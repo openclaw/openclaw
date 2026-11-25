@@ -1,0 +1,500 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import { loadSettings } from "../../app/settings.ts";
+import { t } from "../../i18n/index.ts";
+import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictation.ts";
+import { bytesToBase64 } from "../../lib/bytes-base64.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import {
+  floatToG711Ulaw,
+  measureRealtimeTalkAudioFrame,
+  RealtimeTalkMediaStreamMeter,
+  RealtimeTalkPcmInputPump,
+} from "./talk/audio.ts";
+import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
+import { RealtimeTalkLevelSignal } from "./talk/level.ts";
+
+registerEnglishCatalog(registerChatDictationEnglish);
+
+const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
+const DICTATION_ENCODING = "g711_ulaw";
+const DICTATION_SAMPLE_RATE_HZ = 8000;
+
+type DictationSessionResult = {
+  sessionId: string;
+  transcriptionSessionId?: string;
+  audio?: {
+    inputEncoding?: unknown;
+    inputSampleRateHz?: unknown;
+  };
+};
+
+type ComposerDictationSessionCallbacks = {
+  onError: (message: string, preservesText: boolean) => void;
+  onLevel?: (level: number) => void;
+  onTranscriptChange: () => void;
+  onReady: () => void;
+  onSilence?: () => void;
+};
+
+// Transcription relay events use the shared transcriptionSessionId envelope;
+// the canonical TalkEvent rides alongside it as `talkEvent`.
+function eventPayload(frame: GatewayEventFrame) {
+  if (frame.event !== "talk.event" || !frame.payload || typeof frame.payload !== "object") {
+    return null;
+  }
+  return asOptionalObjectRecord(frame.payload) ?? null;
+}
+
+function formatDictationError(error: unknown): string {
+  if (error instanceof DOMException) {
+    return describeRealtimeTalkInputError(error);
+  }
+  return formatUiError(error);
+}
+
+/**
+ * Stopped recordings that still await their final transcript. Each keeps its
+ * Gateway session until settled; results are delivered in capture order, even
+ * when a later recording's provider finishes first.
+ */
+export class ComposerDictationCommits {
+  private readonly sessions = new Set<ComposerDictationSession>();
+  private tail: Promise<unknown> = Promise.resolve();
+  // Consumers place delivered and preview transcripts in their drafts.
+  readonly place = placeComposerDictation;
+
+  get size(): number {
+    return this.sessions.size;
+  }
+
+  has(session: ComposerDictationSession): boolean {
+    return this.sessions.has(session);
+  }
+
+  /** Delivers once earlier recordings settle; a retired recording resolves false. */
+  add(
+    session: ComposerDictationSession,
+    deliver: (transcript: string) => boolean,
+  ): Promise<boolean> {
+    const previous = this.tail;
+    this.sessions.add(session);
+    const settled = session
+      .finish(true)
+      .catch(() => "")
+      .then(async (transcript) => {
+        await previous;
+        return this.sessions.delete(session) && deliver(transcript);
+      })
+      .catch(() => false);
+    this.tail = settled;
+    return settled;
+  }
+
+  markGatewayDisconnected(): void {
+    for (const session of this.sessions) {
+      session.markGatewayDisconnected();
+    }
+  }
+
+  retire(): void {
+    for (const session of this.sessions) {
+      void session.cancel().catch(() => undefined);
+    }
+    this.sessions.clear();
+  }
+}
+
+function insertComposerDictation(
+  value: string,
+  transcript: string,
+  selectionStart: number,
+  selectionEnd: number,
+): { value: string; caret: number } {
+  const spoken = transcript.trim();
+  if (!spoken) {
+    return { value, caret: selectionEnd };
+  }
+  const start = Math.max(0, Math.min(selectionStart, value.length));
+  const end = Math.max(start, Math.min(selectionEnd, value.length));
+  const before = value.slice(0, start);
+  const after = value.slice(end);
+  const leadingSpace = before && !/\s$/.test(before) && !/^\s|^[,.;:!?)]/.test(spoken) ? " " : "";
+  const trailingSpace =
+    after && !/^\s|^[,.;:!?)]/.test(after) && !/[\s([{]$/.test(spoken) ? " " : "";
+  const inserted = `${leadingSpace}${spoken}${trailingSpace}`;
+  return {
+    value: `${before}${inserted}${after}`,
+    caret: before.length + inserted.length,
+  };
+}
+
+type DictationSelection = { start: number; end: number; value: string };
+
+/**
+ * Places a transcript in a draft. The captured selection holds unless a late final
+ * finds the draft edited after Stop; with a newer recording's preview painted over
+ * the draft, the next result chains from the captured draft instead.
+ */
+export function placeComposerDictation(
+  transcript: string,
+  captured: DictationSelection | null,
+  live: DictationSelection,
+  late?: true,
+  preservePreview?: true,
+): { value: string; caret: number; changed: boolean; captured: DictationSelection | null } {
+  const selection =
+    captured && (preservePreview || !late || captured.value === live.value) ? captured : live;
+  const insertion = insertComposerDictation(
+    selection.value,
+    transcript,
+    selection.start,
+    selection.end,
+  );
+  return {
+    ...insertion,
+    changed: insertion.value !== selection.value,
+    captured: preservePreview
+      ? { start: insertion.caret, end: insertion.caret, value: insertion.value }
+      : null,
+  };
+}
+
+export function describeDictationStartError(error: unknown): [string, "busy" | "start"] {
+  // Stopped recordings hold their Gateway sessions until transcribed; a full
+  // connection refuses the next one before its microphone opens.
+  const details = asOptionalObjectRecord(asOptionalObjectRecord(error)?.details);
+  return details?.code === "TALK_SESSION_CAPACITY"
+    ? [t("chat.dictation.busy"), "busy"]
+    : [formatDictationError(error), "start"];
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+export class ComposerDictationSession {
+  private readonly input = new RealtimeTalkInputOwner((detail) => this.reportFailure(detail));
+  private context: AudioContext | null = null;
+  private readonly inputPump = new RealtimeTalkPcmInputPump();
+  private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
+  // Live microphone level for the listening meter; lives with the lazily loaded capture.
+  readonly inputLevel = new RealtimeTalkLevelSignal();
+  private unsubscribe: (() => void) | null = null;
+  private sessionId: string | null = null;
+  private transcriptionSessionId: string | null = null;
+  private readonly finalTranscripts: string[] = [];
+  private currentPartial = "";
+  private startPromise: Promise<void> | null = null;
+  private appendChain: Promise<void> = Promise.resolve();
+  private closeRequest: { discard: boolean; promise: Promise<void> } | null = null;
+  private stopped = false;
+  private discarded = false;
+  private failed = false;
+  private gatewayDisconnected = false;
+  private settleLateFinalDrain: ((discard: boolean) => void) | null = null;
+  private pauseFinalDrain: (() => void) | null = null;
+  private resumeFinalDrain: (() => void) | null = null;
+  private heardSpeech = false;
+  private silentSamples = 0;
+
+  constructor(
+    private readonly client: GatewayBrowserClient,
+    private readonly callbacks: ComposerDictationSessionCallbacks,
+    private readonly options?: {
+      sessionKey?: string;
+      inputDeviceId?: string;
+      silenceTimeoutMs?: number;
+    },
+  ) {}
+
+  start(): Promise<void> {
+    this.startPromise ??= this.startInternal();
+    return this.startPromise;
+  }
+
+  private async startInternal(): Promise<void> {
+    const inputDeviceId =
+      this.options && "inputDeviceId" in this.options
+        ? this.options.inputDeviceId
+        : loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
+    // Start the audio graph while the Gateway admits the session instead of after it.
+    // stopCapture() closes the context on every exit.
+    try {
+      this.context = new AudioContext({ sampleRate: DICTATION_SAMPLE_RATE_HZ });
+    } catch {
+      this.context = null;
+    }
+    // Claim the Gateway session before the microphone opens. Stopped recordings
+    // hold their sessions while they transcribe, so a full connection must refuse
+    // here rather than after the user has started speaking.
+    const result = await this.client.request<DictationSessionResult>("talk.session.create", {
+      mode: "transcription",
+      transport: "gateway-relay",
+      brain: "none",
+      ...(this.options?.sessionKey ? { sessionKey: this.options.sessionKey } : {}),
+    });
+    this.sessionId = result.sessionId;
+    this.transcriptionSessionId = result.transcriptionSessionId ?? result.sessionId;
+    if (this.stopped) {
+      return;
+    }
+    if (
+      result.audio?.inputEncoding !== DICTATION_ENCODING ||
+      result.audio.inputSampleRateHz !== DICTATION_SAMPLE_RATE_HZ
+    ) {
+      await this.closeRemote();
+      throw new Error(t("chat.composer.dictationAudioUnsupported"));
+    }
+    // Listen before awaiting the permission prompt: a provider failure while it is
+    // open must stop startup instead of capturing against a removed session.
+    this.unsubscribe = this.client.addEventListener((frame) => {
+      const payload = eventPayload(frame);
+      if (
+        !payload ||
+        payload.transcriptionSessionId !== this.transcriptionSessionId ||
+        this.stopped
+      ) {
+        return;
+      }
+      if (
+        (payload.type === "transcript" || payload.type === "partial") &&
+        typeof payload.text === "string"
+      ) {
+        const text = payload.text.trim();
+        if (payload.type === "partial" || payload.final !== true) {
+          this.currentPartial = text;
+        } else if (text) {
+          this.finalTranscripts.push(text);
+          this.currentPartial = "";
+        }
+        this.callbacks.onTranscriptChange();
+        return;
+      }
+      if (payload.type === "error") {
+        this.reportFailure(
+          formatUiExternalText(
+            typeof payload.message === "string" ? payload.message : undefined,
+            t("chat.composer.dictationFailed"),
+          ),
+        );
+        return;
+      }
+      if (payload.type === "close" && payload.reason === "error") {
+        this.reportFailure(t("chat.composer.dictationDisconnected"));
+      }
+    });
+    const media = await this.input.open(inputDeviceId);
+    if (this.stopped || this.failed) {
+      return;
+    }
+    if (this.context?.sampleRate !== DICTATION_SAMPLE_RATE_HZ) {
+      throw new Error(t("chat.composer.dictationBrowserAudioUnsupported"));
+    }
+    const context = this.context;
+    this.inputMeter = new RealtimeTalkMediaStreamMeter((level) => {
+      this.inputLevel.set(level);
+      this.callbacks.onLevel?.(level);
+    });
+    this.inputMeter.start(media, context);
+    this.inputPump.start(media, context, (samples) => {
+      if (this.stopped) {
+        return;
+      }
+      this.queueAudio(samples);
+      this.detectSilence(samples);
+    });
+    this.callbacks.onReady();
+  }
+
+  transcriptSnapshot(): string {
+    return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
+  }
+
+  async finish(requireTranscript?: true): Promise<string> {
+    const transcript =
+      this.gatewayDisconnected || this.failed ? this.transcriptSnapshot() : this.waitForLateFinal();
+    // Bound admission separately; a started close uses the media provider timeout.
+    void this.stopAndClose(true).catch(() => undefined);
+    const text = await transcript;
+    // Composer dictation needs a visible outcome; split Talk can quietly listen again.
+    // Cancellation and already-reported provider failures keep their existing outcomes.
+    if (requireTranscript && !text && !this.discarded && !this.failed) {
+      this.reportFailure(
+        t(
+          this.gatewayDisconnected
+            ? "chat.composer.dictationDisconnected"
+            : "chat.composer.dictationFailed",
+        ),
+      );
+    }
+    return text;
+  }
+
+  async cancel(): Promise<void> {
+    this.discarded = true;
+    this.settleLateFinalDrain?.(true);
+    await this.stopAndClose(false);
+  }
+
+  private async stopAndClose(reportStartFailure: boolean): Promise<void> {
+    await this.stopCapture();
+    // Startup may already be waiting for a normal close; discard must interrupt it.
+    if (!this.discarded || !this.sessionId) {
+      await this.startPromise?.catch((error: unknown) => {
+        if (reportStartFailure && !isAbortError(error)) {
+          this.reportFailure(formatDictationError(error));
+        }
+      });
+    }
+    if (!this.discarded) {
+      await this.appendChain;
+    }
+    await this.closeRemote();
+  }
+
+  markGatewayDisconnected(): boolean {
+    this.gatewayDisconnected = true;
+    this.settleLateFinalDrain?.(false);
+    return this.hasTranscript();
+  }
+
+  private detectSilence(samples: Float32Array): void {
+    if (!this.options?.silenceTimeoutMs || !this.callbacks.onSilence) {
+      return;
+    }
+    if (measureRealtimeTalkAudioFrame(samples).rms >= 0.015) {
+      this.heardSpeech = true;
+      this.silentSamples = 0;
+    } else if (this.heardSpeech) {
+      this.silentSamples += samples.length;
+      if (this.silentSamples >= (this.options.silenceTimeoutMs * DICTATION_SAMPLE_RATE_HZ) / 1000) {
+        this.heardSpeech = false;
+        this.callbacks.onSilence();
+      }
+    }
+  }
+
+  private queueAudio(samples: Float32Array): void {
+    if (!this.sessionId) {
+      return;
+    }
+    const sessionId = this.sessionId;
+    const audioBase64 = bytesToBase64(floatToG711Ulaw(samples));
+    this.appendChain = this.appendChain
+      .then(async () => {
+        if (this.discarded) {
+          return;
+        }
+        await this.client.request("talk.session.appendAudio", { sessionId, audioBase64 });
+      })
+      .catch((error: unknown) => {
+        this.reportFailure(formatDictationError(error));
+      });
+  }
+
+  private reportFailure(message: string): void {
+    if (this.failed) {
+      return;
+    }
+    this.failed = true;
+    this.settleLateFinalDrain?.(false);
+    this.callbacks.onError(message, this.hasTranscript());
+  }
+
+  private hasTranscript(): boolean {
+    return this.finalTranscripts.length > 0 || Boolean(this.currentPartial);
+  }
+
+  private async stopCapture(): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
+    this.stopped = true;
+    this.input.stop();
+    this.inputPump.stop();
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    this.inputMeter?.stop();
+    this.inputMeter = null;
+    await this.context?.close();
+    this.context = null;
+  }
+
+  private closeRemote(): Promise<void> {
+    if (!this.sessionId) {
+      return Promise.resolve();
+    }
+    if (!this.closeRequest || (this.discarded && !this.closeRequest.discard)) {
+      // Buffered STT finalizes during close; its media owner bounds the request.
+      // The browser's late-event grace starts only after that work completes.
+      this.pauseFinalDrain?.();
+      const discard = this.discarded;
+      const promise = this.client
+        .request(
+          "talk.session.close",
+          { sessionId: this.sessionId, ...(discard ? { discard } : {}) },
+          { timeoutMs: null },
+        )
+        .then(() => undefined)
+        .catch(() => undefined)
+        .finally(() => this.resumeFinalDrain?.());
+      this.closeRequest = { discard, promise };
+    }
+    return this.closeRequest.promise;
+  }
+
+  private waitForLateFinal(): Promise<string> {
+    return new Promise((resolve) => {
+      const initialTranscript = this.transcriptSnapshot();
+      const transcripts: string[] = [...this.finalTranscripts];
+      let partial = this.currentPartial;
+      let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
+      let unsubscribe = () => {};
+      const finish = (text: string) => {
+        globalThis.clearTimeout(timer);
+        unsubscribe();
+        this.settleLateFinalDrain = null;
+        this.pauseFinalDrain = null;
+        this.resumeFinalDrain = null;
+        resolve(text);
+      };
+      const transcript = () => [...transcripts, partial].filter(Boolean).join(" ").trim();
+      this.pauseFinalDrain = () => globalThis.clearTimeout(timer);
+      this.resumeFinalDrain = () => {
+        timer = globalThis.setTimeout(() => finish(transcript()), FINAL_TRANSCRIPT_MAX_WAIT_MS);
+      };
+      this.resumeFinalDrain();
+      unsubscribe = this.client.addEventListener((frame) => {
+        const payload = eventPayload(frame);
+        if (!payload || payload.transcriptionSessionId !== this.transcriptionSessionId) {
+          return;
+        }
+        if (
+          payload.type === "transcript" &&
+          payload.final === true &&
+          typeof payload.text === "string" &&
+          payload.text.trim()
+        ) {
+          transcripts.push(payload.text.trim());
+          partial = "";
+        } else if (payload.type === "error" || payload.type === "close") {
+          if (payload.type === "error" || payload.reason === "error") {
+            this.reportFailure(
+              formatUiExternalText(
+                typeof payload.message === "string" ? payload.message : undefined,
+                t("chat.composer.dictationFailed"),
+              ),
+            );
+          } else {
+            finish(transcript());
+          }
+        }
+      });
+      // Failed finalization retains the preview, not its provisional result.
+      this.settleLateFinalDrain = (discard) =>
+        finish(discard ? "" : this.failed ? initialTranscript : transcript());
+    });
+  }
+}

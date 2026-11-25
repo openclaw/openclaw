@@ -1,4 +1,3 @@
-// Shared meeting bot realtime engines own provider and audio-transport orchestration.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
@@ -21,7 +20,6 @@ import type {
 import {
   buildMeetingSpeakExactUserMessage,
   createMeetingRealtimeHarness,
-  formatMeetingTranscriptSummaryLog,
   formatMeetingRealtimeVoiceModelLog,
   meetingOutputBytesPerMs,
   resolveMeetingRealtimeProvider,
@@ -130,9 +128,16 @@ export async function startMeetingRealtimeEngine(params: {
       );
       stopAfterFailure(source);
     },
+    onStall: () => handleOutputBackpressure(),
   });
 
-  const stop = async () => {
+  const sendInputAudio = (audio: Buffer) => {
+    if (harness.recordInputAudio(audio)) {
+      bridge?.sendAudio(audio);
+    }
+  };
+
+  const stop = async (drainInput = true) => {
     if (!stopped) {
       stopped = true;
       outputOwner.reset();
@@ -148,6 +153,18 @@ export async function startMeetingRealtimeEngine(params: {
     }
     const cleanup = Promise.resolve().then(async () => {
       if (!bridgeClosed) {
+        if (drainInput) {
+          try {
+            const tail = params.transport.drainInput?.();
+            if (tail?.length) {
+              sendInputAudio(tail);
+            }
+          } catch (error) {
+            params.logger.warn(
+              `${params.platform.logScope} ${realtimeLogScope} input drain failed: ${formatErrorMessage(error)}`,
+            );
+          }
+        }
         try {
           await bridge?.close();
         } catch (error) {
@@ -192,7 +209,7 @@ export async function startMeetingRealtimeEngine(params: {
     }
   };
   const stopAfterFailure = (source: string) => {
-    void stop().catch((error: unknown) => {
+    void stop(false).catch((error: unknown) => {
       params.logger.warn(
         `${params.platform.logScope} ${realtimeLogScope} ${source} cleanup failed: ${formatErrorMessage(error)}`,
       );
@@ -265,7 +282,7 @@ export async function startMeetingRealtimeEngine(params: {
     });
   };
 
-  const resolved = resolveMeetingRealtimeProvider({
+  const resolved = await resolveMeetingRealtimeProvider({
     config: params.config,
     fullConfig: params.fullConfig,
     providers: params.providers,
@@ -444,24 +461,10 @@ export async function startMeetingRealtimeEngine(params: {
         if (!isFinal) {
           return;
         }
-        params.logger.info(
-          formatMeetingTranscriptSummaryLog(
-            params.platform.logScope,
-            `${realtimeLogScope} ${role}`,
-            text,
-          ),
-        );
         if (role !== "user" || strategy !== "agent") {
           return;
         }
         if (harness.isLikelyAssistantEchoTranscript(text)) {
-          params.logger.info(
-            formatMeetingTranscriptSummaryLog(
-              params.platform.logScope,
-              `${realtimeLogScope} ignored assistant echo transcript`,
-              text,
-            ),
-          );
           return;
         }
         if (!stopped) {
@@ -524,10 +527,6 @@ export async function startMeetingRealtimeEngine(params: {
         }
         if (
           event.type === "error" ||
-          event.type === "response.done" ||
-          event.type === "input_audio_buffer.speech_started" ||
-          event.type === "input_audio_buffer.speech_stopped" ||
-          event.type === "conversation.item.input_audio_transcription.completed" ||
           event.type === "conversation.item.input_audio_transcription.failed"
         ) {
           const detail = event.detail ? ` ${event.detail}` : "";
@@ -606,10 +605,7 @@ export async function startMeetingRealtimeEngine(params: {
       if (stopped || audio.byteLength === 0) {
         return;
       }
-      if (!harness.recordInputAudio(audio)) {
-        return;
-      }
-      bridge?.sendAudio(audio);
+      sendInputAudio(audio);
     });
 
     await bridge.connect();
@@ -620,13 +616,13 @@ export async function startMeetingRealtimeEngine(params: {
     }
   } catch (error) {
     try {
-      await stop();
+      await stop(false);
     } catch (cleanupError) {
       params.logger.debug?.(
         `${params.platform.logScope} ${realtimeLogScope} failed-start cleanup ignored: ${formatErrorMessage(cleanupError)}`,
       );
       try {
-        await stop();
+        await stop(false);
       } catch (retryError) {
         params.logger.debug?.(
           `${params.platform.logScope} ${realtimeLogScope} failed-start cleanup retry ignored: ${formatErrorMessage(retryError)}`,

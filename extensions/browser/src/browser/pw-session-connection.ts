@@ -1,9 +1,11 @@
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { Browser, BrowserContext, Page } from "playwright-core";
+import { cdpNetworkLogs } from "./cdp-network-log.js";
 import { withManagedProxyForCdpUrl, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   assertCdpEndpointAllowed,
@@ -24,7 +26,7 @@ import {
   closeRelayOperationConnection,
 } from "./extension-relay/owner-playwright.js";
 import { getBorrowedRelayCdpAccess } from "./extension-relay/relay-access.js";
-import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
+import { connectOverCdpTransport, UnresponsiveCdpTargetError } from "./pw-session-cdp-transport.js";
 import {
   blockedPageRefsByCdpUrl,
   blockedTargetsByCdpUrl,
@@ -38,10 +40,11 @@ import {
   type ContextState,
   type PlaywrightConnectionRetirement,
 } from "./pw-session-contracts.js";
+import { prepareMeetPlaybackObservation } from "./pw-session-meet-playback.js";
 import {
   isConnectionScopedTargetId,
   markConnectionScopedBrowser,
-  pageTargetInfo,
+  pageTargetId,
 } from "./pw-session-page-target.js";
 import {
   bindRoleRefsTarget,
@@ -49,6 +52,11 @@ import {
   normalizeCdpUrl,
   targetKey,
 } from "./pw-session-state.js";
+import {
+  guardHeadlessContexts,
+  isHeadlessChromium,
+  refuseHeadlessPasskeyDialogs,
+} from "./pw-session-webauthn.js";
 
 export { pageTargetInfo } from "./pw-session-page-target.js";
 
@@ -183,7 +191,12 @@ async function closeTrackedPlaywrightConnection(connection: ConnectedBrowser): P
   }
   const closing = connection.browser.close();
   closeConnectionPromises.set(connection, closing);
-  return await closing;
+  try {
+    return await closing;
+  } catch (error) {
+    materializeErrorStack(error);
+    throw error;
+  }
 }
 
 async function withPlaywrightCloseTimeout(task: Promise<void>): Promise<void> {
@@ -311,7 +324,6 @@ function observeContext(context: BrowserContext) {
   context.on("page", (page) => ensurePageState(page));
 }
 
-/** Ensure shared Playwright browser-context state. */
 export function ensureContextState(context: BrowserContext): ContextState {
   const existing = contextStates.get(context);
   if (existing) {
@@ -342,7 +354,7 @@ export async function connectBrowser(
     }
     const browser = await connectRelayBrowser(relay, normalized, relayReference);
     observeBrowser(browser);
-    return { browser, cdpUrl: normalized };
+    return { browser };
   }
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
@@ -430,26 +442,52 @@ export async function connectBrowser(
             throw new Error("Relay connection was superseded");
           }
         } catch (err) {
-          if (!configuredIsWebSocket || endpointUrl === normalized) {
+          if (
+            err instanceof UnresponsiveCdpTargetError ||
+            !configuredIsWebSocket ||
+            endpointUrl === normalized
+          ) {
             throw err;
           }
           browser = await connectEndpoint(normalized, configuredPin?.lookup);
         }
+        let disconnected = false;
         const onDisconnected = () => {
+          disconnected = true;
           const current = cachedByCdpUrl.get(normalized);
           if (current?.browser === browser) {
             cachedByCdpUrl.delete(normalized);
           }
         };
-        if (resolveBrowserEngine(engine).descriptor.sessionScope === "connection") {
-          markConnectionScopedBrowser(browser);
+        // Listen before the awaited setup below, so a browser lost meanwhile is not cached.
+        browser.on("disconnected", onDisconnected);
+        const engineAdapter = resolveBrowserEngine(engine);
+        if (engineAdapter.descriptor.sessionScope === "connection") {
+          markConnectionScopedBrowser(browser, engineAdapter.closePageClosesConnection === true);
         }
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected, engine };
+        // Relay connections drive the user's visible Chrome, which shows its own dialogs.
+        const headless =
+          !relay && engineAdapter.descriptor.id === "chromium"
+            ? await isHeadlessChromium(browser)
+            : false;
+        observeBrowser(browser);
+        if (headless) {
+          // Before any caller can load a document through this connection.
+          await guardHeadlessContexts(browser.contexts());
+        }
+        if (disconnected) {
+          browser.off("disconnected", onDisconnected);
+          throw new Error("Browser disconnected while connecting.");
+        }
+        const connected: ConnectedBrowser = {
+          browser,
+          onDisconnected,
+          engine,
+          headless,
+        };
         if (connectingByCdpUrl.get(normalized) === pending) {
           cachedByCdpUrl.set(normalized, connected);
         }
-        browser.on("disconnected", onDisconnected);
-        observeBrowser(browser);
         return connected;
       } catch (err) {
         lastErr = err;
@@ -458,7 +496,7 @@ export async function connectBrowser(
         }
         // Don't retry rate-limit errors; retrying worsens the 429.
         const errMsg = formatErrorMessage(err);
-        if (errMsg.includes("rate limit")) {
+        if (err instanceof UnresponsiveCdpTargetError || errMsg.includes("rate limit")) {
           break;
         }
         await sleepWithAbort(250 + attempt * 250);
@@ -485,6 +523,7 @@ export async function getAllPages(browser: Browser): Promise<Page[]> {
 }
 
 async function getAccessiblePages(opts: {
+  browser: Browser;
   cdpUrl: string;
   pages: Page[];
 }): Promise<Array<{ page: Page; targetId: string | null }>> {
@@ -495,7 +534,7 @@ async function getAccessiblePages(opts: {
         return { page, targetId: null };
       }
       ensurePageState(page);
-      const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
+      const targetId = await pageTargetId(page).catch(() => null);
       return { page, targetId };
     }),
   );
@@ -509,6 +548,10 @@ async function getAccessiblePages(opts: {
       continue;
     }
     bindRoleRefsTarget(page, opts.cdpUrl, targetId);
+    const log = cdpNetworkLogs.get(opts.browser);
+    if (log && targetId) {
+      ensurePageState(page).readNetworkRequests = (clear) => log.read(targetId, clear);
+    }
     accessible.push({ page, targetId });
   }
   return accessible;
@@ -523,13 +566,18 @@ async function getPageForTargetIdOnce(opts: {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, opts.relayReference);
+  const { browser, headless, engine } = await connectBrowser(
+    opts.cdpUrl,
+    opts.ssrfPolicy,
+    opts.relayReference,
+  );
   const pages = await getAllPages(browser);
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
   }
 
   const accessible = await getAccessiblePages({
+    browser,
     cdpUrl: opts.cdpUrl,
     pages,
   });
@@ -541,6 +589,13 @@ async function getPageForTargetIdOnce(opts: {
     : accessible[0];
   if (found) {
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
+    if (!engine || engine === "chromium") {
+      await prepareMeetPlaybackObservation(found.page);
+    }
+    if (headless) {
+      // Settled guards are cached; this only re-registers one that failed.
+      void refuseHeadlessPasskeyDialogs(found.page.context());
+    }
     return found.page;
   }
   throw new BrowserTabNotFoundError();

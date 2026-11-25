@@ -1,97 +1,23 @@
 import * as fs from "node:fs";
-import { getCapabilities } from "@earendil-works/pi-tui";
 import chalk from "chalk";
-import { type Static, Type } from "typebox";
-import { Compile } from "typebox/compile";
+import { Errors } from "typebox/schema";
 import type { SourceInfo } from "../../../sessions/source-info.js";
 import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.js";
-
-const ColorValueSchema = Type.Union([
-  Type.String(), // hex "#ff0000", var ref "primary", or empty ""
-  Type.Integer({ minimum: 0, maximum: 255 }), // 256-color index
-]);
-
-type ColorValue = Static<typeof ColorValueSchema>;
-
-const ThemeJsonSchema = Type.Object({
-  $schema: Type.Optional(Type.String()),
-  name: Type.String(),
-  vars: Type.Optional(Type.Record(Type.String(), ColorValueSchema)),
-  colors: Type.Object({
-    accent: ColorValueSchema,
-    border: ColorValueSchema,
-    borderAccent: ColorValueSchema,
-    borderMuted: ColorValueSchema,
-    success: ColorValueSchema,
-    error: ColorValueSchema,
-    warning: ColorValueSchema,
-    muted: ColorValueSchema,
-    dim: ColorValueSchema,
-    text: ColorValueSchema,
-    thinkingText: ColorValueSchema,
-    selectedBg: ColorValueSchema,
-    userMessageBg: ColorValueSchema,
-    userMessageText: ColorValueSchema,
-    customMessageBg: ColorValueSchema,
-    customMessageText: ColorValueSchema,
-    customMessageLabel: ColorValueSchema,
-    toolPendingBg: ColorValueSchema,
-    toolSuccessBg: ColorValueSchema,
-    toolErrorBg: ColorValueSchema,
-    toolTitle: ColorValueSchema,
-    toolOutput: ColorValueSchema,
-    mdHeading: ColorValueSchema,
-    mdLink: ColorValueSchema,
-    mdLinkUrl: ColorValueSchema,
-    mdCode: ColorValueSchema,
-    mdCodeBlock: ColorValueSchema,
-    mdCodeBlockBorder: ColorValueSchema,
-    mdQuote: ColorValueSchema,
-    mdQuoteBorder: ColorValueSchema,
-    mdHr: ColorValueSchema,
-    mdListBullet: ColorValueSchema,
-    toolDiffAdded: ColorValueSchema,
-    toolDiffRemoved: ColorValueSchema,
-    toolDiffContext: ColorValueSchema,
-    syntaxComment: ColorValueSchema,
-    syntaxKeyword: ColorValueSchema,
-    syntaxFunction: ColorValueSchema,
-    syntaxVariable: ColorValueSchema,
-    syntaxString: ColorValueSchema,
-    syntaxNumber: ColorValueSchema,
-    syntaxType: ColorValueSchema,
-    syntaxOperator: ColorValueSchema,
-    syntaxPunctuation: ColorValueSchema,
-    thinkingOff: ColorValueSchema,
-    thinkingMinimal: ColorValueSchema,
-    thinkingLow: ColorValueSchema,
-    thinkingMedium: ColorValueSchema,
-    thinkingHigh: ColorValueSchema,
-    thinkingXhigh: ColorValueSchema,
-    bashMode: ColorValueSchema,
-  }),
-  export: Type.Optional(
-    Type.Object({
-      pageBg: Type.Optional(ColorValueSchema),
-      cardBg: Type.Optional(ColorValueSchema),
-      infoBg: Type.Optional(ColorValueSchema),
-    }),
-  ),
-});
-
-type ThemeJson = Static<typeof ThemeJsonSchema>;
-
-const validateThemeJson = Compile(ThemeJsonSchema);
+import { loadTuiRuntime } from "../tui-runtime.js";
+import { ThemeJsonSchema, type ColorValue, type ThemeJson } from "./theme-schema.js";
+import { isThemeJson } from "./theme-validator.generated.js";
 
 type ThemeColor = Exclude<keyof ThemeJson["colors"], ThemeBg>;
 
-type ThemeBg =
-  | "selectedBg"
-  | "userMessageBg"
-  | "customMessageBg"
-  | "toolPendingBg"
-  | "toolSuccessBg"
-  | "toolErrorBg";
+const BACKGROUND_COLOR_KEYS = [
+  "selectedBg",
+  "userMessageBg",
+  "customMessageBg",
+  "toolPendingBg",
+  "toolSuccessBg",
+  "toolErrorBg",
+] as const;
+type ThemeBg = (typeof BACKGROUND_COLOR_KEYS)[number];
 
 type ColorMode = "truecolor" | "256color";
 
@@ -325,16 +251,14 @@ export class Theme {
 }
 
 function parseThemeJson(label: string, json: unknown): ThemeJson {
-  if (!validateThemeJson.Check(json)) {
-    const errors = Array.from(validateThemeJson.Errors(json));
+  if (!isThemeJson(json)) {
+    const errors = Errors(ThemeJsonSchema, json)[1];
     const missingColors = new Set<string>();
     const otherErrors: string[] = [];
 
     for (const error of errors) {
       if (error.keyword === "required" && error.instancePath === "/colors") {
-        const requiredProperties = (error.params as { requiredProperties?: string[] })
-          .requiredProperties;
-        for (const requiredProperty of requiredProperties ?? []) {
+        for (const requiredProperty of error.params.requiredProperties) {
           missingColors.add(requiredProperty);
         }
         continue;
@@ -376,18 +300,12 @@ function parseThemeJsonContent(label: string, content: string): ThemeJson {
 }
 
 function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string): Theme {
-  const colorMode = mode ?? (getCapabilities().trueColor ? "truecolor" : "256color");
+  const colorMode =
+    mode ?? (loadTuiRuntime().getCapabilities().trueColor ? "truecolor" : "256color");
   const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
   const fgColors: Record<ThemeColor, string | number> = {} as Record<ThemeColor, string | number>;
   const bgColors: Record<ThemeBg, string | number> = {} as Record<ThemeBg, string | number>;
-  const bgColorKeys: Set<string> = new Set([
-    "selectedBg",
-    "userMessageBg",
-    "customMessageBg",
-    "toolPendingBg",
-    "toolSuccessBg",
-    "toolErrorBg",
-  ]);
+  const bgColorKeys: Set<string> = new Set(BACKGROUND_COLOR_KEYS);
   for (const [key, value] of Object.entries(resolvedColors)) {
     if (bgColorKeys.has(key)) {
       bgColors[key as ThemeBg] = value;
@@ -455,72 +373,57 @@ export function highlightCode(code: string, lang?: string): string[] {
   }
 }
 
+const EXTENSION_LANGUAGES: Record<string, string> = Object.fromEntries(
+  Object.entries({
+    typescript: ["ts", "tsx"],
+    javascript: ["js", "jsx", "mjs", "cjs"],
+    python: ["py"],
+    ruby: ["rb"],
+    rust: ["rs"],
+    go: ["go"],
+    java: ["java"],
+    kotlin: ["kt"],
+    swift: ["swift"],
+    c: ["c", "h"],
+    cpp: ["cpp", "cc", "cxx", "hpp"],
+    csharp: ["cs"],
+    php: ["php"],
+    bash: ["sh", "bash", "zsh"],
+    fish: ["fish"],
+    powershell: ["ps1"],
+    sql: ["sql"],
+    html: ["html", "htm"],
+    css: ["css"],
+    scss: ["scss"],
+    sass: ["sass"],
+    less: ["less"],
+    json: ["json"],
+    yaml: ["yaml", "yml"],
+    toml: ["toml"],
+    xml: ["xml"],
+    markdown: ["md", "markdown"],
+    dockerfile: ["dockerfile"],
+    makefile: ["makefile"],
+    cmake: ["cmake"],
+    lua: ["lua"],
+    perl: ["perl"],
+    r: ["r"],
+    scala: ["scala"],
+    clojure: ["clj"],
+    elixir: ["ex", "exs"],
+    erlang: ["erl"],
+    haskell: ["hs"],
+    ocaml: ["ml"],
+    vim: ["vim"],
+    graphql: ["graphql"],
+    protobuf: ["proto"],
+    hcl: ["tf", "hcl"],
+  }).flatMap(([language, extensions]) =>
+    extensions.map((extension) => [extension, language] as const),
+  ),
+);
+
 export function getLanguageFromPath(filePath: string): string | undefined {
   const ext = filePath.split(".").pop()?.toLowerCase();
-  if (!ext) {
-    return undefined;
-  }
-
-  const extToLang: Record<string, string> = {
-    ts: "typescript",
-    tsx: "typescript",
-    js: "javascript",
-    jsx: "javascript",
-    mjs: "javascript",
-    cjs: "javascript",
-    py: "python",
-    rb: "ruby",
-    rs: "rust",
-    go: "go",
-    java: "java",
-    kt: "kotlin",
-    swift: "swift",
-    c: "c",
-    h: "c",
-    cpp: "cpp",
-    cc: "cpp",
-    cxx: "cpp",
-    hpp: "cpp",
-    cs: "csharp",
-    php: "php",
-    sh: "bash",
-    bash: "bash",
-    zsh: "bash",
-    fish: "fish",
-    ps1: "powershell",
-    sql: "sql",
-    html: "html",
-    htm: "html",
-    css: "css",
-    scss: "scss",
-    sass: "sass",
-    less: "less",
-    json: "json",
-    yaml: "yaml",
-    yml: "yaml",
-    toml: "toml",
-    xml: "xml",
-    md: "markdown",
-    markdown: "markdown",
-    dockerfile: "dockerfile",
-    makefile: "makefile",
-    cmake: "cmake",
-    lua: "lua",
-    perl: "perl",
-    r: "r",
-    scala: "scala",
-    clj: "clojure",
-    ex: "elixir",
-    exs: "elixir",
-    erl: "erlang",
-    hs: "haskell",
-    ml: "ocaml",
-    vim: "vim",
-    graphql: "graphql",
-    proto: "protobuf",
-    tf: "hcl",
-    hcl: "hcl",
-  };
-
-  return extToLang[ext];
+  return ext ? EXTENSION_LANGUAGES[ext] : undefined;
 }

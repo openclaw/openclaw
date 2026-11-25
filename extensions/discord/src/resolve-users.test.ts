@@ -3,66 +3,23 @@ import { describe, expect, it } from "vitest";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { jsonResponse, urlToString } from "./test-http-helpers.js";
 
-type DiscordAllowlistResult = Awaited<ReturnType<typeof resolveDiscordUserAllowlist>>[number];
-
-function expectResolvedUser(
-  result: DiscordAllowlistResult | undefined,
-  expected: { id: string; input?: string; name?: string },
-) {
-  if (!result) {
-    throw new Error("expected Discord allowlist result");
-  }
-  expect(result.resolved).toBe(true);
-  expect(result.id).toBe(expected.id);
-  if (expected.input !== undefined) {
-    expect(result.input).toBe(expected.input);
-  }
-  if (expected.name !== undefined) {
-    expect(result.name).toBe(expected.name);
-  }
-}
-
-function expectUnresolvedUser(result: DiscordAllowlistResult | undefined) {
-  if (!result) {
-    throw new Error("expected Discord allowlist result");
-  }
-  expect(result.resolved).toBe(false);
-}
-
-function createGuildListProbeFetcher() {
-  let guildsCalled = false;
-  const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
-    const url = urlToString(input);
-    if (url.endsWith("/users/@me/guilds")) {
-      guildsCalled = true;
-      return jsonResponse([]);
-    }
-    return new Response("not found", { status: 404 });
-  });
-  return {
-    fetcher,
-    wasGuildsCalled: () => guildsCalled,
-  };
-}
-
 describe("resolveDiscordUserAllowlist", () => {
-  it.each(["<@123456789012345678>"])("resolves %s without calling listGuilds", async (entry) => {
-    const { fetcher, wasGuildsCalled } = createGuildListProbeFetcher();
-
+  it("resolves a mention without calling listGuilds", async () => {
+    const entry = "<@123456789012345678>";
+    const requests: string[] = [];
     const results = await resolveDiscordUserAllowlist({
       token: "test",
       entries: [entry],
-      fetcher,
+      fetcher: withFetchPreconnect(async (input) => {
+        const url = urlToString(input);
+        requests.push(url);
+        return url.endsWith("/users/@me/guilds")
+          ? jsonResponse([])
+          : new Response("not found", { status: 404 });
+      }),
     });
-
-    expect(results).toEqual([
-      {
-        input: entry,
-        resolved: true,
-        id: "123456789012345678",
-      },
-    ]);
-    expect(wasGuildsCalled()).toBe(false);
+    expect(results).toEqual([{ input: entry, resolved: true, id: "123456789012345678" }]);
+    expect(requests).toEqual([]);
   });
 
   it("fetches guilds only once for multiple username entries", async () => {
@@ -74,13 +31,9 @@ describe("resolveDiscordUserAllowlist", () => {
         return jsonResponse([{ id: "g1", name: "Test Guild" }]);
       }
       if (url.includes("/guilds/g1/members/search")) {
-        const params = new URL(url).searchParams;
-        const query = params.get("query") ?? "";
+        const query = new URL(url).searchParams.get("query") ?? "";
         return jsonResponse([
-          {
-            user: { id: `u-${query}`, username: query, bot: false },
-            nick: null,
-          },
+          { user: { id: `u-${query}`, username: query, bot: false }, nick: null },
         ]);
       }
       return new Response("not found", { status: 404 });
@@ -93,25 +46,22 @@ describe("resolveDiscordUserAllowlist", () => {
     });
 
     expect(guildsCallCount).toBe(1);
-    expect(results).toHaveLength(2);
-    expectResolvedUser(results[0], { input: "alice", id: "u-alice", name: "alice" });
-    expectResolvedUser(results[1], { input: "bob", id: "u-bob", name: "bob" });
+    expect(results).toMatchObject([
+      { resolved: true, input: "alice", id: "u-alice", name: "alice" },
+      { resolved: true, input: "bob", id: "u-bob", name: "bob" },
+    ]);
   });
 
   it("returns unresolved for empty/blank entries", async () => {
-    const fetcher = withFetchPreconnect(async () => {
-      return new Response("not found", { status: 404 });
-    });
-
     const results = await resolveDiscordUserAllowlist({
       token: "test",
       entries: ["", "  "],
-      fetcher,
+      fetcher: withFetchPreconnect(async () => new Response("not found", { status: 404 })),
     });
-
-    expect(results).toHaveLength(2);
-    expectUnresolvedUser(results[0]);
-    expectUnresolvedUser(results[1]);
+    expect(results).toEqual([
+      { input: "", resolved: false },
+      { input: "  ", resolved: false },
+    ]);
   });
 
   it("returns ordered unresolved entries when token is blank", async () => {

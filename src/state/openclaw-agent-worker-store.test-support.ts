@@ -14,8 +14,20 @@ import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-op
 
 const PREPARATION_CLEANUP_GUARD_MS = 5_000;
 
+function check(condition: unknown, message: string): asserts condition {
+  if (!condition) {
+    throw new Error(message);
+  }
+}
+
+function waitForPreparation(gate: string) {
+  // Host test signals cannot cross the worker's structured-clone API.
+  return waitForFile(gate, AbortSignal.timeout(PREPARATION_CLEANUP_GUARD_MS));
+}
+
 export type AgentWorkerFixtureOperations = {
-  inspect: { input: undefined; output: number };
+  inspect: { input: undefined | "wal_autocheckpoint"; output: number };
+  failWorker: { input: "crash" | "exit"; output: never };
   append: {
     input: {
       value: string;
@@ -77,52 +89,54 @@ export function bindSqliteWorkerBackend(
       if (!preparation) {
         return undefined;
       }
-      if (commandType !== "append") {
-        throw new Error("Fixture loader requires the nested command type");
-      }
+      check(commandType === "append", "Fixture loader requires the nested command type");
       enter(preparation.codeMarker, "loading");
-      // Preserve the worker fixture guard: host test signals cannot cross this structured-clone API.
-      return waitForFile(
-        preparation.codeGate,
-        AbortSignal.timeout(PREPARATION_CLEANUP_GUARD_MS),
-      ).then(() => {
+      return waitForPreparation(preparation.codeGate).then(() => {
         codeLoaded = true;
       });
     },
     prepare(command) {
+      if (command.type === "failWorker") {
+        return new Promise<never>(() => {
+          setImmediate(() => {
+            if (command.input === "exit") {
+              process.exit(17);
+            }
+            throw new Error("Fixture worker crashed");
+          });
+        });
+      }
       if (!preparation) {
         return undefined;
       }
-      if (!codeLoaded) {
-        throw new Error("Fixture command preparation requires completed code loading");
-      }
-      if (command.type !== "append") {
-        throw new Error("Fixture preparation requires an append command");
-      }
+      check(codeLoaded, "Fixture command preparation requires completed code loading");
+      check(command.type === "append", "Fixture preparation requires an append command");
       enter(preparation.commandMarker, "preparing");
-      // Preserve the worker fixture guard: host test signals cannot cross this structured-clone API.
-      return waitForFile(
-        preparation.commandGate,
-        AbortSignal.timeout(PREPARATION_CLEANUP_GUARD_MS),
-      ).then(() => {
+      return waitForPreparation(preparation.commandGate).then(() => {
         preparedValue = command.input.value;
       });
     },
     execute(command) {
+      if (command.type === "failWorker") {
+        throw new Error("Fixture failure must terminate the worker during preparation");
+      }
       if (command.type === "inspect") {
-        const count = db.prepare("SELECT COUNT(*) AS count FROM worker_proof").get()?.count;
-        if (typeof count !== "number") {
-          throw new Error("Fixture count is unavailable");
+        if (command.input === "wal_autocheckpoint") {
+          return Number(db.prepare("PRAGMA wal_autocheckpoint").get()?.wal_autocheckpoint);
         }
+        const count = db.prepare("SELECT COUNT(*) AS count FROM worker_proof").get()?.count;
+        check(typeof count === "number", "Fixture count is unavailable");
         return count;
       }
       const { input } = command;
-      if (input.bytes !== undefined && !Buffer.isBuffer(input.bytes)) {
-        throw new Error("Fixture binary input lost its Buffer type");
-      }
-      if (preparation && preparedValue !== input.value) {
-        throw new Error("Fixture execution requires its fully prepared nested input");
-      }
+      check(
+        input.bytes === undefined || Buffer.isBuffer(input.bytes),
+        "Fixture binary input lost its Buffer type",
+      );
+      check(
+        !preparation || preparedValue === input.value,
+        "Fixture execution requires its fully prepared nested input",
+      );
       return runSqliteImmediateTransactionSync(
         db,
         () => {
@@ -144,9 +158,7 @@ export function bindSqliteWorkerBackend(
     },
     assertSettled() {
       assertTransactionUsable(db);
-      if (!db.isOpen || db.isTransaction) {
-        throw new Error("Fixture left an unsettled borrowed connection");
-      }
+      check(db.isOpen && !db.isTransaction, "Fixture left an unsettled borrowed connection");
     },
     close() {
       receipts?.close();

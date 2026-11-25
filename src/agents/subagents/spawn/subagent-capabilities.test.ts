@@ -16,8 +16,6 @@ describe("resolveSubagentCapabilities", () => {
       depth: 0,
       role: "main",
       controlScope: "children",
-      canSpawn: true,
-      canControlChildren: true,
     });
   });
 
@@ -26,8 +24,6 @@ describe("resolveSubagentCapabilities", () => {
       depth: 1,
       role: "leaf",
       controlScope: "none",
-      canSpawn: false,
-      canControlChildren: false,
     });
   });
 
@@ -36,8 +32,6 @@ describe("resolveSubagentCapabilities", () => {
       depth: 1_000,
       role: "leaf",
       controlScope: "none",
-      canSpawn: false,
-      canControlChildren: false,
     });
   });
 });

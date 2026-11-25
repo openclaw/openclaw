@@ -1,21 +1,18 @@
-import type { DatabaseSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { requireTranscriptEventAppendSnapshot } from "../../config/sessions/session-accessor.sqlite-transcript-append-result.js";
+import type { TranscriptAppendCursor } from "../../config/sessions/session-accessor.sqlite-transcript-append.types.js";
 import type { PreparedTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { canRebasePreparedAssistantInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-parent.js";
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
-} from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
-import {
-  findSessionTranscriptHeader,
-  isIndexedSessionEntry,
-  isReadableSessionMessage,
-  parseOpaqueLeafEntry,
-} from "../../config/sessions/session-entry-codec.js";
+} from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
+import { isReadableSessionMessage } from "../../config/sessions/session-entry-codec.js";
 import type { SessionMetadataOperations } from "../../config/sessions/session-manager-write-contract.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { prepareTranscriptPayloadForReuse } from "../../config/sessions/transcript-payload.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { decodeMetadataAppendEvent } from "./session-manager-append-codec.js";
 import type {
   SessionHeader,
   SessionEntry,
@@ -28,32 +25,8 @@ type PreparedSessionManagerAppend = {
   message?: PreparedTranscriptMessageAppend<SessionMessageEntry["message"]>;
 };
 
-export function decodeMetadataAppendEvent(
-  input: SessionMetadataOperations["session.metadata.append"]["input"],
-): SessionHeader | SessionEntry | SessionLeafControl {
-  const event: unknown =
-    typeof input.event === "string"
-      ? JSON.parse(input.event)
-      : { ...input.event, message: JSON.parse(input.message?.messageJson ?? "null") };
-  if (isIndexedSessionEntry(event)) {
-    if ((event.type === "message") !== (typeof input.event !== "string")) {
-      throw new Error("Session message append requires prepared storage bytes");
-    }
-    return event;
-  }
-  const header = findSessionTranscriptHeader([event]);
-  if (header) {
-    return header;
-  }
-  const leaf = parseOpaqueLeafEntry(event);
-  if (leaf && isRecord(event) && typeof event.timestamp === "string") {
-    return { ...leaf, type: "leaf", timestamp: event.timestamp };
-  }
-  throw new Error("Invalid serialized session transcript entry");
-}
-
 export function prepareSessionMetadataAppend(
-  database: DatabaseSync,
+  database: EngineConnection,
   input: SessionMetadataOperations["session.metadata.append"]["input"],
 ): PreparedSessionManagerAppend {
   const event = decodeMetadataAppendEvent(input);
@@ -81,11 +54,15 @@ export function applySessionMetadataAppendInTransaction(
   database: OpenClawAgentDatabase,
   input: SessionMetadataOperations["session.metadata.append"]["input"],
   beforeFreshMessageCommit: () => void,
-  preparation = prepareSessionMetadataAppend(database.db, input),
+  preparation?: PreparedSessionManagerAppend,
+  persistActorMutation = true,
+  cursor?: TranscriptAppendCursor,
 ): SessionMetadataOperations["session.metadata.append"]["output"] {
-  const { event } = preparation;
+  const event = preparation?.event ?? decodeMetadataAppendEvent(input);
   let projectionNeedsReconcile = false;
   const projection = {
+    persistActorMutation,
+    cursor,
     scheduleProjectionReconcile: false,
     onProjectionReconcileNeeded: () => {
       projectionNeedsReconcile = true;
@@ -93,10 +70,10 @@ export function applySessionMetadataAppendInTransaction(
   } as const;
   const { message } = input;
   if (event.type === "message" && message) {
-    const prepared = preparation.message;
-    if (!prepared) {
-      throw new Error("Session message append lost its prepared storage bytes");
-    }
+    const prepared = preparation?.message ?? {
+      messageJson: message.messageJson,
+      persistedMessage: event.message,
+    };
     const options = { ...input.options };
     if (message.validateTurn) {
       if (
@@ -105,6 +82,7 @@ export function applySessionMetadataAppendInTransaction(
           input.scope.sessionId,
           event.parentId,
           input.view?.admission?.entryId,
+          input.view?.questionAnswers,
         )
       ) {
         throw new SqliteTranscriptMutationConflictError(input.scope.sessionId);
@@ -124,6 +102,7 @@ export function applySessionMetadataAppendInTransaction(
         now: Date.parse(event.timestamp),
         cwd: message.cwd,
         idempotencyLookup: message.idempotencyLookup,
+        mentionInvitation: message.mentionInvitation,
         ...(message.freshMessageCheck ? { beforeFreshMessageCommit } : {}),
       },
       prepared,
@@ -137,20 +116,42 @@ export function applySessionMetadataAppendInTransaction(
     }
     return { snapshot, projectionNeedsReconcile };
   }
-  return {
-    snapshot: appendTranscriptEventSnapshotSync(
-      input.scope,
-      event,
-      input.options,
-      {
-        ...projection,
-        eventJson: typeof input.event === "string" ? input.event : undefined,
-      },
-      undefined,
-      database,
-    ),
-    projectionNeedsReconcile,
-  };
+  const initialModel = input.initialModel
+    ? requireTranscriptEventAppendSnapshot(
+        appendTranscriptEventSnapshotSync(
+          input.scope,
+          input.initialModel,
+          input.options,
+          { ...projection, persistActorMutation: false },
+          undefined,
+          database,
+        ),
+        "Initial model metadata was not persisted",
+      )
+    : undefined;
+  const snapshot = appendTranscriptEventSnapshotSync(
+    input.scope,
+    event,
+    initialModel ? { ...input.options, expectedMutationAt: undefined } : input.options,
+    {
+      ...projection,
+      eventJson: typeof input.event === "string" ? input.event : undefined,
+    },
+    undefined,
+    database,
+  );
+  if (initialModel) {
+    const thinking = requireTranscriptEventAppendSnapshot(
+      snapshot,
+      "Initial thinking metadata was not persisted",
+    );
+    return {
+      snapshot: { ok: true, value: { ...thinking, before: initialModel.before } },
+      initialModelParentId: initialModel.result.effectiveParentId,
+      projectionNeedsReconcile,
+    };
+  }
+  return { snapshot, projectionNeedsReconcile };
 }
 
 export function applySessionDirectMessageInTransaction(
@@ -168,11 +169,11 @@ export function applySessionDirectMessageInTransaction(
     {
       message,
       cwd: input.cwd,
+      mentionInvitation: input.mentionInvitation,
       ...(input.freshMessageCheck && beforeFreshMessageCommit ? { beforeFreshMessageCommit } : {}),
     },
     { messageJson: input.messageJson, persistedMessage: message },
     {
-      messageAlreadyRedacted: true,
       scheduleProjectionReconcile: false,
       onProjectionReconcileNeeded: () => {
         projectionNeedsReconcile = true;
@@ -185,35 +186,4 @@ export function applySessionDirectMessageInTransaction(
     snapshot.value.result.message = undefined;
   }
   return { snapshot, projectionNeedsReconcile };
-}
-
-/** Reload decisions retain the canonical adopted identity and actual append parent. */
-export function sessionMetadataAppendNeedsReload(
-  input: SessionMetadataOperations["session.metadata.append"]["input"],
-  value: SessionMetadataOperations["session.metadata.append"]["output"],
-): boolean {
-  const event = decodeMetadataAppendEvent(input);
-  if (event.type === "session" || !input.view || !value.snapshot.ok) {
-    return false;
-  }
-  const committed = value.snapshot.value;
-  const result = committed.result;
-  if (!result) {
-    return false;
-  }
-  const adoptedMessage = "messageId" in result && result.messageId !== event.id;
-  if (!result.appended && !adoptedMessage) {
-    return false;
-  }
-  const version = input.view.loadedVersion;
-  const parent = "effectiveParentId" in result ? result.effectiveParentId : undefined;
-  return (
-    adoptedMessage ||
-    Boolean(
-      version &&
-      (committed.before.generation !== version.generation ||
-        committed.before.rawSeq !== version.rawSeq),
-    ) ||
-    (parent !== undefined && parent !== event.parentId)
-  );
 }

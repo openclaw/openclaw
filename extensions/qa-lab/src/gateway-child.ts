@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { writeSync } from "node:fs";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
@@ -29,6 +30,8 @@ export type { QaGatewayStopResult, QaGatewayStopOptions } from "./gateway-child-
 export type { QaGatewayChildListeningContext } from "./gateway-child-setup.js";
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 export type QaGatewayChild = Awaited<ReturnType<typeof startOwnedGatewayChild>>;
+
+const QA_GATEWAY_CHILD_LOG_MAX_PENDING_BYTES = 4 * 1024 * 1024;
 
 export function createQaGatewayChild() {
   const lifetime = new QaGatewayChildLifecycle();
@@ -101,6 +104,11 @@ async function startOwnedGatewayChild(
       ? await lifetime.controller.prepare({ args: gatewayArgs, cwd: gatewayCwd, env: launch.env })
       : null;
     lifetime.assertOpen();
+    try {
+      writeSync(2, '[qa-bootstrap] {"command":"gateway","event":"spawn"}\n');
+    } catch {
+      // A diagnostic sink failure must not prevent the owned Gateway spawn.
+    }
     const child = spawn(nodeExecPath, gatewayArgs, {
       cwd: gatewayCwd,
       env: prepared?.env ?? launch.env,
@@ -109,18 +117,31 @@ async function startOwnedGatewayChild(
     });
     // Register synchronously: acceptance/readiness may reject with descendants
     // still alive, and replacement must immediately supersede its stopped parent.
-    active = lifetime.register(child, prepared);
+    const owned = (active = lifetime.register(child, prepared));
     for (const [stream, label, log] of [
       [child.stdout, "stdout", stdoutLog],
       [child.stderr, "stderr", stderrLog],
     ] as const) {
-      stream.on("data", (chunk) => {
-        const buffer = Buffer.from(chunk);
+      stream.on("data", (buffer: Buffer) => {
         output.push(label, buffer);
+        // A stalled file sink must not turn diagnostic output into an unbounded queue.
+        // Fail through the existing pipe-error owner; it stops the child and settles logs.
+        if (log.writableLength + buffer.byteLength > QA_GATEWAY_CHILD_LOG_MAX_PENDING_BYTES) {
+          stream.destroy(
+            new Error(
+              `${label} log backlog exceeded ${QA_GATEWAY_CHILD_LOG_MAX_PENDING_BYTES} bytes`,
+            ),
+          );
+          return;
+        }
         log.write(buffer);
       });
     }
-    getChildFailure = monitorQaGatewayChildFailure(child, output);
+    getChildFailure = monitorQaGatewayChildFailure(
+      child,
+      output,
+      () => owned.ready && !lifetime.signal.aborted && owned.settlement === undefined,
+    );
     active.checkFailure = () => throwQaGatewayChildFailure(getChildFailure, logs);
     try {
       if (prepared && lifetime.controller) {
@@ -145,6 +166,7 @@ async function startOwnedGatewayChild(
         token: gatewayToken,
         configPath,
         runtimeEnv: launch.env,
+        logs,
       });
     }
     if (!initial || !params.allowUnhealthyStartup) {
@@ -154,6 +176,7 @@ async function startOwnedGatewayChild(
     lifetime.rpcClient = await startQaGatewayRpcClient({
       wsUrl: launch.wsUrl,
       token: gatewayToken,
+      password: params.rpcPassword,
       logs,
     });
     await lifetime.rpcClient.request("config.get", {}, { timeoutMs: 30_000 });
@@ -209,8 +232,17 @@ async function startOwnedGatewayChild(
       return active.identity?.pid ?? active.child.pid ?? null;
     },
     getProcessCpuMs: () => readProcessTreeCpuMs(active.identity?.pid ?? active.child.pid ?? null),
-    getProcessRssBytes: () =>
-      readProcessTreeRssBytes(active.identity?.pid ?? active.child.pid ?? null),
+    getProcessRssBytes: () => {
+      const rootPid = active.identity?.pid ?? active.child.pid ?? null;
+      return readProcessTreeRssBytes(rootPid, (reason) => {
+        try {
+          // Suite success can discard Gateway logs; keep unavailable sampling in the runner log.
+          writeSync(2, `[qa-rss] at=${new Date().toISOString()} rootPid=${rootPid} ${reason}\n`);
+        } catch {
+          // Diagnostic sink failure must not change the strict unavailable metric.
+        }
+      });
+    },
     token: gatewayToken,
     workspaceDir,
     tempRoot,
@@ -260,7 +292,6 @@ async function startOwnedGatewayChild(
       mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,
     ) {
       return lifetime.run(async () => {
-        throwActiveChildFailure();
         await stopAttempt();
         await mutateState({ configPath, runtimeEnv: runningEnv, stateDir, tempRoot });
         // Mutation can reopen parent stores; release them before child startup maintenance.

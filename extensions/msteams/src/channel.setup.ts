@@ -11,10 +11,7 @@ import { msteamsSetupWizard } from "./setup-surface.js";
 
 export const msteamsSetupPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   id: "msteams",
-  meta: {
-    ...msteamsMeta,
-    aliases: [...msteamsMeta.aliases],
-  },
+  meta: msteamsMeta,
   capabilities: {
     chatTypes: ["direct", "channel", "group", "thread"],
     polls: true,

@@ -25,7 +25,6 @@ import {
   type ThemeMode,
 } from "../../../packages/gateway-protocol/src/theme.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
@@ -35,8 +34,7 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
-import { resolveUserProfileId } from "../../state/user-profiles.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
+import { readResidentUserProfileId } from "../../state/user-profile-list.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
@@ -45,7 +43,7 @@ const DEFINITION_PREFIX = "ui.themeDefinition.";
 type ThemeRequest = Omit<GatewayRequestHandlerOptions, "params">;
 
 function requestOwner(options: ThemeRequest) {
-  const { client, context } = options;
+  const { client } = options;
   const runtimeIdentity = client?.internal?.agentRuntimeIdentity;
   const caller = getGatewayToolCallerIdentity();
   const participant = resolveGatewayPersonalToolParticipant(runtimeIdentity);
@@ -56,19 +54,14 @@ function requestOwner(options: ThemeRequest) {
       : client?.internal?.syntheticClient
         ? caller?.gatewayUiCommandTarget?.profileId
         : client?.authenticatedUserProfile?.profileId;
-  const assertCaller = captureGatewayToolCallerAssertion();
-  const profileId = capturedProfile ? resolveUserProfileId(capturedProfile) : undefined;
+  const profileId = capturedProfile ? readResidentUserProfileId(capturedProfile) : undefined;
   const assertCurrent = () => {
     participant?.assertCurrent();
     options.signal?.throwIfAborted();
     options.sessionMutationCommitGuard?.();
     options.sessionMutationAuthorization?.assertCurrent();
-    assertActiveAgentRuntimeAuthority(client, context, assertCaller);
-    if (options.hasCurrentClientAuthority?.() === false || client?.invalidated) {
-      throw new Error("Theme request authority is no longer active.");
-    }
     if (
-      (capturedProfile && resolveUserProfileId(capturedProfile) !== profileId) ||
+      (capturedProfile && readResidentUserProfileId(capturedProfile) !== profileId) ||
       (!runtimeIdentity &&
         !participant &&
         !client?.internal?.syntheticClient &&
@@ -92,25 +85,10 @@ function catalogForPreferences(entries: Record<string, unknown>): ThemeCatalogEn
     if (!THEME_LOCAL_ID_PATTERN.test(localId) || !definition) {
       continue;
     }
+    const { light: _light, dark: _dark, ...metadata } = definition;
     imported.push({
+      ...metadata,
       id: `user/${localId}`,
-      name: definition.name,
-      description: definition.description,
-      ...(definition.mascot !== undefined ? { mascot: definition.mascot } : {}),
-      ...(definition.brandName !== undefined ? { brandName: definition.brandName } : {}),
-      ...(definition.brandIcon !== undefined ? { brandIcon: definition.brandIcon } : {}),
-      ...(definition.workingIndicator !== undefined
-        ? { workingIndicator: definition.workingIndicator }
-        : {}),
-      ...(definition.lobsterdex !== undefined ? { lobsterdex: definition.lobsterdex } : {}),
-      ...(definition.communityLinks !== undefined
-        ? { communityLinks: definition.communityLinks }
-        : {}),
-      ...(definition.workingPhrases !== undefined
-        ? { workingPhrases: definition.workingPhrases }
-        : {}),
-      ...(definition.critters !== undefined ? { critters: definition.critters } : {}),
-      ...(definition.avatarHat !== undefined ? { avatarHat: definition.avatarHat } : {}),
       source: "user",
       modes: (["light", "dark"] as const).filter((mode) => Boolean(definition[mode])),
       definition,
@@ -205,10 +183,7 @@ async function writeThemes(
   options: ThemeRequest,
   owner: ReturnType<typeof requestOwner>,
   entries: Record<string, unknown>,
-  conditions: {
-    assertCatalog?: () => void;
-    expectedEntries: Readonly<Record<string, unknown>>;
-  },
+  expectedEntries: Readonly<Record<string, unknown>>,
 ) {
   if (!owner.profileId) {
     throw new Error(
@@ -216,11 +191,8 @@ async function writeThemes(
     );
   }
   const written = await setCanonicalUserPreferences(owner.profileId, entries, {
-    expectedEntries: conditions.expectedEntries,
-    assertCurrent: () => {
-      owner.assertCurrent();
-      conditions.assertCatalog?.();
-    },
+    expectedEntries,
+    assertCurrent: owner.assertCurrent,
   });
   if (!written) {
     throw new Error("The requesting profile is unavailable.");
@@ -311,27 +283,14 @@ export const themeHandlers: GatewayRequestHandlers = {
           ...(nextMode !== undefined ? { "ui.themeMode": nextMode } : {}),
         },
         {
-          expectedEntries: {
-            "ui.theme": entries["ui.theme"] ?? null,
-            "ui.themeMode": entries["ui.themeMode"] ?? null,
-            ...(selected?.source === "user"
-              ? {
-                  [`${DEFINITION_PREFIX}${selected.id.slice("user/".length)}`]:
-                    entries[`${DEFINITION_PREFIX}${selected.id.slice("user/".length)}`] ?? null,
-                }
-              : {}),
-          },
-          assertCatalog:
-            selected?.source === "plugin"
-              ? () => {
-                  const current = listPluginThemes().find((theme) => theme.id === selected.id);
-                  if (!current || current.definition !== selected.definition) {
-                    throw new Error(
-                      "The theme plugin changed before selection was saved. List themes and try again.",
-                    );
-                  }
-                }
-              : undefined,
+          "ui.theme": entries["ui.theme"] ?? null,
+          "ui.themeMode": entries["ui.themeMode"] ?? null,
+          ...(selected?.source === "user"
+            ? {
+                [`${DEFINITION_PREFIX}${selected.id.slice("user/".length)}`]:
+                  entries[`${DEFINITION_PREFIX}${selected.id.slice("user/".length)}`] ?? null,
+              }
+            : {}),
         },
       );
       options.respond(true, {
@@ -374,10 +333,8 @@ export const themeHandlers: GatewayRequestHandlers = {
           ...(nextMode !== undefined ? { "ui.themeMode": nextMode } : {}),
         },
         {
-          expectedEntries: {
-            "ui.theme": snapshot.entries["ui.theme"] ?? null,
-            "ui.themeMode": snapshot.entries["ui.themeMode"] ?? null,
-          },
+          "ui.theme": snapshot.entries["ui.theme"] ?? null,
+          "ui.themeMode": snapshot.entries["ui.themeMode"] ?? null,
         },
       );
       options.respond(true, {

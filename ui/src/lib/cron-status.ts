@@ -20,7 +20,7 @@ export function isCronJobRunning(job: Pick<CronStatusJob, "state">): boolean {
   return typeof runningAtMs === "number" && Number.isFinite(runningAtMs);
 }
 
-// "Failed cron" surfaces (cron page, sidebar attention chips) track current
+// The Automations page and rail indicator track current
 // actionability, so a failure only counts while the job is still enabled —
 // with one exception: auto-disabled jobs are the ESCALATED failure state, not
 // an operator pause, so hiding them would drop the problem from every failure

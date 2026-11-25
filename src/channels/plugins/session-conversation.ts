@@ -52,15 +52,6 @@ function normalizeResolvedChannel(channel: string): string {
   );
 }
 
-function getLoadedSessionChannelPlugin(channel: string) {
-  const normalizedChannel = normalizeResolvedChannel(channel);
-  try {
-    return getLoadedChannelPlugin(normalizedChannel);
-  } catch {
-    return undefined;
-  }
-}
-
 function buildGenericConversationResolution(rawId: string): ResolvedSessionConversation | null {
   const parsed = parseThreadSessionSuffix(rawId);
   // Generic parsing treats `:thread:*` suffixes as child thread metadata while
@@ -162,7 +153,7 @@ export function resolveSessionConversation(params: {
     return null;
   }
 
-  const channelPlugin = getLoadedSessionChannelPlugin(params.channel);
+  const channelPlugin = getLoadedChannelPlugin(normalizeResolvedChannel(params.channel));
   const messaging = channelPlugin?.messaging;
   const pluginResolved = normalizeSessionConversationResolution(
     messaging?.resolveSessionConversation?.({
@@ -234,9 +225,8 @@ export function resolveSessionConversationRef(
 
 export function resolveSessionThreadInfo(
   sessionKey: string | undefined | null,
-  opts: SessionConversationResolutionOptions = {},
 ): ParsedThreadSessionSuffix {
-  const resolved = resolveSessionConversationRef(sessionKey, opts);
+  const resolved = resolveSessionConversationRef(sessionKey);
   if (!resolved) {
     return parseThreadSessionSuffix(sessionKey);
   }
@@ -257,4 +247,39 @@ export function resolveSessionParentSessionKey(
     return null;
   }
   return baseSessionKey ?? null;
+}
+
+/**
+ * The conversation an id belongs to without the channel's own topic or sender scope.
+ * Callers that already resolved the channel plugin pass it to skip a registry lookup.
+ */
+export function resolveBaseConversationId(
+  channel: string | undefined,
+  rawId: string,
+  plugin?: { messaging?: ChannelMessagingAdapter },
+): string {
+  const trimmed = rawId.trim();
+  if (!channel) {
+    return trimmed;
+  }
+  const owner = plugin ?? getLoadedChannelPlugin(normalizeResolvedChannel(channel));
+  const adapter = owner?.messaging;
+  if (adapter?.resolveSessionConversation) {
+    return (
+      normalizeSessionConversationResolution(
+        adapter.resolveSessionConversation({ kind: "group", rawId: trimmed }),
+      )?.baseConversationId || trimmed
+    );
+  }
+  // Deprecated numericTopicShorthand keeps its meaning for adapters that have not
+  // adopted resolveSessionConversation yet.
+  if (adapter?.numericTopicShorthand) {
+    return /^(-?\d+):\d+$/.exec(trimmed)?.[1] ?? trimmed;
+  }
+  // A loaded channel without its own grammar keeps the id opaque; otherwise the
+  // bundled session-key artifact may still describe it before registration.
+  return owner
+    ? trimmed
+    : resolveSessionConversation({ channel, kind: "group", rawId: trimmed })?.baseConversationId ||
+        trimmed;
 }

@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -27,116 +26,105 @@ function sameDraft(left: DraftTitleInput | null, right: DraftTitleInput | null):
 }
 
 /** Owns disposable title work for New Session, never the chat route. */
-export class NewSessionTitleController implements ReactiveController {
-  private current: DraftTitleInput | null = null;
-  private title: string | null = null;
-  private timer: ReturnType<typeof setTimeout> | undefined;
-  private active = false;
-  private pending = false;
-  private readyAt = 0;
+export function createNewSessionTitle(
+  read: () => {
+    context: ApplicationContext | undefined;
+    data: NewSessionRouteData | undefined;
+    place: DraftPlaceState;
+    submission: DraftSubmissionFlow;
+    dictating: boolean;
+  },
+) {
+  let current: DraftTitleInput | null = null;
+  let title: string | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let active = false;
+  let pending = false;
+  let readyAt = 0;
+  let disposed = false;
+  let composing = false;
+  let submitted: DraftTitleInput | null = null;
 
-  private connected = false;
-  private composing = false;
-  private submitted: DraftTitleInput | null = null;
-
-  constructor(
-    host: ReactiveControllerHost,
-    private readonly read: () => {
-      context: ApplicationContext | undefined;
-      data: NewSessionRouteData | undefined;
-      place: DraftPlaceState;
-      submission: DraftSubmissionFlow;
-      dictating: boolean;
+  return {
+    dispose() {
+      disposed = true;
+      sync(null);
+      submitted = null;
     },
-  ) {
-    host.addController(this);
-  }
+    synchronize: () => sync(readInput()),
+    setComposing(value: boolean) {
+      composing = value;
+      sync(readInput());
+    },
+    takePreparedTitle(): string | undefined {
+      const next = readInput();
+      const prepared = sameDraft(current, next) ? (title ?? undefined) : undefined;
+      submitted = next ?? submitted;
+      sync(null);
+      return prepared;
+    },
+  };
 
-  hostConnected() {
-    this.connected = true;
-  }
-  hostUpdated() {
-    this.sync(this.input());
-  }
-  hostDisconnected() {
-    this.connected = false;
-    this.sync(null);
-    this.submitted = null;
-  }
-
-  setComposing(composing: boolean) {
-    this.composing = composing;
-    this.hostUpdated();
-  }
-
-  takePreparedTitle(): string | undefined {
-    const input = this.input();
-    const title = sameDraft(this.current, input) ? (this.title ?? undefined) : undefined;
-    this.submitted = input ?? this.submitted;
-    this.sync(null);
-    return title;
-  }
-
-  private sync(input: DraftTitleInput | null) {
+  function sync(input: DraftTitleInput | null) {
     const next =
       input && input.message.length >= 12 && !input.message.startsWith("/") ? input : null;
-    if (sameDraft(this.current, next)) {
+    if (sameDraft(current, next)) {
       return;
     }
-    clearTimeout(this.timer);
-    this.current = next;
-    this.title = null;
-    this.pending = next !== null;
-    this.readyAt = Date.now() + 1_000;
-    this.schedule();
+    clearTimeout(timer);
+    current = next;
+    title = null;
+    pending = next !== null;
+    readyAt = Date.now() + 1_000;
+    schedule();
   }
 
-  private schedule() {
-    if (!this.pending || this.active) {
+  function schedule() {
+    if (!pending || active) {
       return;
     }
-    this.timer = setTimeout(() => void this.prepare(), Math.max(0, this.readyAt - Date.now()));
+    timer = setTimeout(() => void prepare(), Math.max(0, readyAt - Date.now()));
   }
 
-  private async prepare() {
-    const current = this.current;
-    if (!current || !this.pending) {
+  async function prepare() {
+    const preparing = current;
+    if (!preparing || !pending) {
       return;
     }
-    this.pending = false;
-    this.active = true;
+    pending = false;
+    active = true;
     try {
-      const result = await current.client.request<{ title: string | null }>(
+      const result = await preparing.client.request<{ title: string | null }>(
         "sessions.title.prepare",
         {
-          agentId: current.agentId,
-          message: truncateUtf16Safe(current.message, 1_000),
-          ...(current.model ? { model: current.model } : {}),
+          agentId: preparing.agentId,
+          message: truncateUtf16Safe(preparing.message, 1_000),
+          ...(preparing.model ? { model: preparing.model } : {}),
         },
         { timeoutMs: 20_000 },
       );
       // Object identity fences edits, route changes, privacy changes, and teardown,
       // including a draft that changes away and then back during the request.
-      if (this.current === current) {
-        this.title = result.title;
+      if (current === preparing) {
+        title = result.title;
       }
     } catch {
       // Speculation must never block Send or leak a provider error into the draft.
       // An unchanged failed draft is not retried until the operator edits it.
     } finally {
-      this.active = false;
-      this.schedule();
+      active = false;
+      schedule();
     }
   }
 
-  private input(): DraftTitleInput | null {
-    const { context, data, place, submission, dictating } = this.read();
+  function readInput(): DraftTitleInput | null {
+    const { context, data, place, submission, dictating } = read();
     const snapshot = context?.gateway.snapshot;
     // Native prompts belong to the selected CLI, never OpenClaw title inference.
     if (
-      !this.connected ||
+      disposed ||
       isTarget(data) ||
-      this.composing ||
+      composing ||
       dictating ||
       submission.submitting ||
       submission.visibility === "incognito" ||
@@ -157,6 +145,6 @@ export class NewSessionTitleController implements ReactiveController {
     };
     // A failed navigation/retry may leave this page mounted after creation. The
     // submitted draft cannot start more inference; only a new draft can do so.
-    return sameDraft(input, this.submitted) ? null : input;
+    return sameDraft(input, submitted) ? null : input;
   }
 }

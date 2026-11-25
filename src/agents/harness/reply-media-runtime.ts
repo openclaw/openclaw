@@ -102,10 +102,10 @@ export async function prepareHarnessReplyMedia(params: {
     lastToolError: result.lastToolError,
     didSendViaMessagingTool: result.didSendViaMessagingTool,
     didDeliverSourceReplyViaMessageTool: result.didDeliverSourceReplyViaMessageTool,
+    sourceReplyDeliveryState: result.sourceReplyDeliveryState,
     messagingToolSentTargets: result.messagingToolSentTargets,
     messagingToolSourceReplyPayloads: result.messagingToolSourceReplyPayloads,
     didSendDeterministicApprovalPrompt: result.didSendDeterministicApprovalPrompt,
-    heartbeatToolResponse: result.heartbeatToolResponse,
     runAborted: result.terminal.kind === "aborted",
   });
   const sources = [

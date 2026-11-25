@@ -108,7 +108,6 @@
     ],
     "remoteWorkspaceRoot": "/workspaces",
     "codeModeOnly": true,
-    "loopDetectionPreToolUseRelay": false,
     "requestTimeoutMs": 1000,
     "approvalPolicy": "on-request",
     "sandbox": "workspace-write",
@@ -117,7 +116,6 @@
     "enableUltrafast": false,
     "cyberFailover": {
       "mode": "off",
-      "model": "example-model",
       "cooloffMs": 1000
     },
     "networkProxy": {

@@ -9,6 +9,7 @@ import {
   type SpawnSyncReturns,
 } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "@openclaw/fs-safe/path";
@@ -21,6 +22,7 @@ import {
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
 import { toErrorObject } from "./lib/error-format.mts";
+import { applyLocalTsgoPolicy } from "./lib/local-check-runtime.mts";
 import {
   inspectManagedProcessGroup,
   signalExitCode,
@@ -29,7 +31,11 @@ import {
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot, controlUiBuildSiblingPid } from "./lib/output-root-guard.mjs";
-import { readProcessMemoryCapacity, type MemoryLimitParams } from "./lib/process-memory.mts";
+import {
+  readProcessCgroupV2Snapshot,
+  readProcessMemoryCapacity,
+  type MemoryLimitParams,
+} from "./lib/process-memory.mts";
 import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
   TSDOWN_DECLARATION_CONFIG_GROUPS,
@@ -39,10 +45,20 @@ import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./lib/tsdown-config-groups.mts";
 import {
+  DEFAULT_TSDOWN_MAX_OLD_SPACE_MB,
+  TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  tsdownBudgetAdmitsParallelNativeWork,
+} from "./lib/tsdown-heap-budget.mts";
+import {
   TSDOWN_PACKAGE_OUTPUT_ROOTS,
   TSDOWN_PACKAGES_CACHE_INPUT,
   tsdownPackageOutputRoot,
 } from "./lib/tsdown-output-roots.mts";
+import {
+  finalizeTsdownRuntimeCaches,
+  TSDOWN_CACHE_GROUPS_ENV,
+  TSDOWN_CACHE_PENDING_ENV,
+} from "./lib/tsdown-runtime-cache.mts";
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
 const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
@@ -51,9 +67,7 @@ const DEPENDENCY_PATH_MARKERS = ["node_modules/", "openclaw-pnpm-node-modules/"]
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
-const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
 const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
-export const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
 const DOCKER_TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB";
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
 const SERIALIZED_MAIN_CONFIG_GROUPS = [
@@ -78,35 +92,6 @@ export const TSDOWN_DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 
-export const TSDOWN_DECLARATION_TOOL_INPUTS = [
-  "package.json",
-  "pnpm-lock.yaml",
-  "tsconfig.json",
-  "scripts/tsdown-build.mts",
-  "scripts/build-all.mts",
-  "scripts/lib/build-artifact-cache.mts",
-  "scripts/lib/dist-artifact-ownership.mts",
-  "scripts/lib/managed-child-process.mts",
-  "scripts/lib/vitest-resource-ownership.mts",
-  "scripts/lib/direct-run.mjs",
-  "scripts/lib/repo-root.mjs",
-  "scripts/lib/local-check-runtime.mts",
-  "scripts/lib/process-memory.mts",
-  "scripts/tsx.mjs",
-  "scripts/lib/tsx-cli-shim.mjs",
-  "scripts/lib/bundled-plugin-build-entries.mjs",
-  "scripts/lib/bundled-plugin-paths.mjs",
-  "scripts/lib/optional-bundled-clusters.mjs",
-  "scripts/lib/plugin-sdk-entries.mts",
-  "scripts/lib/plugin-sdk-entrypoints.json",
-  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-  "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
-  "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
-  "scripts/lib/root-package-bundled-plugin-excludes.mjs",
-  "scripts/lib/tsdown-config-groups.mts",
-  "scripts/lib/tsdown-declaration-boundary.mts",
-  "scripts/lib/tsdown-output-roots.mts",
-];
 export { TSDOWN_PACKAGES_CACHE_INPUT };
 export const TSDOWN_UNIFIED_CACHE_ENV = [
   "OPENCLAW_BUILD_PRIVATE_QA",
@@ -121,7 +106,14 @@ type OutputRootParams = {
   roots?: string[];
 };
 
-type ResolvedMemoryLimitParams = MemoryLimitParams & { resolvedMaxOldSpaceMb?: number };
+type TsdownMemoryBudget = {
+  maxOldSpaceMb: number;
+  unresolvedCgroupMemory: boolean;
+  capacityBytes: number | null;
+};
+type ResolvedMemoryLimitParams = MemoryLimitParams & {
+  resolvedMemoryBudget?: TsdownMemoryBudget;
+};
 
 type TsdownBuildParams = ResolvedMemoryLimitParams & {
   args?: string[];
@@ -613,9 +605,9 @@ function parseNonNegativeIntegerEnv(value: string | undefined, name: string) {
   return parsed;
 }
 
-function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
-  if (params.resolvedMaxOldSpaceMb !== undefined) {
-    return { maxOldSpaceMb: params.resolvedMaxOldSpaceMb, unresolvedCgroupMemory: false };
+function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}): TsdownMemoryBudget {
+  if (params.resolvedMemoryBudget) {
+    return params.resolvedMemoryBudget;
   }
   const defaultMaxOldSpaceMb =
     (params.platform ?? process.platform) === "win32"
@@ -625,15 +617,15 @@ function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
     (params.env ?? process.env)[TSDOWN_MAX_OLD_SPACE_MB_ENV],
     TSDOWN_MAX_OLD_SPACE_MB_ENV,
   );
+  const { limitBytes, unresolved, capacityBytes } = readProcessMemoryCapacity(params);
   if (envOverride !== null) {
-    return { maxOldSpaceMb: envOverride, unresolvedCgroupMemory: false };
+    return { maxOldSpaceMb: envOverride, unresolvedCgroupMemory: false, capacityBytes };
   }
-  const { limitBytes, unresolved } = readProcessMemoryCapacity(params);
   if (unresolved) {
-    return { maxOldSpaceMb: 1, unresolvedCgroupMemory: true };
+    return { maxOldSpaceMb: 1, unresolvedCgroupMemory: true, capacityBytes };
   }
   if (limitBytes === null) {
-    return { maxOldSpaceMb: defaultMaxOldSpaceMb, unresolvedCgroupMemory: false };
+    return { maxOldSpaceMb: defaultMaxOldSpaceMb, unresolvedCgroupMemory: false, capacityBytes };
   }
 
   const limitMb = Math.floor(limitBytes / 1024 / 1024);
@@ -643,6 +635,7 @@ function resolveTsdownMemoryBudget(params: ResolvedMemoryLimitParams = {}) {
   return {
     maxOldSpaceMb: Math.min(defaultMaxOldSpaceMb, cgroupCap),
     unresolvedCgroupMemory: false,
+    capacityBytes,
   };
 }
 
@@ -681,17 +674,13 @@ export function describeInsufficientTsdownHeap(
     : TSDOWN_MAX_OLD_SPACE_MB_ENV;
   const fatal = explicitHeapMb === null;
   const outcome = fatal
-    ? budget.unresolvedCgroupMemory
-      ? [
-          "Stopping before any build output is removed. Pick one:",
-          "  - run the build where the process cgroup limit is visible",
-          `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
-        ]
-      : [
-          "Stopping before any build output is removed. Pick one:",
-          "  - give this machine or container more memory",
-          `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
-        ]
+    ? [
+        "Stopping before any build output is removed. Pick one:",
+        budget.unresolvedCgroupMemory
+          ? "  - run the build where the process cgroup limit is visible"
+          : "  - give this machine or container more memory",
+        `  - set ${heapOverrideEnv}=<MB> to explicitly attempt the build anyway`,
+      ]
     : [
         `Continuing because ${heapOverrideEnv} explicitly requests ${explicitHeapMb}MB. Existing build output will now be cleaned; the build may stall or fail.`,
       ];
@@ -708,8 +697,7 @@ export function describeInsufficientTsdownHeap(
   };
 }
 
-function normalizeTsdownNodeOptions(nodeOptions: string, params: ResolvedMemoryLimitParams = {}) {
-  const { maxOldSpaceMb } = resolveTsdownMemoryBudget(params);
+function normalizeTsdownNodeOptions(nodeOptions: string, maxOldSpaceMb: number) {
   const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
   const normalized: string[] = [];
   let foundMaxOldSpaceSize = false;
@@ -751,9 +739,18 @@ function resolveTsdownEnv(
   params: ResolvedMemoryLimitParams = {},
 ): NodeJS.ProcessEnv {
   const nodeOptions = env.NODE_OPTIONS?.trim() ?? "";
+  const budget = resolveTsdownMemoryBudget(params);
+  // The native declaration compiler is Go-based; Node's heap limit does not govern it.
+  const { env: compilerEnv } = applyLocalTsgoPolicy([], env, {
+    logicalCpuCount: os.availableParallelism(),
+    totalMemoryBytes: params.physicalMemoryBytes ?? os.totalmem(),
+    memoryCapacityBytes: budget.capacityBytes,
+  });
   return {
-    ...env,
-    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions, params),
+    ...compilerEnv,
+    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions, budget.maxOldSpaceMb),
+    // Descendants keep the frozen budget, including the native declaration emitter.
+    [TSDOWN_MAX_OLD_SPACE_MB_ENV]: String(budget.maxOldSpaceMb),
   };
 }
 
@@ -770,7 +767,7 @@ function tsdownBuildUsage() {
   ].join("\n");
 }
 
-export function parseTsdownBuildArgs(argv: string[]) {
+function parseTsdownBuildArgs(argv: string[]) {
   if (argv.includes("--help") || argv.includes("-h")) {
     return {
       forwardedArgs: [],
@@ -826,7 +823,11 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
 export function resolveTsdownBuildInvocation(
   params: TsdownBuildParams = {},
 ): TsdownBuildInvocation {
-  const env = resolveTsdownEnv(params.env ?? process.env, params);
+  const budget = resolveTsdownMemoryBudget(params);
+  const env = resolveTsdownEnv(params.env ?? process.env, {
+    ...params,
+    resolvedMemoryBudget: budget,
+  });
   const args = params.args ?? [];
   const forwardedArgs = wrapperOwnsTsdownCleanup(args)
     ? args.filter((arg) => arg !== "--clean" && !arg.startsWith("--clean="))
@@ -835,21 +836,30 @@ export function resolveTsdownBuildInvocation(
     (arg) => arg === "--concurrency" || arg.startsWith("--concurrency="),
   );
   const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  const mainConfig = !args.some(isConfigArg) || selectsMainConfig(args);
   const runtimeOnly =
     !args.includes("--dts") &&
-    (!args.some(isConfigArg) || selectsMainConfig(args)) &&
+    mainConfig &&
     filters.length > 0 &&
     filters.every((filter) => filter === TSDOWN_UNIFIED_CONFIG_GROUP);
+  // Native allocations are outside the JS heap. Keep small runtime builds serial
+  // and declaration graphs serialized, regardless of which build entry point is used.
+  const defaultConcurrency =
+    !runtimeOnly && tsdownDeclarationsEnabled(args, env)
+      ? 1
+      : mainConfig
+        ? tsdownBudgetAdmitsParallelNativeWork(budget.maxOldSpaceMb)
+          ? 2
+          : 1
+        : null;
   const tsdownArgs = [
     "--config-loader",
     "unrun",
     "--logLevel",
     logLevel,
     "--no-clean",
-    // Native declaration children retain entire compiler graphs. Let tsdown own
-    // config admission so preparation and trace drainage cannot overlap unboundedly.
-    ...(!explicitConcurrency && !runtimeOnly && tsdownDeclarationsEnabled(args, env)
-      ? ["--concurrency", "1"]
+    ...(!explicitConcurrency && defaultConcurrency !== null
+      ? ["--concurrency", String(defaultConcurrency)]
       : []),
     ...forwardedArgs,
   ];
@@ -922,8 +932,9 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
   });
   const declarationsEnabled = tsdownDeclarationsEnabled(aiArgs, env);
   const hasForwardedConfig = aiArgs.some(isConfigArg);
+  const mainConfig = hasForwardedConfig && selectsMainConfig(forwardedArgs);
   if (
-    (!hasForwardedConfig || selectsMainConfig(forwardedArgs)) &&
+    (!hasForwardedConfig || mainConfig) &&
     TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.some((group) => forwardedFilters.includes(group)) &&
     TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.some((group) => forwardedFilters.includes(group))
   ) {
@@ -948,45 +959,17 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
     // Watchers are long-lived, so sequential group orchestration would block forever on the
     // first child. Keep watch mode inside tsdown's single owning process.
     const groups =
-      declarationsEnabled && selectsMainConfig(forwardedArgs)
+      declarationsEnabled && mainConfig
         ? resolveSerializedMainConfigGroups(forwardedFilters)
         : null;
     return [
       resolveTsdownBuildInvocation({
         ...params,
         ...(groups ? { args: [...groups.flatMap((group) => ["--filter", group]), ...aiArgs] } : {}),
-        env: selectsMainConfig(forwardedArgs) ? mainEnv : env,
+        env: mainConfig ? mainEnv : env,
       }),
     ];
   }
-
-  if (hasForwardedConfig) {
-    if (declarationsEnabled && selectsMainConfig(forwardedArgs)) {
-      const serializedGroups = resolveSerializedMainConfigGroups(forwardedFilters);
-      if (serializedGroups) {
-        return serializedGroups.map((group) =>
-          resolveTsdownBuildInvocation({
-            ...params,
-            args: ["--filter", group, ...aiArgs],
-            env: mainEnv,
-          }),
-        );
-      }
-    }
-    return [
-      resolveTsdownBuildInvocation({
-        ...params,
-        env: selectsMainConfig(forwardedArgs) ? mainEnv : env,
-      }),
-    ];
-  }
-
-  const invocations = [
-    resolveTsdownBuildInvocation({
-      ...params,
-      args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
-    }),
-  ];
 
   const forwardedFilterSet = new Set(forwardedFilters);
   const uniqueForwardedFilters = SELECTABLE_MAIN_CONFIG_GROUPS.filter((group) =>
@@ -995,11 +978,32 @@ export function resolveTsdownBuildInvocations(params: TsdownBuildParams = {}) {
   const hasUnknownFilter = forwardedFilters.some(
     (filter) => filter !== "." && !SELECTABLE_MAIN_CONFIG_GROUPS.includes(filter),
   );
-  const serializedGroups = forwardedFilters.includes(".")
-    ? SERIALIZED_MAIN_CONFIG_GROUPS
-    : !hasUnknownFilter && uniqueForwardedFilters.length > 1
-      ? uniqueForwardedFilters
-      : null;
+  const serializedGroups = hasForwardedConfig
+    ? declarationsEnabled && mainConfig
+      ? resolveSerializedMainConfigGroups(forwardedFilters)
+      : null
+    : forwardedFilters.includes(".")
+      ? SERIALIZED_MAIN_CONFIG_GROUPS
+      : !hasUnknownFilter && uniqueForwardedFilters.length > 1
+        ? uniqueForwardedFilters
+        : null;
+  if (hasForwardedConfig && !serializedGroups) {
+    return [
+      resolveTsdownBuildInvocation({
+        ...params,
+        env: mainConfig ? mainEnv : env,
+      }),
+    ];
+  }
+
+  const invocations = hasForwardedConfig
+    ? []
+    : [
+        resolveTsdownBuildInvocation({
+          ...params,
+          args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
+        }),
+      ];
   if (!declarationsEnabled || (hasForwardedFilter && !serializedGroups)) {
     invocations.push(resolveTsdownBuildInvocation({ ...params, env: mainEnv }));
     return invocations;
@@ -1032,7 +1036,7 @@ export function resolveTsdownBuildPlan(params: TsdownBuildParams = {}) {
   const maxOldSpaceMb = budget.maxOldSpaceMb;
   const preparedParams = {
     ...params,
-    resolvedMaxOldSpaceMb: maxOldSpaceMb,
+    resolvedMemoryBudget: budget,
   };
   return {
     env: resolveTsdownEnv(params.env ?? process.env, preparedParams),
@@ -1320,7 +1324,84 @@ async function executeTsdownInvocation(
   count: number,
 ): Promise<number> {
   const startedAt = performance.now();
-  const result = await runTsdownBuildInvocation(invocation);
+  const pendingRoot = createTsdownCachePendingRoot(invocation);
+  try {
+    return await executeValidatedTsdownInvocation(invocation, index, count, startedAt, pendingRoot);
+  } finally {
+    if (pendingRoot) {
+      fs.rmSync(pendingRoot, { recursive: true, force: true });
+    }
+  }
+}
+
+function createTsdownCachePendingRoot(invocation: TsdownBuildInvocation) {
+  const args = invocation.args.slice(1);
+  const env = invocation.options.env;
+  if (env.OPENCLAW_BUILD_CACHE === "0" || env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD !== "1") {
+    return undefined;
+  }
+  // Unknown CLI overrides may affect output bytes or selection. Let tsdown own
+  // those builds unchanged; only the wrapper's normal release plan is cached.
+  const valued = new Set([
+    "--config-loader",
+    "--logLevel",
+    "--concurrency",
+    "--filter",
+    "-F",
+    "--config",
+    "-c",
+  ]);
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (valued.has(arg)) {
+      index++;
+      continue;
+    }
+    if (arg === "--no-clean" || arg === "--no-dts") {
+      continue;
+    }
+    return undefined;
+  }
+  const config = readForwardedOption(args, ["--config", "-c"]);
+  if (config && !["tsdown.config.ts", "tsdown.ai.config.ts"].includes(config)) {
+    return undefined;
+  }
+  const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  if (
+    filters.some(
+      (filter) => ![TSDOWN_PACKAGE_CONFIG_GROUP, TSDOWN_UNIFIED_CONFIG_GROUP].includes(filter),
+    )
+  ) {
+    return undefined;
+  }
+  fs.mkdirSync(".artifacts", { recursive: true });
+  return fs.mkdtempSync(path.resolve(".artifacts/tsdown-cache-pending-"));
+}
+
+async function executeValidatedTsdownInvocation(
+  invocation: TsdownBuildInvocation,
+  index: number,
+  count: number,
+  startedAt: number,
+  pendingRoot: string | undefined,
+): Promise<number> {
+  const cachedInvocation = pendingRoot
+    ? {
+        ...invocation,
+        options: {
+          ...invocation.options,
+          env: {
+            ...invocation.options.env,
+            [TSDOWN_CACHE_PENDING_ENV]: pendingRoot,
+            [TSDOWN_CACHE_GROUPS_ENV]: readForwardedOptions(invocation.args, [
+              "--filter",
+              "-F",
+            ]).join(","),
+          },
+        },
+      }
+    : invocation;
+  const result = await runTsdownBuildInvocation(cachedInvocation);
   if (result.error) {
     throw result.error;
   }
@@ -1345,6 +1426,9 @@ async function executeTsdownInvocation(
     return 124;
   }
 
+  if (result.status === 0 && pendingRoot) {
+    finalizeTsdownRuntimeCaches(pendingRoot);
+  }
   return result.status ?? 1;
 }
 
@@ -1420,6 +1504,20 @@ async function loadDefaultLiveGatewayDistFence(): Promise<LiveGatewayDistFenceFn
   }
 }
 
+function readParentResidentMemoryBytes(): number | null {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  try {
+    const status = fs.readFileSync(`/proc/${process.ppid}/status`, "utf8");
+    const rss = status.match(/^VmRSS:\s+(\d+)\s+kB$/mu)?.[1];
+    const bytes = rss === undefined ? Number.NaN : Number(rss) * 1024;
+    return Number.isSafeInteger(bytes) ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function runTsdownBuild(
   argv: string[] = process.argv.slice(2),
   options: {
@@ -1450,6 +1548,43 @@ export async function runTsdownBuild(
       {
         reportShortfall(shortfall) {
           if (shortfall.fatal) {
+            try {
+              console.error(
+                "[tsdown-build:memory-refusal]",
+                JSON.stringify({
+                  sample: "after-refusal",
+                  memoryCapacity: readProcessMemoryCapacity({}),
+                  rssBytes: process.memoryUsage().rss,
+                  parentRssBytes: readParentResidentMemoryBytes(),
+                  cgroup: readProcessCgroupV2Snapshot({}, { includeMemoryDetails: true })
+                    ?.slice(0, 8)
+                    .map(({ counters }, depth) => {
+                      const current = Number(counters["memory.current"] ?? Number.NaN);
+                      const peak = Number(counters["memory.peak"] ?? Number.NaN);
+                      const max = /^\d+\s*$/u.test(counters["memory.max"] ?? "")
+                        ? Number(counters["memory.max"])
+                        : Number.NaN;
+                      const high = /^\d+\s*$/u.test(counters["memory.high"] ?? "")
+                        ? Number(counters["memory.high"])
+                        : Number.NaN;
+                      const inactiveFile = Number(
+                        counters["memory.stat"]?.match(/^inactive_file\s+(\d+)$/mu)?.[1] ??
+                          Number.NaN,
+                      );
+                      return {
+                        depth,
+                        currentBytes: Number.isSafeInteger(current) ? current : null,
+                        peakBytes: Number.isSafeInteger(peak) ? peak : null,
+                        maxBytes: Number.isSafeInteger(max) ? max : null,
+                        highBytes: Number.isSafeInteger(high) ? high : null,
+                        inactiveFileBytes: Number.isSafeInteger(inactiveFile) ? inactiveFile : null,
+                      };
+                    }),
+                }),
+              );
+            } catch {
+              // Diagnostics must preserve the original admission refusal.
+            }
             console.error(shortfall.message);
           } else {
             console.warn(shortfall.message);

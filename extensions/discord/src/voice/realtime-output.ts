@@ -7,9 +7,7 @@ import {
   DISCORD_AUDIO_PLAYED_BYTES,
   DISCORD_AUDIO_STARTED,
   DiscordAudioOutputStatus,
-  admitDiscordAudioInput,
   getDiscordAudioOutputStatus,
-  releaseDiscordAudioInput,
   setDiscordAudioOutputStatus,
   restoreDiscordAudioError,
   type DiscordAudioEvent,
@@ -146,24 +144,11 @@ export class DiscordRealtimeOutput {
     item: RealtimeVoicePlaybackItem | undefined,
     onAccepted: () => void,
   ): boolean {
-    if (
-      this.closed ||
-      this.activity.snapshot().streamEnding ||
-      !admitDiscordAudioInput(this.clock)
-    ) {
+    if (!this.isAcceptingAudio()) {
       return false;
     }
-    try {
-      onAccepted();
-    } catch (error) {
-      releaseDiscordAudioInput(this.clock);
-      throw error;
-    }
-    // Observers may cancel synchronously after admission, before publication.
-    if (this.closed) {
-      releaseDiscordAudioInput(this.clock);
-      return true;
-    }
+    onAccepted();
+    // A chunk racing natural worker retirement may be dropped; the next chunk opens a new output.
     const previous = this.activity.snapshot();
     const delta = resolveDiscordOutputAudioDelta(previous, audio.length);
     const { audioMs } = delta;

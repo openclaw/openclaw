@@ -30,9 +30,7 @@ type SlashHandlerMatch =
   | { kind: "none" }
   | {
       kind: "single";
-      source: SlashHandlerMatchSource;
       handler: SlashHandler;
-      accountIds: string[];
     }
   | {
       kind: "ambiguous";
@@ -101,9 +99,7 @@ function resolveSlashHandler(
     }
     return {
       kind: "single",
-      source,
       handler: match.handler,
-      accountIds: [match.accountId],
     };
   }
 
@@ -138,7 +134,6 @@ export function getSlashCommandState(accountId: string): SlashCommandAccountStat
  */
 export function activateSlashCommands(params: {
   account: ResolvedMattermostAccount;
-  commandTokens: string[];
   registeredCommands: MattermostRegisteredCommand[];
   triggerMap?: Map<string, string>;
   api: {
@@ -147,7 +142,7 @@ export function activateSlashCommands(params: {
   };
   log?: (msg: string) => void;
 }) {
-  const { account, commandTokens, registeredCommands, triggerMap, api, log } = params;
+  const { account, registeredCommands, triggerMap, api, log } = params;
   const accountId = account.accountId;
 
   const handler = createSlashCommandHttpHandler({
@@ -160,7 +155,7 @@ export function activateSlashCommands(params: {
   });
 
   accountStates.set(accountId, {
-    commandTokens: new Set(commandTokens),
+    commandTokens: new Set(registeredCommands.map((command) => command.token).filter(Boolean)),
     registeredCommands,
     handler,
   });
@@ -171,13 +166,10 @@ export function activateSlashCommands(params: {
 }
 
 export function deactivateSlashCommands(accountId?: string) {
-  for (const [stateAccountId, state] of accountStates) {
+  for (const stateAccountId of accountStates.keys()) {
     if (accountId && stateAccountId !== accountId) {
       continue;
     }
-    state.commandTokens.clear();
-    state.registeredCommands = [];
-    state.handler = null;
     clearMattermostSlashCommandValidationCacheForAccount(stateAccountId);
     accountStates.delete(stateAccountId);
   }

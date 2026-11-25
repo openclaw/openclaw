@@ -19,7 +19,6 @@ describe("requestProviderUsage", () => {
     }) as GatewayBrowserClient["request"]);
     await expect(requestProviderUsage(client)).resolves.toEqual({
       ok: false,
-      error: { kind: "request-failed" },
     });
   });
 

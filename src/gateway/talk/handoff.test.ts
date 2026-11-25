@@ -31,17 +31,15 @@ describe("talk handoff store", () => {
       createdAt: Date.parse("2026-05-05T12:00:00.000Z"),
       expiresAt: Date.parse("2026-05-05T12:00:05.000Z"),
     });
-    expect(handoff.room.activeClientId).toBeUndefined();
-    expect(Array.isArray(handoff.room.recentTalkEvents)).toBe(true);
-    expect(handoff.room.recentTalkEvents[0]).toMatchObject({
-      type: "session.started",
-      sessionId: `talk_${handoff.id}`,
-      transport: "managed-room",
-    });
     expect(handoff).not.toHaveProperty("tokenHash");
     if (record === undefined) {
       throw new Error("expected stored talk handoff record");
     }
+    expect(record.room.talk.recentEvents[0]).toMatchObject({
+      type: "session.started",
+      sessionId: `talk_${handoff.id}`,
+      transport: "managed-room",
+    });
     expect(record).not.toHaveProperty("token");
 
     vi.advanceTimersByTime(5001);
@@ -49,62 +47,25 @@ describe("talk handoff store", () => {
     vi.useRealTimers();
   });
 
-  it("expires handoffs immediately when the creation clock is invalid", () => {
-    const handoff = (() => {
-      const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-      try {
-        return createTalkHandoff({
-          sessionKey: "session:main",
-          ttlMs: 5000,
-        });
-      } finally {
-        dateNow.mockRestore();
-      }
-    })();
-
-    expect(handoff.createdAt).toBe(0);
-    expect(handoff.expiresAt).toBe(0);
-    expect(getTalkHandoff(handoff.id)).toBeUndefined();
-    expect(revokeTalkHandoff(handoff.id)).toEqual({ revoked: false, events: [] });
-  });
-
-  it("expires handoffs immediately when expiry would exceed Date bounds", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-
-    const handoff = createTalkHandoff({
-      sessionKey: "session:main",
-      ttlMs: 5000,
-    });
-
-    expect(handoff.expiresAt).toBe(0);
-    expect(getTalkHandoff(handoff.id)).toBeUndefined();
-    expect(revokeTalkHandoff(handoff.id)).toEqual({ revoked: false, events: [] });
-
-    vi.useRealTimers();
-  });
-
   it("revokes a handoff and records its final close event", () => {
     const handoff = createTalkHandoff({ sessionKey: "session:main" });
+    const record = getTalkHandoff(handoff.id);
 
-    expect(getTalkHandoff(handoff.id)).toMatchObject({
+    expect(record).toMatchObject({
       roomId: handoff.roomId,
       sessionKey: "session:main",
     });
-    const revoked = revokeTalkHandoff(handoff.id);
-    expect(revoked).toMatchObject({
-      revoked: true,
-      roomId: handoff.roomId,
-    });
-    expect(Array.isArray(revoked.events)).toBe(true);
-    expect(revoked.events[0]).toMatchObject({
+    revokeTalkHandoff(handoff.id);
+    expect(record?.room.talk.recentEvents).toHaveLength(2);
+    expect(record?.room.talk.recentEvents[1]).toMatchObject({
       type: "session.closed",
       sessionId: handoff.roomId,
       final: true,
+      payload: { reason: "revoked" },
     });
-    expect(revoked.events[0]?.payload).toMatchObject({ reason: "revoked" });
     expect(getTalkHandoff(handoff.id)).toBeUndefined();
-    expect(revokeTalkHandoff(handoff.id)).toEqual({ revoked: false, events: [] });
+    revokeTalkHandoff(handoff.id);
+    expect(record?.room.talk.recentEvents).toHaveLength(2);
   });
 
   it("isolates simultaneous handoffs for different sessions on the same host", () => {

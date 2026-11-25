@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   databaseWorkerCoreTestFiles,
@@ -5,6 +6,10 @@ import {
 } from "../vitest/vitest.database-worker-core-paths.mjs";
 
 describe("database-worker test routing registry", () => {
+  it("routes only existing test files", () => {
+    expect(databaseWorkerCoreTestFiles.filter((file) => !existsSync(file))).toEqual([]);
+  });
+
   it("contains no duplicate file routes", () => {
     expect(new Set(databaseWorkerCoreTestFiles).size).toBe(databaseWorkerCoreTestFiles.length);
   });
@@ -13,11 +18,10 @@ describe("database-worker test routing registry", () => {
     "src/state/agent-database-admission.test.ts",
     "src/agents/prepared-model-runtime.hot-reload-dispatch.test.ts",
     "src/wizard/setup.inference-recovery.integration.test.ts",
-    "src/channels/message-access/discord-native-acp-owner.test.ts",
     "src/auto-reply/reply/commands-acp.owner.test.ts",
     "src/auto-reply/reply/commands-config.owner.test.ts",
-    "src/auto-reply/reply/commands-plugins.owner.test.ts",
     "src/auto-reply/reply/commands-session-restart.test.ts",
+    "src/auto-reply/reply/dispatch-from-config.reply-dispatch-scope.test.ts",
     "src/auto-reply/reply/directive-handling.mixed-inline.test.ts",
     "src/auto-reply/reply/directive-handling.model.test.ts",
     "src/auto-reply/reply/get-reply-native-slash-fast-path.test.ts",

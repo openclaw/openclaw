@@ -1,9 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  assertDatabasePathIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import type {
   SessionTranscriptWriteScope,
@@ -17,7 +14,7 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { prepareTranscriptMessageAppendForWorker } from "./session-accessor.sqlite-transcript-message-append.js";
-import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   LockedTranscriptMessageAppendOptions,
   SessionTranscriptWriteLockAccessorContext,
@@ -65,20 +62,12 @@ export async function withWorkerTranscriptWriteLock<T>(
   const assertOwned = captureOwnedTranscriptWriteAssertion(ownerScope);
   const custody = captureSessionPendingInputWorkerCustody();
   const database = { ...toDatabaseOptions(scope), path: scope.path };
-  const identity = readDatabasePathIdentitySync(scope.path);
-  const execution = captureOpenClawAgentDatabaseExecution(
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync(
     database,
-    identity.key.startsWith("file:")
-      ? {
-          expectedIdentity: {
-            kind: "file",
-            physicalIdentity: identity.key.slice("file:".length),
-            nativeLocation: identity.canonicalPath,
-            birthtime: identity.birthtime,
-          },
-        }
-      : { expectedCreationIdentity: identity },
+    {},
+    "observed-absence",
   );
+  const identity = execution.capturedIdentity;
   const resolved: ResolvedTranscriptScope = {
     agentId: scope.agentId,
     databaseAgentId: scope.databaseAgentId,
@@ -93,7 +82,7 @@ export async function withWorkerTranscriptWriteLock<T>(
   try {
     const owned = await prepareSessionSourceAuthority(assertOwned);
     if (owned.nativeSource) {
-      // Released synchronous authority callbacks reread the database; revisit at the next SDK major.
+      // Released synchronous callbacks remain through 2026-12-31, then retire in January 2027 stable.
       try {
         execution.assertCurrent();
         releaseExecution = false;
@@ -148,14 +137,14 @@ export async function withWorkerTranscriptWriteLock<T>(
                     writer.runExisting(source, (worker) =>
                       executeSessionMessageRewriteOperation(worker, database.agentId, {
                         type: "session.transcript.lock.cold",
-                        input: { scope: resolved },
+                        input: { scope: resolved, readCustody: source.readCustody },
                       }),
                     ),
                   );
                   if (!metadata) {
                     throw new Error("Locked transcript lost its admitted database");
                   }
-                  return metadata.archive;
+                  return metadata;
                 },
               },
               {
@@ -184,7 +173,6 @@ export async function withWorkerTranscriptWriteLock<T>(
           assertCurrent();
         },
         beforeWrite: assertCurrent,
-        async release() {},
       }),
       onTransactionFacts(facts) {
         if (!isRecord(facts)) {
@@ -273,6 +261,21 @@ export async function withWorkerTranscriptWriteLock<T>(
             }
             return receipt;
           };
+          // Source authority and message preparation can both read this writer.
+          // Settle their reads before commit without queuing behind the append itself.
+          const prepareWithLockedReads = <R>(prepare: () => Promise<R>) =>
+            withTranscriptLockSettlement((queueRead) =>
+              withLockedSessionTranscriptReads(
+                {
+                  canonicalPath: identity.canonicalPath,
+                  claim,
+                  worker,
+                  assertCurrent,
+                  queue: queueRead,
+                },
+                prepare,
+              ),
+            );
           const append = async <TMessage>(
             options: LockedTranscriptMessageAppendOptions<TMessage>,
             sequenced: boolean,
@@ -332,11 +335,13 @@ export async function withWorkerTranscriptWriteLock<T>(
                     input,
                   })
                 : undefined;
-            const authority = await prepareSessionSourceAuthority(
-              expected?.pending || expected?.existing ? undefined : freshGuard,
+            const authority = await prepareWithLockedReads(() =>
+              prepareSessionSourceAuthority(
+                expected?.pending || expected?.existing ? undefined : freshGuard,
+              ),
             );
             if (freshGuard?.nativeSource || authority.nativeSource || (legacyPrepare && !prepare)) {
-              // Released synchronous authority callbacks reread the database; revisit at the next SDK major.
+              // Released synchronous callbacks remain through 2026-12-31, then retire in January 2027 stable.
               try {
                 return await native(
                   fenced,
@@ -360,19 +365,7 @@ export async function withWorkerTranscriptWriteLock<T>(
             try {
               let message: TMessage | undefined = originalMessage;
               if (prepare && expected && !expected.pending && !expected.existing) {
-                // Preparation may await a delta read; settle it before this append commits.
-                message = await withTranscriptLockSettlement((queueRead) =>
-                  withLockedSessionTranscriptReads(
-                    {
-                      canonicalPath: identity.canonicalPath,
-                      claim,
-                      worker,
-                      assertCurrent,
-                      queue: queueRead,
-                    },
-                    () => prepare(originalMessage),
-                  ),
-                );
+                message = await prepareWithLockedReads(() => prepare(originalMessage));
               }
               assertCurrent();
               const preparedMessageJson =
@@ -380,7 +373,7 @@ export async function withWorkerTranscriptWriteLock<T>(
                   ? undefined
                   : isRecord(message)
                     ? prepareTranscriptMessageAppendForWorker({ message, config }).messageJson
-                    : JSON.stringify(redactTranscriptMessageForStorage(message, { config }));
+                    : JSON.stringify(sanitizeTranscriptMessageForStorage(message));
               const receipt = await mutate({
                 ...input,
                 kind: "message",
@@ -441,7 +434,12 @@ export async function withWorkerTranscriptWriteLock<T>(
                       database.agentId,
                       {
                         type: "session.transcript.lock.facts",
-                        input: { ...target, idempotencyKeys: params.idempotencyKeys },
+                        input: {
+                          ...target,
+                          idempotencyKeys: params.idempotencyKeys,
+                          activeBranchOnly: params.activeBranchOnly,
+                          sourceRunId: params.sourceRunId,
+                        },
                       },
                     );
                     assertCurrent();

@@ -17,36 +17,20 @@ import {
   overlayRuntimeExternalOAuthProfiles,
   type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
-import {
-  getRuntimeExternalCliProfileIds,
-  removeRuntimeExternalProfileReferences,
-  setRuntimeExternalCliProfileIds,
-} from "./runtime-external-profile-references.js";
+import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
 import type { AuthProfileStore } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
+export type WithPreparedExternalAuthProfiles = <T>(
+  params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv },
+  run: () => Promise<T>,
+) => Promise<T>;
 export type ExternalCliOverlayOptions = {
   allowKeychainPrompt?: boolean;
   config?: OpenClawConfig;
   externalCliProviderIds?: Iterable<string>;
   externalCliProfileIds?: Iterable<string>;
 };
-
-let resolveExternalAuthProfilesForRuntime: ProviderExternalAuthProfileResolver | undefined;
-
-/** Test-only resolver injection for provider external auth profiles. */
-const testing = {
-  resetResolveExternalAuthProfilesForTest(): void {
-    resolveExternalAuthProfilesForRuntime = undefined;
-  },
-  setResolveExternalAuthProfilesForTest(resolver: ProviderExternalAuthProfileResolver): void {
-    resolveExternalAuthProfilesForRuntime = resolver;
-  },
-};
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.externalAuthTestApi")] =
-    testing;
-}
 
 function resolveExplicitProfileIds(values: Iterable<string> | undefined): Set<string> | undefined {
   if (values === undefined) {
@@ -140,23 +124,19 @@ export function syncPersistedExternalCliAuthProfiles(
   return next ?? store;
 }
 
-// Only external-profile-dependent operations are bound; module state stays above.
+// Only external-profile-dependent operations are bound.
 export function createExternalAuthRuntime(
   resolveExternalAuthProfilesWithPlugins: ProviderExternalAuthProfileResolver,
+  withPreparedExternalAuthProfiles: WithPreparedExternalAuthProfiles,
 ) {
   function resolveExternalAuthProfiles(params: {
     store: AuthProfileStore;
     agentDir?: string;
     env?: NodeJS.ProcessEnv;
     externalCli?: ExternalCliOverlayOptions;
-  }): {
-    profiles: ExternalAuthProfileMap;
-    pluginProfileIds: ReadonlySet<string>;
-  } {
+  }): ExternalAuthProfileMap {
     const env = params.env ?? process.env;
-    const resolveProfiles =
-      resolveExternalAuthProfilesForRuntime ?? resolveExternalAuthProfilesWithPlugins;
-    const profiles = resolveProfiles({
+    const profiles = resolveExternalAuthProfilesWithPlugins({
       env,
       config: params.externalCli?.config,
       context: {
@@ -170,7 +150,6 @@ export function createExternalAuthRuntime(
     const resolved: ExternalAuthProfileMap = new Map(
       resolveAllowedExternalCliAuthProfiles(params).map((profile) => [profile.profileId, profile]),
     );
-    const pluginProfileIds = new Set<string>();
     const explicitProfileIds = resolveExplicitProfileIds(params.externalCli?.externalCliProfileIds);
     for (const rawProfile of profiles) {
       if (!rawProfile?.profileId || !rawProfile.credential) {
@@ -192,9 +171,8 @@ export function createExternalAuthRuntime(
         continue;
       }
       resolved.set(profile.profileId, profile);
-      pluginProfileIds.add(profile.profileId);
     }
-    return { profiles: resolved, pluginProfileIds };
+    return resolved;
   }
 
   /** List runtime-only and persisted external auth profiles for this store. */
@@ -204,7 +182,7 @@ export function createExternalAuthRuntime(
     env?: NodeJS.ProcessEnv;
     externalCli?: ExternalCliOverlayOptions;
   }): RuntimeExternalOAuthProfile[] {
-    return Array.from(resolveExternalAuthProfiles(params).profiles.values());
+    return Array.from(resolveExternalAuthProfiles(params).values());
   }
 
   /** Overlay external auth profiles onto a cloned auth store for runtime use. */
@@ -213,27 +191,8 @@ export function createExternalAuthRuntime(
     params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
   ): AuthProfileStore {
     const scoped = hasScopedExternalCliOverlay(params);
-    const runtimeExternalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
-    // Provider hooks are authoritative on every combined refresh. Remove their previous
-    // generation-owned rows before reevaluating them, while limiting CLI removal to its scope.
-    const refreshedProfileIds = new Set(
-      (store.runtimeExternalProfileIds ?? []).filter(
-        (profileId) => !runtimeExternalCliProfileIds.has(profileId),
-      ),
-    );
-    for (const profileId of runtimeExternalCliProfileIds) {
-      if (
-        scoped &&
-        externalCliSync.isExternalCliAuthProfileInScope({
-          store,
-          profileId,
-          providerIds: params?.externalCliProviderIds,
-          profileIds: params?.externalCliProfileIds,
-        })
-      ) {
-        refreshedProfileIds.add(profileId);
-      }
-    }
+    // Provider hooks own all runtime-only overlays; MiniMax CLI credentials are persisted.
+    const refreshedProfileIds = new Set(store.runtimeExternalProfileIds ?? []);
     const base = removeRuntimeExternalProfileReferences({ store, profileIds: refreshedProfileIds });
     const resolved = resolveExternalAuthProfiles({
       store: base,
@@ -241,18 +200,14 @@ export function createExternalAuthRuntime(
       env: params?.env,
       externalCli: params,
     });
-    const next = overlayRuntimeExternalOAuthProfiles(base, resolved.profiles.values(), {
+    return overlayRuntimeExternalOAuthProfiles(base, resolved.values(), {
       runtimeExternalProfileIdsAuthoritative: !scoped,
     });
-    const retainedCliProfileIds = getRuntimeExternalCliProfileIds(base).filter(
-      (profileId) => !resolved.pluginProfileIds.has(profileId),
-    );
-    setRuntimeExternalCliProfileIds(next, retainedCliProfileIds);
-    return next;
   }
 
   return {
     listRuntimeExternalAuthProfiles,
     overlayExternalAuthProfiles,
+    withPreparedExternalAuthProfiles,
   };
 }

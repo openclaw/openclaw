@@ -4,7 +4,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import * as cronStore from "../../../src/cron/store.js";
 import { cronStoreKey } from "../../../src/cron/store/key.js";
-import type { CronRuntimeMutationType } from "../../../src/cron/store/runtime-worker.types.js";
+import type { CronStateWorkerOperations } from "../../../src/cron/store/worker-contract.js";
+import type { CronJobState } from "../../../src/cron/types.js";
 import type { SqliteWorkerRequest } from "../../../src/infra/sqlite-worker-contract.js";
 import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
 
@@ -22,7 +23,9 @@ export function observeCronStoreCommits(storePath: string, observer: () => void)
   return () => publication.mockRestore();
 }
 
-export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron.repairRun") {
+export function loseFirstCronMutationReply(
+  type: keyof CronStateWorkerOperations = "cron.recoverRuns",
+) {
   let target: { worker: Worker; requestId: number } | undefined;
   let stopped: Promise<number> | undefined;
   let dropped = false;
@@ -65,7 +68,10 @@ export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron
       reply.value instanceof Uint8Array
     ) {
       const result: unknown = deserialize(reply.value);
-      if (isRecord(result) && "outcome" in result) {
+      if (
+        isRecord(result) &&
+        ("outcome" in result || "accepted" in result || "launches" in result || "skipped" in result)
+      ) {
         // Lose the successful reply after the real worker committed; never fabricate a rollback.
         dropped = true;
         stopped = target.worker.terminate();
@@ -95,7 +101,7 @@ export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron
 /** Observe persisted state after a real cron write has committed. */
 export function observeCronJobCommits(
   jobId: string,
-  observer: (state: { queuedAtMs?: number; runningAtMs?: number }) => void,
+  observer: (state: CronJobState) => void,
 ): () => void {
   const database = openOpenClawStateDatabase().db;
   const read = (storeKey: string) =>
@@ -115,13 +121,16 @@ export function observeCronJobCommits(
     .spyOn(cronStore, "noteCronJobsStoreCommit")
     .mockImplementation((storeKey) => {
       noteCommit(storeKey);
+      if (storeKey === undefined) {
+        return;
+      }
       const row = read(storeKey);
       const current = JSON.stringify(row);
       if (current === previous.get(storeKey) || typeof row?.state_json !== "string") {
         return;
       }
       previous.set(storeKey, current);
-      const state = JSON.parse(row.state_json) as { queuedAtMs?: number; runningAtMs?: number };
+      const state = JSON.parse(row.state_json) as CronJobState;
       observer(state);
     });
   return () => publication.mockRestore();

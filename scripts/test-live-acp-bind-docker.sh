@@ -88,15 +88,11 @@ set -euo pipefail
 [ -f "$HOME/.profile" ] && [ -r "$HOME/.profile" ] && source "$HOME/.profile" || true
 export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
 export npm_config_prefix="$NPM_CONFIG_PREFIX"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/node/corepack}"
-export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$XDG_CACHE_HOME/npm}"
-export npm_config_cache="$NPM_CONFIG_CACHE"
+trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
+source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 mkdir -p "$NPM_CONFIG_PREFIX" "$HOME/.local/bin" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:$PATH"
-trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
-source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_mounted_auth
 run_setup_command() {
   openclaw_live_run_setup_command \

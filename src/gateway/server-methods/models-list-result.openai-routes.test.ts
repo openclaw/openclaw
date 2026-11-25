@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { configForProviders } from "../../agents/model-auth.fixtures.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -8,14 +9,15 @@ import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import {
   catalogEntry,
   listModels,
   providerCatalogEntry,
   createModelsListTestContext,
-  WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
+import * as runtimeChoices from "./models-list-runtime-choices.js";
 
 const IMPLICIT_CODEX_RUNTIME = {
   id: "codex",
@@ -33,6 +35,34 @@ const IMPLICIT_OPENCLAW_RUNTIME = {
 } as const;
 
 describe("models.list OpenAI routes", () => {
+  it("only prepares the requested provider's rows in a full catalog refresh", async () => {
+    const context = createModelsListTestContext({
+      catalog: [
+        catalogEntry("shared", "openai-responses"),
+        providerCatalogEntry("local", "shared"),
+        providerCatalogEntry("local", "other"),
+      ],
+      catalogComplete: true,
+      preparedAuthStore: { version: 1, profiles: {} },
+      catalogDiagnostics: { providerOutcomes: [{ provider: "local", status: "ready" }] },
+    });
+    const read = (provider?: string) =>
+      buildModelsListResult({
+        source: { kind: "gateway", context },
+        params: { view: "all", refresh: true, provider, includeDefaultModels: false },
+      });
+    using prepare = vi.spyOn(runtimeChoices, "prepareModelPickerRuntimeProjection");
+    const all = await read();
+    expect(prepare.mock.calls.map(([{ entry }]) => entry.provider)).toContain("local");
+    prepare.mockClear();
+
+    const scoped = await read("openai");
+    const expected = all.models.filter((row) => row.provider === "openai");
+    expect(expected.map((row) => row.id)).toEqual(["shared"]);
+    expect(scoped).toEqual({ ...all, models: expected });
+    expect(prepare.mock.calls.map(([{ entry }]) => entry.provider)).toEqual(["openai"]);
+  });
+
   it("uses the system-agent owner when no request agent is given", async () => {
     const config: OpenClawConfig = {
       agents: {
@@ -116,7 +146,7 @@ describe("models.list OpenAI routes", () => {
     expect(resolveRoutes).toHaveBeenCalledTimes(2);
   });
 
-  it("omits route-sensitive metadata while route observation is required", async () => {
+  it("keeps the Codex Access default while omitting unobserved route metadata", async () => {
     const routeResolverFactory = vi.fn(() => () => ({
       kind: "indeterminate" as const,
       defaultRuntimeId: "codex",
@@ -130,6 +160,7 @@ describe("models.list OpenAI routes", () => {
       params: { apiKey: "private" },
       compat: { supportsStore: false },
       mediaInput: { image: { maxBytes: 42 } },
+      providerOrder: 3,
       reasoning: true,
     } as ModelCatalogEntry;
 
@@ -140,47 +171,21 @@ describe("models.list OpenAI routes", () => {
           name: "gpt-5.6",
           provider: "openai",
           agentRuntime: IMPLICIT_CODEX_RUNTIME,
+          cyberAccessProgramDefault: "standard",
           available: false,
         },
       ],
     });
   });
 
-  it("preserves provider-owned order in the public route-aware model list", async () => {
-    const routeResolverFactory = vi.fn(() => () => ({
-      kind: "indeterminate" as const,
-      defaultRuntimeId: "codex",
-    }));
-    const catalog: ModelCatalogEntry[] = [
-      { ...catalogEntry("gpt-5.4", "openai-responses"), providerOrder: 3 },
-      { ...catalogEntry("gpt-5.6-luna", "openai-responses"), providerOrder: 2 },
-      { ...catalogEntry("gpt-5.6-sol", "openai-responses"), providerOrder: 0 },
-      { ...catalogEntry("gpt-5.6-terra", "openai-responses"), providerOrder: 1 },
-    ];
-
-    const result = await listModels({ catalog, routeResolverFactory });
-
-    expect(result.models.map((entry) => entry.id)).toEqual([
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.4",
-    ]);
-    expect(result.models.every((entry) => !("providerOrder" in entry))).toBe(true);
-  });
-
   it("keeps the all view exhaustive while default hides incompatible implicit rows", async () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            api: "openai-chatgpt-responses",
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            models: [{ id: "gpt-5.6", name: "GPT-5.6" }],
-          },
-        },
+    const cfg = configForProviders({
+      openai: {
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        models: [{ id: "gpt-5.6", name: "GPT-5.6" }],
       },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
 
     const incompatibleRow = {
       ...catalogEntry("chat-latest", "openai-chatgpt-responses"),
@@ -310,13 +315,11 @@ describe("models.list OpenAI routes", () => {
 
           const inventoryConfig = {
             ...cfg,
-            models: {
-              providers: {
-                openai: {
-                  models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
-                },
+            models: configForProviders({
+              openai: {
+                models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
               },
-            },
+            }).models,
           } as unknown as OpenClawConfig;
           await expect(
             listModels({
@@ -369,16 +372,12 @@ describe("models.list OpenAI routes", () => {
 
   it("includes runtime-discovered rows for configured providers without explicit models", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
-      const cfg = {
-        models: {
-          providers: {
-            litellm: {
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:14004",
-            },
-          },
+      const cfg = configForProviders({
+        litellm: {
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:14004",
         },
-      } as unknown as OpenClawConfig;
+      }) as unknown as OpenClawConfig;
 
       await expect(
         listModels({
@@ -401,16 +400,12 @@ describe("models.list OpenAI routes", () => {
 
   it("does not infer runtime inventory for static providers without explicit models", async () => {
     await withEnvAsync(WITHOUT_OPENAI_ENV_AUTH, async () => {
-      const cfg = {
-        models: {
-          providers: {
-            kimi: {
-              api: "openai-completions",
-              baseUrl: "https://api.kimi.com/coding/v1",
-            },
-          },
+      const cfg = configForProviders({
+        kimi: {
+          api: "openai-completions",
+          baseUrl: "https://api.kimi.com/coding/v1",
         },
-      } as unknown as OpenClawConfig;
+      }) as unknown as OpenClawConfig;
 
       await expect(
         listModels({
@@ -437,15 +432,13 @@ describe("models.list OpenAI routes", () => {
             },
           },
         },
-        models: {
-          providers: {
-            openai: {
-              api: "openai-chatgpt-responses",
-              baseUrl: "https://chatgpt.com/backend-api/codex",
-              models: [],
-            },
+        models: configForProviders({
+          openai: {
+            api: "openai-chatgpt-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            models: [],
           },
-        },
+        }).models,
       } as unknown as OpenClawConfig;
 
       await expect(

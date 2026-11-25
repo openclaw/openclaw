@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -11,18 +11,27 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
+import { personalCredentialPublication } from "./user-model-account-authority.js";
 import {
   connectUserModelAccount,
+  enrollPersonalAuthProfileAuthorizationInDatabase,
   clearUserProfileAuthLink,
   setUserProfileAuthLink,
   listUserModelAccounts,
   readSelectedUserModelAccount,
 } from "./user-model-accounts.js";
+import { ensureDelegatedUserProfile } from "./user-profile-delegation.worker.js";
+import { ensureEnterpriseGitHubProfile } from "./user-profile-enterprise-github-write.worker.js";
 import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,
+  selectUserProfileRoleAuthority,
 } from "./user-profile-github-identity.js";
-import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import {
+  ensureOpenClawIdUserProfile,
+  linkOpenClawIdUserProfile,
+  unlinkOpenClawIdUserProfile,
+} from "./user-profile-openclaw-id.worker.js";
 import {
   createUserProfileWriteOperation,
   linkEmail,
@@ -64,23 +73,34 @@ function accountWrite<Input extends { profileId: string }, Output>(
   ) => {
     const database = open();
     const facts = { kind: "model-account-links", profileId: input.profileId };
-    return write(input, { ...stateOptions(), database }, (stage) => {
-      const roles = (input.authorityProfileIds ?? []).map((profileId) => {
-        const profile = selectResolvedUserProfileById(database.db, profileId);
-        if (!profile || profile.id !== profileId || profile.merged_into) {
-          throw new ModelAccountConnectAuthorityError();
+    return personalCredentialPublication.capture(database.db, () =>
+      write(input, { ...stateOptions(), database }, (stage) => {
+        const roles = (input.authorityProfileIds ?? []).map((profileId) => {
+          const profile = selectResolvedUserProfileById(database.db, profileId);
+          if (!profile || profile.id !== profileId || profile.merged_into) {
+            throw new ModelAccountConnectAuthorityError();
+          }
+          return { profileId, role: profile.role ?? null };
+        });
+        requestSqliteWorkerOperationAdmission({ stage, facts: { ...facts, roles } });
+        if (stage === "commit") {
+          deferSqliteWorkerCommitReceipt(database.db, {
+            ...facts,
+            personalCredentials: personalCredentialPublication.capture(database.db, () => {})
+              .receipt,
+          });
         }
-        return { profileId, role: profile.role ?? null };
-      });
-      requestSqliteWorkerOperationAdmission({ stage, facts: { ...facts, roles } });
-      if (stage === "commit") {
-        deferSqliteWorkerCommitReceipt(database.db, facts);
-      }
-    });
+      }),
+    ).result;
   };
 }
 
 const userProfileWriteOperations = {
+  "userProfiles.ensureDelegated": createUserProfileWriteOperation(
+    "userProfiles.ensureDelegated",
+    (input: Parameters<typeof ensureDelegatedUserProfile>[0], owned) =>
+      ensureDelegatedUserProfile(input, owned),
+  ),
   "userProfiles.setRole": createUserProfileWriteOperation(
     "userProfiles.setRole",
     (input: { profileId: string; role: string | null }, owned) =>
@@ -110,10 +130,37 @@ const userProfileWriteOperations = {
         expectedGitHubAccountId: input.expectedGitHubAccountId,
       }),
   ),
+  "userProfiles.ensureEnterpriseGitHub": createUserProfileWriteOperation(
+    "userProfiles.ensureEnterpriseGitHub",
+    (
+      input: {
+        principal: string;
+        name: string;
+        verifiedMetadata: { login: string; email?: string };
+      },
+      owned,
+    ) => ensureEnterpriseGitHubProfile(input.principal, input.name, input.verifiedMetadata, owned),
+  ),
   "userProfiles.ensureTailscale": createUserProfileWriteOperation(
     "userProfiles.ensureTailscale",
     (input: Parameters<typeof ensureProfileForTailscaleIdentity>[0], owned) =>
       ensureProfileForTailscaleIdentity(input, owned),
+  ),
+  "userProfiles.ensureOpenClawId": createUserProfileWriteOperation(
+    "userProfiles.ensureOpenClawId",
+    (input: Parameters<typeof ensureOpenClawIdUserProfile>[0], owned) =>
+      ensureOpenClawIdUserProfile(input, owned),
+  ),
+  "userProfiles.linkOpenClawId": createUserProfileWriteOperation(
+    "userProfiles.linkOpenClawId",
+    (input: Parameters<typeof linkOpenClawIdUserProfile>[0], owned) =>
+      linkOpenClawIdUserProfile(input, owned),
+  ),
+  "userProfiles.unlinkOpenClawId": createUserProfileWriteOperation(
+    "userProfiles.unlinkOpenClawId",
+    (input: Parameters<typeof unlinkOpenClawIdUserProfile>[0], owned) =>
+      unlinkOpenClawIdUserProfile(input, owned),
+    (input) => input.profileId,
   ),
   "userProfiles.syncGitHub": createUserProfileWriteOperation(
     "userProfiles.syncGitHub",
@@ -148,6 +195,8 @@ export type UserProfileWriteOperations = WorkerOperations<typeof userProfileWrit
 
 export const userProfileOperations = {
   ...userProfileWriteOperations,
+  "userProfiles.roleAuthority.resolve": ({ profileId }: { profileId: string }, { open }) =>
+    selectUserProfileRoleAuthority(open().db, profileId),
   "userProfiles.modelAccount.connect": accountWrite(
     (
       input: Omit<
@@ -160,6 +209,23 @@ export const userProfileOperations = {
       connectUserModelAccount(
         { ...input, ownerProfileId: input.profileId, assertCurrent },
         options,
+      ),
+  ),
+  "userProfiles.modelAccount.enrollAuthorization": accountWrite(
+    (
+      input: Parameters<typeof enrollPersonalAuthProfileAuthorizationInDatabase>[1],
+      options,
+      assertCurrent,
+    ) =>
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          assertCurrent("transaction");
+          const result = enrollPersonalAuthProfileAuthorizationInDatabase(db, input);
+          assertCurrent("commit");
+          return result;
+        },
+        options,
+        { operationLabel: "users.model-accounts.enroll-authorization" },
       ),
   ),
   "userProfiles.modelAccount.link": accountWrite(
@@ -184,17 +250,10 @@ export const userProfileOperations = {
     input: { profileId: string; provider: string },
     { stateOptions },
   ) => readSelectedUserModelAccount(input.profileId, input.provider, stateOptions()),
-  "userProfiles.list": (
-    input: { githubAccountIds: readonly number[] } | undefined,
-    { open, stateOptions },
-  ) => {
-    const options = { ...stateOptions(), database: open() };
-    return readUserProfileSnapshotSync(options, input?.githubAccountIds);
-  },
   "userProfiles.directory": ({ limit }: { limit: number }, { open, stateOptions }) => {
     const database = open();
     ensureUserProfilesSchema(stateOptions(), database);
-    return runSqliteDeferredTransactionSync(
+    return runSqliteReadSnapshotSync(
       database.db,
       () => {
         const profiles = executeSqliteQuerySync(

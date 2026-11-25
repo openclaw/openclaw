@@ -1,4 +1,4 @@
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
@@ -6,16 +6,14 @@ import type {
   SessionTranscriptRawDeltaResult,
   SessionTranscriptReadScope,
 } from "./session-accessor.sqlite-contract.js";
-import {
-  normalizeRawDeltaLimits,
-  readRawDeltaInTransaction,
-} from "./session-accessor.sqlite-raw-delta-read.js";
+import { readRawDeltaInTransaction } from "./session-accessor.sqlite-raw-delta-read.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
+import { normalizeRawDeltaLimits } from "./session-transcript-raw-cursor.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 
 /** Read one generation-consistent raw transcript page without parsing excluded payload rows. */
@@ -57,7 +55,7 @@ export function readTranscriptRawDeltaInDatabase(
   };
   return database.db.isTransaction
     ? readSnapshot()
-    : runSqliteDeferredTransactionSync(database.db, readSnapshot, {
+    : runSqliteReadSnapshotSync(database.db, readSnapshot, {
         databaseLabel: database.path,
         operationLabel: "session transcript raw delta",
       });

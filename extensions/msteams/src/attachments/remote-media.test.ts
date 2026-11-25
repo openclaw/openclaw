@@ -1,4 +1,3 @@
-// Msteams tests cover remote media plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveResponseMediaMock = vi.hoisted(() =>
@@ -27,17 +26,17 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => ({
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const MEDIA_URL = "https://graph.microsoft.com/v1.0/shares/abc/driveItem/content";
 
-function jsonResponse(body: BodyInit, init?: ResponseInit): Response {
-  return new Response(body, init);
-}
-
-function requireFirstFetchUrl(mock: ReturnType<typeof vi.fn>): unknown {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected direct fetch call");
-  }
-  return call[0];
+function download(
+  fetchImpl: Parameters<typeof downloadAndStoreMSTeamsRemoteMedia>[0]["fetchImpl"],
+) {
+  return downloadAndStoreMSTeamsRemoteMedia({
+    url: MEDIA_URL,
+    filePathHint: "file.png",
+    maxBytes: 1024,
+    fetchImpl,
+  });
 }
 
 describe("downloadAndStoreMSTeamsRemoteMedia", () => {
@@ -45,75 +44,37 @@ describe("downloadAndStoreMSTeamsRemoteMedia", () => {
     saveResponseMediaMock.mockClear();
   });
 
-  describe("guarded caller fetch (Node 24+ / undici v7 path for issue #63396)", () => {
-    it("downloads through the supplied guarded fetchImpl", async () => {
-      // `fetchImpl` here simulates the "pre-validated hostname" contract from
-      // `safeFetchWithPolicy`: the caller has already enforced the allowlist,
-      // so the strict SSRF dispatcher is not needed.
-      const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        jsonResponse(PNG_BYTES, { status: 200, headers: { "content-type": "image/png" } }),
-      );
+  // Regression #63396: use the caller's guarded fetch, which owns SSRF enforcement.
+  it("downloads through the supplied guarded fetchImpl", async () => {
+    const fetchImpl = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(PNG_BYTES, { status: 200, headers: { "content-type": "image/png" } }),
+    );
+    const result = await download(fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe(MEDIA_URL);
+    expect(result.path).toBe("/tmp/saved.png");
+  });
 
-      const result = await downloadAndStoreMSTeamsRemoteMedia({
-        url: "https://graph.microsoft.com/v1.0/shares/abc/driveItem/content",
-        filePathHint: "file.png",
-        maxBytes: 1024,
-        fetchImpl,
-      });
+  it("surfaces HTTP errors as exceptions (no silent drop)", async () => {
+    await expect(download(async () => new Response("nope", { status: 403 }))).rejects.toThrow(
+      /HTTP 403/,
+    );
+  });
 
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-      const calledUrl = requireFirstFetchUrl(fetchImpl);
-      expect(calledUrl).toBe("https://graph.microsoft.com/v1.0/shares/abc/driveItem/content");
-      expect(result.path).toBe("/tmp/saved.png");
-    });
+  it("rejects a response whose Content-Length exceeds maxBytes", async () => {
+    await expect(
+      download(async () => new Response(PNG_BYTES, { headers: { "content-length": "999999" } })),
+    ).rejects.toThrow(/exceeds maxBytes/);
+  });
 
-    it("surfaces HTTP errors as exceptions (no silent drop)", async () => {
-      const fetchImpl = vi.fn(async () => jsonResponse("nope", { status: 403 }));
-
-      await expect(
-        downloadAndStoreMSTeamsRemoteMedia({
-          url: "https://graph.microsoft.com/v1.0/shares/abc/driveItem/content",
-          filePathHint: "file.png",
-          maxBytes: 1024,
-          fetchImpl,
-        }),
-      ).rejects.toThrow(/HTTP 403/);
-    });
-
-    it("rejects a response whose Content-Length exceeds maxBytes", async () => {
-      const fetchImpl = vi.fn(async () =>
-        jsonResponse(PNG_BYTES, {
-          status: 200,
-          headers: { "content-length": "999999" },
-        }),
-      );
-
-      await expect(
-        downloadAndStoreMSTeamsRemoteMedia({
-          url: "https://graph.microsoft.com/v1.0/shares/abc/driveItem/content",
-          filePathHint: "file.png",
-          maxBytes: 1024,
-          fetchImpl,
-        }),
-      ).rejects.toThrow(/exceeds maxBytes/);
-    });
-
-    it("cancels a guarded response when storage fails before reading the body", async () => {
-      const cancel = vi.fn();
-      const body = new ReadableStream<Uint8Array>({ cancel });
-      const fetchImpl = vi.fn(async () => new Response(body, { status: 200 }));
-      saveResponseMediaMock.mockRejectedValueOnce(new Error("mkdir failed"));
-
-      await expect(
-        downloadAndStoreMSTeamsRemoteMedia({
-          url: "https://graph.microsoft.com/v1.0/shares/abc/driveItem/content",
-          filePathHint: "file.png",
-          maxBytes: 1024,
-          fetchImpl,
-        }),
-      ).rejects.toThrow("mkdir failed");
-
-      expect(cancel).toHaveBeenCalledTimes(1);
-    });
+  it("cancels a guarded response when storage fails before reading the body", async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    saveResponseMediaMock.mockRejectedValueOnce(new Error("mkdir failed"));
+    await expect(download(async () => new Response(body, { status: 200 }))).rejects.toThrow(
+      "mkdir failed",
+    );
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 });

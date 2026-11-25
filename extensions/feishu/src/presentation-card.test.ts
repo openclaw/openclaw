@@ -35,7 +35,41 @@ describe("buildFeishuPresentationCard", () => {
   });
 });
 
+describe("Feishu agent controls", () => {
+  it("renders a typed callback button a message action authored, and only that one", () => {
+    const presentation = normalizeMessagePresentation({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            { label: "Agent", action: { type: "callback", value: "::pick:a" } },
+            { label: "Plugin", action: { type: "callback", value: "pick:b" } },
+          ],
+        },
+      ],
+    });
+    if (!presentation) {
+      throw new Error("expected valid presentation");
+    }
+
+    const [agent, plugin] = buildFeishuPresentationCard({ presentation }).body.elements as Array<
+      Record<string, unknown>
+    >;
+    expect(agent).toMatchObject({
+      tag: "button",
+      behaviors: [{ type: "callback", value: expect.objectContaining({ q: "::pick:a" }) }],
+    });
+    expect(plugin).toEqual({ tag: "markdown", content: "- Plugin" });
+  });
+});
+
 describe("isFeishuCardWithinEnvelope", () => {
+  it("rejects cyclic cards at the serialization boundary", () => {
+    const card: Record<string, unknown> = { schema: "2.0" };
+    card.body = card;
+    expect(isFeishuCardWithinEnvelope(card)).toBe(false);
+  });
+
   it("counts nested elements against the 200-element API limit", () => {
     const buildCard = (elementCount: number) => ({
       schema: "2.0",

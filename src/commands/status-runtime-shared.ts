@@ -1,15 +1,28 @@
-// Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
 import type { Result } from "@openclaw/normalization-core/result";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatGatewayServiceInstallationDrift } from "../cli/daemon-cli/shared.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveNodeService } from "../daemon/node-service.js";
+import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
+import { formatServiceLabel } from "../daemon/runtime-format.js";
+import {
+  inspectGatewayServiceInstallationDrift,
+  summarizeGatewayServiceLayout,
+  type GatewayServiceLayoutSummary,
+} from "../daemon/service-layout.js";
+import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
+import type { GatewayServiceLoadState } from "../daemon/service-types.js";
+import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { HealthSummary } from "./health.js";
 import type { StatusUsageSummaryOptions } from "./status-usage.runtime.js";
-import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
+import { formatDaemonRuntimeShort } from "./status.format.js";
 import { resolveStatusGatewayProbeTimeoutMs } from "./status.gateway-probe-budget.js";
 
 /** Runs the lightweight security audit used by status JSON/all output. */
@@ -27,7 +40,6 @@ export async function resolveStatusSecurityAudit(params: {
     deep: false,
     ...(params.timeoutMs !== undefined ? { deepTimeoutMs: params.timeoutMs } : {}),
     includeFilesystem: true,
-    includeChannelSecurity: true,
     loadPluginSecurityCollectors: false,
   });
 }
@@ -49,6 +61,8 @@ async function queryStatusGateway<T>(
   params: StatusGatewayQuery,
   buildRequest: () => Pick<CallGatewayOptions, "method" | "params">,
 ): Promise<Result<T, StatusGatewayFailure>> {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   const { callGateway } = await import("../gateway/call.js");
   const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params);
   if (timeoutMs === 0) {
@@ -60,9 +74,16 @@ async function queryStatusGateway<T>(
     timeoutMs,
     config: params.config,
     ...params.callOverrides,
+    signal,
   }).then<Result<T, StatusGatewayFailure>, Result<T, StatusGatewayFailure>>(
-    (value) => ({ ok: true, value }),
-    (cause: unknown) => ({ ok: false, error: { kind: "request", cause } }),
+    (value) => {
+      signal?.throwIfAborted();
+      return { ok: true, value };
+    },
+    (cause: unknown) => {
+      signal?.throwIfAborted();
+      return { ok: false, error: { kind: "request", cause } };
+    },
   );
 }
 
@@ -140,14 +161,114 @@ async function resolveStatusLastHeartbeat(
 // --timeout, so a wedged systemd/launchd socket cannot hang `openclaw status`.
 const DEFAULT_SERVICE_PROBE_TIMEOUT_MS = 5000;
 
+type ServiceStatusSummary = {
+  label: string;
+  installed: boolean | null;
+  loadState: GatewayServiceLoadState;
+  managedByOpenClaw: boolean;
+  externallyManaged: boolean;
+  loadedText: string;
+  runtime: GatewayServiceRuntime | undefined;
+  layout?: GatewayServiceLayoutSummary;
+  wrapperPath?: string;
+  installationDrift?: string;
+};
+
+async function buildDaemonStatusSummary(serviceLabel: "gateway" | "node", timeoutMs?: number) {
+  const service = serviceLabel === "gateway" ? resolveGatewayService() : resolveNodeService();
+  const fallbackLabel = serviceLabel === "gateway" ? "Daemon" : "Node";
+  const activePackageRoot =
+    serviceLabel === "gateway"
+      ? await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, argv1: process.argv[1] })
+      : null;
+  let summary: ServiceStatusSummary;
+  try {
+    const state = await readGatewayServiceState(service, { env: process.env, timeoutMs });
+    // Layout is optional enrichment; a broken manifest or inaccessible path
+    // must not erase service-manager evidence that the gateway is running.
+    const layout = await summarizeGatewayServiceLayout(state.command).catch(() => undefined);
+    const installationDrift = activePackageRoot
+      ? await inspectGatewayServiceInstallationDrift(layout, activePackageRoot).catch(
+          () => undefined,
+        )
+      : undefined;
+    const wrapperPath = state.command?.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
+    const managedByOpenClaw = state.installed;
+    // A running unmanaged process still counts as installed for status display.
+    const externallyManaged = !managedByOpenClaw && state.running;
+    const installed = managedByOpenClaw || externallyManaged;
+    const loadedText = externallyManaged
+      ? "running (externally managed)"
+      : state.loadState.status === "loaded"
+        ? service.loadedText
+        : state.loadState.status === "not-loaded"
+          ? service.notLoadedText
+          : "unknown";
+    summary = {
+      label: formatServiceLabel(service.label, state.runtime),
+      installed,
+      loadState: state.loadState,
+      managedByOpenClaw,
+      externallyManaged,
+      loadedText,
+      runtime: state.runtime,
+      ...(layout ? { layout } : {}),
+      ...(wrapperPath ? { wrapperPath } : {}),
+      ...(installationDrift
+        ? {
+            installationDrift: formatGatewayServiceInstallationDrift(installationDrift, state.env, {
+              command: state.command,
+            }),
+          }
+        : {}),
+    };
+  } catch (error) {
+    // Status output should survive service-manager errors and show an unknown row.
+    summary = {
+      label: fallbackLabel,
+      installed: null,
+      loadState: { status: "unknown", detail: String(error) },
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "unknown",
+      runtime: undefined,
+    };
+  }
+  const runtime = summary.runtime?.inspectionFailure
+    ? { ...summary.runtime, detail: `${summary.runtime.detail}; retry with openclaw status --deep` }
+    : summary.runtime;
+  const loaded =
+    summary.loadState.status === "unknown" ? null : summary.loadState.status === "loaded";
+  return {
+    ...summary,
+    loaded,
+    runtime,
+    runtimeShort: formatDaemonRuntimeShort(runtime),
+  };
+}
+
+/** Ends an interrupted scan quietly; other scan failures keep their report. */
+export async function reportStatusScanFailureUnlessInterrupted(
+  error: unknown,
+  runtime: RuntimeEnv,
+  timeoutMs?: number,
+): Promise<undefined> {
+  const signal = getAsyncWorkSignal();
+  if (signal?.aborted && error === signal.reason) {
+    return undefined;
+  }
+  return await reportStatusScanFailure(error, runtime, timeoutMs);
+}
+
 /** Preserve independent service diagnostics when local status collection refuses state. */
-export async function reportStatusScanFailure(
+async function reportStatusScanFailure(
   error: unknown,
   runtime: RuntimeEnv,
   timeoutMs?: number,
 ): Promise<never> {
   try {
-    const { installationDrift } = await getDaemonStatusSummary(
+    const { installationDrift } = await buildDaemonStatusSummary(
+      "gateway",
       timeoutMs ?? DEFAULT_SERVICE_PROBE_TIMEOUT_MS,
     );
     if (installationDrift) {
@@ -163,8 +284,8 @@ export async function reportStatusScanFailure(
 export async function resolveStatusServiceSummaries(timeoutMs?: number) {
   const probeTimeoutMs = timeoutMs ?? DEFAULT_SERVICE_PROBE_TIMEOUT_MS;
   return await Promise.all([
-    getDaemonStatusSummary(probeTimeoutMs),
-    getNodeDaemonStatusSummary(probeTimeoutMs),
+    buildDaemonStatusSummary("gateway", probeTimeoutMs),
+    buildDaemonStatusSummary("node", probeTimeoutMs),
   ]);
 }
 
@@ -197,6 +318,8 @@ export async function resolveStatusRuntimeSnapshot(params: {
     gatewayProbeDeadlineMs: number;
   }) => Promise<StatusGatewayHealth>;
 }) {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   const securityAudit = params.includeSecurityAudit
     ? await (params.resolveSecurityAudit ?? resolveStatusSecurityAudit)({
         config: params.config,
@@ -225,7 +348,11 @@ export async function resolveStatusRuntimeSnapshot(params: {
             gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
           }).catch(
             params.suppressHealthErrors
-              ? (error: unknown) => ({ error: String(error) })
+              ? (error: unknown) => {
+                  // Interrupts stay interrupts; only real probe failures collapse into JSON.
+                  signal?.throwIfAborted();
+                  return { error: String(error) };
+                }
               : undefined,
           )
       : undefined;
@@ -240,6 +367,8 @@ export async function resolveStatusRuntimeSnapshot(params: {
         })
       : null;
   const [gatewayService, nodeService] = await resolveStatusServiceSummaries(params.timeoutMs);
+  // An interrupt landed while local probes ran; never publish a half-built snapshot.
+  signal?.throwIfAborted();
   return {
     securityAudit,
     usage,

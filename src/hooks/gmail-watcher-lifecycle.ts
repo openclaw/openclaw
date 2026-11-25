@@ -1,4 +1,3 @@
-// Gmail watcher lifecycle helpers manage watcher process state from config.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";

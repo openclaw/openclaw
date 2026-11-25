@@ -1,5 +1,11 @@
-import type { Selectable } from "kysely";
-import type { WorkerEnvironments } from "../../state/openclaw-state-db.generated.js";
+import type {
+  WorkerProfile,
+  WorkerResourceReceipt,
+} from "../../plugins/capability-provider.types.js";
+import type {
+  WorkerRetentionOperation,
+  WorkerRetentionObservation,
+} from "../../plugins/worker-retention.types.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import type {
   WorkerEnvironmentIntentInput,
@@ -7,6 +13,7 @@ import type {
   WorkerEnvironmentRecord,
   WorkerEnvironmentTeardownTerminalState,
 } from "./environment-record.js";
+import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   WorkerEnvironmentAttachmentRecord,
   WorkerEnvironmentSessionIdentity,
@@ -24,6 +31,7 @@ export type WorkerEnvironmentFacts = {
   environments: WorkerEnvironmentRecord[];
   credentials: WorkerCredentialRecord[];
   attachments: WorkerEnvironmentAttachmentRecord[];
+  placements?: WorkerSessionPlacementRecord[];
 };
 export type WorkerEnvironmentCommitAdmission = Array<{
   environmentId: string;
@@ -32,25 +40,35 @@ export type WorkerEnvironmentCommitAdmission = Array<{
   transferAuthority: string;
   attachmentAuthority: string;
 }>;
-export type WorkerEnvironmentPruneCursor = { changedAtMs: number; environmentId: string };
-export type WorkerEnvironmentPruneObservation = Selectable<WorkerEnvironments>;
-export type WorkerEnvironmentPruneReadInput = {
-  nowMs: number;
-  limit?: number;
-  cursor?: WorkerEnvironmentPruneCursor;
-};
-export type WorkerEnvironmentPrunePage = {
-  candidates: Array<{
-    observed: WorkerEnvironmentPruneObservation;
-    record: WorkerEnvironmentRecord;
-  }>;
-  nextCursor?: WorkerEnvironmentPruneCursor;
-  limit: number;
-};
 
 /** Native mutation signatures own the host callbacks and the worker's serializable contract. */
 export type WorkerEnvironmentMutationMethods = {
   createIntent(input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord;
+  recordResourceReceipt(input: {
+    environmentId: string;
+    provisionOperationId: string;
+    receipt: WorkerResourceReceipt;
+    assertCurrent: () => void;
+  }): WorkerEnvironmentRecord;
+  beginRetentionOperation(input: {
+    environmentId: string;
+    expectedOwnerEpoch: number;
+    operation: WorkerRetentionOperation;
+    assertCurrent?: () => void;
+  }): WorkerEnvironmentRecord;
+  recordRetentionObservation(input: {
+    environmentId: string;
+    expectedOwnerEpoch: number;
+    observation: WorkerRetentionObservation;
+    assertCurrent?: () => void;
+  }): WorkerEnvironmentRecord;
+  setRetentionRuntimeAdmission(input: {
+    ready: boolean;
+    environmentId: string;
+    expectedOwnerEpoch: number;
+    expectedClaimRevision: string;
+    assertCurrent: () => void;
+  }): WorkerEnvironmentRecord;
   ensureNodeEnrollment(environmentId: string): WorkerEnvironmentRecord;
   revokeEnvironmentCredential(input: CredentialRevocationInput): void;
   reconcileSharedHost(input: {
@@ -101,6 +119,15 @@ export type WorkerEnvironmentMutationMethods = {
     maxTotal: number;
     assertCurrent: () => void;
   }): WorkerEnvironmentRecord | undefined;
+  refreshPreparedProject(input: {
+    environmentId: string;
+    ownerEpoch: number;
+    preparationKey: string;
+    sessionId: string;
+    expectedGeneration: number;
+    profileSnapshot: WorkerProfile;
+    assertCurrent?: () => void;
+  }): WorkerEnvironmentRecord;
   requestPreparedDestroy(input: {
     environmentId: string;
     ownerEpoch: number;
@@ -121,7 +148,11 @@ export type WorkerEnvironmentMutationMethods = {
     record: WorkerEnvironmentAttachmentRecord,
     assertCurrent: () => void,
   ): void;
-  pruneTerminalEnvironments(input: { approved: WorkerEnvironmentPruneObservation[] }): number;
+  pruneTerminalEnvironments(input: {
+    environmentIds: string[];
+    cutoffMs: number;
+    limit: number;
+  }): number;
 };
 type WorkerEnvironmentMutationMethod = keyof WorkerEnvironmentMutationMethods;
 

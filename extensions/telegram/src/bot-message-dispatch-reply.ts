@@ -9,15 +9,17 @@ import type {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
+import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
+  isReplyPayloadTerminalContent,
   resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
+  stripReplyPayloadResponsePrefix,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   deliverFinalAnswerText,
   handlePreviewFinalizedResult,
@@ -63,9 +65,7 @@ import { applyTextToPayload, markTelegramDroppedControlFallback } from "./intera
 import { createTelegramReasoningStepState } from "./reasoning-lane-coordinator.js";
 import { resolveTelegramTargetChatType } from "./targets.js";
 
-type BufferedDispatchParams = Parameters<
-  TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
->[0];
+type BufferedDispatchParams = Parameters<typeof dispatchReplyWithBufferedBlockDispatcher>[0];
 type DispatcherOptions = BufferedDispatchParams["dispatcherOptions"];
 type Deliver = DispatcherOptions["deliver"];
 type Skip = NonNullable<DispatcherOptions["onSkip"]>;
@@ -112,6 +112,7 @@ function resolvePayloadTelegramControls(
     },
     {
       allowWebAppButtons: resolveTelegramTargetChatType(String(turn.context.chatId)) === "direct",
+      supportsDisabled: turn.richMessages,
       onDroppedControl: (control) => droppedControls.push(control),
       questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
     },
@@ -218,11 +219,11 @@ async function adoptProgressDraft(
     return false;
   }
   const adopt = info.adoptProgressDraft;
-  await turn.draftEventQueue;
   const stream = turn.answerLane.stream;
   if (!stream || turn.answerLane.finalized || turn.isSuperseded()) {
     return false;
   }
+  await info.onPlatformSendDispatch?.();
   if (
     !turn.progressCompositor.isVisible &&
     !turn.progressCompositor.hasStarted &&
@@ -258,7 +259,7 @@ async function adoptProgressDraft(
   // The retained draft now owns the card. Detach it from this turn so final
   // cleanup and late lane callbacks cannot edit or delete it.
   turn.answerLane.stream = undefined;
-  turn.progressContinuationAdopted = true;
+  turn.finalHandoff = "progress-continuation";
   resetLaneState(turn, turn.answerLane);
   resetReasoningStepState(turn);
   turn.deliveryState.markDelivered();
@@ -350,12 +351,19 @@ async function deliverReplyWithNormalization(
   const split = splitTextIntoLaneSegments(turn, lanePayload.text, payload.isReasoning);
   const { segment } = split;
   if (info.kind === "final" && (reply.text.length > 0 || reply.hasMedia)) {
-    // Mark final delivery before any queued draft drain; late tool progress must stay suppressed.
     turn.previewLifecycle.beginFinalDelivery();
   }
-  if (info.kind === "final") {
-    // Final delivery drains queued draft work so an earlier block cannot overtake it.
-    await enqueueDraftEvent(turn, async () => {});
+  if (info.kind === "final" && effectivePayload.isStatusNotice === true) {
+    // ACP identity notices finish dispatch but must not replace the answer preview.
+    await turn.materializeAnswerLaneBeforeRotation();
+    const result = await sendPayload(turn, effectivePayload, {
+      durable: true,
+      onPlatformSendDispatch: info.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
+      bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+    });
+    await observeFinalDelivery(turn, result, effectivePayload.isError === true);
+    return toTelegramReplyDeliveryResult(turn, result.visibleReplySent, undefined, result);
   }
   const isToolPayloadAfterFinal = info.kind === "tool" && turn.previewLifecycle.finalStarted;
   const isNonTerminalWarningAfterDeliveredFinal =
@@ -433,6 +441,17 @@ async function deliverReplyWithNormalization(
       await prepareAnswerLaneForToolProgress(turn);
     }
 
+    if (
+      turn.streamMode === "progress" &&
+      info.kind === "block" &&
+      effectivePayload.isCompactionNotice === true
+    ) {
+      // Compaction notices are standalone messages. Held as an interim answer, the
+      // final would replace them; let past the hold, they would stream into the
+      // progress card and be deleted with it.
+      const delivery = await sendPayload(turn, effectivePayload);
+      return toTelegramReplyDeliveryResult(turn, delivery.visibleReplySent);
+    }
     const ownedByQueuedRotation = isQueuedAnswerBlock(
       turn,
       lanePayload,
@@ -441,6 +460,7 @@ async function deliverReplyWithNormalization(
     const skipTextOnlyBlock =
       turn.streamMode === "partial" &&
       info.kind === "block" &&
+      payload.textMode !== "delta" &&
       segment.lane === "answer" &&
       !hasMediaOrControls &&
       turn.answerLane.hasStreamedMessage &&
@@ -456,14 +476,20 @@ async function deliverReplyWithNormalization(
     if (skipTextOnlyBlock || suppressProgressAnswerBlock) {
       turn.activeAnswerBlockDelivery = {
         payload: effectivePayload,
-        text: segment.text,
+        text:
+          payload.textMode === "delta"
+            ? (turn.activeAnswerBlockDelivery?.text ?? "") +
+              (turn.activeAnswerBlockDelivery?.text
+                ? stripReplyPayloadResponsePrefix(effectivePayload, segment.text)
+                : segment.text)
+            : segment.text,
         buttons: telegramButtons,
       };
       turn.activeAnswerDraftIsToolProgressOnly = false;
       if (!suppressProgressAnswerBlock) {
         turn.progressCompositor.resetActivity();
       }
-      return toTelegramReplyDeliveryResult(turn, true);
+      return toTelegramReplyDeliveryResult(turn, !suppressProgressAnswerBlock);
     }
 
     if (segment.lane === "answer" && info.kind === "block") {
@@ -481,6 +507,28 @@ async function deliverReplyWithNormalization(
       turn.progressCompositor.resetActivity();
     }
     const isAskUserPayload = effectivePayload.channelData?.askUser !== undefined;
+    // Only declared chunks extend a preview. Finals, media and replacement snapshots
+    // keep their own text even when they do not share the previous answer prefix.
+    const canStreamBlock =
+      info.kind === "block" &&
+      segment.lane === "answer" &&
+      Boolean(turn.answerLane.stream) &&
+      !hasMediaOrControls &&
+      !effectivePayload.isError &&
+      !effectivePayload.presentation &&
+      !effectivePayload.interactive &&
+      !isAskUserPayload &&
+      isReplyPayloadTerminalContent(effectivePayload);
+    const segmentText =
+      canStreamBlock && effectivePayload.textMode === "delta"
+        ? turn.lastAnswerPartialText +
+          (turn.lastAnswerPartialText
+            ? stripReplyPayloadResponsePrefix(effectivePayload, segment.text)
+            : segment.text)
+        : segment.text;
+    if (canStreamBlock) {
+      turn.lastAnswerPartialText = segmentText;
+    }
     const result =
       segment.lane === "answer" && info.kind === "final"
         ? await deliverFinalAnswerText(
@@ -494,7 +542,7 @@ async function deliverReplyWithNormalization(
           )
         : await turn.deliverLaneText({
             laneName: segment.lane,
-            text: segment.text,
+            text: segmentText,
             payload: lanePayload,
             infoKind: info.kind,
             buttons: telegramButtons,
@@ -509,7 +557,7 @@ async function deliverReplyWithNormalization(
       info.kind !== "final" &&
       (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial");
     if (finalizedPreview) {
-      await handlePreviewFinalizedResult(turn, result);
+      await handlePreviewFinalizedResult(turn, result, lanePayload);
       if (isAskUserPayload && result.kind === "preview-finalized") {
         registerTelegramQuestionDeliveryForMessage(turn, effectivePayload, {
           messageId: result.delivery.messageId,
@@ -520,7 +568,7 @@ async function deliverReplyWithNormalization(
     if (segment.lane === "answer" && info.kind === "block" && result.kind === "preview-updated") {
       turn.activeAnswerBlockDelivery = {
         payload: lanePayload,
-        text: segment.text,
+        text: segmentText,
         buttons: telegramButtons,
       };
     }

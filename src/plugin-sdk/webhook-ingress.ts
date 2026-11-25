@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for webhook ingress guards, targets, and request helpers.
- */
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { GatewayAuthRateLimitConfig } from "../config/types.gateway.js";

@@ -8,7 +8,8 @@ import type {
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
 type PostedUsageTask = { input?: unknown; taskId?: number; responseId?: number };
 type NativeWorker = EventEmitter & {
-  postMessage: ReturnType<typeof vi.fn<(message: PostedUsageTask) => void>>;
+  posted: ReturnType<typeof vi.fn<(message: PostedUsageTask) => void>>;
+  postMessage: (message: PostedUsageTask) => void;
 };
 const nativeWorkers = vi.hoisted(() => [] as NativeWorker[]);
 const nativePosts = vi.hoisted(() => ({
@@ -27,7 +28,6 @@ const observed = vi.hoisted(() => ({
   closeResources: vi.fn<(key?: string) => Promise<void>>().mockResolvedValue(undefined),
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
-  replaceWorkers: [] as Array<() => () => Promise<void>>,
 }));
 
 vi.mock("../../infra/worker-task-capacity.js", async (importOriginal) => {
@@ -52,9 +52,10 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         super();
         nativeWorkers.push(this);
       }
-      postMessage = vi.fn<(message: PostedUsageTask) => void>((message) =>
+      posted = vi.fn<(message: PostedUsageTask) => void>((message) =>
         nativePosts.observe?.(this, message),
       );
+      postMessage = this.posted;
       ref() {}
       unref() {}
       async terminate() {
@@ -70,31 +71,15 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 vi.mock("../../infra/sqlite-database-admission.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/sqlite-database-admission.js")>()),
   hasSqliteDatabaseSchemaAdmissionForPath: () => observed.preparedDatabase,
-}));
-
-vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>()),
-  captureExistingOpenClawAgentDatabaseExecution: (options: { path: string }) => {
-    if (!observed.preparedDatabase) {
-      return undefined;
-    }
-    const claim = { identity: "transport", incarnation: "transport", assertCurrent() {} };
-    return {
-      agentId: "main",
-      path: options.path,
-      fileIdentity: undefined,
-      assertCurrent() {},
-      captureGenerationClaim: () => claim,
-      capturePreparedGenerationClaim: () => claim,
-      async prepare() {
-        throw new Error("Readonly transport must not prepare a writer");
-      },
-      async runExisting() {
-        throw new Error("Readonly transport must not open a writer");
-      },
-      async release() {},
-    };
-  },
+  getSqliteDatabaseAdmissionIdentityForPath: (canonicalPath: string) =>
+    observed.preparedDatabase
+      ? {
+          canonicalPath,
+          key: canonicalPath.replace(/^.*-(\d+)\.sqlite$/u, "file:1:$1"),
+          birthtime: "1",
+        }
+      : undefined,
+  hasSqliteDatabaseSchemaAdmissionForIdentity: () => observed.preparedDatabase,
 }));
 
 vi.mock("../../infra/bun-sqlite-library.js", async (importOriginal) => ({
@@ -123,18 +108,17 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
     let worker: ReturnType<NonNullable<typeof poolOptions.prepareWorker>> | undefined;
     const retiring = new Set<NonNullable<typeof worker>>();
     let activeTasks = 0;
+    let rotation: Promise<void> | undefined;
     const serialSlots = Array.from({ length: poolOptions.maxWorkers ?? 1 }, () =>
       Promise.resolve(),
     );
     let nextSlot = 0;
-    observed.replaceWorkers.push(() => {
-      const previous = worker;
-      worker = poolOptions.prepareWorker?.();
-      return async () => previous?.releaseResources?.();
-    });
     return {
       async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
         const execute = async () => {
+          if (rotation) {
+            await rotation;
+          }
           activeTasks++;
           try {
             const preparedInput = prepare();
@@ -157,23 +141,32 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
         return result;
       },
       getSnapshot: () => ({ activeTasks }),
-      async rotate() {
+      rotate() {
+        if (rotation) {
+          return rotation;
+        }
         if (worker) {
           retiring.add(worker);
         }
         worker = undefined;
         const previous = [...retiring];
-        try {
-          await observed.rotate();
-          for (const prepared of previous) {
-            if (retiring.delete(prepared)) {
-              await prepared.releaseResources?.();
+        rotation = (async () => {
+          try {
+            await observed.rotate();
+            for (const prepared of previous) {
+              if (retiring.delete(prepared)) {
+                await prepared.releaseResources?.();
+              }
             }
+            poolOptions.onRotationComplete?.();
+          } catch (error) {
+            void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
+            throw error;
+          } finally {
+            rotation = undefined;
           }
-        } catch (error) {
-          void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
-          throw error;
-        }
+        })();
+        return rotation;
       },
       closeResources: observed.closeResources,
     };
@@ -181,6 +174,7 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
 }));
 // mock-isolation: Observe custody without registering real database lifecycle resources.
 vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
+  registerAgentDatabaseResourceReleaseHandler: () => {},
   matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
     candidate.path === targetPath,
   registerOpenClawAgentDatabaseReadCandidateResource: (resource: Resource) => {
@@ -192,7 +186,6 @@ vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
     return observed.unregister;
   },
 }));
-// The pure transport must not become the process-wide disk-scan singleton.
 // mock-isolation: Reader controls must never start the process-wide disk scanner.
 vi.mock("./disk-budget-runtime.js", () => ({
   measureSessionPhysicalDiskUsage: () => {
@@ -203,10 +196,8 @@ vi.mock("./disk-budget-runtime.js", () => ({
 
 import {
   historyLane,
-  maintenanceLane,
-  projectionLane,
+  sessionStoreLane,
   rotateDatabaseWorkers,
-  targetDiscoveryLane,
 } from "./session-transcript-worker-resources.js";
 
 let sequence = 0;
@@ -240,11 +231,7 @@ afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   observed.closeResources.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await Promise.all(
-    [historyLane, projectionLane, maintenanceLane, targetDiscoveryLane].map((lane) =>
-      rotateDatabaseWorkers(lane),
-    ),
-  );
+  await Promise.all([historyLane, sessionStoreLane].map((lane) => rotateDatabaseWorkers(lane)));
 });
 afterAll(() => {
   vi.useRealTimers();

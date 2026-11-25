@@ -2,8 +2,20 @@ import type { SessionTranscriptWatermark } from "./session-transcript-context-ve
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry } from "./types.js";
 
+export type SessionTranscriptAnchorEntry = Pick<
+  InternalSessionEntry,
+  | "sessionId"
+  | "updatedAt"
+  | "lifecycleRevision"
+  | "activeWriterRunId"
+  | "cliHistoryBoundary"
+  | "permissionMode"
+>;
+
 export type SessionTranscriptAnchorFacts = {
   anchors: TranscriptEntryAnchor[];
+  /** The requested leaf is the active leaf or one of its ancestors; `null` only when empty. */
+  onActivePath?: boolean;
   session?: { sessionId: string; lifecycleRevision?: string };
   header?: unknown;
   watermark?: SessionTranscriptWatermark;
@@ -11,14 +23,7 @@ export type SessionTranscriptAnchorFacts = {
   metadata?: { present: boolean; observedAt: number | null; updatedAt: number | null };
   contextValidated?: true;
   contextAuthority?: {
-    entry?: Pick<
-      InternalSessionEntry,
-      | "sessionId"
-      | "lifecycleRevision"
-      | "activeWriterRunId"
-      | "cliHistoryBoundary"
-      | "permissionMode"
-    >;
+    entry?: SessionTranscriptAnchorEntry;
     watermark: SessionTranscriptWatermark;
   };
   replayValidated?: "current" | "initial";

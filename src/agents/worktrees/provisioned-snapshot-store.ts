@@ -17,9 +17,7 @@ export function createProvisionedSnapshotWriter(
   authority: WorktreeWorkerAuthority = {},
 ) {
   const context = captureWorktreeRunEndContext(env);
-  const predicates = structuredClone(authority.predicates);
-  const leaseSet = authority.leaseSet;
-  const assertCurrent = authority.assertCurrent;
+  const { predicates, leaseSet, assertCurrent } = authority;
   let uncertain: { error: unknown } | undefined;
   return async (
     effect: ProvisionedSnapshotEffect,

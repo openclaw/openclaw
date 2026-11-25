@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getIMessageRuntime } from "../runtime.js";
@@ -9,7 +10,10 @@ import { advanceIMessageRecoveryCursor, loadIMessageRecoveryCursor } from "./rec
 
 const accountId = "default";
 const dbIdentity = "remote:synthetic:chat.db";
-const cursorKey = `${accountId}\u0000${dbIdentity}`;
+const cursorKey = createHash("sha256")
+  .update(JSON.stringify([accountId, dbIdentity]), "utf8")
+  .digest("hex")
+  .slice(0, 32);
 const cursorStoreOptions = { namespace: "imessage.recovery-cursor", maxEntries: 64 };
 
 function seedCursor(rowid: number) {
@@ -19,21 +23,17 @@ function seedCursor(rowid: number) {
   );
 }
 
-function interceptCursorStore(options: { beforeWrite?: () => void; compareError?: Error } = {}) {
+function interceptCursorStore(options: { writeError?: Error } = {}) {
   const state = getIMessageRuntime().state;
   const openKeyedStore = state.openKeyedStoreV2.bind(state);
   const syncOpen = vi.spyOn(state, "openSyncKeyedStore");
   vi.spyOn(state, "openKeyedStoreV2").mockImplementation(
     <T>(storeOptions: OpenAsyncKeyedStoreOptions) => {
       const store = openKeyedStore<T>(storeOptions);
-      if (options.beforeWrite || options.compareError) {
-        const compareAndApply = store.compareAndApply.bind(store);
-        store.compareAndApply = async (...args) => {
-          if (options.compareError) {
-            throw options.compareError;
-          }
-          options.beforeWrite?.();
-          return await compareAndApply(...args);
+      const writeError = options.writeError;
+      if (writeError) {
+        store.register = async () => {
+          throw writeError;
         };
       }
       return store;
@@ -74,21 +74,11 @@ describe("iMessage recovery cursor persistence", () => {
     expect(syncOpen).not.toHaveBeenCalled();
   });
 
-  it("preserves a cursor changed before rewind admission", async () => {
-    seedCursor(9000);
-    const syncOpen = interceptCursorStore({ beforeWrite: () => seedCursor(9100) });
-    expect(await loadIMessageRecoveryCursor(accountId, dbIdentity, { watermarkRowid: 5000 })).toBe(
-      9100,
-    );
-    expect(await loadIMessageRecoveryCursor(accountId, dbIdentity)).toBe(9100);
-    expect(syncOpen).not.toHaveBeenCalled();
-  });
-
   it.each(["advance", "rewind"] as const)(
-    "does not fall back to sync storage after a modern %s comparison fails",
+    "keeps the persisted cursor after a failed %s write",
     async (operation) => {
       seedCursor(9000);
-      const syncOpen = interceptCursorStore({ compareError: new Error("synthetic CAS refusal") });
+      const syncOpen = interceptCursorStore({ writeError: new Error("storage unavailable") });
       if (operation === "advance") {
         await advanceIMessageRecoveryCursor(accountId, dbIdentity, 9100);
       } else {

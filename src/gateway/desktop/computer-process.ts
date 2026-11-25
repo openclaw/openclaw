@@ -9,7 +9,7 @@ import {
   type ComputerUseCapabilityDescriptor,
 } from "../../plugins/computer-use-contract.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
-import type { ManagedRun, ProcessSupervisor, RunExit } from "../../process/supervisor/types.js";
+import type { ManagedRun, RunExit } from "../../process/supervisor/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createPendingRequestRegistry } from "../../shared/pending-request-registry.js";
 import {
@@ -31,9 +31,8 @@ export function startComputerHostProcess(params: {
   env: NodeJS.ProcessEnv;
   pluginIds: string[];
   assertCurrent(): void;
-  supervisor?: ProcessSupervisor;
 }) {
-  const supervisor = params.supervisor ?? getProcessSupervisor();
+  const supervisor = getProcessSupervisor();
   const scopeKey = `gateway-computer:${randomUUID()}`;
   const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "owned-only" });
   const ready = createDeferredCore<ComputerUseCapabilityDescriptor>();
@@ -84,8 +83,7 @@ export function startComputerHostProcess(params: {
             run.cancel("manual-cancel");
           }
         }
-        const timer = setTimeout(() => run?.cancel("manual-cancel"), SHUTDOWN_TIMEOUT_MS);
-        timer.unref?.();
+        const timer = setTimeout(() => run?.cancel("manual-cancel"), SHUTDOWN_TIMEOUT_MS).unref();
         try {
           exit = await run.wait();
         } catch (error) {
@@ -154,8 +152,7 @@ export function startComputerHostProcess(params: {
   const startupTimer = setTimeout(
     () => fail(new Error("Gateway computer provider startup timed out")),
     STARTUP_TIMEOUT_MS,
-  );
-  startupTimer.unref?.();
+  ).unref();
   void ready.promise.then(
     () => clearTimeout(startupTimer),
     () => clearTimeout(startupTimer),
@@ -201,9 +198,6 @@ export function startComputerHostProcess(params: {
       sessionKey?: string;
     }) {
       await ready.promise;
-      assertActive();
-      request.assertCurrent();
-      request.signal?.throwIfAborted();
       const id = randomUUID();
       let timedOut = false;
       const cancel = () => {

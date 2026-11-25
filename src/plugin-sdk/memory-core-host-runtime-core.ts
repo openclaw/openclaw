@@ -11,19 +11,16 @@ export {
 } from "../agents/tools/common.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";
-export {
-  listAgentIds,
-  resolveConfiguredAgentId,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
-export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
+export { resolveConfiguredAgentId, resolveDefaultAgentId } from "../agents/agent-scope.js";
+export { listAgentIds, resolveSessionAgentIds } from "./agent-scope-runtime.js";
 export {
   resolveMemorySearchConfig,
   resolveMemorySearchIndexConfig,
 } from "../agents/memory-search.js";
 export { resolveMemoryDreamingPluginConfig } from "../memory-host-sdk/dreaming.js";
 export { parseNonNegativeByteSize } from "../config/byte-size.js";
-export { getRuntimeConfig, resolveRuntimeConfigCacheKey } from "../config/config.js";
+export { resolveRuntimeConfigCacheKey } from "../config/config.js";
+export { getRuntimeConfig } from "./runtime-config-legacy.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { resolveStateDir } from "../config/paths.js";
 export { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";

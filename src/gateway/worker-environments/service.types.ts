@@ -2,10 +2,10 @@ import type { AnyAgentTool } from "../../agents/tools/common.js";
 import type { CloudWorkerSetupMutationAdmission } from "../../infra/device-bootstrap.worker-types.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import type { WorkerExecutionMode, WorkerProfile } from "../../plugins/types.js";
+import type { QueuedOperatorRecoverySource } from "../operator-run-recovery-source.codec.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerEnvironmentNodeTunnel } from "./environment-access.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
-import type { WorkerInferenceExecutor } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
@@ -19,6 +19,8 @@ import type { WorkerTunnelManager } from "./tunnel.js";
 export type WorkerEnvironmentCreateRequest = {
   profileId: string;
   idempotencyKey: string;
+  /** Immutable admitted acquisition policy; unselected profiles and reserves stay fixed-lease. */
+  retainedPolicy?: import("../../plugins/worker-retention.types.js").WorkerRetentionPolicy;
   machineClass?: string;
   executionMode?: WorkerExecutionMode;
   projectPath?: string;
@@ -27,6 +29,10 @@ export type WorkerEnvironmentCreateRequest = {
   runSetupScript?: boolean;
   inheritedProfile?: { providerId: string; profileSnapshot: WorkerProfile };
   admittedIntent?: WorkerProviderPreparedIntent;
+  /** Revalidate caller authority after preparation, immediately before provider effects. */
+  beforeProvision?: () => void;
+  /** Original requesting source, immutable across retries and Gateway restarts. */
+  provisionSource?: QueuedOperatorRecoverySource;
 };
 
 export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &
@@ -58,24 +64,14 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
       WorkerLiveEventReceiver,
       "apply" | "clear" | "clearEnvironment" | "rotateCredential"
     >;
-    executeInference: WorkerInferenceExecutor;
     inferenceStore?: WorkerInferenceStore;
     createGatewayTools?: (params: {
       identity: WorkerConnectionIdentity;
       inheritedToolPolicySource?: "sender";
       inheritedToolDenylist?: string[];
       delegatedToolPolicyActive?: boolean;
-      skillWorkshop?: AnyAgentTool;
+      skillLibrary?: AnyAgentTool;
       portalAvailable?: boolean;
       prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
     }) => Promise<AnyAgentTool[]>;
   };
-
-export type WorkerEnvironmentReconcileCore = (
-  signal?: AbortSignal,
-  retainProviderSettlement?: (settled: Promise<void>) => void,
-) => Promise<void>;
-export type WorkerEnvironmentReconcileGuard = (
-  environmentId: string,
-  reconcileCore: WorkerEnvironmentReconcileCore,
-) => Promise<void>;

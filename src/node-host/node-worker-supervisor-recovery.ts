@@ -50,7 +50,9 @@ export function createNodeWorkerLaunchRecovery(
     if (
       !context.isRecoveryActive() ||
       receipt.state !== "running" ||
-      !["owned-anchor", "linux-subreaper"].includes(receipt.workerCleanupMode ?? "") ||
+      !["owned-anchor", "linux-subreaper", "windows-job"].includes(
+        receipt.workerCleanupMode ?? "",
+      ) ||
       !receipt.worker ||
       receipt.container
     ) {
@@ -73,9 +75,7 @@ export function createNodeWorkerLaunchRecovery(
     let recovery = recoveries.get(key);
     if (!recovery) {
       const done = recoverNodeWorkerLaunch(params).finally(() => {
-        if (recoveries.get(key)?.done === done) {
-          recoveries.delete(key);
-        }
+        recoveries.delete(key);
       });
       recovery = { params, done };
       recoveries.set(key, recovery);
@@ -167,10 +167,13 @@ async function recoverNodeWorkerLaunch(params: {
       );
     }
     await params.containerLifecycle.remove(receipt.container, receipt);
-  } else if (!rebooted && receipt.worker && receipt.workerCleanupMode === "linux-subreaper") {
-    // The surviving owner observes its original IPC parent loss and drains its
-    // scope. A replacement has neither child wait ownership nor a retained pidfd:
-    // never turn a procfs identity check into permission to signal a numeric PID.
+  } else if (
+    !rebooted &&
+    receipt.worker &&
+    (receipt.workerCleanupMode === "linux-subreaper" || receipt.workerCleanupMode === "windows-job")
+  ) {
+    // Linux's surviving owner drains its scope; Windows closes the dead supervisor's Job.
+    // A replacement observes exact process identity without signaling a numeric PID.
     let owner = inspectNodeWorkerProcessIdentity(receipt.worker);
     while (owner === "live" && (await stillOwned())) {
       await delay(25);
@@ -179,7 +182,11 @@ async function recoverNodeWorkerLaunch(params: {
     if (owner !== "dead" && owner !== "reused") {
       return latest();
     }
-    if ((await params.store.getMatching(receipt))?.workerDescendantsReaped !== true) {
+    if (receipt.workerCleanupMode === "windows-job") {
+      // Allow kill-on-close Job members the stop grace after the recorded worker exits.
+      // A breakaway or unusually slow descendant may briefly overlap the next turn.
+      await delay(NODE_WORKER_STOP_GRACE_MS);
+    } else if ((await params.store.getMatching(receipt))?.workerDescendantsReaped !== true) {
       log.warn(
         `Worker ${receipt.launchId} lost its native process owner without recorded descendant extinction; capacity remains reserved.`,
       );
@@ -245,55 +252,28 @@ async function recoverNodeWorkerLaunch(params: {
       return latest();
     }
   }
-  const recoveryClosed = new Error("node worker launch recovery is closed");
-  const recoveryCancelled = new Error("node worker launch recovery was cancelled before admission");
-  while (true) {
-    if (!(await stillOwned())) {
-      return latest();
-    }
-    const state = params.state ?? "interrupted";
-    try {
-      return await params.capacity.finish(
-        {
-          launchId: receipt.launchId,
-          planHash: receipt.planHash,
-          supervisor: receipt.supervisor,
-          worker: receipt.worker,
-          state,
-          errorText:
-            state === "cancelled"
-              ? "node worker launch cancelled"
-              : rebooted
-                ? "node host rebooted before the worker launch completed"
-                : receipt.worker
-                  ? "node host stopped before the worker launch completed"
-                  : "node host stopped before the worker launch started",
-        },
-        params.notifyCapacity,
-        {
-          assertCurrent: () => {
-            // Journal admission can yield after the last durable ownership read.
-            if (!params.isRecoveryActive()) {
-              throw recoveryClosed;
-            }
-            if (state === "interrupted" && params.state === "cancelled") {
-              throw recoveryCancelled;
-            }
-          },
-        },
-      );
-    } catch (error) {
-      if (error === recoveryClosed) {
-        return latest();
-      }
-      // The journal only invokes this guard before its transaction grant. An exact
-      // refusal permits the one-way cancellation upgrade; delivery failures do not.
-      if (error === recoveryCancelled) {
-        continue;
-      }
-      throw error;
-    }
+  if (!(await stillOwned())) {
+    return latest();
   }
+  const state = params.state ?? "interrupted";
+  return params.capacity.finish(
+    {
+      launchId: receipt.launchId,
+      planHash: receipt.planHash,
+      supervisor: receipt.supervisor,
+      worker: receipt.worker,
+      state,
+      errorText:
+        state === "cancelled"
+          ? "node worker launch cancelled"
+          : rebooted
+            ? "node host rebooted before the worker launch completed"
+            : receipt.worker
+              ? "node host stopped before the worker launch completed"
+              : "node host stopped before the worker launch started",
+    },
+    params.notifyCapacity,
+  );
 }
 
 /** Persist an observed physical exit before releasing its active owner and turn waiters. */
@@ -342,9 +322,7 @@ export function createNodeWorkerTerminalReconciliation(options: {
       return receipt;
     })();
     const pending = operation.finally(() => {
-      if (active.reconciliation === pending) {
-        active.reconciliation = undefined;
-      }
+      active.reconciliation = undefined;
     });
     active.reconciliation = pending;
     return pending;

@@ -2,8 +2,9 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
-import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { requireDirectorySync, syncDirectory, syncDirectorySync } from "./directory-durability.js";
+import { ignoreMissingPath } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   packageActivationIdentity,
   resolvePackageActivationHelper,
@@ -17,10 +18,7 @@ export function packageActivationIdentityOrAbsent(file: string, directory: boole
   try {
     return packageActivationIdentity(file, directory);
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? null;
   }
 }
 
@@ -189,6 +187,8 @@ export function settlePackageActivationCustody(params: {
   record: PackageActivationRecord;
   settlement: Extract<NonNullable<PackageActivationRecord["intent"]>, { settled: boolean }>;
   assertCurrent: () => void;
+  // Once durably closed, archival may move the custody paths verified before close.
+  assertArchiveCurrent?: () => void;
   onSettled?: () => void;
 }) {
   const { anchor, journal, settlement, assertCurrent } = params;
@@ -199,7 +199,12 @@ export function settlePackageActivationCustody(params: {
     assertCurrent,
   );
   params.onSettled?.();
-  const warning = archivePackageActivationCustody(anchor, journal, record, assertCurrent);
+  const warning = archivePackageActivationCustody(
+    anchor,
+    journal,
+    record,
+    params.assertArchiveCurrent ?? assertCurrent,
+  );
   return {
     record,
     warning: `${settlement.detail ?? settlement.kind}. ${warning ?? `Preserved at ${anchor}.superseded-${record.descriptor.operationId}`}`,
@@ -217,6 +222,38 @@ export function archivePackageActivationCustody(
   const retained = `${anchor}.superseded-${record.descriptor.operationId}`;
   try {
     journal.archiveSettled(record, assertCurrent);
+    // Preparation moves the package and launchers out of this npm prefix.
+    // Preserve only its recorded stage, never sweep another updater's stages.
+    const descriptor = record.descriptor;
+    const stage = path.resolve(descriptor.originalStageRoot, "../../..");
+    if (
+      record.intent?.kind === "recovery-lease-missing" &&
+      record.intent.replacementIdentity === descriptor.previous.identity &&
+      record.publications.length === 0 &&
+      path.dirname(stage) === path.dirname(anchor) &&
+      path.basename(stage).startsWith(".openclaw.update-stage-") &&
+      descriptor.originalStageRoot ===
+        path.join(stage, "lib/node_modules", path.basename(descriptor.authority.installKey)) &&
+      fs.lstatSync(stage, { throwIfNoEntry: false })
+    ) {
+      const stageArchive = path.join(retained, "update-stage");
+      assertCurrent();
+      const candidateSource = descriptor.preparation.find((entry) => entry.name === "candidate")!;
+      if (
+        fs.realpathSync(stage) !== stage ||
+        !fs.lstatSync(stage).isDirectory() ||
+        fs.lstatSync(stageArchive, { throwIfNoEntry: false }) ||
+        packageActivationIdentity(path.dirname(descriptor.originalStageRoot), "parent") !==
+          candidateSource.sourceParentIdentity
+      ) {
+        throw new Error("Recorded package update stage changed before archival.");
+      }
+      fs.renameSync(stage, stageArchive);
+      for (const directory of [path.dirname(stage), retained]) {
+        assertCurrent();
+        requireDirectorySync(syncDirectorySync(directory), "Package update stage archive");
+      }
+    }
   } catch (error) {
     assertCurrent();
     // Lost rename acknowledgements may leave only the archived journal. A still

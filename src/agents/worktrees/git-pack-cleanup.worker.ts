@@ -1,14 +1,11 @@
 import fs from "node:fs";
-import koffi from "koffi";
+import path from "node:path";
+import { tryAcquireWriteLease } from "@openclaw/fs-safe/file-lock";
+import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 
 // Linux leases check open descriptors across UIDs, unlike an unprivileged fuser census.
 // Keep SIGIO and the leased descriptor in this disposable process, never the Gateway.
 process.on("SIGIO", () => {});
-const fcntl = koffi.load(null).func("int fcntl(int fd, int command, ...)");
-const F_SETLEASE = 1024;
-const F_GETLEASE = 1025;
-const F_WRLCK = 1;
-const F_UNLCK = 2;
 // SAFETY: The maintenance owner sends this private packet after its live input guard.
 const { files, olderThan } = JSON.parse(fs.readFileSync(0, "utf8")) as {
   files: string[];
@@ -16,6 +13,7 @@ const { files, olderThan } = JSON.parse(fs.readFileSync(0, "utf8")) as {
 };
 let removed = 0;
 let retained = 0;
+let bytesRemoved = 0;
 for (const file of files) {
   if (removed >= 256) {
     break;
@@ -30,7 +28,15 @@ for (const file of files) {
     if (!original.isFile() || original.mtimeMs >= olderThan) {
       continue;
     }
-    if (fcntl(fd, F_SETLEASE, "int", F_WRLCK) !== 0) {
+    const pid = /^\.tmp-(\d+)-pack-/.exec(path.basename(file))?.[1];
+    // A repacker can close a sidecar before publishing it; the file lease alone
+    // cannot protect that interval. Retain live/unknown PIDs regardless of cwd.
+    if (pid && !isPidDefinitelyDead(Number(pid))) {
+      retained++;
+      continue;
+    }
+    const lease = tryAcquireWriteLease(fd);
+    if (!lease) {
       retained++;
       continue;
     }
@@ -42,15 +48,16 @@ for (const file of files) {
         current.size !== original.size ||
         current.mtimeMs !== original.mtimeMs ||
         current.ctimeMs !== original.ctimeMs ||
-        fcntl(fd, F_GETLEASE) !== F_WRLCK
+        !lease.isHeld()
       ) {
         retained++;
         continue;
       }
       fs.unlinkSync(file);
       removed++;
+      bytesRemoved += original.size;
     } finally {
-      fcntl(fd, F_SETLEASE, "int", F_UNLCK);
+      lease.release();
     }
   } catch {
     retained++;
@@ -60,4 +67,4 @@ for (const file of files) {
     }
   }
 }
-process.stdout.write(JSON.stringify({ removed, retained }));
+process.stdout.write(JSON.stringify({ removed, retained, bytesRemoved }));

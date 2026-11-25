@@ -33,12 +33,6 @@ export const offsetMocks: {
   deleteTelegramUpdateOffset: vi.fn().mockResolvedValue(undefined) as unknown as MockFn,
 };
 
-export const lifecycleMocks: {
-  onAccountConfigChanged: MockFn;
-} = {
-  onAccountConfigChanged: vi.fn().mockResolvedValue(undefined) as unknown as MockFn,
-};
-
 const secretMocks = {
   resolveCommandConfigWithSecrets: vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,
@@ -56,6 +50,11 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../cli/command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: secretMocks.resolveCommandConfigWithSecrets,
+}));
+
+// mock-isolation: Store routing is external I/O here; persistence tests prove durable writes.
+vi.mock("../cli/local-state-owner.js", () => ({
+  runWithLocalStateOwner: vi.fn(async () => undefined),
 }));
 
 vi.mock("../cli/command-secret-targets.js", () => ({

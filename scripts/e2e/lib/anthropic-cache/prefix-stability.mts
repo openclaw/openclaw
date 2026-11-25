@@ -77,31 +77,31 @@ function firstDifference(before: unknown, after: unknown, path = "$"): string {
   return `path=${path} leafPrevious=${digest(left)} leafNext=${digest(right)} leafBytes=${left === undefined ? 0 : Buffer.byteLength(left)}:${right === undefined ? 0 : Buffer.byteLength(right)}`;
 }
 
-function imageCleanupBytes(serialized: string): string {
-  let images = 0;
-  const project = (value: unknown): unknown => {
-    if (Array.isArray(value)) {
-      return value.map(project);
+/**
+ * Responses item envelopes (`id`, `status`) render no model tokens. A warm continuation
+ * inherits stored output items with them, while cold replay omits IDs the store cannot
+ * verify (#200163). Every prefix comparison uses this one projection, so the release gate
+ * and the transport tests cannot disagree about which fields count.
+ */
+export function omitResponsesReplayEnvelopes(input: readonly unknown[]): unknown[] {
+  return input.map((raw) => {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      return raw;
     }
-    if (value === null || typeof value !== "object") {
-      return value;
+    const item = raw as Record<string, unknown>;
+    const envelope =
+      item.type === "function_call" ||
+      item.type === "reasoning" ||
+      (item.type === "message" && item.role === "assistant");
+    if (!envelope) {
+      return item;
     }
-    const block = object(value);
-    if (block.type === "image" || block.type === "image_url" || block.type === "input_image") {
-      images += 1;
-      return {
-        type: block.type === "input_image" ? "input_text" : "text",
-        text: "[image data removed - already processed by model]",
-      };
-    }
-    return Object.fromEntries(Object.entries(block).map(([key, field]) => [key, project(field)]));
-  };
-  const expected = bytes(project(JSON.parse(serialized)));
-  assert(images > 0, "image cleanup boundary must contain an image");
-  return expected;
+    const { id: _id, status: _status, ...rest } = item;
+    return rest;
+  });
 }
 
-/** Preserve wire ordering and bytes; only movable conversation cache markers are separate. */
+/** Preserve history order and content bytes; normalize text shorthand and separate cache markers. */
 export function snapshotProviderPrefix(
   api: CacheRequestApi,
   payload: unknown,
@@ -125,14 +125,28 @@ export function snapshotProviderPrefix(
         if (cache_control !== undefined) {
           breakpoints.push({ index: history.length, policy: bytes(cache_control) });
         }
-        history.push(bytes({ ...envelope, block }));
+        // Anthropic accepts a string as shorthand for one text block. Its synthetic
+        // envelope must not acquire a different key order from sorted captured JSON.
+        const { type, text, ...fields } = block;
+        history.push(
+          bytes({ ...envelope, block: type === "text" ? { type, text, ...fields } : block }),
+        );
       }
     } else {
       history.push(bytes(message));
     }
   }
+  const system = api === "openai-responses" ? request.instructions : request.system;
+  // Opening-only Anthropic checkpoints may move without changing the model-visible prefix.
+  const stableSystem =
+    api === "anthropic-messages" && Array.isArray(system)
+      ? system.map((rawBlock) => {
+          const { cache_control: _cacheControl, ...block } = object(rawBlock);
+          return block;
+        })
+      : system;
   return {
-    system: bytes(api === "openai-responses" ? request.instructions : request.system),
+    system: bytes(stableSystem),
     tools: bytes(request.tools),
     cacheKey: bytes({
       model: request.model,
@@ -153,9 +167,7 @@ export function assertStableProviderPrefix(
   options: {
     label: string;
     historyLength?: number;
-    boundary?:
-      | { kind: "image-cleanup"; historyIndexes: number[] }
-      | { kind: "history-pruning"; startIndex: number; deleteCount: number };
+    boundary?: { kind: "history-pruning"; startIndex: number; deleteCount: number };
   },
 ): void {
   const same = (segment: string, before: string | undefined, after: string | undefined) => {
@@ -174,7 +186,6 @@ export function assertStableProviderPrefix(
     "invalid stable history boundary",
   );
   const boundary = options.boundary;
-  const changedIndexes = new Set(boundary?.kind === "image-cleanup" ? boundary.historyIndexes : []);
   let history = previous.history.slice(0, length);
   let prunedCount = 0;
   if (boundary?.kind === "history-pruning") {
@@ -189,18 +200,8 @@ export function assertStableProviderPrefix(
     history = history.toSpliced(boundary.startIndex, boundary.deleteCount);
     prunedCount = boundary.deleteCount;
   }
-  for (const index of changedIndexes) {
-    assert(
-      Number.isInteger(index) && index >= 0 && index < length,
-      "invalid image cleanup boundary",
-    );
-  }
   for (let index = 0; index < history.length; index++) {
-    if (!changedIndexes.has(index)) {
-      same(`history[${index}]`, history[index], next.history[index]);
-    } else {
-      same(`history[${index}]`, imageCleanupBytes(history[index]!), next.history[index]);
-    }
+    same(`history[${index}]`, history[index], next.history[index]);
   }
   // Anthropic moves the last breakpoint as history grows; its retention policy
   // and coverage of the old marked prefix must survive that movement.

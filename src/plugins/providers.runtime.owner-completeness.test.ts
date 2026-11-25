@@ -18,7 +18,7 @@ import {
   resolveProviderRuntimePluginHandle,
 } from "./provider-hook-runtime.js";
 import { findProviderRuntimeRegistrationInRegistry } from "./provider-registry-selection.js";
-import { resolvePluginProvidersCore } from "./providers.runtime.js";
+import { resolvePluginProvidersCore, withPluginProviders } from "./providers.runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
@@ -120,6 +120,77 @@ afterEach(clearPluginLoaderCache);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("provider selection registration coverage", () => {
+  it.each(["active", "request", "unowned request", "disabled", "replaced"] as const)(
+    "uses a %s runtime alias owner only as an independent inspection hint",
+    async (state) => {
+      const proof = fixture("cli");
+      writeFileSync(
+        proof.otherSource,
+        'let calls=0; module.exports={id:"other-owner",register(api){api.registerProvider({id:"other-provider",label:"Other",auth:[],hookAliases:["runtime-alias"],normalizeModelId:()=>String(++calls)});}};',
+      );
+      const loaded = proof.load("full", ["other-owner"]);
+      const callback = loaded.providers[0]!.provider.normalizeModelId!;
+      expect(callback({ provider: "runtime-alias", modelId: "before" })).toBe("1");
+      setActivePluginRegistry(
+        state.includes("request") ? createEmptyPluginRegistry() : loaded,
+        "runtime-alias-owner",
+      );
+      const replacement = path.join(path.dirname(proof.otherSource), "replacement.cjs");
+      writeFileSync(replacement, 'throw new Error("replacement must not be selected");');
+      const inspect = () =>
+        withPluginProviders(
+          {
+            ...proof.query,
+            mode: "runtime",
+            applyAutoEnable: false,
+            providerRefs: ["runtime-alias"],
+            onlyPluginIds: undefined,
+            ...(state === "disabled"
+              ? {
+                  config: {
+                    plugins: {
+                      ...proof.query.config.plugins,
+                      entries: { "other-owner": { enabled: false } },
+                    },
+                  },
+                }
+              : {}),
+            ...(state === "replaced"
+              ? {
+                  pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+                    plugins: proof.snapshot.plugins.map((plugin) =>
+                      plugin.id === "other-owner" ? { ...plugin, source: replacement } : plugin,
+                    ),
+                  }),
+                }
+              : {}),
+          },
+          async (providers) =>
+            providers.map((provider) => ({
+              id: provider.id,
+              call: provider.normalizeModelId?.({ provider: "runtime-alias", modelId: "after" }),
+            })),
+        );
+      const selected = await (state.includes("request")
+        ? withPluginRuntimeRegistryScope(
+            state === "request"
+              ? loaded
+              : {
+                  ...createEmptyPluginRegistry(),
+                  plugins: loaded.plugins,
+                  providers: loaded.providers,
+                },
+            inspect,
+          )
+        : inspect());
+      expect(selected).toEqual(
+        state === "active" || state === "request" ? [{ id: "other-provider", call: "1" }] : [],
+      );
+      expect(callback({ provider: "runtime-alias", modelId: "after" })).toBe("2");
+      expect(proof.registrations()).toBe("");
+    },
+  );
+
   it("activates the Bedrock API owner for a custom provider without loading other owners", () => {
     const manifest = JSON.parse(
       readFileSync(

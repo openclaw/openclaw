@@ -5,7 +5,7 @@ import {
   resolveIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
-import { resolveAcceptedBrowserOriginForGateway } from "../gateway/origin-check.js";
+import { resolveAcceptedBrowserOrigin as resolveAcceptedBrowserOriginForGateway } from "../gateway/origin-check.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   isRequestBodyLimitError,

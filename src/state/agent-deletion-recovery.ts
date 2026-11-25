@@ -1,4 +1,5 @@
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { releaseAgentDatabaseHeldAdmission } from "./agent-database-admission.js";
 import type { AgentDeletionRecoveryHoldPredicate } from "./agent-deletion-journal-recovery.kernel.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
@@ -10,7 +11,7 @@ export async function resolveAgentDeletionRecoveryHoldsInWorker(
   assertCurrent: () => void,
 ): Promise<void> {
   const context = captureOpenClawStateWorkerContext();
-  const input = { predicate: structuredClone(predicate), paths };
+  const input = { predicate, paths };
   await runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "agentRecovery.resolveHolds", input }),
@@ -29,4 +30,5 @@ export async function resolveAgentDeletionRecoveryHoldsInWorker(
       }),
     },
   );
+  releaseAgentDatabaseHeldAdmission(paths, { env: context.environment });
 }

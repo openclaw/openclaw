@@ -42,7 +42,12 @@ type QualificationDispatchClient = {
   readApi: (endpoint: string, fields?: string[]) => string;
   postApi: (args: string[]) => string;
   httpStatus: (response: string) => number;
+  // Throws unless the observed main tip is trusted admission tooling that
+  // descends from the previously selected P.
+  verifyMainAdvance?: (previousSha: string, currentSha: string, preflightFirst: boolean) => void;
 };
+// Bounded re-reads absorb ordinary main merges between P selection and the POST.
+const MAX_ADMISSION_MAIN_ADVANCES = 3;
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -77,6 +82,7 @@ export type DispatchRequest = {
 export type QualificationAdmissionDispatch = {
   request: ReturnType<typeof buildQualificationAdmissionRequest>;
   workflowSha: string;
+  workflowShaPolicy?: "advance-with-main" | "pinned";
   workflowRef: string;
   workflowId: number;
   phase: "prepared" | "attempted" | "observed" | "rejected";
@@ -104,12 +110,17 @@ export function dispatchInputsDigest(inputs: DispatchInputs): string {
 }
 
 export function formatDispatchSelection(
-  request: Pick<DispatchRequest, "targetSha" | "workflowSha" | "inputs" | "effectiveSoak">,
+  request: Pick<
+    DispatchRequest,
+    "targetSha" | "workflowSha" | "inputs" | "effectiveSoak" | "trustedWorkflowRef"
+  >,
 ): string {
   const { inputs } = request;
-  // Waiver values remain in the private request; operator output records selection only.
-  const waiver = inputs.telegram_waiver ? "selected (redacted)" : "omitted";
-  return `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak} telegram_waiver=${waiver}`;
+  const selection = `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak}`;
+  if (request.targetSha === request.workflowSha || request.trustedWorkflowRef === "candidate") {
+    return selection;
+  }
+  return `${selection}\nWARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts. Release verification may fail even when workloads succeed. Use the admitted candidate route for publication qualification, with Q=C by default or an explicit reviewed Q.`;
 }
 
 function validateDispatchRecord(value: unknown): asserts value is DispatchRecord {
@@ -163,9 +174,7 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
       /^[0-9]{4}\.[0-9]+\.[0-9]+(?:-.+)?$/u.test(request.targetVersion) &&
       typeof request.targetContextRef === "string" &&
       typeof request.trustedWorkflowRef === "string" &&
-      ((value.kind === CANDIDATE_REQUEST_KIND &&
-        request.trustedWorkflowRef === "candidate" &&
-        request.targetSha === request.workflowSha) ||
+      ((value.kind === CANDIDATE_REQUEST_KIND && request.trustedWorkflowRef === "candidate") ||
         request.trustedWorkflowRef === "main" ||
         TRUSTED_WORKFLOW_TAG_PATTERN.test(request.trustedWorkflowRef)) &&
       typeof request.workflowRef === "string" &&
@@ -241,21 +250,25 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
   }
   if (value.kind === CANDIDATE_REQUEST_KIND) {
     requireDispatch(
-      request.trustedWorkflowRef === "candidate" && request.workflowSha === request.targetSha,
-      "Candidate request cannot change its qualification mode or C=Q identity",
+      request.trustedWorkflowRef === "candidate",
+      "Candidate request cannot change its admitted qualification mode",
     );
     const admission = value.admission;
+    const admissionKeys = [
+      "request",
+      "workflowSha",
+      "workflowRef",
+      "workflowId",
+      "phase",
+      "run",
+      "descriptor",
+    ];
     requireDispatch(
-      exactKeys(admission, [
-        "request",
-        "workflowSha",
-        "workflowRef",
-        "workflowId",
-        "phase",
-        "run",
-        "descriptor",
-      ]) &&
+      (exactKeys(admission, admissionKeys) ||
+        exactKeys(admission, [...admissionKeys, "workflowShaPolicy"])) &&
         SHA_PATTERN.test(stringValue(admission.workflowSha)) &&
+        (admission.workflowShaPolicy === undefined ||
+          ["advance-with-main", "pinned"].includes(stringValue(admission.workflowShaPolicy))) &&
         (admission.workflowRef === "main" ||
           TRUSTED_WORKFLOW_TAG_PATTERN.test(stringValue(admission.workflowRef))) &&
         Number.isSafeInteger(admission.workflowId) &&
@@ -430,7 +443,7 @@ export function observeQualificationAdmission(
       isDeepStrictEqual(authenticated.request, admission.request),
       "Retained admission differs from the original frozen request",
     );
-    return { descriptor: admission.descriptor, run: admission.run };
+    return { descriptor: admission.descriptor, run: admission.run, authenticated };
   }
   const inventory: unknown = JSON.parse(
     client.readApi("repos/" + REPOSITORY + "/actions/workflows/" + admission.workflowId + "/runs", [
@@ -505,7 +518,7 @@ export function observeQualificationAdmission(
     isDeepStrictEqual(authenticated.request, admission.request),
     "Admission returned a different frozen request",
   );
-  return { descriptor, run: { id: Number(run.id), attempt: 1 } };
+  return { descriptor, run: { id: Number(run.id), attempt: 1 }, authenticated };
 }
 
 export async function qualifyAdmission(
@@ -514,21 +527,58 @@ export async function qualifyAdmission(
   client: QualificationDispatchClient,
 ) {
   let record = initialRecord;
-  const admission = record.admission;
+  let admission = record.admission;
   requireDispatch(admission, "Candidate admission is missing");
   if (admission.phase === "prepared") {
     // P's mutable dispatch selector is checked immediately before the one POST.
     // If it moves in the API window, the observed run SHA refuses adoption.
+    // Before any POST, a moved main may only advance P to a verified descendant;
+    // protected tags never move.
     const refPath =
       admission.workflowRef === "main" ? "heads/main" : "tags/" + admission.workflowRef;
-    const ref: unknown = JSON.parse(client.readApi("repos/" + REPOSITORY + "/git/ref/" + refPath));
-    requireDispatch(
-      isJsonRecord(ref) &&
-        isJsonRecord(ref.object) &&
-        ref.object.type === "commit" &&
-        ref.object.sha === admission.workflowSha,
-      "Admission tooling ref moved before dispatch",
-    );
+    let workflowSha = admission.workflowSha;
+    for (let advances = 0; ; advances += 1) {
+      const ref: unknown = JSON.parse(
+        client.readApi("repos/" + REPOSITORY + "/git/ref/" + refPath),
+      );
+      requireDispatch(
+        isJsonRecord(ref) && isJsonRecord(ref.object) && ref.object.type === "commit",
+        "Admission tooling ref is unreadable",
+      );
+      const currentSha = stringValue(ref.object.sha);
+      if (currentSha === workflowSha) {
+        break;
+      }
+      requireDispatch(
+        admission.workflowRef === "main" &&
+          admission.workflowShaPolicy !== "pinned" &&
+          client.verifyMainAdvance &&
+          SHA_PATTERN.test(currentSha) &&
+          advances < MAX_ADMISSION_MAIN_ADVANCES,
+        "Admission tooling ref moved before dispatch",
+      );
+      try {
+        client.verifyMainAdvance(
+          workflowSha,
+          currentSha,
+          decodePublicationDispatchEnvelope(record.request.inputs.trusted_workflow_json).laneInputs
+            ?.preflight_first === "true",
+        );
+      } catch (error) {
+        throw new Error(
+          "Admission tooling ref moved before dispatch: " +
+            (error instanceof Error ? error.message : String(error)),
+          { cause: error },
+        );
+      }
+      console.log(`Admission P advanced with main: ${workflowSha} -> ${currentSha}`);
+      workflowSha = currentSha;
+    }
+    if (workflowSha !== admission.workflowSha) {
+      admission = { ...admission, workflowSha };
+      record = { ...record, admission };
+      retain(record);
+    }
     const directory = mkdtempSync(join(tmpdir(), "openclaw-qualification-request-"));
     const path = join(directory, "dispatch.json");
     try {
@@ -579,13 +629,22 @@ export async function qualifyAdmission(
   do {
     const observed = observeQualificationAdmission(record, client);
     if (observed) {
+      if (admission.phase === "observed") {
+        // Reauthenticate without repacking the already frozen workflow input bytes.
+        return { record, authenticated: observed.authenticated };
+      }
       const envelope = decodePublicationDispatchEnvelope(
         String(record.request.inputs.trusted_workflow_json),
       );
       const packed = JSON.stringify({ ...envelope, qualificationAdmission: observed.descriptor });
       record = {
         ...record,
-        admission: { ...admission, ...observed, phase: "observed" },
+        admission: {
+          ...admission,
+          descriptor: observed.descriptor,
+          run: observed.run,
+          phase: "observed",
+        },
         request: {
           ...record.request,
           inputs: { ...record.request.inputs, trusted_workflow_json: packed },
@@ -593,7 +652,7 @@ export async function qualifyAdmission(
         },
       };
       retain(record);
-      return record;
+      return { record, authenticated: observed.authenticated };
     }
     await sleep(15_000);
   } while (Date.now() < deadline);

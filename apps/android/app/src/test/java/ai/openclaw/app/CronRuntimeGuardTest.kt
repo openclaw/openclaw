@@ -242,7 +242,7 @@ class CronRuntimeGuardTest {
     }
 
   @Test
-  fun refreshCronJobsRetriesWhenSnapshotRevisionChangesBetweenPages() =
+  fun refreshCronJobsAcceptsChangesBetweenPagesWithoutRetrying() =
     runBlocking {
       val runtime = createTestRuntime()
       seedConnectedRuntime(runtime)
@@ -260,25 +260,15 @@ class CronRuntimeGuardTest {
                 .getValue("offset")
                 .jsonPrimitive.content
                 .toInt()
-            val requestIndex = requestedOffsets.size
             requestedOffsets += offset
-            when (requestIndex) {
+            when (offset) {
               0 -> {
                 val jobs = (0 until 200).joinToString(",") { cronJobSummaryJson(it) }
                 """{"jobs":[$jobs],"snapshotRevision":"rev-1","total":201,"offset":0,"limit":200,"hasMore":true,"nextOffset":200}"""
               }
 
-              1 -> {
-                """{"jobs":[${cronJobSummaryJson(999)}],"snapshotRevision":"rev-2","total":201,"offset":200,"limit":200,"hasMore":false,"nextOffset":null}"""
-              }
-
-              2 -> {
-                val jobs = (0 until 200).joinToString(",") { cronJobSummaryJson(it) }
-                """{"jobs":[$jobs],"snapshotRevision":"rev-2","total":201,"offset":0,"limit":200,"hasMore":true,"nextOffset":200}"""
-              }
-
               else -> {
-                """{"jobs":[${cronJobSummaryJson(200)}],"snapshotRevision":"rev-2","total":201,"offset":200,"limit":200,"hasMore":false,"nextOffset":null}"""
+                """{"jobs":[${cronJobSummaryJson(999)}],"snapshotRevision":"rev-2","total":201,"offset":200,"limit":200,"hasMore":false,"nextOffset":null}"""
               }
             }
           }
@@ -296,7 +286,8 @@ class CronRuntimeGuardTest {
 
       assertEquals(null, runtime.cronErrorText.value)
       assertEquals(201, runtime.cronJobs.value.size)
-      assertEquals(listOf(0, 200, 0, 200), requestedOffsets)
+      assertEquals(listOf(0, 200), requestedOffsets)
+      assertEquals(true, runtime.cronJobs.value.any { it.id == "job-999" })
     }
 
   @Test

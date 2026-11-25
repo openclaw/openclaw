@@ -13,11 +13,12 @@ import { readToolResultDetails } from "./tool-result-error.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
 
-function pushUniqueMessagingMediaUrl(urls: Set<string>, value: unknown): void {
+function pushUniqueMessagingMediaUrl(urls: Set<string>, value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
   if (normalized) {
     urls.add(normalized);
   }
+  return normalized;
 }
 
 export function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
@@ -193,8 +194,7 @@ function collectStructuredMedia(media: Record<string, unknown>): ToolResultMedia
   const mediaUrls = new Set<string>();
   const attachmentsByUrl = new Map<string, ReplyMediaAttachment>();
   const pushString = (value: unknown, attachment?: ReplyMediaAttachment) => {
-    pushUniqueMessagingMediaUrl(mediaUrls, value);
-    const normalized = typeof value === "string" ? value.trim() : "";
+    const normalized = pushUniqueMessagingMediaUrl(mediaUrls, value);
     if (normalized && attachment && !attachmentsByUrl.has(normalized)) {
       attachmentsByUrl.set(normalized, attachment);
     }

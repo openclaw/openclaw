@@ -353,6 +353,16 @@ openclaw_live_append_array() {
   eval "${target_array}+=(\"\${${source_array}[@]}\")"
 }
 
+openclaw_live_append_default_env() {
+  local prefix="$1" setting name fallback
+  shift
+  for setting in "$@"; do
+    name="${prefix}${setting%%=*}"
+    fallback="${setting#*=}"
+    DOCKER_RUN_ARGS+=(-e "$name=${!name:-$fallback}")
+  done
+}
+
 openclaw_live_require_build_extension() {
   local extension="${1:?extension required}"
   local current="${OPENCLAW_DOCKER_BUILD_EXTENSIONS:-${OPENCLAW_EXTENSIONS:-}}"

@@ -6,7 +6,7 @@ import {
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
-import { resolveGatewayErrorDetailCode } from "../../api/gateway.ts";
+import { resolveGatewayErrorDetailCode } from "../../api/gateway-connect-errors.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
 type ErrorWithMessageAndDetails = {

@@ -5,9 +5,10 @@ import {
   coerceTransportToolCallArguments,
   sanitizeTransportPayloadText,
 } from "../transports/transport-stream-shared.js";
-import type { Tool } from "../types.js";
+import { hasRuntimeContextMarker, type Tool } from "../types.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { googleToolParameters, mapGoogleToolArguments } from "./google-tool-parameters.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 
 type GoogleContentPart = Part & Record<string, unknown>;
@@ -47,14 +48,6 @@ function sanitizeGeminiThoughtSignature(value: string | undefined): string | und
     : undefined;
 }
 
-function toolCallThoughtSignatureReplayKey(
-  id: string,
-  name: string,
-  args: Record<string, unknown>,
-): string {
-  return [id, name, stableStringifyGoogleToolCallValue(args)].join("\u0000");
-}
-
 export function requiresGoogleToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 }
@@ -69,6 +62,7 @@ function supportsMultimodalFunctionResponse(modelId: string): boolean {
 export function projectGoogleMessages(params: {
   model: Pick<ProviderModel, "id" | "api" | "provider" | "input">;
   messages: ProviderContext["messages"];
+  tools?: Tool[];
   replay: "signed-parts" | "managed";
   requiresToolCallSignature: boolean;
   videoPart?: (video: VideoContent) => GoogleContentPart;
@@ -122,6 +116,16 @@ export function projectGoogleMessages(params: {
       if (visibleParts.length === 0) {
         visibleParts.push({ text: " " });
       }
+      if (hasRuntimeContextMarker(msg)) {
+        // Keep context separate: merging into a user turn rewrites its replayed
+        // bytes when turn-scoped context expires. Google has no developer role.
+        visibleParts.unshift({
+          text: "The following is runtime context, not a user request. Do not respond to or acknowledge this context.",
+        });
+        visibleParts.push({
+          text: "Use this context to continue responding to the user's request.",
+        });
+      }
       contents.push({ role: "user", parts: visibleParts });
     } else if (msg.role === "assistant") {
       const parts: GoogleContentPart[] = [];
@@ -148,7 +152,12 @@ export function projectGoogleMessages(params: {
           if (isSameProviderAndModel && (managed || model.provider !== "google-gemini-cli")) {
             sameRouteToolCallIds.add(block.id);
           }
-          const args = coerceTransportToolCallArguments(block.arguments);
+          const args = mapGoogleToolArguments(
+            params.tools,
+            block.name,
+            coerceTransportToolCallArguments(block.arguments),
+            "encode",
+          );
           const ownSignature = isSameProviderAndModel
             ? signature(block.thoughtSignature)
             : undefined;
@@ -159,7 +168,7 @@ export function projectGoogleMessages(params: {
               (params.requiresToolCallSignature &&
                 isSameProviderAndModel &&
                 replaySignatures.size > 0))
-              ? toolCallThoughtSignatureReplayKey(block.id, block.name, args)
+              ? [block.id, block.name, stableStringifyGoogleToolCallValue(args)].join("\u0000")
               : "";
           if (managed && ownSignature) {
             nextReplaySignatures.set(replayKey, ownSignature);
@@ -277,7 +286,7 @@ export function convertGoogleTools(
       functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
         name: tool.name,
         description: tool.description,
-        parametersJsonSchema: tool.parameters,
+        parametersJsonSchema: googleToolParameters(tool.parameters),
       })),
     },
   ];

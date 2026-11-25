@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const installer = readStandaloneInstaller(process.cwd(), "install.sh");
@@ -68,24 +69,36 @@ case "$1" in
 esac
 `,
   );
-  const zip = join(root, "bun.zip");
-  const zipped = spawnSync("/usr/bin/zip", ["-q", zip, "bun-linux-x64/bun"], { cwd: root });
-  expect(zipped.status).toBe(0);
+  const archiveBytes = makeStoredZip({ "bun-linux-x64/bun": readFileSync(bun, "utf8") });
+  writeFileSync(join(root, "bun.zip"), archiveBytes);
   const artifact = {
     asset: "bun.zip",
-    sha256: sha(readFileSync(zip)),
+    sha256: sha(archiveBytes),
     executable: "bun-linux-x64/bun",
     executableSha256: sha(readFileSync(bun)),
   };
   const pin = {
     tag,
     revision,
-    artifacts: Object.fromEntries(
-      ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"].map((platform) => [
-        platform,
-        artifact,
-      ]),
-    ),
+    artifacts: {
+      ...Object.fromEntries(
+        ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"].map((platform) => [
+          platform,
+          artifact,
+        ]),
+      ),
+      ...Object.fromEntries(
+        ["windows-x64", "windows-arm64"].map((platform) => [
+          platform,
+          {
+            ...artifact,
+            executable: `bun-${platform}/bun.exe`,
+            authenticodeSigned: true,
+            testOnly: false,
+          },
+        ]),
+      ),
+    },
   };
   writeFileSync(join(root, "pin.json"), JSON.stringify(pin));
   writeFileSync(join(root, "registry.json"), JSON.stringify({ latest: version, beta: version }));
@@ -109,6 +122,13 @@ esac
   );
   executable(join(bin, "uname"), '#!/bin/sh\necho "${FIXTURE_ARCH:-x86_64}"\n');
   executable(join(bin, "getconf"), '#!/bin/sh\n[ "${FIXTURE_MUSL:-0}" = 0 ]\n');
+  executable(
+    join(bin, "shasum"),
+    `#!/bin/bash
+[[ "$1" == -a && "$2" == 256 ]] || exit 1
+exec "$REAL_NODE" -e 'const fs = require("node:fs"); const { createHash } = require("node:crypto"); console.log(createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"));' "$3"
+`,
+  );
   executable(
     join(bin, "node"),
     '#!/bin/sh\necho forbidden-node >> "$FIXTURE_ROOT/effects"\nexit 99\n',
@@ -147,6 +167,19 @@ function output(result: ReturnType<ReturnType<typeof fixture>["run"]>) {
 }
 
 describe("install.sh Bun runtime", () => {
+  it("rejects a renamed Bun executable before package or profile changes", () => {
+    const f = fixture();
+    const renamed = join(f.root, "bun-canary");
+    executable(renamed, readFileSync(f.bun, "utf8"));
+    const result = f.run(["--runtime", "bun", "--bun-path", renamed, "--no-onboard"], {
+      SERVICE_LOADED: "true",
+    });
+    expect(result.status, output(result)).not.toBe(0);
+    expect(output(result)).toContain("must name a bun or bun.exe executable");
+    expect(existsSync(join(f.root, "effects")), output(result)).toBe(false);
+    expect(existsSync(join(f.home, ".bashrc"))).toBe(false);
+  });
+
   it.each([
     ["linux-gnu", "x86_64", "linux-x64"],
     ["linux-gnu", "aarch64", "linux-arm64"],
@@ -380,7 +413,14 @@ describe("install.sh Bun runtime", () => {
     expect(readFileSync(join(f.root, "effects"), "utf8")).not.toContain("cli:gateway");
   });
 
-  it.each(["duplicate key", "escaped value", "path key"])("rejects ambiguous pin: %s", (fault) => {
+  it.each([
+    "duplicate key",
+    "escaped value",
+    "path key",
+    "boolean tag",
+    "trailing boolean text",
+    "duplicate boolean key",
+  ])("rejects ambiguous pin: %s", (fault) => {
     const f = fixture();
     let pin = JSON.stringify(f.pin);
     if (fault === "duplicate key") {
@@ -391,6 +431,18 @@ describe("install.sh Bun runtime", () => {
     }
     if (fault === "path key") {
       pin = pin.replace('"artifacts":', '"artifacts/linux-x64":');
+    }
+    if (fault === "boolean tag") {
+      pin = pin.replace(`"tag":"${tag}"`, '"tag":true');
+    }
+    if (fault === "trailing boolean text") {
+      pin = pin.replace('"authenticodeSigned":true', '"authenticodeSigned":truex');
+    }
+    if (fault === "duplicate boolean key") {
+      pin = pin.replace(
+        '"authenticodeSigned":true',
+        '"authenticodeSigned":true,"authenticodeSigned":false',
+      );
     }
     writeFileSync(join(f.root, "pin.json"), pin);
     const result = f.run(["--runtime", "bun", "--dry-run"]);

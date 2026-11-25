@@ -117,11 +117,11 @@ node scripts/e2e/lib/openai-web-search-minimal/assertions.mjs assert-success-req
 PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node scripts/e2e/lib/openai-web-search-minimal/client.mjs reject >"$CLIENT_REJECT_LOG" 2>&1
 
 for _ in $(seq 1 80); do
-  if grep -Fq "$RAW_SCHEMA_ERROR" "$GATEWAY_LOG"; then
+  if grep -Fq '[provider-error] Model request failed sessionKey="agent:main:openai-web-search-minimal:reject" runId="schema-reject"' "$GATEWAY_LOG"; then
     break
   fi
   sleep 0.25
 done
-grep -F "$RAW_SCHEMA_ERROR" "$GATEWAY_LOG" >/dev/null
+node scripts/e2e/lib/openai-web-search-minimal/assertions.mjs assert-schema-reject-log "$GATEWAY_LOG"
 
 echo "OpenAI web_search minimal reasoning Docker E2E passed"

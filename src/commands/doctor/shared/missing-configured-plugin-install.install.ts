@@ -37,7 +37,6 @@ import {
   copyPluginInstallTransactionRequest,
   retainPluginInstallTransaction,
 } from "../../../plugins/install-transaction.js";
-import { isUnavailableNpmTarget } from "../../../plugins/install-types.js";
 import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import {
   buildNpmResolutionInstallFields,
@@ -224,61 +223,59 @@ async function installCandidatePackage(
   } = await installWithSourceFallback({
     sources,
     install: async (source) => {
-      const specs = source.source === "npm" ? npmSpecs : clawhubSpecs;
-      const installSpec = specs?.installSpec ?? source.spec;
-      return await installWithChannelFallback({
-        installSpec,
-        ...(source.expectedIntegrity ? {} : { fallbackSpec: specs?.fallbackSpec }),
-        install: async (spec) => {
-          const capabilityConsent = await prepareConsent(
-            source.source,
-            spec,
-            source.expectedIntegrity,
-          );
-          const options = copyPluginInstallTransactionRequest(params, {
-            spec,
-            config: params.config,
-            timeoutMs: params.timeoutMs,
-            workTimeoutMs: params.workTimeoutMs,
-            extensionsDir,
-            expectedPluginId: candidate.pluginId,
-            expectedIntegrity: source.expectedIntegrity,
-            onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
+      const install = async (spec: string) => {
+        const capabilityConsent = await prepareConsent(
+          source.source,
+          spec,
+          source.expectedIntegrity,
+        );
+        const options = copyPluginInstallTransactionRequest(params, {
+          spec,
+          config: params.config,
+          timeoutMs: params.timeoutMs,
+          workTimeoutMs: params.workTimeoutMs,
+          extensionsDir,
+          expectedPluginId: candidate.pluginId,
+          expectedIntegrity: source.expectedIntegrity,
+          onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
+        });
+        if (source.source === "clawhub") {
+          const result = await installPluginFromClawHub({
+            ...options,
+            env: params.env,
+            ...(recordedSource === "clawhub" ? { baseUrl: record?.clawhubUrl } : {}),
+            mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
+            logger: {
+              terminalLinks: false,
+              warn: (message) => warnings.push(stripAnsi(message)),
+            },
           });
-          if (source.source === "clawhub") {
-            const result = await installPluginFromClawHub({
-              ...options,
-              env: params.env,
-              ...(recordedSource === "clawhub" ? { baseUrl: record?.clawhubUrl } : {}),
-              mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
-              logger: {
-                terminalLinks: false,
-                warn: (message) => warnings.push(stripAnsi(message)),
-              },
-            });
-            retainPluginInstallTransaction(params, result);
-            return { result, capabilityConsent };
-          }
-          const mode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
-          const install = (installMode: "install" | "update") =>
-            installPluginFromNpmSpec({
-              ...options,
-              npmDir,
-              mode: installMode,
-              trustedSourceLinkedOfficialInstall: candidate.trustedSourceLinkedOfficialInstall,
-            });
-          let result = await install(mode);
-          if (!result.ok && mode === "install" && /\bplugin already exists:/.test(result.error)) {
-            result = await install("update");
-          }
           retainPluginInstallTransaction(params, result);
           return { result, capabilityConsent };
-        },
-        isRetryable: (attempt) =>
-          !attempt.result.ok &&
-          (source.source === "npm"
-            ? isUnavailableNpmTarget(attempt.result)
-            : isUnavailableClawHubTarget(attempt.result)),
+        }
+        const mode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
+        const installNpm = (installMode: "install" | "update") =>
+          installPluginFromNpmSpec({
+            ...options,
+            npmDir,
+            mode: installMode,
+            trustedSourceLinkedOfficialInstall: candidate.trustedSourceLinkedOfficialInstall,
+          });
+        let result = await installNpm(mode);
+        if (!result.ok && mode === "install" && /\bplugin already exists:/.test(result.error)) {
+          result = await installNpm("update");
+        }
+        retainPluginInstallTransaction(params, result);
+        return { result, capabilityConsent };
+      };
+      if (source.source === "npm") {
+        return await install(npmSpecs?.installSpec ?? source.spec);
+      }
+      return await installWithChannelFallback({
+        installSpec: clawhubSpecs?.installSpec ?? source.spec,
+        ...(source.expectedIntegrity ? {} : { fallbackSpec: clawhubSpecs?.fallbackSpec }),
+        install,
+        isRetryable: (attempt) => !attempt.result.ok && isUnavailableClawHubTarget(attempt.result),
         onFallback: (message) => void channelNotices.push(message),
       });
     },

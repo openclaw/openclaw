@@ -1,6 +1,5 @@
 import type { Chat, Message } from "grammy/types";
 import { firstDefined, isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
-import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   OpenClawConfig,
@@ -10,11 +9,7 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
-import {
-  asDateTimestampMs,
-  parseStrictPositiveInteger,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
 import {
@@ -22,6 +17,8 @@ import {
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
+import { getTelegramAdoptedDmThreadId } from "../dm-topic-adopt.js";
+import type { TelegramGroupConfigResolver } from "../group-config-helpers.js";
 import type { TelegramThreadSpec } from "../thread-spec.js";
 import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
@@ -33,8 +30,9 @@ import {
   isBinaryContent,
   joinTelegramTextParts,
   normalizeForwardedContext,
+  resolveTelegramNonTextBody,
   resolveTelegramPrimaryMedia,
-  resolveTelegramRichMessageBody,
+  resolveTelegramRichMessagePlaceholder,
   resolveTelegramTextContent,
   type TelegramForwardedContext,
   type TelegramMediaKind,
@@ -45,11 +43,7 @@ import type { TelegramGetChat } from "./types.js";
 export { resolveTelegramPreviewStreamMode as resolveTelegramStreamMode } from "../preview-streaming.js";
 export { normalizeTelegramReplyToMessageId as resolveTelegramReplyId } from "../outbound-params.js";
 
-export type {
-  TelegramForwardedContext,
-  TelegramMediaKind,
-  TelegramTextEntity,
-} from "./body-helpers.js";
+export type { TelegramForwardedContext, TelegramTextEntity } from "./body-helpers.js";
 export type { TelegramThreadSpec } from "../thread-spec.js";
 export {
   buildSenderLabel,
@@ -70,31 +64,20 @@ const telegramForumFlagByChatId = new Map<string, { expiresAtMs: number; isForum
 
 function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs = Date.now()) {
   const cacheKey = String(chatId);
-  const expiresAtMs = resolveExpiresAtMsFromDurationMs(TELEGRAM_FORUM_FLAG_CACHE_TTL_MS, {
-    nowMs,
-  });
-  if (expiresAtMs === undefined) {
-    telegramForumFlagByChatId.delete(cacheKey);
-    return;
-  }
   telegramForumFlagByChatId.set(cacheKey, {
-    expiresAtMs,
+    expiresAtMs: nowMs + TELEGRAM_FORUM_FLAG_CACHE_TTL_MS,
     isForum,
   });
   pruneMapToMaxSize(telegramForumFlagByChatId, TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS);
 }
 
-export function getCachedTelegramForumFlag(
-  chatId: string | number,
-  nowMs?: number,
-): boolean | undefined {
+export function getCachedTelegramForumFlag(chatId: string | number): boolean | undefined {
   const cacheKey = String(chatId);
   const cached = telegramForumFlagByChatId.get(cacheKey);
   if (!cached) {
     return undefined;
   }
-  const effectiveNow = nowMs ?? Date.now();
-  if (cached.expiresAtMs <= effectiveNow) {
+  if (cached.expiresAtMs <= Date.now()) {
     return undefined;
   }
   return cached.isForum;
@@ -163,22 +146,17 @@ export async function resolveTelegramForumFlag(params: {
     return false;
   }
   const cacheKey = String(params.chatId);
-  const rawNowMs = Date.now();
-  const nowMs = asDateTimestampMs(rawNowMs);
+  const nowMs = Date.now();
   const cached = telegramForumFlagByChatId.get(cacheKey);
   if (cached) {
-    if (
-      nowMs !== undefined &&
-      asDateTimestampMs(cached.expiresAtMs) !== undefined &&
-      cached.expiresAtMs > nowMs
-    ) {
+    if (cached.expiresAtMs > nowMs) {
       return cached.isForum;
     }
     telegramForumFlagByChatId.delete(cacheKey);
   }
   try {
     const resolved = extractTelegramForumFlag(await params.getChat(params.chatId)) === true;
-    cacheTelegramForumFlag(params.chatId, resolved, rawNowMs);
+    cacheTelegramForumFlag(params.chatId, resolved, nowMs);
     return resolved;
   } catch {
     return false;
@@ -220,14 +198,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   // the decision. Lets command auth survive transient store I/O failures.
   skipPairingStoreRead?: boolean;
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
-  resolveTelegramGroupConfig: (
-    chatId: string | number,
-    messageThreadId: number | undefined,
-    cfg: OpenClawConfig,
-  ) => {
-    groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-    topicConfig?: TelegramTopicConfig;
-  };
+  resolveTelegramGroupConfig: TelegramGroupConfigResolver;
 }): Promise<{
   threadSpec: TelegramThreadSpec;
   resolvedThreadId?: number;
@@ -356,6 +327,11 @@ export function resolveTelegramMessageThreadSpec(
   if (message.chat.is_direct_messages === true) {
     const id = parseStrictPositiveInteger(message.direct_messages_topic?.topic_id);
     return id === undefined ? { scope: "none" } : { id, scope: "direct-messages" };
+  }
+  // Topic fact decided once by the receiving account's ingress monitor.
+  const adoptedDmThreadId = getTelegramAdoptedDmThreadId(message);
+  if (adoptedDmThreadId !== undefined) {
+    return { id: adoptedDmThreadId, scope: "dm" };
   }
   const isGroup = message.chat.type === "group" || message.chat.type === "supergroup";
   return resolveTelegramThreadSpec({
@@ -528,14 +504,12 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const safeReplyText = replyTextParts?.text ?? "";
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody = safeReplyText.trim() || resolveTelegramRichMessageBody(replyLike) || "";
+    const replyBody =
+      safeReplyText.trim() || resolveTelegramRichMessagePlaceholder(replyLike) || "";
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {
-      const locationData = extractTelegramLocation(replyLike);
-      if (locationData) {
-        body = formatLocationText(locationData);
-      }
+      body = resolveTelegramNonTextBody(replyLike)?.text ?? "";
     }
   }
   if (!body && !replyLike) {

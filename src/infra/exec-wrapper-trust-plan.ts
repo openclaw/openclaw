@@ -67,7 +67,7 @@ function unwrapTransparentShellArgvCarrierInvocation(
   if (commandCarrierUsesDefaultPathSearch(argv)) {
     return { kind: "blocked", wrapper: token0 };
   }
-  const unwrapped = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
+  const unwrapped = resolveCarrierCommandArgv(argv);
   return unwrapped && unwrapped.length > 0
     ? { kind: "unwrapped", wrapper: token0, argv: unwrapped }
     : { kind: "blocked", wrapper: token0 };

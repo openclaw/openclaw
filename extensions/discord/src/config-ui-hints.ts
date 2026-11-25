@@ -39,7 +39,7 @@ export const discordChannelConfigUiHints = {
   }),
   "streaming.progress.toolProgress": {
     label: "Discord Progress Tool Lines",
-    help: "Show the detailed rolling tool log (default: false). Work status, delegated-task states, plans, and authored progress remain visible without it. Set streaming.mode to off for quiet final-only delivery.",
+    help: "Show the detailed rolling tool log and delegated-task lifecycle rows (default: false). The editable work message, plans, and authored progress remain visible without it. Set streaming.mode to off for quiet final-only delivery.",
   },
   joinIntro: {
     label: "Discord Guild Join Introduction",
@@ -67,7 +67,7 @@ export const discordChannelConfigUiHints = {
   },
   "thread.inheritParent": {
     label: "Discord Thread Parent Inheritance",
-    help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
+    help: "If true, Discord thread sessions inherit the parent channel chat history (default: false).",
   },
   "threadBindings.enabled": {
     label: "Discord Thread Binding Enabled",
@@ -87,7 +87,7 @@ export const discordChannelConfigUiHints = {
   },
   "threadBindings.defaultSpawnContext": {
     label: "Discord Thread Spawn Context",
-    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
+    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester chat history; "isolated" starts clean. Default: "fork".',
   },
   "agentComponents.ttlMs": {
     label: "Discord Component TTL (ms)",

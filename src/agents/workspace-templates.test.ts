@@ -4,14 +4,14 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as packageRoot from "../infra/openclaw-root.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 async function loadWorkspaceTemplateResolvers() {
-  vi.resetModules();
   return import("./workspace-templates.js");
 }
 
@@ -23,10 +23,12 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
 
     const distDir = path.join(root, "dist");
     await fs.mkdir(distDir, { recursive: true });
-    const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
+    const checkoutTemplates = path.resolve("docs", "reference", "templates");
+    vi.spyOn(process, "cwd").mockReturnValue(distDir);
+    vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
 
-    const [resolved = ""] = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
-    expect(path.normalize(resolved)).toBe(path.resolve("docs", "reference", "templates"));
+    const [resolved = ""] = await resolveWorkspaceTemplateSearchDirs();
+    expect(path.normalize(resolved)).toBe(checkoutTemplates);
   });
 
   it("returns only existing documentation template directories", async () => {
@@ -39,9 +41,10 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
 
     const distDir = path.join(root, "dist");
     await fs.mkdir(distDir, { recursive: true });
-    const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
+    vi.spyOn(process, "cwd").mockReturnValue(distDir);
+    vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
 
-    const resolved = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
+    const resolved = await resolveWorkspaceTemplateSearchDirs();
     expect(resolved[0]).toBe(docsTemplatesDir);
     expect(resolved).not.toContain(path.join(root, "src", "agents", "templates"));
     for (const templateDir of resolved) {

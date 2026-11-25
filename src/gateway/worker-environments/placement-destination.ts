@@ -23,7 +23,7 @@ export async function resolveProjectProfileDestination(params: {
     try {
       const result = await runCommandWithTimeout(
         ["git", "-C", params.workspace.path, "config", "--get", "remote.origin.url"],
-        { timeoutMs: PROJECT_ORIGIN_TIMEOUT_MS },
+        { timeoutMs: PROJECT_ORIGIN_TIMEOUT_MS, env: { GIT_NO_LAZY_FETCH: "1" } },
       );
       if (result.code !== 0) {
         return undefined;

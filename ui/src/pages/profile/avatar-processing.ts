@@ -7,7 +7,6 @@ const MAX_PROFILE_AVATAR_SOURCE_BYTES = 10 * 1024 * 1024;
 type ProcessedProfileAvatar = {
   mime: "image/png" | "image/webp";
   avatarBase64: string;
-  byteLength: number;
 };
 
 export class ProfileAvatarError extends Error {
@@ -86,5 +85,5 @@ export async function processProfileAvatar(file: File): Promise<ProcessedProfile
     throw new ProfileAvatarError("too-large");
   }
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  return { mime, avatarBase64: bytesToBase64(bytes), byteLength: bytes.byteLength };
+  return { mime, avatarBase64: bytesToBase64(bytes) };
 }

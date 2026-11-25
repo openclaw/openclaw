@@ -1,5 +1,13 @@
 /** Physical debugger attachments and cleanup debt belong to exact native acquisitions. */
 export function createRelayDebugger({ policy, requireAutomationAllowed }) {
+  function throwCleanupErrors(errors) {
+    if (errors.length) {
+      throw new AggregateError(
+        errors,
+        `Debugger cleanup incomplete: ${errors.map(String).join("; ")}`,
+      );
+    }
+  }
   const attachments = new Map();
   const owners = new Set();
   let admission = 0;
@@ -221,12 +229,7 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
         const errors = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
-        if (errors.length) {
-          throw new AggregateError(
-            errors,
-            `Debugger cleanup incomplete: ${errors.map(String).join("; ")}`,
-          );
-        }
+        throwCleanupErrors(errors);
       },
     };
     owners.add(owner);
@@ -276,12 +279,7 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
           errors.push(error);
         }
       }
-      if (errors.length) {
-        throw new AggregateError(
-          errors,
-          `Debugger cleanup incomplete: ${errors.map(String).join("; ")}`,
-        );
-      }
+      throwCleanupErrors(errors);
     },
   };
 }

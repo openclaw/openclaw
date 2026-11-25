@@ -3,9 +3,24 @@ import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { killPidIfAlive } from "./process-tree.js";
 
+const readProcessIdentity = vi.hoisted(() =>
+  vi.fn<typeof import("@openclaw/proc-safe/identity").readProcessIdentity>(),
+);
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/proc-safe/identity")>()),
+  readProcessIdentity,
+}));
+
 describe.each(["linux", "darwin"] as const)("killPidIfAlive (%s)", (platform) => {
   beforeEach(() => {
     vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+    readProcessIdentity.mockReset().mockReturnValue({
+      pid: 123,
+      parentPid: 1,
+      startTimeMicros: 1,
+      startTimeResolutionMicros: 1,
+      exited: false,
+    });
     const readFileSync = fs.readFileSync;
     vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
       // Keep the fake live PID's procfs state consistent with its existence probe.

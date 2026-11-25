@@ -10,6 +10,13 @@ import {
   resolveSlackReplyRenderPlan,
 } from "./reply-blocks.js";
 
+function commandButtons(command: string): MessagePresentation["blocks"][number] {
+  return {
+    type: "buttons",
+    buttons: [{ label: "Run", action: { type: "command", command } }],
+  };
+}
+
 describe("renderSlackMessagePresentationFallbackText", () => {
   it("uses complete authored fallback once when presentation has only text output", () => {
     const text = "Choose once: /run foo_bar & <!channel>\nThen inspect the report.";
@@ -214,20 +221,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
   it("marks command fallbacks with backticks as not copyable", () => {
     const rendered = renderSlackMessagePresentationFallbackText({
       presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Run",
-                action: {
-                  type: "command",
-                  command: "/run foo_bar C:\\tools\\run ` <!channel> <@U1>",
-                },
-              },
-            ],
-          },
-        ],
+        blocks: [commandButtons("/run foo_bar C:\\tools\\run ` <!channel> <@U1>")],
       },
     });
 
@@ -243,135 +237,10 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     expect(
       renderSlackMessagePresentationFallbackText({
         presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Run",
-                  action: {
-                    type: "command",
-                    command: "/run foo_bar C:\\tools\\run <!channel> <@U1>",
-                  },
-                },
-              ],
-            },
-          ],
+          blocks: [commandButtons("/run foo_bar C:\\tools\\run <!channel> <@U1>")],
         },
       }),
     ).toBe("- Run: `/run foo_bar C:\\tools\\run <!channel> <@U1>`");
-  });
-
-  it("keeps non-native table text between raw, portable, and legacy blocks", () => {
-    const payload = {
-      channelData: {
-        slack: {
-          blocks: [
-            {
-              type: "actions",
-              block_id: "openclaw_reply_buttons_1",
-              elements: [
-                {
-                  type: "button",
-                  action_id: "existing_button",
-                  text: { type: "plain_text", text: "Existing" },
-                  value: "existing",
-                },
-              ],
-            },
-            {
-              type: "actions",
-              block_id: "openclaw_reply_select_1",
-              elements: [
-                {
-                  type: "static_select",
-                  action_id: "existing_select",
-                  placeholder: { type: "plain_text", text: "Existing" },
-                  options: [
-                    {
-                      text: { type: "plain_text", text: "Existing" },
-                      value: "existing",
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-      },
-      presentation: {
-        blocks: [
-          {
-            type: "table" as const,
-            caption: "Large pipeline",
-            headers: ["Account"],
-            rows: Array.from({ length: 100 }, (_entry, index) => [
-              `account-${String(index)} ${"x".repeat(110)}`,
-            ]),
-          },
-          {
-            type: "buttons" as const,
-            buttons: [{ label: "Stage", value: "stage" }],
-          },
-          {
-            type: "select" as const,
-            placeholder: "Lane",
-            options: [{ label: "Production", value: "production" }],
-          },
-        ],
-      },
-      interactive: {
-        blocks: [
-          {
-            type: "buttons" as const,
-            buttons: [{ label: "Refresh", value: "refresh" }],
-          },
-          {
-            type: "select" as const,
-            placeholder: "Window",
-            options: [{ label: "Recent", value: "recent" }],
-          },
-        ],
-      },
-    };
-
-    const { segments } = resolveSlackReplyBlockResolution(payload);
-    expect(segments).toHaveLength(3);
-    expect(segments[0]).toMatchObject({
-      kind: "blocks",
-      blocks: [
-        { type: "actions", block_id: "openclaw_reply_buttons_1" },
-        { type: "actions", block_id: "openclaw_reply_select_1" },
-      ],
-    });
-    expect(segments[1]).toMatchObject({ kind: "text" });
-    expect(segments[1]?.kind === "text" ? segments[1].text : "").toContain("- Account: account-99");
-    expect(segments[2]).toMatchObject({
-      kind: "blocks",
-      blocks: [
-        {
-          type: "actions",
-          block_id: "openclaw_reply_buttons_2",
-          elements: [{ action_id: "openclaw:reply_button:2:1", value: "stage" }],
-        },
-        {
-          type: "actions",
-          block_id: "openclaw_reply_select_2",
-          elements: [{ action_id: "openclaw:reply_select:2" }],
-        },
-        {
-          type: "actions",
-          block_id: "openclaw_reply_buttons_3",
-          elements: [{ action_id: "openclaw:reply_button:3:1", value: "refresh" }],
-        },
-        {
-          type: "actions",
-          block_id: "openclaw_reply_select_3",
-          elements: [{ action_id: "openclaw:reply_select:3" }],
-        },
-      ],
-    });
-    expect(renderSlackMessagePresentationFallbackText(payload)).toContain("- Account: account-99");
   });
 
   it("coalesces adjacent fallbacks without changing their authored order", () => {
@@ -417,21 +286,13 @@ describe("renderSlackMessagePresentationFallbackText", () => {
       presentation: {
         blocks: [
           { type: "table", caption: "Owners", headers, rows: [values] },
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Run",
-                action: { type: "command", command: "/say ` <!channel>" },
-              },
-            ],
-          },
+          commandButtons("/say ` <!channel>"),
         ],
       },
     });
 
     expect(segments).toHaveLength(1);
-    expect(segments[0]).toMatchObject({ kind: "text", mrkdwn: false });
+    expect(segments[0]).toMatchObject({ kind: "text" });
     const fallback = segments[0]?.kind === "text" ? segments[0].text : "";
     expect(fallback).toContain("<@U1> & <!channel>");
     expect(fallback).toContain("/say ` <!channel>");
@@ -456,7 +317,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     });
 
     expect(resolution.authoredTextPlacement).toBe("blocks");
-    expect(resolution.segments).toContainEqual({ kind: "text", text, mrkdwn: false });
+    expect(resolution.segments).toContainEqual({ kind: "text", text });
   });
 
   it("materializes authored text blocks as verbatim mrkdwn", () => {

@@ -6,6 +6,17 @@ import {
 } from "openclaw/plugin-sdk/secret-input";
 import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+type MSTeamsCredentialConfig = Pick<
+  MSTeamsConfig,
+  | "appId"
+  | "appPassword"
+  | "tenantId"
+  | "authType"
+  | "certificatePath"
+  | "useManagedIdentity"
+  | "managedIdentityClientId"
+>;
+
 type MSTeamsSecretCredentials = {
   type: "secret";
   appId: string;
@@ -18,7 +29,6 @@ type MSTeamsFederatedCredentials = {
   appId: string;
   tenantId: string;
   certificatePath?: string;
-  certificateThumbprint?: string;
   useManagedIdentity?: boolean;
   managedIdentityClientId?: string;
 };
@@ -31,7 +41,7 @@ type MSTeamsCredentialInspection = {
 };
 
 function resolveAuthType(
-  cfg?: MSTeamsConfig,
+  cfg?: MSTeamsCredentialConfig,
   options?: { allowEnvFallback?: boolean },
 ): "secret" | "federated" {
   const fromCfg = cfg?.authType;
@@ -53,14 +63,17 @@ function resolveFederatedPath(configValue?: string, envValue?: string): string |
   return readNonBlankString(configValue) ?? readNonBlankString(envValue);
 }
 
-function resolveMSTeamsAppId(cfg: MSTeamsConfig | undefined, allowEnvFallback: boolean) {
+function resolveMSTeamsAppId(cfg: MSTeamsCredentialConfig | undefined, allowEnvFallback: boolean) {
   return (
     normalizeSecretInputString(cfg?.appId) ||
     (allowEnvFallback ? normalizeSecretInputString(process.env.MSTEAMS_APP_ID) : undefined)
   );
 }
 
-function resolveMSTeamsTenantId(cfg: MSTeamsConfig | undefined, allowEnvFallback: boolean) {
+function resolveMSTeamsTenantId(
+  cfg: MSTeamsCredentialConfig | undefined,
+  allowEnvFallback: boolean,
+) {
   return (
     normalizeSecretInputString(cfg?.tenantId) ||
     (allowEnvFallback ? normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID) : undefined)
@@ -68,39 +81,14 @@ function resolveMSTeamsTenantId(cfg: MSTeamsConfig | undefined, allowEnvFallback
 }
 
 export function hasConfiguredMSTeamsCredentials(
-  cfg?: MSTeamsConfig,
+  cfg?: MSTeamsCredentialConfig,
   options?: { allowEnvFallback?: boolean },
 ): boolean {
-  const allowEnvFallback = options?.allowEnvFallback ?? true;
-  const authType = resolveAuthType(cfg, { allowEnvFallback });
-
-  const hasAppId = Boolean(resolveMSTeamsAppId(cfg, allowEnvFallback));
-  const hasTenantId = Boolean(resolveMSTeamsTenantId(cfg, allowEnvFallback));
-
-  if (authType === "federated") {
-    const hasCert = Boolean(
-      resolveFederatedPath(
-        cfg?.certificatePath,
-        allowEnvFallback ? process.env.MSTEAMS_CERTIFICATE_PATH : undefined,
-      ),
-    );
-    const hasManagedIdentity =
-      cfg?.useManagedIdentity ??
-      (allowEnvFallback ? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true" : false);
-
-    return hasAppId && hasTenantId && (hasCert || hasManagedIdentity);
-  }
-
-  return Boolean(
-    hasAppId &&
-    hasTenantId &&
-    (hasConfiguredSecretInput(cfg?.appPassword) ||
-      (allowEnvFallback && normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD))),
-  );
+  return inspectMSTeamsCredentials(cfg, options).status !== "missing";
 }
 
 export function resolveMSTeamsCredentials(
-  cfg?: MSTeamsConfig,
+  cfg?: MSTeamsCredentialConfig,
   options?: { allowEnvFallback?: boolean; pathPrefix?: string },
 ): MSTeamsCredentials | undefined {
   const allowEnvFallback = options?.allowEnvFallback ?? true;
@@ -119,11 +107,6 @@ export function resolveMSTeamsCredentials(
       cfg?.certificatePath,
       allowEnvFallback ? process.env.MSTEAMS_CERTIFICATE_PATH : undefined,
     );
-
-    const certificateThumbprint =
-      cfg?.certificateThumbprint ||
-      (allowEnvFallback ? process.env.MSTEAMS_CERTIFICATE_THUMBPRINT : undefined) ||
-      undefined;
 
     const useManagedIdentity =
       cfg?.useManagedIdentity ??
@@ -144,7 +127,6 @@ export function resolveMSTeamsCredentials(
       appId,
       tenantId,
       certificatePath,
-      certificateThumbprint,
       useManagedIdentity: useManagedIdentity || undefined,
       managedIdentityClientId,
     };
@@ -166,7 +148,7 @@ export function resolveMSTeamsCredentials(
 
 /** Read credential availability for diagnostics without redeeming unresolved SecretRefs. */
 export function inspectMSTeamsCredentials(
-  cfg?: MSTeamsConfig,
+  cfg?: MSTeamsCredentialConfig,
   options?: { allowEnvFallback?: boolean },
 ): MSTeamsCredentialInspection {
   const allowEnvFallback = options?.allowEnvFallback ?? true;

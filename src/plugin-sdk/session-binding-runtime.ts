@@ -1,4 +1,4 @@
-import { captureSessionEntryCurrentCheckInternal } from "../config/sessions/session-entry-current-check.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "../config/sessions/session-entry-current-check.js";
 // Bundled runtime authority for selected sessions and conversation bindings.
 import {
   captureExternalSessionCommitGuard,
@@ -7,11 +7,13 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import { projectPluginSessionEntry } from "./session-store-runtime-internal.js";
 
-/** Prepare public metadata together with its original source and exact live policy guard. */
-export async function captureSessionEntryCurrentCheck(
-  params: Parameters<typeof captureSessionEntryCurrentCheckInternal>[0],
+export type { PreparedSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+
+/** Read current policy in the worker at effects; pass source to worker-backed mutations. */
+export async function captureSessionEntryCurrentCheckAsync(
+  params: Parameters<typeof captureSessionEntryCurrentCheckAsyncInternal>[0],
 ) {
-  const prepared = await captureSessionEntryCurrentCheckInternal(params);
+  const prepared = await captureSessionEntryCurrentCheckAsyncInternal(params);
   return {
     ...prepared,
     entry: prepared.entry ? projectPluginSessionEntry(prepared.entry) : undefined,

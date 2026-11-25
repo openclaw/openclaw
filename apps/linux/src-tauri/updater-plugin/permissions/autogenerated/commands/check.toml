@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-check"
+description = "Enables the check command without any pre-configured scope."
+commands.allow = ["check"]
+
+[[permission]]
+identifier = "deny-check"
+description = "Denies the check command without any pre-configured scope."
+commands.deny = ["check"]

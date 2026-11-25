@@ -1,0 +1,22 @@
+{
+  "id": "incident-tools",
+  "name": "Incident tools",
+  "description": "Native inline incident views with a shared session panel.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "contracts": {
+    "tools": [
+      "show_incident"
+    ]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "uiCapabilities": [
+    "inline",
+    "panel"
+  ]
+}

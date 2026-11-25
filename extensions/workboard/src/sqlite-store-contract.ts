@@ -2,7 +2,7 @@ import type { WorkboardPersistence } from "./persistence-types.js";
 import type { WorkboardSqliteResult } from "./sqlite-store-errors.js";
 
 type Operation<Method extends (...args: never[]) => unknown> = {
-  input: { connection: number; args: Parameters<Method> };
+  input: { args: Parameters<Method> };
   output: Awaited<ReturnType<Method>>;
 };
 
@@ -20,10 +20,7 @@ type WorkboardSqliteStoreOperations = {
   [Key in keyof WorkboardSqliteStoreMethods]: Operation<WorkboardSqliteStoreMethods[Key]>;
 };
 
-export type WorkboardSqliteOperations = {
-  "connection.open": { input: undefined; output: { connection: number } };
-  "connection.close": { input: { connection: number }; output: void };
-} & WorkboardSqliteStoreOperations;
+export type WorkboardSqliteOperations = WorkboardSqliteStoreOperations;
 export type WorkboardSqliteWorkerOperations = {
   [K in keyof WorkboardSqliteOperations]: {
     input: WorkboardSqliteOperations[K]["input"];

@@ -3,8 +3,10 @@ import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { resolveDatabasePathKey } from "../../infra/sqlite-worker-identity.js";
 import type { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { AuthProfileStore } from "./types.js";
 
 type AuthProfileRuntimeMode =
@@ -13,10 +15,41 @@ type AuthProfileRuntimeMode =
 
 export const authProfileRuntimeMode = new AsyncLocalStorage<AuthProfileRuntimeMode>();
 
+export function getScopedAuthProfileEnv(): NodeJS.ProcessEnv | undefined {
+  const mode = authProfileRuntimeMode.getStore();
+  return mode?.kind === "agent-dir" ? mode.env : undefined;
+}
+
+export function getScopedSharedAuthStore(): AuthProfileStore | undefined {
+  const mode = authProfileRuntimeMode.getStore();
+  return mode?.kind === "agent-dir" ? mode.sharedStore : undefined;
+}
+
+export function isEnvOnlyAuthProfileRuntime(): boolean {
+  return authProfileRuntimeMode.getStore()?.kind === "env-only";
+}
+
+export function resolveRuntimeAuthProfileAgentDir(agentDir?: string): string | undefined {
+  const mode = authProfileRuntimeMode.getStore();
+  return mode?.kind === "agent-dir" ? mode.agentDir : agentDir;
+}
+
+export function captureAuthProfileStoreScope() {
+  const mode = authProfileRuntimeMode.getStore();
+  return {
+    isolated: Boolean(mode),
+    run: <T>(agentDir: string | undefined, env: NodeJS.ProcessEnv, run: () => T): T =>
+      mode?.kind === "agent-dir"
+        ? authProfileRuntimeMode.run({ ...mode, agentDir: agentDir!, env }, run)
+        : run(),
+  };
+}
+
 type WorkerAuthProfileWrites = {
   env: NodeJS.ProcessEnv;
   assertOwner: (env: NodeJS.ProcessEnv) => void;
   run: <T>(operation: () => T | Promise<T>) => Promise<T>;
+  runSync: <T>(databasePath: string, operation: () => T) => T;
 };
 
 const workerAuthProfileWrites = resolveGlobalSingleton(
@@ -35,6 +68,8 @@ export function withWorkerAuthProfileWrites<T>(
   }
   const ownedEnv = cloneEnvWithPlatformSemantics(env);
   const stateDir = path.resolve(resolveStateDir(ownedEnv));
+  const databasePath = resolveOpenClawStateSqlitePath(ownedEnv);
+  const canonicalPath = resolveDatabasePathKey(databasePath);
   return workerAuthProfileWrites.run(
     {
       env: ownedEnv,
@@ -46,6 +81,12 @@ export function withWorkerAuthProfileWrites<T>(
       // Closing still admits an OAuth claim's settlement; closed work rejects retained callers.
       // The refresh owner separately retains its native section before publishing the claim.
       run: (operation) => work.track(operation),
+      runSync: (currentPath, operation) => {
+        if (currentPath !== databasePath && currentPath !== canonicalPath) {
+          throw new Error("Native auth write differs from its worker state owner");
+        }
+        return work.run(operation);
+      },
     },
     run,
   );

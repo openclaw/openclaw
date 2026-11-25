@@ -23,15 +23,6 @@ export function resolveGatewayReadRetryDelayMs(error: unknown, attempt = 0): num
   return typeof hint === "number" && Number.isFinite(hint) ? Math.max(hint, backoff) : backoff;
 }
 
-function isGatewayUnavailableError(error: unknown): boolean {
-  return (
-    (error instanceof GatewayProtocolRequestError &&
-      (isGatewaySuspendUnavailableError(error) || isGatewayRestartUnavailableError(error))) ||
-    isRetryableGatewayStartupUnavailableError(error) ||
-    isAgentDatabaseInspectionPendingError(error)
-  );
-}
-
 export function isGatewayAvailable(
   snapshot: Pick<ApplicationGatewaySnapshot, "phase" | "restartPending" | "suspensionPhase">,
 ): boolean {
@@ -50,7 +41,10 @@ export function isAwaitingGatewayFailure(
     | undefined,
 ): boolean {
   return (
-    isGatewayUnavailableError(error) ||
+    (error instanceof GatewayProtocolRequestError &&
+      (isGatewaySuspendUnavailableError(error) || isGatewayRestartUnavailableError(error))) ||
+    isRetryableGatewayStartupUnavailableError(error) ||
+    isAgentDatabaseInspectionPendingError(error) ||
     (!(error instanceof GatewayProtocolRequestError) &&
       snapshot != null &&
       !isGatewayAvailable(snapshot))

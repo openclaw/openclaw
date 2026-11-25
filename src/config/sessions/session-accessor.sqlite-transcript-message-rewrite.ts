@@ -37,8 +37,8 @@ type TranscriptMessageAnchorRewriteResult<TMessage> = {
   message: TMessage;
 };
 
-/** Rewrites one exact anchored message without rejecting unrelated later appends. */
-export async function rewriteTranscriptMessageAtAnchor<TMessage>(
+/** Worker and offline-maintenance adapter; runtime callers use the prepared worker operation. */
+export async function rewriteNativeTranscriptMessageAtAnchor<TMessage>(
   anchor: TranscriptEntryAnchor,
   rewriteMessage: (message: unknown) => TMessage | undefined,
 ): Promise<TranscriptMessageAnchorRewriteResult<TMessage> | null> {
@@ -85,8 +85,8 @@ export async function rewriteTranscriptMessageAtAnchor<TMessage>(
   );
 }
 
-/** Updates the terminal assistant owned by one run, preserving unrelated later turns. */
-export async function rewriteAssistantTranscriptMessageForRun(
+/** Worker and offline-maintenance adapter; process-held incognito retains its native owner. */
+export async function rewriteNativeAssistantTranscriptMessageForRun(
   params: {
     scope: SessionTranscriptAccessScope;
     runId: string;

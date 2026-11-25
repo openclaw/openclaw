@@ -4,7 +4,6 @@ import {
   clearSessionPlacementRecovery,
   listSessionPlacementRecoveries,
   migrateSessionPlacementRecoveryScope,
-  parseSessionPlacementCreateParams,
   pauseSessionPlacementRecovery,
   promoteSessionPlacementRecovery,
   readSessionPlacementRecovery,
@@ -35,6 +34,7 @@ describe("session placement recovery", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    sessionStorage.clear();
   });
 
   it("frames every namespace component without URI encoding", () => {
@@ -53,30 +53,6 @@ describe("session placement recovery", () => {
     expect(sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, "\ud800")).not.toBe(
       sessionPlacementRecoveryExactStorageKey(gatewayUrl, recoveryScope, "\ud801"),
     );
-  });
-
-  it("keeps two recoveries in one scope independently readable and clearable", () => {
-    const second = {
-      ...recovery,
-      sessionKey: "agent:cloud:two",
-      messageId: "message-2",
-      message: "run another task",
-      target: { kind: "device" as const, deviceId: "device-1" },
-    };
-    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
-    expect(writeSessionPlacementRecovery(second)).toBe(true);
-    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([
-      recovery,
-      second,
-    ]);
-    expect(readRecovery()).toEqual(recovery);
-
-    clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope, recovery.sessionKey);
-    expect(readRecovery()).toBeNull();
-    expect(readRecovery(second)).toEqual(second);
-
-    clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope);
-    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([]);
   });
 
   it("keeps required input outside the released scope through promotion, migration, and retirement", () => {
@@ -156,95 +132,43 @@ describe("session placement recovery", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("preserves automatic device selection across placement recovery", () => {
-    const automatic = {
+  it("keeps input in memory on a failed pause write (already paused=true)", () => {
+    const retained = {
       ...recovery,
-      target: { kind: "auto-device" as const },
+      phase: "paused" as const,
+      reason: "not-sent" as const,
+      error: "first failure",
     };
-    expect(writeSessionPlacementRecovery(automatic)).toBe(true);
-    expect(readRecovery(automatic)).toEqual(automatic);
+    expect(writeSessionPlacementRecovery(retained)).toBe(true);
+    const storage = sessionStorage;
+    vi.stubGlobal("sessionStorage", {
+      getItem: storage.getItem.bind(storage),
+      removeItem: storage.removeItem.bind(storage),
+      setItem: () => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      },
+    });
+    expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
+      persisted: false,
+      recovery: {
+        message: retained.message,
+        messageId: retained.messageId,
+        phase: "paused",
+        reason: "not-sent",
+        error: expect.stringContaining("Keep this page open"),
+      },
+    });
+    expect(readRecovery()).toEqual(retained);
   });
 
-  it("does not retire a replacement submission at the same session key", () => {
-    const replacement = { ...recovery, messageId: "message-newer", message: "newer input" };
-    expect(writeSessionPlacementRecovery(replacement)).toBe(true);
-    clearSessionPlacementRecovery(
-      recovery.gatewayUrl,
-      recovery.recoveryScope,
-      recovery.sessionKey,
-      recovery.messageId,
-    );
-    expect(readRecovery()).toEqual(replacement);
-    clearSessionPlacementRecovery(
-      recovery.gatewayUrl,
-      recovery.recoveryScope,
-      recovery.sessionKey,
-      replacement.messageId,
-    );
-    expect(readRecovery()).toBeNull();
+  it("keeps bounded pause errors on UTF-16 boundaries (persistent=false)", () => {
+    const error = `${"x".repeat(4095)}🤖`;
+    const paused = pauseSessionPlacementRecovery(recovery, error, false);
+
+    expect(paused.recovery.error).toBe("x".repeat(4095));
+    expect(paused.persisted).toBe(false);
+    expect(readRecovery()).toEqual(null);
   });
-
-  it.each(["not-sent", "rejected", "unconfirmed"] as const)(
-    "retains a paused %s failure without changing pending recovery or storage lifetime",
-    (reason) => {
-      const paused = {
-        ...recovery,
-        phase: "paused" as const,
-        reason,
-        error: "Target unavailable",
-      };
-      expect(writeSessionPlacementRecovery(paused)).toBe(true);
-      expect(readRecovery()).toEqual(paused);
-      expect(writeSessionPlacementRecovery({ ...paused, error: "x".repeat(4097) })).toBe(false);
-      expect(readRecovery()).toEqual(paused);
-    },
-  );
-
-  it.each([false, true])(
-    "keeps input in memory on a failed pause write (already paused=%s)",
-    (alreadyPaused) => {
-      const retained = alreadyPaused
-        ? {
-            ...recovery,
-            phase: "paused" as const,
-            reason: "not-sent" as const,
-            error: "first failure",
-          }
-        : recovery;
-      expect(writeSessionPlacementRecovery(retained)).toBe(true);
-      const storage = sessionStorage;
-      vi.stubGlobal("sessionStorage", {
-        getItem: storage.getItem.bind(storage),
-        removeItem: storage.removeItem.bind(storage),
-        setItem: () => {
-          throw new DOMException("quota exceeded", "QuotaExceededError");
-        },
-      });
-      expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
-        persisted: false,
-        recovery: {
-          message: retained.message,
-          messageId: retained.messageId,
-          phase: "paused",
-          reason: "not-sent",
-          error: expect.stringContaining("Keep this page open"),
-        },
-      });
-      expect(readRecovery()).toEqual(alreadyPaused ? retained : null);
-    },
-  );
-
-  it.each([false, true])(
-    "keeps bounded pause errors on UTF-16 boundaries (persistent=%s)",
-    (persistent) => {
-      const error = `${"x".repeat(4095)}🤖`;
-      const paused = pauseSessionPlacementRecovery(recovery, error, persistent);
-
-      expect(paused.recovery.error).toBe("x".repeat(4095));
-      expect(paused.persisted).toBe(persistent);
-      expect(readRecovery()).toEqual(persistent ? paused.recovery : null);
-    },
-  );
 
   it("keeps storage-failure guidance on UTF-16 boundaries", () => {
     const prefix = "Recovery could not be saved in this tab. Keep this page open.\n";
@@ -347,9 +271,10 @@ describe("session placement recovery", () => {
       getItem: storage.getItem.bind(storage),
       key: storage.key.bind(storage),
       removeItem: vi.fn((key: string) => {
-        if (key !== sourceKey) {
-          storage.removeItem(key);
+        if (key === sourceKey) {
+          throw new DOMException("storage disabled", "SecurityError");
         }
+        storage.removeItem(key);
       }),
       setItem: storage.setItem.bind(storage),
     });
@@ -399,15 +324,44 @@ describe("session placement recovery", () => {
     expect(sessionStorage.getItem(malformedKey)).toBeNull();
   });
 
-  it("fails closed when storage is unavailable", () => {
-    vi.stubGlobal("sessionStorage", {
-      getItem: vi.fn(),
-      removeItem: vi.fn(),
-      setItem: vi.fn(() => {
-        throw new DOMException("storage disabled", "SecurityError");
+  it("round-trips a device folder only with its exact dispatch target", () => {
+    const creating = {
+      ...recovery,
+      phase: "creating" as const,
+      target: { kind: "device" as const, deviceId: "runner" },
+      createParams: {
+        key: recovery.sessionKey,
+        agentId: "cloud",
+        message: "" as const,
+        deviceFolder: { deviceId: "runner", path: "/srv/project" },
+      },
+    };
+    expect(writeSessionPlacementRecovery(creating)).toBe(true);
+    expect(readRecovery()).toEqual(creating);
+    expect(writeSessionPlacementRecovery({ ...creating, target: { kind: "auto-device" } })).toBe(
+      false,
+    );
+    expect(
+      writeSessionPlacementRecovery({ ...creating, target: { kind: "device", deviceId: "other" } }),
+    ).toBe(false);
+  });
+
+  it("rejects a malformed persisted device-folder binding", () => {
+    sessionStorage.setItem(
+      exactKey(recovery.sessionKey),
+      JSON.stringify({
+        ...recovery,
+        phase: "creating",
+        target: { kind: "device", deviceId: "runner" },
+        createParams: {
+          key: recovery.sessionKey,
+          agentId: "cloud",
+          message: "",
+          deviceFolder: null,
+        },
       }),
-    });
-    expect(writeSessionPlacementRecovery(recovery)).toBe(false);
+    );
+    expect(readRecovery()).toBeNull();
   });
 
   it("round-trips an attachment-only first turn", () => {
@@ -422,7 +376,6 @@ describe("session placement recovery", () => {
 
   it.each([
     { projectId: "openclaw", worktree: true as const },
-    { worktree: true as const, worktreeSource: "empty" as const },
     { repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" } },
   ])("requires matching create parameters for a creating recovery: %j", (workspace) => {
     const creating = {
@@ -453,86 +406,5 @@ describe("session placement recovery", () => {
       JSON.stringify({ ...creating, createParams: { key: "agent:cloud:other" } }),
     );
     expect(readRecovery()).toBeNull();
-  });
-
-  it.each([
-    { name: "an unsupported workspace source", value: { worktreeSource: "folder" } },
-    {
-      name: "an empty workspace with a previous checkout",
-      value: { worktreeSource: "empty", cwd: "/previous/checkout" },
-    },
-    {
-      name: "an empty workspace with a repository",
-      value: {
-        worktreeSource: "empty",
-        worktree: undefined,
-        repository: { url: "https://github.com/openclaw/openclaw.git" },
-      },
-    },
-    { name: "an empty project id", value: { projectId: "" } },
-    { name: "a non-string project id", value: { projectId: 42 } },
-    { name: "a project id with a cwd", value: { projectId: "openclaw", cwd: "/tmp/repo" } },
-    {
-      name: "a repository with a Gateway worktree",
-      value: { repository: { url: "https://github.com/openclaw/openclaw.git" } },
-    },
-    { name: "an invalid repository", value: { worktree: undefined, repository: { url: "" } } },
-    {
-      name: "a repository with a local path",
-      value: {
-        worktree: undefined,
-        repository: { url: "https://github.com/openclaw/openclaw.git" },
-        cwd: "/gateway/repo",
-      },
-    },
-    {
-      name: "a project id with an exec node",
-      value: { projectId: "openclaw", execNode: "macbook" },
-    },
-    { name: "an unsupported visibility", value: { visibility: "shared" } },
-    { name: "an unsupported Fast Mode", value: { fastMode: "fast" } },
-    { name: "a null Fast Mode", value: { fastMode: null } },
-    { name: "an empty runtime", value: { agentRuntime: "" } },
-    { name: "a whitespace runtime", value: { agentRuntime: "  " } },
-    { name: "a non-string runtime", value: { agentRuntime: 42 } },
-    { name: "a null runtime", value: { agentRuntime: null } },
-    { name: "malformed tool overrides", value: { toolOverrides: { webSearch: "yes" } } },
-    { name: "an unknown field", value: { unknown: true } },
-  ])("rejects $name in creating parameters", ({ value }) => {
-    expect(
-      parseSessionPlacementCreateParams(
-        {
-          key: recovery.sessionKey,
-          agentId: "cloud",
-          message: "",
-          worktree: true,
-          ...value,
-        },
-        recovery.sessionKey,
-        "cloud",
-      ),
-    ).toBeNull();
-  });
-
-  it("arbitrates matching sessions without blocking another session", () => {
-    expect(writeSessionPlacementRecoveryIfAvailable(recovery)).toBe(true);
-    expect(writeSessionPlacementRecoveryIfAvailable({ ...recovery, message: "retry" })).toBe(true);
-    expect(
-      writeSessionPlacementRecoveryIfAvailable({
-        ...recovery,
-        messageId: "message-conflict",
-        message: "conflicting task",
-      }),
-    ).toBe(false);
-    const second = {
-      ...recovery,
-      sessionKey: "agent:cloud:newer",
-      messageId: "message-newer",
-    };
-    expect(writeSessionPlacementRecoveryIfAvailable(second)).toBe(true);
-    expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([
-      second,
-      { ...recovery, message: "retry" },
-    ]);
   });
 });

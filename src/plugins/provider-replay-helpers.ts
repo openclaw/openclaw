@@ -86,9 +86,13 @@ export function buildStrictAnthropicReplayPolicy(
         }
       : {}),
     preserveSignatures: true,
-    appendOnlyRuntimeContext:
-      options.inHistorySystemUpdates || options.appendOnlyRuntimeContext || false,
-    ...(options.inHistorySystemUpdates ? { inHistorySystemUpdates: true } : {}),
+    // Retained carriers are the host default; only an explicit provider opt-out disables them,
+    // and in-history system updates always need them.
+    ...(options.inHistorySystemUpdates
+      ? { appendOnlyRuntimeContext: true, inHistorySystemUpdates: true }
+      : options.appendOnlyRuntimeContext === false
+        ? { appendOnlyRuntimeContext: false }
+        : {}),
     repairToolUseResultPairing: true,
     validateAnthropicTurns: true,
     allowSyntheticToolResults: true,
@@ -122,7 +126,6 @@ export function buildAnthropicReplayPolicyForModel(
   return buildStrictAnthropicReplayPolicy({
     inHistorySystemUpdates,
     dropThinkingBlocks: shouldDropClaudeThinkingBlocks(modelId, model),
-    appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({ id: modelId, params: model?.params }),
   });
 }
 
@@ -146,10 +149,6 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
   if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
     return buildStrictAnthropicReplayPolicy({
       inHistorySystemUpdates: ctx.inHistorySystemUpdates,
-      appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({
-        id: ctx.modelId,
-        params: ctx.model?.params,
-      }),
       dropThinkingBlocks:
         options.anthropicModelDropThinkingBlocks &&
         shouldDropClaudeThinkingBlocks(ctx.modelId, ctx.model),
@@ -213,7 +212,7 @@ export function buildPassthroughGeminiSanitizingReplayPolicy(
   };
 }
 
-/** @deprecated Use sanitizeGoogleGeminiReplayHistoryAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use sanitizeGoogleGeminiReplayHistoryAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function sanitizeGoogleGeminiReplayHistory(
   ctx: ProviderSanitizeReplayHistoryContext,
 ): AgentMessage[] {

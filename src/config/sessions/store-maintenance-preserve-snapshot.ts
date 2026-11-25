@@ -1,7 +1,9 @@
-import type { SessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
+import type {
+  SessionMaintenancePreservationPlan,
+  SessionMaintenancePreservationSnapshot,
+} from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
 
 export function addSessionMaintenancePreserveKeys(
@@ -70,7 +72,7 @@ export function resolveSessionMaintenancePreserveKeys(params: {
 export function assertMaintenancePreservationCompatible(
   sent: SessionMaintenancePreservationSnapshot,
   current: SessionMaintenancePreservationSnapshot,
-  plans?: readonly SessionEntryMaintenancePlan[],
+  plans?: readonly SessionMaintenancePreservationPlan[],
 ): void {
   const added = new Set(
     (["providerKeys", "workIdentities", "lifecycleIdentities"] as const).flatMap((kind) => {
@@ -80,6 +82,14 @@ export function assertMaintenancePreservationCompatible(
         .filter(Boolean);
     }),
   );
+  // A provider that became pending after planning may not yet name a row this plan archives.
+  if (
+    current.archivingDeferred &&
+    !sent.archivingDeferred &&
+    (!plans || plans.some((plan) => plan.archivedEntries.length > 0))
+  ) {
+    throw new SqliteSessionMutationConflictError("session maintenance");
+  }
   // Lost protection only over-preserves the sent plan, so it cannot invalidate a commit.
   if (added.size === 0) {
     return;

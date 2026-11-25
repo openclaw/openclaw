@@ -2,7 +2,7 @@ import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   deleteSessionEntry,
-  listSessionEntries,
+  listSessionEntriesAsync,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -42,12 +42,11 @@ export async function closeDiscordThreadSessions(params: {
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     // agentId selects the owner DB: with a fixed custom store every agent
     // resolves the same storePath, so storePath alone re-reads the default
-    // owner. readOnly keeps this fleet-wide scan from creating or registering
+    // owner. The read-only listing keeps this fleet-wide scan from creating or registering
     // agent databases while handling a thread archive/delete event.
-    for (const { sessionKey, entry } of listSessionEntries({
+    for (const { sessionKey, entry } of await listSessionEntriesAsync({
       agentId,
       storePath,
-      readOnly: true,
     })) {
       if (!segmentRe.test(sessionKey)) {
         continue;

@@ -1,5 +1,5 @@
 /** Static owner-native cron lifecycle projection for run inspection. */
-import type { DatabaseSync } from "node:sqlite";
+
 import type {
   DecisionReceiptV1,
   ExecutionIdentityContextV1,
@@ -9,13 +9,13 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import { EXECUTION_OWNER_LIFECYCLE_BINDING_TABLE } from "./execution-owner-lifecycle-binding-store.js";
 
-type WithSqliteRowId<Row> = Row & { rowid: number };
 type OwnerLifecycleDatabase = {
-  cron_run_receipts: WithSqliteRowId<OpenClawStateDatabase["cron_run_receipts"]>;
+  cron_run_receipts: OpenClawStateDatabase["cron_run_receipts"];
   execution_owner_lifecycle_bindings: OpenClawStateDatabase["execution_owner_lifecycle_bindings"];
 };
 /** Captured by the connection read-open/admission owner, never discovered while paging. */
@@ -41,7 +41,7 @@ const KNOWN_STATUSES = new Set(["running", "ok", "error", "skipped", "interrupte
 const OWNER_LIFECYCLE_CURSOR_RETAINED_ERROR = "owner lifecycle cursor is no longer retained";
 
 function assertRetainedCursor(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   contextId: string;
   executionId: string;
   after?: OwnerLifecycleCursor;
@@ -53,11 +53,11 @@ function assertRetainedCursor(params: {
   const ownerQuery = kysely
     .selectFrom("cron_run_receipts")
     .select("receipt_id as ownerId")
-    .where("rowid", "=", params.after.rowId)
+    .where("cursor_id", "=", params.after.rowId)
     .where("started_at_ms", "=", params.after.occurredAt);
   const owner = executeSqliteQueryTakeFirstSync(params.db, ownerQuery);
   // Admission binds at most one cron owner to an execution. The exact execution
-  // match therefore rejects a different owner reusing this rowid.
+  // match therefore rejects a different owner reusing this cursor id.
   const binding = owner
     ? executeSqliteQueryTakeFirstSync(
         params.db,
@@ -76,7 +76,7 @@ function assertRetainedCursor(params: {
 }
 
 function readRows(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   schema: OwnerLifecycleSchemaFacts;
   contextId: string;
   executionId: string;
@@ -104,11 +104,11 @@ function readRows(params: {
       "execution_owner_lifecycle_bindings.execution_id as executionId",
       "cron_run_receipts.started_at_ms as occurredAt",
       "cron_run_receipts.status",
-      "cron_run_receipts.rowid as rowId",
+      "cron_run_receipts.cursor_id as rowId",
     ])
     .where("execution_owner_lifecycle_bindings.context_id", "=", params.contextId)
     .orderBy("cron_run_receipts.started_at_ms", "asc")
-    .orderBy("cron_run_receipts.rowid", "asc")
+    .orderBy("cron_run_receipts.cursor_id", "asc")
     .limit(params.limit);
   if (params.after) {
     query = query.where((eb) =>
@@ -116,7 +116,7 @@ function readRows(params: {
         eb("cron_run_receipts.started_at_ms", ">", params.after!.occurredAt),
         eb.and([
           eb("cron_run_receipts.started_at_ms", "=", params.after!.occurredAt),
-          eb("cron_run_receipts.rowid", ">", params.after!.rowId),
+          eb("cron_run_receipts.cursor_id", ">", params.after!.rowId),
         ]),
       ]),
     );
@@ -127,7 +127,7 @@ function readRows(params: {
 }
 
 function countRows(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   schema: OwnerLifecycleSchemaFacts;
   contextId: string;
   executionId?: string;
@@ -209,7 +209,7 @@ function projectReceipt(
 }
 
 export function summarizeOwnerLifecycleReceiptsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     schema: OwnerLifecycleSchemaFacts;
     context: ExecutionIdentityContextV1;
@@ -233,7 +233,7 @@ export function summarizeOwnerLifecycleReceiptsInDatabase(
 }
 
 export function pageOwnerLifecycleReceiptsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: {
     schema: OwnerLifecycleSchemaFacts;
     context: ExecutionIdentityContextV1;
@@ -242,7 +242,7 @@ export function pageOwnerLifecycleReceiptsInDatabase(
     limit: number;
   },
 ): { entries: OwnerLifecycleReceiptEntry[]; nextCursor?: OwnerLifecycleCursor } {
-  const rows = runSqliteDeferredTransactionSync(
+  const rows = runSqliteReadSnapshotSync(
     db,
     () =>
       readRows({

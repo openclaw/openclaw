@@ -6,18 +6,12 @@ export function normalizeChannelMeta<TId extends string>(params: {
   meta?: Partial<ChannelMeta> | null;
   existing?: Partial<ChannelMeta> | null;
 }): ChannelMeta & { id: TId } {
-  const next = params.meta ?? undefined;
-  const existing = params.existing ?? undefined;
-  const label =
-    normalizeOptionalString(next?.label) ??
-    normalizeOptionalString(existing?.label) ??
-    normalizeOptionalString(next?.selectionLabel) ??
-    normalizeOptionalString(existing?.selectionLabel) ??
-    params.id;
+  const next = params.meta;
+  const existing = params.existing;
+  const label = normalizeOptionalString(next?.label) ?? normalizeOptionalString(existing?.label);
   const selectionLabel =
     normalizeOptionalString(next?.selectionLabel) ??
-    normalizeOptionalString(existing?.selectionLabel) ??
-    label;
+    normalizeOptionalString(existing?.selectionLabel);
   const docsPath =
     normalizeOptionalString(next?.docsPath) ??
     normalizeOptionalString(existing?.docsPath) ??
@@ -29,8 +23,8 @@ export function normalizeChannelMeta<TId extends string>(params: {
     ...existing,
     ...next,
     id: params.id,
-    label,
-    selectionLabel,
+    label: label ?? selectionLabel ?? params.id,
+    selectionLabel: selectionLabel ?? label ?? params.id,
     docsPath,
     blurb,
   };

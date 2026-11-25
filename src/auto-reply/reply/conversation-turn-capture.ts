@@ -1,13 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../../agents/transcript-sanitize.js";
 import {
   findConversationTurnDeliveryByReplyTarget,
   markConversationDeliveryReplied,
   markConversationDeliverySent,
 } from "../../config/sessions/conversation-delivery-store.js";
-import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
+import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity-inbound.js";
 import { prepareConversationRegistryScope } from "../../config/sessions/conversation-registry.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
@@ -21,10 +21,10 @@ import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { claimPendingConversationTurnReply } from "../../sessions/conversation-turns.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
 import {
   buildPersistedUserTurnMessage,
   preparePersistedUserTurnMessageForTranscriptWrite,
-  type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
@@ -130,7 +130,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     : undefined;
   const input: UserTurnInput = {
     // This is the model-facing reply returned by the tool, so its durable copy
-    // must pass through the same write hook and redaction policy as transcripts.
+    // must pass through the same write hook and normalization as transcripts.
     text: replyText,
     timestamp,
     idempotencyKey: `conversation-inbound:${conversation.conversationRef}:${messageId}`,
@@ -193,7 +193,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     if (!prepared) {
       throw new Error("captured conversation turn reply was blocked before persistence");
     }
-    const persistedMessage = redactTranscriptMessage(prepared, params.cfg);
+    const persistedMessage = sanitizeTranscriptMessage(prepared);
     const persistedReplyText = readPersistedReplyText(persistedMessage);
     if (!persistedReplyText) {
       throw new Error("captured conversation turn reply has no persistable text");

@@ -3,9 +3,14 @@ import path from "node:path";
 import { afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
+} from "../infra/sqlite-worker-operation-admission.js";
+import {
   closeOpenClawAgentDatabasesAsync,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
+import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 
 export const agentCreationWitnessTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -35,5 +40,25 @@ export function createAliasedAgentCreationWitnessFixture() {
   return {
     options,
     aliased: { ...options, path: path.join(alias, path.basename(options.path)) },
+  };
+}
+
+export function createAgentCreationWitnessSource(
+  beforeGrant: (request: SqliteWorkerAdmissionRequest) => void = () => {},
+): AgentDatabaseRequestExecutionSource {
+  return {
+    assertCurrent() {},
+    createAdmission(binding) {
+      return () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          beforeGrant(request);
+          binding.authorize(request);
+          if (!grant()) {
+            throw new Error("Creation witness fixture lost admission");
+          }
+        }, binding.attachment),
+      });
+    },
   };
 }

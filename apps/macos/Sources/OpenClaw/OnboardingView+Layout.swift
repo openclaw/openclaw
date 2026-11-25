@@ -40,17 +40,24 @@ extension OnboardingView {
             minHeight: Self.minimumWindowHeight,
             maxHeight: .infinity)
         .background(Color(NSColor.windowBackgroundColor))
+        .sheet(isPresented: self.$showOpenClawID) {
+            OnboardingOpenClawIDView(model: self.openClawID)
+        }
         .onAppear {
             self.onboardingDidAppear()
         }
         .onChange(of: currentPage) { _, newValue in
             self.updateMonitoring(for: self.activePageIndex(for: newValue))
         }
+        .onChange(of: showRemoteChoices) { _, _ in
+            self.updateDiscoveryMonitoring(for: self.activePageIndex)
+        }
         .onChange(of: state.connectionMode) { _, _ in
             self.handleConnectionModeChange()
         }
-        .onChange(of: cliInstalled) { _, installed in
+        .onChange(of: cliInstalled) { previous, installed in
             guard installed else { return }
+            self.preservePageAfterCLIReadiness(wasInstalled: previous)
             self.updateMonitoring(for: self.activePageIndex)
         }
         .onChange(of: GatewayProcessManager.shared.status) { _, status in
@@ -72,8 +79,8 @@ extension OnboardingView {
     @discardableResult
     func onboardingDidAppear() -> Task<Void, Never>? {
         onboardingVisible = true
-        currentPage = 0
-        updateMonitoring(for: 0)
+        currentPage = pageOrder.firstIndex(of: initialPage.rawValue) ?? 0
+        updateMonitoring(for: self.activePageIndex)
         // App launch may have connected and emitted its snapshot before this
         // view subscribed. Always inspect the selected route once on appear.
         return self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent, knownVisible: true)
@@ -87,7 +94,7 @@ extension OnboardingView {
 
     func activePageIndex(for pageCursor: Int) -> Int {
         guard !pageOrder.isEmpty else { return 0 }
-        let clamped = min(max(0, pageCursor), pageOrder.count - 1)
+        let clamped = Self.visiblePageCursor(pageCursor, pageCount: pageOrder.count)
         return pageOrder[clamped]
     }
 
@@ -112,6 +119,8 @@ extension OnboardingView {
     }
 
     func resetGatewayBoundAIState() {
+        self.openClawID.cancel()
+        self.showOpenClawID = false
         configuredGatewayProbe.invalidate()
         // The UI attempt belongs to one route, but its durable activation lease
         // must survive A -> B -> A while the old Gateway can still be mutating.
@@ -312,15 +321,10 @@ extension OnboardingView {
 
     var navigationBar: some View {
         let connectionLockIndex = pageOrder.firstIndex(of: connectionPageIndex)
+        let findLockIndex = pageOrder.firstIndex(of: findPageIndex)
         let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
         let aiLockIndex = pageOrder.firstIndex(of: aiPageIndex)
-        let remoteGatewayDecision = Self.remoteGatewayAdvanceDecision(
-            connectionMode: state.connectionMode,
-            activePageIndex: self.activePageIndex,
-            connectionPageIndex: connectionPageIndex,
-            authIssue: remoteAuthIssue,
-            probeState: remoteProbeState,
-            input: remoteGatewayProbeInput)
+        let remoteGatewayDecision = self.findPageAdvanceDecision
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Color.clear
@@ -349,8 +353,7 @@ extension OnboardingView {
                 ForEach(0..<self.pageCount, id: \.self) { index in
                     let isInstallLocked = (self.installingCLI || self.updatingGatewayHosting || self.aiSetup.isBusy) &&
                         index != self.currentPage
-                    let isConnectionLocked = (self.isConnectionSelectionBlocking || !remoteGatewayDecision
-                        .canAdvance) &&
+                    let isConnectionLocked = self.isConnectionSelectionBlocking &&
                         index > (connectionLockIndex ?? 0)
                     let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
                     // Dots must honor the same setup gate as Next: no jumping
@@ -359,7 +362,10 @@ extension OnboardingView {
                         self.state.connectionMode != .unconfigured &&
                         !self.aiSetup.connected &&
                         index > (aiLockIndex ?? 0)
-                    let isLocked = isInstallLocked || isConnectionLocked || isCLILocked || isAILocked
+                    let isFindLocked = findLockIndex != nil &&
+                        (!self.canAdvanceFromFind || !remoteGatewayDecision.canAdvance) &&
+                        index > (findLockIndex ?? 0)
+                    let isLocked = isInstallLocked || isConnectionLocked || isFindLocked || isCLILocked || isAILocked
                     Button {
                         withAnimation { self.currentPage = index }
                     } label: {
@@ -396,7 +402,9 @@ extension OnboardingView {
 
     private func navigationTitle(for pageIndex: Int) -> LocalizedStringKey {
         switch pageIndex {
-        case self.connectionPageIndex: "Where should your assistant live?"
+        case self.connectionPageIndex: "Where should your assistant run?"
+        case self.findPageIndex: "Find your OpenClaw"
+        case self.reachabilityPageIndex: "Reach it from anywhere?"
         case self.cliPageIndex: "Getting things ready"
         case self.aiPageIndex: self.aiSetup.configuredGatewayAuthIssue == nil
             ? "Connect your AI" : "Authenticate with your Gateway"

@@ -1,13 +1,10 @@
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import { sessionMemberWithAccess } from "./session-member-access-facts.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -39,35 +36,27 @@ export function listSessionMembersInDatabase(
     database.db,
     getSessionMemberKysely(database)
       .selectFrom("session_members")
-      .select(["identity_id", "added_by", "added_at"])
+      .select(["identity_id", "added_by", "added_at", "access"])
       .where("session_key", "=", sessionKey)
       .orderBy("identity_id"),
-  ).rows.map((row) => ({
-    identityId: row.identity_id,
-    addedBy: row.added_by,
-    addedAt: row.added_at,
-  }));
+  ).rows.map((row) =>
+    sessionMemberWithAccess(
+      {
+        identityId: row.identity_id,
+        addedBy: row.added_by,
+        addedAt: row.added_at,
+      },
+      row.access,
+    ),
+  );
 }
 
-type SessionMemberDatabase = Pick<OpenClawAgentKyselyDatabase, "session_members">;
+type SessionMemberDatabase = {
+  session_members: Omit<OpenClawAgentKyselyDatabase["session_members"], "access"> & {
+    access: SessionMember["access"] | null;
+  };
+};
 
 export function getSessionMemberKysely(database: Pick<OpenClawAgentDatabase, "db">) {
   return getNodeSqliteKysely<SessionMemberDatabase>(database.db);
-}
-
-export function hasSessionMemberInDatabase(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  sessionKey: string,
-  normalizedIdentityId: string,
-): boolean {
-  return Boolean(
-    executeSqliteQueryTakeFirstSync(
-      database.db,
-      getSessionMemberKysely(database)
-        .selectFrom("session_members")
-        .select("identity_id")
-        .where("session_key", "=", sessionKey)
-        .where("identity_id", "=", normalizedIdentityId),
-    ),
-  );
 }

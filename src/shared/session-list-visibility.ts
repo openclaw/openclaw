@@ -1,10 +1,37 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isSubagentSessionKey, parseAgentSessionKey } from "../sessions/session-key-utils.js";
+
+export function isSubagentSessionRow(
+  key: string,
+  entry?: { spawnedBy?: string; category?: string },
+): boolean {
+  return (
+    isSubagentSessionKey(key) ||
+    // Visible spawned conversations use dashboard keys even without a sidebar group.
+    // Lineage alone must not hide the session where the human follows the work.
+    Boolean(
+      entry?.spawnedBy &&
+      !parseAgentSessionKey(key)?.rest.toLowerCase().startsWith("dashboard:") &&
+      !normalizeOptionalString(entry.category),
+    )
+  );
+}
 
 /** Display/discovery classification; routing validates canonical keys separately. */
 export function isCronSessionDisplayKey(key: string): boolean {
   // Display keys historically ignore empty segments and accept whitespace owners.
   // Match those nonempty segments directly, without allocating an array per row.
   return /^(?:cron:|agent::*[^:]+:+cron:+[^:])/u.test(normalizeLowercaseStringOrEmpty(key));
+}
+
+/** GitHub publication custody keys: stable checkout IDs and the earlier per-invocation UUIDv8 IDs. */
+export function isReservedGitHubPublicationSessionKey(key: string): boolean {
+  return /^agent:[^:]+:dashboard:(?:github-publication-[a-f0-9]{32}|github-[a-f0-9]{8}-[a-f0-9]{4}-8[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/iu.test(
+    key,
+  );
 }
 
 /**
@@ -16,6 +43,7 @@ export function isSystemCreatedSessionRow(row: {
   key: string;
   createdActor?: { type: string };
   createdVia?: string;
+  createdSurface?: string;
   label?: string;
   displayName?: string;
   subject?: string;
@@ -23,6 +51,9 @@ export function isSystemCreatedSessionRow(row: {
 }): boolean {
   if (isCronSessionDisplayKey(row.key)) {
     return false;
+  }
+  if (row.classification === "github-publication" || row.createdSurface === "github-publication") {
+    return true;
   }
   // Recall rows predate creation provenance. Their producer-owned suffix also
   // identifies existing rows while the recall is running or awaiting cleanup.

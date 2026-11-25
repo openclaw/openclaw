@@ -3,16 +3,19 @@ import { beforeEach, vi } from "vitest";
 const graphMessagesMockState = vi.hoisted(() => ({
   resolveGraphToken: vi.fn(),
   fetchGraphJson: vi.fn(),
+  fetchAllGraphPages: vi.fn(),
   fetchGraphAbsoluteUrl: vi.fn(),
   mutateGraphJson: vi.fn(),
   deleteGraphRequest: vi.fn(),
   findPreferredDmByUserId: vi.fn(),
 }));
 
-vi.mock("./graph.js", () => {
+vi.mock("./graph.js", async (importOriginal) => {
   return {
+    ...(await importOriginal<typeof import("./graph.js")>()),
     resolveGraphToken: graphMessagesMockState.resolveGraphToken,
     fetchGraphJson: graphMessagesMockState.fetchGraphJson,
+    fetchAllGraphPages: graphMessagesMockState.fetchAllGraphPages,
     fetchGraphAbsoluteUrl: graphMessagesMockState.fetchGraphAbsoluteUrl,
     mutateGraphJson: graphMessagesMockState.mutateGraphJson,
     deleteGraphRequest: graphMessagesMockState.deleteGraphRequest,

@@ -12,11 +12,6 @@ export class MediaReferenceError extends Error {
   }
 }
 
-type InboundMediaUri = {
-  id: string;
-  normalizedSource: string;
-};
-
 /** Strips legacy MEDIA: prefixes while preserving canonical media:// references. */
 export function normalizeMediaReferenceSource(source: string): string {
   const trimmed = source.trim();
@@ -27,7 +22,7 @@ export function normalizeMediaReferenceSource(source: string): string {
 }
 
 /** Parses canonical inbound media-store URIs and rejects nested or cross-bucket references. */
-export function parseInboundMediaUri(source: string): InboundMediaUri | null {
+export function parseInboundMediaUri(source: string) {
   const normalizedSource = normalizeMediaReferenceSource(source);
   if (!/^media:\/\//i.test(normalizedSource)) {
     return null;

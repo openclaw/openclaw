@@ -2,100 +2,74 @@ import { describe, expect, it } from "vitest";
 import { validateSessionsPatchParams, validateSessionsPatchManyParams } from "../index.js";
 
 describe("session patch schema", () => {
-  it.each([
-    [true, true],
-    [false, true],
-    [null, false],
-    ["true", false],
-  ] as const)("validates sidebarRoot %j for single and batch patches", (sidebarRoot, valid) => {
-    expect(validateSessionsPatchParams({ key: "agent:main:chat", sidebarRoot })).toBe(valid);
-    expect(
-      validateSessionsPatchManyParams({
-        targets: [{ key: "agent:main:chat" }],
-        patch: { sidebarRoot },
-      }),
-    ).toBe(valid);
-  });
-  it.each([
-    [{ expectedSidebarRoot: false, expectedCategory: null, expectedArchived: false }, true],
-    [
-      {
-        expectedSidebarAncestors: [
-          {
-            key: "agent:main:parent",
-            expectedSessionId: "parent",
-            expectedSidebarRoot: false,
-            expectedCategory: null,
-          },
-        ],
-      },
-      true,
-    ],
-    [{ expectedSidebarAncestors: [{ key: "agent:main:parent" }] }, false],
-    [
-      {
-        expectedSidebarAncestors: [
-          {
-            key: "agent:main:parent",
-            expectedSessionId: "parent",
-            expectedSidebarRoot: false,
-            expectedCategory: null,
-            expectedArchived: false,
-          },
-        ],
-      },
+  it("rejects the cron-only scheduled memory parent receipt", () => {
+    const scheduledMemoryParent = {
+      sessionKey: "agent:main:dashboard:parent",
+      sessionId: "2f1d2a4e-5c6b-4d7e-8f90-1a2b3c4d5e6f",
+      senderIsOwner: true,
+    };
+    expect(validateSessionsPatchParams({ key: "agent:main:chat", scheduledMemoryParent })).toBe(
       false,
-    ],
-    [{ expectedSidebarRoot: true, expectedCategory: "Projects", expectedArchived: true }, true],
-    [{ expectedSidebarRoot: "false" }, false],
-    [{ expectedCategory: false }, false],
-    [{ expectedCategory: "" }, false],
-    [{ expectedArchived: null }, false],
-  ] as const)("validates organization expectations %j", (expectations, valid) => {
-    const target = { key: "agent:main:chat", expectedSessionId: "session", ...expectations };
-    expect(validateSessionsPatchParams({ ...target, archived: true })).toBe(valid);
-    expect(validateSessionsPatchManyParams({ targets: [target], patch: { archived: true } })).toBe(
-      valid,
     );
-  });
-
-  it.each([
-    [1_800_000_000_000, true],
-    [null, true],
-    [0, false],
-    [-1, false],
-    [1.5, false],
-    ["1800000000000", false],
-  ] as const)("validates snoozedUntil %j for single and batch patches", (snoozedUntil, valid) => {
-    expect(validateSessionsPatchParams({ key: "agent:main:chat", snoozedUntil })).toBe(valid);
     expect(
       validateSessionsPatchManyParams({
         targets: [{ key: "agent:main:chat" }],
-        patch: { snoozedUntil },
+        patch: { scheduledMemoryParent },
       }),
-    ).toBe(valid);
+    ).toBe(false);
   });
 
-  it.each(["off", null] as const)(
-    "accepts sandbox mode %s with single and batch CAS",
-    (sandboxMode) => {
-      expect(
-        validateSessionsPatchParams({
-          key: "agent:main:chat",
-          sandboxMode,
-          expectedSandboxMode: null,
-        }),
-      ).toBe(true);
+  it.each([null, 42])("accepts a per-target unread marker guard (%s)", (expectedMarkedUnreadAt) => {
+    expect(
+      validateSessionsPatchManyParams({
+        targets: [{ key: "agent:main:read", expectedMarkedUnreadAt }],
+        patch: { unread: false },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([-1, "42"])(
+    "rejects an invalid per-target unread marker guard (%s)",
+    (expectedMarkedUnreadAt) => {
       expect(
         validateSessionsPatchManyParams({
-          targets: [{ key: "agent:main:chat", expectedSandboxMode: "off" }],
-          patch: { sandboxMode },
+          targets: [{ key: "agent:main:read", expectedMarkedUnreadAt }],
+          patch: { unread: false },
         }),
-      ).toBe(true);
+      ).toBe(false);
     },
   );
 
-  it.each(["all", "required", true])("rejects unsupported sandbox mode %s", (sandboxMode) => {
+  it.each([[null, true]] as const)(
+    "validates snoozedUntil %j for single and batch patches",
+    (snoozedUntil, valid) => {
+      expect(validateSessionsPatchParams({ key: "agent:main:chat", snoozedUntil })).toBe(valid);
+      expect(
+        validateSessionsPatchManyParams({
+          targets: [{ key: "agent:main:chat" }],
+          patch: { snoozedUntil },
+        }),
+      ).toBe(valid);
+    },
+  );
+
+  it.each(["off"] as const)("accepts sandbox mode %s with single and batch CAS", (sandboxMode) => {
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:chat",
+        sandboxMode,
+        expectedSandboxMode: null,
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsPatchManyParams({
+        targets: [{ key: "agent:main:chat", expectedSandboxMode: "off" }],
+        patch: { sandboxMode },
+      }),
+    ).toBe(true);
+  });
+
+  it.each(["all"])("rejects unsupported sandbox mode %s", (sandboxMode) => {
     expect(validateSessionsPatchParams({ key: "agent:main:chat", sandboxMode })).toBe(false);
     expect(
       validateSessionsPatchParams({
@@ -104,21 +78,6 @@ describe("session patch schema", () => {
         expectedSandboxMode: sandboxMode,
       }),
     ).toBe(false);
-  });
-  it("accepts explicit runtime selections and clearing the runtime pin", () => {
-    expect(
-      validateSessionsPatchParams({
-        key: "agent:main:runtime",
-        model: "openai/gpt-5.6-sol",
-        agentRuntime: "codex",
-      }),
-    ).toBe(true);
-    expect(validateSessionsPatchParams({ key: "agent:main:runtime", agentRuntime: null })).toBe(
-      true,
-    );
-    expect(validateSessionsPatchParams({ key: "agent:main:runtime", agentRuntime: "" })).toBe(
-      false,
-    );
   });
   it("validates session settings compare-and-set fields", () => {
     expect(

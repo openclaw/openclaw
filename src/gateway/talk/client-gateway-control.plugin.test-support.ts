@@ -4,8 +4,8 @@ import {
   createOrResumeClientVoiceSession,
 } from "../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../talk/client-voice-session.test-support.js";
+import type { GatewayControlOwner } from "./client-agent-consult.types.js";
 import { createTalkClientGatewayControlOwner } from "./client-gateway-control.js";
-import type { GatewayControlOwner } from "./client-gateway-control.types.js";
 
 export type TalkGatewayControlOwnerTestFixture = {
   closeLogicalSession: () => Promise<void>;
@@ -41,6 +41,7 @@ export async function createTalkGatewayControlOwnerTestFixture(
       sessionKey,
       canonicalKey: sessionKey,
       storePath: "/tmp/sessions",
+      assertCurrent: vi.fn(),
     },
     connId: `conn-${voiceSessionId}`,
     context: {

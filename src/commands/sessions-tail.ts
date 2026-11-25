@@ -1,13 +1,13 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
@@ -16,6 +16,7 @@ import { isGatewayRpcUnavailableError } from "../gateway/transport-error.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
@@ -44,7 +45,7 @@ type SqliteFollowState = {
   selection: TailSelection;
 };
 
-type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM";
+type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM" | "ABORTED";
 
 const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
@@ -106,9 +107,7 @@ function safePreview(event: TrajectoryEvent): string {
       return `prompt skipped${reason ? `: ${reason}` : ""}`;
     }
     case "tool.call":
-      // Tool arguments may contain secrets or user text; tail output shows only
-      // the tool name and a redacted placeholder.
-      return `${toolName(data)} {...redacted...}`;
+      return `${toolName(data)} ${JSON.stringify(data?.arguments ?? data?.args ?? {})}`;
     case "tool.timeout":
       return `${toolName(data)} timeout`;
     case "tool.result":
@@ -131,7 +130,7 @@ function formatProgressLine(event: TrajectoryEvent): string {
   const sessionKey = event.sessionKey ?? event.sessionId;
   const sessionLabel = formatTextCell(sanitizeTerminalText(sessionKey), SESSION_KEY_PAD);
   const typeLabel = formatTextCell(sanitizeTerminalText(event.type), EVENT_TYPE_PAD);
-  const preview = safePreview(event);
+  const preview = sanitizeTerminalText(safePreview(event));
   return [formatTimestamp(event.ts).padEnd(9), typeLabel, sessionLabel, preview]
     .join(" ")
     .trimEnd();
@@ -147,7 +146,7 @@ async function selectSessionsToTail(
   selections: TailSelection[],
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,
-): Promise<TailSelection[]> {
+): Promise<TailSelection[] | undefined> {
   if (opts.sessionKey || selections.length === 0) {
     return selections.filter((selection) => selection.key === opts.sessionKey);
   }
@@ -157,8 +156,9 @@ async function selectSessionsToTail(
   if (opts.store !== undefined) {
     runtime.log("explicit store: ordered by activity");
   } else {
+    const signal = getAsyncWorkSignal();
     try {
-      const cfg = getRuntimeConfig();
+      const cfg = await captureRuntimeConfigAsyncReader()();
       const { sessions } = await callGatewayFromCliWithTransport<{
         sessions: Pick<GatewaySessionRow, "key" | "sessionId" | "hasActiveRun" | "status">[];
       }>(
@@ -171,8 +171,11 @@ async function selectSessionsToTail(
           includeGlobal: true,
           includeUnknown: true,
         },
-        { progress: false },
+        { progress: false, signal },
       );
+      if (signal?.aborted) {
+        return undefined;
+      }
       const running = new Map(
         sessions
           .filter((row) => row.hasActiveRun && row.status !== "queued")
@@ -192,6 +195,9 @@ async function selectSessionsToTail(
         return active;
       }
     } catch (error) {
+      if (signal?.aborted) {
+        return undefined;
+      }
       if (!isGatewayRpcUnavailableError(error)) {
         throw error;
       }
@@ -218,6 +224,7 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
 function followSelections(
   states: SqliteFollowState[],
   runtime: RuntimeEnv,
+  signal?: AbortSignal,
 ): Promise<FollowOutcome> {
   return new Promise((resolve) => {
     let finished = false;
@@ -227,7 +234,7 @@ function followSelections(
           renderEvents(readNewSqliteFollowEvents(state), runtime);
         } catch (error) {
           runtime.error(
-            `Failed to read trajectory progress for ${state.selection.key}: ${formatErrorMessage(
+            terminalText`Failed to read trajectory progress for ${state.selection.key}: ${formatErrorMessage(
               error,
             )}`,
           );
@@ -242,13 +249,19 @@ function followSelections(
         clearInterval(interval);
         process.off("SIGINT", stopSigint);
         process.off("SIGTERM", stopSigterm);
+        signal?.removeEventListener("abort", stopAbort);
         resolve(outcome);
       }
     };
     const stopSigint = () => finish("SIGINT");
     const stopSigterm = () => finish("SIGTERM");
+    const stopAbort = () => finish("ABORTED");
     process.once("SIGINT", stopSigint);
     process.once("SIGTERM", stopSigterm);
+    signal?.addEventListener("abort", stopAbort, { once: true });
+    if (signal?.aborted) {
+      stopAbort();
+    }
   });
 }
 
@@ -282,7 +295,7 @@ export async function sessionsTailCommand(
     return;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const targets = resolveCommandSessionStoreTargets({
     cfg,
     opts: {
@@ -310,10 +323,13 @@ export async function sessionsTailCommand(
     { ...opts, sessionKey: requestedKey },
     runtime,
   );
+  if (!selected) {
+    return;
+  }
   if (selected.length === 0) {
     if (requestedKey) {
       runtime.error(
-        `Session not found: ${requestedKey}. Run ${formatCliCommand("openclaw sessions list --all-agents --json")} to choose a valid key.`,
+        `Session not found: ${terminalText`${requestedKey}`}. Run ${formatCliCommand("openclaw sessions list --all-agents --json")} to choose a valid key.`,
       );
       runtime.exit(1);
     } else {
@@ -335,7 +351,9 @@ export async function sessionsTailCommand(
   }
 
   if (opts.follow) {
-    const outcome = await followSelections(followStates, runtime);
-    runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
+    const outcome = await followSelections(followStates, runtime, getAsyncWorkSignal());
+    if (outcome !== "ABORTED") {
+      runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
+    }
   }
 }

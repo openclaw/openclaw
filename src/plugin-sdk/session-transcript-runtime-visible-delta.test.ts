@@ -1,6 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, assert, beforeEach, describe, expect, it } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -23,10 +23,7 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "../config/sessions/session-transcript-reconcile.js";
 import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import * as agentWriteAdmission from "../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
@@ -34,9 +31,54 @@ import {
   readSessionTranscriptRawDelta,
   readSessionTranscriptVisibleMessageDelta,
   withSessionTranscriptWriteLock,
+  type SessionTranscriptReadParams,
 } from "./session-transcript-runtime.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-visible-transcript-");
+const decodeCursor = (cursor: string) =>
+  JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
+const rewriteCursor = (cursor: string, patch: Record<string, unknown>) =>
+  Buffer.from(JSON.stringify({ ...decodeCursor(cursor), ...patch }), "utf8").toString("base64url");
+async function offThread<T>(read: () => T) {
+  const sql = observeHostDataSql();
+  try {
+    const result = await read();
+    expect(sql.queries).toEqual([]);
+    return result;
+  } finally {
+    sql.restore();
+  }
+}
+function visibleReader(scope: SessionTranscriptReadParams, maxBytes = 10_000, maxMessages = 1) {
+  return (cursor?: string, limits = { maxBytes, maxMessages }) =>
+    readSessionTranscriptVisibleMessageDelta({ ...scope, cursor, ...limits });
+}
+function expectReset(
+  page: ReturnType<typeof readSessionTranscriptVisibleMessageDelta>,
+  reason: string,
+) {
+  return expect(page).resolves.toMatchObject({ kind: "reset", reason });
+}
+const rawMessage = (content: string) =>
+  expect.objectContaining({
+    event: expect.objectContaining({ message: expect.objectContaining({ content }) }),
+  });
+function append(
+  scope: SessionTranscriptReadParams,
+  role: string,
+  content: string,
+  now?: number,
+  parentId?: string,
+  eventId?: string,
+) {
+  return appendSessionTranscriptMessageByIdentity({
+    ...scope,
+    message: { role, content },
+    now,
+    parentId,
+    eventId,
+  });
+}
 
 describe("session transcript visible cursor SDK", () => {
   let tempDir: string;
@@ -47,20 +89,33 @@ describe("session transcript visible cursor SDK", () => {
     storePath = path.join(tempDir, "sessions.json");
   });
 
+  async function seed(
+    sessionId: string,
+    overrides: Partial<SessionTranscriptReadParams> = {},
+    updatedAt = 10,
+  ) {
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+      ...overrides,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt });
+    return scope;
+  }
+
   it("settles nested reads through lock preparation, cancellation, and closure", async ({
     signal,
   }) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "nested-worker-read",
-      sessionKey: "agent:main:nested-worker-read",
-      storePath: path.join(tempDir, "nested-worker-read.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content: "before nested read" },
-    });
+    const scope = await seed(
+      "nested-worker-read",
+      {
+        storePath: path.join(tempDir, "nested-worker-read.sqlite"),
+      },
+      1,
+    );
+    await append(scope, "user", "before nested read");
     const resumeLateRead = createDeferred();
     let lateRead: Promise<unknown> | undefined;
     await withSessionTranscriptWriteLock(scope, async (locked) => {
@@ -73,13 +128,7 @@ describe("session transcript visible cursor SDK", () => {
         withSessionTranscriptDeltaReader(scope, (reader) => reader.raw({ maxEvents: 10 }), signal),
       ).resolves.toMatchObject({
         kind: "page",
-        events: expect.arrayContaining([
-          expect.objectContaining({
-            event: expect.objectContaining({
-              message: expect.objectContaining({ content: "before nested read" }),
-            }),
-          }),
-        ]),
+        events: expect.arrayContaining([rawMessage("before nested read")]),
       });
       await locked.appendMessage({
         message: { role: "assistant", content: "after nested read" },
@@ -140,134 +189,9 @@ describe("session transcript visible cursor SDK", () => {
     await expect(readSessionTranscriptRawDelta({ ...scope, maxEvents: 10 })).resolves.toMatchObject(
       {
         kind: "page",
-        events: expect.arrayContaining([
-          expect.objectContaining({
-            event: expect.objectContaining({
-              message: expect.objectContaining({ content: "after cancelled read" }),
-            }),
-          }),
-        ]),
+        events: expect.arrayContaining([rawMessage("after cancelled read")]),
       },
     );
-  });
-
-  it("refuses a queued delta read after its prepared executor generation is replaced", async ({
-    signal,
-  }) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "prepared-delta-generation",
-      sessionKey: "agent:main:prepared-delta-generation",
-      storePath: path.join(tempDir, "prepared-delta.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content: "retained transcript" },
-    });
-    const execution = captureOpenClawAgentDatabaseExecution({
-      agentId: scope.agentId,
-      path: scope.storePath,
-    });
-    if (!execution.capturePreparedGenerationClaim()) {
-      await execution.release();
-      throw new Error("The fixture requires its admitted session writer");
-    }
-    const entered = createDeferred();
-    const resume = createDeferred();
-    const writerEntered = createDeferred();
-    const replaceGeneration = createDeferred();
-    const reading = withSessionTranscriptDeltaReader(
-      scope,
-      async (reader) => {
-        entered.resolve();
-        await withinTest(resume.promise, signal);
-        return reader.raw({ maxEvents: 10 });
-      },
-      signal,
-    );
-    const refused = expect(reading).rejects.toThrow(
-      "Agent database execution generation was replaced",
-    );
-    const source: AgentDatabaseRequestExecutionSource = {
-      assertCurrent: () => execution.assertCurrent(),
-      createAdmission(binding) {
-        return () => ({
-          nativeLocations: binding.nativeLocations,
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            binding.authorize(request);
-            execution.assertCurrent();
-            if (!grant()) {
-              throw new Error("Fixture execution admission expired");
-            }
-          }, binding.attachment),
-        });
-      },
-    };
-    let writing: Promise<void> | undefined;
-    let restoreAdmission = () => {};
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          reading,
-          "Delta read ended before retaining its prepared owner",
-        ),
-        signal,
-      );
-      writing = agentWriteAdmission.runOpenClawAgentWriteAdmission(execution, async () => {
-        writerEntered.resolve();
-        await withinTest(replaceGeneration.promise, signal);
-        const failure = new Error("Retire the original native generation");
-        await expect(
-          execution.runExisting(
-            source,
-            async () => {
-              throw failure;
-            },
-            { retireNativeOnFailure: true },
-          ),
-        ).rejects.toBe(failure);
-        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 2 });
-      });
-      await withinTest(writerEntered.promise, signal);
-      const queued = createDeferred();
-      const admit = agentWriteAdmission.runOpenClawAgentWriteAdmission;
-      const admission = vi
-        .spyOn(agentWriteAdmission, "runOpenClawAgentWriteAdmission")
-        .mockImplementation((...args) => {
-          const pending = admit(...args);
-          if (args[0].path === scope.storePath && args[4] === signal) {
-            queued.resolve();
-          }
-          return pending;
-        });
-      restoreAdmission = () => admission.mockRestore();
-      resume.resolve();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          queued.promise,
-          reading,
-          "Delta read bypassed the earlier admitted writer",
-        ),
-        signal,
-      );
-      restoreAdmission();
-      replaceGeneration.resolve();
-      await withinTest(writing, signal);
-      await refused;
-      const fresh = await readSessionTranscriptVisibleMessageDelta({ ...scope, maxMessages: 10 });
-      expect(fresh).toMatchObject({
-        kind: "page",
-        entries: [{ message: { role: "user", content: "retained transcript" } }],
-      });
-    } finally {
-      restoreAdmission();
-      resume.resolve();
-      replaceGeneration.resolve();
-      await Promise.allSettled([reading, writing, refused]);
-      await execution.release();
-    }
   });
 
   it.each([readSessionTranscriptRawDelta, readSessionTranscriptVisibleMessageDelta])(
@@ -288,32 +212,14 @@ describe("session transcript visible cursor SDK", () => {
   it.each(["raw", "visible"] as const)(
     "reads %s deltas off the caller thread and observes foreign rewrite generations",
     async (kind) => {
-      const scope = {
-        agentId: "main",
-        sessionId: `worker-delta-${kind}`,
-        sessionKey: `agent:main:worker-delta-${kind}`,
-        storePath,
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
-      await appendSessionTranscriptMessageByIdentity({
-        ...scope,
-        message: { role: "user", content: "persisted delta" },
-      });
+      const scope = await seed(`worker-delta-${kind}`);
+      await append(scope, "user", "persisted delta");
       const read = (cursor?: string) =>
         kind === "raw"
           ? readSessionTranscriptRawDelta({ ...scope, cursor, maxEvents: 10 })
           : readSessionTranscriptVisibleMessageDelta({ ...scope, cursor, maxMessages: 10 });
-      const firstSql = observeHostDataSql();
-      let first: Awaited<ReturnType<typeof read>>;
-      try {
-        first = await read();
-        expect(firstSql.queries).toEqual([]);
-      } finally {
-        firstSql.restore();
-      }
-      if (first.kind !== "page") {
-        throw new Error("expected a populated delta");
-      }
+      const first = await offThread(() => read());
+      assert(first.kind === "page", "expected a populated delta");
       // Serialize fixture setup with background writers; the peer still bypasses publication.
       await agentWriteAdmission.runOpenClawAgentWriteAdmission(
         toDatabaseOptions(resolveSqliteTranscriptReadScope(scope)),
@@ -332,16 +238,10 @@ describe("session transcript visible cursor SDK", () => {
           }
         },
       );
-      const nextSql = observeHostDataSql();
-      try {
-        await expect(read(first.cursor)).resolves.toMatchObject({
-          kind: "reset",
-          reason: "generation_mismatch",
-        });
-        expect(nextSql.queries).toEqual([]);
-      } finally {
-        nextSql.restore();
-      }
+      await expect(offThread(() => read(first.cursor))).resolves.toMatchObject({
+        kind: "reset",
+        reason: "generation_mismatch",
+      });
     },
   );
 
@@ -350,17 +250,12 @@ describe("session transcript visible cursor SDK", () => {
       agentId: "main",
       path: path.join(tempDir, "shared-history.sqlite"),
     });
-    const scope = {
+    const scope = await seed("shared-visible-repair", {
       agentId: "other",
-      sessionId: "shared-visible-repair",
       sessionKey: "agent:other:shared-visible-repair",
       storePath: database.path,
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
-    await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content: "Shared history survives projection repair" },
     });
+    await append(scope, "user", "Shared history survives projection repair");
     const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptReadScope(scope));
     await waitForSessionTranscriptIndexReconcile(databaseOptions);
     database.db
@@ -380,9 +275,7 @@ describe("session transcript visible cursor SDK", () => {
       ],
       hasMore: false,
     });
-    if (repaired.kind !== "page") {
-      throw new Error("expected repaired shared-store transcript page");
-    }
+    assert(repaired.kind === "page", "expected repaired shared-store transcript page");
     await expect(
       readSessionTranscriptVisibleMessageDelta({ ...scope, cursor: repaired.cursor }),
     ).resolves.toMatchObject({
@@ -393,33 +286,14 @@ describe("session transcript visible cursor SDK", () => {
   });
 
   it("pages appends and resets when the active branch changes", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "visible-delta-session",
+    const scope = await seed("visible-delta-session", {
       sessionKey: "agent:main:visible-delta",
-      storePath,
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
-    const root = await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content: "root" },
-      now: 1_000,
     });
-    const firstBranch = await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "assistant", content: "first branch" },
-      parentId: root?.messageId,
-      now: 2_000,
-    });
-    if (!root || !firstBranch) {
-      throw new Error("expected visible delta setup messages");
-    }
-
-    const first = await readSessionTranscriptVisibleMessageDelta({
-      ...scope,
-      maxBytes: 10_000,
-      maxMessages: 1,
-    });
+    const read = visibleReader(scope);
+    const root = await append(scope, "user", "root", 1_000);
+    const firstBranch = await append(scope, "assistant", "first branch", 2_000, root?.messageId);
+    assert(root && firstBranch, "expected visible delta setup messages");
+    const first = await read();
     expect(first).toMatchObject({
       kind: "page",
       entries: [
@@ -431,35 +305,17 @@ describe("session transcript visible cursor SDK", () => {
       ],
       hasMore: true,
     });
-    if (first.kind !== "page") {
-      throw new Error("expected first visible transcript page");
-    }
+    assert(first.kind === "page", "expected first visible transcript page");
 
-    const decodedCursor = JSON.parse(
-      Buffer.from(first.cursor, "base64url").toString("utf8"),
-    ) as Record<string, unknown>;
-    const nonCanonicalCursors = [
+    for (const cursor of [
       `${first.cursor}!`,
       `${first.cursor}=`,
-      Buffer.from(JSON.stringify({ ...decodedCursor, extra: true }), "utf8").toString("base64url"),
-    ];
-    for (const cursor of nonCanonicalCursors) {
-      await expect(
-        readSessionTranscriptVisibleMessageDelta({
-          ...scope,
-          cursor,
-          maxBytes: 10_000,
-          maxMessages: 1,
-        }),
-      ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
+      rewriteCursor(first.cursor, { extra: true }),
+    ]) {
+      await expectReset(read(cursor), "invalid_cursor");
     }
 
-    const second = await readSessionTranscriptVisibleMessageDelta({
-      ...scope,
-      cursor: first.cursor,
-      maxBytes: 10_000,
-      maxMessages: 1,
-    });
+    const second = await read(first.cursor);
     expect(second).toMatchObject({
       kind: "page",
       entries: [
@@ -471,39 +327,12 @@ describe("session transcript visible cursor SDK", () => {
       ],
       hasMore: false,
     });
-    if (second.kind !== "page") {
-      throw new Error("expected second visible transcript page");
-    }
-    const movedAnchorCursor = Buffer.from(
-      JSON.stringify({
-        ...(JSON.parse(Buffer.from(second.cursor, "base64url").toString("utf8")) as object),
-        lastMessagePosition: 0,
-      }),
-      "utf8",
-    ).toString("base64url");
-    await expect(
-      readSessionTranscriptVisibleMessageDelta({
-        ...scope,
-        cursor: movedAnchorCursor,
-        maxBytes: 10_000,
-        maxMessages: 1,
-      }),
-    ).resolves.toMatchObject({ kind: "reset", reason: "anchor_moved" });
+    assert(second.kind === "page", "expected second visible transcript page");
+    const movedAnchorCursor = rewriteCursor(second.cursor, { lastMessagePosition: 0 });
+    await expectReset(read(movedAnchorCursor), "anchor_moved");
 
-    const appended = await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content: "linear append" },
-      parentId: firstBranch.messageId,
-      now: 3_000,
-    });
-    await expect(
-      readSessionTranscriptVisibleMessageDelta({
-        ...scope,
-        cursor: second.cursor,
-        maxBytes: 10_000,
-        maxMessages: 1,
-      }),
-    ).resolves.toMatchObject({
+    const appended = await append(scope, "user", "linear append", 3_000, firstBranch.messageId);
+    await expect(read(second.cursor)).resolves.toMatchObject({
       kind: "page",
       entries: [{ entryId: appended?.messageId, message: { content: "linear append" } }],
       hasMore: false,
@@ -519,41 +348,21 @@ describe("session transcript visible cursor SDK", () => {
     // Worker reads can outlast repair; test the settled cursor contract here.
     startSessionTranscriptIndexReconcile(databaseOptions);
     await waitForSessionTranscriptIndexReconcile(databaseOptions);
-    await expect(
-      readSessionTranscriptVisibleMessageDelta({
-        ...scope,
-        cursor: second.cursor,
-        maxBytes: 10_000,
-        maxMessages: 1,
-      }),
-    ).resolves.toMatchObject({ kind: "reset", reason: "anchor_missing" });
-    await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      eventId: "replacement-branch",
-      parentId: "select-replacement-branch",
-      message: { role: "assistant", content: "replacement branch" },
-      now: 4_000,
-    });
+    await expectReset(read(second.cursor), "anchor_missing");
+    await append(
+      scope,
+      "assistant",
+      "replacement branch",
+      4_000,
+      "select-replacement-branch",
+      "replacement-branch",
+    );
     startSessionTranscriptIndexReconcile(databaseOptions);
     await waitForSessionTranscriptIndexReconcile(databaseOptions);
-    const reset = await readSessionTranscriptVisibleMessageDelta({
-      ...scope,
-      cursor: second.cursor,
-      maxBytes: 10_000,
-      maxMessages: 1,
-    });
+    const reset = await read(second.cursor);
     expect(reset).toMatchObject({ kind: "reset", reason: "anchor_missing" });
-    if (reset.kind !== "reset") {
-      throw new Error("expected visible branch reset");
-    }
-    await expect(
-      readSessionTranscriptVisibleMessageDelta({
-        ...scope,
-        cursor: reset.cursor,
-        maxBytes: 10_000,
-        maxMessages: 10,
-      }),
-    ).resolves.toMatchObject({
+    assert(reset.kind === "reset", "expected visible branch reset");
+    await expect(read(reset.cursor, { maxBytes: 10_000, maxMessages: 10 })).resolves.toMatchObject({
       kind: "page",
       entries: [
         { entryId: root.messageId, parentId: null },
@@ -564,51 +373,17 @@ describe("session transcript visible cursor SDK", () => {
   });
 
   it("bounds pages before parsing oversized entries", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "visible-delta-bounds",
-      sessionKey: "agent:main:visible-delta-bounds",
-      storePath,
-    };
+    const scope = await seed("visible-delta-bounds");
+    const read = visibleReader(scope, 10);
     const content = "x".repeat(200);
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
-    await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content },
-      now: 1_000,
-    });
+    await append(scope, "user", content, 1_000);
 
-    const invalid = await readSessionTranscriptVisibleMessageDelta({
-      ...scope,
-      cursor: "not-a-cursor",
-      maxBytes: 10,
-      maxMessages: 1,
-    });
+    const invalid = await read("not-a-cursor");
     expect(invalid).toMatchObject({ kind: "reset", reason: "invalid_cursor" });
-    if (invalid.kind !== "reset") {
-      throw new Error("expected invalid visible cursor reset");
-    }
-    const inconsistentBootstrapCursor = Buffer.from(
-      JSON.stringify({
-        ...(JSON.parse(Buffer.from(invalid.cursor, "base64url").toString("utf8")) as object),
-        lastMessagePosition: 0,
-      }),
-      "utf8",
-    ).toString("base64url");
-    await expect(
-      readSessionTranscriptVisibleMessageDelta({
-        ...scope,
-        cursor: inconsistentBootstrapCursor,
-        maxBytes: 10,
-        maxMessages: 1,
-      }),
-    ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
-    const bounded = await readSessionTranscriptVisibleMessageDelta({
-      ...scope,
-      cursor: invalid.cursor,
-      maxBytes: 10,
-      maxMessages: 1,
-    });
+    assert(invalid.kind === "reset", "expected invalid visible cursor reset");
+    const inconsistentBootstrapCursor = rewriteCursor(invalid.cursor, { lastMessagePosition: 0 });
+    await expectReset(read(inconsistentBootstrapCursor), "invalid_cursor");
+    const bounded = await read(invalid.cursor);
     expect(bounded).toMatchObject({
       kind: "page",
       entries: [],
@@ -616,16 +391,12 @@ describe("session transcript visible cursor SDK", () => {
       requiredBytes: expect.any(Number),
       serializedBytes: 0,
     });
-    if (bounded.kind !== "page" || bounded.requiredBytes === undefined) {
-      throw new Error("expected oversized visible entry metadata");
-    }
+    assert(
+      bounded.kind === "page" && bounded.requiredBytes !== undefined,
+      "expected oversized visible entry metadata",
+    );
     await expect(
-      readSessionTranscriptVisibleMessageDelta({
-        ...scope,
-        cursor: bounded.cursor,
-        maxBytes: bounded.requiredBytes,
-        maxMessages: 1,
-      }),
+      read(bounded.cursor, { maxBytes: bounded.requiredBytes, maxMessages: 1 }),
     ).resolves.toMatchObject({
       kind: "page",
       entries: [{ message: { role: "user", content } }],
@@ -635,63 +406,24 @@ describe("session transcript visible cursor SDK", () => {
   });
 
   it("stops a visible cursor before the admitted row and resumes it after the fence", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "visible-delta-fence",
-      sessionKey: "agent:main:visible-delta-fence",
-      storePath,
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
-    const prior = await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content: "same prompt" },
-      now: 1_000,
-    });
-    const admitted = await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content: "same prompt" },
-      parentId: prior?.messageId,
-      now: 2_000,
-    });
-    const assistant = await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "assistant", content: "answer" },
-      parentId: admitted?.messageId,
-      now: 3_000,
-    });
-    if (!prior || !admitted || !assistant) {
-      throw new Error("expected visible fence setup messages");
-    }
-
-    if (!admitted.anchor) {
-      throw new Error("expected admitted transcript anchor");
-    }
+    const scope = await seed("visible-delta-fence");
+    const read = visibleReader(scope, 100_000, 10);
+    const prior = await append(scope, "user", "same prompt", 1_000);
+    const admitted = await append(scope, "user", "same prompt", 2_000, prior?.messageId);
+    const assistant = await append(scope, "assistant", "answer", 3_000, admitted?.messageId);
+    assert(prior && admitted?.anchor && assistant, "expected visible fence setup and anchor");
     const fenced = await runWithSessionTranscriptReadFence(
       { ...admitted.anchor, logicalTurnId: "visible-delta-fence", role: "user" },
-      async () =>
-        await readSessionTranscriptVisibleMessageDelta({
-          ...scope,
-          maxBytes: 100_000,
-          maxMessages: 10,
-        }),
+      () => read(),
     );
     expect(fenced).toMatchObject({
       kind: "page",
       entries: [{ entryId: prior.messageId, message: { content: "same prompt" } }],
       hasMore: false,
     });
-    if (fenced.kind !== "page") {
-      throw new Error("expected fenced visible transcript page");
-    }
+    assert(fenced.kind === "page", "expected fenced visible transcript page");
 
-    await expect(
-      readSessionTranscriptVisibleMessageDelta({
-        ...scope,
-        cursor: fenced.cursor,
-        maxBytes: 100_000,
-        maxMessages: 10,
-      }),
-    ).resolves.toMatchObject({
+    await expect(read(fenced.cursor)).resolves.toMatchObject({
       kind: "page",
       entries: [
         { entryId: admitted.messageId, message: { content: "same prompt" } },

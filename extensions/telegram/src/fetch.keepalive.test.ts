@@ -178,6 +178,7 @@ it("downloads distinct concurrent attachments, cancels an in-flight body, and re
       });
       const download = (fileId: string, abortSignal?: AbortSignal) =>
         resolveMedia({
+          budget: new AbortController().signal,
           ctx: contextFor(fileId),
           token,
           transport,

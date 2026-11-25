@@ -192,7 +192,6 @@ export function parseCardsJson(params: { raw: string; day: string }): CardParseR
       appPrimary: normalizeDomain(appSites.primary),
       appSecondary: normalizeDomain(appSites.secondary),
       distractions: parseDistractions(params.day, raw.distractions),
-      keyframeId: undefined,
     });
   });
   if (problems.length > 0) {
@@ -202,34 +201,30 @@ export function parseCardsJson(params: { raw: string; day: string }): CardParseR
     return { ok: false, error: "Output contained no valid cards." };
   }
   const sorted = drafts.toSorted((a, b) => a.startMs - b.startMs);
-  const normalized: LogbookCardDraft[] = [];
-  for (const current of sorted) {
-    const previous = normalized.at(-1);
+  for (const [index, current] of sorted.entries()) {
+    const previous = sorted[index - 1];
     if (!previous) {
-      normalized.push(current);
       continue;
     }
     const overlapMs = previous.endMs - current.startMs;
     if (overlapMs > 60 * 1000) {
       return {
         ok: false,
-        error: `Cards ${normalized.length - 1} and ${normalized.length} overlap by ${Math.round(overlapMs / 60000)} minutes; adjacent cards must meet cleanly.`,
+        error: `Cards ${index - 1} and ${index} overlap by ${Math.round(overlapMs / 60000)} minutes; adjacent cards must meet cleanly.`,
       };
     }
     if (overlapMs > 0) {
       if (current.endMs <= previous.endMs) {
         return {
           ok: false,
-          error: `Card ${normalized.length}: endTime must be after the previous card's endTime.`,
+          error: `Card ${index}: endTime must be after the previous card's endTime.`,
         };
       }
       // Trim sub-minute overlaps instead of round-tripping to the model again.
-      normalized.push({ ...current, startMs: previous.endMs });
-    } else {
-      normalized.push(current);
+      current.startMs = previous.endMs;
     }
   }
-  return { ok: true, drafts: normalized };
+  return { ok: true, drafts: sorted };
 }
 
 /** Slack so minute-rounded model times do not fail coverage checks. */
@@ -264,10 +259,9 @@ export function validateCardCoverage(params: {
       );
     }
   }
-  const covered = params.drafts.toSorted((a, b) => a.startMs - b.startMs);
   for (const span of params.requiredSpans) {
     let cursor = span.startMs;
-    for (const interval of covered) {
+    for (const interval of params.drafts) {
       if (interval.endMs <= cursor) {
         continue;
       }
@@ -329,12 +323,6 @@ export function selectBatchFrames(params: {
       break;
     }
     if (selected.length > 0 && frame.capturedAtMs - previousTs > BATCH_MAX_GAP_MS) {
-      endedEarly = true;
-      break;
-    }
-    // Batches never span local midnight: every downstream clock (observations,
-    // cards, day keys) is parsed against the batch's single day.
-    if (selected.length > 0 && dayKeyFor(frame.capturedAtMs) !== firstDay) {
       endedEarly = true;
       break;
     }

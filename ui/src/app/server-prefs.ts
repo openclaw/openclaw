@@ -2,6 +2,7 @@
 // the approval gate and other devices pick them up. The localStorage mirror gives instant boot and
 // stays authoritative when this client cannot write config (viewer scope, offline). Pending local
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
 import {
@@ -18,7 +19,6 @@ import {
 } from "./server-prefs-profile.ts";
 import {
   isNavigationPref,
-  prefValuesEqual,
   clearSidebarEntriesMetadata,
   isProfilePref,
   SYNCED_PREF_KEYS,
@@ -28,21 +28,21 @@ import {
 } from "./server-prefs-state.ts";
 import {
   PENDING_KEY,
-  LAST_SEEN_KEY,
   parseStoredPrefs,
-  readRetainedLocalKeys,
+  serializeStoredPrefs,
+  readRetainedLocalPrefs,
   readStorage,
   readStoredPrefs,
-  writeRetainedLocalKeys,
+  writeRetainedLocalPrefs,
   writeStorage,
 } from "./server-prefs-storage.ts";
 import type {
   ServerUiPrefsWriter,
   ServerUiPrefsCommit,
-  ServerUiPrefsSync,
+  ConfirmedPrefsFallback,
 } from "./server-prefs-sync-contract.ts";
 import type { UiSettings } from "./settings-contract.ts";
-import { patchSettings } from "./settings.ts";
+import { loadSettings, patchSettings } from "./settings.ts";
 
 type ServerUiPrefsPushHooks = {
   afterCommit?: (commit: ServerUiPrefsCommit) => void;
@@ -52,47 +52,46 @@ type ServerUiPrefsPushHooks = {
 };
 export type { ServerUiPrefProvenance } from "./server-prefs-state.ts";
 
-const CONFLICT_REDRAIN_DELAY_MS = 1_000;
-const MAX_CONFLICT_REDRAINS = 5;
-const preferenceWriteListeners = new Set<() => void>();
+let preferenceWritesChanged: (() => void) | undefined;
 export function subscribeServerUiPrefWrites(listener: () => void): () => void {
-  preferenceWriteListeners.add(listener);
-  return () => preferenceWriteListeners.delete(listener);
+  preferenceWritesChanged = listener;
+  return () => {
+    preferenceWritesChanged = undefined;
+  };
 }
 function publishPreferenceWrites(): void {
-  for (const listener of preferenceWriteListeners) {
-    listener();
-  }
+  preferenceWritesChanged?.();
 }
-class ServerUiPrefsOutbox implements ServerUiPrefsSync {
+class ServerUiPrefsOutbox {
   applyingServerPrefs = false;
   pendingScope = "";
   pendingPrefs: ServerUiPrefs | null = null;
   pendingPersistedKeys = new Set<string>();
-  composeSidebar: ServerUiPrefsSync["composeSidebar"] = null;
+  // The active pin operation alone can observe local successors; foreign adoption detaches it.
+  composeSidebar: ((pending: ServerUiPrefs | null, next: ServerUiPrefs) => void) | null = null;
   pushWriter: ServerUiPrefsWriter | null = null;
   pushScope = "";
-  pushClient: ServerUiPrefsSync["pushClient"] = null;
+  pushClient: GatewayBrowserClient | null = null;
   pushProfileId: string | null = null;
   pushCanWrite = false;
   pushAfterCommit: ((commit: ServerUiPrefsCommit) => void) | undefined;
   pushDraining = false;
   drainRequested = false;
   pushEpoch = 0;
-  conflictRedrainTimer: ReturnType<typeof setTimeout> | null = null;
-  consecutiveConflictRedrains = 0;
-  confirmedPrefsFallback: ServerUiPrefsSync["confirmedPrefsFallback"] = null;
+  confirmedPrefsFallback: ConfirmedPrefsFallback | null = null;
   lastReconciledScope: string | null = null;
   lastReconciledConfigObject: unknown = null;
-  preferenceWriteFailures: ServerUiPrefsSync["preferenceWriteFailures"] = new Map();
+  restoredProfileAppearance: { scope: string; keys: Set<SyncedPrefKey> } | null = null;
+  preferenceWriteFailures: Map<
+    string,
+    Map<SyncedPrefKey, { value: unknown; error: string; retained: boolean }>
+  > = new Map();
   writePendingStorage = writePendingStorage;
   recordPreferenceWriteFailures = recordPreferenceWriteFailures;
   reconcilePersistedPendingPrefs = reconcilePersistedPendingPrefs;
   cancelPendingKeys = cancelPendingKeys;
   updateRetainedLocalKeys = updateRetainedLocalKeys;
   publishPreferenceWrites = publishPreferenceWrites;
-  clearConflictRedrain = clearConflictRedrain;
-  scheduleConflictRedrain = scheduleConflictRedrain;
   mergePendingIntoStorage = mergePendingIntoStorage;
   startPendingDrain = startPendingDrain;
   batchIsCurrent = batchIsCurrent;
@@ -120,28 +119,31 @@ function recordPreferenceWriteFailures(
   }
   sync.preferenceWriteFailures.set(scope, failures);
 }
-function clearConflictRedrain(): void {
-  if (sync.conflictRedrainTimer !== null) {
-    clearTimeout(sync.conflictRedrainTimer);
-    sync.conflictRedrainTimer = null;
-  }
-  sync.consecutiveConflictRedrains = 0;
-}
 function updateRetainedLocalKeys(
   scope: string,
   keys: readonly SyncedPrefKey[],
-  retained: boolean,
+  retained: boolean | "confirmed",
 ): void {
-  const stored = readRetainedLocalKeys(scope);
+  const stored = readRetainedLocalPrefs(scope);
+  const settings = retained ? loadSettings() : null;
   for (const key of keys) {
-    if (retained) {
-      stored.add(key);
+    if (retained === true && settings) {
+      stored.set(key, { state: "pending", value: SYNCED_PREFS[key].local(settings) ?? null });
+    } else if (retained === "confirmed") {
+      const preference = stored.get(key);
+      if (preference) {
+        preference.state = "confirmed";
+        // Upgrade key-only markers while their local mirror is still selected.
+        if (!Object.hasOwn(preference, "value") && settings) {
+          preference.value = SYNCED_PREFS[key].local(settings) ?? null;
+        }
+      }
     } else {
       stored.delete(key);
     }
   }
-  writeRetainedLocalKeys(scope, stored);
-  if (retained && scope === sync.lastReconciledScope) {
+  writeRetainedLocalPrefs(scope, stored);
+  if (retained === true && scope === sync.lastReconciledScope) {
     sync.lastReconciledConfigObject = null;
   }
 }
@@ -153,24 +155,6 @@ function adoptPendingScope(scope: string): void {
   sync.pendingPersistedKeys = new Set(
     stored.available && stored.prefs ? pendingUiPrefKeys(stored.prefs) : [],
   );
-  if (
-    sync.pushProfileId &&
-    stored.prefs?.sidebarEntries &&
-    !Object.hasOwn(stored.prefs, "sidebarEntriesBase")
-  ) {
-    // v2026.9.9 saved pending pins without an edit base. Freeze only its same-profile
-    // recorded baseline before hydration can replace LAST_SEEN with a fresh remote value.
-    const previous = readStoredPrefs(LAST_SEEN_KEY, scope).prefs;
-    const base = SYNCED_PREFS.sidebarEntries.extract(previous?.sidebarEntries);
-    if (
-      previous?.navigationConfirmation === undefined &&
-      base &&
-      prefValuesEqual(base, previous?.sidebarEntries)
-    ) {
-      stored.prefs.sidebarEntriesBase = base;
-      writePendingStorage(stored.prefs);
-    }
-  }
 }
 function writePendingStorage(prefs: ServerUiPrefs | null): void {
   if (prefs && !prefs.sidebarEntries) {
@@ -179,7 +163,7 @@ function writePendingStorage(prefs: ServerUiPrefs | null): void {
   const persisted = writeStorage(
     PENDING_KEY,
     sync.pendingScope,
-    prefs && Object.keys(prefs).length ? JSON.stringify(prefs) : null,
+    prefs && Object.keys(prefs).length ? serializeStoredPrefs(prefs) : null,
   );
   if (persisted) {
     sync.pendingPersistedKeys = new Set(
@@ -216,7 +200,7 @@ function cancelPendingKeys(scope: string, keys: readonly SyncedPrefKey[]): void 
     writePendingStorage(next);
     return;
   }
-  writeStorage(PENDING_KEY, scope, next ? JSON.stringify(next) : null);
+  writeStorage(PENDING_KEY, scope, next ? serializeStoredPrefs(next) : null);
 }
 // localStorage pending is a cross-tab merged pool per gateway. Per-key read-merge-write prevents
 // one tab from clobbering sibling offline intent; its ms-scale race is accepted because storage has
@@ -282,7 +266,6 @@ function batchIsCurrent(batch: ServerUiPrefs): boolean {
   );
 }
 export function resetServerUiPrefsSync() {
-  clearConflictRedrain();
   sync.applyingServerPrefs = sync.pushDraining = sync.drainRequested = false;
   sync.pendingScope = "";
   sync.pendingPrefs = sync.pushWriter = null;
@@ -295,6 +278,7 @@ export function resetServerUiPrefsSync() {
   sync.confirmedPrefsFallback = null;
   sync.lastReconciledScope = null;
   sync.lastReconciledConfigObject = null;
+  sync.restoredProfileAppearance = null;
   resetProfileAppearancePrefs();
   resetServerUiPrefIntent();
   sync.preferenceWriteFailures.clear();
@@ -337,7 +321,6 @@ function adoptPushWriter(writer: ServerUiPrefsWriter, hooks: ServerUiPrefsPushHo
           ...sync.pendingPrefs,
         }
       : null;
-  clearConflictRedrain();
   sync.pushEpoch += 1;
   sync.pushWriter = writer;
   sync.pushClient = writer.state.client;
@@ -361,24 +344,6 @@ function adoptPushWriter(writer: ServerUiPrefsWriter, hooks: ServerUiPrefsPushHo
     writeStorage(PENDING_KEY, "", null);
   }
 }
-// Conflicts mean another writer committed, so bounded rescheduling converges under progress.
-// The cap prevents an endlessly conflicting server from keeping a timer chain alive.
-function scheduleConflictRedrain(writer: ServerUiPrefsWriter, epoch: number): void {
-  if (
-    sync.conflictRedrainTimer !== null ||
-    sync.consecutiveConflictRedrains >= MAX_CONFLICT_REDRAINS
-  ) {
-    return;
-  }
-  sync.consecutiveConflictRedrains += 1;
-  sync.conflictRedrainTimer = setTimeout(() => {
-    sync.conflictRedrainTimer = null;
-    if (sync.pushWriter === writer && sync.pushEpoch === epoch && sync.pendingPrefs) {
-      startPendingDrain(writer);
-    }
-  }, CONFLICT_REDRAIN_DELAY_MS);
-}
-
 function startPendingDrain(writer: ServerUiPrefsWriter): void {
   // Offline intent must not load dispatch or invalidate another profile.
   if (!writer.state.connected) {
@@ -392,7 +357,6 @@ function startPendingDrain(writer: ServerUiPrefsWriter): void {
     return;
   }
   if (
-    writer.state.connected &&
     writer.canPatch === false &&
     !(sync.pushProfileId && sync.pushCanWrite && Object.keys(sync.pendingPrefs).some(isProfilePref))
   ) {
@@ -425,7 +389,6 @@ export function pushServerUiPrefs(
   hooks: ServerUiPrefsPushHooks = {},
 ): void {
   adoptPushWriter(writer, hooks);
-  clearConflictRedrain();
   sync.pushAfterCommit = hooks.afterCommit;
   const keys = SYNCED_PREF_KEYS.filter((key) => Object.hasOwn(prefs, key));
   for (const key of keys) {
@@ -480,7 +443,6 @@ export function flushServerUiPrefs(
 ): void {
   adoptPushWriter(writer, hooks);
   reconcilePersistedPendingPrefs(SYNCED_PREF_KEYS);
-  clearConflictRedrain();
   sync.pushEpoch += 1;
   sync.pushDraining = sync.drainRequested = false;
   sync.composeSidebar = null;

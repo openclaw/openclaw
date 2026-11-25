@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -8,21 +10,28 @@ import {
   validateWorktreesCreateParams,
   validateWorktreesGcParams,
   validateWorktreesListParams,
+  validateWorktreesRecoverFileParams,
   validateWorktreesRecoverRemovalParams,
   validateWorktreesRemoveParams,
   validateWorktreesRestoreParams,
   validateWorktreesRetireSnapshotParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { WorktreeRestoreError } from "../../agents/worktrees/errors.js";
+import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "../../agents/worktrees/git.js";
+import { readLiveRegistryWorktreeByPath } from "../../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
-import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
-import { resolveRecordedProjectRoot } from "../../projects/project-registry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runGitReadOperation } from "../../infra/git-read-cache.js";
+import { resolveRecordedProjectByRoot } from "../../projects/project-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { requestGatewayWorktreeMaintenance } from "../worktree-maintenance.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
 } from "./local-state-owner.js";
+import { respondError } from "./response.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
@@ -30,19 +39,6 @@ import type {
 } from "./types.js";
 import type { Validator } from "./validation.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
-
-type WorktreeService = Pick<
-  ManagedWorktreeService,
-  | "create"
-  | "list"
-  | "listRegistryRecords"
-  | "listRepositoryBranches"
-  | "recoverRemoval"
-  | "remove"
-  | "removeIfLossless"
-  | "restore"
-  | "retireSnapshot"
->;
 
 function publicWorktreeRecord(
   { gcRetry: _gcRetry, ...record }: ManagedWorktreeRecord,
@@ -55,13 +51,9 @@ function publicWorktreeRecord(
 }
 
 function invalidParams(respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"]): void {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "invalid worktrees parameters", {
-      details: { mutationAccepted: false },
-    }),
-  );
+  respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid worktrees parameters", {
+    details: { mutationAccepted: false },
+  });
 }
 
 function captureWorktreeMutationGuard(
@@ -96,6 +88,37 @@ function captureWorktreeMutationGuard(
   }
 }
 
+/** Repository roots a write-scoped client may name; other host paths need operator.admin. */
+async function resolveWriteScopedRepoRoot(
+  repoRoot: string,
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  const containment = await resolveWorkspacePathContainment(repoRoot, cfg);
+  // A stored project row authorizes its canonical repo root for write-scoped clients.
+  return containment?.path ?? (await resolveRecordedProjectByRoot(repoRoot))?.repoRoot;
+}
+
+/**
+ * Admits a live managed worktree as a source checkout for a write-scoped client that could
+ * create one from the same repository. Session-owned worktrees stay with their conversation,
+ * so naming a path never borrows another chat's work.
+ */
+export async function resolveWriteScopedManagedWorktree(
+  requestedPath: string,
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  const canonicalPath = path.isAbsolute(requestedPath)
+    ? await fs.realpath(requestedPath).catch(() => undefined)
+    : undefined;
+  const record = canonicalPath
+    ? await readLiveRegistryWorktreeByPath(captureWorktreeRunEndContext(process.env), canonicalPath)
+    : undefined;
+  if (!record || record.ownerKind === "session") {
+    return undefined;
+  }
+  return (await resolveWriteScopedRepoRoot(record.repoRoot, cfg)) ? record.path : undefined;
+}
+
 async function resolveAuthorizedRepoRoot(
   repoRoot: string,
   opts: Parameters<GatewayRequestHandlers[string]>[0],
@@ -104,12 +127,10 @@ async function resolveAuthorizedRepoRoot(
   if (scopes.includes(ADMIN_SCOPE)) {
     return repoRoot;
   }
-  const containment = await resolveWorkspacePathContainment(
+  const authorizedRoot = await resolveWriteScopedRepoRoot(
     repoRoot,
     opts.context.getRuntimeConfig(),
   );
-  // A stored project row authorizes its canonical repo root for write-scoped clients.
-  const authorizedRoot = containment?.path ?? (await resolveRecordedProjectRoot(repoRoot));
   if (authorizedRoot) {
     return authorizedRoot;
   }
@@ -138,190 +159,262 @@ function worktreeHandler<T>(
   };
 }
 
-export function createWorktreesHandlers(service: WorktreeService): GatewayRequestHandlers {
-  return {
-    "worktrees.list": worktreeHandler(validateWorktreesListParams, async ({ respond }) => {
-      respond(
-        true,
-        { worktrees: (await service.list()).map((record) => publicWorktreeRecord(record)) },
-        undefined,
-      );
-    }),
-    "worktrees.create": worktreeHandler(validateWorktreesCreateParams, async (opts, params) => {
-      const { respond } = opts;
-      if (params.expectedRepoIdentity && !params.expectedOwnerId) {
-        invalidParams(respond);
-        return;
-      }
-      const scopes = Array.isArray(opts.client?.connect.scopes) ? opts.client.connect.scopes : [];
-      const commitGuard = captureWorktreeMutationGuard(
-        params.expectedOwnerId,
-        opts,
-        params.expectedRepoIdentity
-          ? { path: params.repoRoot, identity: params.expectedRepoIdentity }
-          : undefined,
-      );
-      if (commitGuard === null) {
-        return;
-      }
-      let repoRoot: string | undefined;
-      try {
-        repoRoot = await resolveAuthorizedRepoRoot(params.repoRoot, opts);
-        if (!repoRoot) {
-          return;
-        }
-        commitGuard?.();
-      } catch (error) {
-        respond(false, undefined, localStateOwnerChangedError(error));
-        return;
-      }
-      const record = await service.create({
-        repoRoot,
-        name: params.name,
-        baseRef: params.baseRef,
-        ...(params.profiles?.length ? { profiles: params.profiles } : {}),
-        ...(commitGuard ? { commitGuard, signal: opts.signal } : {}),
-        ownerKind: "manual",
-        // Repository hooks and .openclaw/worktree-setup.sh execute repo code.
-        runSetupScript: scopes.includes(ADMIN_SCOPE),
-      });
-      commitGuard?.();
-      respond(true, publicWorktreeRecord(record, Boolean(params.expectedOwnerId)), undefined);
-    }),
-    "worktrees.remove": worktreeHandler(validateWorktreesRemoveParams, async (opts, params) => {
-      const { respond } = opts;
-      if ([params.force, params.ifLossless, params.exactState].filter(Boolean).length > 1) {
-        invalidParams(respond);
-        return;
-      }
-      const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
-      if (commitGuard === null) {
-        return;
-      }
-      const id = normalizeOptionalString(params.id) ?? params.id;
-      const guard = commitGuard ? { commitGuard, signal: opts.signal } : {};
-      try {
-        if (params.ifLossless) {
-          const removed = await service.removeIfLossless(id, guard);
-          const cleanup = (await service.listRegistryRecords()).find(
-            (record) => record.id === id,
-          )?.runEndCleanup;
-          commitGuard?.();
-          respond(true, { removed, ...(cleanup ? { cleanup } : {}) }, undefined);
-          return;
-        }
-        const result = await service.remove({
-          id,
-          reason: "manual-delete",
-          allowSnapshotLoss: params.force,
-          ...(params.exactState ? { exactState: params.exactState } : {}),
-          ...guard,
-        });
-        commitGuard?.();
-        respond(
-          true,
-          params.expectedOwnerId
-            ? result
-            : {
-                removed: result.removed,
-                ...(result.snapshotRef ? { snapshotRef: result.snapshotRef } : {}),
-                ...(result.snapshotError ? { snapshotError: result.snapshotError } : {}),
-              },
-          undefined,
-        );
-      } catch (error) {
-        // Snapshot failures are a structured outcome: clients decide whether
-        // to retry with force instead of sniffing error strings.
-        if (error instanceof WorktreeSnapshotError && !params.expectedOwnerId) {
-          respond(true, { removed: false, snapshotError: error.snapshotError }, undefined);
-          return;
-        }
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, String(error), {
-            ...(error instanceof WorktreeSnapshotError
-              ? { details: { snapshotError: error.snapshotError } }
-              : {}),
-            retryable: false,
-          }),
-        );
-      }
-    }),
-    "worktrees.restore": worktreeHandler(validateWorktreesRestoreParams, async (opts, params) => {
-      const { respond } = opts;
-      const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
-      if (commitGuard === null) {
-        return;
-      }
-      const id = normalizeOptionalString(params.id) ?? params.id;
-      const record = await service.restore({
-        id,
-        ...(params.recoverExactState ? { recoverExactState: params.recoverExactState } : {}),
-        ...(commitGuard ? { commitGuard, signal: opts.signal } : {}),
-      });
-      commitGuard?.();
-      respond(true, publicWorktreeRecord(record, Boolean(params.expectedOwnerId)), undefined);
-    }),
-    "worktrees.branches": worktreeHandler(validateWorktreesBranchesParams, async (opts, params) => {
-      const { respond } = opts;
-      const repoRoot = await resolveAuthorizedRepoRoot(params.repoRoot, opts);
+export const worktreesHandlers: GatewayRequestHandlers = {
+  "worktrees.list": worktreeHandler(validateWorktreesListParams, async ({ respond, client }) => {
+    respond(
+      true,
+      {
+        worktrees: (await managedWorktrees.list()).map((record) =>
+          publicWorktreeRecord(record, client?.connect.scopes?.includes(ADMIN_SCOPE)),
+        ),
+      },
+      undefined,
+    );
+  }),
+  "worktrees.create": worktreeHandler(validateWorktreesCreateParams, async (opts, params) => {
+    const { respond } = opts;
+    if (params.expectedRepoIdentity && !params.expectedOwnerId) {
+      invalidParams(respond);
+      return;
+    }
+    const scopes = Array.isArray(opts.client?.connect.scopes) ? opts.client.connect.scopes : [];
+    const commitGuard = captureWorktreeMutationGuard(
+      params.expectedOwnerId,
+      opts,
+      params.expectedRepoIdentity
+        ? { path: params.repoRoot, identity: params.expectedRepoIdentity }
+        : undefined,
+    );
+    if (commitGuard === null) {
+      return;
+    }
+    let repoRoot: string | undefined;
+    try {
+      repoRoot = await resolveAuthorizedRepoRoot(params.repoRoot, opts);
       if (!repoRoot) {
         return;
       }
-      const result = params.includeRepositoryStatus
-        ? await service.listRepositoryBranches(repoRoot, {
-            includeRepositoryStatus: true,
-          })
-        : await service.listRepositoryBranches(repoRoot);
-      respond(true, result, undefined);
-    }),
-    "worktrees.gc": worktreeHandler(validateWorktreesGcParams, async (opts, params) => {
-      const { respond, context } = opts;
-      const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
-      if (commitGuard === null) {
+      commitGuard?.();
+    } catch (error) {
+      respond(false, undefined, localStateOwnerChangedError(error));
+      return;
+    }
+    const record = await managedWorktrees.create({
+      repoRoot,
+      name: params.name,
+      baseRef: params.baseRef,
+      ...(params.profiles?.length ? { profiles: params.profiles } : {}),
+      ...(commitGuard ? { commitGuard, signal: opts.signal } : {}),
+      ownerKind: "manual",
+      // Repository hooks and .openclaw/worktree-setup.sh execute repo code.
+      runSetupScript: scopes.includes(ADMIN_SCOPE),
+    });
+    commitGuard?.();
+    respond(true, publicWorktreeRecord(record, Boolean(params.expectedOwnerId)), undefined);
+  }),
+  "worktrees.remove": worktreeHandler(validateWorktreesRemoveParams, async (opts, params) => {
+    const { respond } = opts;
+    if (
+      [params.force, params.ifLossless, params.exactState].filter(Boolean).length > 1 ||
+      (params.ifLossless && params.retryPreserved)
+    ) {
+      invalidParams(respond);
+      return;
+    }
+    const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
+    if (commitGuard === null) {
+      return;
+    }
+    const id = normalizeOptionalString(params.id) ?? params.id;
+    const guard = commitGuard ? { commitGuard, signal: opts.signal } : {};
+    try {
+      if (params.ifLossless) {
+        const removed = await managedWorktrees.removeIfLossless(id, guard);
+        const cleanup = (await managedWorktrees.listRegistryRecords()).find(
+          (record) => record.id === id,
+        )?.runEndCleanup;
+        commitGuard?.();
+        respond(true, { removed, ...(cleanup ? { cleanup } : {}) }, undefined);
         return;
       }
-      commitGuard?.();
-      const receipt = requestGatewayWorktreeMaintenance(context.getRuntimeConfig, {
-        jobId: params.jobId,
-        retryDeferred: params.retryDeferred,
+      const result = await managedWorktrees.remove({
+        id,
+        reason: "manual-delete",
+        allowSnapshotLoss: params.force,
+        retryPreserved: params.retryPreserved,
+        ...(params.exactState ? { exactState: params.exactState } : {}),
+        ...guard,
       });
-      respond(true, receipt, undefined);
-    }),
-    "worktrees.recoverRemoval": worktreeHandler(
-      validateWorktreesRecoverRemovalParams,
-      async (opts, params) => {
-        const { respond } = opts;
-        const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
-        if (!commitGuard) {
-          return;
-        }
-        const result = await service.recoverRemoval({
-          id: normalizeOptionalString(params.id) ?? params.id,
-          snapshot: params.snapshot,
-          commitGuard,
-          signal: opts.signal,
-        });
-        commitGuard();
-        respond(true, result, undefined);
+      commitGuard?.();
+      respond(
+        true,
+        params.expectedOwnerId
+          ? result
+          : {
+              removed: result.removed,
+              ...(result.preserved ? { preserved: result.preserved } : {}),
+              ...(result.snapshotRef ? { snapshotRef: result.snapshotRef } : {}),
+              ...(result.snapshotError ? { snapshotError: result.snapshotError } : {}),
+            },
+        undefined,
+      );
+    } catch (error) {
+      // Snapshot failures are a structured outcome: clients decide whether
+      // to retry with force instead of sniffing error strings.
+      if (error instanceof WorktreeSnapshotError && !params.expectedOwnerId) {
+        respond(true, { removed: false, snapshotError: error.snapshotError }, undefined);
+        return;
+      }
+      respondError(respond, ErrorCodes.UNAVAILABLE, String(error), {
+        ...(error instanceof WorktreeSnapshotError
+          ? { details: { snapshotError: error.snapshotError } }
+          : {}),
+        retryable: false,
+      });
+    }
+  }),
+  "worktrees.restore": worktreeHandler(validateWorktreesRestoreParams, async (opts, params) => {
+    const { respond } = opts;
+    const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
+    if (commitGuard === null) {
+      return;
+    }
+    const id = normalizeOptionalString(params.id) ?? params.id;
+    const deadline = new AbortController();
+    const timer = setTimeout(
+      () => deadline.abort(new Error("Worktree restore timed out")),
+      WORKTREE_CHECKOUT_TIMEOUT_MS,
+    );
+    timer.unref();
+    try {
+      const record = await managedWorktrees.restore({
+        id,
+        ...(params.recoverExactState ? { recoverExactState: params.recoverExactState } : {}),
+        commitGuard,
+        signal: opts.signal ? AbortSignal.any([opts.signal, deadline.signal]) : deadline.signal,
+      });
+      commitGuard?.();
+      respond(true, publicWorktreeRecord(record, Boolean(params.expectedOwnerId)), undefined);
+    } catch (error) {
+      const reason = deadline.signal.aborted
+        ? "timeout"
+        : error instanceof WorktreeRestoreError
+          ? error.reason
+          : "restore-failed";
+      respondError(
+        respond,
+        ErrorCodes.UNAVAILABLE,
+        `Workspace restore failed (${reason}): ${String(error)}. Check the source repository, available disk space, and conflicting checkouts, then retry Restore or start a new conversation.`,
+        { details: { restoreReason: reason }, retryable: false },
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }),
+  "worktrees.branches": worktreeHandler(validateWorktreesBranchesParams, async (opts, params) => {
+    const { respond } = opts;
+    const repoRoot = await resolveAuthorizedRepoRoot(params.repoRoot, opts);
+    if (!repoRoot) {
+      return;
+    }
+    const cfg = opts.context.getRuntimeConfig();
+    const branches = runGitReadOperation(
+      {
+        type: "repository.branches",
+        input: { repoRoot, includeRepositoryStatus: params.includeRepositoryStatus },
       },
-    ),
-    "worktrees.retireSnapshot": worktreeHandler(
-      validateWorktreesRetireSnapshotParams,
-      async (opts, params) => {
-        const { respond } = opts;
-        const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
-        if (!commitGuard) {
-          return;
-        }
-        const { expectedOwnerId: _expectedOwnerId, ...input } = params;
-        const result = await service.retireSnapshot({ ...input, commitGuard, signal: opts.signal });
-        commitGuard();
-        respond(true, result, undefined);
+      {
+        snapshot: true,
+        signal: opts.signal,
+        onRefresh: () => {
+          if (
+            opts.client?.connId &&
+            opts.hasCurrentClientAuthority?.() !== false &&
+            opts.context.getRuntimeConfig() === cfg
+          ) {
+            opts.context.broadcastToConnIds(
+              "worktrees.branches.changed",
+              { repoRoot: params.repoRoot },
+              new Set([opts.client.connId]),
+            );
+          }
+        },
       },
-    ),
-  };
-}
-
-export const worktreesHandlers = createWorktreesHandlers(managedWorktrees);
+    );
+    const [result, clone] = await Promise.all([
+      branches,
+      params.includeRepositoryStatus
+        ? resolveRecordedProjectByRoot(repoRoot, { source: "cloned" })
+        : undefined,
+    ]);
+    respond(true, clone ? { ...result, requiresWorktree: true } : result, undefined);
+  }),
+  "worktrees.gc": worktreeHandler(validateWorktreesGcParams, async (opts, params) => {
+    const { respond, context } = opts;
+    const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
+    if (commitGuard === null) {
+      return;
+    }
+    commitGuard?.();
+    const receipt = requestGatewayWorktreeMaintenance(context.getRuntimeConfig, {
+      jobId: params.jobId,
+      retryDeferred: params.retryDeferred,
+    });
+    respond(true, receipt, undefined);
+  }),
+  "worktrees.recoverFile": worktreeHandler(
+    validateWorktreesRecoverFileParams,
+    async (opts, params) => {
+      const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
+      if (!commitGuard) {
+        return;
+      }
+      const { recoverLocalWorkspaceFile } =
+        await import("../worker-environments/local-workspace-recovery.js");
+      const result = await recoverLocalWorkspaceFile({
+        ...params,
+        cfg: opts.context.getRuntimeConfig(),
+        signal: opts.signal,
+        assertCurrent: commitGuard,
+      });
+      commitGuard();
+      opts.respond(true, result, undefined);
+    },
+  ),
+  "worktrees.recoverRemoval": worktreeHandler(
+    validateWorktreesRecoverRemovalParams,
+    async (opts, params) => {
+      const { respond } = opts;
+      const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
+      if (!commitGuard) {
+        return;
+      }
+      const result = await managedWorktrees.recoverRemoval({
+        id: normalizeOptionalString(params.id) ?? params.id,
+        snapshot: params.snapshot,
+        commitGuard,
+        signal: opts.signal,
+      });
+      commitGuard();
+      respond(true, result, undefined);
+    },
+  ),
+  "worktrees.retireSnapshot": worktreeHandler(
+    validateWorktreesRetireSnapshotParams,
+    async (opts, params) => {
+      const { respond } = opts;
+      const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
+      if (!commitGuard) {
+        return;
+      }
+      const { expectedOwnerId: _expectedOwnerId, ...input } = params;
+      const result = await managedWorktrees.retireSnapshot({
+        ...input,
+        commitGuard,
+        signal: opts.signal,
+      });
+      commitGuard();
+      respond(true, result, undefined);
+    },
+  ),
+};

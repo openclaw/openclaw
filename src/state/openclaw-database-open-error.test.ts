@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -17,19 +16,35 @@ import {
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const roots = createTempDirTracker();
-const observed = new Set<DatabaseSync>();
+const observed: DatabaseSync[] = [];
 const runTransaction = transactions.runSqliteImmediateTransactionSync;
+
+function failTransaction(pathname: string, primary: Error) {
+  return vi
+    .spyOn(transactions, "runSqliteImmediateTransactionSync")
+    .mockImplementation((db, operation, options) => {
+      if (db.location() !== pathname) {
+        return runTransaction(db, operation, options);
+      }
+      observed.push(db);
+      const loseTransaction = () => {
+        expect(db.isTransaction).toBe(true);
+        db.exec("ROLLBACK");
+        throw primary;
+      };
+      return runTransaction(db, loseTransaction, options);
+    });
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  for (const db of observed) {
+  for (const db of observed.splice(0)) {
     if (db.isOpen) {
       db.close();
     }
   }
-  observed.clear();
   roots.cleanup();
 });
 
@@ -43,50 +58,26 @@ it.each(["state", "agent"] as const)(
         ? resolveOpenClawStateSqlitePath(env)
         : resolveOpenClawAgentSqlitePath(options);
     const primary = new Error("synthetic schema transaction lost its transaction");
-    let intercepted = 0;
-    const transaction = vi
-      .spyOn(transactions, "runSqliteImmediateTransactionSync")
-      .mockImplementation((db, operation, transactionOptions) => {
-        if (db.location() !== pathname) {
-          return runTransaction(db, operation, transactionOptions);
-        }
-        intercepted += 1;
-        observed.add(db);
-        return runTransaction(
-          db,
-          () => {
-            expect(db.isTransaction).toBe(true);
-            db.exec("ROLLBACK");
-            throw primary;
-          },
-          transactionOptions,
-        );
-      });
+    const transaction = failTransaction(pathname, primary);
     const open = () =>
       kind === "state" ? openOpenClawStateDatabase({ env }) : openOpenClawAgentDatabase(options);
+    let failure: unknown;
     try {
-      let failure: unknown;
-      try {
-        open();
-      } catch (error) {
-        failure = error;
-      }
-      expect(intercepted).toBe(1);
-      expect(observed.size).toBe(1);
-      const [failedDb] = observed;
-      assert(failedDb);
-      expect(failedDb.isOpen).toBe(false);
-      expect(failure).toBe(primary);
-      if (kind === "agent") {
-        expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
-      }
-      transaction.mockRestore();
-      const fresh = open();
-      expect(fresh.db === failedDb).toBe(false);
-      expect(fresh.db.isOpen).toBe(true);
-    } finally {
-      transaction.mockRestore();
+      open();
+    } catch (error) {
+      failure = error;
     }
+    expect(failure).toBe(primary);
+    expect(observed).toHaveLength(1);
+    const [failedDb] = observed;
+    expect(failedDb).toMatchObject({ isOpen: false });
+    if (kind === "agent") {
+      expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+    }
+    transaction.mockRestore();
+    const fresh = open();
+    expect(fresh.db === failedDb).toBe(false);
+    expect(fresh.db.isOpen).toBe(true);
   },
 );
 
@@ -96,36 +87,12 @@ it("returns doctor repair warnings when rollback cleanup already closed the stat
   openOpenClawStateDatabase({ env });
   closeOpenClawStateDatabaseForTest();
   const primary = new Error("synthetic repair transaction lost its transaction");
-  let intercepted = 0;
-  const transaction = vi
-    .spyOn(transactions, "runSqliteImmediateTransactionSync")
-    .mockImplementation((db, operation, transactionOptions) => {
-      if (db.location() !== pathname) {
-        return runTransaction(db, operation, transactionOptions);
-      }
-      intercepted += 1;
-      observed.add(db);
-      return runTransaction(
-        db,
-        () => {
-          expect(db.isTransaction).toBe(true);
-          db.exec("ROLLBACK");
-          throw primary;
-        },
-        transactionOptions,
-      );
-    });
-  try {
-    const result = repairOpenClawStateDatabaseSchema({ env });
-    expect(intercepted).toBe(1);
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
-    expect(result.warnings[0]).toContain("synthetic repair transaction lost its transaction");
-    const [failedDb] = observed;
-    assert(failedDb);
-    expect(failedDb.isOpen).toBe(false);
-  } finally {
-    transaction.mockRestore();
-  }
+  failTransaction(pathname, primary);
+  const result = repairOpenClawStateDatabaseSchema({ env });
+  expect(observed).toHaveLength(1);
+  expect(result.changes).toEqual([]);
+  expect(result.warnings).toEqual([expect.stringContaining(primary.message)]);
+  expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
+  const [failedDb] = observed;
+  expect(failedDb).toMatchObject({ isOpen: false });
 });

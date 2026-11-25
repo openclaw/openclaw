@@ -1,7 +1,9 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
+import type { AgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { ResponsePrefixContext } from "../../auto-reply/reply/response-prefix-template.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
 import {
@@ -29,7 +31,6 @@ import type {
   OutboundMessageGatewayOptionsInput,
 } from "./message-gateway-options.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
-import type { OutboundMirror } from "./mirror.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 export type MessageActionGateway = Omit<
@@ -39,7 +40,6 @@ export type MessageActionGateway = Omit<
   resolveAgentRuntimeIdentityToken?: (
     context?: OutboundGatewayRequestContext,
   ) => Promise<string | undefined>;
-  terminalSourceReplyReceiptOwner?: "caller";
   clientName: GatewayClientName;
   clientDisplayName?: string;
   mode: GatewayClientMode;
@@ -50,6 +50,7 @@ export type MessageActionInput = Pick<
   | "cfg"
   | "runId"
   | "executionIdentityToken"
+  | "gatewayClientScopes"
   | "mediaAccess"
   | "deps"
   | "preparedMessageId"
@@ -69,6 +70,8 @@ export type MessageActionInput = Pick<
   progressSnapshot?: ChannelProgressDraftCompositorSnapshot;
   /** @internal Identifies model-authored calls for lossy input normalization. */
   actionOrigin?: "message-tool";
+  /** @internal Selected model of the calling run, for model tokens in responsePrefix. */
+  responsePrefixContext?: ResponsePrefixContext;
   defaultAccountId?: string;
   requesterAccountId?: string | null;
   requesterSenderId?: string | null;
@@ -78,6 +81,8 @@ export type MessageActionInput = Pick<
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   workspaceDir?: string;
+  /** @internal Captured creation readiness; never persisted or sent to channel adapters. */
+  workspaceReadiness?: AgentWorkspaceReadiness;
   /** @internal Host-owned route plan computed before broadcast SecretRef resolution. */
   broadcastAccountPlan?: MessageBroadcastAccountPlan;
   /**
@@ -91,13 +96,9 @@ export type MessageActionInput = Pick<
   workspaceMediaAccess?: OutboundMediaAccess;
   gateway?: MessageActionGateway;
   sessionKey?: string;
-  /** @internal Durable session key for source-reply transcript and receipt state. */
+  /** @internal Durable session key for source-reply transcript mirrors. */
   sourceReplySessionKey?: string;
   agentId?: string;
-  /** Caller owns durable outbound context and must avoid the generic delivery mirror. */
-  suppressTranscriptMirror?: boolean;
-  /** @internal Explicit durable transcript destination owned by the caller. */
-  transcriptMirror?: OutboundMirror;
   /** @internal The Gateway owns this call and may use its active gateway-mode adapter directly. */
   gatewayOwnedDelivery?: boolean;
   /** @internal Bypass provider-native action dispatch so core durable delivery owns the send. */
@@ -148,6 +149,8 @@ export type MessageActionResult =
       channel: ChannelId;
       action: "send";
       to: string;
+      /** Account selected by the message routing owner, not the original tool arguments. */
+      accountId?: string;
       handledBy: "plugin" | "core" | "internal-source";
       payload: unknown;
       normalization?: MessageActionNormalization;
@@ -287,6 +290,9 @@ export function createChannelActionContext(params: {
     cfg: params.ctx.cfg,
     params: params.ctx.params,
     ...(params.reply ? { reply: params.reply } : {}),
+    // The message tool owns the turn's cancellation; hand it to channel actions so
+    // their transports can drop queued work instead of waiting out a rate limit.
+    ...(params.ctx.abortSignal ? { abortSignal: params.ctx.abortSignal } : {}),
     ...(mediaAccess ? { mediaAccess } : {}),
     mediaLocalRoots: mediaAccess?.localRoots,
     mediaReadFile: mediaAccess?.readFile,
@@ -302,8 +308,10 @@ export function createChannelActionContext(params: {
     inboundEventKind: params.ctx.input.inboundEventKind,
     agentId: params.ctx.agentId,
     gateway: params.ctx.gateway,
+    gatewayClientScopes: params.ctx.input.gatewayClientScopes,
     toolContext: params.ctx.input.toolContext,
     dryRun: params.ctx.dryRun,
+    deliveryRetryOwner: params.ctx.input.actionOrigin === "message-tool" ? "caller" : undefined,
     onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
     assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
     ...(params.action === "send" ? { skipQueue: params.ctx.input.skipQueue } : {}),

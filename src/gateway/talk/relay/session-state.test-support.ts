@@ -1,7 +1,6 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { testing as embeddedRunTesting } from "../../../agents/embedded-agent-runner/runs.test-support.js";
-import { resetClientVoiceConfirmationStateForTest } from "../../../talk/client-voice-confirmation.test-support.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import {
@@ -15,7 +14,10 @@ import {
 import { deletePersistentSessionStoreRows } from "../../test/persistent-session-store.test-support.js";
 import { drainRelayTestSessions } from "./index.test-support.js";
 
-export function usePersistentRelayTestState(activeRelaySessions: Map<string, string>) {
+export function usePersistentRelayTestState(
+  activeRelaySessions: Map<string, string>,
+  settleTestRuns?: () => Promise<void>,
+) {
   let testState: OpenClawTestState;
 
   beforeAll(async () => {
@@ -40,6 +42,7 @@ export function usePersistentRelayTestState(activeRelaySessions: Map<string, str
     try {
       await drainRelayTestSessions(activeRelaySessions);
     } finally {
+      await settleTestRuns?.();
       activeRelaySessions.clear();
     }
   }
@@ -56,7 +59,6 @@ export function usePersistentRelayTestState(activeRelaySessions: Map<string, str
     } finally {
       vi.useRealTimers();
       clientVoiceSessionTesting.reset();
-      resetClientVoiceConfirmationStateForTest();
       embeddedRunTesting.resetActiveEmbeddedRuns();
       await drainSessionStateForTest({ stateDir: testState.stateDir, rootPath: testState.root });
       await deletePersistentSessionStoreRows({

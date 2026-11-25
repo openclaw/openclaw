@@ -96,6 +96,7 @@ export const intentSchema = z
     }),
     z.strictObject({
       kind: z.enum([
+        "publication-not-started",
         "superseded-by-manual-install",
         "recovery-lease-identity-changed",
         "recovery-lease-missing",

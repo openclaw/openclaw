@@ -22,11 +22,7 @@ export function bindSessionRowProjection<T extends object>(
   const binding =
     projections.get(context)?.binding ??
     new SessionRowProjectionBinding(context, (query) => {
-      const target = projections.get(context)?.read()?.sharingTarget(query);
-      // The projection owns store-locator mapping; session-key aliases still require an exact read.
-      return target?.canonicalKey === query.key && target.agentId === query.agentId
-        ? target.entry
-        : undefined;
+      return projections.get(context)?.read()?.readCapabilityEntry(query);
     });
   projections.set(context, { read, binding });
   return Object.assign(context, { sessionRowProjectionOwner: binding });

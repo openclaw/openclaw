@@ -1,14 +1,17 @@
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareEmbeddedRunSession } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
-import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
-import { bindReplyOperationDatabaseAdmission } from "../../auto-reply/reply/reply-turn-database-admission.js";
+import { bindReplyAdmissionRelease } from "../../auto-reply/reply/reply-turn-admission-lifecycle.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import * as readOnly from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { loadAgentEntryReadOperations } from "../../state/openclaw-agent-execution-operations.js";
+import { createAgentWorkerTestLoaders } from "../../state/openclaw-agent-execution-operations.test-support.js";
+import * as executionOwner from "../../state/openclaw-agent-execution.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
@@ -19,9 +22,141 @@ import { readTranscriptContextVersionInTransaction } from "./session-accessor.sq
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
-it("reads cold entry, participant and membership facts in one statement without a transaction", async () => {
+async function entryReader(
+  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  env: NodeJS.ProcessEnv,
+) {
+  const context: AgentWorkerOperationContext = {
+    open: () => database,
+    options: { agentId: database.agentId, path: database.path, env },
+    admit: () => {},
+    writeTransaction: () => {
+      throw new Error("A fact read cannot write");
+    },
+  };
+  const operations = await createAgentWorkerTestLoaders(context)["session.entry.read"]();
+  return (request: Parameters<(typeof operations)["session.entry.read"]>[0]) =>
+    operations["session.entry.read"](request, context);
+}
+
+it("retains complete reply-initialization cohorts and observes parent edits, reparenting and creation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:reply-child";
+    const parentKey = "agent:main:reply-parent";
+    const replacementParentKey = "agent:main:reply-replacement-parent";
+    const missingParentKey = "agent:main:reply-missing-parent";
+    const scope = { agentId: "main", env, storePath: database.path, sessionKey };
+    const child = {
+      sessionId: "reply-child",
+      lifecycleRevision: "original",
+      updatedAt: 1,
+      parentSessionKey: parentKey,
+    };
+    replaceSessionEntrySync(scope, child);
+    replaceSessionEntrySync(
+      { ...scope, sessionKey: parentKey },
+      { sessionId: "reply-parent", updatedAt: 1, label: "original parent" },
+    );
+    replaceSessionEntrySync(
+      { ...scope, sessionKey: replacementParentKey },
+      { sessionId: "reply-replacement-parent", updatedAt: 1, label: "replacement parent" },
+    );
+    let entryRequests = 0;
+    const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
+    const requests = vi
+      .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
+      .mockImplementation((...args) => {
+        const execution = capture(...args);
+        return {
+          ...execution,
+          get fileIdentity() {
+            return execution.fileIdentity;
+          },
+          runExisting: (source, operation, options) =>
+            execution.runExisting(
+              source,
+              (worker) =>
+                operation({
+                  execute: (command, requestOptions) => {
+                    if (command.type === "session.entry.read") {
+                      entryRequests += 1;
+                    }
+                    return worker.execute(command, requestOptions);
+                  },
+                }),
+              options,
+            ),
+        };
+      });
+    const admission = await loadSessionEntryForAdmission(scope);
+    try {
+      const claim = admission.databaseClaim;
+      if (!("reader" in claim) || !claim.reader) {
+        throw new Error("Expected an admitted reply-initialization reader");
+      }
+      const reader = claim.reader;
+      const read = () =>
+        reader.withRead(
+          { sessionKeys: [sessionKey], replyInitializationSessionKey: sessionKey },
+          () => {},
+          (result, assertCurrent) => {
+            assertCurrent();
+            return result.entries;
+          },
+        );
+      const original = [
+        { sessionKey, entry: { parentSessionKey: parentKey } },
+        { sessionKey: parentKey, entry: { label: "original parent" } },
+      ];
+      expect(await read()).toMatchObject(original);
+      entryRequests = 0;
+      expect(await read()).toMatchObject(original);
+      expect(entryRequests).toBe(0);
+
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: parentKey },
+        { sessionId: "reply-parent", updatedAt: 2, label: "updated parent" },
+      );
+      expect(await read()).toMatchObject([
+        { sessionKey, entry: { parentSessionKey: parentKey } },
+        { sessionKey: parentKey, entry: { label: "updated parent" } },
+      ]);
+      replaceSessionEntrySync(scope, { ...child, parentSessionKey: replacementParentKey });
+      expect(await read()).toMatchObject([
+        { sessionKey, entry: { parentSessionKey: replacementParentKey } },
+        { sessionKey: replacementParentKey, entry: { label: "replacement parent" } },
+      ]);
+      entryRequests = 0;
+      expect((await read()).map((row) => row.sessionKey)).toEqual([
+        sessionKey,
+        replacementParentKey,
+      ]);
+      expect(entryRequests).toBe(0);
+
+      replaceSessionEntrySync(scope, { ...child, parentSessionKey: missingParentKey });
+      expect((await read()).map((row) => row.sessionKey)).toEqual([sessionKey]);
+      entryRequests = 0;
+      expect((await read()).map((row) => row.sessionKey)).toEqual([sessionKey]);
+      expect(entryRequests).toBe(0);
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: missingParentKey },
+        { sessionId: "reply-created-parent", updatedAt: 3, label: "newly created parent" },
+      );
+      expect(await read()).toMatchObject([
+        { sessionKey, entry: { parentSessionKey: missingParentKey } },
+        { sessionKey: missingParentKey, entry: { label: "newly created parent" } },
+      ]);
+    } finally {
+      await admission.databaseClaim.release();
+      requests.mockRestore();
+    }
+  });
+});
+
+it.each([false, true])("reads complete cold entry facts with lifecycle=%s", async (lifecycle) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:fused";
@@ -29,6 +164,7 @@ it("reads cold entry, participant and membership facts in one statement without 
     replaceSessionEntrySync(scope, {
       sessionId: "fused",
       updatedAt: 1,
+      sessionStartedAt: 1,
       skillsSnapshot: { prompt: "cold prompt", skills: [] },
     });
     const contribution = {
@@ -38,31 +174,31 @@ it("reads cold entry, participant and membership facts in one statement without 
     };
     recordSessionParticipant(scope, contribution);
     addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 3 });
-    const operations = await loadAgentEntryReadOperations();
-    const context: AgentWorkerOperationContext = {
-      open: () => database,
-      options: { agentId: "main", path: database.path, env },
-      admit: () => {},
-      writeTransaction: () => {
-        throw new Error("A fact read cannot write");
-      },
-    };
+    const readEntry = await entryReader(database, env);
     const read = (snapshotFields?: SessionEntryCohortRequest["snapshotFields"]) =>
-      operations["session.entry.read"](
-        {
-          sessionKeys: [sessionKey, "agent:main:absent"],
-          snapshotFields,
-          includeMembers: true,
-          includeParticipantRecords: true,
-        },
-        context,
-      );
-    const statements = trackSqliteStatementExecutions(database.db, ["all"], () => "all");
+      checkedRead({
+        sessionKeys: [sessionKey, "agent:main:absent"],
+        snapshotFields,
+        includeMembers: true,
+        includeParticipantRecords: true,
+        ...(lifecycle ? { lifecycleSessionKey: sessionKey } : {}),
+      });
+    const statements = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["all"],
+      () => "all",
+    );
     const transactions = vi.spyOn(database.db, "exec");
+    const checkedRead = (request: SessionEntryCohortRequest) => {
+      statements.counts.all = 0;
+      transactions.mockClear();
+      const result = readEntry(request);
+      expect(statements.counts.all).toBe(1);
+      expect(transactions.mock.calls).toEqual([]);
+      return result;
+    };
     try {
       const first = read();
-      expect(statements.counts.all).toBe(1);
-      expect(transactions).not.toHaveBeenCalled();
       expect(first.entries).toMatchObject([
         {
           sessionKey,
@@ -88,20 +224,35 @@ it("reads cold entry, participant and membership facts in one statement without 
         ],
       });
       expect(first.source.databaseIdentity).toBe(first.databaseIdentity.identity);
-      statements.counts.all = 0;
+      expect(first.lifecycleTimestamps).toEqual(
+        lifecycle ? { sessionStartedAt: 1, lastInteractionAt: undefined } : {},
+      );
       expect(read([]).entries[0]?.entry.skillsSnapshot).toBeUndefined();
-      expect(statements.counts.all).toBe(1);
+      const target = checkedRead({
+        sessionKeys: [sessionKey],
+        runtimeTarget: { agentId: "main", sessionId: "fused", sessionKey },
+      });
+      expect(target.runtimeTarget).toEqual({
+        agentId: "main",
+        sessionId: "fused",
+        sessionKey,
+        storePath: database.path,
+      });
       recordSessionParticipant(scope, { ...contribution, promptedAt: 4 });
       removeSessionMember(scope, "member");
-      statements.counts.all = 0;
-      transactions.mockClear();
+      replaceSessionEntrySync(scope, {
+        sessionId: "fused",
+        updatedAt: 5,
+        sessionStartedAt: 5,
+      });
       const next = read();
       expect(next.members).toEqual({ [sessionKey]: [] });
       expect(next.participantRecords?.[sessionKey]).toMatchObject([
         { contributionCount: 2, firstPromptedAt: 2, lastPromptedAt: 4 },
       ]);
-      expect(statements.counts.all).toBe(1);
-      expect(transactions).not.toHaveBeenCalled();
+      expect(next.lifecycleTimestamps).toEqual(
+        lifecycle ? { sessionStartedAt: 5, lastInteractionAt: undefined } : {},
+      );
       database.db
         .prepare("UPDATE session_participants SET contribution_count = ? WHERE session_key = ?")
         .run(9_007_199_254_740_992n, sessionKey);
@@ -145,22 +296,9 @@ it("prepares bounded facts on one admitted source and refreshes after sibling an
     });
     replaceTranscriptEventsSync(scope, [
       { type: "session", id: "cohort", version: 3, timestamp: 123 },
-      {
-        type: "message",
-        id: "question",
-        parentId: null,
-        message: { role: "user", content: "cohort input" },
-      },
+      messageEvent("question", null, { role: "user", content: "cohort input" }),
     ]);
-    const operations = await loadAgentEntryReadOperations();
-    const context: AgentWorkerOperationContext = {
-      open: () => database,
-      options: { agentId: "main", path: database.path, env },
-      admit: () => {},
-      writeTransaction: () => {
-        throw new Error("Cohort reads cannot open a write transaction");
-      },
-    };
+    const readEntry = await entryReader(database, env);
     const request: SessionEntryCohortRequest = {
       sessionKeys: [sessionKey],
       runtimeTarget: { agentId: "logical", sessionId: "retained", sessionKey },
@@ -178,7 +316,7 @@ it("prepares bounded facts on one admitted source and refreshes after sibling an
         includeWatermark: true,
       },
     };
-    const read = (input = request) => operations["session.entry.read"](input, context);
+    const read = (input = request) => readEntry(input);
     const first = read();
     expect(first.coldArchives).toEqual([]);
     expect(first.entries.map(({ sessionKey: key }) => key)).toEqual([sessionKey, parentKey]);
@@ -206,14 +344,47 @@ it("prepares bounded facts on one admitted source and refreshes after sibling an
       transcript: {
         sessionKey,
         entryIds: ["question"],
+        includeSession: true,
+        contextAuthority: true,
         contextValidation: { version: currentVersion },
         replayValidation: { allowInitial: false, expectedLifecycleRevision: "original" },
       },
     };
-    expect(read(replayRequest).transcript).toMatchObject({
-      contextValidated: true,
-      anchors: [{ entryId: "question" }],
-    });
+    const repeated = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["entry", "participants"],
+      (sql) =>
+        sql.includes('from "session_nodes"') && !sql.includes('"actor_')
+          ? "entry"
+          : sql.startsWith('select "session_key", "identity_namespace"')
+            ? "participants"
+            : null,
+    );
+    try {
+      expect(read(replayRequest).transcript).toMatchObject({
+        contextValidated: true,
+        session: { sessionId: "cohort", lifecycleRevision: "original" },
+        contextAuthority: { entry: { sessionId: "cohort", lifecycleRevision: "original" } },
+        anchors: [{ entryId: "question" }],
+      });
+      expect(repeated.counts.participants).toBe(0);
+      // The cohort loads its row once; anchors consume that same snapshot.
+      expect(repeated.counts.entry).toBeLessThanOrEqual(1);
+      writeSessionEntry(database, sessionKey, { ...entry, lifecycleRevision: "updated" });
+      expect(() => read(replayRequest)).toThrow("writer claim");
+      expect(
+        read({
+          ...replayRequest,
+          transcript: {
+            ...replayRequest.transcript!,
+            replayValidation: { allowInitial: false, expectedLifecycleRevision: "updated" },
+          },
+        }).transcript?.session?.lifecycleRevision,
+      ).toBe("updated");
+      writeSessionEntry(database, sessionKey, entry);
+    } finally {
+      repeated.restore();
+    }
     expect(
       read({
         ...replayRequest,
@@ -264,7 +435,7 @@ it("prepares bounded facts on one admitted source and refreshes after sibling an
         throw new Error("An admitted cohort must not open a second read connection");
       });
     // Compare warm standalone reads after their original canonical admission has settled.
-    operations["session.entry.read"]({ sessionKey }, context);
+    readEntry({ sessionKey });
     const transactionCommands: string[] = [];
     const exec = database.db.exec.bind(database.db);
     const transactions = vi.spyOn(database.db, "exec").mockImplementation((statement) => {
@@ -273,15 +444,18 @@ it("prepares bounded facts on one admitted source and refreshes after sibling an
       }
       return exec(statement);
     });
-    const sql = trackSqliteStatementExecutions(database.db, ["fresh", "authSchema"], (statement) =>
-      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(statement.trim())
-        ? "fresh"
-        : /^SELECT type FROM sqlite_master WHERE name = \?$/iu.test(statement.trim())
-          ? "authSchema"
-          : null,
+    const sql = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["fresh", "authSchema"],
+      (statement) =>
+        /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(statement.trim())
+          ? "fresh"
+          : /^SELECT type FROM sqlite_master WHERE name = \?$/iu.test(statement.trim())
+            ? "authSchema"
+            : null,
     );
     try {
-      const standalone = operations["session.entry.read"]({ sessionKey }, context);
+      const standalone = readEntry({ sessionKey });
       expect(standalone.entries).toMatchObject([{ sessionKey, entry: { sessionId: "cohort" } }]);
       expect(standalone.source).toEqual(first.source);
       expect(standalone.databaseIdentity).toEqual(first.databaseIdentity);
@@ -361,16 +535,17 @@ it("prepares the admitted run target with its entry and refuses source loss afte
     replaceSessionEntrySync(scope, { sessionId: "bootstrap", updatedAt: 1 });
     const admission = await loadSessionEntryForAdmission(scope);
     const operation = createTestReplyOperation({ sessionKey, sessionId: "bootstrap" });
-    const bound = bindReplyOperationDatabaseAdmission(
+    bindReplyAdmissionRelease({
       operation,
-      { sessionKey },
-      undefined,
-      admission.databaseClaim,
-    );
+      sessionKey,
+      sessionId: operation.sessionId,
+      admission: undefined,
+      databaseClaim: admission.databaseClaim,
+    });
     const reader = getReplyOperationSessionReader(operation);
     if (!reader) {
-      await admission.databaseClaim.release();
       operation.complete();
+      await waitForReplyRunSuccessorAdmission(operation.key, null);
       throw new Error("Expected an admitted bootstrap reader");
     }
     const controller = new AbortController();
@@ -395,21 +570,6 @@ it("prepares the admitted run target with its entry and refuses source loss afte
     };
     const withRead = reader.withRead.bind(reader);
     const reads = vi.spyOn(reader, "withRead");
-    const runRequest = projectionLane.pool.run.bind(projectionLane.pool);
-    let runtimeTargets = 0;
-    const requests = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
-      const reply = await runRequest(...args);
-      if (
-        reply.ok &&
-        typeof reply.value === "object" &&
-        reply.value !== null &&
-        "kind" in reply.value &&
-        reply.value.kind === "session-runtime-target"
-      ) {
-        runtimeTargets++;
-      }
-      return reply;
-    });
     try {
       const prepared = await prepareEmbeddedRunSession(input);
       expect(prepared.sessionAdmission?.entry.sessionId).toBe("bootstrap");
@@ -419,7 +579,6 @@ it("prepares the admitted run target with its entry and refuses source loss afte
         sessionKey,
       });
       expect(reads).toHaveBeenCalledTimes(1);
-      expect(runtimeTargets).toBe(0);
 
       const interrupted = new Error("bootstrap source ended after target preparation");
       reads.mockImplementationOnce(async (...args) => {
@@ -430,9 +589,11 @@ it("prepares the admitted run target with its entry and refuses source loss afte
       await expect(prepareEmbeddedRunSession(input)).rejects.toBe(interrupted);
     } finally {
       reads.mockRestore();
-      requests.mockRestore();
-      await bound.releaseWorkerDatabaseClaim?.();
       operation.complete();
+      expect(await waitForReplyRunSuccessorAdmission(operation.key, null)).toMatchObject({
+        settled: true,
+      });
+      expect(admission.databaseClaim.isCurrent()).toBe(false);
     }
   });
 });

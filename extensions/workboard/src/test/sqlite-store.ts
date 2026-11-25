@@ -9,8 +9,8 @@ import type {
   WorkboardWriteAuthority,
 } from "../persistence-types.js";
 import { workboardSqliteBackendEntrypoint } from "../sqlite-backend-entrypoint.test-support.js";
-import { createWorkboardSqliteStores } from "../sqlite-store.js";
 import { WorkboardStore } from "../store.js";
+import { createWorkboardSqliteStores } from "./database-config.js";
 
 const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);
 
@@ -53,9 +53,9 @@ function withCardHooks(
       await options.beforeCardWrite?.(key, value);
       return cards.registerIfUpdatedAt(key, value, expectedUpdatedAt);
     },
-    async claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now) {
+    async claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerSlot) {
       await options.beforeCardWrite?.(key, value);
-      return cards.claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerId, now);
+      return cards.claimIfOwnerAvailable(key, value, expectedUpdatedAt, ownerSlot);
     },
     async lookup(key) {
       await options.beforeCardLookup?.(key);

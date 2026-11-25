@@ -18,7 +18,9 @@ import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isSessionStateWatchAddress } from "./session-state-events.watch-address.js";
 import { acknowledgeSessionStateNoticesInWorker } from "./session-state-notice-acknowledgment.js";
+import { sessionStateNoticeText } from "./session-state-notice-text.js";
 
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
 const log = createSubsystemLogger("sessions/state-notices");
@@ -67,12 +69,10 @@ const notices = resolveGlobalSingleton(
             }
             const pending = peekSystemEventEntries(latest.sessionKey);
             // A user turn or store replacement can consume the notice before admission.
-            let remaining = items.filter((item) =>
+            const selected = items.filter((item) =>
               pending.some((event) => event.id === item.occurrence.id),
             );
-            while (remaining.length > 0) {
-              const selected = remaining;
-              let adopted = false;
+            if (selected.length > 0) {
               const target = combineSessionEventTargetsForHost(selected.map((item) => item.target));
               const occurrences = selected.map((item) => item.occurrence);
               const receipt = enqueueSessionEventForHost(
@@ -80,12 +80,12 @@ const notices = resolveGlobalSingleton(
                 {
                   agentId: latest.agentId,
                   sessionKey: latest.sessionKey,
-                  source: "session",
+                  source: "session_state",
+                  replyExpectation: "optional",
                   expectedTarget: target,
                   occurrences,
                   preserveOccurrenceOnRejection: true,
                   onAdopted: async () => {
-                    adopted = true;
                     await lifecycle.onAdopted();
                     await acknowledgeSessionStateNoticesInWorker(
                       latest.sessionKey,
@@ -103,18 +103,7 @@ const notices = resolveGlobalSingleton(
               if (outcome.status === "failed") {
                 throw new Error(outcome.error ?? "Session state notice failed");
               }
-              if (adopted || outcome.executionStarted || outcome.status !== "cancelled") {
-                return;
-              }
-              const current = peekSystemEventEntries(latest.sessionKey);
-              remaining = selected.filter((item) =>
-                current.some((event) => event.id === item.occurrence.id),
-              );
-              // Exact consumption may remove one member before adoption. Reconcile only
-              // a shrinking set of the same originals after the cancelled owner settles.
-              if (remaining.length === selected.length) {
-                return;
-              }
+              // Cancellation leaves unconsumed notices for an ordinary turn or the next sweep.
             }
           },
         });
@@ -158,13 +147,6 @@ export function decodeSessionStateNoticeContextKey(contextKey: string): string |
   }
 }
 
-// Terse on purpose: this line lands in model prompts, possibly repeatedly across
-// turns. Text must stay byte-stable per frozen watermark so queue dedupe holds,
-// and the reconciliation call must be self-contained (explicit target sessionKey).
-function sessionStateNoticeText(targetSessionKey: string, lastSeenSequence: number): string {
-  return `Session "${targetSessionKey}" changed (other actor). Reconcile before acting: session_status sessionKey "${targetSessionKey}" changesSince ${lastSeenSequence}.`;
-}
-
 export function enqueueSessionStateNotice(params: {
   watcherSessionKey: string;
   watcherStorePath?: string | null;
@@ -173,7 +155,7 @@ export function enqueueSessionStateNotice(params: {
   queueOnly?: boolean;
 }): void {
   const agentId = parseAgentSessionKey(params.watcherSessionKey)?.agentId;
-  if (!agentId) {
+  if (!agentId || !isSessionStateWatchAddress(params)) {
     return;
   }
   const storePath = params.watcherStorePath ?? null;

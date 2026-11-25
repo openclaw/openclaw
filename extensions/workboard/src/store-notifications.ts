@@ -3,12 +3,7 @@ import type {
   WorkboardNotificationSubscription,
 } from "@openclaw/workboard-contract";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import {
-  cardRunId,
-  cardSessionKey,
-  compareNotifications,
-  notificationSequence,
-} from "./store-card-helpers.js";
+import { cardRunId, cardSessionKey, compareNotifications } from "./store-card-helpers.js";
 import type {
   WorkboardNotificationEventsInput,
   WorkboardNotificationListOptions,
@@ -38,10 +33,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     const boardId = normalizeBoardId(input.boardId);
     const cardId = normalizeBoundedString(input.cardId, undefined, 120, "card id");
     const subscriptions = (await this.subscriptionStore.entries({ boardId, cardId }))
-      .flatMap(({ value }) =>
-        value?.version === 1 && value.subscription?.id ? [value.subscription] : [],
-      )
-      .filter((subscription) => !boardId || subscription.boardId === boardId)
+      .map(({ value }) => value.subscription)
       .filter((subscription) => !cardId || subscription.cardId === cardId)
       .toSorted((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
     return { subscriptions };
@@ -159,7 +151,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
         return result;
       }
       const last = result.events.at(-1)!;
-      const lastSequence = notificationSequence(last);
+      const lastSequence = last.sequence;
       const subscription: WorkboardNotificationSubscription = {
         ...result.subscription,
         lastEventAt: last.createdAt,

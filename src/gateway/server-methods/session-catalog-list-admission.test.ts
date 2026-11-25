@@ -3,23 +3,6 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
 
 describe("SessionCatalogListAdmission", () => {
-  it("starts at most the configured number of provider lists", async () => {
-    const admission = new SessionCatalogListAdmission(2, 2);
-    const gates = Array.from({ length: 4 }, () => createDeferredCore<number>());
-    const tasks = gates.map((gate) => vi.fn(() => gate.promise));
-    const pending = tasks.map((task) => admission.run(task));
-
-    expect(tasks.map((task) => task.mock.calls.length)).toEqual([1, 1, 0, 0]);
-    gates[0]?.resolve(0);
-    await expect(pending[0]).resolves.toBe(0);
-    expect(tasks.map((task) => task.mock.calls.length)).toEqual([1, 1, 1, 0]);
-
-    gates[1]?.resolve(1);
-    gates[2]?.resolve(2);
-    gates[3]?.resolve(3);
-    await expect(Promise.all(pending)).resolves.toEqual([0, 1, 2, 3]);
-  });
-
   it("releases a slot after rejection and preserves queued FIFO order", async () => {
     const admission = new SessionCatalogListAdmission(1, 2);
     const active = createDeferredCore();

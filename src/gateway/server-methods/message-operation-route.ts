@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizeOptionalAccountId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withEffectPreparation } from "../../shared/effect-authority.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -17,7 +16,7 @@ import {
   runGatewayInflightWork,
   type GatewayInflightResult as InflightResult,
 } from "./inflight.js";
-import type { createMessageActionRuntimeAuthority } from "./message-action-context.js";
+import type { MessageActionCallerAuthority } from "./message-action-context.js";
 import { resolveMessageOperationAccountRoute } from "./send-account-route.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -245,10 +244,7 @@ export async function withMessageOperationRoute<
   bindingAccountIds: readonly unknown[];
   routeAccountIds: (binding: MessageOperationRouteBinding | undefined) => readonly unknown[];
   conflictMessage: string;
-  authority: Pick<
-    ReturnType<typeof createMessageActionRuntimeAuthority>,
-    "agentRuntimeAuthority" | "prepareEffect"
-  >;
+  authority: MessageActionCallerAuthority;
   /** Input-only policy never replaces an already accepted receipt. */
   assertNewInputAllowed?: () => void;
   /** Ephemeral scheduled reads must consult current provider policy on every invocation. */
@@ -263,8 +259,7 @@ export async function withMessageOperationRoute<
     },
   ) => Promise<InflightResult>;
 }): Promise<void> {
-  const authorize = params.authority.agentRuntimeAuthority.hasActive;
-  const prepareEffect = params.authority.prepareEffect;
+  const authorize = params.authority.authorize;
   if (params.replayResults === false) {
     const resolved = await params.resolveChannel(params.requestChannel);
     if (!resolved) {
@@ -278,20 +273,18 @@ export async function withMessageOperationRoute<
       });
       const assertCurrent = () => {
         if (!authorize()) {
-          throw new Error("agent runtime authority is no longer active");
+          throw new Error("The message turn has ended. Start a new turn to retry.");
         }
       };
       assertCurrent();
       params.assertNewInputAllowed?.();
-      const result = await withEffectPreparation(prepareEffect, () =>
-        params.work({
-          ...resolved,
-          accountId: accountRoute.effectiveAccountId,
-          idem: params.idempotencyKey,
-          dedupeKey: undefined,
-          authorize,
-        }),
-      );
+      const result = await params.work({
+        ...resolved,
+        accountId: accountRoute.effectiveAccountId,
+        idem: params.idempotencyKey,
+        dedupeKey: undefined,
+        authorize,
+      });
       assertCurrent();
       params.respond(result.ok, result.payload, result.error, result.meta);
     } catch (error) {
@@ -374,17 +367,19 @@ export async function withMessageOperationRoute<
       await inflight.done;
       return;
     }
-    // Routing and attachment preparation may yield while the admitted run
-    // closes. Revalidate before any provider-visible message side effect.
-    if (!authorize()) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
-      );
-      return;
-    }
     try {
+      // Routing and attachment preparation may yield while the caller's turn closes.
+      if (!authorize()) {
+        params.respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "The message turn has ended. Start a new turn to retry.",
+          ),
+        );
+        return;
+      }
       params.assertNewInputAllowed?.();
     } catch (error) {
       respondMessageOperationAdmissionError({
@@ -401,22 +396,22 @@ export async function withMessageOperationRoute<
       requestScope: accountRoute.requestScope,
       retainUntilSettled: true,
     });
-    const work = withEffectPreparation(prepareEffect, () =>
-      params.work({
+    const work = params
+      .work({
         ...resolved,
         accountId: accountRoute.accountId,
         idem: inflight.idem,
         dedupeKey: inflight.dedupeKey,
         authorize,
-      }),
-    ).finally(() => {
-      updateMessageOperationRouteBinding({
-        context: params.context,
-        binding,
-        requestScope: accountRoute.requestScope,
-        retainUntilSettled: false,
+      })
+      .finally(() => {
+        updateMessageOperationRouteBinding({
+          context: params.context,
+          binding,
+          requestScope: accountRoute.requestScope,
+          retainUntilSettled: false,
+        });
       });
-    });
     const inflightWork = runGatewayInflightWork({ ...inflight, work, respond: params.respond });
     releaseLock();
     await inflightWork;

@@ -4,6 +4,7 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DeferredHookWake } from "../../cron/wake-contract.js";
 import {
   captureGatewayRootWorkReleaseObserver,
   getActiveGatewayRootWorkCount,
@@ -16,7 +17,7 @@ import { useSpawnBrokerTestFixture } from "../../process/spawn-broker/host.test-
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
-const enqueueSystemEventMock = vi.fn();
+const deferHookWakeMock = vi.fn<DeferredHookWake>();
 const captureSessionEventTargetMock = vi.fn(async (agentId: string, sessionKey: string) => ({
   agentId,
   sessionKey,
@@ -40,17 +41,11 @@ const loadConfigMock = vi.fn(mainRosterConfig);
 const logHooksInfoMock = vi.fn();
 const logHooksWarnMock = vi.fn();
 const validateExplicitMessageAccountSelectionMock = vi.fn(
-  ({ accountId }: { accountId?: unknown }) => accountId as string | undefined,
+  ({ accountId }: { cfg: OpenClawConfig; accountId?: unknown }) => accountId as string | undefined,
 );
 const resolveOutboundChannelPluginMock = vi.fn(() => ({ id: "telegram" }));
 const resolveChannelDefaultAccountIdMock = vi.fn(() => "default");
 
-vi.mock("../../infra/system-events.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
-  enqueueSystemEvent: enqueueSystemEventMock,
-  enqueueSystemEventWithReceipt: (...args: unknown[]) =>
-    enqueueSystemEventMock(...args) ? () => true : null,
-}));
 // mock-isolation: Observe hook handoff without admitting an unrelated ordinary reply turn.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: captureSessionEventTargetMock,
@@ -79,6 +74,7 @@ vi.mock("../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
 }));
 
+import { waitForFast } from "../../../test/helpers/vitest-wait.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -99,22 +95,11 @@ const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =
   await import("./hooks.js");
 const createBroker = useSpawnBrokerTestFixture(afterEach);
 
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
-function expectOwnedSystemEvent(text: string, ownerAgentId: string): void {
-  const call = enqueueSystemEventMock.mock.calls.find(([queuedText]) => queuedText === text);
-  expect(call?.[1]).toEqual({ sessionKey: `agent:${ownerAgentId}:global` });
-}
-
 function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number } = {}) {
   return {
     scheduler: createTestGatewayScheduler("fake-timers"),
     deps: {} as never,
+    deferHookWake: deferHookWakeMock,
     getHooksConfig: () => null,
     getClientIpConfig: () => ({ trustedProxies: undefined, allowRealIpFallback: false }),
     bindHost: "127.0.0.1",
@@ -199,6 +184,10 @@ describe("dispatchAgentHook trust handling", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
     vi.clearAllMocks();
+    deferHookWakeMock.mockImplementation(async ({ commitGuard }) => {
+      commitGuard();
+      return { ok: true, eventOutcome: "queued" };
+    });
     loadConfigMock.mockImplementation(mainRosterConfig);
     validateExplicitMessageAccountSelectionMock.mockImplementation(
       ({ accountId }: { accountId?: unknown }) => accountId as string | undefined,
@@ -230,9 +219,24 @@ describe("dispatchAgentHook trust handling", () => {
       "hooks",
     );
 
-    expectOwnedSystemEvent("Mapped wake", "hooks");
+    expect(deferHookWakeMock).toHaveBeenCalledExactlyOnceWith({
+      text: "Mapped wake",
+      agentId: "hooks",
+      expectedTarget: {
+        agentId: "hooks",
+        sessionKey: "global",
+        sessionId: "captured-session",
+        generation: "captured-generation",
+      },
+      createIfMissing: true,
+      commitGuard: expect.any(Function),
+    });
     expect(enqueueSessionEventMock).not.toHaveBeenCalled();
-    expect(captureSessionEventTargetMock).not.toHaveBeenCalled();
+    expect(captureSessionEventTargetMock).toHaveBeenCalledExactlyOnceWith(
+      "hooks",
+      "global",
+      expect.objectContaining({ assertCaptureCurrent: expect.any(Function) }),
+    );
   });
 
   it("keeps the resolved owner when a deferred multi-agent wake omits agentId", async () => {
@@ -244,7 +248,7 @@ describe("dispatchAgentHook trust handling", () => {
       },
     });
 
-    enqueueSystemEventMock.mockReturnValue(false);
+    deferHookWakeMock.mockResolvedValueOnce({ ok: true, eventOutcome: "coalesced" });
     const result = await dispatchWakeHook({ text: "Mapped wake", mode: "next-heartbeat" }, "molty");
 
     expect(result).toEqual({ eventOutcome: "coalesced" });
@@ -252,9 +256,13 @@ describe("dispatchAgentHook trust handling", () => {
       cfg: expect.any(Object),
       agentId: "molty",
     });
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Mapped wake", {
-      sessionKey: "agent:molty:main",
-    });
+    expect(deferHookWakeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Mapped wake",
+        agentId: "molty",
+        expectedTarget: expect.objectContaining({ sessionKey: "agent:molty:main" }),
+      }),
+    );
     expect(enqueueSessionEventMock).not.toHaveBeenCalled();
   });
 
@@ -341,6 +349,7 @@ describe("dispatchAgentHook trust handling", () => {
     expect(result).toMatchObject({ ok: true });
     expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        trigger: "event",
         job: expect.objectContaining({
           delivery: expect.objectContaining({ accountId: "default" }),
         }),
@@ -349,33 +358,60 @@ describe("dispatchAgentHook trust handling", () => {
   });
 
   it("revalidates an explicit delivery account against queued-run config", async () => {
-    validateExplicitMessageAccountSelectionMock
-      .mockImplementationOnce(({ accountId }: { accountId?: unknown }) => accountId as string)
-      .mockImplementationOnce(() => {
+    let currentConfig: OpenClawConfig = {
+      ...mainRosterConfig(),
+      channels: { telegram: { accounts: { removed: {} } } },
+    };
+    loadConfigMock.mockImplementation(() => currentConfig);
+    validateExplicitMessageAccountSelectionMock.mockImplementation(({ cfg, accountId }) => {
+      if (accountId !== "removed" || !cfg.channels?.telegram?.accounts?.[accountId]) {
         throw new Error('Unknown account "removed" for channel telegram.');
-      });
+      }
+      return accountId;
+    });
+    const firstGate = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      await firstGate.promise;
+      return { status: "ok", summary: "first done", delivered: false };
+    });
 
-    const result = await dispatchAgentHook({
-      ...buildAgentPayload("Removed account"),
-      deliver: true,
-      channel: "telegram",
-      to: "123456",
-      accountId: "removed",
-      delivery: {
-        mode: "announce",
+    const first = dispatchAgentHook(buildAgentPayload("Blocking hook"));
+    try {
+      await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+      const queued = dispatchAgentHook({
+        ...buildAgentPayload("Removed account"),
+        deliver: true,
         channel: "telegram",
         to: "123456",
         accountId: "removed",
-      },
-    });
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123456",
+          accountId: "removed",
+        },
+      });
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(2));
 
-    expect(result).toMatchObject({
-      ok: false,
-      statusCode: 400,
-      error: 'Unknown account "removed" for channel telegram.',
-      runId: expect.any(String),
-    });
-    expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+      currentConfig = {
+        ...mainRosterConfig(),
+        channels: { telegram: { accounts: {} } },
+      };
+      firstGate.resolve();
+      const result = await queued;
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({
+        ok: false,
+        statusCode: 400,
+        error: 'Unknown account "removed" for channel telegram.',
+        runId: expect.any(String),
+      });
+    } finally {
+      firstGate.resolve();
+      await first;
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    }
   });
 
   it("retains detached agent work after the hook request closes", async () => {

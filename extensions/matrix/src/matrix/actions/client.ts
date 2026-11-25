@@ -1,5 +1,4 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { MatrixClientReleaseMode } from "../client/shared.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixRoomId } from "../send.js";
 import type { MatrixActionClientOpts } from "./types.js";
@@ -11,17 +10,16 @@ const loadMatrixActionClientRuntime = createLazyRuntimeModule(
 export async function withResolvedActionClient<T>(
   opts: MatrixActionClientOpts,
   run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
-  mode: MatrixClientReleaseMode = "stop",
 ): Promise<T> {
   const { withResolvedRuntimeMatrixClient } = await loadMatrixActionClientRuntime();
-  return await withResolvedRuntimeMatrixClient(opts, run, mode);
+  return await withResolvedRuntimeMatrixClient(opts, run);
 }
 
 export async function withStartedActionClient<T>(
   opts: MatrixActionClientOpts,
   run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
 ): Promise<T> {
-  return await withResolvedActionClient({ ...opts, readiness: "started" }, run, "persist");
+  return await withResolvedActionClient({ ...opts, readiness: "started" }, run);
 }
 
 export async function withResolvedRoomAction<T>(

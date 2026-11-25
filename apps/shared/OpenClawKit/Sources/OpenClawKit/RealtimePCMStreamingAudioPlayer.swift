@@ -2,6 +2,34 @@
 import AVFAudio
 import Foundation
 
+/// Realtime voice providers send speech near -22 LUFS, well under the level phones normally play
+/// speech at. Lift each 20 ms frame, and hold peaks under the ceiling: the gain drops at once for a
+/// loud frame and recovers about 1 dB per frame.
+struct RealtimePCMLoudness {
+    // One fixed gain, measured on xAI voice (-21.9 LUFS in, -13.6 out). Make it per provider if
+    // another provider arrives hotter.
+    static let gain: Float = 2.82 // +9 dB
+    static let ceiling: Float = 29204 // -1 dBFS
+    private static let release: Float = 1.12
+    private var current = Self.gain
+
+    mutating func apply(to frame: Data) -> Data {
+        var samples = frame.withUnsafeBytes { raw in
+            stride(from: 0, to: raw.count - 1, by: 2).map { raw.loadUnaligned(fromByteOffset: $0, as: Int16.self) }
+        }
+        let peak = samples.reduce(Float(1)) { max($0, abs(Float($1))) }
+        let previous = self.current
+        self.current = min(Self.gain, Self.ceiling / peak, previous * Self.release)
+        // Ramp while recovering so the level does not step; a drop applies to the whole frame.
+        let start = min(previous, self.current)
+        let step = (self.current - start) / Float(max(samples.count, 1))
+        for index in samples.indices {
+            samples[index] = Int16((Float(samples[index]) * (start + step * Float(index))).rounded())
+        }
+        return samples.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+}
+
 /// The lock guards playback/generation state; backend closures run on backendQueue without it.
 /// Completion callbacks are queued, including callbacks invoked synchronously by node.stop.
 public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying,
@@ -35,17 +63,36 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
     private var inputFinished = false
 
     public convenience init() {
-        let engine = AVAudioEngine()
+        self.init(engine: AVAudioEngine(), ownsEngine: true)
+    }
+
+    /// Plays through an engine whose I/O another owner runs, such as a voice-processing capture
+    /// engine: echo cancellation only removes output rendered by its own I/O unit. That owner
+    /// starts and restarts the engine; playback only connects and stops its own node.
+    public convenience init(sharedEngine engine: AVAudioEngine) {
+        self.init(engine: engine, ownsEngine: false)
+    }
+
+    private convenience init(engine: AVAudioEngine, ownsEngine: Bool) {
         let node = AVAudioPlayerNode()
         engine.attach(node)
+        // Relay audio arrives as PCM16, but connecting an Int16 player node raises on iOS (on owned
+        // and shared voice-processing engines alike), so those render Float32 and convert frames.
+        #if os(iOS)
+        let commonFormat = AVAudioCommonFormat.pcmFormatFloat32
+        #else
+        let commonFormat: AVAudioCommonFormat = ownsEngine ? .pcmFormatInt16 : .pcmFormatFloat32
+        #endif
         var format: AVAudioFormat?
+        var loudness = RealtimePCMLoudness()
         self.init(
             preparePlayback: { sampleRate in
+                loudness = RealtimePCMLoudness()
                 node.stop()
-                engine.stop()
+                if ownsEngine { engine.stop() }
                 engine.disconnectNodeOutput(node)
                 guard let nextFormat = AVAudioFormat(
-                    commonFormat: .pcmFormatInt16,
+                    commonFormat: commonFormat,
                     sampleRate: sampleRate,
                     channels: 1,
                     interleaved: false)
@@ -54,40 +101,59 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
                 }
                 format = nextFormat
                 engine.connect(node, to: engine.mainMixerNode, format: nextFormat)
-                engine.prepare()
-                try engine.start()
+                // A shared engine may be mid-reconfiguration here; its owner restarts it and then
+                // resumes this node through resumePlaybackAfterEngineRestart().
+                if ownsEngine {
+                    engine.prepare()
+                    try engine.start()
+                }
                 // Preserve the device-startup cushion before the first audible frames.
                 let padFrames = AVAudioFrameCount(sampleRate * 0.3)
                 if let pad = AVAudioPCMBuffer(pcmFormat: nextFormat, frameCapacity: padFrames) {
                     pad.frameLength = padFrames
                     pad.int16ChannelData?[0].update(repeating: 0, count: Int(padFrames))
+                    pad.floatChannelData?[0].update(repeating: 0, count: Int(padFrames))
                     node.scheduleBuffer(pad)
                 }
             },
-            scheduleFrame: { data, _, completion in
+            scheduleFrame: { frame, _, completion in
                 guard let format else {
                     throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 2)
                 }
+                let data = loudness.apply(to: frame)
                 let frames = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
-                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
-                      let channel = buffer.int16ChannelData?[0]
-                else {
+                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
                     throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 3)
                 }
                 buffer.frameLength = frames
-                data.copyBytes(
-                    to: UnsafeMutableRawBufferPointer(
-                        start: channel,
-                        count: data.count))
+                if let channel = buffer.int16ChannelData?[0] {
+                    data.copyBytes(
+                        to: UnsafeMutableRawBufferPointer(
+                            start: channel,
+                            count: data.count))
+                } else if let channel = buffer.floatChannelData?[0] {
+                    data.withUnsafeBytes { raw in
+                        for index in 0..<Int(frames) {
+                            let sample = Int16(littleEndian: raw.loadUnaligned(
+                                fromByteOffset: index * MemoryLayout<Int16>.size,
+                                as: Int16.self))
+                            channel[index] = Float(sample) / 32768
+                        }
+                    }
+                } else {
+                    throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 3)
+                }
                 node.scheduleBuffer(
                     buffer,
                     completionCallbackType: .dataPlayedBack)
                 { _ in completion() }
             },
-            startPlayback: { node.play() },
+            // A shared engine can be stopped by its owner for a reconfiguration; starting a node
+            // on a stopped engine raises, so resumePlaybackAfterEngineRestart() starts it later.
+            startPlayback: { if engine.isRunning { node.play() } },
             stopPlayback: {
                 node.stop()
-                engine.stop()
+                if ownsEngine { engine.stop() }
             },
             playbackTime: {
                 guard let renderTime = node.lastRenderTime,
@@ -166,6 +232,15 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
             self.finish(StreamingPlaybackResult(finished: false, interruptedAt: interruptedAt), cancelInput: true)
         }
         return interruptedAt
+    }
+
+    /// Called by a shared engine's owner after it restarts the engine, which stops attached nodes.
+    public func resumePlaybackAfterEngineRestart() {
+        self.backendQueue.async { [weak self] in
+            guard let self else { return }
+            let resume = self.lock.withLock { self.playbackStarted && self.playbackContinuation != nil }
+            if resume { self.startPlayback() }
+        }
     }
 
     private func isCurrent(_ generation: UInt64) -> Bool {

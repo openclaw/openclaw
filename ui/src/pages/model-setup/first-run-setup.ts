@@ -7,6 +7,7 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
 import {
   clearFirstRunActivationReceipt,
@@ -25,6 +26,8 @@ import {
   type ModelSetupWizardResult,
   type ModelSetupWizardRecovery,
 } from "./state.ts";
+
+registerUpdateActionsEnglish();
 
 export type ModelSetupConnection = Pick<
   ApplicationContext["gateway"]["snapshot"],
@@ -183,12 +186,12 @@ export class FirstRunSetup {
     this.readyConnection = connection;
   }
 
-  routeChanged(): void {
+  routeChanged(firstRun: boolean): void {
     const receipt = this.pending?.receipt ?? null;
     this.reset();
     this.readyConnection = null;
     this.pending = null;
-    if (this.host.routeData()?.firstRun === false) {
+    if (!firstRun) {
       clearFirstRunActivationReceipt(receipt);
     }
   }
@@ -313,7 +316,9 @@ export class FirstRunSetup {
     ) {
       return;
     }
-    const receipt = readFirstRunActivationReceipt(context);
+    const stored = readFirstRunActivationReceipt(context);
+    // A Models sign-in record belongs to its login dialog, not to first-run activation.
+    const receipt = stored?.kind === "provider-login" ? null : stored;
     if (this.pending?.receipt && receipt?.owner !== this.pending.receipt.owner) {
       this.pending = null;
     }
@@ -350,7 +355,7 @@ export class FirstRunSetup {
       this.host.setVerifyState({
         phase: "failed",
         status: "unknown",
-        error: `${t("modelSetup.access.gatewayTooOld")}. ${t("updates.confirm.action")}. ${t("desktop.reconnect")}.`,
+        error: t("modelSetup.access.gatewayTooOld"),
       });
       return;
     }
@@ -446,6 +451,18 @@ export class FirstRunSetup {
 
   get unresolved(): boolean {
     return this.pending !== null;
+  }
+
+  /** An activation from an earlier visit is recovered from discovery before new setup starts. */
+  get awaitsRecovery(): boolean {
+    if (this.pending !== null) {
+      return true;
+    }
+    if (this.host.routeData()?.firstRun !== true) {
+      return false;
+    }
+    const receipt = readFirstRunActivationReceipt(this.host.context());
+    return receipt !== null && receipt.kind !== "provider-login";
   }
 
   get canUseCurrentModel(): boolean {

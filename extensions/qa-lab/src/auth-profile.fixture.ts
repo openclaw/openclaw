@@ -34,8 +34,6 @@ export type QaCodexAuthProfileSelection =
   | {
       status: "ready";
       profileId: string;
-      provider: "openai";
-      mode: "oauth";
     }
   | {
       status: "blocked";
@@ -129,7 +127,7 @@ export async function seedAuthProfiles(
 }
 
 export async function snapshotAuthProfiles(agentDir: string): Promise<QaAuthProfileSnapshot> {
-  return normalizeAuthProfileSnapshot(readQaAuthProfiles(agentDir));
+  return normalizeAuthProfileSnapshot(await readQaAuthProfiles(agentDir));
 }
 
 export function resolveCodexAuthProfile(
@@ -153,7 +151,5 @@ export function resolveCodexAuthProfile(
   return {
     status: "ready",
     profileId,
-    provider: "openai",
-    mode: "oauth",
   };
 }

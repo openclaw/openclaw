@@ -2,15 +2,15 @@ import { DatabaseSync } from "node:sqlite";
 import { it, expect, vi } from "vitest";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import * as readonly from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readBestEffortConfig } from "./io.js";
 
-it("shares the CLI routing metadata snapshot without changing the resolved config", async () => {
+it("reads CLI routing metadata without synchronous SQLite work", async () => {
   await withOpenClawTestState({}, async (state) => {
     await state.writeConfig({ mcp: { servers: {} } });
     const opened = openOpenClawStateDatabase();
@@ -20,25 +20,19 @@ it("shares the CLI routing metadata snapshot without changing the resolved confi
       .prepare("INSERT INTO config_machine_state(state_key,value_json,updated_at_ms) VALUES(?,?,1)")
       .run("synthetic.padding", payload);
     opened.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const writer = new DatabaseSync(pathname);
     writer.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO config_machine_state VALUES ('synthetic.wal','true',2)",
     );
     const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+    const mainSql = observeMainThreadSql();
     try {
       clearPluginMetadataLifecycleCaches();
-      const bypass = vi
-        .spyOn(readonly, "withSynchronousArtifactPreservingStateSnapshot")
-        .mockImplementation((operation) => operation());
-      const baseline = await readBestEffortConfig({ observe: false, skipPluginValidation: true });
-      expect(prepare).toHaveBeenCalledTimes(2);
-      bypass.mockRestore();
-      clearPluginMetadataLifecycleCaches();
-      prepare.mockClear();
       const config = await readBestEffortConfig({ observe: false, skipPluginValidation: true });
-      expect(config).toEqual(baseline);
-      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(config.mcp).toEqual({ servers: {} });
+      expect(prepare).not.toHaveBeenCalled();
+      mainSql.expectIdle();
     } finally {
       vi.restoreAllMocks();
       writer.close();

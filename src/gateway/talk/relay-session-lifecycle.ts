@@ -1,7 +1,10 @@
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 
 const MAX_RELAY_SESSIONS_PER_CONN = 2;
 const MAX_RELAY_SESSIONS_GLOBAL = 64;
+
+/** Admission refused because the Gateway or this connection has no free Talk session. */
+export class TalkRelayCapacityError extends Error {}
 
 type TalkRelayLifecycleSession = {
   connId: string;
@@ -18,33 +21,22 @@ export function assertTalkRelaySessionCapacity(
   label: "realtime relay" | "transcription Talk",
 ): void {
   if (sessions.length >= MAX_RELAY_SESSIONS_GLOBAL) {
-    throw new Error(`Too many active ${label} sessions`);
+    throw new TalkRelayCapacityError(`Too many active ${label} sessions`);
   }
   if (
     sessions.filter((session) => session.connId === connId).length >= MAX_RELAY_SESSIONS_PER_CONN
   ) {
-    throw new Error(`Too many active ${label} sessions for this connection`);
+    throw new TalkRelayCapacityError(`Too many active ${label} sessions for this connection`);
   }
-}
-
-function isExpiredTalkRelaySession(
-  session: TalkRelayLifecycleSession,
-  validNowMs: number,
-): boolean {
-  const expiresAtMs = asDateTimestampMs(session.expiresAtMs);
-  return expiresAtMs === undefined || validNowMs > expiresAtMs;
 }
 
 export function closeExpiredTalkRelaySessions<TSession extends TalkRelayLifecycleSession>(params: {
   sessions: Iterable<TSession>;
   closeSession: CloseTalkRelaySession<TSession>;
 }): void {
-  const validNowMs = asDateTimestampMs(Date.now());
-  if (validNowMs === undefined) {
-    return;
-  }
+  const now = Date.now();
   for (const session of params.sessions) {
-    if (isExpiredTalkRelaySession(session, validNowMs)) {
+    if (now > session.expiresAtMs) {
       params.closeSession(session);
     }
   }
@@ -73,12 +65,7 @@ export async function closeTalkRelaySessionsForConnection<
     }
   }
   const results = await Promise.allSettled(pending);
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Talk relay cleanup did not complete");
-  }
+  throwSettledAggregate(results, "Talk relay cleanup did not complete");
 }
 
 /** Returns the active session only when it belongs to the current connection. */
@@ -93,8 +80,7 @@ export function requireActiveTalkRelaySession<TSession extends TalkRelayLifecycl
   if (!session || session.connId !== params.connId) {
     throw new Error(params.unknownSessionMessage);
   }
-  const nowMs = asDateTimestampMs(Date.now());
-  if (nowMs === undefined || isExpiredTalkRelaySession(session, nowMs)) {
+  if (Date.now() > session.expiresAtMs) {
     params.closeSession(session);
     throw new Error(params.unknownSessionMessage);
   }

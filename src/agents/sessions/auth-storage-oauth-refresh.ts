@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OAuthProviderId } from "../../llm/utils/oauth/types.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS } from "../auth-profiles/constants.js";
 import {
@@ -15,8 +16,8 @@ import {
 } from "./auth-storage-oauth-registry.js";
 import type {
   AuthCredential,
-  AuthStorageBackend,
   AuthStorageData,
+  LockResult,
   OAuthCredential,
 } from "./auth-storage-types.js";
 
@@ -49,7 +50,10 @@ export function isAuthStorageOAuthRefreshFence(
 
 export async function refreshAuthStorageOAuthCredential(params: {
   authStorage: object;
-  storage: Pick<AuthStorageBackend, "withLock">;
+  config?: OpenClawConfig;
+  storage: {
+    withLock<T>(fn: (current: string | undefined) => LockResult<T>): T | Promise<T>;
+  };
   providerId: OAuthProviderId;
   parse: (current: string | undefined) => AuthStorageData;
   commit: (data: AuthStorageData) => void;
@@ -75,10 +79,11 @@ export async function refreshAuthStorageOAuthCredential(params: {
       [params.providerId]: credential,
     }),
     canRefresh: async () =>
-      Boolean(provider) || (await canResolveAuthStoragePluginOAuthRefresh(params.providerId)),
-    commit: (data) => {
+      Boolean(provider) ||
+      (await canResolveAuthStoragePluginOAuthRefresh(params.providerId, params.config)),
+    commit: async (data) => {
       const expected = params.parse(JSON.stringify(data));
-      const current = params.storage.withLock((raw) => {
+      const current = await params.storage.withLock((raw) => {
         const authoritative = params.parse(raw);
         if (!isDeepStrictEqual(authoritative[params.providerId], expected[params.providerId])) {
           throw new AuthStoragePersistenceError(
@@ -102,7 +107,12 @@ export async function refreshAuthStorageOAuthCredential(params: {
             params.providerId,
             oauthCredentials,
           )
-        : await resolveAuthStoragePluginOAuthCredential(params.providerId, credential, true);
+        : await resolveAuthStoragePluginOAuthCredential(
+            params.providerId,
+            credential,
+            true,
+            params.config,
+          );
       return mergeResolvedOAuthCredential(credential, refreshed);
     },
     resolve: async (credential) => {
@@ -113,6 +123,7 @@ export async function refreshAuthStorageOAuthCredential(params: {
         params.providerId,
         credential,
         false,
+        params.config,
       );
       return mergeResolvedOAuthCredential(credential, resolved);
     },

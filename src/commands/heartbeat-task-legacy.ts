@@ -1,4 +1,5 @@
 /** Doctor-only reader for the retired YAML-like heartbeat `tasks:` syntax. */
+import { parseDurationMs } from "../cli/parse-duration.js";
 
 export type LegacyHeartbeatTask = {
   name: string;
@@ -12,6 +13,37 @@ type LegacyHeartbeatTaskDocument = {
   tasks: LegacyHeartbeatTask[];
   strippedContent: string;
 };
+
+type ValidatedHeartbeatTask = {
+  task: LegacyHeartbeatTask;
+  intervalMs: number;
+  occurrenceIndex: number;
+};
+
+export function validateHeartbeatTasks(
+  document: LegacyHeartbeatTaskDocument,
+): ValidatedHeartbeatTask[] {
+  if (!document.hasTasksBlock) {
+    return [];
+  }
+  const { tasks, taskEntryCount } = document;
+  if (tasks.length === 0) {
+    throw new Error("tasks: block has no complete name/interval/prompt entries");
+  }
+  if (tasks.length !== taskEntryCount) {
+    throw new Error("tasks: block contains an incomplete name/interval/prompt entry");
+  }
+  const occurrenceCounts = new Map<string, number>();
+  return tasks.map((task) => {
+    const intervalMs = parseDurationMs(task.interval, { defaultUnit: "m" });
+    if (intervalMs <= 0) {
+      throw new Error(`task ${JSON.stringify(task.name)} interval must be greater than zero`);
+    }
+    const occurrenceIndex = occurrenceCounts.get(task.name) ?? 0;
+    occurrenceCounts.set(task.name, occurrenceIndex + 1);
+    return { task, intervalMs, occurrenceIndex };
+  });
+}
 
 type HeartbeatLine = {
   htmlCommentSource?: string;
@@ -86,6 +118,7 @@ export function analyzeLegacyHeartbeatTasks(content: string): LegacyHeartbeatTas
   const tasks: LegacyHeartbeatTask[] = [];
   let taskEntryCount = 0;
   let hasTasksBlock = false;
+  let hasTaskSyntax = false;
   let inTasksBlock = false;
   let currentTask: Partial<LegacyHeartbeatTask> | undefined;
   let orphanEntryOpen = false;
@@ -103,6 +136,8 @@ export function analyzeLegacyHeartbeatTasks(content: string): LegacyHeartbeatTas
 
   for (const [index, line] of lines.entries()) {
     const trimmed = line.visible.trim();
+    // A bare marker is checklist text. Stray fields after it still need repair.
+    hasTaskSyntax ||= hasTasksBlock && /^(?:- name:|interval:|prompt:)/.test(trimmed);
 
     // Every visible marker starts a new block, including a marker immediately
     // following another block with no intervening prose.
@@ -162,7 +197,7 @@ export function analyzeLegacyHeartbeatTasks(content: string): LegacyHeartbeatTas
   finishCurrentTask();
 
   return {
-    hasTasksBlock,
+    hasTasksBlock: hasTasksBlock && hasTaskSyntax,
     taskEntryCount,
     tasks,
     strippedContent: lines

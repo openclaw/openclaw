@@ -1,6 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { findSessionRepositoryWorkspaceInDatabase } from "../../state/session-repository-workspaces.kernel.js";
+import { readWorkerPlacementMovesReadOnly } from "./placement-move-row-codec.js";
 import {
   isCurrentPlacementTurnClaim,
   normalizeEpoch,
@@ -8,13 +10,19 @@ import {
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
-import { getRequired, query, transitionValues, turnClaimValues } from "./placement-row-codec.js";
+import {
+  fromRow,
+  getRequired,
+  query,
+  transitionValues,
+  turnClaimValues,
+} from "./placement-row-codec.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
 
 export function drainWorkerSessionPlacement(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: {
     sessionId: string;
     environmentId: string;
@@ -55,6 +63,21 @@ export function drainWorkerSessionPlacement(
   if (input.expectedTurnClaim && !isCurrentPlacementTurnClaim(current, input.expectedTurnClaim)) {
     throw new Error(`Cannot drain stale worker turn for session ${sessionId}`);
   }
+  const repository = findSessionRepositoryWorkspaceInDatabase(db, current);
+  if (repository?.diskAuthority) {
+    const move = readWorkerPlacementMovesReadOnly(db, [sessionId]).get(sessionId);
+    if (
+      move?.target.kind !== "gateway" ||
+      move.abandonSource ||
+      move.source.environmentId !== environmentId ||
+      move.source.ownerEpoch !== ownerEpoch ||
+      move.source.generation !== current.generation
+    ) {
+      throw new Error(
+        "This repository disk requires Move to Gateway before retirement; its placement and disk are preserved",
+      );
+    }
+  }
   // Draining closes new admission first. The already-admitted worker may
   // finish under its old claim before reconciliation advances ownership.
   const values = transitionValues(
@@ -75,16 +98,18 @@ export function drainWorkerSessionPlacement(
       .where("state", "=", "active")
       .where("transition_generation", "=", current.generation)
       .where("environment_id", "=", environmentId)
-      .where("active_owner_epoch", "=", ownerEpoch),
+      .where("active_owner_epoch", "=", ownerEpoch)
+      .returningAll(),
   );
-  if (result.numAffectedRows !== 1n) {
+  const row = result.rows[0];
+  if (!row) {
     throw new Error(`Worker session placement ${sessionId} changed during drain`);
   }
   if (input.workspaceBaseManifestRef !== undefined) {
     clearWorkerWorkspaceReconciliation(db, sessionId, input.workspaceBaseManifestRef);
     sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
   }
-  const record = getRequired(db, sessionId);
+  const record = fromRow(row);
   publishPlacementTurnClaimState(db, record);
   return record;
 }

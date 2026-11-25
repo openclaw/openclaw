@@ -1,6 +1,7 @@
 export * from "./agent-runtime-restriction-error-details.js";
 export * from "./capability-consent-error-details.js";
 export * from "./clawhub-trust-error-details.js";
+export * from "./device-pair-error-details.js";
 export * from "./install-policy-warning-error-details.js";
 export * from "./system-agent-error-details.js";
 export {
@@ -8,6 +9,8 @@ export {
   GatewayErrorDetailCodes,
   isMcpAppViewExpiredError,
   readCronJobNotFoundError,
+  readClawHubRiskAcknowledgementRequiredError,
+  readTemplateReviewRequiredError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
 } from "./gateway-error-details.js";
@@ -23,6 +26,8 @@ export type {
   WizardNotFoundErrorDetails,
   SetupAdmissionBusyErrorDetails,
   SessionWorkspaceRecoveryRequiredErrorDetails,
+  ClawHubRiskAcknowledgementRequiredErrorDetails,
+  TemplateReviewRequiredErrorDetails,
 } from "./gateway-error-details.js";
 export {
   CronJobNotFoundErrorDetailsSchema,
@@ -34,6 +39,8 @@ export {
   WizardNotFoundErrorDetailsSchema,
   SetupAdmissionBusyErrorDetailsSchema,
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
+  ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
+  TemplateReviewRequiredErrorDetailsSchema,
   buildMissingScopeErrorDetails,
   errorShape,
   missingScopeErrorShape,

@@ -10,6 +10,7 @@ import {
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasSlackAccountCredentialsFromConfig } from "./account-configured.js";
@@ -73,6 +74,19 @@ const {
 });
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
+
+export function resolveSlackMarkdownOptions(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) {
+  return {
+    tableMode: resolveMarkdownTableMode({
+      cfg: params.cfg,
+      channel: "slack",
+      accountId: params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+    }),
+  };
+}
 
 function resolveSlackAccountConfig(
   cfg: OpenClawConfig,

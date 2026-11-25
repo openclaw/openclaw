@@ -1,13 +1,15 @@
-/** Doctor checks and repairs for workspace memory files and legacy workspace hints. */
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { statIfExists as statPathIfExists } from "../infra/path-existence.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   LEGACY_ROOT_MEMORY_FILENAME,
@@ -83,15 +85,8 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
 }
 
 async function statIfExists(filePath: string) {
-  try {
-    const stat = await fs.promises.stat(filePath);
-    return stat.isFile() ? { exists: true, bytes: stat.size } : { exists: false };
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-      return { exists: false };
-    }
-    throw err;
-  }
+  const stat = await statPathIfExists(filePath);
+  return stat?.isFile() ? { exists: true, bytes: stat.size } : { exists: false };
 }
 
 async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> {
@@ -136,12 +131,8 @@ type RootMemoryMigrationResult = {
   legacyPath: string;
   mergedLegacy: boolean;
   archivedLegacyPath?: string;
-  /** True when the repair was skipped because a file exceeded the safe read limit. */
-  readLimitExceeded?: boolean;
-  /** True when the repair was skipped because a file could not be read. */
-  readError?: boolean;
-  /** True when the legacy file could not be archived atomically. */
-  archiveError?: boolean;
+  canonicalBackupPath?: string;
+  skipReason?: string;
 };
 
 async function moveLegacyRootMemoryFileToArchive(params: {
@@ -150,11 +141,10 @@ async function moveLegacyRootMemoryFileToArchive(params: {
 }): Promise<string> {
   const repairDir = resolveRootMemoryRepairDir(params.workspaceDir);
   await fs.promises.mkdir(repairDir, { recursive: true });
-  const archiveDir = path.join(
-    repairDir,
-    new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-"),
+  // A later repair must never reuse a directory containing earlier recovery copies.
+  const archiveDir = await fs.promises.mkdtemp(
+    path.join(repairDir, `${new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-")}-`),
   );
-  await fs.promises.mkdir(archiveDir, { recursive: true });
   const archivePath = path.join(archiveDir, LEGACY_ROOT_MEMORY_FILENAME);
   // Source and repair archive live under one workspace. If a mounted file makes
   // this cross-device, fail before mutation instead of copying an unbounded file.
@@ -193,22 +183,27 @@ async function migrateLegacyRootMemoryFile(
     return unchanged;
   }
   const skippedForReadFailure = (err: unknown): RootMemoryMigrationResult => {
-    const isTooLarge =
-      typeof err === "object" &&
-      err !== null &&
-      "message" in err &&
-      typeof (err as Error).message === "string" &&
-      (err as Error).message.startsWith("File exceeds");
+    const message = err instanceof Error ? err.message : "";
     return {
       ...unchanged,
-      readLimitExceeded: isTooLarge,
-      readError: !isTooLarge,
+      skipReason: message.startsWith("File exceeds")
+        ? "a file exceeded the safe read limit"
+        : message.startsWith("File is not valid UTF-8:")
+          ? message
+          : "a file could not be read",
     };
   };
-  const readMemoryFile = (filePath: string) =>
-    readRegularFile({ filePath, maxBytes: ROOT_MEMORY_FILE_MAX_BYTES });
+  const readMemoryFile = async (filePath: string) => {
+    const { buffer } = await readRegularFile({ filePath, maxBytes: ROOT_MEMORY_FILE_MAX_BYTES });
+    if (!isUtf8(buffer)) {
+      throw new Error(
+        `File is not valid UTF-8: ${filePath}; preserve its bytes and convert a copy to UTF-8 before retrying`,
+      );
+    }
+    return buffer.toString("utf-8");
+  };
   try {
-    // Reject oversized, unreadable, symlinked, or non-regular inputs before the
+    // Reject unsafe inputs, including invalid UTF-8, before the
     // archive rename. The archived snapshot is read again after the atomic move.
     await Promise.all([
       readMemoryFile(detection.canonicalPath),
@@ -224,14 +219,14 @@ async function migrateLegacyRootMemoryFile(
       legacyPath: detection.legacyPath,
     });
   } catch {
-    return { ...unchanged, archiveError: true };
+    return { ...unchanged, skipReason: "legacy memory could not be archived atomically" };
   }
   let canonicalText: string;
   let legacyText: string;
   try {
     [canonicalText, legacyText] = await Promise.all([
-      readMemoryFile(detection.canonicalPath).then(({ buffer }) => buffer.toString("utf-8")),
-      readMemoryFile(archivedLegacyPath).then(({ buffer }) => buffer.toString("utf-8")),
+      readMemoryFile(detection.canonicalPath),
+      readMemoryFile(archivedLegacyPath),
     ]);
   } catch (err) {
     const skipped = skippedForReadFailure(err);
@@ -245,18 +240,40 @@ async function migrateLegacyRootMemoryFile(
       archivedLegacyPath,
     };
   }
+  let canonicalBackupPath: string | undefined;
   if (canonicalText !== legacyText) {
     const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
       legacyText,
       archivedLegacyPath: shortenHomePath(archivedLegacyPath),
     })}`;
-    await fs.promises.writeFile(detection.canonicalPath, merged, "utf-8");
+    // Preserve the canonical bytes independently before publishing the merge.
+    // Keep the atomic writer's unlink/copy fallback disabled to avoid torn writes.
+    canonicalBackupPath = path.join(
+      path.dirname(archivedLegacyPath),
+      `${CANONICAL_ROOT_MEMORY_FILENAME}.pre-merge`,
+    );
+    await fs.promises.copyFile(detection.canonicalPath, canonicalBackupPath);
+    // Workspace aliases are supported, but the atomic writer needs a real parent
+    // and continues to reject a symlink at the final MEMORY.md path.
+    const publicationDir = await fs.promises.realpath(detection.workspaceDir);
+    await replaceFileAtomic({
+      allowDrvfsRenameRecovery: true,
+      filePath: path.join(publicationDir, CANONICAL_ROOT_MEMORY_FILENAME),
+      content: merged,
+      dirMode: (await fs.promises.stat(publicationDir)).mode & 0o7777,
+      preserveExistingMode: true,
+      tempPrefix: CANONICAL_ROOT_MEMORY_FILENAME,
+      syncTempFile: true,
+      syncParentDir: true,
+      throwOnCleanupError: true,
+    });
   }
   return {
     ...unchanged,
     changed: true,
     mergedLegacy: canonicalText !== legacyText,
     archivedLegacyPath,
+    ...(canonicalBackupPath ? { canonicalBackupPath } : {}),
   };
 }
 
@@ -311,13 +328,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       return;
     }
     const migration = await migrateLegacyRootMemoryFile(params.scope.workspaceDir);
-    const reason = migration.readLimitExceeded
-      ? "a file exceeded the safe read limit"
-      : migration.readError
-        ? "a file could not be read"
-        : migration.archiveError
-          ? "legacy memory could not be archived atomically"
-          : null;
+    const reason = migration.skipReason;
     if (reason) {
       note(
         [
@@ -341,6 +352,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       `${prefix}Workspace memory root merged:`,
       `- current: ${migration.canonicalPath}`,
       migration.archivedLegacyPath ? `- backup: ${migration.archivedLegacyPath}` : null,
+      migration.canonicalBackupPath ? `- pre-merge backup: ${migration.canonicalBackupPath}` : null,
       migration.mergedLegacy ? `- merged legacy content from: ${migration.legacyPath}` : null,
       `- removed legacy file: ${migration.legacyPath}`,
     ].filter(Boolean);

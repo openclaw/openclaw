@@ -63,16 +63,12 @@ export function createDraftStreamLoop<T = string>(params: {
         return;
       }
       pendingValue = emptyValue;
-      let current: Promise<void | boolean> | undefined;
       let sent: void | boolean;
       try {
-        current = Promise.resolve(params.sendOrEditStreamMessage(value)).finally(() => {
-          if (inFlightPromise === current) {
-            inFlightPromise = undefined;
-          }
+        inFlightPromise = Promise.resolve(params.sendOrEditStreamMessage(value)).finally(() => {
+          inFlightPromise = undefined;
         });
-        inFlightPromise = current;
-        sent = await current;
+        sent = await inFlightPromise;
       } catch (err) {
         retainUnsentValue(value, background);
         throw err;
@@ -94,11 +90,7 @@ export function createDraftStreamLoop<T = string>(params: {
 
   const startBackgroundFlush = () => {
     void flush(true).catch((err: unknown) => {
-      try {
-        params.onBackgroundFlushError?.(err);
-      } catch {
-        // Error reporting must not recreate the unhandled background rejection path.
-      }
+      params.onBackgroundFlushError?.(err);
     });
   };
 

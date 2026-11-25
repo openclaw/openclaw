@@ -56,7 +56,7 @@ export const LoggingConfigSchema = z
     maxFileBytes: z.number().int().positive().optional(),
     consoleLevel: LoggingLevelSchema.optional(),
     consoleStyle: z.union([z.literal("pretty"), z.literal("json")]).optional(),
-    /** Regex patterns used to redact sensitive tokens from logs and transcripts. */
+    /** Regex patterns used to redact sensitive tokens from logs and diagnostics. */
     redactPatterns: z.array(z.string()).optional(),
     /** Metadata-only agent activity audit ledger settings. */
     audit: z

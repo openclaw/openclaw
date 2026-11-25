@@ -12,8 +12,14 @@ async function applyAcrossProcess(request: AgentDatabaseReaderRequest): Promise<
   await closeWorkerTaskPoolResources(encodeAgentDatabaseReaderRequest(request));
 }
 
-function resolveUnique(pathnames: readonly string[]): string[] {
-  return [...new Set(pathnames.map((pathname) => path.resolve(pathname)))];
+/** Offline maintenance closes retained readers in every isolate; later reads may reopen them. */
+export async function closeAgentDatabaseReaders(databasePaths: readonly string[]): Promise<void> {
+  const candidates = [...new Set(databasePaths.map((pathname) => path.resolve(pathname)))].map(
+    (pathname) => ({ path: pathname }),
+  );
+  if (candidates.length > 0) {
+    await applyAcrossProcess({ kind: "close", candidates, deleted: false });
+  }
 }
 
 /** Deletion closes the databases everywhere and refuses reopening them until the agent returns. */
@@ -23,7 +29,9 @@ export async function closeDeletedAgentDatabases(
   authority: { assertCurrentFinal(): void; assertCurrentAsync(): Promise<void> },
 ): Promise<void> {
   await authority.assertCurrentAsync();
-  const candidates = resolveUnique(databasePaths).map((pathname) => ({ path: pathname }));
+  const candidates = [...new Set(databasePaths.map((pathname) => path.resolve(pathname)))].map(
+    (pathname) => ({ path: pathname }),
+  );
   if (candidates.length > 0) {
     await applyAcrossProcess({ kind: "close", candidates, deleted: true, agentId });
     for (const candidate of candidates) {

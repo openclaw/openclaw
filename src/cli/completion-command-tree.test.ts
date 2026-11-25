@@ -14,7 +14,7 @@ describe("shell completion command tree", () => {
 
     const context = collectShellCompletionCommandTree(program).descendants[0];
 
-    expect(context?.completions).toEqual(["--visible"]);
+    expect(context?.completions).toEqual(["--visible", "-h", "--help"]);
     expect(context?.valueOptions).toEqual(["-p", "--profile"]);
     expect(context?.valueChoices).toEqual([
       { flags: ["-p"], choices: ["parent"], requiresValue: true },

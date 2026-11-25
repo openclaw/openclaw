@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ConversationBindingInspection } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import {
+  inspectRuntimeConversationBindingRoute,
   resolveConfiguredBindingRoute,
-  resolveRuntimeConversationBindingRoute,
+  type resolveRuntimeConversationBindingRoute,
+  type RuntimeConversationBindingRouteResult,
   resolveRuntimeConversationBindingRouteAsync,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -17,7 +20,7 @@ type DiscordConversationBindingRouteParams = {
   runtimeConversationId: string;
   configuredConversationId: string;
   parentConversationId?: string;
-  touchBinding?: boolean;
+  inspection?: ConversationBindingInspection;
 };
 
 function prepareDiscordBindingRoute(params: DiscordConversationBindingRouteParams) {
@@ -29,7 +32,8 @@ function prepareDiscordBindingRoute(params: DiscordConversationBindingRouteParam
       baseRoute = params.resolveRoute(selection);
       return baseRoute;
     },
-    touchBinding: params.touchBinding,
+    // Processing owns the awaited activity write after preflight completes.
+    touchBinding: false,
     conversation: {
       channel: "discord",
       accountId: params.accountId,
@@ -41,10 +45,13 @@ function prepareDiscordBindingRoute(params: DiscordConversationBindingRouteParam
 }
 
 export function resolveDiscordConversationBindingRoute(
-  params: DiscordConversationBindingRouteParams,
+  params: DiscordConversationBindingRouteParams & { inspection: ConversationBindingInspection },
 ) {
   const prepared = prepareDiscordBindingRoute(params);
-  const runtimeRoute = resolveRuntimeConversationBindingRoute(prepared.input);
+  const runtimeRoute = inspectRuntimeConversationBindingRoute({
+    ...prepared.input,
+    inspection: params.inspection,
+  });
   return applyDiscordBindingRoute(params, runtimeRoute, prepared.getBaseRoute());
 }
 
@@ -58,7 +65,7 @@ export async function resolveDiscordConversationBindingRouteAsync(
 
 function applyDiscordBindingRoute(
   params: DiscordConversationBindingRouteParams,
-  resolvedRuntimeRoute: ReturnType<typeof resolveRuntimeConversationBindingRoute>,
+  resolvedRuntimeRoute: RuntimeConversationBindingRouteResult,
   baseRoute: ResolvedAgentRoute | undefined,
 ) {
   let runtimeRoute = resolvedRuntimeRoute;

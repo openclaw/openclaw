@@ -81,6 +81,7 @@ export async function backupLegacyStateSource(params: {
     symlinks: "reject",
     mkdir: false,
     mode: 0o600,
+    allowDrvfsRenameRecovery: true,
     assertBeforeMutation: params.assertCurrent,
   });
   const snapshot = await readLegacyMigrationSourceSnapshot({
@@ -130,8 +131,8 @@ export async function backupLegacyStateSource(params: {
   assertUnchanged();
   const backupPath = path.join(directory, backupName);
   const backupIdentity = {
-    dev: backup.stat.dev,
-    ino: backup.stat.ino,
+    dev: backup.exactIdentity.dev,
+    ino: backup.exactIdentity.ino,
     mtimeMs: backup.stat.mtimeMs,
     sha256: snapshot.sha256,
     size: snapshot.size,

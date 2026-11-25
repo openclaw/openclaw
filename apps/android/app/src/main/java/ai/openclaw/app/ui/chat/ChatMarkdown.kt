@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -41,9 +42,11 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.commonmark.Extension
@@ -84,7 +87,6 @@ import java.util.Locale
 import org.commonmark.node.Image as MarkdownImage
 import org.commonmark.node.Text as MarkdownTextNode
 
-private const val LIST_INDENT_DP = 14
 private const val DATA_IMAGE_HEADER_MAX_CHARS = 64
 internal const val CHAT_MARKDOWN_DISCLOSURE_MAX_DEPTH = 32
 private val dataImageRegex = Regex("^data:image/([a-zA-Z0-9+.-]+);base64,([A-Za-z0-9+/=\\n\\r]+)$")
@@ -129,7 +131,7 @@ fun ChatMarkdown(
       when (block) {
         is ChatMarkdownSourceBlock.Markdown -> {
           val documentBlocks = remember(block.source) { parseChatMarkdownBlocks(block.source) }
-          rendering.RenderMarkdownBlocks(documentBlocks, listDepth = 0)
+          rendering.RenderMarkdownBlocks(documentBlocks)
         }
 
         is ChatMarkdownSourceBlock.Math -> {
@@ -152,17 +154,11 @@ private data class MarkdownRendering(
 )
 
 @Composable
-private fun MarkdownRendering.RenderMarkdownBlocks(
-  blocks: List<ChatMarkdownRenderBlock>,
-  listDepth: Int,
-) {
+private fun MarkdownRendering.RenderMarkdownBlocks(blocks: List<ChatMarkdownRenderBlock>) {
   for (block in blocks) {
     when (block) {
       is ChatMarkdownRenderBlock.CommonMark -> {
-        RenderCommonMarkBlock(
-          current = block.node,
-          listDepth = listDepth,
-        )
+        RenderCommonMarkBlock(block.node)
       }
 
       is ChatMarkdownRenderBlock.LiteralHtml -> {
@@ -170,20 +166,14 @@ private fun MarkdownRendering.RenderMarkdownBlocks(
       }
 
       is ChatMarkdownRenderBlock.Disclosure -> {
-        RenderMarkdownDisclosure(
-          disclosure = block,
-          listDepth = listDepth,
-        )
+        RenderMarkdownDisclosure(block)
       }
     }
   }
 }
 
 @Composable
-private fun MarkdownRendering.RenderCommonMarkBlock(
-  current: Node,
-  listDepth: Int,
-) {
+private fun MarkdownRendering.RenderCommonMarkBlock(current: Node) {
   if (progressBars) {
     val progress = remember(current) { parseChatProgressElement(current) }
     if (progress != null) {
@@ -247,19 +237,13 @@ private fun MarkdownRendering.RenderCommonMarkBlock(
           modifier = Modifier.weight(1f),
           verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          RenderMarkdownBlocks(
-            blocks = commonMarkBlocks(current.firstChild),
-            listDepth = listDepth,
-          )
+          RenderMarkdownBlocks(commonMarkBlocks(current.firstChild))
         }
       }
     }
 
     is BulletList, is OrderedList -> {
-      RenderList(
-        list = current,
-        listDepth = listDepth,
-      )
+      RenderList(current)
     }
 
     is TableBlock -> {
@@ -301,10 +285,7 @@ private fun RenderLiteralHtml(
 }
 
 @Composable
-private fun MarkdownRendering.RenderMarkdownDisclosure(
-  disclosure: ChatMarkdownRenderBlock.Disclosure,
-  listDepth: Int,
-) {
+private fun MarkdownRendering.RenderMarkdownDisclosure(disclosure: ChatMarkdownRenderBlock.Disclosure) {
   var isExpanded by rememberSaveable { mutableStateOf(disclosure.isExpanded) }
   val summarySource = disclosure.summary ?: nativeString("Details")
   val summary =
@@ -342,10 +323,7 @@ private fun MarkdownRendering.RenderMarkdownDisclosure(
         modifier = Modifier.padding(start = 8.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
       ) {
-        RenderMarkdownBlocks(
-          blocks = disclosure.blocks,
-          listDepth = listDepth,
-        )
+        RenderMarkdownBlocks(disclosure.blocks)
       }
     }
   }
@@ -398,24 +376,33 @@ private fun MarkdownRendering.RenderInlineMarkdownRange(
 }
 
 @Composable
-private fun MarkdownRendering.RenderList(
-  list: Node,
-  listDepth: Int,
-) {
-  Column(
-    modifier = Modifier.padding(start = (LIST_INDENT_DP * listDepth).dp),
-    verticalArrangement = Arrangement.spacedBy(6.dp),
-  ) {
-    var index = (list as? OrderedList)?.markerStartNumber ?: 1
-    for (item in markdownSiblings(list.firstChild)) {
-      if (item is ListItem) {
-        RenderListItem(
-          item = item,
-          markerText = if (list is OrderedList) "$index." else "•",
-          listDepth = listDepth,
-        )
-        index += 1
+private fun MarkdownRendering.RenderList(list: Node) {
+  val items = remember(list) { markdownSiblings(list.firstChild).filterIsInstance<ListItem>().toList() }
+  val markers =
+    remember(list) {
+      val start = (list as? OrderedList)?.markerStartNumber ?: 1
+      items.mapIndexed { index, item ->
+        val task = item.firstChild as? TaskListItemMarker
+        when {
+          task != null -> if (task.isChecked) "☑" else "☐"
+          list is OrderedList -> "${start + index}."
+          else -> "•"
+        }
       }
+    }
+  val markerStyle = inlineStyles.baseCallout.copy(fontWeight = FontWeight.SemiBold)
+  val textMeasurer = rememberTextMeasurer()
+  // One width per list keeps sibling text aligned when numbers or font scaling grow.
+  val markerWidth =
+    with(LocalDensity.current) {
+      (markers.maxOfOrNull { textMeasurer.measure(it, markerStyle, softWrap = false).size.width } ?: 0)
+        .toDp()
+        .coerceAtLeast(24.dp)
+    }
+  // Nested lists already sit inside their parent's content column.
+  Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    items.forEachIndexed { index, item ->
+      RenderListItem(item, markers[index], markerStyle, markerWidth)
     }
   }
 }
@@ -423,16 +410,12 @@ private fun MarkdownRendering.RenderList(
 @Composable
 private fun MarkdownRendering.RenderListItem(
   item: ListItem,
-  markerText: String,
-  listDepth: Int,
+  marker: String,
+  markerStyle: TextStyle,
+  markerWidth: Dp,
 ) {
-  var contentStart = item.firstChild
-  var marker = markerText
-  val task = contentStart as? TaskListItemMarker
-  if (task != null) {
-    marker = if (task.isChecked) "☑" else "☐"
-    contentStart = task.next
-  }
+  val firstChild = item.firstChild
+  val contentStart = if (firstChild is TaskListItemMarker) firstChild.next else firstChild
 
   Row(
     modifier = Modifier.fillMaxWidth(),
@@ -441,19 +424,18 @@ private fun MarkdownRendering.RenderListItem(
   ) {
     Text(
       text = marker,
-      style = inlineStyles.baseCallout.copy(fontWeight = FontWeight.SemiBold),
+      style = markerStyle,
       color = textColor,
-      modifier = Modifier.width(24.dp),
+      modifier = Modifier.width(markerWidth),
+      softWrap = false,
+      maxLines = 1,
     )
 
     Column(
       modifier = Modifier.weight(1f),
       verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      RenderMarkdownBlocks(
-        blocks = commonMarkBlocks(contentStart),
-        listDepth = listDepth + 1,
-      )
+      RenderMarkdownBlocks(blocks = commonMarkBlocks(contentStart))
     }
   }
 }

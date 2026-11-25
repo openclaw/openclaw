@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { buildSandboxHostDocument } from "../../agents/sandbox-host.js";
+import { setOpenClawIdClawOriginResolver } from "../openclaw-id/claw-origin.js";
 
 const mocks = vi.hoisted(() => ({
   scopedRead: vi.fn(),
@@ -65,8 +67,10 @@ const policyEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
 let policyServer: McpServerConfig | undefined;
 import type { McpAppPrepareToolCall } from "../../agents/mcp-ui-resource.js";
 import { resolveMcpAppAllowedToolNames } from "../mcp-app-operations.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { makeClient } from "../server-broadcast.test-helpers.js";
+import type { RemoteControlUiIngressContext } from "../server/client-identity-types.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import { mcpAppHandlers } from "./mcp-app.js";
 import { runtime } from "./mcp-app.test-support.js";
@@ -100,6 +104,8 @@ async function invoke(
   config: Record<string, unknown> = {},
   scopes: string[] = ["operator.write"],
   profileId?: string,
+  remoteControlUiIngress?: RemoteControlUiIngressContext,
+  openclawIdTunnel = false,
 ) {
   const respond = vi.fn();
   const cfg = {
@@ -114,6 +120,8 @@ async function invoke(
     params,
     client: {
       connect: { scopes },
+      remoteControlUiIngress,
+      browserOrigin: { openclawIdTunnel },
       ...(profileId ? { authenticatedUserProfile: { profileId } } : {}),
     },
     context: {
@@ -515,6 +523,58 @@ describe("MCP App gateway bridge", () => {
     });
   });
 
+  it("projects the ingress sandbox origin without changing direct view presentation", async () => {
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+    const remote = await invoke(
+      "mcp.app.view",
+      params,
+      true,
+      {},
+      ["operator.read"],
+      undefined,
+      createRemoteControlUiIngressTestContext(),
+    );
+    expect(remote.mock.calls[0]?.[0]).toBe(true);
+    expect(remote.mock.calls[0]?.[1]).toMatchObject({
+      sandboxUrl: "https://sandbox.example.test/mcp-app-sandbox",
+      sandboxOrigin: "https://sandbox.example.test",
+    });
+    const direct = await invoke("mcp.app.view", params);
+    expect(direct.mock.calls[0]?.[1]).toMatchObject({
+      sandboxUrl: "mcp-app-sandbox",
+      sandboxOrigin: "https://apps.example.com",
+    });
+  });
+
+  it("bootstraps only linked tunnel MCP views without changing other connections", async () => {
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+    const direct = (await invoke("mcp.app.view", params)).mock.calls[0]![1];
+    const tunnelView = async () =>
+      (
+        await invoke(
+          "mcp.app.view",
+          params,
+          true,
+          {},
+          ["operator.write"],
+          undefined,
+          undefined,
+          true,
+        )
+      ).mock.calls[0]![1];
+    expect(await tunnelView()).toEqual(direct);
+    setOpenClawIdClawOriginResolver(() => "https://studio-k7x2q.crabd.xyz");
+    onTestFinished(() => setOpenClawIdClawOriginResolver(undefined));
+    expect(await tunnelView()).toEqual({
+      ...direct,
+      sandboxUrl:
+        "https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz/mcp-app-sandbox?claw=studio-k7x2q&cspv=1",
+      sandboxOrigin: "https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz",
+      sandboxShellHtml: buildSandboxHostDocument().html,
+    });
+    expect((await invoke("mcp.app.view", params)).mock.calls[0]![1]).toEqual(direct);
+  });
+
   it("does not reuse a live bare-key view owned by another agent", async () => {
     const nativeRuntime = runtime();
     const nativeView = { ...view, agentId: "ops", runtime: nativeRuntime };
@@ -611,6 +671,32 @@ describe("MCP App gateway bridge", () => {
     const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
     expect(getMcpAppModelContext(activeRuntime, view)).toBeNull();
   });
+
+  it.each([false, true])(
+    "returns the owning app's name and optional icon metadata (%s)",
+    async (withIcons) => {
+      const active = runtime();
+      const catalog = active.peekCatalog();
+      const icons = withIcons ? [{ src: "https://example.test/excalidraw.png" }] : undefined;
+      const server = expectDefined(catalog.servers.demo, "demo server fixture");
+      server.title = "Excalidraw";
+      server.icons = icons;
+      mocks.peekSessionMcpRuntime.mockReturnValue(active);
+      const response = await invoke("mcp.app.view", {
+        sessionKey: "agent:main:main",
+        viewId: "cv_app",
+      });
+      expect(response.mock.calls[0]?.[1]).toMatchObject({
+        appIdentity: { label: "Excalidraw", icons: icons ?? [] },
+      });
+      server.title = undefined;
+      const fallback = await invoke("mcp.app.view", {
+        sessionKey: "agent:main:main",
+        viewId: "cv_app",
+      });
+      expect(fallback.mock.calls[0]?.[1]).toMatchObject({ appIdentity: { label: "demo" } });
+    },
+  );
 
   it("rechecks current widget authority for every interactive capability", async () => {
     const activeRuntime = runtime();

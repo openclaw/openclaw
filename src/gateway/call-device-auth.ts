@@ -2,6 +2,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { readMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import {
   loadDeviceAuthToken,
   loadDeviceAuthTokenReadOnly,
@@ -16,6 +17,7 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import type { resolveGatewayAuth } from "./auth-resolve.js";
 import type { GatewayClientOptions } from "./client.js";
+import { projectGatewayUrlForDiagnostics } from "./connection-details.js";
 import { isLoopbackGatewayUrl } from "./net.js";
 
 export type GatewayCallDeviceAuthOptions = Pick<
@@ -32,6 +34,8 @@ export type GatewayCallDeviceAuthOptions = Pick<
   requireLocalBackendSharedAuth?: boolean;
   /** Reuse local auth-none authority without opening device storage for ordinary CLI RPCs. */
   allowLocalBackendAuthNone?: boolean;
+  /** CLI storage selection is lazy until authentication needs a local identity. */
+  beforeDeviceIdentityLoad?: () => Promise<void>;
 };
 
 export class GatewayCredentialsRequiredError extends Error {
@@ -170,6 +174,9 @@ export async function resolveGatewayCallDeviceAuth(params: {
       "local backend shared auth requires a loopback gateway with token/password credentials or auth mode none",
     );
   }
+  if (opts.deviceIdentity === undefined && !omitDeviceIdentity) {
+    await opts.beforeDeviceIdentityLoad?.();
+  }
   const deviceIdentity =
     opts.deviceIdentity === undefined
       ? omitDeviceIdentity
@@ -209,4 +216,26 @@ export async function loadStoredOperatorDeviceAuthToken(
   } catch {
     return null;
   }
+}
+
+/**
+ * A device with no identity behind gateway.remote.edgeAuth reaches the Gateway
+ * through the proxy but holds no scopes. `gateway call` is read-only and cannot
+ * pair it; the TUI can. An explicit --url stays in the command, because a bare
+ * `openclaw tui` may select another Gateway (for example a local one).
+ */
+export function withEdgeAuthPairingHint(
+  error: Error,
+  edgeAuthHeaders: Readonly<Record<string, string>> | undefined,
+  deviceIdentity: DeviceIdentity | null,
+  explicitUrl: string | undefined,
+): Error {
+  const details = "details" in error ? error.details : undefined;
+  if (edgeAuthHeaders && !deviceIdentity && readMissingScopeErrorDetails(details)) {
+    const tui = explicitUrl
+      ? `openclaw tui --url ${projectGatewayUrlForDiagnostics(explicitUrl)}`
+      : "openclaw tui";
+    error.message = `${error.message}\nFix: this device is not paired with this Gateway yet. Run \`${tui}\` once to pair this device, approve the request in that Gateway's Control UI (Settings -> Devices), then retry.`;
+  }
+  return error;
 }

@@ -16,24 +16,27 @@ import {
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
 } from "openclaw/plugin-sdk/lazy-runtime";
-import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
+import { listSlackReadableConversations } from "./action-channel-list.js";
 import type { SlackActionContext } from "./action-context.js";
+import { resolveSlackReadAsToken, resolveSlackReadPolicyTeamId } from "./action-read-params.js";
 import {
-  resolveSlackAutoThreadId,
+  hasSlackRequesterAccount,
+  isSlackDmTargetConfigured,
+  isSlackResolvedReadTargetAllowed,
+  resolveSlackChannelReadPolicy,
+  resolveSlackDmReadAllowed,
+} from "./action-read-policy.js";
+import {
+  resolveSlackThreadTsFromContext,
   SLACK_PRIVATE_ACTION_DELIVERY_RESULT,
 } from "./action-threading.js";
+import { hasSlackNativeDataBlock } from "./blocks-fallback.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import type { SlackConversationInfo } from "./channel-type.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
-import { buildSlackChannelIdCandidates } from "./group-policy.js";
-import { getSlackInstallationKind } from "./installation-identity-state.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
-import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
-import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
-import { hasSlackNativeDataBlock } from "./native-data-blocks.js";
 import { mergeSlackSendResults } from "./send-results.js";
 import type { SlackSendResult } from "./send.js";
 import { formatSlackTarget } from "./target-parsing.js";
@@ -74,10 +77,14 @@ const loadSlackChannelTypeRuntime = createLazyRuntimeModule(() => import("./chan
 const bindSlackChannelType = createLazyRuntimeMethodBinder(loadSlackChannelTypeRuntime);
 
 export const slackActionRuntime = {
+  createSlackChannel: bindSlackAction((runtime) => runtime.createSlackChannel),
   deleteSlackMessage: bindSlackAction((runtime) => runtime.deleteSlackMessage),
   downloadSlackFile: bindSlackAction((runtime) => runtime.downloadSlackFile),
   editSlackMessage: bindSlackAction((runtime) => runtime.editSlackMessage),
+  editSlackRenderedMessage: bindSlackAction((runtime) => runtime.editSlackRenderedMessage),
   getSlackMemberInfo: bindSlackAction((runtime) => runtime.getSlackMemberInfo),
+  listSlackConversations: bindSlackAction((runtime) => runtime.listSlackConversations),
+  resolveSlackTokenWorkspace: bindSlackAction((runtime) => runtime.resolveSlackTokenWorkspace),
   listSlackEmojis: bindSlackAction((runtime) => runtime.listSlackEmojis),
   listSlackPins: bindSlackAction((runtime) => runtime.listSlackPins),
   listSlackReactions: bindSlackAction((runtime) => runtime.listSlackReactions),
@@ -97,98 +104,6 @@ export const slackActionRuntime = {
 
 export type { SlackActionContext } from "./action-context.js";
 
-function resolveThreadTsFromContext(
-  explicitThreadTs: string | undefined,
-  targetChannel: string,
-  context: SlackActionContext | undefined,
-  opts?: { suppressImplicitThread?: boolean },
-): string | undefined {
-  if (explicitThreadTs) {
-    return explicitThreadTs;
-  }
-  if (opts?.suppressImplicitThread) {
-    return undefined;
-  }
-  const threadTs = resolveSlackAutoThreadId({ to: targetChannel, toolContext: context });
-  if (isSingleUseReplyToMode(context?.replyToMode ?? "off") && !context?.hasRepliedRef) {
-    return undefined;
-  }
-  // Planning stays pure so failed sends cannot consume a thread before delivery.
-  return threadTs;
-}
-
-function hasPotentialSlackNamedPolicy(params: {
-  channels: ResolvedSlackAccount["config"]["channels"];
-  allowNameMatching?: boolean;
-  decision: "allow" | "deny";
-}): boolean {
-  if (params.allowNameMatching !== true) {
-    return false;
-  }
-  return Object.entries(params.channels ?? {}).some(([key, entry]) => {
-    if (entry == null || key === "*") {
-      return false;
-    }
-    const named = !/^(?:channel:)?[CDG][A-Z0-9]+$/i.test(key);
-    const entryAllows = entry.enabled !== false;
-    return named && (params.decision === "allow" ? entryAllows : !entryAllows);
-  });
-}
-
-function resolveSlackDmReadAllowed(account: ResolvedSlackAccount): boolean {
-  const dmPolicy = account.config.dmPolicy ?? "pairing";
-  return account.config.dm?.enabled !== false && dmPolicy !== "disabled";
-}
-
-function normalizeConfiguredSlackDmUserId(value: unknown): string | undefined {
-  const target = parseSlackTarget(String(value), { defaultKind: "user" });
-  if (target?.kind !== "user") {
-    return undefined;
-  }
-  const userId = target.id.trim().toLowerCase();
-  return /^[uw][a-z0-9]+$/i.test(userId) ? userId : undefined;
-}
-
-async function isSlackDmTargetConfigured(params: {
-  account: ResolvedSlackAccount;
-  cfg: OpenClawConfig;
-  channelId: string;
-  userId?: string;
-}): Promise<boolean> {
-  const defaultTo = params.account.config.defaultTo?.trim();
-  if (
-    defaultTo &&
-    slackContextTargetsMatch(params.channelId, {
-      currentChannelId: defaultTo,
-    })
-  ) {
-    return true;
-  }
-  const userId = normalizeConfiguredSlackDmUserId(params.userId);
-  if (!userId) {
-    return false;
-  }
-  const { resolveSlackAccountAllowFrom } = await loadSlackAccountsRuntime();
-  const configuredUsers = [
-    ...(resolveSlackAccountAllowFrom({
-      cfg: params.cfg,
-      accountId: params.account.accountId,
-    }) ?? []),
-    ...Object.keys(params.account.config.dms ?? {}),
-    ...(defaultTo ? [defaultTo] : []),
-  ];
-  return configuredUsers.some((entry) => normalizeConfiguredSlackDmUserId(entry) === userId);
-}
-
-function hasSlackRequesterAccount(account: ResolvedSlackAccount, context?: SlackActionContext) {
-  const requesterAccountId = context?.requesterAccountId?.trim();
-  return Boolean(
-    normalizeOptionalLowercaseString(context?.currentChannelProvider) === "slack" &&
-    requesterAccountId &&
-    normalizeAccountId(requesterAccountId) === normalizeAccountId(account.accountId),
-  );
-}
-
 function assertSlackMemberInfoAllowed(params: {
   account: ResolvedSlackAccount;
   context?: SlackActionContext;
@@ -207,88 +122,17 @@ function assertSlackMemberInfoAllowed(params: {
   }
 }
 
-function resolveSlackChannelReadPolicy(params: {
-  account: ResolvedSlackAccount;
-  cfg: OpenClawConfig;
-  channelId: string;
-  teamId?: string;
-  channelName?: string;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  metadataResolved?: boolean;
-  currentConversation?: boolean;
-}) {
-  const channels = params.account.config.channels;
-  const channelKeys = Object.keys(channels ?? {});
-  const channelConfig = resolveSlackChannelConfig({
-    teamId: params.teamId,
-    allowUnscoped: getSlackInstallationKind(params.account.accountId) !== "enterprise",
-    channelId: params.channelId,
-    channelName: params.channelName,
-    channels,
-    channelKeys,
-    allowNameMatching: params.account.config.dangerouslyAllowNameMatching,
-    defaultRequireMention: params.account.config.requireMention,
-  });
-  const channelAllowed = channelConfig?.allowed !== false;
-  const channelExplicitlyDisabled = !channelAllowed && channelConfig?.matchSource === "direct";
-  const channelWildcardDisabled = !channelAllowed && channelConfig?.matchSource === "wildcard";
-  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: params.cfg.channels?.slack !== undefined,
-    groupPolicy: params.account.config.groupPolicy,
-    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
-  });
-  const policyAllowed = isSlackChannelAllowedByPolicy({
-    groupPolicy,
-    channelAllowlistConfigured: channelKeys.length > 0,
-    channelAllowed,
-  });
-  const delegatedChannelAllowed =
-    policyAllowed && !(!channelAllowed && (groupPolicy !== "open" || channelConfig?.matchSource));
-  const directChannelAllowed =
-    groupPolicy !== "disabled" && !channelExplicitlyDisabled && !channelWildcardDisabled;
-  const baseChannelAllowed =
-    params.conversationReadOrigin === "direct-operator" || params.currentConversation
-      ? directChannelAllowed
-      : delegatedChannelAllowed;
-  const allowNameMatching = params.account.config.dangerouslyAllowNameMatching;
-  const shouldResolveName =
-    !params.metadataResolved &&
-    !params.channelName &&
-    ((baseChannelAllowed &&
-      channelConfig?.matchSource !== "direct" &&
-      hasPotentialSlackNamedPolicy({
-        channels,
-        allowNameMatching,
-        decision: "deny",
-      })) ||
-      (!baseChannelAllowed &&
-        groupPolicy !== "disabled" &&
-        !channelExplicitlyDisabled &&
-        hasPotentialSlackNamedPolicy({
-          channels,
-          allowNameMatching,
-          decision: "allow",
-        })));
-  return {
-    channelAllowed: baseChannelAllowed,
-    channelExplicitlyDisabled,
-    groupDmAllowed:
-      params.account.config.dm?.enabled !== false &&
-      params.account.config.dm?.groupEnabled === true &&
-      (params.currentConversation ||
-        isSlackGroupDmTargetConfigured(params.account, params.channelId, params.teamId)),
-    shouldResolveName,
-  };
-}
-
 async function assertSlackReadTargetAllowed(params: {
   account: ResolvedSlackAccount;
   cfg: OpenClawConfig;
   channelId: string;
   teamId?: string;
+  policyTeamId?: string;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   context?: SlackActionContext;
+  token?: string;
 }) {
+  const policy = { ...params, teamId: params.policyTeamId ?? params.teamId };
   const deny = () => {
     throw new Error("Slack read target channel is not allowed.");
   };
@@ -316,6 +160,7 @@ async function assertSlackReadTargetAllowed(params: {
       channelId: params.channelId,
       teamId: params.teamId,
       operation: "read",
+      ...(params.token ? { token: params.token } : {}),
       assertDirectAdapterHandoff: params.context?.assertDirectAdapterHandoff,
     });
     if (
@@ -330,10 +175,7 @@ async function assertSlackReadTargetAllowed(params: {
     return;
   }
 
-  const preliminary = resolveSlackChannelReadPolicy({
-    ...params,
-    currentConversation,
-  });
+  const preliminary = resolveSlackChannelReadPolicy({ ...policy, currentConversation });
   if (preliminary.channelExplicitlyDisabled) {
     deny();
   }
@@ -352,6 +194,7 @@ async function assertSlackReadTargetAllowed(params: {
     channelId: params.channelId,
     teamId: params.teamId,
     operation: "read",
+    ...(params.token ? { token: params.token } : {}),
     ...(preliminary.shouldResolveName ? { requireFreshName: true } : {}),
     assertDirectAdapterHandoff: params.context?.assertDirectAdapterHandoff,
   });
@@ -362,72 +205,16 @@ async function assertSlackReadTargetAllowed(params: {
   ) {
     deny();
   }
-  const resolved = resolveSlackChannelReadPolicy({
-    ...params,
-    channelName: info.name,
-    metadataResolved: true,
-    currentConversation,
-  });
-  if (resolved.channelExplicitlyDisabled) {
+  if (!(await isSlackResolvedReadTargetAllowed({ ...policy, info, currentConversation }))) {
     deny();
   }
-  if (info.type === "dm") {
-    if (
-      !resolveSlackDmReadAllowed(params.account) ||
-      (!directOperator &&
-        !currentConversation &&
-        !(await isSlackDmTargetConfigured({
-          ...params,
-          userId: info.user,
-        })))
-    ) {
-      deny();
-    }
-    return;
-  }
-  const allowed =
-    info.type === "channel"
-      ? resolved.channelAllowed
-      : info.type === "group"
-        ? resolved.groupDmAllowed
-        : resolved.channelAllowed && resolved.groupDmAllowed;
-  if (!allowed) {
-    deny();
-  }
-}
-
-function isSlackGroupDmTargetConfigured(
-  account: ResolvedSlackAccount,
-  channelId: string,
-  teamId?: string,
-): boolean {
-  const entries = account.config.dm?.groupChannels ?? [];
-  if (entries.length === 0) {
-    return true;
-  }
-  const candidates = new Set(
-    buildSlackChannelIdCandidates(channelId, teamId, {
-      allowUnscoped: getSlackInstallationKind(account.accountId) !== "enterprise",
-    }).map((candidate) => candidate.toLowerCase()),
-  );
-  const target = channelId.trim().toLowerCase();
-  return entries.some((entry) => {
-    const candidate = String(entry).trim().toLowerCase();
-    return (
-      candidate === "*" ||
-      candidates.has(candidate) ||
-      candidate === target ||
-      candidate === `slack:${target}` ||
-      candidate === `channel:${target}` ||
-      candidate === `group:${target}` ||
-      candidate === `mpim:${target}`
-    );
-  });
 }
 
 type SlackActionChannelTarget = {
   channelId: string;
   teamId?: string;
+  /** Workspace for policy when the caller's target is unqualified; identity keeps teamId. */
+  policyTeamId?: string;
 };
 
 function resolveTrustedCurrentSlackTeamId(params: {
@@ -509,8 +296,12 @@ export async function handleSlackAction(
   const isActionEnabled = createActionGate(actionConfig);
   const botToken = account.botToken?.trim();
 
-  const buildActionOpts = (operation: "read" | "write", teamId?: string) => {
-    const token = resolveSlackOperationToken(account, operation);
+  if (action === "createChannel" && !isActionEnabled("channels", false)) {
+    throw new Error("Slack channel creation is disabled.");
+  }
+
+  const buildActionOpts = (operation: "read" | "write", teamId?: string, readToken?: string) => {
+    const token = readToken ?? resolveSlackOperationToken(account, operation);
     if (!token && account.identity === "user") {
       throw new Error(`Slack operation token missing for account "${account.accountId}".`);
     }
@@ -524,16 +315,35 @@ export async function handleSlackAction(
     };
   };
 
-  const assertReadTargetAllowed = async (target: SlackActionChannelTarget) => {
+  const assertReadTargetAllowed = async (target: SlackActionChannelTarget, token?: string) => {
     await assertSlackReadTargetAllowed({
       account,
       cfg,
       channelId: target.channelId,
       teamId: target.teamId,
+      policyTeamId: target.policyTeamId,
       conversationReadOrigin: context?.conversationReadOrigin,
       context,
+      token,
     });
   };
+
+  if (action === "createChannel") {
+    const teamId =
+      readStringParam(params, "teamId") ?? resolveTrustedCurrentSlackTeamId({ account, context });
+    const inviteUserId =
+      normalizeOptionalLowercaseString(context?.currentChannelProvider) === "slack" &&
+      context?.requesterAccountId &&
+      normalizeAccountId(context.requesterAccountId) === normalizeAccountId(account.accountId)
+        ? context?.requesterSenderId
+        : undefined;
+    assertSlackDetachedTargetAllowed(account.accountId, teamId);
+    const result = await slackActionRuntime.createSlackChannel(
+      readStringParam(params, "name", { required: true }),
+      { ...buildActionOpts("write", teamId), inviteUserId },
+    );
+    return jsonResult({ ok: true, ...result });
+  }
 
   if (reactionsActions.has(action)) {
     if (!isActionEnabled("reactions")) {
@@ -583,7 +393,7 @@ export async function handleSlackAction(
     }
     const sentResults: SlackSendResult[] = [];
     const buildSendOpts = (destination: string, forceDocument: boolean) => {
-      const threadTs = resolveThreadTsFromContext(
+      const threadTs = resolveSlackThreadTsFromContext(
         readStringParam(params, "threadTs"),
         destination,
         context,
@@ -684,9 +494,7 @@ export async function handleSlackAction(
           ...(nativeDataFallbackBaseText !== undefined ? { nativeDataFallbackBaseText } : {}),
         };
         const sendContentAndBlocks = async () => {
-          const shouldSplitLongContent =
-            content && content.length > SLACK_TEXT_LIMIT && !hasSlackNativeDataBlock(blocks);
-          if (content && shouldSplitLongContent) {
+          if (content && content.length > SLACK_TEXT_LIMIT && !hasSlackNativeDataBlock(blocks)) {
             // Reuse the resolved thread for both sends. Invoking the action twice
             // could consume replyToMode=first and move the full text off-thread.
             const { replyBroadcast: _replyBroadcast, ...blockSendOpts } = sendOpts;
@@ -711,15 +519,8 @@ export async function handleSlackAction(
           for (const [index, message] of preparedMessages.entries()) {
             await sendSlackMessage(destination, message.text, {
               ...baseSendOpts,
+              ...message,
               ...(index === 0 && replyBroadcast ? { replyBroadcast: true } : {}),
-              ...(message.blocks ? { blocks: message.blocks } : {}),
-              ...(message.authoredTextPlacement
-                ? { authoredTextPlacement: message.authoredTextPlacement }
-                : {}),
-              ...(Object.hasOwn(message, "nativeDataFallbackBaseText")
-                ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
-                : {}),
-              ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
             });
           }
         } else if (blocks) {
@@ -727,7 +528,7 @@ export async function handleSlackAction(
         } else {
           await sendSlackMessage(destination, content ?? "", {
             ...sendOpts,
-            mediaUrl: mediaUrl ?? undefined,
+            mediaUrl,
             blocks,
           });
         }
@@ -778,7 +579,11 @@ export async function handleSlackAction(
         }
         await assertReadTargetAllowed(target);
         const writeOpts = buildActionOpts("write", target.teamId);
-        await slackActionRuntime.editSlackMessage(channelId, messageId, content ?? "", {
+        const edit =
+          context?.preparedEditText === undefined
+            ? slackActionRuntime.editSlackMessage
+            : slackActionRuntime.editSlackRenderedMessage;
+        await edit(channelId, messageId, context?.preparedEditText ?? content ?? "", {
           ...writeOpts,
           blocks,
         });
@@ -798,8 +603,18 @@ export async function handleSlackAction(
       case "readMessages": {
         const target = resolveChannelTarget();
         const { channelId } = target;
-        await assertReadTargetAllowed(target);
-        const readOpts = buildActionOpts("read", target.teamId);
+        const readToken = resolveSlackReadAsToken(account, params);
+        const policyTeamId = await resolveSlackReadPolicyTeamId({
+          account,
+          targetTeamId: target.teamId,
+          selectedToken: readToken ?? resolveSlackOperationToken(account, "read"),
+          lookup: () =>
+            slackActionRuntime.resolveSlackTokenWorkspace(
+              buildActionOpts("read", undefined, readToken),
+            ),
+        });
+        await assertReadTargetAllowed({ ...target, policyTeamId }, readToken);
+        const readOpts = buildActionOpts("read", target.teamId, readToken);
         const limit = readPositiveIntegerParam(params, "limit", {
           message: "limit must be a positive integer.",
         });
@@ -810,10 +625,10 @@ export async function handleSlackAction(
         const result = await slackActionRuntime.readSlackMessages(channelId, {
           ...readOpts,
           limit,
-          before: before ?? undefined,
-          after: after ?? undefined,
-          threadId: threadId ?? undefined,
-          messageId: messageId ?? undefined,
+          before,
+          after,
+          threadId,
+          messageId,
         });
         const messages = result.messages.map((message) =>
           withNormalizedTimestamp(message, message.ts),
@@ -844,14 +659,12 @@ export async function handleSlackAction(
         const maxBytes = account.config?.mediaMaxMb
           ? account.config.mediaMaxMb * 1024 * 1024
           : 20 * 1024 * 1024;
-        const readToken = resolveSlackOperationToken(account, "read");
         const readOpts = buildActionOpts("read", target.teamId);
         const downloaded = await slackActionRuntime.downloadSlackFile(fileId, {
           ...readOpts,
-          ...(readToken && !readOpts.token ? { token: readToken } : {}),
           maxBytes,
           channelId,
-          threadId: threadId ?? undefined,
+          threadId,
         });
         if (!downloaded) {
           return jsonResult({
@@ -914,10 +727,9 @@ export async function handleSlackAction(
     }
     await assertReadTargetAllowed(target);
     const pins = await slackActionRuntime.listSlackPins(channelId, readOpts);
+    pins.length = Math.min(pins.length, readPositiveIntegerParam(params, "limit") ?? pins.length);
     const normalizedPins = pins.map((pin) => {
-      const message = pin.message
-        ? withNormalizedTimestamp(pin.message, pin.message.ts)
-        : pin.message;
+      const message = pin.message && withNormalizedTimestamp(pin.message, pin.message.ts);
       return message ? Object.assign({}, pin, { message }) : pin;
     });
     return jsonResult({ ok: true, pins: normalizedPins });
@@ -955,6 +767,31 @@ export async function handleSlackAction(
           : { name, identifier: name },
       );
     return jsonResult({ ok: true, emojis });
+  }
+
+  if (action === "channelList") {
+    if (!isActionEnabled("channelInfo")) {
+      throw new Error("Slack channel list is disabled.");
+    }
+    const requestedTeamId =
+      readStringParam(params, "teamId") ?? resolveTrustedCurrentSlackTeamId({ account, context });
+    assertSlackDetachedTargetAllowed(account.accountId, requestedTeamId);
+    const readAsToken = resolveSlackReadAsToken(account, params);
+    const readToken = readAsToken ?? resolveSlackOperationToken(account, "read");
+    const listOpts = buildActionOpts("read", requestedTeamId, readAsToken);
+    return jsonResult(
+      await listSlackReadableConversations({
+        account,
+        cfg,
+        params,
+        context,
+        readToken,
+        requestedTeamId,
+        listConversations: (options) =>
+          slackActionRuntime.listSlackConversations({ ...listOpts, ...options }),
+        lookupWorkspace: () => slackActionRuntime.resolveSlackTokenWorkspace(listOpts),
+      }),
+    );
   }
 
   throw new Error(`Unknown action: ${action}`);

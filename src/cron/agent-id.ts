@@ -4,6 +4,15 @@ import type { CronAgentScope } from "./types-shared.js";
 export const CRON_AGENT_SELECTION_REQUIRED_MESSAGE =
   "Agent-less cron job has no resolvable owner. Pass --agent <id> when creating or editing the job, or set agents.defaults.systemAgent.agentId.";
 
+export class CronAgentSelectionRequiredError extends Error {
+  readonly code = "AGENT_SELECTION_REQUIRED";
+
+  constructor() {
+    super(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+    this.name = "CronAgentSelectionRequiredError";
+  }
+}
+
 /** Resolves cron ownership: explicit non-blank id, scoped session key, then configured default. */
 export function tryResolveCronJobEffectiveAgentId(
   job: CronAgentScope,
@@ -23,7 +32,7 @@ export function resolveCronJobEffectiveAgentId(
 ): string {
   const agentId = tryResolveCronJobEffectiveAgentId(job, configuredDefaultAgentId);
   if (!agentId) {
-    throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+    throw new CronAgentSelectionRequiredError();
   }
   return agentId;
 }

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createBrokerNativeResourceServer } from "./resource-server.js";
 import type { createBrokerResourceSocket } from "./resource-socket.js";
@@ -23,16 +23,26 @@ it("joins the same native close after transport loss instead of abandoning or du
     entered.resolve();
     await released.promise;
   });
-  vi.stubGlobal("__openclawResourceRetirementFixture", { close });
+  const receive = vi.fn(() => {
+    throw new Error("owner callback refused");
+  });
+  vi.stubGlobal("__openclawResourceRetirementFixture", { close, receive });
+  const responses: string[] = [];
   const connected = Object.getOwnPropertyDescriptor(process, "connected");
   Object.defineProperty(process, "connected", { configurable: true, value: true });
+  // Registered before startup so a rejected server cannot leak the override.
+  onTestFinished(() => {
+    if (connected) {
+      Object.defineProperty(process, "connected", connected);
+    } else {
+      Reflect.deleteProperty(process, "connected");
+    }
+  });
   let accept: ((socket: { setTimeout: () => void }) => void) | undefined;
   let peer: Parameters<typeof createBrokerResourceSocket>[1] | undefined;
   const nativeServer = Object.assign(new EventEmitter(), {
     listen: (_endpoint: string, ready: () => void) => ready(),
-    close: vi.fn((): void => {
-      nativeServer.emit("close");
-    }),
+    close: vi.fn(() => nativeServer.emit("close")),
   });
   boundary.server.mockImplementation((callback: typeof accept) => {
     accept = callback;
@@ -44,13 +54,16 @@ it("joins the same native close after transport loss instead of abandoning or du
       return { send: async () => {}, close: () => handlers.close() };
     },
   );
+  const endpoint = "synthetic-resource-endpoint";
   const resource = await createBrokerNativeResourceServer({
-    endpoint: "synthetic-resource-endpoint",
+    endpoint,
+    directory: undefined,
     secret: "synthetic-resource-secret",
     generation: 1,
     canAdmit: () => true,
-    reportParent: async (message) => {
-      if (message.type === "resource-created") {
+    reportParent: async ({ type }) => {
+      responses.push(type);
+      if (type === "resource-created") {
         created.resolve();
       }
     },
@@ -61,27 +74,31 @@ it("joins the same native close after transport loss instead of abandoning or du
       type: "resource-attach",
       attachment: {
         id: 1,
-        endpoint: "synthetic-resource-endpoint",
+        endpoint,
         secret: "synthetic-resource-secret",
         generation: 1,
         ownerPort: true,
         moduleUrl:
           "data:text/javascript," +
           encodeURIComponent(
-            "export function createNativeWorkerResource(){return globalThis.__openclawResourceRetirementFixture;}",
+            "export function createNativeWorkerResource(_target,_input,owner){const fixture=globalThis.__openclawResourceRetirementFixture;owner.on('message',fixture.receive);return fixture;}",
           ),
       },
     });
     await created.promise;
+    const ownerRequest = { type: "resource-owner", id: 1, sequence: 1, value: "request" } as const;
+    resource.receive(ownerRequest);
+    peer!.message(ownerRequest);
+    expect(receive).toHaveBeenCalledOnce();
+    expect(responses).toContain("resource-owner-rejected");
+    expect(responses).not.toContain("resource-owner-received");
     resource.receive({ type: "resource-close", id: 1, requestId: 1 });
     await entered.promise;
     resource.disconnect();
-    let settled = false;
-    const closing = resource.close().then(() => {
-      settled = true;
-    });
+    const settled = vi.fn();
+    const closing = resource.close().then(settled);
     await Promise.resolve();
-    expect(settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
     released.resolve();
     await closing;
@@ -91,10 +108,5 @@ it("joins the same native close after transport loss instead of abandoning or du
   } finally {
     released.resolve();
     await resource.close();
-    if (connected) {
-      Object.defineProperty(process, "connected", connected);
-    } else {
-      Reflect.deleteProperty(process, "connected");
-    }
   }
 });

@@ -214,6 +214,8 @@
 }
 
 .memory-import__loading {
+  --skeleton-base: var(--skeleton-base-raised);
+
   display: grid;
   gap: 12px;
   padding: 12px;
@@ -222,14 +224,6 @@
 .memory-import__skeleton {
   height: 96px;
   border-radius: var(--radius-md);
-}
-
-.memory-import__skeleton::after {
-  animation-duration: 1.4s;
-}
-
-.memory-import__confirm .callout {
-  margin-top: 12px;
 }
 
 .memory-import__backfill-dates,
@@ -283,6 +277,25 @@
 .memory-import__backfill-preview > ul > li > ul {
   color: var(--muted);
   font-size: 10px;
+}
+
+/* Let compact import values share their label's line, without stealing the width
+   a long workspace path or agent name needs when it wraps to the next line. */
+@media (max-width: 640px) {
+  .memory-import
+    .settings-row:has(> .settings-row__control > :is(openclaw-agent-select, .settings-row__value)) {
+    > .settings-row__text {
+      flex-basis: auto;
+    }
+
+    > .settings-row__control {
+      width: auto;
+    }
+
+    .settings-row__value {
+      text-align: start;
+    }
+  }
 }
 
 @media (max-width: 768px) {

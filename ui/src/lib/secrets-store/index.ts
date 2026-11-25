@@ -8,7 +8,10 @@ import { isSensitiveEnvName } from "../../../../src/secrets/secret-env-name.js";
 import { parseSecretStoreDotEnvText } from "../../../../src/secrets/store/dotenv.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSecretsStoreEnglish } from "../../i18n/locales/en-secrets-store.ts";
 import { formatUiError } from "../format-error.ts";
+
+registerSecretsStoreEnglish();
 
 export type SecretsStoreDraft = {
   name: string;
@@ -109,22 +112,24 @@ async function mutateAndReload(
       for (const entry of mutation.entries) {
         const reply = await client.request<SecretsStoreMutationResult>("secrets.store.set", entry);
         saved += 1;
+        state.loaded = false;
         warningCount = Math.max(warningCount, reply.warningCount ?? 0);
         await refreshSnapshot(state, client);
       }
     } else {
       result = await mutation(client);
+      state.loaded = false;
     }
   } catch (error) {
-    mutationError = bulk
-      ? new Error(
-          t("secretsStore.partial", {
-            saved: String(saved),
-            total: String(mutation.entries.length),
-            error: formatUiError(error),
-          }),
-        )
-      : error;
+    mutationError =
+      bulk && saved < mutation.entries.length
+        ? new Error(
+            `${t("secretsStore.partial", {
+              saved: String(saved),
+              total: String(mutation.entries.length),
+            })} ${t("secretsStore.partialFailure", { error: formatUiError(error) })}`,
+          )
+        : error;
   }
   try {
     if (!bulk || mutationError) {
@@ -138,7 +143,8 @@ async function mutateAndReload(
       state.error = mutationError ? formatUiError(mutationError) : null;
     }
   }
-  return mutationError ? null : bulk ? { saved, warningCount } : result;
+  // A later inventory failure does not undo acknowledged writes.
+  return bulk ? (saved === mutation.entries.length ? { saved, warningCount } : null) : result;
 }
 
 export function setSecretsStoreEntry(

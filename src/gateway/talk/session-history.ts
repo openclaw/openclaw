@@ -18,7 +18,7 @@ export async function readTalkRealtimeInitialItems(
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   };
-  const sessionId = resolveClientVoiceAgentSessionId(sessionTarget);
+  const sessionId = await resolveClientVoiceAgentSessionId(sessionTarget);
   if (!sessionId) {
     return [];
   }

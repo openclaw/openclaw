@@ -4,7 +4,7 @@ import {
   ScheduledTaskInspectionError,
 } from "../../daemon/schtasks-state-probe.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
-import { resolveGlobalInstallSpec } from "../../infra/update-global.js";
+import { isMainPackageTarget, resolveGlobalInstallSpec } from "../../infra/update-global.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { defaultRuntime } from "../../runtime.js";
 import { quotePowerShellArg } from "../quote-cli-arg.js";
@@ -34,18 +34,25 @@ export function preflightWindowsUpdateTask(tag?: string, timeoutMs?: number): vo
       return;
     }
   }
-  const target = resolveGlobalInstallSpec({
-    packageName: "openclaw",
-    tag: normalizePackageTagInput(tag, ["openclaw"]) ?? "<target>",
-  });
-  const spec = /^[\w@.+-]+$/.test(target) ? target : quotePowerShellArg(target);
-  const manual = `For a global npm installation, update manually: npm i -g ${spec} --allow-scripts=openclaw, then openclaw doctor --fix, then openclaw gateway restart.`;
   throw new GatewayServiceUpdateOwnershipError(
     createUpdatePreflightFailure(
       failureCode,
-      [error?.message, manual].filter(Boolean).join("\n"),
+      [error?.message, windowsUpdateManualGuidance(tag)].filter(Boolean).join("\n"),
       "managed-service",
     ),
     error,
   );
+}
+
+export function windowsUpdateManualGuidance(tag?: string): string {
+  const targetTag = normalizePackageTagInput(tag, ["openclaw"]) ?? "<target>";
+  if (isMainPackageTarget(targetTag)) {
+    return "Use openclaw update --channel dev for the supported Git checkout and build flow.";
+  }
+  const target = resolveGlobalInstallSpec({
+    packageName: "openclaw",
+    tag: targetTag,
+  });
+  const spec = /^[\w@.+-]+$/.test(target) ? target : quotePowerShellArg(target);
+  return `For a global npm installation, update manually: npm i -g ${spec} --allow-scripts=openclaw, then openclaw doctor --fix, then openclaw gateway restart.`;
 }

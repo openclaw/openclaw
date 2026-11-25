@@ -3,17 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as shared from "./shared.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { prepareUpdateCommand } from "./update-command-run.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 it("keeps Doctor's source update on dev while preserving saved extended-stable policy", async () => {
   const channel = "extended-stable";

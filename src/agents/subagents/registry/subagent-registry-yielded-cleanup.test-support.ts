@@ -39,6 +39,7 @@ export function registerYieldedParentCleanupCase({
     await mod.addSubagentRunForTests({
       runId: "run-yielded-parent",
       childSessionKey: "agent:main:subagent:parent",
+      childSessionIdentity: { sessionId: "sess-parent" },
       task: "yielded parent waiting on descendants",
       createdAt: Date.parse("2026-06-26T02:17:00Z"),
       startedAt: Date.parse("2026-06-26T02:18:00Z"),

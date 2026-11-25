@@ -21,13 +21,16 @@ async function assertNoPendingSupervisionBranch(params: {
   sourceHomeId?: string;
   allowLegacy?: boolean;
 }): Promise<void> {
-  const adoptedEntries = [
+  const agentIds = [
     params.agentId,
     ...listAgentIds(params.config).filter((agentId) => agentId !== params.agentId),
-  ]
-    .flatMap((agentId) =>
-      params.runtime.agent.session.listSessionEntries({ agentId, readOnly: true }),
+  ];
+  const adoptedEntries = (
+    await Promise.all(
+      agentIds.map((agentId) => params.runtime.agent.session.listSessionEntriesAsync({ agentId })),
     )
+  )
+    .flat()
     .filter(
       (candidate) =>
         isAdoptionSessionKeyForThread(candidate.sessionKey, params.threadId, params.sourceHomeId) ||

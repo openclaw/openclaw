@@ -23,6 +23,10 @@ export function createMockSessionRuntime(sessionStore: Record<string, unknown>) 
     getSessionEntry: vi.fn(
       ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey] as MockSessionEntry,
     ),
+    getSessionEntryAsync: vi.fn(
+      async ({ sessionKey }: { sessionKey: string }) =>
+        sessionStore[sessionKey] as MockSessionEntry,
+    ),
     prepareSessionEntryPatch: vi.fn(
       async ({
         sessionKey,

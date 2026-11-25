@@ -1,4 +1,3 @@
-/** Computer Use readiness probes and their native subscription lifecycle. */
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   CodexAppServerUnsafeSubscriptionError,
@@ -9,7 +8,6 @@ import type { CodexAppServerClient } from "./client.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 import type { ToolCallResult as CodexMcpToolCallResult } from "./protocol-mcp.js";
 import type { CodexThreadStartResponse, JsonValue } from "./protocol.js";
-import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 
 export type CodexComputerUseRequest = <T = JsonValue | undefined>(
   method: string,
@@ -75,7 +73,6 @@ export type CodexComputerUseLiveTestStatus = {
   repaired: boolean;
   message: string;
   error?: string;
-  durationMs?: number;
 };
 
 const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
@@ -91,7 +88,6 @@ export async function runCodexComputerUseLiveTest(params: {
   config: ResolvedCodexComputerUseConfig;
   tools?: readonly string[];
 }): Promise<{ liveTest: CodexComputerUseLiveTestStatus; repair?: CodexComputerUseRepairStatus }> {
-  const startedAt = Date.now();
   let lastError: unknown;
   let repair: CodexComputerUseRepairStatus | undefined;
   const probe =
@@ -107,7 +103,6 @@ export async function runCodexComputerUseLiveTest(params: {
     timeoutMs: params.config.liveTestTimeoutMs,
     retried: attempts > 1,
     repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
-    durationMs: Math.max(0, Date.now() - startedAt),
     message:
       error === undefined
         ? "Computer Use live test passed."
@@ -159,10 +154,7 @@ export async function runCodexComputerUseLiveTest(params: {
         cleanupError = toErrorObject(error, "Computer Use readiness cleanup failed");
       }
     }
-    if (
-      "error" in outcome &&
-      (params.signal?.aborted || isCodexAppServerStartSelectionChangedError(outcome.error))
-    ) {
+    if ("error" in outcome && params.signal?.aborted) {
       throw toErrorObject(outcome.error, "Computer Use live test failed");
     }
     if (cleanupError) {

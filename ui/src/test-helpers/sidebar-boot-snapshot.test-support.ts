@@ -1,5 +1,6 @@
 import type { SidebarSnapshotModel } from "../components/sidebar-snapshot-model.ts";
-import { bootRosterSchema, type BootRoster } from "../lib/sessions/session-boot-roster.ts";
+import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
+import type { BootRoster } from "../lib/sessions/session-boot-roster.ts";
 
 export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotModel {
   return {
@@ -7,13 +8,8 @@ export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotM
     roster: roster ? bootRosterSchema.parse(roster) : null,
     mode: "roster",
     navigationView: "sessions",
-    navigationScope: "all",
-    scopesEquivalent: false,
-    pages: [],
-    pageScopeId: null,
     pinnedSessions: [],
-    entries: ["sessions"],
-    sessions: [],
+    entries: [],
     sections: [],
     cards: [],
     collapsedAgentIds: [],
@@ -23,9 +19,12 @@ export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotM
     onlineCounts: [],
     peopleSortMode: "presence",
     peopleStatusFilter: "all",
-    onlineExpanded: false,
+    peoplePresenceFilter: "online",
+    offlineUsers: [],
     ownerId: null,
     involvingMe: false,
+    windowKeys: [],
+    rowFloor: 32,
     footer: null,
     brand: { name: "Synthetic workspace", avatar: null, icon: "mark", environment: null },
   };

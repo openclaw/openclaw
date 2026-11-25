@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Root } from "@openclaw/fs-safe";
-import { statRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { sameFileIdentity, statRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { FsSafeError, isNoReplaceUnsupported } from "@openclaw/fs-safe/errors";
 import {
@@ -64,8 +64,8 @@ async function pinMoveParent(root: MigrationMoveRoot, from: string): Promise<Pin
     const admitted = await root.stat(relativePath);
     if (
       !admitted.isDirectory ||
-      admitted.dev !== parent.receipt.identity.dev ||
-      admitted.ino !== parent.receipt.identity.ino
+      !admitted.exactIdentity ||
+      !sameFileIdentity(admitted.exactIdentity, parent.receipt.exactIdentity)
     ) {
       throw new FsSafeError("path-mismatch", "legacy migration source parent changed");
     }

@@ -43,9 +43,9 @@ describe("reasoning-first completions", () => {
             { emitReasoning },
           );
           expect(output.stopReason).toBe("stop");
-          expect(output.content.filter((block) => block.type === "text")).toMatchObject([
-            { text: "Answer continues.", textSignature: expect.stringContaining('"commentary"') },
-            { text: "Final.", textSignature: expect.stringContaining('"final_answer"') },
+          expect(output.content.filter((block) => block.type === "text")).toEqual([
+            { type: "text", text: "Answer continues." },
+            { type: "text", text: "Final." },
           ]);
         }
       }

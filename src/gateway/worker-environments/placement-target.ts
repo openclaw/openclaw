@@ -1,6 +1,7 @@
 import { supportsCurrentWorkerLaunch } from "../../worker/worker-build-identity.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 
 export type WorkerPlacementCancellationTarget = Readonly<
   Pick<WorkerSessionPlacementRecord, "state" | "generation" | "environmentId" | "activeOwnerEpoch">
@@ -27,10 +28,39 @@ export function isExactAttachedEnvironment(
     environment.environmentId === placement.environmentId &&
     environment.state === "attached" &&
     environment.destroyRequestedAtMs === null &&
+    isWorkerEnvironmentAttachedTo(environment, placement),
+  );
+}
+
+export function isWorkerEnvironmentAttachedTo<
+  Environment extends Pick<WorkerEnvironmentRecord, "state" | "ownerEpoch"> & {
+    attachedSessionIds: readonly string[];
+  },
+>(
+  environment: Environment | undefined,
+  placement: Pick<WorkerSessionPlacementRecord, "sessionId" | "activeOwnerEpoch">,
+): environment is Environment {
+  return (
+    environment?.state === "attached" &&
     environment.ownerEpoch === placement.activeOwnerEpoch &&
     environment.attachedSessionIds.length === 1 &&
-    environment.attachedSessionIds[0] === placement.sessionId,
+    environment.attachedSessionIds[0] === placement.sessionId
   );
+}
+
+export function assertWorkerSandboxEnvironment(
+  environment: WorkerEnvironmentRecord | undefined,
+  placement: Pick<WorkerSessionPlacementRecord, "sessionId" | "activeOwnerEpoch" | "environmentId">,
+  sandbox: { backendId: string; placementNodeId?: string },
+): void {
+  if (
+    !isWorkerEnvironmentAttachedTo(environment, placement) ||
+    !isWorkerRetainedWindowOpen(environment) ||
+    environment.environmentId !== placement.environmentId ||
+    (sandbox.backendId === "node" && environment.nodeDeviceId !== sandbox.placementNodeId)
+  ) {
+    throw new Error("Remote-exec environment changed while preparing its sandbox");
+  }
 }
 
 export function isCurrentActiveWorkerEnvironment(
@@ -39,6 +69,7 @@ export function isCurrentActiveWorkerEnvironment(
 ): boolean {
   return (
     isExactAttachedEnvironment(environment, placement) &&
+    isWorkerRetainedWindowOpen(environment) &&
     environment?.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
     // A persisted bundle hash can still match a worker using an older launch shape.
     // Recovery may reuse only the currently admitted execution-context dialect.

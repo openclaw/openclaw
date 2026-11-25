@@ -84,6 +84,8 @@ execution budget; its children do not share the root session's slots.
 
 A full in-place conversation reset cancels unfinished native subagents associated with that session, including yielded children and children whose completion requester differs from their controller. Chat `/reset` and `sessions.reset` use the same cleanup owner. If child cancellation is incomplete, reset reports a failure before clearing the conversation; inspect the remaining tasks and retry. Child transcripts and unrelated sessions are preserved.
 
+Completed subagent history does not block reset. Completed children still participate in cleanup when they retain commands, pending completion wakes, controller disposal, or unfinished descendants.
+
 ### Cascade stop
 
 Explicit cancellation of an orchestrator cascades through its descendant
@@ -101,6 +103,9 @@ Sub-agent auth is resolved by **agent id**, not by session type:
 The merge is additive, so shared profiles are always available as
 fallbacks. There is no setting that isolates an agent's auth from the shared
 profiles.
+
+A child does not inherit its parent's selected account. See
+[Defaults](/tools/subagents/tool-reference#tool-sessions_spawn).
 
 ### Memory audience inheritance
 
@@ -120,6 +125,10 @@ host-minted root audience to memory providers and plugin tools. Providers must
 consume that prepared audience and must not walk session lineage or infer memory
 authority from session lookups.
 
+Spawn records the parent incarnation captured during preparation. If the parent
+resets before creation finishes, the child can still be created, but memory
+access rejects its stale lineage; respawn it from the current parent session.
+
 A child reset preserves its recorded parent grant, so a newly resolved audience
 can still inherit from the same root. A reset or removal of any recorded parent
 invalidates an already captured audience, so the next protected provider or tool
@@ -132,6 +141,13 @@ without private or conversation memory, and the Gateway log warns that the
 session predates memory lineage receipts and must be respawned from its parent.
 Children whose parents lack a lifecycle revision must be respawned after the
 parent's next reset, which establishes a current lifecycle revision.
+
+A child spawned into a different agent inherits only the owner's private
+audience, applied to the child agent's own memory, and only when an owner turn
+spawned it from the owner's direct chat. The spawn already requires the target to
+be allowed by `subagents.allowAgents` and the requester's operator role. Children
+of group, channel, or non-owner conversations in another agent receive no memory
+audience.
 
 This contract covers OpenClaw-created child sessions. Native runtime child threads
 also need their runtime's tool bridge to provide a live authorized invocation;

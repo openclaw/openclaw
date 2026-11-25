@@ -104,7 +104,7 @@ describe("config writer policy-close ordering", () => {
           ...(browser ? { origin: browserOrigin } : {}),
           deviceIdentity: browser
             ? loadOrCreateDeviceIdentity({
-                path: state.path("browser-identity.sqlite"),
+                path: state.path("browser", "client", "credentials.sqlite"),
               })
             : null,
           scopes: ["operator.admin", "operator.read", "operator.write"],

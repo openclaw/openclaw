@@ -146,13 +146,12 @@ export function createAgentsApiSessionHistory(options: {
 export async function waitForAgentsApiEventOrRecovery<T>(
   nextEvent: Promise<T>,
   signal: AbortSignal,
-  wait: (ms: number, signal: AbortSignal) => Promise<void>,
 ): Promise<T | undefined> {
   const refresh = new AbortController();
   try {
     return await Promise.race([
       nextEvent,
-      wait(1_000, AbortSignal.any([signal, refresh.signal])).then(() => undefined),
+      delay(1_000, undefined, { signal: AbortSignal.any([signal, refresh.signal]) }),
     ]);
   } finally {
     refresh.abort();

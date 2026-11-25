@@ -7,6 +7,7 @@ import { asOptionalObjectRecord as getToolParamsRecord } from "@openclaw/normali
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { preserveAtPrefixedRelativePath } from "./path-policy.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
+import { normalizeLocalWindowsDrivePath } from "./sessions/tools/path-utils.js";
 
 export { getToolParamsRecord };
 
@@ -71,7 +72,7 @@ function isValidEditReplacement(value: unknown): boolean {
   const record = value as Record<string, unknown>;
   return (
     typeof record.oldText === "string" &&
-    record.oldText.trim().length > 0 &&
+    record.oldText.length > 0 &&
     typeof record.newText === "string"
   );
 }
@@ -93,6 +94,23 @@ export const REQUIRED_PARAM_GROUPS = {
   ],
 } as const;
 
+/** Models send `optional: false` for a required read; the read schema accepts only `true`. */
+export function prepareReadToolParams(args: unknown): unknown {
+  const record = getToolParamsRecord(args);
+  if (record?.optional !== false) {
+    return args;
+  }
+  const required = { ...record };
+  delete required.optional;
+  return required;
+}
+
+/** Canonical daily-memory journals, which a read without `optional` treats as optional. */
+export function isDailyMemoryReadPath(filePath: string): boolean {
+  const normalized = process.platform === "win32" ? filePath.replace(/\\/g, "/") : filePath;
+  return /^(?:\.\/)*memory\/\d{4}-\d{2}-\d{2}\.md$/u.test(normalized);
+}
+
 function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }
@@ -113,7 +131,8 @@ export function normalizeFileToolPathParam(
     HALLUCINATED_OFFICE_PATH_EXTENSION_RE,
     (match, family: string) => OFFICE_EXTENSION_BY_FAMILY[family.toLowerCase()] ?? match,
   );
-  return cwd ? Promise.resolve(preserveAtPrefixedRelativePath(repaired, cwd, bridge)) : repaired;
+  const filePath = cwd && !bridge ? normalizeLocalWindowsDrivePath(repaired) : repaired;
+  return cwd ? Promise.resolve(preserveAtPrefixedRelativePath(filePath, cwd, bridge)) : repaired;
 }
 
 /** Strip malformed XML suffixes from selected string fields without mutating input. */
@@ -160,7 +179,7 @@ export async function normalizeFileToolPathParamsFromKeys<T extends Record<strin
   return normalized ?? record;
 }
 
-export function missingRequiredParamLabels(
+function missingRequiredParamLabels(
   record: Record<string, unknown> | undefined,
   groups: readonly RequiredParamGroup[],
 ): string[] {
@@ -187,7 +206,7 @@ export function assertRequiredParams(
   groups: readonly RequiredParamGroup[],
   toolName: string,
 ): void {
-  if (!record || typeof record !== "object") {
+  if (!record) {
     throw parameterValidationError(`Missing parameters for ${toolName}`);
   }
 
@@ -203,25 +222,18 @@ export function assertRequiredParams(
 
 export function wrapToolParamValidation(
   tool: AnyAgentTool,
-  requiredParamGroups?: readonly RequiredParamGroup[],
+  requiredParamGroups: readonly RequiredParamGroup[],
   cwd?: string,
-  bridge?: SandboxFsBridge,
 ): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const record = getToolParamsRecord(params);
-      const pathKeys = requiredParamGroups?.some((group) => group.keys.includes("path"))
-        ? ["path"]
-        : [];
-      const normalizedParams =
-        record && pathKeys.length > 0
-          ? await normalizeFileToolPathParamsFromKeys(record, pathKeys, cwd, bridge)
-          : params;
-      if (requiredParamGroups?.length) {
-        assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
-      }
-      return tool.execute(toolCallId, normalizedParams, signal, onUpdate);
+      const normalizedRecord = record
+        ? await normalizeFileToolPathParamsFromKeys(record, ["path"], cwd)
+        : record;
+      assertRequiredParams(normalizedRecord, requiredParamGroups, tool.name);
+      return tool.execute(toolCallId, normalizedRecord ?? params, signal, onUpdate);
     },
   };
 }

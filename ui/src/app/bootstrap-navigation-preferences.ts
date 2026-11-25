@@ -14,7 +14,6 @@ export function createApplicationNavigationPreferences(
     navCollapsed,
     navWidth: preferences.settings.navWidth,
     sidebarEntries: preferences.settings.sidebarEntries,
-    navigationScope: preferences.settings.navigationScope,
     pinnedAgentIds: preferences.settings.pinnedAgentIds ?? [],
   });
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
@@ -38,9 +37,6 @@ export function createApplicationNavigationPreferences(
       if (patch.sidebarEntries !== undefined) {
         persisted.sidebarEntries = [...patch.sidebarEntries];
       }
-      if (patch.navigationScope !== undefined) {
-        persisted.navigationScope = patch.navigationScope;
-      }
       if (patch.pinnedAgentIds !== undefined) {
         persisted.pinnedAgentIds = [...patch.pinnedAgentIds];
       }
@@ -55,6 +51,7 @@ export function createApplicationNavigationPreferences(
     },
     subscribe(listener) {
       listeners.add(listener);
+      // Forward persisted preferences through the synchronous navigation owner.
       const stopPreferences = preferences.subscribe(() => listener(snapshot()));
       return () => {
         listeners.delete(listener);

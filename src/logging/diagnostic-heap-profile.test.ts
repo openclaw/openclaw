@@ -1,9 +1,15 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiagnosticsHeapProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import recordedProfile from "./diagnostic-heap-profile.fixture.json" with { type: "json" };
+import type { SamplingProfile } from "./diagnostic-heap-profile.js";
 import { diagnosticProfileEntrypoints } from "./diagnostic-profile-runtime.test-support.js";
 
 const native = vi.hoisted(() => ({
@@ -13,8 +19,16 @@ const native = vi.hoisted(() => ({
   resolveRoot: vi.fn(),
   heapSpaces: vi.fn(),
 }));
-vi.mock("node:v8", () => ({ getHeapSpaceStatistics: native.heapSpaces }));
-vi.mock("node:timers/promises", () => ({ setTimeout: native.wait }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let stateDir: string;
+vi.mock("node:v8", async (original) => ({
+  ...(await original<typeof import("node:v8")>()),
+  getHeapSpaceStatistics: native.heapSpaces,
+}));
+vi.mock("node:timers/promises", async (original) => ({
+  ...(await original<typeof import("node:timers/promises")>()),
+  setTimeout: native.wait,
+}));
 vi.mock("node:trace_events", () => ({ getEnabledCategories: () => undefined }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
@@ -70,6 +84,8 @@ async function capture(
 beforeEach(() => {
   vi.resetModules();
   vi.resetAllMocks();
+  stateDir = tempDirs.make("heap-profile-artifact-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("NODE_OPTIONS", "");
   vi.stubEnv("NODE_V8_COVERAGE", "");
   vi.stubEnv("BUN_INSPECT", "");
@@ -82,11 +98,36 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
+it("reports an unavailable inspector method as unsupported heap sampling", async () => {
+  native.post.mockRejectedValue(
+    new Error("Inspector error -32601: 'HeapProfiler.enable' wasn't found"),
+  );
+  expect(await capture()).toMatchObject({ status: "unavailable", reason: "unsupported" });
+  const { collectRuntimeCapabilities } = await import("../infra/runtime-capabilities.js");
+  expect(collectRuntimeCapabilities().capabilities.heapSampling.state).toBe("unavailable");
+});
+
 describe("diagnostic heap profile owner", () => {
-  it.each([false, true])(
+  it("preserves the sanitized bytes of a recorded synthetic native profile", async () => {
+    const { sanitizeDiagnosticHeapProfile } = await import("./diagnostic-heap-profile.js");
+    // Recorded on Node 26; only the fixture installation path was normalized.
+    // Expected bytes came from the synchronous sanitizer before this change.
+    const split = vi.spyOn(String.prototype, "split");
+    const result = await sanitizeDiagnosticHeapProfile(
+      recordedProfile.raw,
+      recordedProfile.packageRoot,
+      { ...recordedProfile.metadata, durationLimitReason: "collected-samples" },
+    );
+    expect(split).not.toHaveBeenCalledWith(path.sep);
+    split.mockRestore();
+    expect(JSON.stringify(result)).toBe(JSON.stringify(recordedProfile.sanitized));
+  });
+
+  it.each([true])(
     "preserves samples and memory readings with unattributed V8 samples=%s",
     async (unattributed) => {
       const before = [
@@ -125,14 +166,6 @@ describe("diagnostic heap profile owner", () => {
           redactedNodeCount: 1,
           unattributedSampleCount: unattributed ? 1 : 0,
           unattributedSampleBytes: unattributed ? 4096 : 0,
-          profile: {
-            samples: profile().samples,
-            head: {
-              children: expect.arrayContaining([
-                expect.objectContaining({ id: 2, selfSize: 8192 }),
-              ]),
-            },
-          },
         },
       });
       expect(JSON.stringify(outcome)).not.toMatch(/fixture|private/);
@@ -155,7 +188,7 @@ describe("diagnostic heap profile owner", () => {
   );
 
   it("attributes dependency and native frames without exposing private paths or symbols", async () => {
-    const dependencies: [string, string][] = [
+    const dependencies: [string, string, string?][] = [
       ["/fixture/node_modules/ws/lib/buffer-util.js", "ws"],
       ["/fixture/openclaw/node_modules/undici/lib/core/util.js", "undici"],
       ["/fixture/openclaw/src/node_modules/undici/lib/core/util.js", "undici"],
@@ -166,13 +199,39 @@ describe("diagnostic heap profile owner", () => {
         "@scope/pkg",
       ],
       ["/fixture/node_modules/outer/node_modules/inner/lib/private.js", "inner"],
+      ["/node_modules/@openclaw/fs-safe/write.js", "@openclaw/fs-safe", "runPinnedWriteNative"],
+      ["/node_modules/@openclaw/fs-safe/write.js", "@openclaw/fs-safe", "NativeStagedFile.write"],
+      ["/node_modules/@openclaw/fs-safe/write.js", "@openclaw/fs-safe", "#prepare"],
+      ["/node_modules/@openclaw/fs-safe/write.js", "@openclaw/fs-safe"],
     ];
     const locations: [Partial<ReturnType<typeof frame>>, string][] = [
       [{ scriptId: "0", url: "", lineNumber: -1 }, "[native]"],
+      ...[
+        "(V8 API)",
+        "(GC)",
+        "(PARSER)",
+        "(COMPILER)",
+        "(BYTECODE_COMPILER)",
+        "(EXTERNAL)",
+        "(LOGGING)",
+        "(IDLE_EXTERNAL)",
+        "(IDLE)",
+        "(JS)",
+        "(deopt)",
+      ].map((functionName): [Partial<ReturnType<typeof frame>>, string] => [
+        { functionName, scriptId: "0", url: "", lineNumber: -1 },
+        functionName,
+      ]),
       [{ scriptId: "0", url: "", lineNumber: 0 }, "[redacted]"],
       [{ scriptId: "2", url: "", lineNumber: -1 }, "[redacted]"],
       [{ scriptId: "0", url: "/private/user/secret.js", lineNumber: -1 }, "[redacted]"],
       [{ url: "/private/user/secret.js" }, "[redacted]"],
+      [{ url: "/private/plugins/packages/ai/dist/secret.mjs" }, "[redacted]"],
+      [{ url: "/fixture/openclaw-other/packages/ai/dist/secret.mjs" }, "[redacted]"],
+      [{ url: "/fixture/openclaw/packages/ai/private/secret.js" }, "[redacted]"],
+      [{ url: "/fixture/openclaw/packages/private package/dist/secret.js" }, "[redacted]"],
+      [{ url: "/fixture/openclaw/packages/ai/dist/secret.mjs?private=query" }, "[redacted]"],
+      [{ url: "file:///fixture/openclaw/packages/ai/dist/secret.mjs#private" }, "[redacted]"],
       [{ url: "https://private.example/node_modules/ws/secret.js" }, "[redacted]"],
       [
         { url: "/private/user/secret.js?next=/../node_modules/suffix-only/secret.js" },
@@ -188,9 +247,9 @@ describe("diagnostic heap profile owner", () => {
       [{ url: "/private/node_modules/.pnpm/ws@8.18.0/secret.js" }, "[redacted]"],
     ];
     const frames = [
-      ...dependencies.map(([url, dependency]) => ({
-        source: { ...frame("private payload"), url },
-        expected: { ...frame(`[dep:${dependency}]`), url: `node_modules/${dependency}` },
+      ...dependencies.map(([url, dependency, symbol]) => ({
+        source: { ...frame(symbol ?? "private payload"), url },
+        expected: { ...frame(symbol ?? `[dep:${dependency}]`), url: `node_modules/${dependency}` },
       })),
       ...locations.map(([location, functionName]) => ({
         source: { ...frame("private payload"), ...location },
@@ -223,6 +282,33 @@ describe("diagnostic heap profile owner", () => {
   });
 
   it.each([
+    ["packages/ai/dist/openai-responses-shared-abc.mjs", "allocateRows", "allocateRows"],
+    ["packages/gateway-protocol/dist/schema.cjs", "Schema.parse", "Schema.parse"],
+    ["packages/ai/src/providers/openai.ts", "allocateRows", "allocateRows"],
+    ["packages/ai/src/providers/openai.js", "private payload", "[redacted]"],
+  ])("attributes workspace package %s with safe symbols", async (relative, name, expectedName) => {
+    const root = "/fixture/node_modules/openclaw";
+    native.resolveRoot.mockResolvedValue(root);
+    native.post.mockResolvedValue({
+      profile: profile({ ...frame(name), url: `file://${root}/${relative}` }),
+    });
+    expect(await capture()).toMatchObject({
+      status: "complete",
+      result: {
+        redactedNodeCount: expectedName === "[redacted]" ? 2 : 1,
+        profile: {
+          head: {
+            children: [
+              { callFrame: { ...frame(expectedName), url: `openclaw:${relative}` } },
+              { id: 3, callFrame: { functionName: "[redacted]", url: "" } },
+            ],
+          },
+        },
+      },
+    });
+  });
+
+  it.each([
     "/fixture/node_modules/openclaw",
     "/fixture/node_modules/.pnpm/openclaw@1.0.0/node_modules/openclaw",
   ])("preserves OpenClaw code attribution when installed at %s", async (root) => {
@@ -244,20 +330,10 @@ describe("diagnostic heap profile owner", () => {
     });
   });
 
-  it.each([
-    { nodeId: -1, size: 4096, ordinal: 3 },
-    { nodeId: 1.5, size: 4096, ordinal: 3 },
-    { nodeId: 999, size: -1, ordinal: 3 },
-    { nodeId: 999, size: 4096, ordinal: -1 },
-  ])("rejects malformed unattributed samples %j", async (sample) => {
-    const value = profile();
-    value.samples.push(sample);
-    native.post.mockResolvedValue({ profile: value });
-    expect(await capture()).toMatchObject({ status: "unavailable", reason: "invalid-profile" });
-  });
-
-  it.each<[DiagnosticsHeapProfileParams, number, number]>([
-    [{ durationMs: 900_000, samplingIntervalBytes: 1 }, 900_000, 4096],
+  it.each<
+    [DiagnosticsHeapProfileParams, number, number, "collected-samples" | "maximum-duration" | null]
+  >([
+    [{ durationMs: 900_000, samplingIntervalBytes: 1 }, 900_000, 4096, null],
     [
       {
         durationMs: 1_000_000,
@@ -266,35 +342,71 @@ describe("diagnostic heap profile owner", () => {
       },
       900_000,
       32768,
+      "maximum-duration",
     ],
-    [{ durationMs: 900_000, includeObjectsCollectedByMajorGC: true }, 30_000, 32768],
-    [{ durationMs: 900_000, includeObjectsCollectedByMinorGC: true }, 30_000, 32768],
     [
-      {
-        durationMs: 900_000,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      },
+      { durationMs: 900_000, includeObjectsCollectedByMajorGC: true },
       30_000,
       32768,
+      "collected-samples",
     ],
-    [{ durationMs: 1, samplingIntervalBytes: 65536 }, 1, 65536],
-    [{ includeObjectsCollectedByMajorGC: true }, 5000, 32768],
-    [{ includeObjectsCollectedByMinorGC: true }, 5000, 32768],
-  ])("applies sampling options and bounds for %j", async (params, duration, interval) => {
-    const collectionOptions = {
-      includeObjectsCollectedByMajorGC: params.includeObjectsCollectedByMajorGC ?? false,
-      includeObjectsCollectedByMinorGC: params.includeObjectsCollectedByMinorGC ?? false,
-    };
-    expect(await capture(params)).toMatchObject({ status: "complete", result: collectionOptions });
-    expect(native.wait).toHaveBeenCalledWith(duration, undefined, {
-      signal: expect.any(AbortSignal),
-    });
-    expect(native.post).toHaveBeenCalledWith("HeapProfiler.startSampling", {
-      samplingInterval: interval,
-      ...collectionOptions,
-    });
-  });
+    [
+      { durationMs: 900_000, includeObjectsCollectedByMinorGC: true },
+      30_000,
+      32768,
+      "collected-samples",
+    ],
+    [{ durationMs: 1, samplingIntervalBytes: 65536 }, 1, 65536, null],
+  ])(
+    "applies sampling options and bounds for %j",
+    async (params, duration, interval, limitReason) => {
+      const collectionOptions = {
+        includeObjectsCollectedByMajorGC: params.includeObjectsCollectedByMajorGC ?? false,
+        includeObjectsCollectedByMinorGC: params.includeObjectsCollectedByMinorGC ?? false,
+      };
+      const outcome = await capture(params);
+      expect(outcome).toMatchObject({
+        status: "complete",
+        result: {
+          ...collectionOptions,
+          requestedDurationMs: params.durationMs,
+          effectiveDurationMs: duration,
+          actualDurationMs: expect.any(Number),
+          durationLimitReason: limitReason,
+        },
+      });
+      if (outcome.status === "complete") {
+        expect(outcome.result.actualDurationMs).toBe(outcome.result.durationMs);
+      }
+      expect(native.wait).toHaveBeenCalledWith(duration, undefined, {
+        signal: expect.any(AbortSignal),
+      });
+      expect(native.post).toHaveBeenCalledWith("HeapProfiler.startSampling", {
+        samplingInterval: interval,
+        ...collectionOptions,
+      });
+    },
+  );
+
+  it.each([
+    [{ includeCollected: true }, true, true, 30_000],
+    [{ includeCollected: false }, false, false, 900_000],
+    [{ includeCollected: true, includeObjectsCollectedByMinorGC: false }, true, false, 30_000],
+  ] as const)(
+    "supports collected-allocation shorthand %j",
+    async (params, major, minor, duration) => {
+      expect(await capture({ ...params, durationMs: 900_000 })).toMatchObject({
+        status: "complete",
+        result: {
+          includeObjectsCollectedByMajorGC: major,
+          includeObjectsCollectedByMinorGC: minor,
+        },
+      });
+      expect(native.wait).toHaveBeenCalledWith(duration, undefined, {
+        signal: expect.any(AbortSignal),
+      });
+    },
+  );
 
   it("rejects overlap, cancels a long retention window, and releases ownership", async () => {
     const waiting = createDeferred();
@@ -327,7 +439,7 @@ describe("diagnostic heap profile owner", () => {
     expect((await capture()).status).toBe("complete");
   });
 
-  it("aggregates repeated allocation stacks when the native profile exceeds 1 MiB", async () => {
+  it("preserves oversized samples in a sanitized file alongside the bounded summary", async () => {
     const value = profile();
     value.head.children = Array.from({ length: 9000 }, (_, index) => ({
       id: index + 2,
@@ -335,6 +447,10 @@ describe("diagnostic heap profile owner", () => {
       callFrame: { ...frame("private payload"), url: "/fixture/node_modules/ws/lib/private.js" },
       children: [],
     }));
+    value.head.children[0]!.callFrame = {
+      ...frame("private payload"),
+      url: "eval://private-source",
+    };
     value.samples = value.head.children.map((node, ordinal) => ({
       size: node.selfSize,
       nodeId: node.id,
@@ -347,16 +463,16 @@ describe("diagnostic heap profile owner", () => {
       status: "complete",
       result: {
         truncated: true,
-        redactedNodeCount: 0,
+        redactedNodeCount: 1,
         summary: expect.arrayContaining([
           {
             stack: [
               { ...frame("[dep:ws]"), url: "node_modules/ws" },
               { ...frame("(root)"), url: "" },
             ],
-            selfBytes: 9000 * 8192,
-            totalBytes: 9000 * 8192,
-            count: 9000,
+            selfBytes: 8999 * 8192,
+            totalBytes: 8999 * 8192,
+            count: 8999,
           },
         ]),
       },
@@ -364,7 +480,228 @@ describe("diagnostic heap profile owner", () => {
     if (outcome.status !== "complete") {
       throw new Error("capture failed");
     }
+    expect(outcome.result).toHaveProperty("path", expect.stringMatching(/\.heapprofile$/));
+    if (!("path" in outcome.result) || typeof outcome.result.path !== "string") {
+      throw new Error("missing heap profile artifact");
+    }
+    expect(path.dirname(outcome.result.path)).toBe(path.join(stateDir, "diagnostics"));
+    const content = await fs.readFile(outcome.result.path, "utf8");
+    expect(outcome.result).toHaveProperty("sizeBytes", Buffer.byteLength(content));
+    expect(content).not.toMatch(/fixture|private/);
+    const saved: SamplingProfile = JSON.parse(content);
+    expect(saved.samples).toEqual(value.samples);
+    expect(saved.head.children).toHaveLength(9000);
+    expect(
+      saved.head.children.reduce(
+        (sum: number, node: { selfSize: number }) => sum + node.selfSize,
+        0,
+      ),
+    ).toBe(9000 * 8192);
+    expect(
+      saved.samples.reduce((sum: number, sample: { size: number }) => sum + sample.size, 0),
+    ).toBe(9000 * 8192);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(outcome.result.path)).mode & 0o777).toBe(0o600);
+    }
     expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
+  });
+
+  it("writes deep native trees without recursive JSON serialization", async () => {
+    const value = profile();
+    value.head.children = [];
+    let leaf = value.head;
+    for (let id = 2; id <= 9000; id++) {
+      const child = { id, selfSize: 0, callFrame: frame(), children: [] };
+      leaf.children.push(child);
+      leaf = child;
+    }
+    leaf.selfSize = 8192;
+    value.samples = [{ nodeId: leaf.id, size: leaf.selfSize, ordinal: 1 }];
+    native.post.mockResolvedValue({ profile: value });
+    const outcome = await capture();
+    if (outcome.status !== "complete" || !("path" in outcome.result) || !outcome.result.path) {
+      throw new Error("missing deep heap profile artifact");
+    }
+    const saved: SamplingProfile = JSON.parse(await fs.readFile(outcome.result.path, "utf8"));
+    let node = saved.head;
+    let count = 1;
+    while (node.children.length) {
+      node = node.children[0]!;
+      count++;
+    }
+    expect(count).toBe(9000);
+    expect(node.selfSize).toBe(8192);
+    expect(saved.samples).toEqual(value.samples);
+  });
+
+  it.each(["abort", "write failure", "close failure", "disk budget", "file cap"])(
+    "removes incomplete heap profile files after %s",
+    async (failure) => {
+      const value = profile();
+      value.samples = Array.from({ length: failure === "file cap" ? 1_250_000 : 30_000 }, () => ({
+        nodeId: 2,
+        size: Number.MAX_SAFE_INTEGER,
+        ordinal: Number.MAX_SAFE_INTEGER,
+      }));
+      native.post.mockResolvedValue({ profile: value });
+      const controller = new AbortController();
+      if (failure === "disk budget") {
+        const space = await fs.statfs(stateDir);
+        space.bavail = 0;
+        vi.spyOn(fs, "statfs").mockResolvedValue(space);
+      } else if (failure !== "file cap") {
+        const open = fs.open.bind(fs);
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const file = await open(...args);
+          if (failure === "close failure") {
+            const close = file.close.bind(file);
+            vi.spyOn(file, "close").mockImplementation(async () => {
+              await close();
+              throw new Error("synthetic close failure");
+            });
+          } else {
+            const write = file.writeFile.bind(file);
+            vi.spyOn(file, "writeFile").mockImplementation(async (...writeArgs) => {
+              await write(...writeArgs);
+              if (failure === "abort") {
+                controller.abort();
+              } else {
+                throw new Error("synthetic write failure");
+              }
+            });
+          }
+          return file;
+        });
+      }
+      expect(await capture({}, controller.signal)).toMatchObject({
+        status: "unavailable",
+        reason:
+          failure === "abort"
+            ? "cancelled"
+            : failure === "file cap"
+              ? "profile-too-large"
+              : failure === "disk budget"
+                ? "insufficient-disk-space"
+                : failure === "close failure"
+                  ? "cleanup-failed"
+                  : "capture-failed",
+        cleanupFailed: failure === "close failure",
+      });
+      expect(await fs.readdir(path.join(stateDir, "diagnostics"))).toEqual([]);
+    },
+  );
+
+  it.each([true, false])(
+    "retains allocation listeners and outer callers beyond recursive=%s dependency stacks",
+    async (recursive) => {
+      const value = profile();
+      // Zero-byte siblings force the public capture into its bounded summary path.
+      value.head.children = Array.from({ length: 9000 }, (_, index) => ({
+        id: index + 2,
+        selfSize: 0,
+        callFrame: frame(),
+        children: [],
+      }));
+      let parent = value.head;
+      const names = [
+        "refreshSchemas",
+        "recreateSchemas",
+        ...Array.from({ length: 40 }, (_, index) =>
+          recursive
+            ? index % 2
+              ? "findChildError"
+              : "findJsonSchemaNodeError"
+            : `dependency${index}`,
+        ),
+        "notifyListeners",
+        "pluginListener",
+        "apply",
+        "run",
+        "invoke",
+        "enter",
+        "withPluginRuntimePluginScope",
+        "runWithPluginGatewayScope",
+        "runFrame",
+        "runWithAsyncStore",
+        "runInAsyncScope",
+        "enterAsyncStore",
+        "allocateSchema",
+      ];
+      for (const [index, name] of names.entries()) {
+        const node = {
+          id: 10000 + index,
+          selfSize: 0,
+          callFrame: {
+            ...frame(name),
+            url:
+              index < 2
+                ? "/fixture/openclaw/dist/schemas.js"
+                : "/fixture/openclaw/node_modules/@openclaw/json-schema/index.js",
+          },
+          children: [],
+        };
+        parent.children.push(node);
+        parent = node;
+      }
+      parent.selfSize = 3_880_000;
+      value.samples = [{ nodeId: parent.id, size: parent.selfSize, ordinal: 1 }];
+      native.post.mockResolvedValue({ profile: value });
+      const outcome = await capture();
+      if (outcome.status !== "complete" || !("summary" in outcome.result)) {
+        throw new Error("expected summary");
+      }
+      const allocation = outcome.result.summary.find((row) => row.selfBytes === 3_880_000)!;
+      expect(allocation.count).toBe(1);
+      expect(allocation.stack[0].functionName).toBe("allocateSchema");
+      expect(allocation.stack.map((entry) => entry.functionName)).toEqual(
+        expect.arrayContaining([
+          "pluginListener",
+          "notifyListeners",
+          "recreateSchemas",
+          "refreshSchemas",
+        ]),
+      );
+      expect(allocation.stack.length).toBeLessThanOrEqual(32);
+      expect(allocation.stack.at(-1)?.functionName).toBe(recursive ? "(root)" : "refreshSchemas");
+      expect(allocation.stack.some((entry) => entry.functionName.includes("×20"))).toBe(recursive);
+      expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
+    },
+  );
+
+  it("yields during sanitization while retaining capture ownership and checking revocation", async () => {
+    const value = profile();
+    value.head.children = Array.from({ length: 9000 }, (_, index) => ({
+      id: index + 2,
+      selfSize: 8192,
+      callFrame: frame(),
+      children: [],
+    }));
+    const stopped = createDeferred();
+    native.post.mockImplementation(async (method) => {
+      if (method === "HeapProfiler.stopSampling") {
+        stopped.resolve();
+        return { profile: value };
+      }
+      return {};
+    });
+    let authorized = true;
+    let completed = false;
+    const { captureDiagnosticHeapProfile } = await import("./diagnostic-heap-profile.js");
+    const active = captureDiagnosticHeapProfile({
+      signal: new AbortController().signal,
+      hasAuthority: () => authorized,
+    }).then((outcome) => {
+      completed = true;
+      return outcome;
+    });
+    await stopped.promise;
+    await nextTurn();
+    expect(completed).toBe(false);
+    expect(await capture()).toMatchObject({ status: "unavailable", reason: "busy" });
+    authorized = false;
+    expect(await active).toMatchObject({ status: "unavailable", reason: "cancelled" });
+    expect(native.disconnect).toHaveBeenCalledOnce();
+    expect((await capture()).status).toBe("complete");
   });
 
   it("caps distinct stacks at 1 MiB, retaining the largest allocations", async () => {

@@ -1,130 +1,80 @@
 import path from "node:path";
-import { afterAll, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import * as agentExecution from "../../state/openclaw-agent-execution.js";
+import { afterAll, expect, it } from "vitest";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { forkSessionEntryFromParentTargetWithPatch } from "./session-accessor.sqlite-parent-session.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import * as storeTargetRuntime from "./session-store-target-runtime.js";
-import { loadTranscriptEvents } from "./session-transcript-events.js";
+import { readTranscriptEventAtSeqInTransaction } from "./session-accessor.sqlite-read.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-parent-fork-worker-");
 
-it.each(["executor", "discovery"] as const)(
-  "commits bundled fork and existing-child patches without caller-thread SQL (cleanupFailure=%s)",
-  async (cleanupFailure) => {
-    const storePath = path.join(sessionDirs.make(), "shared.sqlite");
-    const agentId = "research";
-    const parentKey = "agent:research:main";
-    const childKey = "agent:research:typed-child";
-    const parentScope = { agentId, sessionKey: parentKey, storePath };
-    const childScope = { agentId, sessionKey: childKey, storePath };
-    const parentTranscriptScope = { ...parentScope, sessionId: "typed-parent" };
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-    expect(database.agentId).toBe("main");
-    await replaceSessionEntry(parentScope, { sessionId: "typed-parent", updatedAt: 1 });
-    await replaceTranscriptEvents(parentTranscriptScope, [
-      { type: "session", version: 3, id: "typed-parent", timestamp: "2026-09-15T00:00:00Z" },
-      {
+it("forks 512 MiB historical bodies within the production worker heap and confirms the copy", async () => {
+  const storePath = path.join(sessionDirs.make(), "large.sqlite");
+  const parentKey = "agent:main:large-parent";
+  const childKey = "agent:main:large-child";
+  const parentScope = { agentId: "main", sessionKey: parentKey, storePath };
+  await replaceSessionEntry(parentScope, {
+    sessionId: "large-parent",
+    updatedAt: 1,
+  });
+  const count = 8192;
+  const content = "x".repeat(64 * 1024);
+  function* events() {
+    yield { type: "session", version: 3, id: "large-parent", timestamp: "2026-09-15T00:00:00Z" };
+    for (let index = 0; index < count; index++) {
+      yield {
         type: "message",
-        id: "assistant",
-        parentId: null,
-        message: { role: "assistant", content: "parent context" },
-      },
-    ]);
-    const parentEntry = loadSessionEntry(parentScope);
-    const parentEvents = await loadTranscriptEvents(parentTranscriptScope);
-    const params = {
-      agentId,
-      storePath,
-      parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
-      sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
-      fallbackEntry: { sessionId: "", updatedAt: 1 },
-    };
-    const cleanupError = new Error(`synthetic fork ${cleanupFailure} cleanup failure`);
-    let cleanupFailures = 0;
-    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
-    const captureSpy =
-      cleanupFailure === "executor"
-        ? vi
-            .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
-            .mockImplementation((...args): ReturnType<typeof capture> => {
-              const owner = capture(...args);
-              return {
-                ...owner,
-                get fileIdentity() {
-                  return owner.fileIdentity;
-                },
-                async release() {
-                  await owner.release();
-                  cleanupFailures++;
-                  throw cleanupError;
-                },
-              };
-            })
-        : undefined;
-    const discover = storeTargetRuntime.withSessionStoreTarget;
-    const discoverySpy =
-      cleanupFailure === "discovery"
-        ? vi
-            .spyOn(storeTargetRuntime, "withSessionStoreTarget")
-            .mockImplementation(async <T>(...args: Parameters<typeof discover<T>>): Promise<T> => {
-              await discover(...args);
-              cleanupFailures++;
-              throw cleanupError;
-            })
-        : undefined;
-    const sql = observeHostDataSql();
-    let fork: Awaited<ReturnType<typeof forkSessionEntryFromParentTargetWithPatch>>;
-    try {
-      fork = await forkSessionEntryFromParentTargetWithPatch(params, {
-        forked: { label: "forked child" },
-      });
-      expect(fork).toMatchObject({ status: "forked", sessionEntry: { label: "forked child" } });
-      const skipped = await forkSessionEntryFromParentTargetWithPatch(params, {
-        skipExisting: true,
-        skipped: { label: "existing child" },
-      });
-      expect(skipped).toMatchObject({
-        status: "skipped",
-        reason: "existing-entry",
-        sessionEntry: { label: "existing child" },
-      });
-      expect(sql.queries).toEqual([]);
-    } finally {
-      discoverySpy?.mockRestore();
-      captureSpy?.mockRestore();
-      sql.restore();
+        id: "event-" + index,
+        parentId: index === 0 ? null : "event-" + (index - 1),
+        message: { role: "assistant", content, usage: { input: 10, output: 10 } },
+      };
     }
-    expect(cleanupFailures).toBeGreaterThan(0);
-    if (fork.status !== "forked") {
-      throw new Error("expected forked session");
-    }
-    expect(fork.fork.sessionFile).toBe(childKey);
-    expect(fork.fork.sessionId).not.toBe("typed-parent");
-    expect(fork.parentEntry).toEqual(parentEntry);
-    expect(loadSessionEntry(childScope)).toMatchObject({
-      sessionId: fork.fork.sessionId,
-      label: "existing child",
-      forkedFromParent: true,
-      forkSource: { sessionKey: parentKey, sessionId: "typed-parent" },
-    });
-    const forkEvents = (await loadTranscriptEvents({
-      ...childScope,
-      sessionId: fork.fork.sessionId,
-    })) as Record<string, unknown>[];
-    const header = forkEvents[0];
-    expect(header).toMatchObject({ type: "session", id: fork.fork.sessionId });
+  }
+  runOpenClawAgentWriteTransaction(
+    (database) => {
+      appendTranscriptEventsInTransaction(
+        database,
+        { agentId: "main", path: storePath, sessionKey: parentKey, sessionId: "large-parent" },
+        events(),
+      );
+    },
+    { agentId: "main", path: storePath },
+  );
+  const parent = loadSessionEntry(parentScope);
+  const result = await forkSessionEntryFromParentTargetWithPatch({
+    agentId: "main",
+    storePath,
+    parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+    sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+    fallbackEntry: { sessionId: "", updatedAt: 1 },
+  });
+  expect(result.status).toBe("forked");
+  if (result.status !== "forked") {
+    throw new Error("expected fork");
+  }
+  const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+  expect(
+    database.db
+      .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?")
+      .get(result.fork.sessionId)?.count,
+  ).toBe(count + 1);
+  expect(
+    readTranscriptEventAtSeqInTransaction(database, result.fork.sessionId, 0)?.event,
+  ).toMatchObject({
+    inheritedThrough: ["event-" + (count - 1)],
+  });
+  expect(result.decision).toMatchObject({ status: "fork", parentTokens: 20 });
+  for (const seq of [1, count]) {
     expect(
-      parseSqliteSessionFileMarker(
-        typeof header?.parentSession === "string" ? header.parentSession : undefined,
-      ),
-    ).toEqual({ agentId, sessionId: "typed-parent", storePath });
-    expect(forkEvents.slice(1)).toEqual(parentEvents.slice(1));
-    expect(loadSessionEntry(parentScope)).toEqual(parentEntry);
-    await expect(loadTranscriptEvents(parentTranscriptScope)).resolves.toEqual(parentEvents);
-  },
-);
+      readTranscriptEventAtSeqInTransaction(database, result.fork.sessionId, seq)?.event,
+    ).toMatchObject({
+      id: "event-" + (seq - 1),
+      message: { role: "assistant", content, usage: { input: 10, output: 10 } },
+    });
+  }
+  expect(loadSessionEntry(parentScope)).toEqual(parent);
+});

@@ -4,10 +4,18 @@ import type {
   SessionTranscriptCorpusScope,
   SessionTranscriptCorpusEntry,
 } from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
-import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
-import type { SessionAccessScope } from "./session-accessor.types.js";
+import type {
+  SessionColdArchive,
+  TranscriptArchivePresenceRead,
+} from "./session-accessor.sqlite-archive-types.js";
+import type {
+  SessionTranscriptInstance,
+  SessionTranscriptInstanceListOptions,
+  SessionTranscriptStats,
+} from "./session-accessor.sqlite-contract.js";
+import type { SessionAccessScope, SessionEntryListScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
+import type { SessionColdSource } from "./session-cold-storage.types.js";
 import type {
   MemorySessionSelectors,
   MemorySessionTarget,
@@ -51,6 +59,21 @@ type MemorySessionTargetsWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+type SessionTranscriptInstancesWorkerInput = {
+  kind: "session-transcript-instances";
+  database: { agentId: string; path: string };
+  scope: Omit<SessionEntryListScope, "sessionKeys">;
+  options: SessionTranscriptInstanceListOptions;
+  continuation?: CanonicalSessionReaderContinuation;
+};
+
+type SessionTranscriptStatsBatchWorkerInput = {
+  kind: "transcript-stats-batch";
+  database: { agentId: string; path: string };
+  sessionIds: readonly string[];
+  env: NodeJS.ProcessEnv;
+};
+
 type SessionArchivePresenceWorkerInput = TranscriptArchivePresenceRead & {
   kind: "session-archive-presence";
 };
@@ -62,10 +85,10 @@ export type SessionColdMetadataWorkerInput = {
   env: NodeJS.ProcessEnv;
 };
 
-export type SessionColdMetadataWorkerResult = {
-  kind: "cold-metadata";
-  archive: Omit<SessionColdArchive, "archive_blob"> | undefined;
-};
+export type SessionColdMetadataWorkerResult = { kind: "cold-metadata" } & (
+  | { archive: undefined }
+  | { archive: Omit<SessionColdArchive, "archive_blob">; source: SessionColdSource }
+);
 
 export type SessionColdStorageInventoryWorkerInput = {
   kind: "cold-storage-inventory";
@@ -74,11 +97,21 @@ export type SessionColdStorageInventoryWorkerInput = {
 };
 
 export type SessionTranscriptInventoryWorkerInput =
+  | SessionTranscriptStatsBatchWorkerInput
+  | SessionTranscriptInstancesWorkerInput
   | MemorySessionTargetsWorkerInput
   | SessionArchiveInventoryWorkerInput
   | SessionCorpusInventoryWorkerInput
   | SessionArchivePresenceWorkerInput;
 export type SessionTranscriptInventoryWorkerValues = {
+  "transcript-stats-batch": {
+    kind: "transcript-stats-batch";
+    stats: Array<SessionTranscriptStats | null>;
+  };
+  "session-transcript-instances": {
+    kind: "session-transcript-instances";
+    instances: SessionTranscriptInstance[];
+  };
   "memory-session-targets": { kind: "memory-session-targets"; targets: MemorySessionTarget[] };
   "session-archive-inventory": {
     kind: "session-archive-inventory";
@@ -91,6 +124,12 @@ export type SessionTranscriptInventoryWorkerValues = {
   "session-archive-presence": { kind: "session-archive-presence"; registered: boolean };
 };
 export type SessionTranscriptInventoryReaders = {
+  readTranscriptStatsBatch: (
+    input: Omit<SessionTranscriptStatsBatchWorkerInput, "kind" | "database">,
+  ) => Promise<Array<SessionTranscriptStats | null>>;
+  readTranscriptInstances: (
+    input: Omit<SessionTranscriptInstancesWorkerInput, "kind" | "database">,
+  ) => Promise<SessionTranscriptInstance[]>;
   readMemorySessionTargets: (
     input: Omit<MemorySessionTargetsWorkerInput, "kind" | "database">,
   ) => Promise<MemorySessionTarget[]>;

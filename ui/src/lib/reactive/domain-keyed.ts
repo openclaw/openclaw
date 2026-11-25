@@ -1,79 +1,63 @@
-import type { createStoredChatOutboxReader } from "../chat/outbox-store-projection.ts";
-import type { ProjectCatalog } from "../projects.ts";
-import type { SessionProgressCardStore } from "../session-progress-cards.ts";
-import type { SessionPullRequestSnapshotStore } from "../session-pull-requests.ts";
+import { createEffect, createMemo, untrack } from "@solidjs/signals";
+import {
+  readSessionProgressCard,
+  type SessionProgressCardStore,
+} from "../session-progress-cards.ts";
 import { projectSource } from "./projection.ts";
 
-export function projectProjects(
-  source: Pick<ProjectCatalog, "snapshot" | "loading" | "subscribe">,
-) {
-  return projectSource(source, {
-    read: (catalog) => ({ snapshot: catalog.snapshot, loading: catalog.loading }),
-    subscribe: (catalog, notify) => catalog.subscribe(notify),
-    equality: "revision",
-  });
-}
-
 export type ProgressCardProjectionSource = {
-  store: SessionProgressCardStore;
-  target: Parameters<SessionProgressCardStore["get"]>[0];
+  store: SessionProgressCardStore | undefined;
+  target: Parameters<SessionProgressCardStore["get"]>[0] | undefined;
   options?: Parameters<SessionProgressCardStore["watch"]>[2];
 };
 
-export function projectProgressCard(source: ProgressCardProjectionSource) {
-  return projectSource(source, {
-    read: ({ store, target }) => ({
-      card: store.get(target),
-      lifetime: store.getLifetime(target),
-      error: store.getError(target),
-      refreshState: store.getRefreshState(target),
-    }),
+export function projectProgressCard(source: () => ProgressCardProjectionSource) {
+  const binding = createMemo(source);
+  let currentSource = untrack(binding);
+  let disposed = false;
+  const projection = projectSource(currentSource, {
+    read: ({ store, target }) => readSessionProgressCard(store, target),
     subscribe: ({ store, target, options }, notify) => {
+      if (!store) {
+        return () => {};
+      }
       const owner = {};
       const stop = store.subscribe(notify);
-      store.watch(owner, [target], options);
+      store.watch(owner, target ? [target] : [], options);
       return () => {
         store.unwatch(owner);
         stop();
       };
     },
-    equality: "revision",
+    equality: (previous, next) =>
+      previous.card === next.card &&
+      previous.completion === next.completion &&
+      previous.lifetime === next.lifetime &&
+      previous.error === next.error &&
+      previous.refreshState === next.refreshState,
   });
-}
-
-export type PullRequestsProjectionSource = {
-  store: SessionPullRequestSnapshotStore;
-  sessionKey: string;
-  options?: Parameters<SessionPullRequestSnapshotStore["watch"]>[2];
-};
-
-export function projectPullRequests(source: PullRequestsProjectionSource) {
-  return projectSource(source, {
-    read: ({ store, sessionKey }) => store.get(sessionKey),
-    subscribe: ({ store, sessionKey, options }, notify) => {
-      const owner = {};
-      const stop = store.subscribe(notify);
-      store.watch(owner, [sessionKey], options);
-      return () => {
-        store.unwatch(owner);
-        stop();
-      };
+  createEffect(binding, (next) => {
+    if (disposed || next === currentSource) {
+      return;
+    }
+    // A same-store handoff must not trigger idle teardown and discard cached cards.
+    const release = next.store?.subscribe(() => {});
+    try {
+      projection.replaceSource(next);
+      currentSource = next;
+    } finally {
+      release?.();
+    }
+  });
+  const { replaceSource: _replaceSource, ...owned } = projection;
+  return {
+    ...owned,
+    dispose() {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      projection.dispose();
     },
-    equality: "revision",
-  });
-}
-
-type StoredOutboxReader = ReturnType<typeof createStoredChatOutboxReader>;
-
-export type StoredOutboxProjectionSource = {
-  reader: StoredOutboxReader;
-  scope: Parameters<StoredOutboxReader["read"]>[0];
-};
-
-export function projectStoredOutbox(source: StoredOutboxProjectionSource) {
-  return projectSource(source, {
-    read: ({ reader, scope }) => reader.read(scope),
-    subscribe: ({ reader }, notify) => reader.subscribe(notify),
-    equality: "revision",
-  });
+  };
 }

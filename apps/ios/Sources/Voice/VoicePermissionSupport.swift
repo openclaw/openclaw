@@ -1,22 +1,24 @@
 import AVFAudio
 import Foundation
-import OpenClawKit
 import Speech
 
 enum VoicePermissionSupport {
-    static func requestMicrophonePermission(timeoutErrorDomain: String) async -> Bool {
+    static func requestMicrophonePermission() async -> Bool {
         let status = AVAudioApplication.shared.recordPermission
         guard status == .undetermined else { return status == .granted }
-        return await self.requestPermissionWithTimeout(errorDomain: timeoutErrorDomain) { completion in
+        // The OS prompt owns its lifetime; the bridge handles cancellation.
+        return await PermissionRequestBridge.awaitRequest { completion in
             AVAudioApplication.requestRecordPermission(completionHandler: completion)
         }
     }
 
-    static func requestSpeechPermission(timeoutErrorDomain: String) async -> Bool {
+    static func requestSpeechPermission() async -> Bool {
         let status = SFSpeechRecognizer.authorizationStatus()
         guard status == .notDetermined else { return status == .authorized }
-        return await self.requestPermissionWithTimeout(errorDomain: timeoutErrorDomain) { completion in
-            SFSpeechRecognizer.requestAuthorization { authStatus in
+        return await PermissionRequestBridge.awaitRequest { completion in
+            // TCC calls this on a background queue. Without @Sendable the literal inherits the
+            // bridge's main-actor isolation and the runtime isolation check traps.
+            SFSpeechRecognizer.requestAuthorization { @Sendable authStatus in
                 completion(authStatus == .authorized)
             }
         }
@@ -35,21 +37,5 @@ enum VoicePermissionSupport {
             String(localized: "%@ permission denied")
         }
         return String(format: format, kind)
-    }
-
-    private static func requestPermissionWithTimeout(
-        errorDomain: String,
-        operation: @escaping @Sendable (@escaping @Sendable (Bool) -> Void) -> Void) async -> Bool
-    {
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: 8,
-                onTimeout: { NSError(domain: errorDomain, code: 6, userInfo: [
-                    NSLocalizedDescriptionKey: "permission request timed out",
-                ]) },
-                operation: { await PermissionRequestBridge.awaitRequest(operation) })
-        } catch {
-            return false
-        }
     }
 }

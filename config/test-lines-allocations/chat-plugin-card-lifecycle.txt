@@ -1,0 +1,7 @@
+# Approved chat plugin card lifecycle redesign.
+# Browser coverage crosses the actual plugin-page install owner, route retirement,
+# correlated failure/retry/success, and the existing MCP wizard cancellation, expiry,
+# retry and authoritative re-inspection. Synthetic Gateway I/O; real production UI.
+# Allocation covers the excess over the 400-line allowance against d29fad4e3e687dedf683e38ec35b12cb85510637.
+# Includes same-client reconnect preservation for admitted and non-retryable outcomes.
+175

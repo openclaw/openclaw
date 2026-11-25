@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
+import { staticRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 
 // The manager may be loaded by acquisition, but a new importer still needs its file.
 vi.mock("./agent-bundle-mcp-manager-api.js", () => {
@@ -12,19 +14,16 @@ it("releases a materialized view without loading the manager during shutdown", a
   const releaseLease = vi.fn();
   const disposeRuntime = vi.fn(async () => {});
   const joinCleanup = vi.fn(async () => {});
-  const runtime: SessionMcpRuntime = {
+  const runtime: SessionMcpRuntime = staticRuntime({
     sessionId: "shutdown-fixture",
     workspaceDir: "/synthetic",
     configFingerprint: "fixture",
-    createdAt: 0,
-    lastUsedAt: 0,
     getCatalog: async () => catalog,
     peekCatalog: () => catalog,
-    markUsed: () => {},
     callTool: async () => ({ content: [] }),
     dispose: disposeRuntime,
     joinCleanup,
-  };
+  });
   const view = await materializeBundleMcpToolsForRun({ runtime, releaseLease, disposeRuntime });
 
   await view.dispose();

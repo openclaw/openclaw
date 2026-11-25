@@ -1,12 +1,15 @@
-import { clearSessionLifecycleQueues } from "../auto-reply/reply/queue/cleanup.js";
+import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
-  interruptSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-  startSessionWorkAdmissionInterruption,
-} from "../sessions/session-lifecycle-admission.js";
+  captureSessionTarget,
+  interruptSessionControllerEffects,
+  isCompetingSessionControllerWorkActive,
+  runSessionMutation,
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+  startSessionControllerInterruption,
+} from "../sessions/session-controller.lifecycle.js";
+import { captureSessionControllerStop } from "../sessions/session-controller.stop.js";
 import {
   resolveWorkerPlacementSessionStoreTarget,
   resolveWorkerPlacementSessionTarget,
@@ -18,7 +21,6 @@ import type { WorkerSessionPlacementStore } from "./worker-environments/placemen
 
 export type WorkerPlacementHandoffParams = {
   placements: Pick<WorkerSessionPlacementStore, "waitForTurnClaimRelease">;
-  awaitTurnClaimRelease: (sessionId: string, wait: () => Promise<void>) => Promise<void>;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
 };
 
@@ -34,19 +36,25 @@ export async function runWorkerPlacementHandoff<T>(
   begin: (resolved: Awaited<ReturnType<typeof resolveWorkerPlacementSessionTarget>>) => Promise<T>,
 ): Promise<T> {
   const { sessionId, sessionKey, agentId, action, signal } = request;
-  const target = resolveWorkerPlacementSessionStoreTarget(
+  const target = await resolveWorkerPlacementSessionStoreTarget(
     sessionRuntime,
     getRuntimeConfig(),
     request,
   );
   const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
+  const controllerTarget = captureSessionTarget({
+    storeScope: target.storePath,
+    sessionKey: target.canonicalKey,
+    aliases: lifecycleIdentities,
+    agentId: target.agentId,
+    incarnation: sessionId,
+  });
   let begun: T;
-  return await runExclusiveSessionLifecycleMutation(`placement-${action}`, {
-    scope: target.storePath,
-    identities: lifecycleIdentities,
+  return await runSessionMutation({
+    target: controllerTarget,
     signal,
     prepare: async () => {
-      const resolved = await resolveWorkerPlacementSessionTarget({
+      using resolved = await resolveWorkerPlacementSessionTarget({
         sessionRuntime,
         config: getRuntimeConfig(),
         sessionId,
@@ -56,44 +64,47 @@ export async function runWorkerPlacementHandoff<T>(
         errorMessage: `Session ${sessionKey} changed before ${action === "dispatch" ? "cloud worker dispatch" : "placement move"}. Retry.`,
       });
       resolved.assertCurrent(getRuntimeConfig());
+      if (
+        action === "dispatch" &&
+        isCompetingSessionControllerWorkActive(
+          target.storePath,
+          lifecycleIdentities,
+          target.agentId,
+        )
+      ) {
+        throw new Error(
+          `Session ${sessionKey} is busy with active work; wait for the turn to finish and retry dispatch.`,
+        );
+      }
+      const queuedInputs = captureSessionControllerStop({
+        targets: [controllerTarget],
+        includeActive: false,
+      }).queuedInputs;
       begun = await begin(resolved);
       if (action === "dispatch" && request.requiredProfile) {
         // Initial required placement belongs to this held input; there is no local
         // turn to revoke, and clearing its queues would discard the first message.
         return;
       }
-      clearSessionLifecycleQueues({
-        keys: lifecycleIdentities,
-        agentId: resolved.target.agentId,
-        sessionKey: resolved.target.canonicalKey,
-        sessionId,
-        // Placement committed; settling its source queues must survive authority changes.
-        assertCurrent: () => {},
-      });
+      clearSessionQueues(lifecycleIdentities, controllerTarget, queuedInputs);
       params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
       if (request.sourceDisposition === "abandon") {
         // Explicit abandonment cannot wait for an unreachable source's acknowledgement.
-        startSessionWorkAdmissionInterruption({
-          scope: target.storePath,
-          identities: lifecycleIdentities,
-        });
+        startSessionControllerInterruption({ target: controllerTarget });
         return;
       }
-      await params.awaitTurnClaimRelease(sessionId, async () => {
-        const released = await interruptSessionWorkAdmissions({
-          scope: target.storePath,
-          identities: lifecycleIdentities,
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-        });
-        if (!released) {
-          throw new Error(
-            `Session ${sessionKey} is still active; ${action === "dispatch" ? "dispatch stopped" : "placement move interrupted"}`,
-          );
-        }
-        await params.placements.waitForTurnClaimRelease(sessionId, {
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-          signal,
-        });
+      const released = await interruptSessionControllerEffects({
+        target: controllerTarget,
+        timeoutMs: SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+      });
+      if (!released) {
+        throw new Error(
+          `Session ${sessionKey} is still active; ${action === "dispatch" ? "dispatch stopped" : "placement move interrupted"}`,
+        );
+      }
+      await params.placements.waitForTurnClaimRelease(sessionId, {
+        timeoutMs: SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+        signal,
       });
       await runExclusiveSessionStoreWrite(target.storePath, async () => {}, { reentrant: true });
     },
@@ -114,7 +125,12 @@ export function createGatewayWorkerPlacementMoveBarrier(
       params,
       { ...request, action: "move" },
       await params.loadSessionRuntime(),
-      async () => {
+      async ({ workspace }) => {
+        if (workspace.kind === "device-folder") {
+          throw new Error(
+            "Device folders cannot move or Continue on Gateway; reconnect the original device or start a new session.",
+          );
+        }
         request.authorize?.();
         return await request.begin(async (runId) => {
           if (params.persistAbandonedPartial) {

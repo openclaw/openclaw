@@ -3,21 +3,15 @@ import {
   errorShape,
   validateUpdateRunParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { PreparedCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
-import { isRestartEnabled } from "../../config/commands.flags.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
 import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
+import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  FreeBsdPkgOwnershipError,
-} from "../../infra/update-freebsd-pkg-ownership.js";
 import { inspectImmutableInstall } from "../../infra/update-immutable-install.js";
 import { resolveStartupInstallStatus } from "../../infra/update-install-status.js";
 import {
@@ -25,26 +19,48 @@ import {
   UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL,
   type UPDATE_PREFLIGHT_DETAILS,
 } from "../../infra/update-preflight-details.js";
-import type { UpdateRequester } from "../../infra/update-requester-authority.js";
-import {
-  recordUpdateRunDiagnostics,
-  recordUpdateRunPhase,
-  recordUpdateRunStep,
-  finishUpdateRun,
-} from "../../infra/update-run-ledger.js";
+import { getUpdateRunAsync as getUpdateRun } from "../../infra/update-run-reader.js";
 import { summarizeUpdateStepFailure, type UpdateRunRecord } from "../../infra/update-run-record.js";
+import {
+  recordUpdateRunDiagnosticsAsync as recordUpdateRunDiagnostics,
+  recordUpdateRunPhaseAsync as recordUpdateRunPhase,
+  recordUpdateRunStepAsync as recordUpdateRunStep,
+  finishUpdateRunAsync as finishUpdateRun,
+} from "../../infra/update-run-write.async.js";
 import { resolveUpdateInstallSurface } from "../../infra/update-runner-install-surface.js";
 import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner-types.js";
+import {
+  createSystemPackageOwnershipInspection,
+  SystemPackageOwnershipError,
+} from "../../infra/update-system-package-ownership.js";
+import { updateInstallationMismatch } from "../../update/installation-identity.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /** Native params are returned only when this request still belongs to the native updater. */
-export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOptions) {
+export async function admitGatewayUpdateRequest(
+  request: GatewayRequestHandlerOptions,
+  installedRoot?: string | null,
+) {
   const { params, respond, context } = request;
   if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
     return null;
+  }
+  // Before any owner takes the request: a CLI from another installation must not update this one.
+  if (params.checkout && installedRoot) {
+    const mismatch = await updateInstallationMismatch(params.checkout, installedRoot);
+    if (mismatch) {
+      respond(true, {
+        runId: null,
+        ok: false,
+        code: "installation-mismatch",
+        message: mismatch,
+        result: { status: "skipped", reason: "installation-mismatch" },
+      });
+      return null;
+    }
   }
   const authority = readGatewayRequestMutationAuthority(request);
   const root = await resolveOpenClawPackageRoot({
@@ -92,6 +108,17 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
     );
     return null;
   }
+  if (params.acceptCapabilities) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "OCM owns this update and cannot apply capability consent. Run the update without --accept-capabilities.",
+      ),
+    );
+    return null;
+  }
   const run = await manager.start(
     authority.assertCurrent,
     normalizeUpdateChannel(context.getRuntimeConfig().update?.channel),
@@ -114,22 +141,41 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
   return null;
 }
 
+export function makeUpdateRefusal({ mode, root }: UpdateInstallSurface) {
+  return (
+    status: "error" | "skipped",
+    reason: string,
+    beforeVersion?: string | null,
+  ): UpdateRunResult => ({
+    status,
+    mode,
+    ...(root ? { root } : {}),
+    ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
+    reason,
+    steps: [],
+    durationMs: 0,
+  });
+}
+
 const IMMUTABLE_UPDATE_GUIDANCE =
   "Run openclaw update as the root installation owner outside the Gateway service cgroup. Native immutable activation requires an explicitly enabled adoption record; use openclaw update recover --root <installation-root> for retained recovery. Gateway update.run cannot acquire that external updater authority.";
 
-export function reportImmutableGatewayUpdateRefusal(
+export async function reportImmutableGatewayUpdateRefusal(
   runId: string,
   installSurface: Extract<UpdateInstallSurface, { kind: "immutable" }>,
   respond: GatewayRequestHandlerOptions["respond"],
-): void {
+  publishAppUpdate?: (run: UpdateRunRecord) => void,
+): Promise<void> {
   const reason = "immutable-native-updater-required";
-  recordUpdateRunPhase(runId, "requested", {
+  await recordUpdateRunPhase(runId, "requested", {
     origin: { nextAction: IMMUTABLE_UPDATE_GUIDANCE },
   });
-  finishUpdateRun(runId, { status: "skipped", reason });
+  const run = await finishUpdateRun(runId, { status: "skipped", reason });
+  publishAppUpdate?.(run);
   respond(true, {
     runId,
     ok: false,
+    ...(publishAppUpdate ? { noticeInApp: true } : {}),
     message: IMMUTABLE_UPDATE_GUIDANCE,
     result: {
       status: "skipped",
@@ -143,38 +189,18 @@ export function reportImmutableGatewayUpdateRefusal(
   });
 }
 
-export function retainUpdateRequesterAuthority(
-  requester: UpdateRequester | undefined,
-  authority: PreparedCommandOwnerAuthority | undefined,
-  getConfig: () => OpenClawConfig,
-) {
-  return {
-    signal: authority?.signal,
-    assertCurrent: () => {
-      if (!requester?.channel || isInternalMessageChannel(requester.channel)) {
-        return;
-      }
-      const config = getConfig();
-      if (
-        !requester.authorizationSource ||
-        !authority?.isCurrent(config) ||
-        !isRestartEnabled(config)
-      ) {
-        throw new Error("Update requester authority changed before parking.");
-      }
-    },
-  };
-}
-
 export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: number) {
-  recordUpdateRunStep(runId, { step: "installation-inspection", status: "in_progress" });
-  const { root, status } = await currentUpdateCheckLifecycle().run((signal) =>
-    resolveStartupInstallStatus(false, signal),
+  await recordUpdateRunStep(runId, { step: "installation-inspection", status: "in_progress" });
+  const lifecycle = currentUpdateCheckLifecycle();
+  const { root: runningRoot, status } = await lifecycle.run((signal) =>
+    resolveStartupInstallStatus(false, signal, lifecycle.installStatus),
   );
+  // The Gateway runs its release by real path; the installation it updates is the link.
+  const root = runningRoot && (resolvePackageReleaseSlotForRootSync(runningRoot) ?? runningRoot);
   if (status.error?.timeoutMs) {
     throw new Error(status.error.message);
   }
-  recordUpdateRunPhase(runId, "requested", {
+  await recordUpdateRunPhase(runId, "requested", {
     target: {
       ...(status.installKind === "git" || status.installKind === "package"
         ? { kind: status.installKind }
@@ -184,13 +210,16 @@ export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: n
   });
   // Status discovery is read-only; admit ownership before campaign adoption
   // or a managed handoff can select and launch an updater.
-  await createFreeBsdPkgOwnershipInspection(timeoutMs).assertUnowned(root);
+  await createSystemPackageOwnershipInspection(timeoutMs).assertUnowned(root);
   const installSurface = await resolveUpdateInstallSurface({
     root,
     installKind: status.installKind,
+    ...(status.installKind === "package" && status.packageManager !== "unknown"
+      ? { packageManager: status.packageManager }
+      : {}),
     timeoutMs,
   });
-  recordUpdateRunPhase(runId, "requested", {
+  await recordUpdateRunPhase(runId, "requested", {
     ...(installSurface.kind === "global"
       ? { target: { installationMethod: `${installSurface.mode}-global` } }
       : {}),
@@ -244,21 +273,26 @@ function classifyHandoffFailure(
   return "handoff-preparation-failed";
 }
 
-export function recordHandoffFailure(
+export async function recordHandoffFailure(
   runId: string,
   error: unknown,
   previous: UpdateRunResult,
   warn: (message: string) => void,
   stage: HandoffFailureStage = "prepare",
-): UpdateRunResult {
+): Promise<UpdateRunResult> {
   const cause = createUpdateErrorFact("managed-service", error);
   const classified = createUpdatePreflightFailure(
     classifyHandoffFailure(cause, stage),
     undefined,
     "managed-service",
   );
+  const completed = await getUpdateRun(runId).catch(() => undefined);
   const reason =
-    error instanceof UpdatePreMutationError ? error.reason : "managed-service-handoff-failed";
+    completed?.status === "failed" && completed.reason
+      ? completed.reason
+      : error instanceof UpdatePreMutationError
+        ? error.reason
+        : "managed-service-handoff-failed";
   const failureFacts = [
     ...(error instanceof UpdatePreMutationError ? error.failureFacts : [cause]).slice(0, 4),
     ...classified.failureFacts,
@@ -277,13 +311,13 @@ export function recordHandoffFailure(
   };
   try {
     if (error instanceof UpdatePreMutationError) {
-      recordUpdateRunPhase(runId, "requested", { origin: { nextAction: error.message } });
+      await recordUpdateRunPhase(runId, "requested", { origin: { nextAction: error.message } });
     }
-    recordUpdateRunStep(runId, { step: step.name, status: "failed", reason });
+    await recordUpdateRunStep(runId, { step: step.name, status: "failed", reason });
   } catch {
     warn("Update failure state could not be recorded; preserving the original error.");
   }
-  recordUpdateRunDiagnostics(
+  await recordUpdateRunDiagnostics(
     runId,
     {
       rollbackOutcome,
@@ -305,15 +339,18 @@ export function recordHandoffFailure(
   };
 }
 
-export function createUnexpectedUpdateFailureResult(
+export async function createUnexpectedUpdateFailureResult(
   current: UpdateRunRecord,
   previous: UpdateRunResult,
   error: unknown,
   warn: (message: string) => void,
-): UpdateRunResult {
+): Promise<UpdateRunResult> {
+  if (error instanceof SystemPackageOwnershipError && error.owned) {
+    return { ...previous, status: "skipped", reason: error.reason };
+  }
   const activeStep = current.steps.findLast((step) => step.status === "in_progress");
   const name = activeStep?.step ?? current.phase;
-  const reason = error instanceof FreeBsdPkgOwnershipError ? error.reason : "unexpected-error";
+  const reason = error instanceof SystemPackageOwnershipError ? error.reason : "unexpected-error";
   const step = {
     name,
     command: "",
@@ -338,7 +375,7 @@ export function createUnexpectedUpdateFailureResult(
     steps: [...previous.steps, step],
     durationMs: Date.now() - current.createdAtMs,
   };
-  recordUpdateRunDiagnostics(
+  await recordUpdateRunDiagnostics(
     current.runId,
     {
       recovery: result.recovery,

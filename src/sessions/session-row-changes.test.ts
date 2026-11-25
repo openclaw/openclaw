@@ -1,89 +1,71 @@
-import { afterEach, expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { subscribeRuntimeSessionChanges } from "../plugins/runtime/session-changes.js";
-import { captureSessionRowChanges, sessionChanges } from "./session-row-changes.js";
+import {
+  captureSessionRowChanges,
+  readSessionRowChangeRevision,
+  sessionChanges,
+  type SessionRowChange,
+} from "./session-row-changes.js";
 
-const cleanup: Array<() => void> = [];
-afterEach(() => {
-  for (const close of cleanup.splice(0).toReversed()) {
-    close();
-  }
-});
-
-it("captures only surviving transaction postimages before the worker receipt is serialized", () => {
+function database() {
   const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(":memory:");
-  cleanup.push(() => database.close());
-  database.exec("CREATE TABLE facts (key TEXT PRIMARY KEY)");
-  const write = (key: string) => {
-    database.prepare("INSERT INTO facts VALUES (?)").run(key);
-    sessionChanges.emit({ sessionKey: key, facts: { kind: "unchanged" } }, database);
+  const db = new DatabaseSync(":memory:");
+  onTestFinished(() => db.close());
+  return db;
+}
+
+function collectKeys(keys: string[]) {
+  return (change: SessionRowChange) => {
+    if ("sessionKey" in change) {
+      keys.push(change.sessionKey);
+    }
   };
+}
+
+it.each([false, true])("captures surviving postimages with a separate anchor: %s", (separate) => {
+  const anchor = database();
+  const db = separate
+    ? Object.assign(database(), { anchor, [Symbol.for("openclaw.postgres-sync-connection")]: true })
+    : anchor;
+  const write = (sessionKey: string) =>
+    sessionChanges.emit({ sessionKey, facts: { kind: "unchanged" } }, db);
+  const initialRevision = readSessionRowChangeRevision();
   const transaction = <T>(run: () => T) =>
-    withSqlitePostCommitPublications(database, () =>
-      runSqliteImmediateTransactionSync(database, run),
+    withSqlitePostCommitPublications(anchor, () =>
+      separate ? run() : runSqliteImmediateTransactionSync(anchor, run),
     );
   const notifications: string[] = [];
-  cleanup.push(
+  onTestFinished(
     sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change) {
-        notifications.push(change.sessionKey);
+      collectKeys(notifications)(change);
+      if ("sessionKey" in change && change.sessionKey === "last") {
+        sessionChanges.emit({ sessionKey: "observer" }, db);
       }
     }),
   );
-  const receipt = transaction(() =>
-    captureSessionRowChanges(database, () => {
-      write("first");
-      expect(() =>
-        transaction(() => {
-          write("rolled-back");
-          throw new Error("cancel nested mutation");
-        }),
-      ).toThrow("cancel nested mutation");
-      write("last");
-      expect(notifications).toEqual([]);
-      return "committed";
-    }),
-  );
+  const mutate = () => {
+    write("first");
+    expect(() =>
+      transaction(() => {
+        write("rolled-back");
+        throw new Error("cancel nested mutation");
+      }),
+    ).toThrow("cancel nested mutation");
+    write("last");
+    expect(notifications).toEqual([]);
+    expect(readSessionRowChangeRevision()).toBe(initialRevision);
+    return "committed";
+  };
+  const receipt = captureSessionRowChanges(anchor, () => transaction(mutate));
   expect(receipt.result).toBe("committed");
-  expect(receipt.changes.map((change) => "sessionKey" in change && change.sessionKey)).toEqual([
-    "first",
-    "last",
-  ]);
-  expect(notifications).toEqual(["first", "last"]);
-  expect(database.prepare("SELECT key FROM facts ORDER BY key").all()).toEqual([
-    { key: "first" },
-    { key: "last" },
-  ]);
-});
-
-it("keeps postcommit observer events outside the committing worker's captured postimages", () => {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(":memory:");
-  cleanup.push(() => database.close());
-  const observed: string[] = [];
-  cleanup.push(
-    sessionChanges.subscribe((change) => {
-      if (!("sessionKey" in change)) {
-        return;
-      }
-      observed.push(change.sessionKey);
-      if (change.sessionKey === "committed") {
-        sessionChanges.emit({ sessionKey: "observer" }, database);
-      }
-    }),
+  expect(receipt.changes).toEqual(
+    ["first", "last"].map((sessionKey) => ({ sessionKey, facts: { kind: "unchanged" } })),
   );
-  const captured = captureSessionRowChanges(database, () =>
-    withSqlitePostCommitPublications(database, () =>
-      runSqliteImmediateTransactionSync(database, () =>
-        sessionChanges.emit({ sessionKey: "committed", facts: { kind: "unchanged" } }, database),
-      ),
-    ),
-  );
-  expect(observed).toEqual(["committed", "observer"]);
-  expect(captured.changes).toEqual([{ sessionKey: "committed", facts: { kind: "unchanged" } }]);
+  expect(notifications).toEqual(["first", "last", "observer"]);
+  expect(readSessionRowChangeRevision()).toBeGreaterThan(initialRevision);
 });
 
 it("installs private authority before observers without duplicate presentation notifications", () => {
@@ -92,18 +74,10 @@ it("installs private authority before observers without duplicate presentation n
   const observed: string[][] = [];
   const pluginEvents: string[] = [];
   const pluginFacts: string[][] = [];
-  cleanup.push(
-    sessionChanges.subscribeFacts((change) => {
-      if ("sessionKey" in change) {
-        installed.push(change.sessionKey);
-      }
-    }),
-    sessionChanges.subscribeProjection((change) => {
-      if ("sessionKey" in change) {
-        projected.push(change.sessionKey);
-      }
-    }),
-    sessionChanges.subscribe(() => observed.push([...installed])),
+  onTestFinished(sessionChanges.subscribeFacts(collectKeys(installed)));
+  onTestFinished(sessionChanges.subscribeProjection(collectKeys(projected)));
+  onTestFinished(sessionChanges.subscribe(() => observed.push([...installed])));
+  onTestFinished(
     subscribeRuntimeSessionChanges((change) => {
       pluginEvents.push(change.sessionKey);
       pluginFacts.push([...installed]);

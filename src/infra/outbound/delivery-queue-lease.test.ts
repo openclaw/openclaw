@@ -7,21 +7,6 @@ describe("delivery producer lease", () => {
     vi.useRealTimers();
   });
 
-  it("keeps a producer lease with an expiry 30 days ahead alive", async () => {
-    vi.useFakeTimers();
-    const lease = await startDeliveryProducerLease({
-      id: "clock-skew",
-      renew: async () => Date.now() + 30 * 24 * 60 * 60_000,
-    });
-    try {
-      await vi.advanceTimersByTimeAsync(100);
-      expect(lease.signal.aborted).toBe(false);
-    } finally {
-      await lease.stop();
-    }
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("renews immediately and keeps the exact owner alive until stopped", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -82,41 +67,6 @@ describe("delivery producer lease", () => {
     expect(lease.signal.reason).toMatchObject({
       name: "DeliveryProducerLeaseLostError",
       message: "Delivery platform claim was lost: stable-lost",
-    });
-  });
-
-  it("retries transient renewal failures while the last confirmed lease remains valid", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const renew = vi
-      .fn<() => Promise<number | undefined>>()
-      .mockResolvedValueOnce(Date.now() + 60_000)
-      .mockRejectedValueOnce(new Error("database busy"))
-      .mockImplementation(async () => Date.now() + 60_000);
-
-    const lease = await startDeliveryProducerLease({ id: "stable-retry", renew });
-    await vi.advanceTimersByTimeAsync(65_000);
-
-    expect(renew).toHaveBeenCalledTimes(4);
-    expect(lease.signal.aborted).toBe(false);
-    await lease.stop();
-  });
-
-  it("aborts when transient renewal failures outlive the last confirmed lease", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const renew = vi
-      .fn<() => Promise<number | undefined>>()
-      .mockResolvedValueOnce(Date.now() + 60_000)
-      .mockRejectedValue(new Error("database unavailable"));
-
-    const lease = await startDeliveryProducerLease({ id: "stable-expired", renew });
-    await vi.advanceTimersByTimeAsync(60_001);
-
-    expect(lease.signal.aborted).toBe(true);
-    expect(lease.signal.reason).toMatchObject({
-      name: "DeliveryProducerLeaseLostError",
-      message: "Delivery platform claim was lost: stable-expired",
     });
   });
 

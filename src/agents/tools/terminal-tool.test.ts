@@ -1,5 +1,6 @@
 import { Value } from "typebox/value";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { TerminalSessionManager } from "../../gateway/terminal/session-manager.js";
 import {
@@ -32,7 +33,10 @@ const approvalMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./in-process-gateway.js", () => ({ getInProcessGatewayToolContext }));
-vi.mock("../../gateway/session-utils-store.js", () => ({ loadGatewaySessionEntryReadOnly }));
+// mock-isolation: terminal ownership tests supply entry facts without opening session databases.
+vi.mock("../../gateway/session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: loadGatewaySessionEntryReadOnly,
+}));
 vi.mock("../bash-tools.exec-approval-request.js", () => ({
   registerExecApprovalRequestForHostOrThrow: approvalMocks.register,
   resolveRegisteredExecApprovalDecision: approvalMocks.decide,
@@ -97,6 +101,41 @@ describe("terminal tool", () => {
     approvalMocks.register.mockClear();
     approvalMocks.decide.mockReset();
     approvalMocks.decide.mockResolvedValue("allow-once");
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
+  it.each([
+    ["\u001b[32mok\u001b[0m done\u001b[2K", "ok done"],
+    ["\u009b31mred\u009b0m", "red"],
+    ["", ""],
+    ["\r", ""],
+    ["\rhello", "hello"],
+    ["hello\r", "hello"],
+    ["hello\r\r", ""],
+    ["hello\r\r\r", ""],
+    ["hello\rworld\r", "world"],
+    ["10%\r20%\r100%\ndone", "100%\ndone"],
+    ["hello\r\nworld\r\n", "hello\nworld\n"],
+    ["hello\r\r\nworld", "\nworld"],
+    ["a\u0007b\tc", "ab\tc"],
+    [
+      `a\u007f${Array.from({ length: 0x20 }, (_, offset) => String.fromCharCode(0x80 + offset)).join("")}\u00a0b\tc`,
+      "a\u00a0b\tc",
+    ],
+    ["\u001b]0;title\u0007prompt$ ", "prompt$ "],
+    ["\u009d0;title\u009cprompt$ ", "prompt$ "],
+  ])("reads rendered terminal buffer %j as %j", async (raw, expected) => {
+    const { backend, manager, sessionId } = await openAgentTerminal();
+    try {
+      backend.emitData(raw);
+      const result = await makeTool(manager).execute("read", { action: "read", sessionId });
+      expect(result.details).toEqual({ sessionId, text: expected });
+    } finally {
+      manager.closeAgent(agentOwner, sessionId);
+    }
   });
 
   it("exposes existing-session controls but never shell creation behind the owner-only gate", () => {
@@ -279,7 +318,7 @@ describe("terminal tool", () => {
         { action: "close", sessionId },
       ]) {
         await expect(tool.execute(params.action, params)).rejects.toThrow(
-          "Terminal session unavailable. Use action=list to find a shared terminal or ask the operator to open one in this chat.",
+          "Terminal session unavailable. Use action=list to find a terminal the operator opened in this chat. This tool cannot open one; run your own commands with exec when available, otherwise ask the operator to open a terminal.",
         );
       }
     }
@@ -341,15 +380,17 @@ describe("terminal tool", () => {
 
   it("rejects terminal input when the authoritative persisted session is missing", async () => {
     const { backend, manager, sessionId } = await openAgentTerminal();
+    setRuntimeConfigSnapshot({});
     const tool = makeTool(manager, { execSession: undefined });
 
     await expect(
       tool.execute("missing-session-input", { action: "input", sessionId, data: "echo unsafe\r" }),
     ).rejects.toThrow("Terminal session unavailable");
 
-    expect(loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentOwner.agentSessionKey, {
+    expect(loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      key: agentOwner.agentSessionKey,
       agentId: agentOwner.agentId,
-      clone: false,
     });
     expect(backend.writes).toEqual([]);
     expect(approvalMocks.register).not.toHaveBeenCalled();

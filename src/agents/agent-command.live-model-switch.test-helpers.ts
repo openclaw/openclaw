@@ -3,6 +3,13 @@ import type { InternalSessionEntry } from "../config/sessions.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+export function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an array`);
+  }
+  return value;
+}
+
 export async function resetTestSessionReaders(state: {
   loadSessionEntryMock: Mock;
   sessionStoreMock: Record<string, InternalSessionEntry> | undefined;

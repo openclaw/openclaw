@@ -1,4 +1,5 @@
 /** Cleanup consumes the existing manager without loading its construction graph. */
+import type { SessionMcpStoreSource } from "../config/sessions/session-mcp-store-admission.js";
 import { logWarn } from "../logger.js";
 import type { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
@@ -16,6 +17,63 @@ export function peekSessionMcpRuntimeManager():
   return globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY] as ReturnType<
     typeof createSessionMcpRuntimeManager
   >;
+}
+
+/** Captures the current runtimes and their pending disposals without selecting a successor. */
+export function captureSessionMcpRuntimeRetirement(params: {
+  sessionId?: string;
+  sessionKey?: string;
+}) {
+  return peekSessionMcpRuntimeManager()?.captureSessionRetirement(params);
+}
+
+export function listAgentSessionMcpRuntimeIds(agentId: string): string[] {
+  return peekSessionMcpRuntimeManager()?.listSessionIdsForAgent(agentId) ?? [];
+}
+
+export function captureSessionMaintenanceMcpRuntimes(sessionIds: readonly string[]) {
+  const manager = peekSessionMcpRuntimeManager();
+  if (!manager) {
+    return undefined;
+  }
+  const captured = new Map<string, (source: SessionMcpStoreSource) => Promise<void>>();
+  for (const id of new Set(sessionIds)) {
+    const retire = manager.captureStoreRetirement(id);
+    if (retire) {
+      captured.set(id, retire);
+    }
+  }
+  return captured.size
+    ? {
+        sessionIds: [...captured.keys()],
+        async retire(ids: readonly string[], source: SessionMcpStoreSource) {
+          const results = await Promise.allSettled(
+            ids.flatMap((id) => captured.get(id)?.(source) ?? []),
+          );
+          const failures = results.filter((r) => r.status === "rejected");
+          if (failures.length) {
+            throw new AggregateError(
+              failures.map((r) => r.reason),
+              "Session MCP retention cleanup failed",
+            );
+          }
+        },
+      }
+    : undefined;
+}
+
+/** Live views retain leases; close them and retry before agent storage can retire. */
+export async function retireSessionMcpRuntimeForAgentDeletion(params: {
+  sessionId: string;
+  agentId: string;
+  assertCurrent: () => void;
+}): Promise<void> {
+  params.assertCurrent();
+  await peekSessionMcpRuntimeManager()?.retireSessionForAgentDeletion(
+    params.sessionId,
+    params.agentId,
+    params.assertCurrent,
+  );
 }
 
 /** Releases an acquisition after its consumer has taken ownership, or after failure. */

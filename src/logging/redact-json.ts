@@ -30,27 +30,6 @@ type RedactionTarget = {
 export type RedactionCapture = RedactionTarget & {
   redact: (target: RedactionTarget) => RedactionEdit | undefined;
 };
-type RedactionCaptureSelector = (
-  match: RedactMatch,
-  pattern: ResolvedRedactPattern,
-) => RedactionCapture | undefined;
-
-export function getPatternRedactionEdits(
-  value: string,
-  pattern: ResolvedRedactPattern,
-  getCapture: RedactionCaptureSelector,
-): RedactionEdit[] {
-  const edits: RedactionEdit[] = [];
-  visitRedactMatches(value, pattern, (match) => {
-    const capture = getCapture(match, pattern);
-    const edit = capture?.redact(capture);
-    if (edit && edit.end >= edit.start) {
-      edits.push(edit);
-    }
-  });
-  return edits;
-}
-
 export type RedactionMessage = {
   text: string;
   contentLength: number;
@@ -60,7 +39,6 @@ export type RedactionMessage = {
     json: boolean;
     messageField: boolean;
     start: number;
-    primitiveLength?: number;
   }[];
 };
 
@@ -142,7 +120,7 @@ function projectMessageEdits(
         }
       } else {
         start = part.start + edit.start;
-        end = part.start + (part.primitiveLength ?? edit.end);
+        end = part.start + edit.end;
       }
       if (start < message.contentLength) {
         projected.push({
@@ -362,7 +340,7 @@ export function redactJsonRecord(
   input: string,
   origins: RedactionOrigins,
   patternPhases: readonly [readonly RedactionPatternGroup[], readonly RedactionPatternGroup[]],
-  getCapture: RedactionCaptureSelector,
+  getCapture: (match: RedactMatch, pattern: ResolvedRedactPattern) => RedactionCapture | undefined,
   legacyFieldEdits: (field: RedactionField, currentValue: string) => RedactionEdit[],
   fieldEdits: (field: RedactionField) => RedactionEdit[],
   prepEdits: (field: RedactionField) => RedactionEdit[],

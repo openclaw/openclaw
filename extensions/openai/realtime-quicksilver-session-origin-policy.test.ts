@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { createServer, IncomingMessage, type Server } from "node:http";
-import { type AddressInfo, Socket } from "node:net";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { networkInterfaces } from "node:os";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -78,29 +78,8 @@ async function closeWebSocketServer(server: WebSocketServer): Promise<void> {
   });
 }
 
-function createDeferredOfferRequest(params: { origin: string; token: string }): {
-  req: IncomingMessage;
-  finish: (body: string) => void;
-} {
-  const req = new IncomingMessage(new Socket());
-  req.method = "POST";
-  req.headers = {
-    authorization: `Bearer ${params.token}`,
-    "content-type": "application/sdp",
-    origin: params.origin,
-  };
-  return {
-    req,
-    finish: (body) => {
-      req.push(Buffer.from(body));
-      req.complete = true;
-      req.push(null);
-    },
-  };
-}
-
 describe("GPT-Live offer origin policy", () => {
-  it("enforces final policy over real HTTP and settles the durable voice owner", async () => {
+  it("admits mapped-origin offers over real HTTP and rejects new denied offers", async () => {
     const cfg: OpenClawConfig = { gateway: { publicOrigin: "https://public.example.test" } };
     let providerRequests = 0;
     const providerServer = createServer((req, res) => {
@@ -177,7 +156,6 @@ describe("GPT-Live offer origin policy", () => {
     const revokedGateway = await createTalkGatewayControlOwnerTestFixture(
       `voice-revoked-${randomUUID()}`,
     );
-    let heldBody: ReadableStreamDefaultController<Uint8Array> | undefined;
 
     try {
       const unrelated = await createReservation();
@@ -205,43 +183,16 @@ describe("GPT-Live offer origin policy", () => {
 
       const revoked = await createReservation(revokedGateway);
       expect(realtime.getSessionCounts().pending).toBe(1);
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          heldBody = controller;
-          controller.enqueue(new TextEncoder().encode("v=0\r\n"));
-        },
-      });
-      // The body reader resumes after the broker has consumed the pending offer.
-      const revokedOfferReading = new Promise<void>((resolve) => {
-        gatewayServer.once("request", (req) => req.once("resume", resolve));
-      });
-      const revokedResponsePromise = postOffer(
-        revoked.clientSecret,
-        "http://localhost:25432",
-        body,
-      );
-      await revokedOfferReading;
-      expect(realtime.getSessionCounts().pending).toBe(0);
+      // New requests use the current authored policy; an admitted request may finish.
       cfg.gateway!.controlUi = { allowedOrigins: [] };
-      const bodyController = heldBody;
-      if (!bodyController) {
-        throw new Error("Expected held request body controller");
-      }
-      bodyController.enqueue(new TextEncoder().encode("m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"));
-      bodyController.close();
-      heldBody = undefined;
-
-      const revokedResponse = await revokedResponsePromise;
+      const revokedResponse = await postOffer(revoked.clientSecret, "http://localhost:25432");
       expect(revokedResponse.status).toBe(403);
       expect(await revokedResponse.text()).toBe("Origin not allowed");
       expect(providerRequests).toBe(1);
-      expect(revokedGateway.owner.signal.aborted).toBe(true);
+      expect(realtime.getSessionCounts().pending).toBe(1);
+      await realtime.broker.cancelBrowserSession(revoked);
       await revokedGateway.owner.close();
       expect(revokedGateway.readLogicalSessionStatus()).toBe("closed");
-      expect(revokedGateway.events.map((event) => event.type)).toEqual([
-        "session.error",
-        "session.closed",
-      ]);
       expect(realtime.getSessionCounts()).toEqual({
         active: 0,
         inFlight: 0,
@@ -249,7 +200,6 @@ describe("GPT-Live offer origin policy", () => {
         reservations: 0,
       });
     } finally {
-      heldBody?.error(new Error("proof cleanup"));
       await realtime.cleanup();
       await Promise.all([acceptedGateway.owner.close(), revokedGateway.owner.close()]);
       await closeServer(gatewayServer);
@@ -311,77 +261,6 @@ describe("GPT-Live offer origin policy", () => {
       expect(fetchImpl).toHaveBeenCalledOnce();
     } finally {
       await realtime.cleanup();
-    }
-  });
-
-  it("revokes a mapped-origin offer held across an explicit policy change", async () => {
-    const cfg: OpenClawConfig = { gateway: { publicOrigin: "https://public.example.test" } };
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response("v=answer\r\n", {
-          status: 201,
-          headers: { Location: "/v1/live/rtc_revoked_origin" },
-        }),
-    ) as unknown as typeof fetch;
-    const { realtime } = createBroker({ fetchImpl, getConfig: () => cfg });
-    const gateway = await createTalkGatewayControlOwnerTestFixture("voice-revoked-origin");
-    const reservation = await realtime.broker.createBrowserSession(
-      {
-        providerConfig: {},
-        model: "gpt-live-test-canary",
-        clientControl: { owner: "gateway" },
-        runAgentConsult: gateway.owner.runAgentConsult,
-        gatewayControl: gateway.owner.control,
-      },
-      { type: "api-key", token: "platform-key" },
-    );
-    if (reservation.transport !== "webrtc") {
-      throw new Error("Expected WebRTC reservation");
-    }
-    const deferred = createDeferredOfferRequest({
-      origin: "http://localhost:25432",
-      token: reservation.clientSecret,
-    });
-    const response = createResponseHarness();
-
-    try {
-      const offerReading = once(deferred.req, "resume");
-      const handling = withPluginRuntimeGatewayRequestScope(
-        { isWebchatConnect: () => false, publishedPort: 25432 },
-        () => realtime.handler(deferred.req, response.res),
-      );
-      await offerReading;
-      expect(realtime.getSessionCounts().pending).toBe(0);
-
-      cfg.gateway!.controlUi = { allowedOrigins: [] };
-      deferred.finish(AUDIO_ONLY_SDP);
-
-      await expect(handling).resolves.toBe(true);
-      expect(response.res.statusCode).toBe(403);
-      expect(response.readBody()).toBe("Origin not allowed");
-      expect(response.removeHeader).toHaveBeenCalledWith("Access-Control-Allow-Origin");
-      expect(fetchImpl).not.toHaveBeenCalled();
-      expect(() => gateway.owner.assertOpen()).toThrow("Realtime voice session closed");
-      await gateway.owner.close();
-      expect(gateway.closeLogicalSession).toHaveBeenCalledOnce();
-      expect(gateway.readLogicalSessionStatus()).toBe("closed");
-      expect(gateway.events.map((event) => event.type)).toEqual([
-        "session.error",
-        "session.closed",
-      ]);
-      expect(gateway.events[0]?.payload).toEqual(
-        expect.objectContaining({ message: "Origin not allowed" }),
-      );
-      expect(realtime.getSessionCounts()).toEqual({
-        active: 0,
-        inFlight: 0,
-        pending: 0,
-        reservations: 0,
-      });
-    } finally {
-      deferred.req.destroy();
-      await realtime.cleanup();
-      await gateway.owner.close();
     }
   });
 });

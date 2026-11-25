@@ -6,10 +6,9 @@ import {
   waitForChatScrollIdle,
 } from "../../ui/src/e2e/chat-flow.test-support.ts";
 import { CONFIG_PAGE_IDS } from "../../ui/src/pages/config/config-sections.ts";
-import type {
-  ControlUiMockGatewayScenario,
-  MockGatewayControls,
-} from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { NativeControlUiMockGatewayScenario } from "../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
+import { chatToolScenes } from "./chat-tool-scenes.ts";
 import {
   fixedTime,
   sessionKey,
@@ -26,7 +25,7 @@ import {
 
 export { fixedTime };
 export const baseScenario = parityBaseScenario;
-export type Profile = {
+type Profile = {
   id: string;
   width: number;
   height: number;
@@ -56,10 +55,11 @@ export type Scene = {
   route?: RouteId;
   path: string;
   ready: string;
-  scenario?: ControlUiMockGatewayScenario;
+  scenario?: NativeControlUiMockGatewayScenario;
   prepare?: (page: Page, gateway: MockGatewayControls) => Promise<void>;
   scrollTo?: string;
   loading?: boolean;
+  serviceWorkers?: "allow" | "block";
 };
 const configPages = new Set<string>(CONFIG_PAGE_IDS);
 function routeScene(route: RouteId): Scene {
@@ -132,8 +132,152 @@ const loadingRoutes: Array<{ route: RouteId; method: string; ready: string }> = 
     ready: "#settings-profile-identity .settings-loading-skeleton",
   },
 ];
+const modelSettingsScenario: NativeControlUiMockGatewayScenario = {
+  featureMethods: [
+    ...baseScenario.featureMethods!,
+    "codex.accountUsage",
+    "models.authLogin",
+    "wizard.next",
+    "openclaw.setup.detect",
+  ],
+  methodResponses: {
+    "models.authStatus": {
+      ts: fixedTime,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "ok",
+          profiles: [
+            {
+              profileId: "openai:parity",
+              type: "oauth",
+              status: "ok",
+              email: "demo@example.invalid",
+            },
+          ],
+        },
+      ],
+      providerCapabilities: [
+        {
+          provider: "openai",
+          apiKeySupported: true,
+          quickApiKeySetup: true,
+          loginOptions: [
+            {
+              id: "openai-login",
+              brandId: "openai",
+              label: "Sign in with ChatGPT",
+              kind: "oauth",
+              featured: true,
+            },
+          ],
+        },
+      ],
+    },
+    "codex.accountUsage": {
+      updatedAt: fixedTime,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          plan: "Pro",
+          windows: [{ label: "5h", usedPercent: 25 }],
+        },
+      ],
+    },
+    "models.authLogin": { done: false, status: "running" },
+    "wizard.next": {
+      done: false,
+      status: "running",
+      step: {
+        id: "parity-code",
+        type: "text",
+        title: "Complete sign-in",
+        message: "Paste the code from the provider to finish signing in.",
+        sensitive: true,
+      },
+    },
+    "openclaw.setup.detect": {
+      candidates: [
+        {
+          kind: "codex-cli",
+          brandId: "openai",
+          label: "Codex",
+          detail: "Demo account",
+          modelRef: "openai/gpt-5.5",
+          credentials: true,
+          recommended: true,
+        },
+      ],
+      manualProviders: [
+        { id: "openai-api-key", brandId: "openai", groupLabel: "OpenAI", label: "OpenAI API key" },
+        { id: "apiKey", brandId: "anthropic", groupLabel: "Anthropic", label: "Anthropic API key" },
+      ],
+      prepareOptions: [
+        {
+          id: "ollama",
+          brandId: "ollama",
+          label: "Ollama",
+          hint: "Connect to a local Ollama server",
+          actionLabel: "Choose connection",
+        },
+      ],
+      authOptions: [],
+      setupComplete: false,
+      workspace: "/synthetic/workspace",
+    },
+  },
+};
+const modelSettingsPage: Scene = {
+  id: "models-configured",
+  label: "Models: configured defaults and provider",
+  path: "/settings/model-providers",
+  ready: "openclaw-model-providers-page",
+  scenario: modelSettingsScenario,
+  prepare: async (page) => {
+    await page.locator('[data-profile-id="openai:parity"]').waitFor();
+  },
+};
+const modelSetupPage: Scene = {
+  id: "model-setup-ready",
+  label: "Model Setup: detected and manual providers",
+  path: "/settings/model-setup?firstRun=explicit",
+  ready: "openclaw-model-setup-page",
+  scenario: modelSettingsScenario,
+  prepare: async (page) => {
+    await page.locator('[data-candidate-kind="codex-cli"]').waitFor();
+  },
+};
+
+const configuredMcpServers = {
+  mcp: {
+    servers: {
+      docs: { url: "https://mcp.example.com/mcp" },
+      workspace: { command: "node", args: ["workspace-tools.mjs"] },
+    },
+  },
+};
 export const scenes: Scene[] = [
+  ...chatToolScenes,
   ...APP_ROUTE_IDS.map(routeScene),
+  {
+    ...routeScene("mcp"),
+    id: "mcp-configured",
+    label: "MCP: local and remote servers",
+    ready: ".mcp-server-row",
+    scenario: {
+      methodResponses: {
+        "config.get": {
+          config: configuredMcpServers,
+          raw: JSON.stringify(configuredMcpServers),
+          hash: "parity-mcp-config",
+          valid: true,
+          issues: [],
+        },
+      },
+    },
+  },
   ...["status", "setup", "pat"].map((state): Scene =>
     Object.assign(routeScene("profile"), {
       id: `github-connections-${state}`,
@@ -155,6 +299,115 @@ export const scenes: Scene[] = [
       },
     }),
   ),
+  modelSettingsPage,
+  {
+    ...modelSettingsPage,
+    id: "models-account-usage",
+    label: "Models: account and quota",
+    scrollTo: '[data-profile-id="openai:parity"]',
+    prepare: async (page) => {
+      await page
+        .locator(".model-providers__account-usage")
+        .getByText("Pro", { exact: true })
+        .waitFor();
+    },
+  },
+  ...(["providers", "methods", "step"] as const).map((stage): Scene =>
+    Object.assign({}, modelSettingsPage, {
+      id: `models-login-${stage}`,
+      label: `Models: sign-in ${stage}`,
+      prepare: async (page: Page) => {
+        await page.locator("[data-models-connect]").click();
+        const dialog = page.locator(".model-provider-login");
+        await dialog.waitFor();
+        if (stage === "providers") {
+          return;
+        }
+        await dialog.locator('[data-models-login-provider="openai"]').click();
+        const method = dialog.locator("[data-models-login-choice] button").first();
+        await method.waitFor();
+        if (stage === "step") {
+          await method.click();
+          await page.locator('input[name="wizard-text"]').waitFor();
+        }
+      },
+    }),
+  ),
+  {
+    ...modelSettingsPage,
+    id: "models-empty",
+    label: "Models: no configured providers",
+    scenario: {
+      models: [],
+      agentModel: null,
+      methodResponses: {
+        "config.get": {
+          config: {},
+          sourceConfig: {},
+          hash: "parity-empty-models",
+          valid: true,
+          issues: [],
+        },
+        "models.list": { models: [] },
+        "models.authStatus": { ts: fixedTime, providers: [] },
+        "usage.status": { updatedAt: fixedTime, providers: [] },
+        "sessions.usage": { aggregates: { byProvider: [] } },
+      },
+    },
+    prepare: async (page) => {
+      await page.locator(".model-providers__provider-list .settings-empty").waitFor();
+    },
+  },
+  modelSetupPage,
+  {
+    ...modelSetupPage,
+    id: "model-setup-manual",
+    label: "Model Setup: manual API key",
+    scrollTo: ".model-setup__manual",
+    prepare: async (page) => {
+      await page.locator(".model-setup-provider-select__trigger").waitFor();
+    },
+  },
+  {
+    ...modelSetupPage,
+    id: "model-setup-provider-choices",
+    label: "Model Setup: provider choices",
+    scrollTo: ".model-setup__manual",
+    prepare: async (page) => {
+      await page.locator(".model-setup-provider-select__trigger").click();
+      await page.locator("[data-manual-provider]").first().waitFor();
+    },
+  },
+  {
+    ...modelSetupPage,
+    id: "model-setup-loading",
+    label: "Model Setup: discovery loading",
+    ready: ".model-setup__loading",
+    loading: true,
+    scenario: { ...modelSettingsScenario, heldMethods: ["openclaw.setup.detect"] },
+    prepare: undefined,
+  },
+  {
+    ...modelSetupPage,
+    id: "model-setup-error",
+    label: "Model Setup: recoverable discovery error",
+    scenario: {
+      ...modelSettingsScenario,
+      methodResponses: {
+        "openclaw.setup.detect": {
+          __mockError: {
+            code: "UNAVAILABLE",
+            message: "Synthetic discovery unavailable. Retry the request.",
+          },
+        },
+      },
+    },
+    prepare: async (page) => {
+      await page
+        .getByText("Synthetic discovery unavailable. Retry the request.", { exact: false })
+        .waitFor();
+    },
+  },
   ...loadingRoutes.map(({ route, method, ready }): Scene =>
     Object.assign(routeScene(route), {
       id: `${route}-loading`,
@@ -243,6 +496,28 @@ export const scenes: Scene[] = [
   },
   {
     ...chat,
+    id: "sidebar-session-menu",
+    label: "Sidebar session menu: actions and owner controls",
+    prepare: async (page) => {
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+      await row.waitFor({ state: "visible" });
+      await row.click({ button: "right" });
+      await page.locator("openclaw-session-menu").getByRole("menu").waitFor();
+    },
+  },
+  {
+    ...chat,
+    id: "sidebar-session-hovercard",
+    label: "Sidebar session hovercard: title and attribution",
+    prepare: async (page) => {
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+      await row.waitFor({ state: "visible" });
+      await row.hover();
+      await page.locator(".session-progress-hovercard").waitFor({ state: "visible" });
+    },
+  },
+  {
+    ...chat,
     id: "session-menu",
     label: "Session menu: icons and actions",
     prepare: async (page) => {
@@ -259,8 +534,10 @@ export const scenes: Scene[] = [
       await page.keyboard.press("Enter");
       // Compact menus drill into a sheet; wide menus retain nested popovers.
       if (page.viewportSize()!.width <= 560) {
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
         await page.getByRole("menuitem", { name: "Icon & color", exact: true }).click();
       } else {
+        await page.getByRole("menuitem", { name: "Advanced", exact: true }).hover();
         await page.getByRole("menuitem", { name: "Icon & color", exact: true }).hover();
       }
       await page.locator(".session-menu__appearance:visible").waitFor();
@@ -291,7 +568,21 @@ export const scenes: Scene[] = [
       await page.locator('[data-chat-model-select="true"]').click();
       const picker = page.locator(".chat-controls__model-picker");
       await picker.waitFor();
-      await picker.getByText("Model 39", { exact: true }).waitFor({ state: "attached" });
+      const more = picker.locator("[data-chat-model-more-toggle]");
+      if (await more.isVisible()) {
+        await more.click();
+      }
+      const list = picker.locator("[data-chat-model-window]");
+      await expect
+        .poll(() => list.evaluate((element) => element.scrollHeight > element.clientHeight))
+        .toBe(true);
+      await list.evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await picker
+        .locator('[data-chat-model-option][aria-selected="true"]')
+        .first()
+        .waitFor({ state: "visible" });
     },
   },
   {

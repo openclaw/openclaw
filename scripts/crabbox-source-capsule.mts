@@ -211,6 +211,7 @@ export function prepareCrabboxSourceCapsule(options: {
   syncRoot: string;
   base: string;
   reuseMirror?: boolean;
+  seedFromBase?: boolean;
   syncPlan: { command: string; args: string[]; windowsVerbatimArguments?: boolean };
 }): CrabboxSourceCapsule {
   const startedAt = Date.now();
@@ -279,18 +280,9 @@ export function prepareCrabboxSourceCapsule(options: {
     .split("\0")
     .filter(Boolean);
   const eligible = new Set(eligiblePaths.map(capsulePath));
-  function stamp(path: string) {
-    const entry = sourceStat(repoRoot, path);
-    return entry.kind === "present" ? mirrorStatStamp(entry.stat) : entry.kind;
-  }
-  // Source observations select reusable mirror files; this invocation uses the
-  // captured eligibility policy even if the checkout is edited while copying.
+  // Retention and copying record the source observations they actually consume.
+  // Eligibility stays captured even if the checkout is edited while copying.
   const observed = new Map<string, string>();
-  for (const path of new Set(
-    [...eligible].toSorted().concat([".crabboxignore", ".crabbox.yaml", "crabbox.yaml"]),
-  )) {
-    observed.set(path, stamp(path));
-  }
   mkdirSync(options.syncRoot, { recursive: true });
   const witness = captureSourceWitness(repoRoot, sourceSha);
   function allocateMirror() {
@@ -369,6 +361,11 @@ export function prepareCrabboxSourceCapsule(options: {
     };
     delete privateEnv.GIT_CONFIG_PARAMETERS;
     delete privateEnv.GIT_CONFIG;
+    const updateIndex = (entries: string[]) => {
+      if (entries.length) {
+        git(directory, ["update-index", "-z", "--index-info"], privateEnv, entries.join(""));
+      }
+    };
     if (!warm) {
       git(directory, ["init", "--quiet", "--template="], privateEnv);
     }
@@ -447,7 +444,11 @@ export function prepareCrabboxSourceCapsule(options: {
         changedTracking.add(path);
       }
     }
-    git(directory, ["update-index", "-z", "--index-info"], privateEnv, trackingChanges.join(""));
+    if (!warm && trackingChanges.length === 0) {
+      // Empty tracking still needs an index for the retained selection snapshot.
+      git(directory, ["read-tree", "--empty"], privateEnv);
+    }
+    updateIndex(trackingChanges);
     const exclude = git(repoRoot, [
       "rev-parse",
       "--path-format=absolute",
@@ -494,7 +495,9 @@ export function prepareCrabboxSourceCapsule(options: {
         removeFrozen(path);
         continue;
       }
-      const source = observed.get(path)!;
+      const entry = sourceStat(repoRoot, path);
+      const source = entry.kind === "present" ? mirrorStatStamp(entry.stat) : entry.kind;
+      observed.set(path, source);
       const sparse = tracked.get(path);
       const token =
         source === "missing" && sparse?.sparse ? `sparse:${sparse.mode}:${sparse.hash}` : source;
@@ -524,12 +527,22 @@ export function prepareCrabboxSourceCapsule(options: {
         { cause: error },
       );
     }
+    // Old namespaces are already removed; freeze-phase parents only accumulate.
+    // Deletion probes below prune parents and must not reuse this admission.
+    const frozenParents = new Set<string>();
+    function mkdirFrozenParent(destination: string) {
+      const parent = dirname(destination);
+      if (!frozenParents.has(parent)) {
+        mkdirSync(parent, { recursive: true });
+        frozenParents.add(parent);
+      }
+    }
     function writeFrozen(path: string, bytes: Buffer, mode: string) {
       const destination = join(directory, path);
       let blobPath = destination;
       let operation = "mkdir";
       try {
-        mkdirSync(dirname(destination), { recursive: true });
+        mkdirFrozenParent(destination);
         if (mode === "120000") {
           operation = "symlink";
           symlinkSync(bytes, destination);
@@ -593,7 +606,7 @@ export function prepareCrabboxSourceCapsule(options: {
         let operation = "mkdir";
         let output: number;
         try {
-          mkdirSync(dirname(destination), { recursive: true });
+          mkdirFrozenParent(destination);
           operation = "write file";
           output = openSync(destination, "wx");
         } catch (error) {
@@ -887,7 +900,7 @@ export function prepareCrabboxSourceCapsule(options: {
     // Ask the same policy owner about absent source using empty tracked placeholders.
     // These never enter the source tree. Separate overlapping historical file paths
     // (a -> a/b) so no probe follows a source symlink or shadows another deletion.
-    const groups: Set<string>[] = [new Set()];
+    const groups: Set<string>[] = [];
     for (const path of [...owned].toSorted()) {
       if (frozen.has(path) || directories.has(path)) {
         continue;
@@ -906,28 +919,19 @@ export function prepareCrabboxSourceCapsule(options: {
       }
       group.add(path);
     }
-    const emptyBlob = git(directory, ["hash-object", "-w", "--stdin"], privateEnv, "").trim();
+    let emptyBlob: string | undefined;
     const unstageDeletions = (paths: Iterable<string>) =>
-      git(
-        directory,
-        ["update-index", "-z", "--index-info"],
-        privateEnv,
-        [...paths].map((path) => `0 ${"0".repeat(40)}\t${path}\0`).join(""),
-      );
+      updateIndex([...paths].map((path) => `0 ${"0".repeat(40)}\t${path}\0`));
     unstageDeletions(groups.flatMap((group) => [...group]));
     const deleted: string[] = [];
     let selected: Set<string> | undefined;
     for (const group of groups) {
+      emptyBlob ??= git(directory, ["hash-object", "-w", "--stdin"], privateEnv, "").trim();
       for (const path of group) {
         mkdirSync(dirname(join(directory, path)), { recursive: true });
         writeFileSync(join(directory, path), "", { flag: "wx" });
       }
-      git(
-        directory,
-        ["update-index", "-z", "--index-info"],
-        privateEnv,
-        [...group].map((path) => `100644 ${emptyBlob}\t${path}\0`).join(""),
-      );
+      updateIndex([...group].map((path) => `100644 ${emptyBlob}\t${path}\0`));
       const current = selectSource();
       for (const path of group) {
         if (current.delete(path)) {
@@ -944,9 +948,7 @@ export function prepareCrabboxSourceCapsule(options: {
       }
       selected = current;
     }
-    if (!selected) {
-      throw new Error("source capsule selection is missing");
-    }
+    selected ??= selectSource();
     for (const path of tracked.keys()) {
       if (frozen.has(path) && !selected.has(path)) {
         throw new Error(
@@ -983,16 +985,17 @@ export function prepareCrabboxSourceCapsule(options: {
     // Hash frozen bytes without attributes or filters. Link blob inputs contain
     // readlink bytes, never the referent's contents; only selected blobs enter Git.
     const unhashed = paths.filter((path) => !frozen.get(path)!.blob);
-    const newHashes = git(
-      directory,
-      ["hash-object", "-w", "--no-filters", "--stdin-paths"],
-      privateEnv,
-      unhashed.map((path) => JSON.stringify(frozen.get(path)!.blobPath)).join("\n") +
-        (unhashed.length ? "\n" : ""),
-    )
-      .trim()
-      .split("\n")
-      .filter(Boolean);
+    const newHashes = unhashed.length
+      ? git(
+          directory,
+          ["hash-object", "-w", "--no-filters", "--stdin-paths"],
+          privateEnv,
+          unhashed.map((path) => JSON.stringify(frozen.get(path)!.blobPath)).join("\n") + "\n",
+        )
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+      : [];
     if (
       newHashes.length !== unhashed.length ||
       newHashes.some((hash) => !/^[a-f0-9]{40}$/u.test(hash))
@@ -1028,7 +1031,7 @@ export function prepareCrabboxSourceCapsule(options: {
     if (warm) {
       candidateChanges.unshift(`0 ${"0".repeat(40)}\t${bundleFile}\0`);
     }
-    git(directory, ["update-index", "-z", "--index-info"], privateEnv, candidateChanges.join(""));
+    updateIndex(candidateChanges);
     const tree = capsuleObjectId(git(directory, ["write-tree"], privateEnv));
     const carrier = capsuleObjectId(
       git(
@@ -1062,6 +1065,11 @@ export function prepareCrabboxSourceCapsule(options: {
       privateEnv,
     );
     refreshIndex([...paths.filter((path) => !warm || !retained.has(path)), bundleFile]);
+    if (options.seedFromBase) {
+      // Boat seeds this disposable checkout from the base; the sealed capsule
+      // still carries the original source identity and exact candidate bytes.
+      git(directory, ["update-ref", "--no-deref", "HEAD", baseSha], privateEnv);
+    }
     if (cache) {
       copyFileSync(
         join(directory, ".git", "index"),

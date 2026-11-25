@@ -6,6 +6,48 @@ import {
 import { SessionManager } from "../sessions/session-manager.js";
 import { createProviderReplaySessionState } from "./replay-session-state.js";
 
+describe("awaited provider replay session state", () => {
+  it("returns the accepted entry when the adapter closes after append settlement", async () => {
+    const manager = SessionManager.inMemory();
+    const replay = createProviderReplaySessionState(manager);
+    const append = manager.appendCustomEntryAsync.bind(manager);
+    const appendSpy = vi
+      .spyOn(manager, "appendCustomEntryAsync")
+      .mockImplementation(async (customType, data) => {
+        const id = await append(customType, data);
+        replay.close();
+        return id;
+      });
+    try {
+      const outcome = await replay.state.appendCustomEntryAsync("fixture", { retained: true }).then(
+        (id) => ({ id }),
+        (error: unknown) => ({ error }),
+      );
+      const entry = manager.getEntries().find((candidate) => candidate.type === "custom");
+      expect(entry).toMatchObject({
+        type: "custom",
+        customType: "fixture",
+        data: { retained: true },
+      });
+      expect(outcome).toEqual({ id: entry?.id });
+    } finally {
+      appendSpy.mockRestore();
+      replay.close();
+    }
+  });
+
+  it("rejects a new append after the adapter closes", async () => {
+    const manager = SessionManager.inMemory();
+    const replay = createProviderReplaySessionState(manager);
+    replay.close();
+
+    await expect(
+      replay.state.appendCustomEntryAsync("fixture", { retained: true }),
+    ).rejects.toThrow("Provider replay session state is no longer active");
+    expect(manager.getEntries()).toEqual([]);
+  });
+});
+
 describe("legacy provider replay session state", () => {
   it.each([
     new IncognitoSessionSyncAccessError("appendCustomEntry", "appendCustomEntryAsync"),

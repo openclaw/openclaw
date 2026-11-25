@@ -55,6 +55,28 @@ export function getSlackInstallationTeamId(accountId: string): string | undefine
   return state?.kind === "workspace" ? state.teamId : undefined;
 }
 
+/** Retain the authenticated monitor owner, not just its current installation label. */
+export function captureSlackWorkspaceInstallation(accountId: string) {
+  const key = normalizeAccountId(accountId);
+  const captured = slackInstallationStates.get(key);
+  if (captured?.kind !== "workspace") {
+    return null;
+  }
+  const teamId = captured.teamId;
+  return {
+    assertCurrent: () => {
+      const current = slackInstallationStates.get(key);
+      if (
+        current?.owner !== captured.owner ||
+        current.kind !== "workspace" ||
+        current.teamId !== teamId
+      ) {
+        throw new Error("The Slack workspace installation changed; send a new /fork request.");
+      }
+    },
+  };
+}
+
 export function isSlackWorkspaceInstallation(accountId: string): boolean {
   return getSlackInstallationKind(accountId) === "workspace";
 }

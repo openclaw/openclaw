@@ -1,9 +1,9 @@
 import {
   ErrorCodes,
-  errorShape,
   validateMentionsDismissParams,
   validateMentionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
@@ -16,10 +16,10 @@ function mentionHandler(
       return;
     }
     if (!context.mentionInbox) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "The mention Inbox is unavailable. Reconnect to retry."),
+      respondError(
+        respond,
+        ErrorCodes.UNAVAILABLE,
+        "The mention Inbox is unavailable. Reconnect to retry.",
       );
       return;
     }

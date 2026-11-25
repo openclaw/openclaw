@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type {
   RuntimeSessionFactsResult,
@@ -11,7 +10,6 @@ import type {
 } from "../plugins/runtime/types-session-facts.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
-import { runSynchronousWork } from "../shared/synchronous-work.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { operatorReadShareKey } from "./methods/read-share-keys.js";
@@ -22,7 +20,6 @@ import { sessionClassificationForRow } from "./session-classification.js";
 import {
   prepareFactsRead,
   safeText,
-  sessionFactsRedactionPolicy,
   type SelectedFacts,
   type SelectedPrFacts,
 } from "./session-facts-read.js";
@@ -43,7 +40,6 @@ const SESSION_FACTS_LIMIT = 40;
 const selectedPrFacts = new WeakMap<SessionRowProjection, Map<string, SelectedPrFacts>>();
 type SelectedRoster = {
   revision: object;
-  at: number;
   selected: SessionEntrySelection;
   targets: Map<string, SelectionRow>;
   bySessionId: Map<string, Set<string>>;
@@ -53,11 +49,9 @@ type ReadScope = {
   visibility: WeakMap<object, boolean>;
   snapshot?: RuntimeSessionFactsSelectionResult;
   roster?: SelectedRoster;
-  facts: Map<string, { entry: SelectionRow["entry"]; facts: SelectedFacts }>;
+  facts: Map<string, SelectedFacts>;
   dirty: Map<string, object>;
   transient: Set<string>;
-  reset: object;
-  completedReset?: object;
 };
 
 function createReadScope(token: string): ReadScope {
@@ -67,7 +61,6 @@ function createReadScope(token: string): ReadScope {
     facts: new Map(),
     dirty: new Map(),
     transient: new Set(),
-    reset: {},
   };
 }
 
@@ -79,7 +72,6 @@ const readScopes = new WeakMap<
     policy: object | undefined;
     access: number;
     profiles: number;
-    redaction: ReturnType<typeof sessionFactsRedactionPolicy>;
     scopes: Map<string, ReadScope>;
   }
 >();
@@ -117,7 +109,7 @@ export async function readTrustedPluginSessionFacts(
       method: "sessions.list",
       scope: trustedScope(),
       resolveGatewayContext,
-      callerAuthorityError: "Session facts caller authority is no longer active",
+      callerAuthorityError: "Session facts request ended. Start a new request.",
     },
     async (resolved, assertCurrent) => {
       const projection = requireSessionRowProjection(resolved.context);
@@ -152,7 +144,7 @@ export async function readTrustedPluginSessionFacts(
   );
 }
 
-/** Select once through the list owner, then retain caller authority through the plugin consumer. */
+/** Select once through the list owner, retaining the projection through the plugin consumer. */
 export async function withTrustedPluginSessionFacts<T>(
   select: RuntimeSessionFactsSelection,
   run: (snapshot: RuntimeSessionFactsSelectionResult) => Promise<T>,
@@ -164,7 +156,7 @@ export async function withTrustedPluginSessionFacts<T>(
       method: "sessions.list",
       scope: requestScope,
       resolveGatewayContext,
-      callerAuthorityError: "Session facts caller authority is no longer active",
+      callerAuthorityError: "Session facts request ended. Start a new request.",
     },
     async (resolved, assertCurrent) => {
       const { context } = resolved;
@@ -177,20 +169,10 @@ export async function withTrustedPluginSessionFacts<T>(
       const policy = context.getCommittedRuntimeConfig?.();
       const access = readGatewayAccessRevision();
       const profiles = readUserProfileVersion();
-      const redaction = sessionFactsRedactionPolicy();
       const assertAuthority = () => {
         assertCurrent();
-        if (
-          callerKey() !== authorityKey ||
-          getSessionRowProjection(context) !== projection ||
-          context.getRuntimeConfig() !== config ||
-          getRuntimeConfigSnapshotMetadata()?.revision !== configRevision ||
-          context.getCommittedRuntimeConfig?.() !== policy ||
-          readGatewayAccessRevision() !== access ||
-          readUserProfileVersion() !== profiles ||
-          sessionFactsRedactionPolicy() !== redaction
-        ) {
-          throw new Error("Session read authority changed; retry the request");
+        if (getSessionRowProjection(context) !== projection) {
+          throw new Error("Session projection replaced. Retry the request.");
         }
       };
       let authority: ReadScope | undefined;
@@ -200,7 +182,7 @@ export async function withTrustedPluginSessionFacts<T>(
           projection.onFactsChange((change) => {
             for (const scope of readScopes.get(projection)?.scopes.values() ?? []) {
               if (change.kind === "reset" || !scope.roster) {
-                scope.reset = {};
+                scope.snapshot = undefined;
                 scope.dirty.clear();
               } else if (scope.roster.targets.has(change.key)) {
                 scope.dirty.set(change.key, {});
@@ -214,8 +196,7 @@ export async function withTrustedPluginSessionFacts<T>(
           entry.configRevision !== configRevision ||
           entry.policy !== policy ||
           entry.access !== access ||
-          entry.profiles !== profiles ||
-          entry.redaction !== redaction
+          entry.profiles !== profiles
         ) {
           entry = {
             config,
@@ -223,7 +204,6 @@ export async function withTrustedPluginSessionFacts<T>(
             policy,
             access,
             profiles,
-            redaction,
             scopes: new Map(),
           };
           readScopes.set(projection, entry);
@@ -252,7 +232,7 @@ export async function withTrustedPluginSessionFacts<T>(
       const cache = authority ?? createReadScope("");
       const snapshot = await projection.withSelectionPreparation(async () => {
         do {
-          await projection.prepareSelection(true);
+          await projection.prepareSelection({ yieldForCatalog: true });
           await projection.prepareMembership();
           assertAuthority();
         } while (projection.needsSelectionPreparation());
@@ -260,16 +240,14 @@ export async function withTrustedPluginSessionFacts<T>(
         const previousRoster = cache.roster;
         const previousFacts = cache.facts;
         const previousTransient = cache.transient;
-        const reset = cache.reset;
         const at = Date.now();
         const projectionState = projection.state;
-        const full = !previous || cache.completedReset !== reset;
+        const full = !previous;
         let roster = previousRoster;
         if (
           full ||
           !roster ||
           roster.revision !== projectionState.revision ||
-          at < roster.at ||
           at > (roster.selected.activityExpiresAt ?? Infinity)
         ) {
           const opts = { ...select, limit: Number.MAX_SAFE_INTEGER };
@@ -283,9 +261,7 @@ export async function withTrustedPluginSessionFacts<T>(
             visibility: authority?.visibility,
           });
           const selected = presentation.select(opts, () =>
-            withAgentRosterFactsBatch(prepared.cfg, () =>
-              runSynchronousWork(selectSessionEntries(filters)),
-            ),
+            withAgentRosterFactsBatch(prepared.cfg, () => selectSessionEntries(filters)),
           );
           const targets = new Map<string, SelectionRow>();
           const bySessionId = new Map<string, Set<string>>();
@@ -299,7 +275,7 @@ export async function withTrustedPluginSessionFacts<T>(
             aliases.add(key);
             bySessionId.set(target.entry.sessionId, aliases);
           }
-          roster = { revision: projectionState.revision, at, selected, targets, bySessionId };
+          roster = { revision: projectionState.revision, selected, targets, bySessionId };
         }
         const currentRoster = roster;
         const transient = transientSessionKeys(context, projectionState.rowContext, currentRoster);
@@ -311,7 +287,7 @@ export async function withTrustedPluginSessionFacts<T>(
         }
         if (full || currentRoster !== previousRoster) {
           for (const [key, target] of currentRoster.targets) {
-            if (full || previousFacts.get(key)?.entry !== target.entry) {
+            if (full || previousRoster?.targets.get(key)?.entry !== target.entry) {
               wanted.add(key);
             }
           }
@@ -378,9 +354,7 @@ export async function withTrustedPluginSessionFacts<T>(
           } catch (error) {
             assertAuthority();
             complete = false;
-            const unavailable = redactToolPayloadText(String(error))
-              .replace(/\s+/g, " ")
-              .slice(0, 300);
+            const unavailable = String(error).replace(/\s+/g, " ").slice(0, 300);
             for (const { key, target } of batch) {
               const { entry } = target;
               if (
@@ -418,7 +392,7 @@ export async function withTrustedPluginSessionFacts<T>(
         const sameRows =
           previous &&
           currentRoster === previousRoster &&
-          [...updates].every(([key, row]) => row === previousFacts.get(key)?.facts);
+          [...updates].every(([key, row]) => row === previousFacts.get(key));
         let result = previous;
         let nextFacts = previousFacts;
         if (
@@ -428,12 +402,12 @@ export async function withTrustedPluginSessionFacts<T>(
         ) {
           nextFacts = new Map();
           const sessions: SelectedFacts[] = [];
-          for (const [key, target] of currentRoster.targets) {
-            const facts = updates.has(key) ? updates.get(key) : previousFacts.get(key)?.facts;
+          for (const [key] of currentRoster.targets) {
+            const facts = updates.has(key) ? updates.get(key) : previousFacts.get(key);
             if (!facts) {
               continue;
             }
-            nextFacts.set(key, { entry: target.entry, facts });
+            nextFacts.set(key, facts);
             sessions.push(facts);
           }
           Object.freeze(sessions);
@@ -441,7 +415,6 @@ export async function withTrustedPluginSessionFacts<T>(
           result = Object.freeze({
             scope: authority?.token,
             revision: randomUUID(),
-            redactionRevision: redaction.revision,
             sessions,
             ...(currentRoster.selected.people !== undefined
               ? { people: currentRoster.selected.people }
@@ -453,34 +426,17 @@ export async function withTrustedPluginSessionFacts<T>(
             ...(missingSessionKeys.length ? { missingSessionKeys } : {}),
           });
         }
-        const installed = cache.snapshot;
-        if (
-          complete &&
-          installed &&
-          installed !== previous &&
-          result &&
-          cache.completedReset === reset &&
-          cache.reset === reset &&
-          cache.roster?.selected === currentRoster.selected &&
-          installed.retryAt === result.retryAt &&
-          installed.sessions.length === result.sessions.length &&
-          installed.sessions.every((row, index) => row === result.sessions[index])
-        ) {
-          return installed;
-        }
-        // A later read or broad reset owns installation; keyed publications remain pending until observed.
+        // Publications during acquisition remain pending for the next read.
         if (
           complete &&
           authority &&
           cache.snapshot === previous &&
-          cache.reset === reset &&
           currentRoster.revision === projection.state.revision
         ) {
           cache.snapshot = result;
           cache.roster = currentRoster;
           cache.facts = nextFacts;
           cache.transient = transient;
-          cache.completedReset = reset;
           for (const [key, token] of observed) {
             if (cache.dirty.get(key) === token) {
               cache.dirty.delete(key);

@@ -27,7 +27,7 @@ export function registerCronSessionCompletionEventTests({
   connectSessionClient: (
     ws: WebSocket,
     storePath: string,
-    identityFile: string,
+    identityName: string,
     kind: "web",
   ) => Promise<void>;
   waitForSessionMessageEvent: (ws: WebSocket, sessionKey: string) => ReturnType<typeof onceMessage>;
@@ -53,7 +53,7 @@ export function registerCronSessionCompletionEventTests({
       const webWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
       let reconnectedWebWs: Awaited<ReturnType<typeof harness.openWs>> | undefined;
       try {
-        await connectSessionClient(webWs, storePath, "current-cron-web-device.json", "web");
+        await connectSessionClient(webWs, storePath, "current-cron-web-device", "web");
         await rpcReq(webWs, "sessions.messages.subscribe", { key: sessionKey });
 
         const job: CronStoredJob = {
@@ -115,7 +115,6 @@ export function registerCronSessionCompletionEventTests({
             unverifiedMessageToolDelivery: false,
           },
           deliveryBestEffort: false,
-          deliveryPayloadHasStructuredContent: false,
           deliveryPayloads: [{ text: "The detached cron finished without another user message." }],
           synthesizedText: "The detached cron finished without another user message.",
           summary: "The detached cron finished without another user message.",
@@ -128,7 +127,7 @@ export function registerCronSessionCompletionEventTests({
 
         const liveEvent = await liveEventPromise;
         const livePayload = requireRecord(liveEvent.payload, "background completion event");
-        expect(livePayload.message).toMatchObject({
+        const completionMessage = {
           __openclaw: {
             idempotencyKey: "cron-current-completion:cron:job-webchat:3000",
           },
@@ -141,19 +140,15 @@ export function registerCronSessionCompletionEventTests({
             runId: "cron:job-webchat:3000",
           },
           role: "assistant",
-        });
+        };
+        expect(livePayload.message).toMatchObject(completionMessage);
         await expect(dispatchCronDelivery(deliveryParams)).resolves.toMatchObject({
           delivered: true,
         });
 
         webWs.close();
         reconnectedWebWs = await harness.openWs({ origin: `http://127.0.0.1:${harness.port}` });
-        await connectSessionClient(
-          reconnectedWebWs,
-          storePath,
-          "current-cron-web-device.json",
-          "web",
-        );
+        await connectSessionClient(reconnectedWebWs, storePath, "current-cron-web-device", "web");
         const history = await rpcReq<{ messages?: unknown[] }>(reconnectedWebWs, "chat.history", {
           sessionKey,
         });
@@ -161,20 +156,12 @@ export function registerCronSessionCompletionEventTests({
         expect(history.payload?.messages).toHaveLength(1);
         expect(history.payload?.messages).toContainEqual(
           expect.objectContaining({
+            ...completionMessage,
             __openclaw: expect.objectContaining({
               id: livePayload.messageId,
               idempotencyKey: "cron-current-completion:cron:job-webchat:3000",
               seq: 1,
             }),
-            content: [
-              { type: "text", text: "The detached cron finished without another user message." },
-            ],
-            openclawAutomation: {
-              kind: "cron",
-              jobId: "job-webchat",
-              runId: "cron:job-webchat:3000",
-            },
-            role: "assistant",
           }),
         );
       } finally {

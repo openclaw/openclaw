@@ -7,7 +7,7 @@ title: "Worker-owned cron"
 
 # Worker-owned cron
 
-**Proposal, not implemented.** Put scheduling and reservation decisions in one
+**Staged redesign.** Put scheduling and reservation decisions in one
 cron worker. Commit a run request, release the writer, then launch the task.
 Target approximately **26,000 production lines**, down from **43,960**: about
 **18,000 lines (41%) removed**, without moving the same machinery elsewhere.
@@ -86,10 +86,10 @@ transactions run on the worker side. No second database owner. The existing
 transaction helper itself is synchronous (`src/state/openclaw-state-db.ts:485`).
 
 **Host:** authenticate RPC/tool requests, publish normalized config snapshots
-`{version, config}` on startup/change, and expose committed job/status views.
-Version orders snapshots only; it is not a revocation generation. Job CRUD and
-declarative reconciliation go through the cron worker. The worker installs a
-snapshot between commands, never pulls host policy during a transaction.
+`{config}` on startup/change, and expose committed job/status views. Job CRUD and
+declarative reconciliation go through the cron worker. The worker installs
+snapshots in command arrival order between commands, never pulls host policy
+during a transaction.
 
 **Launcher/run execution:** consume committed requests, perform one cheap final
 live-Gateway/launch-eligibility check, then dispatch to the existing task/session
@@ -203,15 +203,19 @@ that owner and `cron_job_runtime_authorities`
 (`src/state/openclaw-state-schema.sql:1490`). No permission redesign or table drop
 is proposed.
 
-## Existing data and three landable PRs
+<a id="existing-data-and-three-landable-prs"></a>
+
+## Existing data and staged PRs
 
 Never rewrite existing receipt IDs or history joins. Use one canonical row codec;
 the new timed-key tag is only an encoding discriminator, never authority. Queued
 rows without a recoverable timed key, including old random IDs, become skipped
 with their marker cleared atomically. Keep `request_run_id` for acknowledged-run
-lookup and leave the natural deadline untouched: ordinary catch-up handles overdue
-schedules, while manual force cannot consume a future natural slot. Restore
-finalized history first, then recover queued/active rows before admitting new work.
+lookup. When catch-up finds a terminal receipt for the current scheduled slot,
+consume that slot by recomputing the next deadline in the request transaction;
+the recorded skip remains in history. Manual force cannot consume a future
+natural slot. Restore finalized history first, then recover queued/active rows
+before admitting new work.
 No Doctor format migration is necessary: Doctor already leaves running-marker
 recovery to scheduler startup (`src/commands/doctor/cron/index.ts:52`); its existing
 legacy-shape migrations remain the only normalization path. Preserve backups and
@@ -229,10 +233,30 @@ are intentional accepted changes; all other observable contracts above stay gree
    an unrelated state writer and the update handoff must still complete. Exercise
    real mutation entry points, not a helper-only mock; trace all cron admission
    calls to prove none remain inside transactions.
-2. **Cut scheduling and launch over together.** Start the worker actor, retire host
-   timers/reservations, use idempotent request rows, and wire timer/manual/event
-   sources to the single launcher. Remove receipt custody/revocation consumers in
-   the same cutover. Proof: duplicate slot, capacity queue, disable/edit, manual
+2. **Remove receipt custody, then cut scheduling and launch over together.** Split
+   this step into two bounded PRs. **2a** removes receipt custody and its consumers
+   while the host remains the sole scheduler. Gateway, task, tool, permission,
+   and approval-row owners keep their existing checks; a revocation may race an
+   already-checked launch. Receipt storage, scheduling, and result recovery stay
+   in place. **2b** starts the worker actor, retires host
+   timers/reservations, uses idempotent request rows, and wires timer/manual/event
+   sources to the single launcher using the custody-free interfaces from 2a.
+   Split **2b** at the queue boundary: **2b-i** gives the worker idempotent
+   receipt requests, capacity, and activation, with one host launcher for every
+   source; the host remains the schedule/wake producer. **2b-ii** moves schedule
+   computation, timer, catch-up, and config snapshots into the long-lived worker.
+   Each step removes its superseded owner. In 2b-i the queued marker preserves
+   the natural deadline until the existing outcome owner advances it.
+   The scheduling actor retains the shared worker through the existing state
+   lease. Its timer sends a wake notification; a finite admitted command reads
+   current rows and makes the due decision, leaving the writer available between
+   wakes. Shutdown joins the lease, and database retirement closes the same
+   resource. CRUD preparation and commit use one worker mutation implementation;
+   commit applies the intent to current rows, preserving intervening runtime
+   updates. Config snapshots are installed between commands. A queued receipt
+   consumes eligibility until completion owns retry, pacing, and the next
+   natural deadline.
+   Proof: duplicate slot, capacity queue, disable/edit, manual
    force, consumed exit event, stream batch, catch-up, retry and clock-jump flows;
    crash at request/active boundaries and recover a copied old-format database.
 3. **Collapse result/recovery plumbing and finish deletion.** One terminal-result

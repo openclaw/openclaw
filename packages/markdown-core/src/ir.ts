@@ -1331,7 +1331,7 @@ function indexSourceLines(source: string) {
 export function markdownToIRWithMeta(
   markdown: string,
   options: MarkdownParseOptions = {},
-): { ir: MarkdownIR; hasTables: boolean; tables: MarkdownTableMeta[] } {
+): { ir: MarkdownIRWithMetadata; hasTables: boolean; tables: MarkdownTableMeta[] } {
   const source = markdown ?? "";
   const env: RenderEnv = {
     listStack: [],

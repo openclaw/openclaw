@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #201735: pnpm package updates keep a working launcher and Gateway across every quoting form, ownership check and layout.
+24

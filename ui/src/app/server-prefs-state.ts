@@ -4,7 +4,11 @@ import {
   type BackgroundPreference,
 } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/tab-icon.ts";
-import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import {
+  normalizeUiAppearancePreference,
+  UI_APPEARANCE_PREFERENCE_KEYS,
+} from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
 import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
@@ -14,6 +18,7 @@ import {
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
   type ChatSendShortcut,
+  type UiPreferences,
   type UiSettings,
 } from "./settings-contract.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
@@ -24,8 +29,7 @@ export function isAppearancePref(key: string): key is keyof typeof UI_APPEARANCE
 }
 
 export const UI_NAVIGATION_PREFERENCE_KEYS = {
-  sidebarEntries: "ui.sidebarEntries",
-  navigationScope: "ui.navigationScope",
+  sidebarEntries: UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
 } as const;
 
 export function isNavigationPref(key: string): key is keyof typeof UI_NAVIGATION_PREFERENCE_KEYS {
@@ -39,9 +43,9 @@ export function isProfilePref(key: string): boolean {
 type SyncedPrefSpec<T> = {
   configSync?: boolean;
   extract: (value: unknown) => T | undefined;
-  local: (settings: UiSettings) => T | undefined;
+  local: (settings: UiPreferences) => T | undefined;
   write?: (value: T | undefined) => Partial<UiSettings>;
-  canApply?: (value: T, settings: UiSettings) => boolean;
+  canApply?: (value: T, settings: UiPreferences) => boolean;
 };
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
@@ -56,7 +60,7 @@ const optionalPrefSpec = <
   prefSpec<UiSettings[K]>({
     configSync,
     extract: normalize,
-    local: (settings) => normalize(settings[key]),
+    local: (settings) => settings[key],
     write: (value) => ({ [key]: value }),
   });
 
@@ -91,7 +95,7 @@ export const SYNCED_PREFS = {
   background: prefSpec<BackgroundPreference>({
     configSync: false,
     extract: normalizeBackgroundPreference,
-    local: (settings) => normalizeBackgroundPreference(settings.background),
+    local: (settings) => settings.background,
     write: (value) => ({ background: value }),
   }),
   locale: prefSpec<string>({
@@ -115,12 +119,6 @@ export const SYNCED_PREFS = {
     local: (settings) => settings.sidebarEntries,
     write: (value) => ({ sidebarEntries: value ?? [...DEFAULT_SIDEBAR_ENTRIES] }),
   }),
-  navigationScope: prefSpec<"mine" | "all">({
-    configSync: false,
-    extract: (value) => (value === "mine" || value === "all" ? value : undefined),
-    local: (settings) => settings.navigationScope,
-    write: (value) => ({ navigationScope: value ?? "mine" }),
-  }),
 } as const;
 
 export type SyncedPrefKey = keyof typeof SYNCED_PREFS;
@@ -141,8 +139,6 @@ export type SyncedServerUiPrefs = { [K in SyncedPrefKey]?: SyncedPrefValue<K> | 
 // Browser storage can retain unknown keys until authoritative rejection; known fields stay typed.
 export type ServerUiPrefs = SyncedServerUiPrefs &
   Record<string, unknown> & {
-    /** Browser-only identities of the last confirmed navigation publications, never RPC entries. */
-    navigationConfirmation?: Partial<Record<"sidebarEntries" | "navigationScope", string>>;
     /** Browser-only edit base: the observed snapshot with subsequent authored membership operations folded in. */
     sidebarEntriesBase?: readonly string[];
     /** Browser-only: an unacknowledged authored reorder, including a reversal back to the edit base. */
@@ -164,7 +160,10 @@ export const SYNCED_PREF_KEYS = Object.keys(SYNCED_PREFS) as SyncedPrefKey[];
 
 export function prefValuesEqual(left: unknown, right: unknown): boolean {
   if (Array.isArray(left) && Array.isArray(right)) {
-    return left.length === right.length && left.every((value, index) => value === right[index]);
+    return (
+      left.length === right.length &&
+      left.every((value, index) => prefValuesEqual(value, right[index]))
+    );
   }
   const leftRecord = asRecord(left);
   const rightRecord = asRecord(right);
@@ -184,5 +183,30 @@ export function prefValuesEqual(left: unknown, right: unknown): boolean {
 export type ServerUiPrefReadiness = {
   appearanceReady: boolean;
   navigationReady?: boolean;
-  sidebarEntriesReady?: boolean;
 };
+
+export const PROFILE_UI_PREFERENCE_KEYS = [
+  ...Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
+  ...Object.values(UI_NAVIGATION_PREFERENCE_KEYS),
+];
+
+export function extractProfileUiPrefs(entries: Record<string, unknown>): ServerUiPrefs {
+  const prefs: ServerUiPrefs = {};
+  for (const [key, preferenceKey] of Object.entries(UI_APPEARANCE_PREFERENCE_KEYS)) {
+    if (!isAppearancePref(key)) {
+      continue;
+    }
+    const value = normalizeUiAppearancePreference(preferenceKey, entries[preferenceKey]);
+    if (value !== undefined) {
+      Object.assign(prefs, { [key]: value });
+    }
+  }
+  for (const key of Object.keys(UI_NAVIGATION_PREFERENCE_KEYS).filter(isNavigationPref)) {
+    const preferenceKey = UI_NAVIGATION_PREFERENCE_KEYS[key];
+    const value = SYNCED_PREFS[key].extract(entries[preferenceKey]);
+    if (value !== undefined) {
+      Object.assign(prefs, { [key]: value });
+    }
+  }
+  return prefs;
+}

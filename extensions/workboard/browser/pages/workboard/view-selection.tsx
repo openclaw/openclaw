@@ -1,6 +1,6 @@
 /** @jsxImportSource @solidjs/web */
 import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { Dialog, SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { WorkboardErrorToast } from "../../components/toast.tsx";
@@ -29,16 +29,18 @@ import {
   matchesAgentFilter,
 } from "./agent-filter.ts";
 import { matchesBoardFilter } from "./board-filter.ts";
+import { DraftChoices } from "./view-draft-choices.tsx";
 import {
   canMutate,
   formatPriorityLabel,
   workboardErrorMessage,
   workboardMutationContext,
-  PriorityIcon,
+  workboardViewState,
+  renderPriorityIcon,
   formatStatusLabel,
   type WorkboardProps,
 } from "./view-helpers.tsx";
-import { liveInputValue } from "./view-input-value.ts";
+import { LabelChoices } from "./view-label-choices.tsx";
 const KEEP_AGENT = "workboard:keep-agent";
 type CardPatch = Partial<Pick<WorkboardCard, "priority" | "labels" | "agentId">>;
 type SelectionAction =
@@ -253,11 +255,11 @@ function agentOptions(workboard: WorkboardProps) {
     }),
   );
 }
-export function SelectionActions(input: { workboard: WorkboardProps }) {
-  const state = () => {
-    void input.workboard.revision;
-    return getWorkboardState(input.workboard.host);
-  };
+export function SelectionActions(input: {
+  workboard: WorkboardProps;
+  focusSelectedCard: () => void;
+}) {
+  const state = workboardViewState(() => input.workboard);
   const cardIds = createMemo(() =>
     state()
       .cards.filter((card) => state().selectedCardIds.has(card.id))
@@ -285,7 +287,7 @@ export function SelectionActions(input: { workboard: WorkboardProps }) {
             observedCards,
             priority: "",
             agentId: KEEP_AGENT,
-            labels: "",
+            labels: [],
             labelMode: "keep",
           };
     input.workboard.onRequestUpdate?.();
@@ -390,6 +392,7 @@ export function SelectionActions(input: { workboard: WorkboardProps }) {
         aria-label={t("workboard.clearSelection")}
         disabled={busy()}
         onClick={() => {
+          input.focusSelectedCard();
           state().selectedCardIds.clear();
           input.workboard.onRequestUpdate?.();
         }}
@@ -415,7 +418,7 @@ function editPatch(
   if (draft.agentId !== KEEP_AGENT) {
     patch.agentId = draft.agentId;
   }
-  const labels = normalizeUniqueTrimmedStringList(draft.labels.split(","));
+  const labels = normalizeUniqueTrimmedStringList(draft.labels);
   switch (draft.labelMode) {
     case "keep":
       break;
@@ -442,36 +445,8 @@ export function SelectionDialog(props: { workboard: WorkboardProps }) {
     </Show>
   );
 }
-function SelectionLabelsInput(props: {
-  draft: Extract<
-    WorkboardBulkDialog,
-    {
-      kind: "edit";
-    }
-  >;
-  disabled: boolean;
-}) {
-  const bindValue = liveInputValue(() => props.draft.labels);
-  return (
-    <input
-      class="settings-input"
-      aria-label={t("workboard.fieldLabels")}
-      placeholder={t("workboard.bulkLabelsPlaceholder")}
-      ref={bindValue}
-      disabled={props.disabled}
-      onInput={(event: InputEvent) => {
-        if (event.currentTarget instanceof HTMLInputElement) {
-          props.draft.labels = event.currentTarget.value;
-        }
-      }}
-    />
-  );
-}
 function SelectionDialogContent(props: { workboard: WorkboardProps; draft: WorkboardBulkDialog }) {
-  const state = () => {
-    void props.workboard.revision;
-    return getWorkboardState(props.workboard.host);
-  };
+  const state = workboardViewState(() => props.workboard);
   const draft = () => {
     void props.workboard.revision;
     return props.draft;
@@ -491,6 +466,16 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
       Boolean(current.priority || current.agentId !== KEEP_AGENT || current.labelMode !== "keep")
     );
   };
+  const labelsTooMany = () => {
+    const current = editDraft();
+    if (current?.labelMode === "replace") {
+      return current.labels.length > 12;
+    }
+    return (
+      current?.labelMode === "add" &&
+      current.observedCards.some((card) => new Set([...card.labels, ...current.labels]).size > 12)
+    );
+  };
   const close = () => {
     if (state().bulkSaving) {
       return false;
@@ -500,6 +485,9 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
     return true;
   };
   const save = () => {
+    if (labelsTooMany()) {
+      return;
+    }
     const current = draft();
     void applySelection(
       props.workboard,
@@ -549,49 +537,38 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
             return (
               <>
                 <p>{t("workboard.bulkEditHelp")}</p>
-                <fieldset
-                  class="workboard-choice-field"
-                  aria-labelledby="workboard-bulk-priority-label"
+                <DraftChoices
+                  name="priority"
+                  radioName="bulk-priority"
+                  labelId="workboard-bulk-priority-label"
                   disabled={state().bulkSaving}
-                >
-                  <legend>
-                    <span id="workboard-bulk-priority-label">{t("workboard.fieldPriority")}</span>
-                    <button
-                      class="workboard-bulk-dialog__reset"
-                      type="button"
-                      disabled={state().bulkSaving || !edit().priority}
-                      onClick={() => {
-                        edit().priority = "";
-                        props.workboard.onRequestUpdate?.();
-                      }}
-                    >
-                      {t("workboard.bulkKeep")}
-                    </button>
-                  </legend>
-                  <div class="workboard-segments workboard-segments--priority">
-                    <For each={WORKBOARD_PRIORITIES} keyed={(priority) => priority}>
-                      {(priority) => (
-                        <label class="workboard-segment">
-                          <input
-                            type="radio"
-                            name="bulk-priority"
-                            checked={edit().priority === priority()}
-                            onChange={() => {
-                              edit().priority = priority();
-                              props.workboard.onRequestUpdate?.();
-                            }}
-                          />
-                          <span>
-                            <i aria-hidden="true">
-                              <PriorityIcon priority={priority()} />
-                            </i>
-                            {formatPriorityLabel(priority())}
-                          </span>
-                        </label>
-                      )}
-                    </For>
-                  </div>
-                </fieldset>
+                  value={edit().priority}
+                  options={WORKBOARD_PRIORITIES.map((value) => ({
+                    value,
+                    label: formatPriorityLabel(value),
+                  }))}
+                  renderIcon={renderPriorityIcon}
+                  onChange={(value) => {
+                    edit().priority = value;
+                    props.workboard.onRequestUpdate?.();
+                  }}
+                  label={
+                    <>
+                      <span id="workboard-bulk-priority-label">{t("workboard.fieldPriority")}</span>
+                      <button
+                        class="workboard-bulk-dialog__reset"
+                        type="button"
+                        disabled={state().bulkSaving || !edit().priority}
+                        onClick={() => {
+                          edit().priority = "";
+                          props.workboard.onRequestUpdate?.();
+                        }}
+                      >
+                        {t("workboard.bulkKeep")}
+                      </button>
+                    </>
+                  }
+                />
                 <div class="field">
                   <span>{t("workboard.fieldAgent")}</span>
                   <SelectPicker
@@ -630,14 +607,26 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
                     }}
                   />
                   <Show when={edit().labelMode !== "keep"}>
-                    <SelectionLabelsInput draft={edit()} disabled={state().bulkSaving} />
+                    <LabelChoices
+                      owner={props.workboard}
+                      value={edit().labels}
+                      limit={edit().labelMode === "remove" ? undefined : 12}
+                      disabled={state().bulkSaving}
+                      onChange={(labels) => {
+                        edit().labels = labels;
+                        props.workboard.onRequestUpdate?.();
+                      }}
+                    />
                   </Show>
                 </div>
               </>
             );
           }}
         </Show>
-        <div class="workboard-modal__actions">
+        <Show when={labelsTooMany()}>
+          <p role="alert">{t("workboard.bulkLabelLimit")}</p>
+        </Show>
+        <openclaw-modal-actions class="workboard-modal__actions">
           <button class="btn" type="button" autofocus disabled={state().bulkSaving} onClick={close}>
             {t("common.cancel")}
           </button>
@@ -647,6 +636,7 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
             disabled={
               state().bulkSaving ||
               !changed() ||
+              labelsTooMany() ||
               !props.workboard.connected ||
               !canMutate(props.workboard)
             }
@@ -655,7 +645,7 @@ function SelectionDialogContent(props: { workboard: WorkboardProps; draft: Workb
               ? t("workboard.bulkApplying")
               : t(draft().kind === "delete" ? "workboard.bulkDelete" : "workboard.bulkApply")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </form>
       <WorkboardErrorToast
         owner={state()}

@@ -5,7 +5,8 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
+import { projectLastRoutePatch } from "./metadata-projection.js";
+import { deriveSessionMetaPatch, prepareSessionMetaPatch } from "./metadata.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
 
 const sessionKey = "agent:user";
@@ -24,6 +25,50 @@ function applyOrigin(
   const entry = { ...existing, ...patch } as SessionEntry;
   return { ...entry, origin: sessionDeliveryOrigin(entry) };
 }
+
+it("clears confirmed absent portraits without changing the sender origin or permissions", () => {
+  const ctx = {
+    Provider: "telegram",
+    AccountId: "sample-bot",
+    ChatType: "direct",
+    From: "telegram:1000000001",
+    To: "telegram:1000000001",
+  };
+  const present = applyOrigin(undefined, {
+    ...ctx,
+    ConversationAvatar: "/media/inbound/portrait.png",
+  });
+  const transient = applyOrigin(present, ctx);
+  expect(transient.origin?.avatar).toBe(present.origin?.avatar);
+  const removed = applyOrigin(transient, { ...ctx, ConversationAvatar: "" });
+  expect(removed.origin).toEqual({ ...present.origin, avatar: undefined });
+  expect(removed.delivery).toEqual({ ...present.delivery, origin: removed.origin });
+  expect(present.origin?.avatar).toBe("/media/inbound/portrait.png");
+});
+
+it("drops the old native portrait when a shared main session moves to another peer", () => {
+  const first = applyOrigin(undefined, {
+    Provider: "telegram",
+    Surface: "telegram",
+    ChatType: "direct",
+    AccountId: "sample-bot",
+    From: "telegram:1000000001",
+    To: "telegram:1000000001",
+    ConversationAvatar: "/media/inbound/first-peer.png",
+  });
+  const second = applyOrigin(first, {
+    Provider: "telegram",
+    Surface: "telegram",
+    ChatType: "direct",
+    AccountId: "sample-bot",
+    From: "telegram:1000000002",
+    To: "telegram:1000000002",
+  });
+  expect(second.origin?.avatar).toBeUndefined();
+  expect(second.origin?.from).toBe("telegram:1000000002");
+  expect(second.origin?.nativeDirectUserId).toBeUndefined();
+  expect(first.origin?.avatar).toBe("/media/inbound/first-peer.png");
+});
 
 const slackTurn = {
   Provider: "slack",
@@ -136,7 +181,7 @@ describe("session origin across a channel switch", () => {
   });
 
   it("preserves a fresh rich route when the inbound identity switches providers", () => {
-    const patch = deriveLastRoutePatch({
+    const patch = projectLastRoutePatch({
       sessionKey,
       existing: applyOrigin(undefined, slackTurn),
       route: {
@@ -145,7 +190,7 @@ describe("session origin across a channel switch", () => {
         target: { to: "chat:42", rawTo: "@forty-two", chatType: "group" },
         thread: { id: 456, kind: "topic", source: "turn" },
       },
-      ctx: telegramTurn as MsgContext,
+      metadata: prepareSessionMetaPatch({ ctx: telegramTurn as MsgContext }),
     });
 
     expect(patch.delivery).toMatchObject({

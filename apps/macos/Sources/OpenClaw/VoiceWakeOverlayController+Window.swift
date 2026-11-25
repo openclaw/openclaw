@@ -20,9 +20,6 @@ extension VoiceWakeOverlayController {
             isFirstPresent: isFirst,
             target: target,
             onFirstPresent: {
-                self.logger.log(
-                    level: .info,
-                    "overlay present windowShown textLen=\(self.model.text.count, privacy: .public)")
                 // Keep the status item in “listening” mode until we explicitly dismiss the overlay.
                 actions?.didPresent()
             },
@@ -124,7 +121,8 @@ extension VoiceWakeOverlayController {
         let used = layout.usedRect(for: container)
 
         let contentHeight = ceil(used.height + (textInset.height * 2))
-        let total = contentHeight + self.verticalPadding * 2
+        let errorHeight: CGFloat = self.model.sendError == nil ? 0 : 36
+        let total = contentHeight + self.verticalPadding * 2 + errorHeight
         return max(self.minHeight, min(total, self.maxHeight))
     }
 

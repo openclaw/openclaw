@@ -1,5 +1,4 @@
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
-import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
@@ -7,16 +6,23 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  loadCommandArgMenuModelCatalog,
   parseCommandArgs,
-  resolveCommandArgMenu,
+  resolveCommandArgMenuAsync,
   serializeCommandArgs,
+  type ChatCommandDefinition,
+  type CommandArgValues,
   type CommandArgs,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
-import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
+import {
+  pluginCommandResultContinuesAgent,
+  type PluginCommandNativeCandidate,
+} from "openclaw/plugin-sdk/plugin-command-runtime";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveDiscordAccountDmPolicy } from "../accounts.js";
 import { Command, type CommandInteraction, type CommandOptions } from "../internal/discord.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
@@ -31,7 +37,7 @@ import {
   resolveDiscordGuildNativeCommandAuthorized,
   resolveDiscordNativeAutocompleteAuthorized,
   resolveDiscordNativeCommandAccessContext,
-  createDiscordNativeCommandAuthority,
+  resolveDiscordNativeCommandAccess,
   resolveDiscordNativeGroupDmAccess,
   resolveDiscordNativePolicyReader,
 } from "./native-command-auth.js";
@@ -62,9 +68,7 @@ import {
   settleDiscordInteractionWithoutVisibleReply,
 } from "./native-command-reply.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
-import { maybeDeliverDiscordDirectStatus } from "./native-command-status.js";
 import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
-import { createNativeCommandDefinition, readDiscordCommandArgs } from "./native-command.args.js";
 import {
   buildDiscordCommandOptions,
   truncateDiscordCommandDescriptionLocalizations,
@@ -76,6 +80,19 @@ import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 const log = createSubsystemLogger("discord/native-command");
 
 const NON_PLUGIN_COMMAND_DISPATCH = Object.freeze({ kind: "non-plugin" as const });
+
+function createNativeCommandDefinition(command: NativeCommandSpec): ChatCommandDefinition {
+  return {
+    key: command.name,
+    nativeName: command.name,
+    description: command.description,
+    textAliases: [],
+    acceptsArgs: command.acceptsArgs,
+    args: command.args,
+    argsParsing: "none",
+    scope: "native",
+  };
+}
 
 export function createDiscordNativeCommand(
   params: DiscordCommandArgContext & {
@@ -140,11 +157,9 @@ export function createDiscordNativeCommand(
     override name = command.name;
     override description = truncateDiscordCommandDescription({
       value: command.description,
-      label: `command:${command.name}`,
     });
     override descriptionLocalizations = truncateDiscordCommandDescriptionLocalizations({
       value: command.descriptionLocalizations,
-      label: `command:${command.name}`,
     });
     override defer = false;
     override ephemeral = ephemeralDefault;
@@ -157,11 +172,28 @@ export function createDiscordNativeCommand(
       if (deferred === null) {
         return;
       }
-      const commandArgs = argDefinitions?.length
-        ? readDiscordCommandArgs(interaction, argDefinitions)
-        : command.acceptsArgs
-          ? parseCommandArgs(commandDefinition, interaction.options.getString("input") ?? "")
-          : undefined;
+      let commandArgs: CommandArgs | undefined;
+      if (argDefinitions?.length) {
+        const values: CommandArgValues = {};
+        for (const definition of argDefinitions) {
+          const getter =
+            definition.type === "number"
+              ? "getNumber"
+              : definition.type === "boolean"
+                ? "getBoolean"
+                : "getString";
+          const value = interaction.options[getter](definition.name);
+          if (value != null) {
+            values[definition.name] = value;
+          }
+        }
+        commandArgs = Object.keys(values).length > 0 ? { values } : undefined;
+      } else if (command.acceptsArgs) {
+        commandArgs = parseCommandArgs(
+          commandDefinition,
+          interaction.options.getString("input") ?? "",
+        );
+      }
       const commandArgsWithRaw = commandArgs
         ? ({
             ...commandArgs,
@@ -179,9 +211,6 @@ export function createDiscordNativeCommand(
         prompt,
         command: commandDefinition,
         commandArgs: commandArgsWithRaw,
-        // Slash commands are deferred up front, so all later responses must use
-        // follow-up/edit semantics instead of the initial reply endpoint.
-        preferFollowUp: true,
         responseEphemeral: ephemeralDefault,
         pluginCommandDispatch: preparedPluginCommand ?? NON_PLUGIN_COMMAND_DISPATCH,
       });
@@ -201,7 +230,6 @@ async function dispatchDiscordCommandInteraction(
     discordConfig: inputDiscordConfig,
     accountId,
     sessionPrefix,
-    preferFollowUp,
     threadBindings,
     responseEphemeral,
     suppressReplies,
@@ -218,9 +246,10 @@ async function dispatchDiscordCommandInteraction(
       content,
       ...(ephemeral !== undefined ? { ephemeral } : {}),
     };
-    await safeDiscordInteractionCall("interaction reply", async () => {
-      await interaction[preferFollowUp ? "followUp" : "reply"](payload);
+    const delivered = await safeDiscordInteractionCall("interaction reply", async () => {
+      await interaction.followUp(payload);
     });
+    return delivered !== null;
   };
   const reject = async (content: string, ephemeral?: boolean) => {
     await respond(content, { ephemeral });
@@ -240,14 +269,12 @@ async function dispatchDiscordCommandInteraction(
     channelName,
     channelSlug,
     rawChannelId,
+    memberRoleIds,
     threadParentId,
   } = channelContext;
   if (policy?.isCurrent() === false) {
     return reject("Access policy changed. Try this interaction again.", true);
   }
-  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.slice()
-    : [];
   const channelAccess = resolveDiscordNativeCommandAccessContext({
     cfg,
     accountId,
@@ -262,14 +289,10 @@ async function dispatchDiscordCommandInteraction(
     (nativeRouteState ??= resolveDiscordNativeInteractionRouteState({
       cfg,
       accountId,
-      guildId: interaction.guild?.id ?? undefined,
-      memberRoleIds,
-      isDirectMessage,
-      isGroupDm,
-      directUserId: user.id,
+      interaction,
+      channelContext,
       conversationId: rawChannelId || "unknown",
-      parentConversationId: threadParentId,
-      threadBinding: isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined,
+      threadBindings,
     }));
   const canBypassConfiguredAcpGuildGuards = () => {
     if (!interaction.guild || !shouldBypassConfiguredAcpGuildGuards(commandName)) {
@@ -288,9 +311,6 @@ async function dispatchDiscordCommandInteraction(
         ? "This channel is disabled."
         : "This channel is not allowed.",
     );
-  }
-  if (policy?.isCurrent() === false) {
-    return reject("Access policy changed. Try this interaction again.", true);
   }
   const dmEnabled = discordConfig?.dm?.enabled ?? true;
   const dmPolicy = resolveDiscordAccountDmPolicy({ cfg, accountId }) ?? "pairing";
@@ -372,6 +392,7 @@ async function dispatchDiscordCommandInteraction(
   const effectiveRoute = routeState.effectiveRoute;
   const { ctxPayload, sessionKey, commandTargetSessionKey } =
     await buildDiscordNativeInteractionContext({
+      cfg,
       buildContext,
       interaction,
       channelContext,
@@ -392,19 +413,18 @@ async function dispatchDiscordCommandInteraction(
   if (policy?.isCurrent() === false) {
     return reject("Access policy changed. Try this interaction again.", true);
   }
-  const authority = await createDiscordNativeCommandAuthority({
+  const authority = resolveDiscordNativeCommandAccess({
     cfg,
     ctx: ctxPayload,
     commandAuthorized,
     sender,
     allowNameMatching: channelAccess.allowNameMatching,
-    isPolicyCurrent: policy?.isCurrent,
     accountId,
     guildId: interaction.guild?.id,
     commandName,
     pluginCommand: params.pluginCommandDispatch.kind === "plugin",
   });
-  if (!authority.isAllowed()) {
+  if (!authority.allowed) {
     return reject("You are not authorized to use this command.", true);
   }
 
@@ -413,13 +433,8 @@ async function dispatchDiscordCommandInteraction(
       ? await ensureConfiguredBindingRouteReady({
           cfg,
           bindingResolution: routeState.configuredBinding,
-          assertActive: authority.assertActive,
         })
       : null;
-
-  if (!authority.isAllowed()) {
-    return reject("You are not authorized to use this command.", true);
-  }
 
   const isGuild = Boolean(interaction.guild);
   const channelId = rawChannelId || "unknown";
@@ -441,22 +456,16 @@ async function dispatchDiscordCommandInteraction(
   // Native /think must not wait on provider discovery; persisted rows retain its metadata.
   const menuModelCatalog =
     command.key === "think" && menuNeedsModelContext
-      ? await loadPreparedModelCatalog({
-          config: cfg,
-          ...(menuModelContext?.agentId
-            ? {
-                agentId: menuModelContext.agentId,
-                agentDir: resolveAgentDir(cfg, menuModelContext.agentId),
-              }
-            : {}),
-          readOnly: true,
+      ? await loadCommandArgMenuModelCatalog({
+          cfg,
+          ...(menuModelContext?.agentId ? { agentId: menuModelContext.agentId } : {}),
         })
       : undefined;
   // Normal dispatch owns the unavailable-binding reply; do not offer choices it cannot apply.
   const menu =
     command.key === "verbose" && bindingReadiness?.ok === false
       ? null
-      : resolveCommandArgMenu({
+      : await resolveCommandArgMenuAsync({
           command,
           args: commandArgs,
           cfg,
@@ -474,27 +483,25 @@ async function dispatchDiscordCommandInteraction(
       command,
       menu,
       userId: interaction.user?.id ?? "",
-      ctx: {
-        cfg,
-        discordConfig,
-        accountId,
-        sessionPrefix,
-        threadBindings,
-        buildContext,
-        dispatchReplyFromConfig,
-      },
-      safeInteractionCall: safeDiscordInteractionCall,
-      dispatchCommandInteraction: dispatchDiscordCommandInteraction,
     });
-    await safeDiscordInteractionCall(
-      preferFollowUp ? "interaction follow-up" : "interaction reply",
-      () =>
-        interaction[preferFollowUp ? "followUp" : "reply"]({
-          content: menuPayload.content,
-          components: menuPayload.components,
-          ephemeral: true,
-        }),
+    const delivered = await safeDiscordInteractionCall("interaction follow-up", () =>
+      interaction.followUp({
+        content: menuPayload.content,
+        components: menuPayload.components,
+        ephemeral: true,
+      }),
     );
+    if (delivered !== null) {
+      await recordDeliveredCommandExchange({
+        config: cfg,
+        agentId: effectiveRoute.agentId,
+        sessionKey: commandTargetSessionKey?.trim() || effectiveRoute.sessionKey,
+        commandText: prompt,
+        commandId: `discord:${accountId}:${channelId}:${interaction.id}`,
+        replyId: "argument-menu",
+        replyText: `${menuPayload.content}\n${menu.choices.map((choice) => choice.label).join(", ")}`,
+      });
+    }
     return { accepted: true };
   }
 
@@ -509,19 +516,16 @@ async function dispatchDiscordCommandInteraction(
       (isThreadChannel ? threadBindings.getByThreadId(rawChannelId)?.agentId : undefined) ||
       routeState.configuredBinding?.statefulTarget.agentId ||
       effectiveRoute.agentId;
-    const targetSessionEntry = getSessionEntry({
+    const targetSessionEntry = await getSessionEntryAsync({
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
     });
-    authority.assertActive();
-    const senderIsOwner = authority.senderIsOwner();
     const pluginReply = await params.pluginCommandDispatch.execute({
       senderId: sender.id,
       channel: "discord",
       channelId,
       isAuthorizedSender: commandAuthorized,
-      senderIsOwner,
-      ...(senderIsOwner ? { assertOwnerCurrent: authority.assertOwnerCurrent } : {}),
+      senderIsOwner: authority.senderIsOwner,
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
       authProfileId: targetSessionEntry?.authProfileOverride,
@@ -537,22 +541,37 @@ async function dispatchDiscordCommandInteraction(
       messageThreadId,
       threadParentId: pluginThreadParentId,
     });
-    if (pluginReply.suppressReply === true) {
-      await settleDiscordInteractionWithoutVisibleReply(interaction);
+    // A continuing command hands this turn to the agent through the normal reply path below.
+    if (!pluginCommandResultContinuesAgent(pluginReply)) {
+      if (pluginReply.suppressReply === true) {
+        await settleDiscordInteractionWithoutVisibleReply(interaction);
+        return { accepted: true, effectiveRoute };
+      }
+      const recordReply = async (replyText: string) => {
+        await recordDeliveredCommandExchange({
+          config: cfg,
+          agentId: pluginCommandAgentId,
+          sessionKey: effectiveRoute.sessionKey,
+          expectedSessionId: targetSessionEntry?.sessionId,
+          commandText: prompt,
+          commandId: `discord:${accountId}:${channelId}:${interaction.id}`,
+          replyId: "plugin-reply",
+          replyText,
+        });
+      };
+      if (hasRenderableReplyPayload(pluginReply)) {
+        await deliverDiscordInteractionReply({
+          interaction,
+          payload: pluginReply,
+          ...resolveDiscordInteractionReplyOptions({ cfg, discordConfig, accountId }),
+          responseEphemeral,
+          onDelivered: recordReply,
+        });
+      } else if (await respond(DISCORD_EMPTY_VISIBLE_REPLY_WARNING)) {
+        await recordReply(DISCORD_EMPTY_VISIBLE_REPLY_WARNING);
+      }
       return { accepted: true, effectiveRoute };
     }
-    if (!hasRenderableReplyPayload(pluginReply)) {
-      await respond(DISCORD_EMPTY_VISIBLE_REPLY_WARNING);
-      return { accepted: true, effectiveRoute };
-    }
-    await deliverDiscordInteractionReply({
-      interaction,
-      payload: pluginReply,
-      ...resolveDiscordInteractionReplyOptions({ cfg, discordConfig, accountId }),
-      preferFollowUp,
-      responseEphemeral,
-    });
-    return { accepted: true, effectiveRoute };
   }
 
   const pickerCommandContext = shouldOpenDiscordModelPickerFromCommand({
@@ -567,7 +586,6 @@ async function dispatchDiscordCommandInteraction(
       userId: user.id,
       accountId,
       threadBindings,
-      preferFollowUp,
       safeInteractionCall: safeDiscordInteractionCall,
     });
     return { accepted: true };
@@ -583,30 +601,46 @@ async function dispatchDiscordCommandInteraction(
     }
   }
 
-  const directStatusResult = await maybeDeliverDiscordDirectStatus({
-    commandName,
-    suppressReplies,
-    resolveDirectStatusReplyForSession,
-    cfg,
-    discordConfig,
-    accountId,
-    sessionKey,
-    commandTargetSessionKey,
-    senderId: sender.id,
-    senderIsOwner: authority.senderIsOwner(),
-    isAuthorizedSender: commandAuthorized,
-    isGroup: isGuild || isGroupDm,
-    defaultGroupActivation: () =>
-      !isGuild ? "always" : channelConfig?.requireMention === false ? "always" : "mention",
-    interaction,
-    mediaLocalRoots,
-    preferFollowUp,
-    responseEphemeral,
-    effectiveRoute,
-    respond,
-  });
-  if (directStatusResult) {
-    return directStatusResult;
+  const { senderIsOwner } = authority;
+  if (!suppressReplies && commandName === "status") {
+    const statusReply = await resolveDirectStatusReplyForSession({
+      cfg,
+      sessionKey: commandTargetSessionKey?.trim() || sessionKey,
+      channel: "discord",
+      senderId: sender.id,
+      senderIsOwner,
+      isAuthorizedSender: commandAuthorized,
+      isGroup: isGuild || isGroupDm,
+      defaultGroupActivation: () =>
+        !isGuild ? "always" : channelConfig?.requireMention === false ? "always" : "mention",
+    });
+    const recordReply = async (replyText: string) => {
+      await recordDeliveredCommandExchange({
+        config: cfg,
+        agentId: effectiveRoute.agentId,
+        sessionKey: commandTargetSessionKey?.trim() || sessionKey,
+        commandText: "/status",
+        commandId: `discord:${accountId}:${commandTargetSessionKey?.trim() || sessionKey}:${interaction.id}`,
+        replyId: "status",
+        replyText,
+      });
+    };
+    if (statusReply && hasRenderableReplyPayload(statusReply)) {
+      await deliverDiscordInteractionReply({
+        interaction,
+        payload: statusReply,
+        mediaLocalRoots,
+        ...resolveDiscordInteractionReplyOptions({ cfg, discordConfig, accountId }),
+        responseEphemeral,
+        onDelivered: recordReply,
+      });
+    } else {
+      const delivered = await respond("Status unavailable.");
+      if (delivered) {
+        await recordReply("Status unavailable.");
+      }
+    }
+    return { accepted: true, effectiveRoute };
   }
 
   const { dispatched, hiddenFinalReply } = await dispatchDiscordNativeAgentReply({
@@ -618,7 +652,6 @@ async function dispatchDiscordCommandInteraction(
     effectiveRoute,
     channelConfig,
     mediaLocalRoots,
-    preferFollowUp,
     responseEphemeral,
     suppressReplies,
     dispatchReplyFromConfig,

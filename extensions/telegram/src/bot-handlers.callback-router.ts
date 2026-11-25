@@ -1,21 +1,26 @@
 import { randomUUID } from "node:crypto";
 import type { Context } from "grammy";
+import { resolveAgentDir, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import { applySessionModelSelection } from "openclaw/plugin-sdk/model-session-runtime";
 import {
-  formatModelsAvailableHeader,
+  formatModelsAvailableHeaderAsync,
+  buildPreparedModelsProviderData,
   MODEL_PICKER_CHANGED_MESSAGE,
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { prepareSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   hasTelegramApprovalCallbackPrefix,
   parseTelegramApprovalCallbackData,
 } from "./approval-callback-data.js";
-import { resolveAgentDir, resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
 import {
   createTelegramCallbackMessageActions,
   handleTelegramQuestionCallback,
@@ -40,6 +45,7 @@ import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
+  resolveTelegramUpdateReceivedAtSeconds,
 } from "./bot-processing-outcome.js";
 import {
   resolveTelegramForumFlag,
@@ -67,6 +73,7 @@ import {
 } from "./model-buttons.js";
 import {
   hasTelegramOpaqueCallbackPrefix,
+  parseTelegramAgentCallbackData,
   parseTelegramNativeCommandCallbackData,
   parseTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
@@ -79,14 +86,7 @@ import { buildInlineKeyboard } from "./send.js";
 import { buildTelegramConversationId } from "./topic-conversation.js";
 
 export function createTelegramCallbackRouter({
-  params: {
-    accountId,
-    bot,
-    runtime,
-    telegramDeps,
-    shouldSkipUpdate,
-    nativeCommandCallbackDispatcher,
-  },
+  params: { accountId, bot, runtime, shouldSkipUpdate, nativeCommandCallbackDispatcher },
   message: messageRuntime,
   authorization: authorizationRuntime,
 }: {
@@ -139,9 +139,16 @@ export function createTelegramCallbackRouter({
       const hasReservedModelPrefix = data.startsWith("mdl1~");
       const hasReservedOpaquePrefix = hasTelegramOpaqueCallbackPrefix(data);
       const opaqueCallbackData = parseTelegramOpaqueCallbackData(callback.data?.trimStart());
+      // Agent-authored values stay data even when slash-prefixed; commands use action.type "command".
+      // Agent buttons already delivered by v2026.11.5 continue as their marked value.
+      const agentCallbackData = parseTelegramAgentCallbackData(data) ?? data;
+      const agentCallbackText = agentControlText(agentCallbackData);
+      const hasReservedTypedPrefix = hasReservedOpaquePrefix || agentCallbackText !== undefined;
       const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
       const callbackCommandText =
-        nativeCallbackCommand ?? (opaqueCallbackData ? "" : genericCallbackText);
+        nativeCallbackCommand ??
+        agentCallbackText ??
+        (opaqueCallbackData ? "" : genericCallbackText);
       const hasReservedApprovalPrefix = hasTelegramApprovalCallbackPrefix(data);
       const hasReservedQuestionPrefix = hasTelegramQuestionCallbackPrefix(data);
       const typedApprovalCallback = parseTelegramApprovalCallbackData(data);
@@ -150,7 +157,7 @@ export function createTelegramCallbackRouter({
       );
       const isApprovalCallback = hasReservedApprovalPrefix || legacyApprovalCallback !== null;
       const isRuntimeControlCallback = isApprovalCallback || hasReservedQuestionPrefix;
-      const authorizationCfg = telegramDeps.getRuntimeConfig();
+      const authorizationCfg = getRuntimeConfig();
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg: authorizationCfg,
         accountId,
@@ -165,7 +172,7 @@ export function createTelegramCallbackRouter({
         !isRuntimeControlCallback &&
         inlineButtonsUnavailable &&
         !nativeCallbackCommand &&
-        !hasReservedOpaquePrefix &&
+        !hasReservedTypedPrefix &&
         !hasReservedModelPrefix
       ) {
         return;
@@ -223,7 +230,7 @@ export function createTelegramCallbackRouter({
       if (
         inlineButtonsUnavailable &&
         ((nativeCallbackCommand && !legacyApprovalCallback) ||
-          hasReservedOpaquePrefix ||
+          hasReservedTypedPrefix ||
           hasReservedModelPrefix)
       ) {
         await terminalizeUnavailableCallback();
@@ -261,10 +268,9 @@ export function createTelegramCallbackRouter({
 
       const callbackConversationId = buildTelegramConversationId({ chatId, thread: threadSpec });
       const callbackThreadId = threadSpec.id;
-      const runtimeCfg = telegramDeps.getRuntimeConfig();
+      const runtimeCfg = getRuntimeConfig();
       const approvalRuntime = createTelegramCallbackApprovalRuntime({
         accountId,
-        telegramDeps,
         runtimeCfg,
         senderId,
         actions,
@@ -313,7 +319,7 @@ export function createTelegramCallbackRouter({
           ctx,
           callbackMessage,
           data,
-          pluginCallbackData: opaqueCallbackData ?? data,
+          pluginCallbackData: opaqueCallbackData ?? agentCallbackData,
           callbackConversationId,
           callbackThreadId,
           senderId,
@@ -367,7 +373,7 @@ export function createTelegramCallbackRouter({
         }
         const agentId = paginationMatch[2]?.trim() || (await resolveSessionState()).agentId;
         const result = await retryModelAction(async () => {
-          const skillCommands = telegramDeps.listSkillCommandsForAgents({
+          const skillCommands = await prepareSkillCommandsForAgents({
             cfg: runtimeCfg,
             agentIds: [agentId],
           });
@@ -393,6 +399,17 @@ export function createTelegramCallbackRouter({
             throw new TelegramRetryableCallbackError(editErr);
           }
         }
+        const session = await resolveSessionState();
+        await recordDeliveredCommandExchange({
+          config: runtimeCfg,
+          agentId: session.agentId,
+          sessionKey: session.sessionKey,
+          expectedSessionId: session.sessionEntry?.sessionId,
+          commandText: `/commands ${page}`,
+          commandId: `telegram:${accountId}:${callback.id}`,
+          replyId: String(callbackMessage.message_id),
+          replyText: result.text,
+        });
         return;
       }
 
@@ -407,15 +424,29 @@ export function createTelegramCallbackRouter({
 
         const { sessionState, modelData } = await retryModelAction(async () => {
           const session = await resolveSessionState();
-          const providerData = await telegramDeps.buildModelsProviderData(
-            runtimeCfg,
-            session.agentId,
-            {
-              sessionEntry: session.sessionEntry,
-            },
-          );
+          const providerData = await buildPreparedModelsProviderData(runtimeCfg, session.agentId, {
+            sessionEntry: session.sessionEntry,
+          });
           return { sessionState: session, modelData: providerData };
         });
+        let commandText = "/model";
+        const showModelReply = async (...args: Parameters<typeof editMessageWithButtons>) => {
+          await editMessageWithButtons(...args);
+          const [text, buttons] = args;
+          await recordDeliveredCommandExchange({
+            config: runtimeCfg,
+            agentId: sessionState.agentId,
+            sessionKey: sessionState.sessionKey,
+            expectedSessionId: sessionState.sessionEntry?.sessionId,
+            commandText,
+            commandId: `telegram:${accountId}:${callback.id}`,
+            replyId: String(callbackMessage.message_id),
+            replyText: [
+              text.replace(/<[^>]*>/g, ""),
+              ...(buttons ?? []).map((row) => row.map((button) => button.text).join(", ")),
+            ].join("\n"),
+          });
+        };
         const { byProvider, providers, resolvedDefault: activeResolvedDefault } = modelData;
         const providerInfos: ProviderInfo[] = providers.map((provider) => ({
           id: provider,
@@ -423,15 +454,12 @@ export function createTelegramCallbackRouter({
         }));
         const showChangedModelPicker = () =>
           retryModelAction(() =>
-            editMessageWithButtons(
-              MODEL_PICKER_CHANGED_MESSAGE,
-              buildProviderKeyboard(providerInfos),
-            ),
+            showModelReply(MODEL_PICKER_CHANGED_MESSAGE, buildProviderKeyboard(providerInfos)),
           );
 
         if (modelCallback.type === "providers" || modelCallback.type === "back") {
           if (providers.length === 0) {
-            await retryModelAction(() => editMessageWithButtons("No providers available.", []));
+            await retryModelAction(() => showModelReply("No providers available.", []));
             return;
           }
           const notice = [...(modelData.modelMenu?.byProvider.values() ?? [])]
@@ -439,7 +467,7 @@ export function createTelegramCallbackRouter({
             .filter(Boolean)
             .join("\n");
           await retryModelAction(() =>
-            editMessageWithButtons(
+            showModelReply(
               [modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n"),
               buildProviderKeyboard(providerInfos),
             ),
@@ -455,12 +483,15 @@ export function createTelegramCallbackRouter({
             return;
           }
           const { provider, page } = listSelection;
+          commandText = `/model ${provider} ${page}`;
           const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
           const totalPages = calculateTotalPages(models.length);
           const safePage = Math.max(1, Math.min(page, totalPages));
           const currentModel =
             sessionState.model ||
-            `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
+            (activeResolvedDefault
+              ? `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`
+              : undefined);
           const availability = modelData.modelMenu?.byProvider.get(provider);
           const buttons = buildModelsKeyboard({
             provider,
@@ -470,7 +501,7 @@ export function createTelegramCallbackRouter({
             totalPages,
             modelNames: modelData.modelMenu?.modelNames ?? modelData.modelNames,
           });
-          const text = `${formatModelsAvailableHeader({
+          const text = `${await formatModelsAvailableHeaderAsync({
             provider,
             total: models.length,
             cfg: runtimeCfg,
@@ -479,10 +510,7 @@ export function createTelegramCallbackRouter({
             availability,
           })}\nSelecting a model also applies its configured runtime.`;
           await retryModelAction(() =>
-            editMessageWithButtons(
-              [modelData.refreshWarning, text].filter(Boolean).join("\n\n"),
-              buttons,
-            ),
+            showModelReply([modelData.refreshWarning, text].filter(Boolean).join("\n\n"), buttons),
           );
           return;
         }
@@ -496,8 +524,9 @@ export function createTelegramCallbackRouter({
           return;
         }
 
+        commandText = `/model ${selection.provider}/${selection.model}`;
         try {
-          const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
+          const storePath = resolveStorePath(runtimeCfg.session?.store, {
             agentId: sessionState.agentId,
           });
           const resolvedDefault = resolveDefaultModelForAgent({
@@ -505,12 +534,9 @@ export function createTelegramCallbackRouter({
             agentId: sessionState.agentId,
           });
           const isDefaultSelection =
-            selection.provider === resolvedDefault.provider &&
-            selection.model === resolvedDefault.model;
-          const persistedSessionEntry =
-            sessionState.sessionEntry ??
-            telegramDeps.getSessionEntry?.({ storePath, sessionKey: sessionState.sessionKey }) ??
-            getSessionEntry({ storePath, sessionKey: sessionState.sessionKey });
+            selection.provider === resolvedDefault?.provider &&
+            selection.model === resolvedDefault?.model;
+          const persistedSessionEntry = sessionState.sessionEntry;
           const sessionEntryMissing = persistedSessionEntry === undefined;
           const sessionEntry = persistedSessionEntry ?? {
             sessionId: randomUUID(),
@@ -536,10 +562,10 @@ export function createTelegramCallbackRouter({
               sessionEntry,
               sessionStore,
               allowCreate: sessionEntryMissing,
-              defaultProvider: resolvedDefault.provider,
-              defaultModel: resolvedDefault.model,
-              currentProvider: currentSelection.provider,
-              currentModel: currentSelection.model,
+              defaultProvider: resolvedDefault?.provider ?? selection.provider,
+              defaultModel: resolvedDefault?.model,
+              currentProvider: currentSelection?.provider,
+              currentModel: currentSelection?.model,
               modelCatalog: modelData.modelCatalog,
               canPersistStickyModelSelection: false,
               request: {
@@ -552,7 +578,7 @@ export function createTelegramCallbackRouter({
             }),
           );
           if (applied.status !== "applied") {
-            await editMessageWithButtons(`❌ ${applied.message}`, []);
+            await showModelReply(`❌ ${applied.message}`, []);
             return;
           }
           const defaultAuthProfileNotice =
@@ -569,14 +595,14 @@ export function createTelegramCallbackRouter({
           const scopeText = isDefaultSelection
             ? `Session model selection cleared.${defaultAuthProfileNotice ? ` ${defaultAuthProfileNotice}` : ""} ${runtimeText} New replies use the agent's configured default.`
             : `Session-only model selection. ${runtimeText} The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;
-          await editMessageWithButtons(`✅ Model ${actionText}\n\n${scopeText}`, [], {
+          await showModelReply(`✅ Model ${actionText}\n\n${scopeText}`, [], {
             parse_mode: "HTML",
           });
         } catch (err) {
           if (err instanceof TelegramRetryableCallbackError) {
             throw err;
           }
-          await editMessageWithButtons(`❌ Failed to change model: ${String(err)}`, []);
+          await showModelReply(`❌ Failed to change model: ${String(err)}`, []);
         }
         return;
       }
@@ -594,6 +620,7 @@ export function createTelegramCallbackRouter({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,
         text: callbackCommandText,
+        date: resolveTelegramUpdateReceivedAtSeconds(ctx.update),
       });
       const syntheticCtx = buildSyntheticContext(ctx, syntheticMessage);
       await processMessageWithReplyChain({

@@ -1,7 +1,6 @@
-import {
-  sanitizeToolArgs,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  type ToolProgressDetailMode,
+import type {
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 
@@ -24,14 +23,8 @@ export function isCodexCommandBearingToolCall(
   );
 }
 
-export function sanitizeCodexAgentEventRecord(
-  value: Record<string, unknown>,
-): Record<string, unknown> {
-  return sanitizeToolArgs(value) as Record<string, unknown>;
-}
-
-export function sanitizeCodexToolArguments(
+export function asCodexToolArguments(
   value: JsonValue | undefined,
 ): Record<string, unknown> | undefined {
-  return isJsonObject(value) ? sanitizeCodexAgentEventRecord(value) : undefined;
+  return isJsonObject(value) ? value : undefined;
 }

@@ -1,11 +1,18 @@
 import fs from "node:fs";
 import zlib from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
+import {
+  appendTranscriptMessage,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import * as projection from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import * as archiveWorkers from "../config/sessions/session-accessor.sqlite-archive.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "../config/sessions/session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   maintenanceConfig,
@@ -14,7 +21,10 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
@@ -23,72 +33,64 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
-it("keeps empty and reset-archive lookup results without creating a missing database", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+const withHistoryState = (run: (state: OpenClawTestState) => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
+    await run(state);
+  });
+
+it("keeps empty and reset-archive lookup results without creating a missing database", () =>
+  withHistoryState(async (state) => {
     const scope = {
       agentId: "main",
       sessionId: "missing-lookup",
       sessionKey: "agent:main:missing-lookup",
       storePath: state.statePath("missing.sqlite"),
     };
+    const archived = (
+      id: string,
+      options: Parameters<typeof readSessionMessageByIdAsync>[2] = {},
+    ) => readSessionMessageByIdAsync(scope, id, { ...options, allowResetArchiveFallback: true });
     expect(await readSessionMessageCountAsync(scope)).toBe(0);
-    expect(await readSessionMessageByIdAsync(scope, "archived")).toEqual({
-      found: false,
-      oversized: false,
-    });
+    const absent = { found: false, oversized: false };
+    expect(await readSessionMessageByIdAsync(scope, "archived")).toEqual(absent);
     fs.writeFileSync(
       state.statePath(`${scope.sessionId}.jsonl.reset.2026-09-23T00-00-00.000Z`),
       [
         { type: "session", version: 3, id: scope.sessionId },
-        {
-          type: "message",
-          id: "archived",
-          parentId: null,
-          message: { role: "user", content: "Retained reset message" },
-        },
-        {
-          type: "message",
-          id: "archived-announce",
-          parentId: "archived",
-          message: {
-            role: "user",
-            timestamp: 1000,
-            content: "Archived completion",
-            provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+        ...[
+          { id: "archived", message: { role: "user", content: "Retained reset message" } },
+          {
+            id: "archived-announce",
+            message: {
+              role: "user",
+              timestamp: 1000,
+              content: "Archived completion",
+              provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+            },
           },
-        },
-        {
-          type: "message",
-          id: "archived-pair",
-          parentId: "archived-announce",
-          timestamp: 1000,
-          message: { role: "assistant", content: "x".repeat(256 * 1024) },
-        },
+          {
+            id: "archived-pair",
+            timestamp: 1000,
+            message: { role: "assistant", content: "x".repeat(256 * 1024) },
+          },
+        ].map((event, index, events) =>
+          Object.assign({ type: "message", parentId: events[index - 1]?.id ?? null }, event),
+        ),
       ]
         .map((event) => JSON.stringify(event))
         .join("\n") + "\n",
     );
+    expect(await archived("archived")).toMatchObject({
+      found: true,
+      message: { content: "Retained reset message" },
+    });
+    expect(await archived("archived", { currentOnly: true, maxBytes: 1024 })).toEqual(absent);
     expect(
-      await readSessionMessageByIdAsync(scope, "archived", { allowResetArchiveFallback: true }),
-    ).toMatchObject({ found: true, message: { content: "Retained reset message" } });
+      await archived("archived-pair", { historyVisibility: { sessionStartedAt: 2000 } }),
+    ).toEqual({ ...absent, historyHidden: true });
     expect(
-      await readSessionMessageByIdAsync(scope, "archived", {
-        currentOnly: true,
-        maxBytes: 1024,
-        allowResetArchiveFallback: true,
-      }),
-    ).toEqual({ found: false, oversized: false });
-    expect(
-      await readSessionMessageByIdAsync(scope, "archived-pair", {
-        allowResetArchiveFallback: true,
-        historyVisibility: { sessionStartedAt: 2000 },
-      }),
-    ).toEqual({ found: false, oversized: false, historyHidden: true });
-    expect(
-      await readSessionMessageByIdAsync(scope, "archived-pair", {
-        allowResetArchiveFallback: true,
-        historyVisibility: { sessionStartedAt: 500 },
-      }),
+      await archived("archived-pair", { historyVisibility: { sessionStartedAt: 500 } }),
     ).toEqual({ found: true, oversized: true, seq: 3 });
     expect(await readSessionMessageCountAsync(scope)).toBe(0);
     expect(fs.existsSync(scope.storePath)).toBe(false);
@@ -97,11 +99,10 @@ it("keeps empty and reset-archive lookup results without creating a missing data
     await expect(readSessionMessageCountAsync(scope)).rejects.toThrow();
     await expect(readSessionMessageByIdAsync(scope, "archived")).rejects.toThrow();
     expect(fs.readFileSync(scope.storePath, "utf8")).toBe("unreadable database");
-  });
-});
+  }));
 
-it("reads process-held incognito history by its key or explicit sentinel path", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("reads process-held incognito history by its key or explicit sentinel path", () =>
+  withHistoryState(async (state) => {
     const scope = {
       agentId: "main",
       sessionId: "incognito-lookup",
@@ -109,32 +110,28 @@ it("reads process-held incognito history by its key or explicit sentinel path", 
       storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
     };
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1, incognito: true });
-    await replaceTranscriptEvents(scope, [
-      { type: "session", id: scope.sessionId },
-      {
-        type: "message",
-        id: "private",
-        parentId: null,
-        message: { role: "user", content: "Private history" },
-      },
-    ]);
+    await appendTranscriptMessage(scope, {
+      eventId: "private",
+      parentId: null,
+      message: { role: "user", content: "Private history" },
+    });
     for (const sessionKey of [scope.sessionKey, undefined]) {
-      expect(
-        await readSessionMessagesMatchingIdAsync({ ...scope, sessionKey }, "private"),
-      ).toMatchObject([{ content: "Private history" }]);
-      expect(await readSessionMessageCountAsync({ ...scope, sessionKey })).toBe(1);
-      expect(await readSessionMessageByIdAsync({ ...scope, sessionKey }, "private")).toMatchObject({
+      const target = { ...scope, sessionKey };
+      expect(await readSessionMessagesMatchingIdAsync(target, "private")).toMatchObject([
+        { content: "Private history" },
+      ]);
+      expect(await readSessionMessageCountAsync(target)).toBe(1);
+      expect(await readSessionMessageByIdAsync(target, "private")).toMatchObject({
         found: true,
         oversized: false,
         seq: 1,
         message: { content: "Private history" },
       });
     }
-  });
-});
+  }));
 
-it("restores cold lookup bytes and validates selected payloads off the caller thread", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("reads cold lookup bytes without restoring and validates selected payloads off the caller thread", () =>
+  withHistoryState(async (state) => {
     const fixture = await createSessionColdStorageFixture(
       resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
     );
@@ -146,19 +143,22 @@ it("restores cold lookup bytes and validates selected payloads off the caller th
         config: maintenanceConfig(fixture.scope.storePath),
       }),
     ).toMatchObject({ archivedTranscripts: 1 });
+    const archive = readSessionColdTranscript(fixture.database(), fixture.scope.sessionId);
+    expect(archive).toBeDefined();
     const restore = vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation");
     const decode = vi.spyOn(zlib, "zstdDecompressSync");
     const snapshot = vi.spyOn(projection, "withCurrentProjectionSnapshot");
     expect(await read()).toEqual(expected);
     expect(await read()).toEqual(expected);
-    expect(fixture.snapshot()).toEqual(fixture.original);
-    expect(restore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workerData: expect.objectContaining({ operation: "cold-mutate" }),
-      }),
-    );
+    expect(restore).not.toHaveBeenCalled();
+    expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toEqual(archive);
     expect(decode).not.toHaveBeenCalled();
     expect(snapshot).not.toHaveBeenCalled();
+
+    // Restore explicitly for the external writer; reads keep the archive intact.
+    await restoreSessionColdTranscript(fixture.scope);
+    // The fixture's full snapshot deliberately decodes rows on this thread.
+    expect(fixture.snapshot()).toEqual(fixture.original);
 
     // Exact reads still validate their selected payload after an external rewrite.
     fixture
@@ -172,5 +172,4 @@ it("restores cold lookup bytes and validates selected payloads off the caller th
       )
       .run("{malformed", fixture.scope.sessionId, fixture.scope.sessionId, "history-assistant");
     await expect(read()).rejects.toThrow();
-  });
-});
+  }));

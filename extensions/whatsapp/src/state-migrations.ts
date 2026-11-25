@@ -10,7 +10,6 @@ import {
   readRegularFileSync,
   root,
 } from "openclaw/plugin-sdk/file-access-runtime";
-// The published 2026.9.7 host loads canonical state without these newer repair capabilities.
 import * as migrationSdk from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
@@ -61,7 +60,7 @@ async function listSources(params: MigrationInput): Promise<AuthSource[]> {
   }
   const sources = new Map<string, AuthSource>();
   for (const entry of await fs.readdir(params.oauthDir, { withFileTypes: true })) {
-    const name = migrationSdk.resolveLegacyMigrationSourcePath?.(entry.name) ?? entry.name;
+    const name = migrationSdk.resolveLegacyMigrationSourcePath(entry.name);
     if (!entry.isFile() || !isWhatsAppBaileysAuthFileName(name)) {
       continue;
     }
@@ -122,7 +121,7 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
       (entry) => entry.channelId === "whatsapp",
     )?.assertCurrent;
     const { backupLegacyStateSource } = migrationSdk;
-    if (!assertCurrent || !backupLegacyStateSource) {
+    if (!assertCurrent) {
       return warn(
         "WhatsApp credential import requires offline Doctor repair. Update OpenClaw core and run openclaw doctor --fix; original files remain unchanged.",
       );
@@ -167,7 +166,7 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
     }
     if (canonical && !canonical.buffer.equals(legacy.backup.bytes)) {
       return warn(
-        "WhatsApp canonical credentials differ from the legacy shared root. Kept both complete sets and private .migrated backups; choose the intended authDir before removing either set.",
+        "WhatsApp current credentials differ from the legacy shared root. Kept both complete sets and private .migrated backups; choose the intended authDir before removing either set.",
         true,
       );
     }
@@ -199,7 +198,7 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
     const previous = await receipts.lookup(sourceIdentity);
     if (previous && (!canonical || previous.targetDigest !== credentialSetDigest(targetFiles))) {
       return warn(
-        "WhatsApp credential migration previously started, but its complete canonical credential set is absent or changed. Kept source files and backups; restore the complete intended account or select its authDir explicitly. Doctor will not recreate credentials after logout.",
+        "WhatsApp credential migration previously started, but its complete current credential set is absent or changed. Kept source files and backups; restore the complete intended account or select its authDir explicitly. Doctor will not recreate credentials after logout.",
         Boolean(canonical),
       );
     }
@@ -256,7 +255,7 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
       const target = await credentials.read(relativePath);
       if (!target.buffer.equals(backup.bytes)) {
         throw new Error(
-          "WhatsApp canonical credentials changed during import; original files retained.",
+          "WhatsApp current credentials changed during import; original files retained.",
         );
       }
       targets.push({
@@ -276,12 +275,12 @@ export const whatsappLegacyStateMigration: PluginDoctorStateMigration = {
         });
         const current = readRegularFileSync({ filePath: targetPath });
         if (
-          current.stat.dev !== target.stat.dev ||
-          current.stat.ino !== target.stat.ino ||
+          current.exactIdentity.dev !== target.exactIdentity.dev ||
+          current.exactIdentity.ino !== target.exactIdentity.ino ||
           !current.buffer.equals(target.buffer)
         ) {
           throw new Error(
-            "WhatsApp canonical credentials changed during import; original backup retained.",
+            "WhatsApp current credentials changed during import; original backup retained.",
           );
         }
         return undefined;

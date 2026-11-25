@@ -1,6 +1,13 @@
 import type { ChildProcess } from "node:child_process";
 import { sleepWithAbort } from "@openclaw/retry";
-import { isChildProcessTreeAlive, signalChildProcessTree } from "../process/child-process-tree.js";
+import {
+  isChildProcessTreeAlive,
+  isChildProcessTreeAliveAsync,
+  isProcessGroupGoneByKernel,
+  signalChildProcessTree,
+} from "../process/child-process-tree.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 2_000;
 const PROCESS_TREE_EXIT_POLL_MS = 25;
@@ -9,29 +16,30 @@ export type ManagedLocalServiceProcess = {
   child: ChildProcess;
   closed: boolean;
   windowsRootGone?: boolean;
-  pendingSignals: Set<"SIGTERM" | "SIGKILL">;
+  pendingSignals: Map<"SIGTERM" | "SIGKILL", Promise<void>>;
 };
 
 export function trackLocalServiceProcess(child: ChildProcess): ManagedLocalServiceProcess {
-  const owned: ManagedLocalServiceProcess = { child, closed: false, pendingSignals: new Set() };
+  const owned: ManagedLocalServiceProcess = { child, closed: false, pendingSignals: new Map() };
   child.once("close", () => {
     owned.closed = true;
   });
   return owned;
 }
 
-function unrefLocalServiceOutput(stream: ChildProcess["stdout"]): void {
-  // SAFETY: Child stdio exposes an optional native-handle unref omitted by Readable's types.
-  (stream as { unref?: () => void } | null)?.unref?.();
+export function unrefLocalServiceOutput(child: ChildProcess): void {
+  for (const stream of [child.stdout, child.stderr]) {
+    // SAFETY: Child stdio exposes an optional native-handle unref omitted by Readable's types.
+    (stream as { unref?: () => void } | null)?.unref?.();
+  }
 }
 
-export function drainLocalServiceOutput(child: ChildProcess): void {
+function drainLocalServiceOutput(child: ChildProcess): void {
   child.stdout?.removeAllListeners("data");
   child.stderr?.removeAllListeners("data");
   child.stdout?.resume();
   child.stderr?.resume();
-  unrefLocalServiceOutput(child.stdout);
-  unrefLocalServiceOutput(child.stderr);
+  unrefLocalServiceOutput(child);
 }
 
 function isLocalServiceProcessTreeAlive(owned: ManagedLocalServiceProcess): boolean {
@@ -48,22 +56,45 @@ function isLocalServiceProcessTreeAlive(owned: ManagedLocalServiceProcess): bool
   return alive;
 }
 
-function isLocalServiceProcessSettled(owned: ManagedLocalServiceProcess): boolean {
-  return owned.closed && owned.pendingSignals.size === 0 && !isLocalServiceProcessTreeAlive(owned);
+async function isLocalServiceProcessTreeAliveAsync(
+  owned: ManagedLocalServiceProcess,
+): Promise<boolean> {
+  if (process.platform === "win32") {
+    return isLocalServiceProcessTreeAlive(owned);
+  }
+  return await isChildProcessTreeAliveAsync(owned.child);
+}
+
+async function isLocalServiceProcessSettled(owned: ManagedLocalServiceProcess): Promise<boolean> {
+  return (
+    owned.closed &&
+    !(await isLocalServiceProcessTreeAliveAsync(owned)) &&
+    owned.pendingSignals.size === 0
+  );
 }
 
 function signalLocalServiceProcess(
   owned: ManagedLocalServiceProcess,
   signal: "SIGTERM" | "SIGKILL",
 ) {
-  if (owned.pendingSignals.has(signal) || !isLocalServiceProcessTreeAlive(owned)) {
+  if (
+    owned.pendingSignals.has(signal) ||
+    (process.platform === "win32"
+      ? !isLocalServiceProcessTreeAlive(owned)
+      : typeof owned.child.pid === "number" && isProcessGroupGoneByKernel(owned.child.pid))
+  ) {
     return;
   }
-  owned.pendingSignals.add(signal);
-  try {
-    signalChildProcessTree(owned.child, signal, () => owned.pendingSignals.delete(signal));
-  } catch (error) {
+  const completion = createDeferredCore();
+  owned.pendingSignals.set(signal, completion.promise);
+  const complete = () => {
     owned.pendingSignals.delete(signal);
+    completion.resolve();
+  };
+  try {
+    signalChildProcessTree(owned.child, signal, complete);
+  } catch (error) {
+    complete();
     throw error;
   }
 }
@@ -77,21 +108,28 @@ export function forceStopLocalServiceProcess(owned: ManagedLocalServiceProcess):
 }
 
 export async function stopLocalServiceProcess(owned: ManagedLocalServiceProcess): Promise<void> {
-  if (isLocalServiceProcessSettled(owned)) {
+  if (await isLocalServiceProcessSettled(owned)) {
     return;
   }
   drainLocalServiceOutput(owned.child);
-  const gracefulDeadline = Date.now() + DEFAULT_PROBE_TIMEOUT_MS;
-  if (owned.pendingSignals.size === 0) {
+  // Grace and final-exit budgets are consumed by sleepWithAbort polls on the
+  // monotonic clock; the deadlines must live there too, or a wall-clock step
+  // (NTP correction, VM resume) stretches the stop window past its bound.
+  const gracefulDeadline = monotonicNow() + DEFAULT_PROBE_TIMEOUT_MS;
+  if (owned.pendingSignals.size === 0 && (await isLocalServiceProcessTreeAliveAsync(owned))) {
     signalLocalServiceProcess(owned, "SIGTERM");
   }
   await waitForChildProcessTreeExit(owned, gracefulDeadline);
-  if (!isLocalServiceProcessSettled(owned)) {
-    const forceDeadline = Date.now() + DEFAULT_PROBE_TIMEOUT_MS;
-    signalLocalServiceProcess(owned, "SIGKILL");
-    await waitForChildProcessTreeExit(owned, forceDeadline);
+  if (!(await isLocalServiceProcessSettled(owned))) {
+    if (await isLocalServiceProcessTreeAliveAsync(owned)) {
+      signalLocalServiceProcess(owned, "SIGKILL");
+    }
+    // Windows taskkill owns its bounded completion deadline. Join every helper
+    // before timing final exit observation, even if the service already closed.
+    await Promise.all(owned.pendingSignals.values());
+    await waitForChildProcessTreeExit(owned, monotonicNow() + DEFAULT_PROBE_TIMEOUT_MS);
   }
-  if (!isLocalServiceProcessSettled(owned)) {
+  if (!(await isLocalServiceProcessSettled(owned))) {
     throw new Error(`Local model service process tree ${owned.child.pid} did not stop`);
   }
 }
@@ -100,8 +138,8 @@ async function waitForChildProcessTreeExit(
   owned: ManagedLocalServiceProcess,
   deadline: number,
 ): Promise<void> {
-  while (!isLocalServiceProcessSettled(owned)) {
-    const remainingMs = deadline - Date.now();
+  while (!(await isLocalServiceProcessSettled(owned))) {
+    const remainingMs = deadline - monotonicNow();
     if (remainingMs <= 0) {
       return;
     }

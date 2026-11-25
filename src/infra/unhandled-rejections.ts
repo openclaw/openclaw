@@ -8,7 +8,13 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { registerListener } from "../shared/listeners.js";
 import { isAbortError } from "./abort-signal.js";
 import { collectNestedErrorCandidates, extractErrorCodeOrErrno } from "./error-graph-internal.js";
-import { extractErrorCode, formatUncaughtError, readErrorCause, readErrorName } from "./errors.js";
+import {
+  extractErrorCode,
+  formatErrorStackWithMessage,
+  formatUncaughtError,
+  readErrorCause,
+  readErrorName,
+} from "./errors.js";
 import { runFatalErrorHooks } from "./fatal-error-hooks.js";
 import { isTransientNetworkError } from "./retryable-network-errors.js";
 
@@ -34,7 +40,10 @@ function createErrorHandlerRegistry(globalKey: symbol, failureMessage: string) {
             return true;
           }
         } catch (err) {
-          console.error(failureMessage, err instanceof Error ? (err.stack ?? err.message) : err);
+          console.error(
+            failureMessage,
+            err instanceof Error ? formatErrorStackWithMessage(err) : err,
+          );
         }
       }
       return false;
@@ -265,15 +274,15 @@ export function isUncaughtExceptionHandled(error: unknown): boolean {
 export function installUnhandledRejectionHandler(): void {
   const exitWithTerminalRestore = (
     reason: string,
-    error?: unknown,
-    hookReason = reason,
+    error: unknown,
+    hookReason: string,
     exitCode = 1,
   ) => {
     for (const message of runFatalErrorHooks({ reason: hookReason, error })) {
       console.error("[openclaw]", message);
     }
     restoreRuntimeTerminalState(reason, { resumeStdinIfPaused: false });
-    exitAfterSignalExitBarriers(exitCode);
+    exitAfterSignalExitBarriers(exitCode, reason);
   };
 
   process.on("unhandledRejection", (reason, _promise) => {

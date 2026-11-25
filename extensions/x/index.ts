@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-entry-contract";
 import type { registerXAllowlistMethods } from "./admin-api.js";
 import type { createXGitHubService } from "./verified-github-api.js";
+import type { registerXWorkOriginGuidance } from "./work-origin-api.js";
 
 export default defineBundledChannelEntry({
   id: "x",
@@ -14,6 +15,10 @@ export default defineBundledChannelEntry({
   secrets: { specifier: "./secret-contract-api.js", exportName: "channelSecrets" },
   runtime: { specifier: "./runtime-api.js", exportName: "setXRuntime" },
   registerFull(api) {
+    loadBundledEntryExportSync<typeof registerXWorkOriginGuidance>(import.meta.url, {
+      specifier: "./work-origin-api.js",
+      exportName: "registerXWorkOriginGuidance",
+    })(api);
     loadBundledEntryExportSync<typeof registerXAllowlistMethods>(import.meta.url, {
       specifier: "./admin-api.js",
       exportName: "registerXAllowlistMethods",

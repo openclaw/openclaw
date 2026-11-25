@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -33,10 +33,10 @@ type WorkspaceJournalDatabase = Pick<
   | "worker_workspace_reconciliations"
 >;
 
-const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceJournalDatabase>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<WorkspaceJournalDatabase>(db);
 
 export function isCurrentJournalOwner(
-  db: DatabaseSync,
+  db: EngineConnection,
   placement: WorkerSessionPlacementRecord | undefined,
   owner: WorkerWorkspaceJournalOwner,
   pendingResults?: ReadonlyMap<string, WorkerWorkspacePendingResult>,
@@ -79,7 +79,7 @@ export function isCurrentJournalOwner(
 }
 
 function assertJournalOwner(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: WorkerWorkspaceJournalOwner,
   options: { allowFailedOwner?: boolean } = {},
 ) {
@@ -100,7 +100,7 @@ function assertJournalOwner(
 }
 
 export function clearWorkerWorkspaceReconciliation(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
   currentManifestRef?: string,
 ): void {
@@ -121,12 +121,15 @@ export function clearWorkerWorkspaceReconciliation(
   publishPlacementWorkspaceJournalState(db, sessionId, false);
 }
 
-function getWorkspaceReconciliationPlacement(db: DatabaseSync, owner: WorkerWorkspaceJournalOwner) {
+function getWorkspaceReconciliationPlacement(
+  db: EngineConnection,
+  owner: WorkerWorkspaceJournalOwner,
+) {
   const placement = find(db, owner.sessionId);
   return isCurrentJournalOwner(db, placement, owner) ? placement : undefined;
 }
 
-function listWorkspaceReconciliationOwners(db: DatabaseSync): WorkerWorkspaceJournalOwner[] {
+function listWorkspaceReconciliationOwners(db: EngineConnection): WorkerWorkspaceJournalOwner[] {
   return executeSqliteQuerySync(
     db,
     query(db)
@@ -142,7 +145,7 @@ function listWorkspaceReconciliationOwners(db: DatabaseSync): WorkerWorkspaceJou
 }
 
 function loadWorkspaceReconciliation(
-  db: DatabaseSync,
+  db: EngineConnection,
   owner: WorkerWorkspaceJournalOwner,
   options: { allowFailedOwner?: boolean } = {},
 ): WorkerWorkspaceReconciliationJournal | undefined {
@@ -304,13 +307,13 @@ export function createPlacementWorkspaceJournalOps(
 }
 
 export function readWorkspaceJournalInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: WorkspaceJournalReadCommand,
 ): WorkspaceJournalReadResult {
-  return runSqliteDeferredTransactionSync(db, () => {
-    if (command.type === "placementJournals.owners") {
-      return { type: command.type, owners: listWorkspaceReconciliationOwners(db) };
-    }
+  if (command.type === "placementJournals.owners") {
+    return { type: command.type, owners: listWorkspaceReconciliationOwners(db) };
+  }
+  return runSqliteReadSnapshotSync(db, () => {
     if (command.type === "placementJournals.placement") {
       return {
         type: command.type,

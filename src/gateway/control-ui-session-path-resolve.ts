@@ -4,7 +4,11 @@ import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import { withPreparedSessionResolve, type SessionsResolveResult } from "./sessions-resolve.js";
+import {
+  resolveSessionKeyFromResolveParams,
+  withPreparedSessionResolve,
+  type SessionsResolveResult,
+} from "./sessions-resolve.js";
 
 /** Both HTTP readers use the same URL grammar and the existing session resolution owner. */
 export async function resolveControlUiSessionPath(params: {
@@ -22,32 +26,69 @@ export async function resolveControlUiSessionPath(params: {
   ) {
     return null;
   }
-  let revision: object | undefined;
-  const resolve = (p: SessionsResolveParams) =>
-    withPreparedSessionResolve(
-      {
-        projection,
-        client: params.client,
-        isCurrent: params.isCurrent,
-        p: {
-          ...p,
-          agentId: target.agentId,
-          allowMissing: true,
-          includeGlobal: true,
-          includeUnknown: true,
-        },
-        publicOnly: params.publicOnly,
+  let isCurrent = () => false;
+  const resolve = (p: SessionsResolveParams) => {
+    const selection = {
+      projection,
+      client: params.client,
+      isCurrent: params.isCurrent,
+      p: {
+        ...p,
+        agentId: target.agentId,
+        allowMissing: true,
+        includeGlobal: true,
+        includeUnknown: true,
       },
-      (result) => {
-        revision = projection.sharingRevision;
-        return result;
-      },
-    );
+      publicOnly: params.publicOnly,
+    };
+    return withPreparedSessionResolve(selection, (result) => {
+      if (result.ok && "key" in result) {
+        const query = { key: result.key, agentId: result.agentId };
+        const row = projection.capture(query);
+        const sessionId = row?.entry?.sessionId;
+        const revision = projection.sharingRevision;
+        isCurrent = () => {
+          if (
+            params.isCurrent?.() === false ||
+            !row ||
+            !projection.isCurrent(row) ||
+            (!isIncognitoSessionKey(query.key) &&
+              projection.sharingTargetState(query).status !== "ready") ||
+            projection.capture(query)?.entry?.sessionId !== sessionId ||
+            projection.sharingRevision === undefined
+          ) {
+            return false;
+          }
+          if (projection.sharingRevision === revision) {
+            return true;
+          }
+          // Unrelated session activity must not invalidate an app document.
+          // Reapply the original selector's current access policy without yielding.
+          try {
+            const current = resolveSessionKeyFromResolveParams(selection);
+            return (
+              current.ok &&
+              "key" in current &&
+              current.key === result.key &&
+              current.agentId === result.agentId
+            );
+          } catch {
+            return false;
+          }
+        };
+      }
+      return result;
+    });
+  };
   let result: SessionsResolveResult;
   if (target.kind === "main") {
-    result = await resolve({
-      key: resolveAgentMainSessionKey({ cfg: projection.state.cfg, agentId: target.agentId }),
-    });
+    const key = resolveAgentMainSessionKey({ cfg: projection.state.cfg, agentId: target.agentId });
+    result = await resolve({ key });
+    // The main session is stored with its first message. Absent and hidden rows give the
+    // same answer, so an authenticated reader opens the app for both, as the app at "/" does.
+    if (params.client && !params.publicOnly && result.ok && "missing" in result) {
+      return { key, agentId: target.agentId, isCurrent: () => params.isCurrent?.() !== false };
+    }
   } else if (target.kind === "short") {
     result = await resolve({ shortId: target.shortId, slugHint: target.slugHint });
     if (result.ok && "missing" in result) {
@@ -66,10 +107,7 @@ export async function resolveControlUiSessionPath(params: {
     ? {
         key: result.key,
         agentId: result.agentId,
-        isCurrent: () =>
-          revision !== undefined &&
-          revision === projection.sharingRevision &&
-          params.isCurrent?.() !== false,
+        isCurrent,
       }
     : null;
 }

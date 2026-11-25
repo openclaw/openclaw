@@ -70,9 +70,14 @@ const updateRestartAuthCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-3420s}"',
 );
+// Hosted 4-vCPU legacy-operator-state passed in 1195-1841s (run 41105259079; 10.8 runs a
+// second published update for the native plugin UI opt-out specimen), and the
+// 2026-10-30 matrix died at the old 1200s default in 4/4 cells => 2700s inner + 300s
+// margin. The shipped 9.36 updater finished its recorded steps in 718s but its command
+// outlived the 900s default (canary-copy cleanup runs outside them), so use 1500s.
 const updateMigrationCommand = upgradeSurvivorScriptCommand(
-  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
-  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2700s}"',
 );
 const dreamingCronDoctorCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.6 OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE=current OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=dreaming-cron-doctor OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0",
@@ -197,6 +202,21 @@ function codexHarnessLane(name: string, envPrefix: string) {
   });
 }
 
+function upgradeSurvivorLane(
+  name: string,
+  command: string,
+  timeoutMs: number,
+  upgradeSurvivorScenario = "base",
+) {
+  return npmLane(name, {
+    command,
+    stateScenario: "upgrade-survivor",
+    timeoutMs,
+    upgradeSurvivorScenario,
+    weight: 3,
+  });
+}
+
 const bundledPluginInstallUninstallLanes = Array.from(
   { length: BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS },
   (_, index) =>
@@ -279,13 +299,7 @@ export const mainLanes: DockerE2eLane[] = [
       timeoutMs: LIVE_CLI_TIMEOUT_MS,
     }),
   ),
-  liveLane("openwebui", {
-    e2eImageKind: "functional",
-    provider: "openai",
-    resources: ["service"],
-    timeoutMs: OPENWEBUI_TIMEOUT_MS,
-    weight: 5,
-  }),
+  openWebUILane(),
   serviceLane("onboard", {
     stateScenario: "empty",
   }),
@@ -294,6 +308,12 @@ export const mainLanes: DockerE2eLane[] = [
     resources: ["service"],
     stateScenario: "empty",
     weight: 3,
+  }),
+  npmLane("muse-runtime", {
+    needsPackage: true,
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
   }),
   serviceLane("codex-media-path", {
     prepublishPluginPackages: ["@openclaw/codex"],
@@ -380,6 +400,7 @@ export const mainLanes: DockerE2eLane[] = [
   lane("agent-bundle-mcp-tools", {
     stateScenario: "empty",
   }),
+  serviceLane("mcp-docker-custody", { stateScenario: "empty" }),
   lane("system-agent-rescue", {
     stateScenario: "empty",
   }),
@@ -397,18 +418,22 @@ export const mainLanes: DockerE2eLane[] = [
     stateScenario: "empty",
     timeoutMs: 10 * 60 * 1000,
   }),
-  npmLane("upgrade-survivor", {
-    command: upgradeSurvivorCommand,
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 20 * 60 * 1000,
-    upgradeSurvivorScenario: "base",
-    weight: 3,
-  }),
-  npmLane("published-upgrade-survivor", {
-    command: publishedUpgradeSurvivorCommand,
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 2580 * 1000,
-    upgradeSurvivorScenario: "base",
+  upgradeSurvivorLane("upgrade-survivor", upgradeSurvivorCommand, 20 * 60 * 1000),
+  upgradeSurvivorLane(
+    "release-update-survivor",
+    upgradeSurvivorScriptCommand("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=release-update"),
+    55 * 60 * 1000,
+    "release-update",
+  ),
+  upgradeSurvivorLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, 2580 * 1000),
+  // The published 2026.10.9 updater still uses in-place activation and Doctor.
+  npmLane("package-installed-recovery-older-runtime", {
+    command: upgradeSurvivorScriptCommand(
+      "OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=package-installed-recovery OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT=older-runtime OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=0 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC= OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0",
+    ),
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 25 * 60 * 1000,
     weight: 3,
   }),
   // Explicit Docker/release regression; the per-PR cell still runs only one real update.
@@ -423,36 +448,75 @@ export const mainLanes: DockerE2eLane[] = [
     "published-driver-update", // Outlives the script's 1125 s envelope; hosted after #162858: p50 521 s, max 659 s.
     { resources: ["service"], stateScenario: "empty", timeoutMs: 20 * 60 * 1000 },
   ),
-  npmLane("dreaming-cron-doctor", {
-    command: dreamingCronDoctorCommand,
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 25 * 60 * 1000,
-    upgradeSurvivorScenario: "dreaming-cron-doctor",
-    weight: 3,
+  // A published updater behind a linked package path: the layout a downgrade would leave under
+  // the proposed release-directory design. No CI workflow selects this lane yet.
+  npmLane("published-driver-linked-root", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
   }),
-  npmLane("root-managed-vps-upgrade", {
-    command: rootManagedVpsUpgradeCommand,
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 25 * 60 * 1000,
-    upgradeSurvivorScenario: "base",
-    weight: 3,
+  // Release directories behind a linked package path on an install-cli-shaped prefix: adoption
+  // and switch, and rollback after a failed post-switch Doctor. Each adds candidate updates to the cell. No CI workflow
+  // selects these lanes yet.
+  npmLane("published-driver-release-adoption", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
   }),
-  npmLane("update-restart-auth", {
-    command: updateRestartAuthCommand,
-    stateScenario: "upgrade-survivor",
-    // 3420s inner + 300s host-side margin.
-    timeoutMs: 3720 * 1000,
-    upgradeSurvivorScenario: "base",
-    weight: 3,
+  npmLane("published-driver-release-rollback", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
   }),
+  // An added launcher takes the swap and the next update adopts again (owned prefix). A linked
+  // root whose service a published updater bound to a release has that release replaced in place;
+  // the restart rebinds the service (rebind), or with --no-restart it stays bound (in-place).
+  npmLane("published-driver-release-launcher", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 50 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-rebind", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 50 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-in-place", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
+  }),
+  // A published updater's first update with official npm plugins while openclaw.json is a link to
+  // a read-only file: plugin convergence changes no config, so the update must succeed. Local
+  // cells took 6-7 minutes inside the script's 1125 s envelope. No CI workflow selects it yet.
+  // By hand, OPENCLAW_PUBLISHED_DRIVER_PLUGIN_FAULT=corrupt-plugin serves one corrupt plugin
+  // tarball instead, and =refused-channel-change also requests a channel the config cannot take.
+  npmLane("published-driver-plugin-publication", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+  }),
+  npmLane("published-driver-scoped-restore", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+  }),
+  upgradeSurvivorLane(
+    "dreaming-cron-doctor",
+    dreamingCronDoctorCommand,
+    25 * 60 * 1000,
+    "dreaming-cron-doctor",
+  ),
+  upgradeSurvivorLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, 25 * 60 * 1000),
+  // 3420s inner + 300s host-side margin.
+  upgradeSurvivorLane("update-restart-auth", updateRestartAuthCommand, 3720 * 1000),
   ...updateFirstHopCompatLanes,
-  npmLane("update-migration", {
-    command: updateMigrationCommand,
-    stateScenario: "upgrade-survivor",
-    timeoutMs: 30 * 60 * 1000,
-    upgradeSurvivorScenario: "plugin-deps-cleanup",
-    weight: 3,
-  }),
+  upgradeSurvivorLane(
+    "update-migration",
+    updateMigrationCommand,
+    3000 * 1000,
+    "plugin-deps-cleanup",
+  ),
   lane("plugins", {
     resources: ["npm", "service"],
     stateScenario: "empty",
@@ -553,6 +617,13 @@ export const tailLanes: DockerE2eLane[] = [
     resources: ["npm", "service"],
     stateScenario: "empty",
     timeoutMs: 20 * 60 * 1000,
+  }),
+  liveLane("gbrain", {
+    command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gbrain",
+    e2eImageKind: false,
+    provider: "openai",
+    resources: ["npm", "service"],
+    timeoutMs: 30 * 60 * 1000,
   }),
   liveLane("live-plugin-tool", {
     command:
@@ -681,6 +752,7 @@ const releasePathPackageMigrationLanes = scheduledLaneList(
 );
 const releasePathPackageSelfUpgradeLanes = scheduledLaneList(
   "upgrade-survivor",
+  "release-update-survivor",
   ...updateFirstHopCompatLanes.map((entry) => entry.name),
 );
 const releasePathPackageUpdateCoreLanes = [
@@ -756,9 +828,9 @@ export function normalizeReleaseProfile(raw: string | null | undefined): DockerE
   );
 }
 
-function openWebUILane() {
+function openWebUILane(command?: string) {
   return liveLane("openwebui", {
-    command: RELEASE_OPENWEBUI_COMMAND,
+    command,
     e2eImageKind: "functional",
     provider: "openai",
     resources: ["service"],
@@ -789,7 +861,7 @@ export function releasePathChunkLanes(
     return [];
   }
   if (chunk === "openwebui") {
-    return options.includeOpenWebUI ? [openWebUILane()] : [];
+    return options.includeOpenWebUI ? [openWebUILane(RELEASE_OPENWEBUI_COMMAND)] : [];
   }
   if (
     (chunk !== "plugins-runtime-core" &&
@@ -799,7 +871,7 @@ export function releasePathChunkLanes(
   ) {
     return base;
   }
-  return [...base, openWebUILane()];
+  return [...base, openWebUILane(RELEASE_OPENWEBUI_COMMAND)];
 }
 
 export function allReleasePathLanes(

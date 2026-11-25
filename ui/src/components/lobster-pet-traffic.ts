@@ -11,24 +11,9 @@ import {
 } from "./lobster-pet-plans.ts";
 import { LobsterPetTimers } from "./lobster-pet-timers.ts";
 
-// Facing, reactions, and the act loop stay owned by the pet element; the
-// controller only reports crossing milestones.
-type LobsterTrafficHooks = {
-  visitsEnabled: () => boolean;
-  passerOptions: () => LobsterPasserOptions;
-  onPasserStart: (plan: LobsterPasserPlan) => void;
-  // Fired at crossing start (toward the entry side) and mid-cross (travel
-  // direction) so the resident can watch the traffic go by.
-  onPasserFacing: (facing: 1 | -1) => void;
-  onPasserMidCross: () => void;
-  onPasserDone: () => void;
-};
-
-type LobsterBottleScene = { spotPct: number; opened: boolean; fortune: string };
-
 export class LobsterLedgeTraffic {
   passer: LobsterPasserPlan | null = null;
-  bottle: LobsterBottleScene | null = null;
+  bottle: { spotPct: number; opened: boolean; fortune: string } | null = null;
   private connected = false;
   private readonly timers = new LobsterPetTimers<
     "passerTimer" | "passerEndTimer" | "passerWatchTimer" | "bottleTimer" | "bottleEndTimer"
@@ -39,7 +24,18 @@ export class LobsterLedgeTraffic {
 
   constructor(
     private readonly notify: () => void,
-    private readonly hooks: LobsterTrafficHooks,
+    // Facing, reactions, and the act loop stay owned by the pet element; the
+    // controller only reports crossing milestones.
+    private readonly hooks: {
+      visitsEnabled: () => boolean;
+      passerOptions: () => LobsterPasserOptions;
+      onPasserStart: (plan: LobsterPasserPlan) => void;
+      // Fired at crossing start (toward the entry side) and mid-cross (travel
+      // direction) so the resident can watch the traffic go by.
+      onPasserFacing: (facing: 1 | -1) => void;
+      onPasserMidCross: () => void;
+      onPasserDone: () => void;
+    },
   ) {}
 
   connect() {
@@ -74,7 +70,25 @@ export class LobsterLedgeTraffic {
     this.bottle = null;
     if (this.connected && this.hooks.visitsEnabled()) {
       this.schedulePasser(seed);
-      this.scheduleBottle(seed);
+      const plan = planLobsterBottle(seed);
+      if (!plan) {
+        return;
+      }
+      this.timers.schedule("bottleTimer", plan.atMs, () => {
+        if (!this.connected || !this.hooks.visitsEnabled()) {
+          return;
+        }
+        this.bottle = {
+          spotPct: plan.spotPct,
+          opened: false,
+          fortune: expectDefined(
+            LOBSTER_BOTTLE_FORTUNES[plan.fortuneIndex],
+            "lobster bottle fortune",
+          ),
+        };
+        this.notify();
+        this.armBottleEbb(300_000);
+      });
     }
   }
 
@@ -163,28 +177,6 @@ export class LobsterLedgeTraffic {
         this.notify();
         this.hooks.onPasserDone();
       });
-    });
-  }
-
-  private scheduleBottle(seed: number) {
-    const plan = planLobsterBottle(seed);
-    if (!plan) {
-      return;
-    }
-    this.timers.schedule("bottleTimer", plan.atMs, () => {
-      if (!this.connected || !this.hooks.visitsEnabled()) {
-        return;
-      }
-      this.bottle = {
-        spotPct: plan.spotPct,
-        opened: false,
-        fortune: expectDefined(
-          LOBSTER_BOTTLE_FORTUNES[plan.fortuneIndex],
-          "lobster bottle fortune",
-        ),
-      };
-      this.notify();
-      this.armBottleEbb(300_000);
     });
   }
 

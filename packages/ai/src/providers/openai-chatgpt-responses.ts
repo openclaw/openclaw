@@ -1,4 +1,3 @@
-import type * as NodeOs from "node:os";
 import type * as NodeZlib from "node:zlib";
 import { consumeResponseBytes } from "@openclaw/normalization-core";
 import {
@@ -13,14 +12,18 @@ import {
   resolveAiTransportHeaderSentinels,
   type AiTransportHost,
 } from "../host.js";
-import type { BaseOpenAIStreamOptions } from "../provider-options.js";
-import { registerSessionResourceCleanup } from "../session-resources.js";
+import { PROVIDER_STATE_SCOPE, registerSessionResourceCleanup } from "../session-resources.js";
 import { buildManagedModelFetch } from "../transports/host-policy.js";
+import {
+  claimResponsesCompactRequest,
+  copyResponsesCompactRequest,
+} from "../transports/openai-responses-compact-request.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
   type OpenAIResponsesReplayMode,
 } from "../transports/openai-responses-compaction-replay.js";
+import { createResponsesV2CompactionCollector } from "../transports/openai-responses-compaction-v2.js";
 import { recordResponsesContextUsage } from "../transports/openai-responses-context-usage.js";
 import { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
@@ -50,8 +53,8 @@ import {
 } from "../transports/transport-utils.js";
 import type {
   AssistantMessage,
-  Context,
   Model,
+  ModelRequestHeaders,
   SimpleStreamOptions,
   StreamFunction,
 } from "../types.js";
@@ -72,7 +75,7 @@ import {
   getFirstStreamEventTimeoutMs,
   withFirstStreamEventTimeout,
 } from "../utils/stream-first-event-timeout.js";
-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { buildBaseCodexHeaders } from "./openai-chatgpt-request-headers.js";
 import { CodexApiError, mapCodexEvents } from "./openai-chatgpt-responses-events.js";
 import {
   CodexProtocolError,
@@ -80,9 +83,12 @@ import {
   resolveCodexUrl,
 } from "./openai-chatgpt-responses-protocol.js";
 import {
-  addCodexWebSocketSseFallback,
+  buildHookedRequestBody,
+  CODEX_TOOL_CALL_PROVIDERS,
+  type OpenAICodexResponsesOptions,
+} from "./openai-chatgpt-responses-request.js";
+import {
   buildCodexWebSocketHeaders,
-  hasCodexWebSocketSseFallback,
   matchesCodexWebSocketAuthority,
   resolveCodexWebSocketAuthority,
   type CodexWebSocketAuthority,
@@ -96,7 +102,6 @@ import {
   isWebSocketReusable,
   isWebSocketSessionExpired,
   scheduleSessionWebSocketExpiry,
-  setOwnedWebSocketSession,
   type CachedWebSocketConnection,
   type OpenAICodexWebSocketRuntimeState,
   type RequestBody,
@@ -105,17 +110,10 @@ import {
 } from "./openai-chatgpt-responses-websocket-state.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { readOpenAIMisalignmentReview } from "./openai-provider-refusal.js";
-import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
-import {
-  resolveOpenAISimpleReasoningEffort,
-  resolveOpenAIRequestReasoning,
-  type OpenAIRequestReasoningEffort,
-} from "./openai-request-reasoning.js";
-import { resolveOpenAIResponsesTextFormat } from "./openai-response-format.js";
+import { resolveOpenAISimpleReasoningEffort } from "./openai-request-reasoning.js";
 import {
   applyResponsesServiceTierPricing,
   convertResponsesMessages,
-  convertResponsesToolPayload,
   createResponsesAssistantOutput,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -124,38 +122,17 @@ type DynamicImport = (specifier: string) => Promise<unknown>;
 
 const dynamicImport: DynamicImport = (specifier) => import(specifier);
 
-type ProcessWithOsBuiltinModule = typeof process & {
-  getBuiltinModule?: (id: "node:os") => typeof NodeOs;
-};
-
-function loadNodeOs(): typeof NodeOs | null {
-  if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
-    return null;
-  }
-  return (process as ProcessWithOsBuiltinModule).getBuiltinModule?.("node:os") ?? null;
-}
-
-// NEVER convert to top-level runtime imports - breaks browser/Vite builds
-const os = loadNodeOs();
-
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
-const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_TRANSPORT_ERROR_CODE = "ERR_WEBSOCKET_TRANSPORT";
 // Only registered server/transport-unavailability closes may authorize retry or
 // settled-turn finalization; peer policy/protocol rejections must fail closed.
-const RETRYABLE_WEBSOCKET_CLOSE_CODES = new Set([1001, 1005, 1006, 1011, 1012, 1013, 1014, 1015]);
+// A normal close (1000) before the terminal event is a dropped stream.
+const RETRYABLE_CLOSE_CODES = new Set([1000, 1001, 1005, 1006, 1011, 1012, 1013, 1014, 1015]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reached";
 const WEBSOCKET_REPLAY_REJECTION =
   "Codex error: Persisted response contains hosted-tool, compaction, or unverifiable hidden reasoning state that Rustponses cannot replay. Start a new response or use the Python Responses service for this continuation.";
 const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
-
-interface OpenAICodexResponsesOptions extends BaseOpenAIStreamOptions {
-  reasoningEffort?: OpenAIRequestReasoningEffort;
-  reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
-  serviceTier?: ResponseCreateParamsStreaming["service_tier"];
-  textVerbosity?: "low" | "medium" | "high";
-}
 
 type ObserveResponsesPromptEgress = NonNullable<
   ReturnType<typeof createResponsesPromptEgressObserver>
@@ -240,6 +217,11 @@ export const streamOpenAICodexResponses: StreamFunction<
   OpenAICodexResponsesOptions
 > = (model, context, options) => {
   const stream = new AssistantMessageEventStream();
+  const compactRequest = claimResponsesCompactRequest(options);
+  const v2Compaction =
+    compactRequest?.mode === "v2"
+      ? createResponsesV2CompactionCollector(compactRequest.replayBudget)
+      : undefined;
 
   void (async () => {
     const startedAt = Date.now();
@@ -250,6 +232,9 @@ export const streamOpenAICodexResponses: StreamFunction<
     const output = createResponsesAssistantOutput(model);
 
     try {
+      if (compactRequest && (!v2Compaction || responsesRequestLifecycle.get(options))) {
+        throw new Error("Native ChatGPT compaction requires an unreviewed V2 request");
+      }
       const unresolvedApiKey = requireApiKey(model.provider, options?.apiKey);
       // WebSocket auth has no fetch seam; unwrap immediately before request construction.
       const transportHost = getAiTransportHost();
@@ -259,14 +244,8 @@ export const streamOpenAICodexResponses: StreamFunction<
       const optionHeaders = resolveAiTransportHeaderSentinels(options?.headers);
 
       const accountId = extractOpenAICodexAccountId(apiKey);
-      const buildBody = async (replayMode: OpenAIResponsesReplayMode) => {
-        let body = buildRequestBody(model, context, options, replayMode);
-        const nextBody = await options?.onPayload?.(body, model);
-        if (nextBody !== undefined) {
-          body = nextBody as RequestBody;
-        }
-        return body;
-      };
+      const buildBody = (replayMode: OpenAIResponsesReplayMode) =>
+        buildHookedRequestBody({ model, context, options, replayMode, v2Compaction });
       let semanticAttempt: ResponsesEncryptedContentAttempt<RequestBody> = {
         kind: "initial",
         request: await buildBody("checkpoint"),
@@ -275,12 +254,10 @@ export const streamOpenAICodexResponses: StreamFunction<
         commitResponsesEncryptedContentAttempt(attempt, (checkpoint) =>
           suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
         );
-      const observePromptEgress = createResponsesPromptEgressObserver(
-        options,
-        context.systemPrompt,
-      );
+      const observePromptEgress = createResponsesPromptEgressObserver(options, context);
       // Without a session id, each WebSocket request gets independent affinity.
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
+      const stateSessionId = options?.[PROVIDER_STATE_SCOPE]?.sessionId;
       requestTimeoutMs = clampPositiveTimerTimeoutMs(options?.timeoutMs);
       requestTimeoutSignal = options?.signal;
       if (requestTimeoutMs !== undefined) {
@@ -294,21 +271,26 @@ export const streamOpenAICodexResponses: StreamFunction<
       const requestOptions =
         activeSignal === options?.signal ? options : { ...options, signal: activeSignal };
       const processStream: ProcessCodexStream = (events, streamOptions, activitySignal) =>
-        processResponsesStream(events, output, stream, model, {
-          serviceTier: streamOptions?.serviceTier,
-          firstEventTimeoutMs: getFirstStreamEventTimeoutMs(streamOptions),
-          abortFirstEventStream: firstEventAbort?.abort,
-          onFirstEventTimeout: getFirstStreamEventTimeoutHandler(streamOptions),
-          // Activity belongs to the caller signal, not the request-scoped abort composite.
-          signal: activitySignal ?? streamOptions?.signal,
-          reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
-            sessionId: streamOptions?.sessionId,
-            authProfileId: streamOptions?.authProfileId,
-          }),
-          resolveServiceTier: resolveCodexServiceTier,
-          applyServiceTierPricing: (usage, serviceTier) =>
-            applyResponsesServiceTierPricing(usage, serviceTier, model),
-        });
+        processResponsesStream(
+          v2Compaction ? v2Compaction.observe(events) : events,
+          output,
+          stream,
+          model,
+          {
+            serviceTier: streamOptions?.serviceTier,
+            firstEventTimeoutMs: getFirstStreamEventTimeoutMs(streamOptions),
+            abortFirstEventStream: firstEventAbort?.abort,
+            onFirstEventTimeout: getFirstStreamEventTimeoutHandler(streamOptions),
+            // Activity belongs to the caller signal, not the request-scoped abort composite.
+            signal: activitySignal ?? streamOptions?.signal,
+            reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+              sessionId: streamOptions?.sessionId,
+            }),
+            resolveServiceTier: resolveCodexServiceTier,
+            applyServiceTierPricing: (usage, serviceTier) =>
+              applyResponsesServiceTierPricing(usage, serviceTier, model),
+          },
+        );
       const completeStream = (
         terminal: CompletedResponse | null | undefined,
         attempt: ResponsesEncryptedContentAttempt<RequestBody>,
@@ -320,7 +302,20 @@ export const streamOpenAICodexResponses: StreamFunction<
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new ErrorType(output.errorMessage ?? "An unknown error occurred");
         }
-        if (terminal && attempt.kind === "initial") {
+        if (v2Compaction && compactRequest) {
+          const compacted = v2Compaction.finish({
+            terminal: terminal ?? undefined,
+            input: attempt.request.input ?? [],
+            model,
+            options: {
+              signal: options?.signal,
+              sessionId: options?.sessionId,
+              authProfileId: options?.authProfileId,
+            },
+          });
+          compactRequest.resolve({ ...compacted, modelUsage: output.usage });
+        }
+        if (!v2Compaction && terminal && attempt.kind === "initial") {
           recordResponsesContextUsage(
             output,
             model,
@@ -339,7 +334,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       };
       const transport = options?.transport || "auto";
       let websocketAuthority: CodexWebSocketAuthority | undefined;
-      if (!transportHost.requiresManagedTransport(model)) {
+      if (!transportHost.requiresManagedTransport(model, "fetch")) {
         try {
           websocketAuthority = resolveCodexWebSocketAuthority({
             transport,
@@ -366,14 +361,10 @@ export const streamOpenAICodexResponses: StreamFunction<
           );
         }
       }
+      // Only the writer's scope latches a fallback; without an authority no socket opens anyway.
       const websocketDisabledForSession =
         transport === "auto" &&
-        websocketAuthority !== undefined &&
-        hasCodexWebSocketSseFallback(
-          websocketState.sseFallbacks,
-          options?.sessionId,
-          websocketAuthority,
-        );
+        websocketState.sseFallbacks.get(stateSessionId ?? "") === websocketAuthority?.url;
 
       if (websocketAuthority && !websocketDisabledForSession) {
         let websocketStarted = false;
@@ -460,12 +451,8 @@ export const streamOpenAICodexResponses: StreamFunction<
                   .byteLength,
               }),
             );
-            if (transport === "auto" && options?.sessionId) {
-              addCodexWebSocketSseFallback(
-                websocketState.sseFallbacks,
-                options.sessionId,
-                websocketAuthority,
-              );
+            if (transport === "auto" && stateSessionId) {
+              websocketState.sseFallbacks.set(stateSessionId, websocketAuthority.url);
             }
             if (websocketStarted || transport !== "auto") {
               throw transportError;
@@ -505,21 +492,19 @@ export const streamOpenAICodexResponses: StreamFunction<
 
         let attemptResponse: Response;
         try {
+          const requestFetch = buildManagedModelFetch(model, transportHost) ?? fetch;
           const lifecycle = responsesRequestLifecycle.get(options);
           if (lifecycle) {
             await lifecycle.beforeDispatch(activeSignal);
             activeSignal?.throwIfAborted();
             lifecycle.assertCurrent();
           }
-          attemptResponse = await (buildManagedModelFetch(model, transportHost) ?? fetch)(
-            resolveCodexUrl(model.baseUrl),
-            {
-              method: "POST",
-              headers: sseHeaders,
-              body: sseBody,
-              signal: activeSignal,
-            },
-          );
+          attemptResponse = await requestFetch(resolveCodexUrl(model.baseUrl), {
+            method: "POST",
+            headers: sseHeaders,
+            body: sseBody,
+            signal: activeSignal,
+          });
         } catch (error) {
           if (error instanceof Error) {
             if (
@@ -616,10 +601,7 @@ export const streamOpenAICodexResponses: StreamFunction<
         requestTimedOut && requestTimeoutMs !== undefined
           ? formatRequestTimeoutError(requestTimeoutMs, error)
           : error;
-      for (const block of output.content) {
-        // partialJson is only a streaming scratch buffer; never persist it.
-        delete (block as { partialJson?: string }).partialJson;
-      }
+      compactRequest?.reject(normalizedError);
       const providerRefusal = readCodexProviderRefusal(normalizedError);
       if (providerRefusal) {
         appendAssistantMessageDiagnostic(output, {
@@ -668,6 +650,7 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
       ?.authProfileId,
     reasoningEffort: resolveOpenAISimpleReasoningEffort(model, options?.reasoning),
   } satisfies OpenAICodexResponsesOptions;
+  copyResponsesCompactRequest(options, resolvedOptions);
   responsesPromptObserver.copy(options, resolvedOptions);
   const lifecycle = responsesRequestLifecycle.get(options);
   if (lifecycle) {
@@ -675,74 +658,6 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
   }
   return streamOpenAICodexResponses(model, context, resolvedOptions);
 };
-
-function buildRequestBody(
-  model: Model<"openai-chatgpt-responses">,
-  context: Context,
-  options?: OpenAICodexResponsesOptions,
-  replayMode: OpenAIResponsesReplayMode = "checkpoint",
-): RequestBody {
-  const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
-    includeSystemPrompt: false,
-    replayResponsesItemIds: false,
-    sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
-    replayMode,
-  });
-
-  const body: RequestBody = {
-    model: model.id,
-    store: false,
-    stream: true,
-    instructions:
-      stripSystemPromptCacheBoundary(context.systemPrompt ?? "") || "You are a helpful assistant.",
-    input: messages,
-    text: { verbosity: options?.textVerbosity || "low" },
-    include: ["reasoning.encrypted_content"],
-    prompt_cache_key:
-      options?.cacheRetention === "none"
-        ? undefined
-        : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-  };
-
-  if (options?.responseFormat !== undefined) {
-    body.text = {
-      ...body.text,
-      format: resolveOpenAIResponsesTextFormat(options.responseFormat),
-    };
-  }
-
-  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
-    body.temperature = options.temperature;
-  }
-
-  if (options?.serviceTier !== undefined) {
-    body.service_tier = options.serviceTier;
-  }
-
-  if (context.tools) {
-    // Explicit false prevents the backend from normalizing optional properties into required ones.
-    const tools = convertResponsesToolPayload(context.tools, { strict: false });
-    if (tools.length > 0) {
-      body.tools = tools;
-      body.tool_choice = "auto";
-      body.parallel_tool_calls = true;
-    }
-  }
-
-  const effort =
-    options?.reasoningEffort === undefined
-      ? undefined
-      : resolveOpenAIRequestReasoning(model, options.reasoningEffort).effort;
-  if (effort !== undefined) {
-    body.reasoning = {
-      effort,
-      ...(effort === "none" ? {} : { summary: options?.reasoningSummary ?? "auto" }),
-    };
-  }
-
-  return body;
-}
 
 function resolveCodexServiceTier(
   responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
@@ -891,10 +806,10 @@ function createWebSocketTransportError(message: string, cause?: Error): Error {
 }
 
 async function connectWebSocket(
-  url: string,
-  headers: Headers,
+  authority: CodexWebSocketAuthority,
   signal?: AbortSignal,
 ): Promise<WebSocketLike> {
+  const { url, headers, transportHost } = authority;
   const WebSocketCtor = await getWebSocketConstructor();
   if (!WebSocketCtor) {
     throw new Error("WebSocket transport is not available in this runtime");
@@ -908,7 +823,10 @@ async function connectWebSocket(
     let socket: WebSocketLike;
 
     try {
-      socket = new WebSocketCtor(url, { headers: wsHeaders });
+      // The cached socket outlives the turn; its native resources must not retain that turn.
+      socket = transportHost.runInDetachedAsyncContext(
+        () => new WebSocketCtor(url, { headers: wsHeaders }),
+      );
     } catch (error) {
       reject(error instanceof Error ? error : new Error(String(error)));
       return;
@@ -963,7 +881,6 @@ async function acquireWebSocket(
   entry?: CachedWebSocketConnection;
   release: (options?: { keep?: boolean }) => void;
 }> {
-  const { url, headers } = authority;
   const lease = (socket: WebSocketLike, entry?: CachedWebSocketConnection) => ({
     socket,
     entry,
@@ -983,12 +900,10 @@ async function acquireWebSocket(
     },
   });
   if (!sessionId) {
-    return lease(await connectWebSocket(url, headers, signal));
+    return lease(await connectWebSocket(authority, signal));
   }
 
   const cached = state.sessionCache.get(sessionId);
-  // Update the expected lease after our own cleanup before awaiting a new connection.
-  let expectedCacheValue: CachedWebSocketConnection | undefined = cached;
   if (cached) {
     if (cached.idleTimer) {
       clearTimeout(cached.idleTimer);
@@ -997,36 +912,36 @@ async function acquireWebSocket(
     if (!cached.busy && !matchesCodexWebSocketAuthority(cached.authority, authority)) {
       closeWebSocketSilently(cached.socket, 1000, "authority_changed");
       deleteOwnedWebSocketSession(state, sessionId, cached);
-      expectedCacheValue = undefined;
     } else if (!cached.busy && isWebSocketSessionExpired(cached)) {
       closeWebSocketSilently(cached.socket, 1000, "connection_age_limit");
       deleteOwnedWebSocketSession(state, sessionId, cached);
-      expectedCacheValue = undefined;
     } else if (!cached.busy && isWebSocketReusable(cached.socket)) {
       cached.busy = true;
       return lease(cached.socket, cached);
     }
     if (cached.busy) {
-      return lease(await connectWebSocket(url, headers, signal));
+      return lease(await connectWebSocket(authority, signal));
     }
 
     if (!isWebSocketReusable(cached.socket)) {
       closeWebSocketSilently(cached.socket);
       deleteOwnedWebSocketSession(state, sessionId, cached);
-      expectedCacheValue = undefined;
     }
   }
 
-  const socket = await connectWebSocket(url, headers, signal);
+  const socket = await connectWebSocket(authority, signal);
+  // A concurrent winner keeps the cache; this socket then remains transient.
+  if (state.sessionCache.has(sessionId)) {
+    return lease(socket);
+  }
   const entry: CachedWebSocketConnection = {
     socket,
     authority,
     busy: true,
     createdAt: Date.now(),
   };
-  // A concurrent winner keeps the cache; this socket then remains transient.
-  const ownsCache = setOwnedWebSocketSession(state, sessionId, entry, expectedCacheValue);
-  return lease(socket, ownsCache ? entry : undefined);
+  state.sessionCache.set(sessionId, entry);
+  return lease(socket, entry);
 }
 
 function extractWebSocketError(event: unknown): Error {
@@ -1060,7 +975,7 @@ function extractWebSocketCloseError(event: unknown): Error {
     }
     const message = `WebSocket closed${codeText}${reasonText}`;
     const error =
-      typeof code === "number" && RETRYABLE_WEBSOCKET_CLOSE_CODES.has(code)
+      typeof code === "number" && RETRYABLE_CLOSE_CODES.has(code)
         ? createWebSocketTransportError(message)
         : Object.assign(new Error(message), { code: WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE });
     return Object.assign(error, {
@@ -1234,7 +1149,7 @@ async function processWebSocketStream(
   const { socket, entry, release } = await acquireWebSocket(
     state,
     authority,
-    options?.sessionId,
+    options?.[PROVIDER_STATE_SCOPE]?.sessionId,
     options?.signal,
   );
   let keepConnection = true;
@@ -1295,7 +1210,6 @@ async function processWebSocketStream(
           includeSystemPrompt: false,
           replayResponsesItemIds: false,
           sessionId: options?.sessionId,
-          authProfileId: options?.authProfileId,
         },
       ).filter((item) => item.type !== "function_call_output");
       entry.continuation = {
@@ -1362,7 +1276,7 @@ async function readChatGptResponsesErrorTextLimited(
     signal?.removeEventListener("abort", onAbort);
     if (!completed) {
       // This provider module is browser-safe, so keep error-body cleanup on Web APIs.
-      await cancel();
+      void cancel();
     }
     try {
       reader.releaseLock();
@@ -1442,29 +1356,9 @@ function createCodexRequestId(): string {
   throw new Error("Secure random request id generation is unavailable");
 }
 
-function buildBaseCodexHeaders(
-  initHeaders: Record<string, string> | undefined,
-  additionalHeaders: Record<string, string> | undefined,
-  accountId: string,
-  token: string,
-): Headers {
-  const headers = new Headers(initHeaders);
-  for (const [key, value] of Object.entries(additionalHeaders || {})) {
-    headers.set(key, value);
-  }
-  headers.set("Authorization", `Bearer ${token}`);
-  headers.set("chatgpt-account-id", accountId);
-  headers.set("originator", "openclaw");
-  const userAgent = os
-    ? `openclaw (${os.platform()} ${os.release()}; ${os.arch()})`
-    : "openclaw (browser)";
-  headers.set("User-Agent", userAgent);
-  return headers;
-}
-
 function buildSSEHeaders(
-  initHeaders: Record<string, string> | undefined,
-  additionalHeaders: Record<string, string> | undefined,
+  initHeaders: ModelRequestHeaders | undefined,
+  additionalHeaders: ModelRequestHeaders | undefined,
   accountId: string,
   token: string,
   sessionId?: string,

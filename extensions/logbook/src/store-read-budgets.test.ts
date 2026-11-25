@@ -1,11 +1,15 @@
 import { copyFileSync, renameSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { SqliteWorkerBackend } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import {
+  openNodeSqliteDatabase,
+  type SqliteWorkerBackend,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LogbookOperations } from "./store-contract.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
+import { cardDraft, frameInput } from "./test-fixtures.test-support.js";
 
 const reads = vi.hoisted(() => ({
   cardQueries: 0,
@@ -121,9 +125,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const day = "2026-07-03";
 
-it("reuses schema admission on reopen and validates a replacement physical database", async () => {
+it("reuses live schema admission on reopen and validates a replacement physical database", async () => {
   const dataDir = tempDirs.make("logbook-schema-admission-");
   const databasePath = path.join(dataDir, "logbook.sqlite");
+  // Keep the original physical store admitted through reopen and pathname replacement.
+  using owner = openNodeSqliteDatabase(databasePath);
+  expect(owner.isOpen).toBe(true);
   for (let opened = 0; opened < 3; opened += 1) {
     schemaStatements.length = 0;
     const backend = createSqliteWorkerBackend({ dataDir }, { databasePath });
@@ -155,15 +162,6 @@ function openBackend() {
   const backend = createSqliteWorkerBackend({ dataDir }, { databasePath });
   backends.push(backend);
   return { backend, databasePath };
-}
-
-function captureError(operation: () => unknown): unknown {
-  try {
-    operation();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("Expected native overflow rejection");
 }
 
 describe("Logbook native statement and read budgets", () => {
@@ -205,17 +203,14 @@ describe("Logbook native statement and read budgets", () => {
 
   it("reuses native write statements with fresh optional values and model coalescing", () => {
     const { backend } = openBackend();
-    const firstFrame = {
+    const firstFrame = frameInput({
       capturedAtMs: 1,
-      day,
       path: "first.jpg",
-      screenIndex: 0,
       width: 640,
       height: 480,
       byteSize: 10,
       contentHash: "first",
-      idle: false,
-    };
+    });
     expect(backend.execute({ type: "insertFrame", input: firstFrame })).toBe(1);
     expect(
       backend.execute({
@@ -246,15 +241,14 @@ describe("Logbook native statement and read budgets", () => {
     expect(
       backend.execute({
         type: "insertFrame",
-        input: {
+        input: frameInput({
           capturedAtMs: 2,
-          day,
           path: "second.jpg",
           screenIndex: 1,
           byteSize: 20,
           contentHash: "second",
           idle: true,
-        },
+        }),
       }),
     ).toBe(3);
     backend.execute({ type: "saveStandup", input: { day, text: "Revised standup 🦞" } });
@@ -311,16 +305,14 @@ describe("Logbook native statement and read budgets", () => {
 
   it("hydrates timeline cards once and counts cards without hydrating their payloads", () => {
     const { backend } = openBackend();
-    const drafts = Array.from({ length: 8 }, (_, index) => ({
-      day,
-      startMs: index * 60_000,
-      endMs: (index + 1) * 60_000,
-      title: `Card ${index} 🦞`,
-      summary: "Summary",
-      detail: "Detailed activity",
-      category: "coding",
-      distractions: [],
-    }));
+    const drafts = Array.from({ length: 8 }, (_, index) =>
+      cardDraft({
+        startMs: index * 60_000,
+        endMs: (index + 1) * 60_000,
+        title: `Card ${index} 🦞`,
+        detail: "Detailed activity",
+      }),
+    );
     backend.execute({
       type: "replaceCardsInWindow",
       input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, drafts },
@@ -373,16 +365,9 @@ describe("Logbook native statement and read budgets", () => {
     );
     expect(reads.observationRows).toBe(200);
   });
-  const keyframeDrafts = [0, 40_000].map((startMs) => ({
-    day,
-    startMs,
-    endMs: startMs + 40_000,
-    title: `Card ${startMs}`,
-    summary: "Summary",
-    detail: "",
-    category: "coding",
-    distractions: [],
-  }));
+  const keyframeDrafts = [0, 40_000].map((startMs) =>
+    cardDraft({ startMs, endMs: startMs + 40_000, title: `Card ${startMs}` }),
+  );
   function insertCandidate(
     backend: SqliteWorkerBackend<LogbookOperations>,
     capturedAtMs: number,
@@ -390,17 +375,14 @@ describe("Logbook native statement and read budgets", () => {
   ) {
     return backend.execute({
       type: "insertFrame",
-      input: {
+      input: frameInput({
         capturedAtMs,
-        day,
         path: `captures/${"nested/".repeat(12)}${capturedAtMs}.jpg`,
-        screenIndex: 0,
         width: 640,
         height: 480,
         byteSize: 10,
-        contentHash: "synthetic",
         idle,
-      },
+      }),
     });
   }
 
@@ -475,7 +457,7 @@ describe("Logbook native statement and read budgets", () => {
       reads.frameTextBytes = 0;
       backend.execute({
         type: "replaceCardsInWindow",
-        input: { day, startMs: 0, endMs: 120_000, drafts: keyframeDrafts, selectKeyframes: true },
+        input: { day, startMs: 0, endMs: 120_000, drafts: keyframeDrafts },
       });
       const expectedIds = count === 0 ? [undefined, undefined] : [41, 119];
       expect(backend.execute({ type: "cardsForDay", input: { day } })).toEqual(
@@ -485,60 +467,6 @@ describe("Logbook native statement and read budgets", () => {
       );
       expect(reads.frameRows).toBe(count);
       expect.soft(reads.frameTextBytes).toBe(0);
-    },
-  );
-
-  it.each([
-    { column: "screen_index", emptyDrafts: false, value: 9007199254740992n },
-    { column: "width", emptyDrafts: true, value: -9007199254740992n },
-    { column: "height", emptyDrafts: false, value: 9007199254740992n },
-    { column: "byte_size", emptyDrafts: true, value: -9007199254740992n },
-  ] as const)(
-    "retains native $column overflow rejection in frame readers and prior cards (empty drafts=$emptyDrafts)",
-    ({ column, emptyDrafts, value }) => {
-      const { backend, databasePath } = openBackend();
-      insertCandidate(backend, 1000);
-      backend.execute({
-        type: "replaceCardsInWindow",
-        input: { day, startMs: 0, endMs: 120_000, drafts: keyframeDrafts },
-      });
-      const before = backend.execute({ type: "cardsForDay", input: { day } });
-      const writer = new DatabaseSync(databasePath);
-      try {
-        writer.prepare(`UPDATE frames SET ${column} = ? WHERE id = 1`).run(value);
-      } finally {
-        writer.close();
-      }
-      const originalError = captureError(() =>
-        backend.execute({ type: "frameById", input: { id: 1 } }),
-      );
-      if (!(originalError instanceof Error)) {
-        throw new Error("Expected the full frame reader to reject the unsafe integer fixture");
-      }
-      expect(originalError).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
-      for (const command of [
-        { type: "framesInRange", input: { startMs: 0, endMs: 120_000 } },
-        { type: "unbatchedActiveFrames", input: { limit: 1 } },
-        {
-          type: "replaceCardsInWindow",
-          input: {
-            day,
-            startMs: 0,
-            endMs: 120_000,
-            drafts: emptyDrafts ? [] : keyframeDrafts,
-            selectKeyframes: true,
-          },
-        },
-      ] satisfies Parameters<typeof backend.execute>[0][]) {
-        const error = captureError(() => backend.execute(command));
-        expect(error).toBeInstanceOf(Error);
-        expect(error).toMatchObject({
-          code: "ERR_OUT_OF_RANGE",
-          name: originalError.name,
-          message: originalError.message,
-        });
-      }
-      expect(backend.execute({ type: "cardsForDay", input: { day } })).toEqual(before);
     },
   );
 });

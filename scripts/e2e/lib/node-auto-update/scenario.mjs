@@ -12,6 +12,8 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { createBuildSmokeEnv } from "../../../lib/build-smoke-env.mts";
+import { resolveNpmJsonEntries } from "../../../lib/npm-json-output.mts";
 import { stopProcessGroup } from "../stop-process-group.mjs";
 import { packNodeUpdateFixture } from "./package-fixtures.mjs";
 import { createNodeUpdateProofPlugin } from "./proof-plugin.mjs";
@@ -221,13 +223,10 @@ function writeConfig(name, value) {
   fs.mkdirSync(state, { recursive: true });
   const config = path.join(state, "openclaw.json");
   fs.writeFileSync(config, `${JSON.stringify(value, null, 2)}\n`);
-  return {
+  return createBuildSmokeEnv(home, {
     ...cleanEnv,
     OPENCLAW_DEBUG: "1",
-    HOME: home,
-    OPENCLAW_STATE_DIR: state,
-    OPENCLAW_CONFIG_PATH: config,
-  };
+  });
 }
 
 async function startNode(name, registryUrl, options = {}) {
@@ -675,9 +674,18 @@ try {
   const defaultPlugins = await startNode("node-default-plugins", proxyUrl, {
     defaultPlugins: true,
   });
+  const defaultRuntimeSelector = path.join(
+    defaultPlugins.env.OPENCLAW_STATE_DIR,
+    "node-runtime/current",
+  );
   const defaultUpdated = await waitFor(
     "default-plugin node activates while idle",
-    () => nodeRow(defaultPlugins.name, versions[0]),
+    async () => {
+      const row = await nodeRow(defaultPlugins.name, versions[0]);
+      return row && fs.readlinkSync(defaultRuntimeSelector).includes(`${versions[0]}-`)
+        ? row
+        : null;
+    },
     900_000,
     () => readNodeUpdateFailure(defaultPlugins.logPath),
   );
@@ -686,11 +694,7 @@ try {
     await cli("default-plugins-identity-after-update", ["node", "identity"], defaultPlugins.env),
     defaultPlugins.identity,
   );
-  assert(
-    fs
-      .readlinkSync(path.join(defaultPlugins.env.OPENCLAW_STATE_DIR, "node-runtime/current"))
-      .includes(`${versions[0]}-`),
-  );
+  assert(fs.readlinkSync(defaultRuntimeSelector).includes(`${versions[0]}-`));
   record("default-plugins-idle-activation", {
     before: defaultPlugins.row.version,
     after: defaultUpdated.version,
@@ -825,14 +829,19 @@ try {
     PATH: `${publishedPrefix}/bin:${cleanEnv.PATH}`,
     OPENCLAW_ALLOW_ROOT: "1",
   });
-  const publishedIdentity = jsonOutput(
-    await command(
-      "published-driver-registry-identity",
-      "npm",
-      ["view", `openclaw@${publishedVersion}`, "version", "dist", "--json"],
-      publishedEnv,
+  const publishedIdentities = resolveNpmJsonEntries(
+    jsonOutput(
+      await command(
+        "published-driver-registry-identity",
+        "npm",
+        ["view", `openclaw@${publishedVersion}`, "version", "dist", "--json"],
+        publishedEnv,
+      ),
     ),
   );
+  assert.equal(publishedIdentities.length, 1);
+  const publishedIdentity = publishedIdentities[0];
+  assert(publishedIdentity && typeof publishedIdentity === "object");
   assert.equal(publishedIdentity.version, publishedVersion);
   assert(publishedIdentity.dist.integrity);
   await command(

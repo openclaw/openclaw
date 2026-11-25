@@ -1,8 +1,11 @@
-import type { BuildSessionEntryOptions } from "../../../packages/memory-host-sdk/src/host/session-files.js";
+import type { SessionEntryRenderedPage } from "../../../packages/memory-host-sdk/src/host/session-entry-render.js";
+import type {
+  BuildSessionEntryOptions,
+  SessionEntrySummary,
+} from "../../../packages/memory-host-sdk/src/host/session-files.js";
+import type { SessionResetRecallCutoff } from "../../../packages/memory-host-sdk/src/host/session-reset-recall.js";
 import type { BoardReadOperations } from "../../boards/sqlite-board-operations.js";
-import type { SessionCostUsageCacheRead } from "../../infra/session-cost-usage-cache-read.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
-import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { VoiceSessionLookup } from "../../talk/client-voice-session-store.js";
@@ -20,12 +23,33 @@ import type {
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type {
+  SessionEntryCurrentFacts,
+  SessionEntryCurrentSource,
+} from "./session-entry-current.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import type { SessionEntryReadWorkerInput } from "./session-entry-read.types.js";
+import type {
   SessionModelContextLimits,
   SessionTranscriptEventMatch,
+  SessionTranscriptMatchCaller,
+  SessionTranscriptMatchDiagnostics,
 } from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
+import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
+import type { SessionTranscriptReplaySelection } from "./session-transcript-replay.types.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+
+export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
+  kind: "session-entry-current";
+  source?: SessionEntryCurrentSource;
+};
+
+export type SessionEntryCurrentWorkerResult = {
+  kind: "session-entry-current";
+  entry: SessionEntryCurrentFacts | undefined;
+  source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
+};
 
 type BoardReadWorkerInput<Kind extends string, Operation extends keyof BoardReadOperations> = {
   kind: Kind;
@@ -58,6 +82,8 @@ export type SessionArchivedEvictionCandidatesWorkerInput = Omit<
 export type SessionTranscriptEventMatchRequest = {
   target: ResolvedTranscriptReadScope;
   match: SessionTranscriptEventMatch;
+  caller?: SessionTranscriptMatchCaller;
+  diagnostics?: SessionTranscriptMatchDiagnostics;
 };
 
 export type SessionTranscriptMatchWorkerInput = {
@@ -84,6 +110,7 @@ export type SessionTranscriptAnchorsWorkerInput = {
   database: { agentId: string; path: string };
   resolved: ResolvedTranscriptScope;
   selection: SessionTranscriptAnchorSelection;
+  preparedEntry?: SessionTranscriptAnchorEntry;
   expectedIdentity: DatabaseFileIdentity;
 };
 
@@ -117,6 +144,13 @@ export type SessionTranscriptMessagePresenceWorkerInput = Omit<
   kind: "transcript-message-presence";
 };
 
+export type SessionTranscriptStatsWorkerInput = Omit<
+  SessionTranscriptWatermarkWorkerInput,
+  "kind"
+> & {
+  kind: "transcript-stats";
+};
+
 export type SessionTranscriptDeltaWorkerInput = Omit<
   SessionTranscriptWatermarkWorkerInput,
   "kind"
@@ -126,6 +160,7 @@ export type SessionTranscriptDeltaWorkerInput = Omit<
 } & (
     | { kind: "transcript-raw-delta"; limits: SessionTranscriptRawDeltaLimits }
     | { kind: "transcript-visible-delta"; limits: SessionTranscriptVisibleMessageDeltaLimits }
+    | { kind: "transcript-replay-groups"; selection: SessionTranscriptReplaySelection }
   );
 
 export type SessionTranscriptLatestAssistantWorkerInput = Omit<
@@ -154,13 +189,6 @@ export type VoiceSessionsWorkerInput = {
   env: NodeJS.ProcessEnv;
 };
 
-export type SessionUsageCacheWorkerInput = {
-  kind: "usage-cache";
-  database: { agentId: string; path: string };
-  request: SessionCostUsageCacheRead;
-  env: NodeJS.ProcessEnv;
-};
-
 export type SessionSqliteTargetWorkerInput = {
   kind: "sqlite-target";
   storePath: string;
@@ -181,14 +209,34 @@ export type SessionResetRecallWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
-export type SessionEntryWorkerInput = {
-  kind: "session-entry";
-  absPath: string;
-  options: Omit<BuildSessionEntryOptions, "onTranscriptMessage" | "parseYieldEveryLines"> & {
-    agentId: string;
-    sessionId: string;
-    storePath: string;
-  };
-  admission?: UserTurnTranscriptAdmissionReceipt;
-  redaction: SensitiveTextRedactionSnapshot;
+export type SessionEntriesWorkerInput = {
+  kind: "session-entries";
+  entries: {
+    absPath: string;
+    options: Omit<BuildSessionEntryOptions, "onTranscriptMessage"> & {
+      agentId: string;
+      sessionId: string;
+      storePath: string;
+    };
+    admission?: UserTurnTranscriptAdmissionReceipt;
+    /** Deliver rendered pages; otherwise only the summary returns. */
+    pages: boolean;
+    /** Deliver each observed original message with the pages. */
+    messages: boolean;
+    prefixLineCount?: number;
+  }[];
 };
+
+/** The worker's acknowledged deliveries, in order, for one requested entry. */
+export type SessionEntriesWorkerUpdate =
+  | { page: SessionEntryRenderedPage }
+  | {
+      reset: true;
+      /** Source restarts discard observations; late classification only discards rendered text. */
+      resetMessages?: true;
+    }
+  | {
+      value:
+        | { summary: SessionEntrySummary | null; resetRecallCutoff: SessionResetRecallCutoff }
+        | { cold: true };
+    };

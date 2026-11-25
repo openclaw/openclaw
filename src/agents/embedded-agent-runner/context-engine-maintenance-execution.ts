@@ -5,17 +5,22 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
   ContextEngine,
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
 } from "../../context-engine/types.js";
-import { SessionManager } from "../sessions/index.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import type { ContextEngineMaintenanceParams } from "./context-engine-maintenance.types.js";
 import { log } from "./logger.js";
+import {
+  attachCompactionAccountingRecorder,
+  readCompactionAccountingRecorder,
+} from "./run/compaction-accounting-bridge.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
 function buildContextEngineMaintenanceRuntimeContext(
@@ -23,7 +28,8 @@ function buildContextEngineMaintenanceRuntimeContext(
     allowDeferredCompactionExecution?: boolean;
   },
 ): ContextEngineRuntimeContext {
-  return {
+  const { abortSignal, assertActive } = params;
+  const runtimeContext = {
     ...params.runtimeContext,
     ...resolveContextEngineCapabilities({
       config: params.config,
@@ -36,7 +42,7 @@ function buildContextEngineMaintenanceRuntimeContext(
     ...(params.sessionTarget ? { sessionTarget: params.sessionTarget } : {}),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
-      params.assertActive?.();
+      assertActive?.();
       const runtimeAgentId = params.sessionTarget?.agentId ?? params.agentId;
       const runtimeSessionKey = normalizeOptionalString(
         params.sessionTarget?.sessionKey ?? params.sessionKey,
@@ -63,15 +69,22 @@ function buildContextEngineMaintenanceRuntimeContext(
           });
           const { restoreSessionColdTranscript } =
             await import("../../config/sessions/session-cold-storage.js");
-          await restoreSessionColdTranscript({ ...runtimeTarget });
-          params.assertActive?.();
-          sessionManager = await SessionManager.openAsync(runtimeTarget);
-          params.assertActive?.();
+          await restoreSessionColdTranscript(
+            runtimeTarget,
+            assertActive,
+            undefined,
+            undefined,
+            abortSignal,
+          );
+          const target = runtimeTarget;
+          sessionManager = await withSessionTranscriptHydrationCaller("maintenance", () =>
+            SessionManager.openAsync(target, undefined, undefined, abortSignal),
+          );
         }
         const manager = sessionManager;
         return await withSessionManagerWrite(manager, () => {
-          params.abortSignal?.throwIfAborted();
-          params.assertActive?.();
+          abortSignal?.throwIfAborted();
+          assertActive?.();
           return rewriteTranscriptEntriesInSessionManager({
             sessionManager: manager,
             replacements: request.replacements,
@@ -81,14 +94,17 @@ function buildContextEngineMaintenanceRuntimeContext(
       const result = await (params.withSessionManagerRewriteLock
         ? params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
         : rewriteSessionManagerEntries());
-      params.assertActive?.();
       if (result.changed && runtimeTarget) {
         await publishTranscriptUpdate(runtimeTarget);
-        params.assertActive?.();
       }
       return result;
     },
-  };
+  } satisfies ContextEngineRuntimeContext;
+  const source = readCompactionAccountingRecorder(params.runtimeContext);
+  if (source) {
+    attachCompactionAccountingRecorder(runtimeContext, source);
+  }
+  return runtimeContext;
 }
 
 export async function executeContextEngineMaintenance(
@@ -117,8 +133,6 @@ export async function executeContextEngineMaintenance(
     }),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
   });
-  params.abortSignal?.throwIfAborted();
-  params.assertActive?.();
   if (result.changed) {
     log.info(
       `[context-engine] maintenance(${params.reason}) changed transcript ` +

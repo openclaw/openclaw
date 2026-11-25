@@ -2,8 +2,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
+
+/** Normalize launcher paths for platform-aware identity comparison. */
+export function normalizeServicePathForCompare(
+  value: string | undefined,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return platform === "win32" ? path.win32.resolve(trimmed).toLowerCase() : path.resolve(trimmed);
+}
 
 export function normalizeServicePathEntry(entry: string, platform: NodeJS.Platform): string {
   const pathModule = platform === "win32" ? path.win32 : path.posix;

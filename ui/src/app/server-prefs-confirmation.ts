@@ -1,10 +1,11 @@
 // Confirmed snapshot operations run only in the existing async read/write reconciliation boundary.
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { generateUUID } from "../lib/uuid.ts";
-import type { ServerUiPrefs, SyncedPrefKey } from "./server-prefs-state.ts";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ServerUiPrefs } from "./server-prefs-state.ts";
 import {
   LAST_SEEN_KEY,
   parseStoredPrefs,
+  serializeStoredPrefs,
   readStorageState,
   writeStorage,
 } from "./server-prefs-storage.ts";
@@ -12,7 +13,6 @@ import type { ConfirmedPrefsFallback } from "./server-prefs-sync-contract.ts";
 
 type ConfirmationOwner = { confirmedPrefsFallback: ConfirmedPrefsFallback | null };
 
-/** LAST_SEEN's snapshot and per-key publication identities share one atomic browser record. */
 export function readConfirmedPrefs(owner: ConfirmationOwner, scope: string): ServerUiPrefs | null {
   const stored = readStorageState(LAST_SEEN_KEY, scope);
   const fallback = owner.confirmedPrefsFallback;
@@ -23,16 +23,6 @@ export function readConfirmedPrefs(owner: ConfirmationOwner, scope: string): Ser
     return fallback.prefs;
   }
   const prefs = parseStoredPrefs(stored.value);
-  if (prefs?.navigationConfirmation) {
-    const receipts = asRecord(prefs.navigationConfirmation);
-    prefs.navigationConfirmation = Object.fromEntries(
-      ["sidebarEntries", "navigationScope"].flatMap((key) =>
-        typeof receipts?.[key] === "string" && receipts[key].length <= 64
-          ? [[key, receipts[key]]]
-          : [],
-      ),
-    );
-  }
   owner.confirmedPrefsFallback = { scope, raw: stored.value, prefs, dirty: false };
   return prefs;
 }
@@ -41,31 +31,22 @@ export function publishConfirmedPrefs(
   owner: ConfirmationOwner,
   scope: string,
   prefs: ServerUiPrefs,
-  confirmedKeys: readonly SyncedPrefKey[] = [],
 ): void {
-  const previous = readConfirmedPrefs(owner, scope);
-  const navigationConfirmation = { ...previous?.navigationConfirmation };
-  const confirmedNavigation = confirmedKeys.filter(
-    (key) => key === "sidebarEntries" || key === "navigationScope",
+  // On rollback, older clients compare this baseline with the server before restoring
+  // browser-only sections. A missing baseline looks like a change and clears their layout.
+  const previous = owner.confirmedPrefsFallback;
+  const retiredSections =
+    previous?.scope === scope && previous.raw
+      ? asNullableRecord(safeParseJson(previous.raw))?.personalSessionGroups
+      : undefined;
+  const raw = serializeStoredPrefs(
+    retiredSections === undefined ? prefs : { ...prefs, personalSessionGroups: retiredSections },
   );
-  const receipt = confirmedNavigation.length ? generateUUID() : undefined;
-  for (const key of ["sidebarEntries", "navigationScope"] as const) {
-    if (!Object.hasOwn(prefs, key)) {
-      delete navigationConfirmation[key];
-    } else if (confirmedNavigation.includes(key)) {
-      navigationConfirmation[key] = receipt;
-    }
-  }
-  const next: ServerUiPrefs = { ...prefs, navigationConfirmation };
-  if (!Object.keys(navigationConfirmation).length) {
-    delete next.navigationConfirmation;
-  }
-  const raw = JSON.stringify(next);
   const persisted = writeStorage(LAST_SEEN_KEY, scope, raw);
   owner.confirmedPrefsFallback = {
     scope,
     raw: persisted ? raw : (owner.confirmedPrefsFallback?.raw ?? null),
-    prefs: next,
+    prefs,
     dirty: !persisted,
   };
 }

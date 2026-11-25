@@ -60,7 +60,7 @@ OAuth TLS prerequisites, and route cleanup.
     If you previously added legacy OpenAI transport settings under `models.providers.openai-codex`, they can shadow the built-in Codex OAuth provider path. Doctor warns when it sees those old transport settings alongside Codex OAuth so you can remove or rewrite the stale transport override and restore current routing behavior. Custom proxies and header-only overrides remain supported and do not trigger this warning, but those authored request routes are not eligible for implicit Codex selection.
   </Accordion>
   <Accordion title="2f. Codex route repair">
-    Doctor checks for legacy `openai-codex/*` model refs. Native Codex harness routing uses canonical `openai/*` model refs, but the prefix alone never selects Codex. With runtime policy unset or `auto`, only an exact official HTTPS Platform Responses or ChatGPT Responses route with no authored request override is eligible. See [OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
+    Doctor checks for legacy `openai-codex/*` model refs. Native Codex harness routing uses standard `openai/*` model refs, but the prefix alone never selects Codex. With runtime policy unset or `auto`, only an exact official HTTPS Platform Responses or ChatGPT Responses route with no authored request override is eligible. See [OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
 
     In `--fix` / `--repair` mode, doctor rewrites affected default-agent and per-agent refs, including primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale persisted session route state:
 
@@ -68,7 +68,7 @@ OAuth TLS prerequisites, and route cleanup.
     - Codex intent moves to provider/model-scoped `agentRuntime.id: "codex"` entries for repaired agent model refs.
     - Stale persisted session runtime pins are removed because runtime selection is provider/model-scoped.
     - Existing provider/model runtime policy is preserved unless the repaired legacy model ref needs Codex routing to keep the old auth path.
-    - Existing model fallback lists are preserved with their legacy entries rewritten; copied per-model settings move from the legacy key to the canonical `openai/*` key.
+    - Existing model fallback lists are preserved with their legacy entries rewritten; copied per-model settings move from the legacy key to the current `openai/*` key.
     - Persisted session `modelProvider`/`providerOverride`, `model`/`modelOverride`, fallback notices, and auth-profile pins are repaired across all discovered agent session stores.
     - Doctor separately repairs stale `agentRuntime.id: "codex-cli"` pins (a distinct legacy runtime id) to `"codex"` across `agents.defaults`, `agents.entries.*`, and `models.providers.*` model entries.
     - `/codex ...` means "control or bind a native Codex conversation from chat."

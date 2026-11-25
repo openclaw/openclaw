@@ -7,7 +7,7 @@ import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
-import { attachSessionEntrySnapshots } from "./session-entry-snapshots.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";

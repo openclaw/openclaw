@@ -1,22 +1,9 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, vi } from "vitest";
+import { afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
-const requireModule = createRequire(import.meta.url);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-export function mockChannelPluginModuleLoader(): void {
-  vi.doMock("./module-loader.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./module-loader.js")>();
-    return {
-      ...actual,
-      loadChannelPluginModule: ({ modulePath }: { modulePath: string }) =>
-        requireModule(modulePath),
-    };
-  });
-}
 
 export function makeBundledEsmFixtureRoot(prefix: string): string {
   const root = tempDirs.make(prefix);

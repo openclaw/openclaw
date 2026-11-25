@@ -2,9 +2,11 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import {
+  buildOutboundMediaLoadOptions,
   canonicalizeBase64,
   estimateBase64DecodedBytes,
   extensionForMime,
+  type OutboundMediaAccess,
 } from "openclaw/plugin-sdk/media-runtime";
 import { getFeishuRuntime } from "./runtime.js";
 
@@ -14,9 +16,28 @@ type DocxUploadInput = {
   image?: string;
   maxBytes: number;
   localRoots?: readonly string[];
+  mediaAccess?: OutboundMediaAccess;
   fileName?: string;
   remoteReadTimeoutMs?: number;
 };
+
+export function resolveDocToolLocalRoots(ctx: {
+  workspaceDir?: string;
+  fsPolicy?: { workspaceOnly: boolean };
+}): string[] | undefined {
+  if (ctx.fsPolicy?.workspaceOnly !== true) {
+    return undefined;
+  }
+  const workspaceDir = ctx.workspaceDir?.trim();
+  // Fail closed: workspace-only with no resolved workspace must not fall back
+  // to default managed roots.
+  if (!workspaceDir) {
+    return [];
+  }
+  // Workspace paths are expected to be absolute; resolve() normalizes any
+  // accidental relative input before passing roots to loadWebMedia.
+  return [resolve(workspaceDir)];
+}
 
 function decodeBase64Image(params: {
   payload: string;
@@ -111,6 +132,7 @@ export async function resolveDocxUploadInput(
     const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({
       url: input.url,
       maxBytes: input.maxBytes,
+      ssrfPolicy: buildOutboundMediaLoadOptions({ mediaAccess: input.mediaAccess }).ssrfPolicy,
       ...(input.remoteReadTimeoutMs !== undefined
         ? {
             responseHeaderTimeoutMs: input.remoteReadTimeoutMs,

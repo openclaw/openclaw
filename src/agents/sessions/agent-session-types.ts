@@ -15,6 +15,24 @@ import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 
+/** The embedded request boundary owns threshold checks while this flag is set. */
+export const agentSessionDeferThresholdCompaction: unique symbol = Symbol(
+  "openclaw.agent-session.defer-threshold-compaction",
+);
+
+/** Runs provider checkpoint work without aborting or restarting the current tool loop. */
+export const agentSessionRunProviderCompaction: unique symbol = Symbol(
+  "openclaw.agent-session.run-provider-compaction",
+);
+
+/**
+ * Runs threshold compaction at a request boundary. Its first history summary comes
+ * from that request plus the given instructions, so it reads the warm prompt cache.
+ */
+export const agentSessionRunWarmCompaction: unique symbol = Symbol(
+  "openclaw.agent-session.run-warm-compaction",
+);
+
 type AgentSessionCompactionOutcome =
   | {
       status: "completed";
@@ -22,6 +40,7 @@ type AgentSessionCompactionOutcome =
       tokensAfter: number;
       willRetry: boolean;
       qualityDegraded?: true;
+      summaryRefused?: true;
     }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string }
@@ -29,6 +48,7 @@ type AgentSessionCompactionOutcome =
 
 type AgentSessionCompactionEndEvent = {
   type: "compaction_end";
+  hooksHandled?: boolean;
   itemId?: string;
   reason: "manual" | "threshold" | "overflow";
   outcome: AgentSessionCompactionOutcome;
@@ -42,21 +62,20 @@ export type AgentSessionEvent =
       willRetry: boolean;
       assistantEntryId?: string;
     }
-  | { type: "queue_update"; steering: readonly string[]; followUp: readonly string[] }
+  | { type: "queue_update" }
   | { type: "agent_settled" }
   | { type: "agent_handoff" }
-  | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow"; itemId?: string }
+  | {
+      type: "compaction_start";
+      reason: "manual" | "threshold" | "overflow";
+      itemId?: string;
+      hooksHandled?: boolean;
+    }
   | { type: "session_info_changed"; name: string | undefined }
   | { type: "thinking_level_changed"; level: ThinkingLevel }
   | AgentSessionCompactionEndEvent
-  | {
-      type: "auto_retry_start";
-      attempt: number;
-      maxAttempts: number;
-      delayMs: number;
-      errorMessage: string;
-    }
-  | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
+  | { type: "auto_retry_start" }
+  | { type: "auto_retry_end" };
 
 export type AgentSessionEventListener = (event: AgentSessionEvent) => unknown;
 export type AgentSessionWriteSettlementRunner = <T>(run: () => Promise<T> | T) => Promise<T>;
@@ -85,8 +104,6 @@ export interface AgentSessionConfig {
     model: Model & { compactionThinkingDefault?: ThinkLevel },
     inheritedLevel: ThinkingLevel,
   ) => ThinkingLevel;
-  /** Whether disposing this object ends the durable provider session. Defaults to true. */
-  cleanupProviderSessionResourcesOnDispose?: boolean;
 }
 
 export interface ExtensionBindings {

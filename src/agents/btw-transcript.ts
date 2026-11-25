@@ -7,11 +7,12 @@ import {
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import {
-  listSessionEntriesCore,
-  loadSessionEntry,
-  loadTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+  readSessionEntryInWorker,
+  readSessionEntrySummariesInWorker,
+} from "../config/sessions/session-entry-read-runtime.js";
+import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import {
   scanSessionTranscriptTree,
   type SessionTranscriptTree,
@@ -135,14 +136,16 @@ export async function readBtwTranscriptMessages(params: {
     const storePath = completeTarget ? params.storePath : (params.storePath ?? marker?.storePath);
     const markerMatches =
       marker && !completeTarget
-        ? listSessionEntriesCore({
-            agentId: marker.agentId,
-            storePath: marker.storePath,
-          }).filter(({ entry }) => entry.sessionId === marker.sessionId)
+        ? (
+            await readSessionEntrySummariesInWorker({
+              agentId: marker.agentId,
+              storePath: marker.storePath,
+            })
+          ).filter(({ entry }) => entry.sessionId === marker.sessionId)
         : [];
     const suppliedEntry =
       marker && params.sessionKey && !completeTarget
-        ? loadSessionEntry({
+        ? await readSessionEntryInWorker({
             agentId: marker.agentId,
             sessionKey: params.sessionKey,
             storePath: marker.storePath,
@@ -170,12 +173,14 @@ export async function readBtwTranscriptMessages(params: {
     if (!sessionKey || !storePath) {
       return [];
     }
-    const entries = (await loadTranscriptEvents({
-      agentId,
-      sessionId,
-      sessionKey,
-      storePath,
-    })) as FileEntry[];
+    const entries = (await withSessionTranscriptHydrationCaller("btw", () =>
+      loadTranscriptEvents({
+        agentId,
+        sessionId,
+        sessionKey,
+        storePath,
+      }),
+    )) as FileEntry[];
     migrateSessionEntries(entries);
     const sessionEntries = entries.filter(
       (entry): entry is AgentSessionEntry => entry.type !== "session",
@@ -202,9 +207,9 @@ export async function readBtwTranscriptMessages(params: {
       const parentId = trailingId ? tree.byId.get(trailingId)?.parentId : null;
       branchEntries = parentId ? (buildSessionBranchEntries(tree, parentId) ?? []) : [];
     }
-    const sessionContext = buildSessionContext(branchEntries ?? sessionEntries);
-    return Array.isArray(sessionContext.messages) ? sessionContext.messages : [];
+    return buildSessionContext(branchEntries ?? sessionEntries).messages;
   } catch {
+    // Transcript context is optional; the caller uses the live prompt or reports no active context.
     return [];
   }
 }

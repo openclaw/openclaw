@@ -1,8 +1,5 @@
 import { expect } from "vitest";
-import {
-  handleChatAbortRequest,
-  handleChatAbortRequestWithLifecycle,
-} from "./chat-abort-handler.js";
+import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -20,7 +17,6 @@ export async function invokeAbort({
   deviceId,
   preserveSideRuns,
   scopes = ["operator.write"],
-  onAuthorizedAfterQueuedAbort,
 }: {
   context: ReturnType<typeof createChatAbortContext>;
   sessionKey?: string;
@@ -29,15 +25,9 @@ export async function invokeAbort({
   deviceId: string;
   preserveSideRuns?: boolean;
   scopes?: string[];
-  onAuthorizedAfterQueuedAbort?: () => boolean;
 }) {
   return await invokeChatAbortHandler({
-    handler: onAuthorizedAfterQueuedAbort
-      ? (options) =>
-          handleChatAbortRequestWithLifecycle(options, {
-            onAuthorizedAfterQueuedAbort,
-          })
-      : handleChatAbortRequest,
+    handler: handleChatAbortRequest,
     context,
     request: {
       sessionKey,
@@ -48,12 +38,15 @@ export async function invokeAbort({
   });
 }
 
-export function createSingleAbortContext() {
+export function createSingleAbortContext(options: { storeScope?: string } = {}) {
   return createChatAbortContext({
-    chatAbortControllers: new Map([
+    sources: new Map([
       [
         "run-1",
-        createActiveRun("main", { owner: { connId: "conn-owner", deviceId: "dev-owner" } }),
+        createActiveRun("main", {
+          storeScope: options.storeScope,
+          owner: { connId: "conn-owner", deviceId: "dev-owner" },
+        }),
       ],
     ]),
   });

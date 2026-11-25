@@ -112,10 +112,18 @@ export async function retainResolvedNodeInvokePlacementGrant(params: {
   if (decision !== "allow-always" || !binding) {
     return true;
   }
-  const result = runtime?.validateAsync
-    ? await runtime.validateAsync(binding)
-    : runtime?.validate(binding);
-  if (!owner || !isBindingCurrentForOwner(owner, binding) || result?.outcome !== "consumed") {
+  // The native runtime checks the durable parent once at the transport effect.
+  // Custom released SDK runtimes keep their original validation contract.
+  const result = runtime?.consumeAsync
+    ? undefined
+    : runtime?.validateAsync
+      ? await runtime.validateAsync(binding)
+      : runtime?.validate(binding);
+  if (
+    !owner ||
+    !isBindingCurrentForOwner(owner, binding) ||
+    (!runtime?.consumeAsync && result?.outcome !== "consumed")
+  ) {
     return false;
   }
   authorization.binding = binding;
@@ -135,5 +143,21 @@ export function consumeNodeInvokePlacementGrant(params: {
       : "rejected";
   } catch {
     return "rejected";
+  }
+}
+
+export async function prepareNodeInvokePlacementGrant(params: {
+  runtime?: PlacementStandingGrantRuntime;
+  authorization: NodeInvokePlacementGrantAuthorization;
+}): Promise<boolean> {
+  const binding = params.authorization.binding;
+  if (!binding || !params.runtime?.consumeAsync) {
+    // Custom released SDK runtimes retain their synchronous final guard.
+    return true;
+  }
+  try {
+    return (await params.runtime.consumeAsync(binding)).outcome === "consumed";
+  } catch {
+    return false;
   }
 }

@@ -28,7 +28,7 @@ Invalid option values are reported by the argument parser before a run starts.
 | `qa manual`                                         | Run a one-off prompt against the selected provider/model lane.                                                                                                                                                                                                      |
 | `qa ui`                                             | Start the QA debugger UI and local QA bus (alias: `pnpm qa:lab:ui`).                                                                                                                                                                                                |
 | `qa docker-build-image`                             | Build the prebaked QA Docker image.                                                                                                                                                                                                                                 |
-| `qa docker-scaffold`                                | Write a docker-compose scaffold for the QA dashboard + gateway lane.                                                                                                                                                                                                |
+| `qa docker-scaffold`                                | Write a docker-compose starter file for the QA dashboard + gateway lane.                                                                                                                                                                                            |
 | `qa up`                                             | Build the QA site, start the Docker-backed stack, print the URL (alias: `pnpm qa:lab:up`; `:fast` variant adds `--use-prebuilt-image --bind-ui-dist --skip-ui-build`).                                                                                              |
 | `qa aimock`                                         | Start only the AIMock provider server.                                                                                                                                                                                                                              |
 | `qa mock-openai`                                    | Start only the scenario-aware `mock-openai` provider server.                                                                                                                                                                                                        |
@@ -75,7 +75,7 @@ pnpm openclaw qa run \
   --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
 ```
 
-Use `smoke-ci` for deterministic profile proof with mock model providers and
+Use `smoke-ci` for repeatable profile proof with mock model providers and
 Crabline local provider servers. Use `release` for Stable/LTS proof against
 live channels. Use `all` only for explicit full-taxonomy evidence runs; it
 selects every active maturity category and can be dispatched through the `QA

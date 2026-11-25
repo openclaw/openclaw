@@ -1,5 +1,6 @@
 import type {
   GroupKeyResolution,
+  InternalSessionEntry,
   SessionEntry,
   SessionScope,
 } from "../../config/sessions/types.js";
@@ -11,7 +12,7 @@ export type SessionInitResult = Required<
   Pick<SessionEntry, "sessionId" | "systemSent" | "abortedLastRun">
 > & {
   sessionCtx: FinalizedTemplateContext;
-  sessionEntry: SessionEntry;
+  sessionEntry: InternalSessionEntry;
   initialSessionEntry?: SessionEntry;
   previousSessionEntry?: SessionEntry;
   previousSessionMemory?: SessionMemoryTranscript;
@@ -27,4 +28,22 @@ export type SessionInitResult = Required<
   isGroup: boolean;
   bodyStripped?: string;
   triggerBodyNormalized: string;
+};
+
+export type InitSessionLifecycleMutation = {
+  kind: "lifecycle-mutation";
+  cyberAccessProgram?: SessionEntry["cyberAccessProgram"];
+  sessionId: string;
+  sessionKey: string;
+  lifecycleRevision?: string;
+  resetTriggered: boolean;
+};
+export type InitSessionStateAttemptOutcome =
+  | { kind: "complete"; result: SessionInitResult }
+  | InitSessionLifecycleMutation;
+
+export type ReplySessionPreprocessingState = {
+  sessionEntry?: SessionEntry;
+  sessionKey: string;
+  storePath: string;
 };

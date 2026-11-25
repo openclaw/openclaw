@@ -13,10 +13,12 @@ export async function listRetiredCronStateFiles(storePath: string): Promise<stri
   ];
   const runsDir = path.join(path.dirname(resolved), "runs");
   try {
-    const entry = (await fs.readdir(runsDir)).find((name) => name.endsWith(".jsonl"));
-    if (entry) {
-      paths.push(path.join(runsDir, entry));
-    }
+    paths.push(
+      ...(await fs.readdir(runsDir))
+        .filter((name) => name.endsWith(".jsonl"))
+        .toSorted()
+        .map((name) => path.join(runsDir, name)),
+    );
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       try {

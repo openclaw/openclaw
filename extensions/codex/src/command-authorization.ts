@@ -1,7 +1,9 @@
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { PreparedSessionSourceAssertion } from "openclaw/plugin-sdk/session-binding-runtime";
 
 export type CodexCommandContext = PluginCommandContext & {
-  assertNativePolicyCurrent?: () => void;
+  assertNativePolicyCurrent?: () => Promise<void>;
+  nativePolicySource?: PreparedSessionSourceAssertion;
 };
 
 type CodexHostMutationAuthContext = Pick<
@@ -14,7 +16,7 @@ export const CODEX_NATIVE_EXECUTION_AUTH_ERROR =
 export const CODEX_HOST_INSPECTION_AUTH_ERROR =
   "Only an owner or operator.admin can inspect Codex host state.";
 export const CODEX_FULL_PERMISSIONS_AUTH_ERROR =
-  "Full Codex permissions require operator.admin. Choose Admin in the Control UI permission picker, or use an admin-authenticated CLI.";
+  "Full Codex permissions require operator.admin. Choose Admin in the permission picker in the OpenClaw app, or use an admin-authenticated CLI.";
 
 export function hasCodexAdminScope(ctx: CodexHostMutationAuthContext): boolean {
   return ctx.gatewayClientScopes?.includes("operator.admin") === true;
@@ -25,7 +27,6 @@ export function canMutateCodexHost(ctx: CodexHostMutationAuthContext): boolean {
 }
 
 export function assertCodexHostOwnerCurrent(ctx: CodexCommandContext): void {
-  ctx.assertNativePolicyCurrent?.();
   if (!hasCodexAdminScope(ctx)) {
     ctx.assertOwnerCurrent?.();
   }

@@ -1,18 +1,18 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveUserPath } from "../../../utils.js";
-import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../sandbox/runtime-status.js";
 import { resolveSpawnSandboxError } from "../../spawn-plan.js";
 import { resolveSenderRestrictedSpawnError } from "../../spawn-requester-policy.js";
 import type { SpawnedToolContext } from "../../spawned-context.js";
 
-export function resolveAcpSpawnRuntimePolicyError(params: {
+export async function resolveAcpSpawnRuntimePolicyError(params: {
   cfg: OpenClawConfig;
   requesterAgentId: string;
   requesterSessionKey?: string;
   requesterSandboxed?: boolean;
   sandbox?: "inherit" | "require";
-}): string | undefined {
-  const requesterRuntime = resolveSandboxRuntimeStatus({
+}): Promise<string | undefined> {
+  const requesterRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     sessionKey: params.requesterSessionKey,
     agentId: params.requesterAgentId,

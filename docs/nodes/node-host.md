@@ -138,7 +138,13 @@ openclaw node start
 openclaw node restart
 ```
 
-`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node|bun>` (default: `node`), and `--force` to reinstall. Bun requires version 1.4+ with WAL-reset-safe `node:sqlite` and is an explicit opt-in; Node remains recommended. `node status`, `node stop`, and `node uninstall` are also available.
+`node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node|bun>` (default: `node`), and `--force` to reinstall. Bun requires version 1.4.3+ with WAL-reset-safe `node:sqlite` and is an explicit opt-in; Node remains recommended. `node status`, `node stop`, and `node uninstall` are also available.
+
+Use `openclaw --profile <name> node install` to run a separate node service for a
+named profile. Its service name is `ai.openclaw.node.<name>` on macOS,
+`openclaw-node-<name>.service` on Linux, or `OpenClaw Node (<name>)` on Windows.
+Use the same `--profile` for status and lifecycle commands. The default profile
+keeps its existing service name.
 
 For `npx openclaw node install` or `npx openclaw connect <join-url> --service`,
 OpenClaw installs the selected release into `<state-dir>/npm` before writing
@@ -289,7 +295,7 @@ Notes:
 - For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped `env` values are reduced to an explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
 - For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `flock`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
 - On Windows node hosts in allowlist mode, shell-wrapper runs via `cmd.exe /c` require approval (allowlist entry alone does not auto-allow the wrapper form).
-- Node hosts ignore `PATH` overrides in the `env` object and strip a large, maintained set of interpreter/shell startup variables (for example `NODE_OPTIONS`, `PYTHONPATH`, `BASH_ENV`, `DYLD_*`, `LD_*`) before running a command. If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `env`.
+- Node hosts ignore `PATH` overrides in the `env` object and strip a large, maintained set of interpreter/shell startup variables (for example `NODE_OPTIONS`, `PYTHONPATH`, `BASH_ENV`, `DYLD_*`, `LD_*`) before running a command. `tools.exec.pathPrepend` on the Gateway does not reach node hosts either; completed exec results warn when it is set. If you need extra PATH entries, configure the node host service environment (or install tools in standard locations) instead of passing `PATH` via `env` or `tools.exec.pathPrepend`.
 - On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals). Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
 - On headless node host, `system.run` is gated by the local SQLite exec approvals row; on macOS specifically, see the exec-host routing env vars under [Headless node host](#headless-node-host-cross-platform) below.
 
@@ -316,3 +322,41 @@ Notes:
 
 - The macOS menubar app connects to the Gateway WS server as a node (so `openclaw nodes …` works against this Mac).
 - In remote mode, the app opens an SSH tunnel for the Gateway port and connects to `localhost`.
+
+## Existing-folder session consent
+
+`nodeHost.workerRuns.folders` is a node-local array of existing directory roots.
+When unset, any existing directory is allowed, except filesystem roots and
+directories overlapping private worker storage. A non-empty list restricts access
+to those roots and their descendants; `[]` explicitly disables existing-folder
+sessions and capability advertising, even when `nodeHost.workerRuns.enabled` is
+true. Configure restrictions on the device, not the Gateway:
+
+```json5
+{
+  nodeHost: {
+    workerRuns: {
+      enabled: true,
+      folders: ["~/src/tries"],
+    },
+  },
+}
+```
+
+Roots and selected folders accept absolute paths or a leading `~`. The node
+resolves both through realpath on every operation. A selected directory must
+remain inside a configured root when restrictions are set; a symlink cannot
+escape that root. Files, missing directories, filesystem roots, and directories
+overlapping OpenClaw's private worker storage are rejected in every mode. Prefer
+narrow roots rather than your home directory when restricting access. Restart a foreground node process after changing its
+local configuration so it advertises the updated consent.
+
+The unrestricted default does not expand the existing session-host exec trust
+boundary: operators can already run agents with exec on this device. This list is
+a folder-selection guardrail for the Gateway's session requests, not an exec
+sandbox or a boundary against a compromised Gateway.
+
+An existing-folder session stays pinned to that device. OpenClaw does not copy,
+reconcile, reset, or remove the selected folder. Worker HOME and metadata use
+private node storage. See [Session hosting](/nodes/session-hosting) for runtime
+support and the New Session flow.

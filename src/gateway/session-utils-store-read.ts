@@ -1,10 +1,7 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadExactSessionEntryCandidates,
-  loadExactSessionEntryCandidatesReadOnlyBatch,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
 import type {
@@ -22,6 +19,17 @@ type GatewaySessionStoreView = {
 
 export type GatewaySessionStoreCache = Map<string, GatewaySessionStoreView>;
 
+/** Session keys are data; ordinary objects retain a V8 shape transition per key. */
+export function createGatewaySessionStore(
+  entries: readonly { sessionKey: string; entry: SessionEntry }[],
+): Record<string, SessionEntry> {
+  const store: Record<string, SessionEntry> = Object.create(null);
+  for (const { sessionKey, entry } of entries) {
+    store[sessionKey] = entry;
+  }
+  return store;
+}
+
 export type GatewaySessionStoreRead = {
   storePath: string;
   clone?: boolean;
@@ -35,7 +43,7 @@ export type GatewaySessionStoreRead = {
     readConsistency?: SessionEntryReadScope["readConsistency"];
     readSource?: SessionEntryReadSource;
   };
-  result?: Result<Record<string, SessionEntry>, unknown>;
+  result?: Record<string, SessionEntry>;
   readSource?: SessionEntryReadSource;
   capturedReadSource?: CapturedSessionEntryReadSource;
 };
@@ -74,42 +82,11 @@ export function readGatewaySessionStore(
       loaded = loadGatewaySessionLookupStore(read);
       cache?.set(cacheKey, loaded);
     }
-    read.result = ok(loaded.store);
+    read.result = loaded.store;
     read.readSource = loaded.readSource;
     read.capturedReadSource = loaded.capturedReadSource;
   }
-  if (!read.result.ok) {
-    throw read.result.error;
-  }
-  return read.result.value;
-}
-
-/** Populate exact logical lookups without materializing unrelated store entries. */
-export function loadGatewaySessionStoreReads(reads: readonly GatewaySessionStoreRead[]): void {
-  const pending = reads.filter((read) => read.result === undefined);
-  const results = loadExactSessionEntryCandidatesReadOnlyBatch(
-    pending.map((read) => ({
-      agentId: read.agentId,
-      env: read.options.env,
-      storePath: read.storePath,
-      projection: read.options.projection,
-      clone: false,
-      sessionKeys: expectDefined(read.options.exactKeys, "exact batch lookup keys"),
-      onReadSource: (source) => {
-        read.readSource = source;
-      },
-    })),
-  );
-  for (const [index, read] of pending.entries()) {
-    const result = expectDefined(results[index], "exact batch lookup result");
-    // Consume failures per logical target so prepared callers retain independent results.
-    read.result = result.ok
-      ? ok(Object.fromEntries(result.value.map(({ sessionKey, entry }) => [sessionKey, entry])))
-      : result;
-    if (!result.ok) {
-      read.readSource = undefined;
-    }
-  }
+  return read.result;
 }
 
 function loadGatewaySessionLookupStore({
@@ -140,7 +117,7 @@ function loadGatewaySessionLookupStore({
       },
     });
     return {
-      store: Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+      store: createGatewaySessionStore(entries),
       ...(readSource ? { readSource } : {}),
       ...(capturedReadSource ? { capturedReadSource } : {}),
     };
@@ -149,7 +126,7 @@ function loadGatewaySessionLookupStore({
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
   return {
-    store: Object.fromEntries(
+    store: createGatewaySessionStore(
       listEntries({
         env: options.env,
         ...(agentId ? { agentId } : {}),
@@ -159,7 +136,7 @@ function loadGatewaySessionLookupStore({
           : {}),
         ...(options.readConsistency ? { readConsistency: options.readConsistency } : {}),
         storePath,
-      }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+      }),
     ),
   };
 }

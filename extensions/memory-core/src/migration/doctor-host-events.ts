@@ -529,6 +529,30 @@ export const hostEventsStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-host-events-jsonl-to-sqlite",
   label: "Memory Core host events",
   doctorOnly: true,
+  async collectBackupResources(params) {
+    const sources = await collectLegacyMemoryHostEventSources(params.config, params.env);
+    // Imported rows are core-captured; also track newly created claims and archives.
+    const resources: Array<{ path: string; kind: "file" }> = [];
+    for (const source of sources) {
+      if (source.kind !== "ready") {
+        continue;
+      }
+      resources.push({ path: source.filePath, kind: "file" });
+      if (source.storage === "active") {
+        const generation = await resolveMemoryHostEventArchivePath(source);
+        resources.push(
+          { path: path.join(source.workspaceDir, generation.claimRelativePath), kind: "file" },
+          { path: path.join(source.workspaceDir, generation.archiveRelativePath), kind: "file" },
+        );
+      } else if (source.archiveRelativePath) {
+        resources.push({
+          path: path.join(source.workspaceDir, source.archiveRelativePath),
+          kind: "file",
+        });
+      }
+    }
+    return resources;
+  },
   async detectLegacyState(params) {
     const preview: string[] = [];
     for (const source of await collectLegacyMemoryHostEventSources(params.config, params.env)) {

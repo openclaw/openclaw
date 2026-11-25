@@ -1,16 +1,24 @@
-import type { APIEmbed } from "discord-api-types/v10";
+import type { APIEmbed, APIMessageTopLevelComponent } from "discord-api-types/v10";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { renderPresentationForDelivery } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  buildOutboundMediaLoadOptions,
+  MediaFetchError,
+  type OutboundMediaAccess,
+} from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
+  appendReplyMediaFailures,
   hasOutboundReplyContent,
+  type ReplyMediaFailure,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { LocalMediaAccessError, loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { registerDiscordComponentEntries } from "../components-registry.js";
@@ -31,6 +39,34 @@ import type { DiscordCommandArgContext } from "./native-command-ui.types.js";
 
 export const DISCORD_EMPTY_VISIBLE_REPLY_WARNING = "⚠️ Command produced no visible reply.";
 
+/** Retain visible component text, not interaction IDs or option values. */
+export function formatDiscordCommandComponents(
+  components: readonly (TopLevelComponents | APIMessageTopLevelComponent)[],
+): string {
+  const text: string[] = [];
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    for (const [key, field] of Object.entries(value)) {
+      if (
+        (key === "content" || key === "label" || key === "description" || key === "placeholder") &&
+        typeof field === "string"
+      ) {
+        text.push(field);
+      } else if ((key === "components" || key === "options") && Array.isArray(field)) {
+        field.forEach(visit);
+      } else if (key === "accessory") {
+        visit(field);
+      }
+    }
+  };
+  components.forEach((component) =>
+    visit("serialize" in component ? component.serialize() : component),
+  );
+  return text.join("\n");
+}
+
 export function resolveDiscordInteractionReplyOptions(
   params: Pick<DiscordCommandArgContext, "cfg" | "discordConfig" | "accountId">,
 ) {
@@ -40,6 +76,7 @@ export function resolveDiscordInteractionReplyOptions(
     }),
     maxLinesPerMessage: resolveDiscordMaxLinesPerMessage(params),
     chunkMode: resolveChunkMode(params.cfg, "discord", params.accountId),
+    mediaAccess: resolveOutboundMediaAccessForConfig(params.cfg),
   };
 }
 
@@ -110,14 +147,15 @@ export async function deliverDiscordInteractionReply(params: {
   interaction: CommandInteraction | BaseComponentInteraction;
   payload: ReplyPayload;
   mediaLocalRoots?: readonly string[];
+  mediaAccess?: OutboundMediaAccess;
   componentRoute?: { accountId: string; agentId: string; sessionKey: string };
   textLimit: number;
   maxLinesPerMessage?: number;
-  preferFollowUp: boolean;
   responseEphemeral?: boolean;
   chunkMode: "length" | "newline";
+  onDelivered?: (text: string) => Promise<void>;
 }): Promise<boolean> {
-  const { interaction, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
+  const { interaction, textLimit, maxLinesPerMessage, chunkMode } = params;
   const nativeParts = resolveDiscordInteractionMessageParts(params.payload);
   // Keep attachments and authored native parts on their existing delivery path.
   const preserveNativeParts =
@@ -151,6 +189,7 @@ export async function deliverDiscordInteractionReply(params: {
   // Interaction acknowledgement/defer state is not delivery for this payload. Only a
   // successful native send in this invocation can make a later expiry partial.
   let payloadDelivered = false;
+  const deliveredText: string[] | undefined = params.onDelivered ? [] : undefined;
   const sendMessage = async (content: string, files?: MessagePayloadFile[]) => {
     const firstMessage = !payloadDelivered;
     const components = firstMessage ? firstMessageComponents : undefined;
@@ -165,13 +204,11 @@ export async function deliverDiscordInteractionReply(params: {
     };
     try {
       const result = await safeDiscordInteractionCall("interaction send", async () => {
-        const sent =
-          await interaction[!preferFollowUp && !payloadDelivered ? "reply" : "followUp"](
-            payloadLocal,
-          );
+        // Command entry points acknowledge interactions before dispatching replies.
+        const sent = await interaction.followUp(payloadLocal);
         payloadDelivered = true;
         if (firstMessage && componentBuild) {
-          // Initial callbacks need not return a message; callback input supplies its ID later.
+          // Native sends need not return a message; callback input supplies its ID later.
           const messageId =
             sent && typeof sent === "object" && "id" in sent && typeof sent.id === "string"
               ? sent.id
@@ -189,6 +226,27 @@ export async function deliverDiscordInteractionReply(params: {
           { cause: new Error("Unknown interaction") },
         );
       }
+      if (deliveredText) {
+        if (payloadLocal.content) {
+          deliveredText.push(payloadLocal.content);
+        }
+        if (payloadLocal.components) {
+          deliveredText.push(formatDiscordCommandComponents(payloadLocal.components));
+        }
+        for (const embed of payloadLocal.embeds ?? []) {
+          deliveredText.push(
+            [
+              embed.title,
+              embed.description,
+              embed.author?.name,
+              ...(embed.fields ?? []).flatMap((field) => [field.name, field.value]),
+              embed.footer?.text,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          );
+        }
+      }
     } catch (error) {
       if (!payloadDelivered) {
         throw error;
@@ -197,27 +255,46 @@ export async function deliverDiscordInteractionReply(params: {
     }
   };
 
-  const files = reply.hasMedia
-    ? await Promise.all(
-        reply.mediaUrls.map(async (url) => {
-          const loaded = await loadWebMedia(url, {
-            localRoots: params.mediaLocalRoots,
-          });
-          return {
-            name: loaded.fileName ?? "upload",
-            data: loaded.buffer,
-            contentType: loaded.contentType,
-          };
-        }),
-      )
-    : undefined;
+  const mediaFailures: ReplyMediaFailure[] = [];
+  const loadedFiles = await Promise.all(
+    reply.mediaUrls.map(async (url, index) => {
+      try {
+        // Keep raw localRoots ([] still denies local reads); only add the remote deny list.
+        const loaded = await loadWebMedia(url, {
+          localRoots: params.mediaLocalRoots,
+          ssrfPolicy: buildOutboundMediaLoadOptions({ mediaAccess: params.mediaAccess }).ssrfPolicy,
+        });
+        return {
+          name: loaded.fileName ?? "upload",
+          data: loaded.buffer,
+          contentType: loaded.contentType,
+        };
+      } catch (error) {
+        // Nothing of this reply is sent yet; keep its text with a receipt for this file.
+        if (!(error instanceof MediaFetchError || error instanceof LocalMediaAccessError)) {
+          throw error;
+        }
+        logVerbose(`discord: interaction media not attached: ${String(error)}`);
+        mediaFailures[index] = {
+          code: "delivery-failed",
+          kind: "document",
+          label:
+            (URL.canParse(url) ? new URL(url).pathname : url).split(/[\\/]/).findLast(Boolean) ??
+            `Attachment ${index + 1}`,
+        };
+        return undefined;
+      }
+    }),
+  );
+  const files = loadedFiles.filter((file) => file !== undefined);
+  const text = appendReplyMediaFailures(reply.text, mediaFailures.filter(Boolean)) ?? "";
 
-  if (!files && !reply.hasText && !hasFirstMessageParts) {
+  if (files.length === 0 && !text.trim() && !hasFirstMessageParts) {
     return false;
   }
   const chunks = resolveTextChunksWithFallback(
-    reply.text,
-    chunkDiscordTextWithMode(reply.text, {
+    text,
+    chunkDiscordTextWithMode(text, {
       maxChars: textLimit,
       maxLines: maxLinesPerMessage,
       chunkMode,
@@ -227,11 +304,14 @@ export async function deliverDiscordInteractionReply(params: {
     chunks.push("");
   }
   for (const [index, chunk] of chunks.entries()) {
-    const chunkFiles = index === 0 ? files : undefined;
+    const chunkFiles = index === 0 && files.length > 0 ? files : undefined;
     if (!chunk.trim() && !chunkFiles && (payloadDelivered || !hasFirstMessageParts)) {
       continue;
     }
     await sendMessage(chunk, chunkFiles);
+  }
+  if (payloadDelivered && params.onDelivered) {
+    await params.onDelivered(deliveredText?.filter(Boolean).join("\n") ?? "");
   }
   return payloadDelivered;
 }

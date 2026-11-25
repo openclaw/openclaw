@@ -6,18 +6,15 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { authProfileRuntimeMode } from "../agents/auth-profiles/runtime-scope.js";
 import { getRuntimeAuthProfileStoreSnapshotCore } from "../agents/auth-profiles/runtime-snapshots.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
+import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { isTrustedToolExecutionPreflightError } from "../agents/tool-execution-error.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
-import {
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  selectApplicableRuntimeConfig,
-} from "../config/runtime-snapshot.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
-import { logVerbose } from "../globals.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
@@ -34,7 +31,7 @@ import {
   resolveWebProviderConfig,
   type WebProviderWithCredential,
 } from "../web/provider-runtime-shared.js";
-import { executeWebSearchCandidates } from "./runtime-execution.js";
+import { isMissingCredentialCode, WebSearchProviderError } from "./runtime-error.js";
 import type {
   ResolveWebSearchDefinitionParams,
   RunWebSearchParams,
@@ -53,19 +50,14 @@ function resolveWebSearchRuntimeConfig(params?: {
   if (params?.preferInputConfig && params.config) {
     return params.config;
   }
-  return selectApplicableRuntimeConfig({
-    inputConfig: params?.config,
-    runtimeConfig: getRuntimeConfigSnapshot(),
-    runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
-  });
+  return selectLiveRuntimeConfig(params?.config);
 }
 
 function hasEntryCredential(
   provider: WebProviderWithCredential,
   config: OpenClawConfig | undefined,
-  agentDir?: string,
   authStore?: AuthProfileStore,
-  resolveAuthProfileStoreSource?: () => boolean,
+  onAuthStoreNeeded?: () => void,
 ): boolean {
   return hasWebProviderEntryCredential({
     provider,
@@ -73,28 +65,28 @@ function hasEntryCredential(
     resolveEnvValue: (configuredEnvVarId) =>
       (configuredEnvVarId ? readWebProviderEnvValue([configuredEnvVarId]) : undefined) ??
       readWebProviderEnvValue(provider.envVars),
-    resolveProviderAuthValue: (providerId) =>
-      hasAuthProfileForProvider({
+    resolveProviderAuthValue: (providerId) => {
+      if (!authStore) {
+        onAuthStoreNeeded?.();
+      }
+      return hasAuthProfileForProvider({
         provider: providerId,
         authStore,
-        authProfileStoreSource: resolveAuthProfileStoreSource?.(),
-        agentDir:
-          agentDir?.trim() || (authStore ? undefined : resolveDefaultAgentDir(config ?? {})),
-      }),
+      });
+    },
   });
 }
 
 function hasImplicitProviderSelectionSignal(
   provider: Parameters<typeof hasEntryCredential>[0],
   config: OpenClawConfig | undefined,
-  agentDir?: string,
   authStore?: AuthProfileStore,
-  resolveAuthProfileStoreSource?: () => boolean,
+  onAuthStoreNeeded?: () => void,
 ): boolean {
   if (!providerRequiresCredential(provider)) {
     return false;
   }
-  return hasEntryCredential(provider, config, agentDir, authStore, resolveAuthProfileStoreSource);
+  return hasEntryCredential(provider, config, authStore, onAuthStoreNeeded);
 }
 
 export function isWebSearchProviderConfigured(params: {
@@ -114,7 +106,7 @@ export function isWebSearchProviderConfigured(params: {
   authStore?: AuthProfileStore;
 }): boolean {
   const config = resolveWebSearchRuntimeConfig({ config: params.config });
-  return hasEntryCredential(params.provider, config, params.agentDir, params.authStore);
+  return hasEntryCredential(params.provider, config, params.authStore);
 }
 
 /** Lists runtime web_search providers after applying runtime config snapshots. */
@@ -125,6 +117,14 @@ export function listWebSearchProviders(params?: {
   return resolveRuntimeWebSearchProviders({
     config,
   });
+}
+
+/** Prepare machine-owned discovery policy before enumerating runtime providers. */
+export async function listWebSearchProvidersAsync(params?: {
+  config?: OpenClawConfig;
+}): Promise<PluginWebSearchProviderEntry[]> {
+  await prepareBundledDiscoveryMode();
+  return listWebSearchProviders(params);
 }
 
 /** Lists plugin-configured web_search providers without runtime-only providers. */
@@ -143,8 +143,7 @@ export function resolveWebSearchProviderId(params: {
   agentDir?: string;
   providers?: PluginWebSearchProviderEntry[];
   authStore?: AuthProfileStore;
-  resolveAuthProfileStoreSource?: () => boolean;
-  onAutoDetection?: (message: string) => void;
+  onAuthStoreNeeded?: () => void;
 }): string {
   const config = resolveWebSearchRuntimeConfig({ config: params.config });
   const search = params.search ?? resolveSearchConfig(config);
@@ -170,16 +169,12 @@ export function resolveWebSearchProviderId(params: {
         !hasImplicitProviderSelectionSignal(
           provider,
           config,
-          params.agentDir,
           params.authStore,
-          params.resolveAuthProfileStoreSource,
+          params.onAuthStoreNeeded,
         )
       ) {
         continue;
       }
-      (params.onAutoDetection ?? logVerbose)(
-        `web_search: no provider configured, auto-detected "${provider.id}" from available credentials`,
-      );
       return provider.id;
     }
   }
@@ -187,62 +182,17 @@ export function resolveWebSearchProviderId(params: {
   return "";
 }
 
-function resolveRuntimePreferredWebSearchProviderId(params: {
-  config?: OpenClawConfig;
-  search?: WebSearchConfig;
-  runtimeWebSearch?: RuntimeWebSearchMetadata;
-  providers?: PluginWebSearchProviderEntry[];
-  agentDir?: string;
-  resolveAuthProfileStoreSource?: () => boolean;
-}): string | undefined {
-  const runtimeProviderId = normalizeOptionalLowercaseString(
-    params.runtimeWebSearch?.selectedProvider ?? params.runtimeWebSearch?.providerConfigured,
-  );
-  if (!runtimeProviderId) {
-    return undefined;
-  }
-  const configuredProviderId =
-    params.search && "provider" in params.search
-      ? normalizeOptionalLowercaseString(params.search.provider)
-      : undefined;
-  if (configuredProviderId) {
-    const configuredProvider = params.providers?.find((entry) => entry.id === configuredProviderId);
-    return configuredProvider?.id === runtimeProviderId ? runtimeProviderId : undefined;
-  }
-  if (params.runtimeWebSearch?.providerSource === "configured") {
-    return runtimeProviderId;
-  }
-  const provider = params.providers?.find((entry) => entry.id === runtimeProviderId);
-  if (
-    !provider ||
-    !hasImplicitProviderSelectionSignal(
-      provider,
-      params.config,
-      params.agentDir,
-      undefined,
-      params.resolveAuthProfileStoreSource,
-    )
-  ) {
-    return undefined;
-  }
-  // The secrets snapshot cannot see OAuth profiles. Let the credential-aware
-  // order choose ahead of its env-keyed winner, which remains eligible for fallback.
-  if (params.runtimeWebSearch?.selectedProviderKeySource === "env") {
-    return undefined;
-  }
-  return provider.id;
-}
-
 type WebSearchRequestContext = {
   config?: OpenClawConfig;
   search?: WebSearchConfig;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
+  sandboxed?: boolean;
 };
 
 function resolveWebSearchRequestContext(
   options?: Pick<
     ResolveWebSearchDefinitionParams,
-    "config" | "preferInputConfig" | "runtimeWebSearch"
+    "config" | "preferInputConfig" | "runtimeWebSearch" | "sandboxed"
   >,
 ): WebSearchRequestContext {
   const config = resolveWebSearchRuntimeConfig({
@@ -254,6 +204,7 @@ function resolveWebSearchRequestContext(
     search: resolveSearchConfig(config),
     runtimeWebSearch:
       options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadataFromState()?.search,
+    sandboxed: options?.sandboxed,
   };
 }
 
@@ -286,6 +237,7 @@ function loadSortedWebSearchProviders(
   return sortPluginEntriesForAutoDetect(
     resolveProviders({
       config: params.config,
+      sandboxed: params.sandboxed,
       ...(pluginId ? { onlyPluginIds: [pluginId] } : {}),
     }),
   );
@@ -295,15 +247,14 @@ async function resolveWebSearchCandidates(
   options?: ResolveWebSearchDefinitionParams,
   context = resolveWebSearchRequestContext(options),
 ): Promise<PluginWebSearchProviderEntry[]> {
-  const { config, search, runtimeWebSearch } = context;
+  const { config, search } = context;
   if (search?.enabled === false) {
     return [];
   }
 
+  await prepareBundledDiscoveryMode();
   const providers = loadSortedWebSearchProviders({
-    config,
-    search,
-    runtimeWebSearch,
+    ...context,
     providerId: options?.providerId,
     preferRuntimeProviders: options?.preferRuntimeProviders,
   });
@@ -312,26 +263,20 @@ async function resolveWebSearchCandidates(
   }
 
   const agentDir = options?.agentDir?.trim() || resolveDefaultAgentDir(config ?? {});
+  const preparedAuthStore =
+    options?.authStore ??
+    (authProfileRuntimeMode.getStore()
+      ? undefined
+      : getRuntimeAuthProfileStoreSnapshotCore(agentDir));
+  const preparedOptions = preparedAuthStore
+    ? { ...options, authStore: preparedAuthStore }
+    : options;
   let needsAuthSource = false;
-  let autoDetectionMessage: string | undefined;
   try {
-    const candidates = selectWebSearchCandidates(
-      options,
-      context,
-      providers,
-      agentDir,
-      () => {
-        needsAuthSource = true;
-        return false;
-      },
-      (message) => {
-        autoDetectionMessage = message;
-      },
-    );
+    const candidates = selectWebSearchCandidates(preparedOptions, context, providers, () => {
+      needsAuthSource = true;
+    });
     if (!needsAuthSource) {
-      if (autoDetectionMessage) {
-        logVerbose(autoDetectionMessage);
-      }
       return candidates;
     }
   } catch (error) {
@@ -340,44 +285,61 @@ async function resolveWebSearchCandidates(
     }
     // Resolve the earlier profile gate before reporting a later selection error.
   }
-  const authProfileStoreSource = await hasAnyAuthProfileStoreSourceAsync(agentDir);
-  return selectWebSearchCandidates(
-    options,
-    context,
-    providers,
-    agentDir,
-    () => authProfileStoreSource,
-  );
+  const authStore = await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
+  return selectWebSearchCandidates({ ...options, authStore }, context, providers);
 }
 
 function selectWebSearchCandidates(
   options: ResolveWebSearchDefinitionParams | undefined,
   context: WebSearchRequestContext,
   providers: PluginWebSearchProviderEntry[],
-  agentDir: string,
-  resolveAuthProfileStoreSource: () => boolean,
-  onAutoDetection?: (message: string) => void,
+  onAuthStoreNeeded?: () => void,
 ): PluginWebSearchProviderEntry[] {
   const { config, search, runtimeWebSearch } = context;
+
+  function resolveRuntimePreferredWebSearchProviderId(): string | undefined {
+    const runtimeProviderId = normalizeOptionalLowercaseString(
+      runtimeWebSearch?.selectedProvider ?? runtimeWebSearch?.providerConfigured,
+    );
+    if (!runtimeProviderId) {
+      return undefined;
+    }
+    const configuredProviderId =
+      search && "provider" in search
+        ? normalizeOptionalLowercaseString(search.provider)
+        : undefined;
+    if (configuredProviderId) {
+      const configuredProvider = providers.find((entry) => entry.id === configuredProviderId);
+      return configuredProvider?.id === runtimeProviderId ? runtimeProviderId : undefined;
+    }
+    if (runtimeWebSearch?.providerSource === "configured") {
+      return runtimeProviderId;
+    }
+    const provider = providers.find((entry) => entry.id === runtimeProviderId);
+    if (
+      !provider ||
+      !hasImplicitProviderSelectionSignal(provider, config, options?.authStore, onAuthStoreNeeded)
+    ) {
+      return undefined;
+    }
+    // The secrets snapshot cannot see OAuth profiles. Let the credential-aware
+    // order choose ahead of its env-keyed winner, which remains eligible for fallback.
+    if (runtimeWebSearch?.selectedProviderKeySource === "env") {
+      return undefined;
+    }
+    return provider.id;
+  }
 
   const preferredIds = uniqueStrings(
     [
       options?.providerId,
-      resolveRuntimePreferredWebSearchProviderId({
-        config,
-        search,
-        runtimeWebSearch,
-        providers,
-        agentDir,
-        resolveAuthProfileStoreSource,
-      }),
+      resolveRuntimePreferredWebSearchProviderId(),
       resolveWebSearchProviderId({
         config,
-        agentDir,
+        authStore: options?.authStore,
         search,
         providers,
-        resolveAuthProfileStoreSource,
-        onAutoDetection,
+        onAuthStoreNeeded,
       }),
     ].filter((value): value is string => Boolean(value)),
   );
@@ -398,13 +360,7 @@ function selectWebSearchCandidates(
   const fallbackProviders = explicitSelection
     ? providers
     : providers.filter((provider) =>
-        hasImplicitProviderSelectionSignal(
-          provider,
-          config,
-          agentDir,
-          undefined,
-          resolveAuthProfileStoreSource,
-        ),
+        hasImplicitProviderSelectionSignal(provider, config, options?.authStore, onAuthStoreNeeded),
       );
 
   return [
@@ -416,8 +372,7 @@ function selectWebSearchCandidates(
 }
 
 type WebSearchConfigurationParams = ResolveWebSearchDefinitionParams & {
-  authStore?: AuthProfileStore;
-  resolveAuthProfileStoreSource?: () => boolean;
+  onAuthStoreNeeded?: () => void;
 };
 
 /** Configuration presence, not credential validity or network health. */
@@ -443,22 +398,19 @@ export function hasConfiguredWebSearchProvider(
       providerRequiresCredential(provider) &&
       (Boolean(coerceSecretRef(provider.getConfiguredCredentialValue?.(config))) ||
         Boolean(coerceSecretRef(provider.getConfiguredCredentialFallback?.(config)?.value)) ||
-        hasEntryCredential(
-          provider,
-          config,
-          options.agentDir,
-          options.authStore,
-          options.resolveAuthProfileStoreSource,
-        )),
+        hasEntryCredential(provider, config, options.authStore, options.onAuthStoreNeeded)),
   );
 }
 
-/** Prepare agent-scoped source facts without synchronous store discovery in tool assembly. */
+/** Prepare the agent-owned store once before synchronous provider selection. */
 export async function prepareWebSearchConfiguration(
   options: WebSearchConfigurationParams = {},
-  prepareAuthSource: (agentDir: string) => Promise<boolean> = hasAnyAuthProfileStoreSourceAsync,
+  prepareAuthStore: (
+    agentDir: string,
+  ) => Promise<AuthProfileStore> = ensureAuthProfileStoreWithoutExternalProfilesAsync,
 ): Promise<boolean> {
-  if (options.authStore || options.resolveAuthProfileStoreSource) {
+  await prepareBundledDiscoveryMode();
+  if (options.authStore) {
     return hasConfiguredWebSearchProvider(options);
   }
   const agentDir = options.agentDir?.trim() || resolveDefaultAgentDir(options.config ?? {});
@@ -473,18 +425,18 @@ export async function prepareWebSearchConfiguration(
   let needsAuthSource = false;
   const configured = hasConfiguredWebSearchProvider({
     ...options,
-    resolveAuthProfileStoreSource: () => {
+    onAuthStoreNeeded: () => {
       needsAuthSource = true;
-      return false;
     },
   });
   if (configured || !needsAuthSource) {
     return configured;
   }
-  const hasSource = await prepareAuthSource(agentDir);
+  const preparedAuthStore = await prepareAuthStore(agentDir);
   return hasConfiguredWebSearchProvider({
     ...options,
-    resolveAuthProfileStoreSource: () => hasSource,
+    agentDir,
+    authStore: preparedAuthStore,
   });
 }
 
@@ -541,9 +493,13 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
     context,
   );
   if (candidates.length === 0) {
-    throw new Error("web_search is disabled or no provider is available.");
+    throw new Error(
+      params.sandboxed
+        ? "web_search is unavailable. Enable or select a bundled or verified official search provider for sandboxed agents."
+        : "web_search is disabled or no provider is available.",
+    );
   }
-  const allowFallback = !hasExplicitWebSearchSelection({
+  const allowAutomaticFallback = !hasExplicitWebSearchSelection({
     search,
     runtimeWebSearch,
     providerId: params.providerId,
@@ -557,17 +513,72 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
           return assertCurrent();
         }
       : undefined,
-    (assertRequestCurrent) =>
-      executeWebSearchCandidates({
-        candidates,
-        config,
-        searchConfig: search as Record<string, unknown> | undefined,
-        runtimeMetadata: runtimeWebSearch,
-        agentDir: params.agentDir,
-        args: params.args,
-        signal: params.signal,
-        assertCurrent: assertRequestCurrent,
-        allowFallback,
-      }),
+    async (assertRequestCurrent) => {
+      // Keep the selected provider's failure, including null or undefined rejections.
+      let firstFailure: WebSearchProviderError | undefined;
+      for (const candidate of candidates) {
+        const allowFallback =
+          allowAutomaticFallback &&
+          !(
+            params.modelSelection?.authProfileId &&
+            candidate.authProviderId === params.modelSelection.provider
+          );
+        params.signal?.throwIfAborted();
+        assertRequestCurrent?.();
+        try {
+          const definition = candidate.createTool({
+            config,
+            agentDir: params.agentDir,
+            searchConfig: search,
+            runtimeMetadata: runtimeWebSearch,
+          });
+          if (!definition) {
+            if (!allowFallback) {
+              throw new Error(`web_search provider "${candidate.id}" is not available.`);
+            }
+            continue;
+          }
+          const executed = await definition.execute(params.args, {
+            signal: params.signal,
+            ...(params.modelSelection ? { modelSelection: params.modelSelection } : {}),
+            ...(assertRequestCurrent ? { assertCurrent: assertRequestCurrent } : {}),
+          });
+          // Cancellation wins races with provider completion or cleanup failures. Otherwise an
+          // ignored signal could return stale work or trigger another provider fallback.
+          params.signal?.throwIfAborted();
+          assertRequestCurrent?.();
+          if (
+            allowFallback &&
+            typeof executed === "object" &&
+            executed !== null &&
+            isMissingCredentialCode(executed.error)
+          ) {
+            // Some providers report missing credentials as structured tool output.
+            // Treat that like unavailable only during auto-detected fallback.
+            firstFailure ??= new WebSearchProviderError(
+              candidate.id,
+              new Error(`web_search provider "${candidate.id}" returned ${executed.error}`),
+              executed,
+            );
+            continue;
+          }
+          return { provider: candidate.id, result: executed };
+        } catch (error) {
+          params.signal?.throwIfAborted();
+          assertRequestCurrent?.();
+          if (isTrustedToolExecutionPreflightError(error)) {
+            throw error;
+          }
+          const failure = new WebSearchProviderError(candidate.id, error);
+          firstFailure ??= failure;
+          if (!allowFallback) {
+            throw failure;
+          }
+        }
+      }
+      throw (
+        firstFailure ?? new Error("web_search is enabled but no provider is currently available.")
+      );
+    },
   );
 }

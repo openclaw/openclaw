@@ -28,6 +28,13 @@ async function runFixture(scenario: NativeExchangeScenario): Promise<unknown> {
 }
 
 describe("native worker host exchanges", () => {
+  it.each(["progress-reply", "progress-callbacks", "progress-failure"] as const)(
+    "wakes synchronous owners after posting %s messages",
+    async (scenario) => {
+      expect(await runFixture(scenario)).toEqual({ scenario, wokeForPostedMessages: true });
+    },
+  );
+
   it.each(["close", "before-request"] as const)(
     "unwinds %s into fenced cleanup before retiring the worker",
     async (scenario) => {

@@ -1,36 +1,37 @@
 // @vitest-environment jsdom
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
+import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
+import type { ChatProps } from "./chat-view.tsx";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 
 beforeEach(installTranscriptDomMocks);
 
-function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]>) {
-  const container = document.createElement("div");
+function renderChatView(overrides: Partial<ChatProps>) {
+  const container = createComposerContainer();
   const props = createChatProps(overrides);
   onTestFinished(async () => {
     await vi.dynamicImportSettled();
-    props.transcript.hostDisconnected();
-    render(null, container);
+    props.transcript.dispose();
+    disposeChatView(container);
     resetChatViewState();
     resetTranscriptTestDom();
   });
-  render(renderChat(props), container);
+  renderChatPropsInto(container, props);
   return container;
 }
 
 describe("recorded automation input attribution", () => {
   it.each(["agent:main:cron:daily:run:execution", "agent:main:main"])(
     "keeps compact automation input outside the completed run: %s",
-    (sourceSessionKey) => {
+    async (sourceSessionKey) => {
       const container = renderChatView({
         sessionKey: "agent:main:main",
         messages: [
@@ -63,6 +64,7 @@ describe("recorded automation input attribution", () => {
           },
         ],
       });
+      await flushDeferredRowPrune();
 
       expect(container.querySelectorAll(".chat-group--forwarded")).toHaveLength(0);
       const forwarded = expectDefined(

@@ -9,6 +9,9 @@ export const MAX_PENDING_BYTES = 256 * 1024 * 1024;
 export const MAX_PENDING_MESSAGES = 1024;
 const FRAME_KIND = "openclaw-spawn-broker-frame";
 
+/** The IPC owner refused this message before any native write was scheduled. */
+export class BrokerIpcAdmissionError extends SpawnBrokerError {}
+
 type IpcSender = (
   message: Serializable,
   handle: SendHandle | undefined,
@@ -38,7 +41,7 @@ export function createBrokerSender(send: IpcSender) {
     });
   const enqueue = <T>(size: number, operation: () => Promise<T>): Promise<T> => {
     if (bytes + size > MAX_PENDING_BYTES || messages >= MAX_PENDING_MESSAGES) {
-      return Promise.reject(new SpawnBrokerError("Spawn broker IPC capacity exceeded"));
+      return Promise.reject(new BrokerIpcAdmissionError("Spawn broker IPC capacity exceeded"));
     }
     bytes += size;
     messages += 1;
@@ -61,7 +64,7 @@ export function createBrokerSender(send: IpcSender) {
     const size = payload.byteLength;
     if (size > FRAME_BYTES && handle) {
       return Promise.reject(
-        new SpawnBrokerError("Spawn broker handle metadata exceeds one IPC frame"),
+        new BrokerIpcAdmissionError("Spawn broker handle metadata exceeds one IPC frame"),
       );
     }
     const id = ++sequence;
@@ -87,40 +90,15 @@ export function createBrokerSender(send: IpcSender) {
   return Object.assign(sender, {
     reserve<T>(run: (publish: BrokerPublisher) => Promise<T>): Promise<T> {
       // Prepay a frame before effects begin; later messages cannot consume its capacity.
-      return enqueue(FRAME_BYTES, async () => {
-        let active = true;
-        let publishing = false;
-        let publication: Promise<void> | undefined;
-        const publish: BrokerPublisher = (message) => {
-          if (!active || publishing) {
-            return Promise.reject(
-              new SpawnBrokerError("Spawn broker publication reservation is closed"),
-            );
+      // The launch owner awaits each publication before returning from its reservation.
+      return enqueue(FRAME_BYTES, () =>
+        run(async (message) => {
+          if (serialize(message).byteLength > FRAME_BYTES) {
+            throw new SpawnBrokerError("Spawn broker reserved publication exceeds one IPC frame");
           }
-          publishing = true;
-          publication = (async () => {
-            if (serialize(message).byteLength > FRAME_BYTES) {
-              throw new SpawnBrokerError("Spawn broker reserved publication exceeds one IPC frame");
-            }
-            await write(message);
-          })();
-          void publication.then(
-            () => {
-              publishing = false;
-            },
-            () => {},
-          );
-          void publication.catch(() => {});
-          return publication;
-        };
-        try {
-          return await run(publish);
-        } finally {
-          active = false;
-          // Even a callback that throws or forgets to await publication retains its write.
-          await publication;
-        }
-      });
+          await write(message);
+        }),
+      );
     },
   });
 }

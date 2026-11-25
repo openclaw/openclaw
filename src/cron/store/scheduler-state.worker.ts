@@ -10,6 +10,7 @@ import { resolveFailureAlert } from "../service/failure-alerts.js";
 import { hasActiveCronRun } from "../service/jobs-scheduling.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { applyJobResult } from "../service/timer-outcomes.js";
+import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
 import { findActiveCronRunReceiptInDatabase } from "./run-receipt-store.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 import { mutateCronRuntimeRowsInDatabase } from "./runtime-rows.kernel.js";
@@ -21,6 +22,7 @@ import type {
 export function recordSkippedCronRunsInWorker(
   database: OpenClawStateDatabase,
   input: CronRuntimeWorkerOperations["cron.recordSkippedRuns"]["input"],
+  options?: { recordHistory: true },
 ): CronRuntimeWorkerOperations["cron.recordSkippedRuns"]["output"] {
   const { change } = input;
   const proposals = new Map(
@@ -76,11 +78,17 @@ export function recordSkippedCronRunsInWorker(
               deps: {
                 nowMs: () => policy.nowMs,
                 cronConfig: policy.cronConfig,
+                defaultAgentId: policy.defaultAgentId,
                 log: createCronMutationLogger(outcome.logs),
               },
               preparedFailureAlert: {
                 jobId: job.id,
-                value: resolveFailureAlert({ deps: { cronConfig: policy.cronConfig } }, job),
+                value: resolveFailureAlert(
+                  {
+                    deps: { cronConfig: policy.cronConfig, defaultAgentId: policy.defaultAgentId },
+                  },
+                  job,
+                ),
               },
             };
             applyJobResult(
@@ -88,6 +96,7 @@ export function recordSkippedCronRunsInWorker(
               job,
               {
                 status: "skipped",
+                errorReason: undefined,
                 completionStatus: "failed",
                 error:
                   change.kind === "ownerless"
@@ -108,6 +117,19 @@ export function recordSkippedCronRunsInWorker(
               },
             );
             outcome.jobs.push(job);
+            if (options?.recordHistory) {
+              recordSkippedCronRequestInDatabase(db, {
+                storeKey: input.storeKey,
+                jobId: job.id,
+                startedAt: policy.nowMs,
+                endedAt: policy.nowMs,
+                error:
+                  change.kind === "ownerless"
+                    ? CRON_AGENT_SELECTION_REQUIRED_MESSAGE
+                    : change.error,
+                nextRunAtMs: job.state.nextRunAtMs,
+              });
+            }
           }
           for (const notification of outcome.notifications) {
             notification.routing = policy.notificationRouting;

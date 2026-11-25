@@ -4,6 +4,7 @@ import {
   createIsolatedRegressionJob,
   setupCronRegressionFixtures,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
+import { stop } from "./service/ops-lifecycle.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 
@@ -53,8 +54,8 @@ describe("#66019 unresolved next-run regression", () => {
       expect(run).toHaveBeenCalledOnce();
       expect(state.store?.jobs[0]?.state.nextRunAtMs).toBeUndefined();
     } finally {
-      state.timer?.cancel();
-      state.timer = null;
+      stop(state);
+      await state.schedulerDrain;
     }
   });
 
@@ -78,8 +79,8 @@ describe("#66019 unresolved next-run regression", () => {
       await tick(backoffNext + 1);
       expect(run).toHaveBeenCalledTimes(2);
     } finally {
-      state.timer?.cancel();
-      state.timer = null;
+      stop(state);
+      await state.schedulerDrain;
     }
   });
 });

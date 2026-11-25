@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import { sendUpdateResultTelemetry } from "../../infra/update-result-telemetry.js";
 import {
   finishInterruptedUpdateBeforeActivation,
   getUpdateRun,
@@ -10,10 +10,9 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
+import { getCliPluginInvocationResources } from "../runtime-cleanup-scope.js";
 import {
-  exitAfterSignalExitBarriers,
   registerSignalExitBarrier,
   registerSignalExitGate,
   waitForSignalExitBarriers,
@@ -22,10 +21,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
 type MutableAdmission = {
-  record: UpdateRunRecord;
   env: NodeJS.ProcessEnv;
-  dev: number;
-  ino: number;
   active?: true;
   sealed?: true;
   settlements: Set<Promise<void>>;
@@ -33,6 +29,7 @@ type MutableAdmission = {
   phase: UpdateRunRecord["phase"];
   terminal?: Promise<void>;
   recovering?: true;
+  ledgerRecordingRetired?: true;
   interruption?: { signal: "SIGINT" | "SIGTERM" | "SIGHUP"; phase: string; error: Error };
   forward: Set<() => void>;
 };
@@ -55,6 +52,11 @@ export async function withMutableUpdateTerminalSettlement<T>(
   } finally {
     completion.resolve();
   }
+}
+
+/** Recovery owns the run after an activation-stage signal, so its receipts still belong in history. */
+export function isMutableUpdateRecovering(run: Run | undefined): boolean {
+  return (run && admissions.get(run)?.recovering) === true;
 }
 
 export function recordMutableUpdateSignalPhase(
@@ -153,29 +155,31 @@ export function retainMutableUpdateSignalWrite(
   void retained.then(release, release);
 }
 
+/**
+ * A signal cancels the CLI's command work. Rollback must outlive that: its state-ownership
+ * reads see the cancelled scope otherwise and the update leaves the Gateway stopped.
+ */
+export function runMutableUpdateRecovery<T>(operation: () => Promise<T>): Promise<T> {
+  const resources = getCliPluginInvocationResources();
+  return resources ? resources.runCleanup(operation) : operation();
+}
+
 /** Retain rollback work without retaining a potentially unbounded forward command. */
 export function captureMutableUpdateCompensation(opts: UpdateCommandOptions) {
   const run = opts.run;
   const admission = run ? admissions.get(run) : undefined;
   return async <T>(operation: () => Promise<T>): Promise<T> => {
     if (!admission) {
-      return await operation();
+      return await runMutableUpdateRecovery(operation);
     }
-    if (
-      !run ||
-      opts.run !== run ||
-      admissions.get(run) !== admission ||
-      run.runId !== admission.record.runId ||
-      !admission.active ||
-      admission.sealed
-    ) {
+    if (!admission.active || admission.sealed) {
       throw new Error("Update compensation admission is no longer current.");
     }
     const completion = createDeferredCore();
     // The admission owner joins this settlement after the compensation operation resolves.
     void trackSignalSettlement(admission, completion.promise);
     try {
-      const result = await operation();
+      const result = await runMutableUpdateRecovery(operation);
       completion.resolve();
       return result;
     } catch (error) {
@@ -187,22 +191,22 @@ export function captureMutableUpdateCompensation(opts: UpdateCommandOptions) {
 
 export function admitMutableUpdateSignalRun(run: Run, record: UpdateRunRecord): void {
   const env = { ...run.env };
-  const file = fs.lstatSync(resolveOpenClawStateSqlitePath(env));
-  if (!file.isFile()) {
-    throw new Error("Update admission requires its regular state database.");
-  }
   admissions.set(run, {
-    record,
     env,
-    dev: file.dev,
-    ino: file.ino,
     settlements: new Set(),
     phase: record.phase,
     forward: new Set(),
   });
 }
 
-export function retireMutableUpdateSignalRun(run: Run): void {
+export function retireMutableUpdateSignalLedgerRecording(run: Run): void {
+  const admission = admissions.get(run);
+  if (admission) {
+    admission.ledgerRecordingRetired = true;
+  }
+}
+
+function retireMutableUpdateSignalRun(run: Run): void {
   admissions.delete(run);
 }
 
@@ -217,11 +221,9 @@ export async function withMutableUpdateSignals<T>(
   }
   admission.active = true;
   const { env } = admission;
-  const pathname = resolveOpenClawStateSqlitePath(env);
   const prepareSettlement = () => {
     const { executorFence, runId } = run;
     if (
-      admissions.get(run) !== admission ||
       process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
       process.env.OPENCLAW_UPDATE_POST_CORE === "1" ||
       !executorFence
@@ -229,24 +231,13 @@ export async function withMutableUpdateSignals<T>(
       return undefined;
     }
     const assertCurrent = () => {
-      if (
-        opts.run !== run ||
-        admissions.get(run) !== admission ||
-        run.runId !== runId ||
-        run.executorFence !== executorFence ||
-        process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
-        process.env.OPENCLAW_UPDATE_POST_CORE === "1"
-      ) {
-        throw new Error("Interrupted update has no live installation owner.");
-      }
       executorFence.assertCurrent();
-      const file = fs.lstatSync(pathname);
-      if (!file.isFile() || file.dev !== admission.dev || file.ino !== admission.ino) {
-        throw new Error("Interrupted update's current state generation changed.");
-      }
     };
-    assertCurrent();
     return () => {
+      // Candidate migrations can retire this reader without ending signal ownership.
+      if (admission.ledgerRecordingRetired) {
+        return;
+      }
       assertCurrent();
       if (admission.unconfirmedWrite) {
         throw admission.unconfirmedWrite.error;
@@ -255,14 +246,18 @@ export async function withMutableUpdateSignals<T>(
       if (
         !expected ||
         expected.status !== "running" ||
-        !["requested", "staging", "validating"].includes(expected.phase) ||
-        expected.createdAtMs !== admission.record.createdAtMs
+        !["requested", "staging", "validating"].includes(expected.phase)
       ) {
         return;
       }
       assertCurrent();
       // Accepted worker writes have settled; the original interruption policy owns this row.
-      finishInterruptedUpdateBeforeActivation(expected, assertCurrent, { env });
+      finishInterruptedUpdateBeforeActivation(
+        expected,
+        assertCurrent,
+        { env },
+        (payload) => void sendUpdateResultTelemetry(payload, { env }),
+      );
     };
   };
   let settle: (() => void) | undefined;
@@ -302,9 +297,13 @@ export async function withMutableUpdateSignals<T>(
         `${admission.interruption.error.message} Recovering the Gateway before exit. Check openclaw update status; use openclaw update repair if recovery remains pending.`,
       );
       const deadline =
-        Date.now() +
+        performance.now() +
         (run.activationTimeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS);
-      const settled = awaitWithinDeadline(() => admission.terminal!, deadline).then((result) => {
+      const settled = awaitWithinDeadline(
+        () => admission.terminal!,
+        deadline,
+        () => performance.now(),
+      ).then((result) => {
         if (result === ABSOLUTE_DEADLINE_EXPIRED) {
           defaultRuntime.error(
             "Update interruption cleanup exceeded its recovery budget. Run openclaw update status, then openclaw update repair to inspect retained recovery.",
@@ -328,12 +327,7 @@ export async function withMutableUpdateSignals<T>(
     } catch {
       defaultRuntime.error("Update interruption could not be recorded; history remains pending.");
     }
-    if (signal === "SIGHUP") {
-      // The shared CLI signal type covers INT/TERM; retain HUP as the same
-      // accepted process outcome instead of silently converting it to SIGINT.
-      exitAfterSignalExitBarriers(code);
-    }
-    shutdown = waitForSignalExitBarriers(signal === "SIGHUP" ? undefined : signal)
+    shutdown = waitForSignalExitBarriers(signal)
       .catch(() => {
         defaultRuntime.error("Update signal cleanup did not complete.");
       })

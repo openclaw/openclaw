@@ -1,112 +1,100 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function writeExecutable(filePath: string, contents: string): void {
-  writeFileSync(filePath, contents);
-  chmodSync(filePath, 0o755);
-}
-
 function runWithStubbedKubectl(
-  args: string[],
+  mode: string,
   namespace: string,
-  options: {
-    deleteKustomizeStatus?: number;
-  } = {},
+  deleteKustomizeStatus = 0,
+  clusterStatus = 0,
 ) {
   const root = tempDirs.make("openclaw-k8s-delete-");
-  const binDir = path.join(root, "bin");
   const logPath = path.join(root, "kubectl.log");
-  mkdirSync(binDir);
+  writeFileSync(logPath, "");
 
-  writeExecutable(
-    path.join(binDir, "kubectl"),
+  writeFileSync(
+    path.join(root, "kubectl"),
     `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$OPENCLAW_KUBECTL_LOG"
 if [[ "$1" == "delete" && "$2" == "-k" ]]; then
   exit "\${OPENCLAW_KUBECTL_DELETE_KUSTOMIZE_STATUS:-0}"
 fi
-if [[ "$1" == "get" && "$2" == "namespace" ]]; then
-  exit 99
-fi
 case "$1" in
-  cluster-info|delete) exit 0 ;;
+  cluster-info) exit "\${OPENCLAW_KUBECTL_CLUSTER_STATUS:-0}" ;;
+  delete) exit 0 ;;
   *) exit 99 ;;
 esac
 `,
+    { mode: 0o755 },
   );
-  writeExecutable(path.join(binDir, "openssl"), "#!/usr/bin/env bash\nexit 0\n");
+  writeFileSync(path.join(root, "openssl"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
 
-  const result = spawnSync("bash", ["scripts/k8s/deploy.sh", ...args], {
-    cwd: process.cwd(),
+  const result = spawnSync("bash", ["scripts/k8s/deploy.sh", mode], {
     encoding: "utf8",
     env: {
       ...process.env,
-      OPENCLAW_KUBECTL_DELETE_KUSTOMIZE_STATUS: String(options.deleteKustomizeStatus ?? 0),
+      OPENCLAW_KUBECTL_DELETE_KUSTOMIZE_STATUS: String(deleteKustomizeStatus),
+      OPENCLAW_KUBECTL_CLUSTER_STATUS: String(clusterStatus),
       OPENCLAW_KUBECTL_LOG: logPath,
       OPENCLAW_NAMESPACE: namespace,
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      PATH: `${root}:${process.env.PATH ?? ""}`,
     },
   });
 
   return {
-    calls: readFileSync(logPath, "utf8").trim().split("\n"),
+    calls: readFileSync(logPath, "utf8").trim().split("\n").filter(Boolean),
     output: `${result.stdout}\n${result.stderr}`,
     result,
   };
 }
 
-describe("scripts/k8s/deploy.sh", () => {
-  function runDeleteResourcesWithStubbedKubectl(
-    namespace: string,
-    options: {
-      deleteKustomizeStatus?: number;
-    } = {},
-  ) {
-    return runWithStubbedKubectl(["--delete-resources"], namespace, options);
-  }
-
-  it("keeps a custom namespace and unrelated workloads when the legacy delete mode is used", () => {
-    const { calls, output, result } = runWithStubbedKubectl(["--delete"], "my-namespace");
-
-    expect(result.status, output).toBe(0);
-    expect(output).toContain("Deleting OpenClaw resources from namespace 'my-namespace'");
-    expect(calls).toEqual([
-      "cluster-info",
-      `delete -k ${path.resolve("scripts/k8s/manifests")} -n my-namespace --ignore-not-found`,
-      "delete secret openclaw-secrets -n my-namespace --ignore-not-found",
-    ]);
-    expect(calls).not.toContain("delete namespace my-namespace --ignore-not-found");
-    expect(calls).not.toContain("get namespace my-namespace");
-  });
-
-  it("surfaces resource delete failures instead of reporting teardown success", () => {
-    const { calls, output, result } = runDeleteResourcesWithStubbedKubectl("restricted-namespace", {
-      deleteKustomizeStatus: 17,
-    });
-
-    expect(result.status, output).toBe(17);
-    expect(output).toContain("Deleting OpenClaw resources from namespace 'restricted-namespace'");
-    expect(calls).toEqual([
-      "cluster-info",
-      `delete -k ${path.resolve("scripts/k8s/manifests")} -n restricted-namespace --ignore-not-found`,
-    ]);
-    expect(output).not.toContain("Done.");
-  });
-
-  it("deletes the namespace only when the explicit namespace teardown mode is selected", () => {
-    const { calls, output, result } = runWithStubbedKubectl(
-      ["--delete-namespace"],
-      "shared-namespace",
-    );
-
-    expect(result.status, output).toBe(0);
-    expect(output).toContain("Deleting namespace 'shared-namespace' and all resources");
-    expect(calls).toEqual(["cluster-info", "delete namespace shared-namespace --ignore-not-found"]);
-  });
+it.each(["-h", "--help"])("shows %s without contacting an unavailable cluster", (mode) => {
+  const { calls, output, result } = runWithStubbedKubectl(mode, "help-only", 0, 1);
+  expect(result.status, output).toBe(0);
+  expect(output).toContain("Usage: ./scripts/k8s/deploy.sh [OPTION]");
+  expect(calls).toEqual([]);
 });
+
+it("still requires a reachable cluster before deleting resources", () => {
+  const { calls, output, result } = runWithStubbedKubectl("--delete", "help-only", 0, 1);
+  expect(result.status, output).toBe(1);
+  expect(output).toContain("Cannot connect to cluster.");
+  expect(calls).toEqual(["cluster-info"]);
+});
+
+it.each([
+  ["--delete", "my-namespace", 0],
+  ["--delete-resources", "restricted-namespace", 17],
+  ["--delete-namespace", "shared-namespace", 0],
+] satisfies [string, string, number][])(
+  "k8s teardown %s in %s (status %s)",
+  (mode, namespace, status) => {
+    const { calls, output, result } = runWithStubbedKubectl(mode, namespace, status);
+    const wholeNamespace = mode === "--delete-namespace";
+    expect(result.status, output).toBe(status);
+    expect(output).toContain(
+      wholeNamespace
+        ? `Deleting namespace '${namespace}' and all resources`
+        : `Deleting OpenClaw resources from namespace '${namespace}'`,
+    );
+    expect(calls).toEqual([
+      "cluster-info",
+      ...(wholeNamespace
+        ? [`delete namespace ${namespace} --ignore-not-found`]
+        : [
+            `delete -k ${path.resolve("scripts/k8s/manifests")} -n ${namespace} --ignore-not-found`,
+            ...(status
+              ? []
+              : [`delete secret openclaw-secrets -n ${namespace} --ignore-not-found`]),
+          ]),
+    ]);
+    if (status) {
+      expect(output).not.toContain("Done.");
+    }
+  },
+);

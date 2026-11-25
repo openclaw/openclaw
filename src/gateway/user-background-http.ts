@@ -62,17 +62,14 @@ export async function handleUserBackgroundHttpRequest(
   );
   const profileId = auth.authenticatedUserProfile?.profileId;
   if (!profileId || !parsed.assetId) {
-    auth.assertCurrent();
     sendJson(res, 404, { error: { type: "not_found" } });
     return true;
   }
   for (;;) {
     const prepared = await getUserBackgroundImage(profileId, parsed.assetId, {
-      assertCurrent: auth.assertCurrent,
       includeBytes: req.method !== "HEAD",
     });
-    await auth.revalidate();
-    // Credential verification may yield while the image is replaced or removed.
+    // The image may be replaced or removed while the read yields.
     if (!prepared.isCurrent()) {
       continue;
     }
@@ -82,7 +79,6 @@ export async function handleUserBackgroundHttpRequest(
       options.getRuntimeConfig?.() ?? getRuntimeConfig(),
       options.publishedPort,
     );
-    auth.assertCurrent();
     const image = prepared.image;
     if (prepared.byteLength === undefined) {
       sendJson(res, 404, { error: { type: "not_found" } });

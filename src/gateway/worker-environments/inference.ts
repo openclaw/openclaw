@@ -14,7 +14,7 @@ import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import {
   createWorkerInferenceSessionControls,
   joinInferenceOperations,
@@ -30,6 +30,7 @@ import {
   validFrameBytes,
 } from "./inference-frames.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
+import { inferenceError } from "./inference-terminal-message.js";
 import type {
   ActiveInference,
   InferenceTurnIdentity,
@@ -43,9 +44,16 @@ import {
   serializeWorkerSessionTurnClaim,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
-import { formatWorkerInferenceError } from "./worker-error.js";
+import { getWorkerTurnInference } from "./placement-turn-claim-events.js";
+import { projectWorkerInferenceError } from "./worker-error.js";
 
-export type { WorkerInferenceExecutor, WorkerInferenceSink } from "./inference.types.js";
+export type { WorkerInferenceSink } from "./inference.types.js";
+
+export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
+  (await getWorkerTurnInference(params.identity)?.(params)) ??
+  inferenceError(
+    params.signal.aborted || !params.isCurrent() ? "cancelled" : "session-not-attached",
+  );
 
 // One active turn plus one provider that ignored abort. This prevents repeated
 // cancel/restart from creating unbounded provider work without wedging the session forever.
@@ -128,9 +136,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
   };
   const abortEntry = (entry: ActiveInference, reason: WorkerInferenceErrorReason): void => {
     entry.abortReason ??= reason;
-    if (!entry.controller.signal.aborted) {
-      entry.controller.abort();
-    }
+    entry.controller.abort();
   };
   const durableFence = (entry: ActiveInference): WorkerInferenceErrorReason | null => {
     const processError = processFence(entry);
@@ -247,7 +253,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
             // captured registration still owns its cancellation receipt, never a retry
             // of an uncertain write or a provider success under retired authority.
             storedOutcome = await store.complete(
-              { ...entry.storeInput, outcome: terminalError(error.reason, rawOutcome) },
+              { ...entry.storeInput, outcome: terminalError(error.reason, outcome) },
               () => assertEntry(entry),
             );
           }
@@ -302,7 +308,6 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     let outcome: WorkerInferenceTerminalOutcome;
     let failure: { error: unknown } | undefined;
     try {
-      const config = options.getConfig?.();
       outcome = await options.execute({
         identity: entry.identity,
         request: entry.request,
@@ -340,15 +345,16 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
           entry.seq = nextSeq;
         },
         isCurrent: () => durableFence(entry) === null,
-        ...(config ? { config } : {}),
       });
     } catch (caught) {
       const error = preserveInferenceAuthorityFailure(caught, entry.authorityFailure);
       failure = { error };
+      const projected = entry.abortReason ? undefined : projectWorkerInferenceError(error);
       outcome = terminalError(
         entry.abortReason ?? "provider-error",
         undefined,
-        entry.abortReason ? undefined : formatWorkerInferenceError(error),
+        projected?.message,
+        projected?.retryAfterMs,
       );
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         retainFailure(entry, error);
@@ -381,6 +387,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
       ),
       entry.storeInput,
     );
+    entry.execution = operation;
     providers.set(operation, entry.request.sessionId);
     void operation.then(
       () => providers.delete(operation),
@@ -628,8 +635,9 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
     request: WorkerInferenceCancelParams;
     revalidate?: RevalidateInference;
   }): Promise<WorkerInferenceCancelApplicationResult> => {
-    if (unknownSettlements.has(inferenceTurnKey(params.request))) {
-      await joinInferenceOperations([], unknownSettlements.get(inferenceTurnKey(params.request)));
+    const unknownFailures = unknownSettlements.get(inferenceTurnKey(params.request));
+    if (unknownFailures) {
+      await joinInferenceOperations([], unknownFailures);
     }
     const claimKey = serializeWorkerSessionTurnClaim(params.identity.turnClaim!);
     const failed = active.get(claimKey);

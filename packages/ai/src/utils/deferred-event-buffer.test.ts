@@ -15,14 +15,6 @@ describe("createDeferredEventBuffer", () => {
     expect(sink.push).toHaveBeenNthCalledWith(2, "b");
   });
 
-  it("calls onBufferedEvent callback on each push", () => {
-    const onEvent = vi.fn();
-    const buffer = createDeferredEventBuffer({ push() {} }, onEvent);
-    buffer.push("a");
-    buffer.push("b");
-    expect(onEvent).toHaveBeenCalledTimes(2);
-  });
-
   it("allows push after flush to start a new buffer", () => {
     const sink = { push: vi.fn() };
     const buffer = createDeferredEventBuffer(sink);

@@ -1,20 +1,10 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show } from "solid-js";
-import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { Icon } from "./icon.tsx";
+import { ErrorDetails } from "../config-error.tsx";
+import { statusIconPaths } from "../icon-data-status.ts";
 import { LoadingState } from "./loading-state.tsx";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-modal-dialog": HTMLAttributes<HTMLElement> & {
-        label: string;
-        "onModal-cancel"?: (event: Event) => void;
-      };
-    }
-  }
-}
+import { StrokeIcon } from "./stroke-icon.tsx";
 
 export function AgentStartupState() {
   return (
@@ -53,32 +43,41 @@ export function LazyElementStateView(props: {
 }
 
 export function LazyElementModal(props: {
-  controller: {
-    visibleState: LazyElementState | undefined;
-    retry(): void;
-    close(): void;
-  };
+  state: LazyElementState | undefined;
+  onRetry: () => void;
+  onClose: () => void;
 }) {
-  const close = () => props.controller.close();
   return (
-    <Show when={props.controller.visibleState}>
+    <Show when={props.state}>
       {(state) => (
         <openclaw-modal-dialog
           class={state().status === "loading" ? "lazy-element-loading-modal" : undefined}
           label={state().element.label}
-          onModal-cancel={close}
+          onModal-cancel={() => props.onClose()}
         >
-          {state().status === "loading" ? (
+          <Show
+            when={state().status === "loading"}
+            fallback={
+              <LazyElementStateView
+                state={state()}
+                onRetry={props.onRetry}
+                onClose={props.onClose}
+              />
+            }
+          >
             <section class="lazy-element-loading">
               <header class="lazy-element-loading__header">
                 <h2>{state().element.label}</h2>
                 <button
-                  class="btn btn--ghost btn--icon"
+                  class="oc-icon-button"
                   type="button"
                   aria-label={t("common.close")}
-                  onClick={close}
+                  onClick={() => props.onClose()}
                 >
-                  <Icon name="x" />
+                  <StrokeIcon aria-hidden="true">
+                    <path d={statusIconPaths.x[0]} />
+                    <path d={statusIconPaths.x[1]} />
+                  </StrokeIcon>
                 </button>
               </header>
               <div
@@ -91,13 +90,7 @@ export function LazyElementModal(props: {
                 <span>{t("common.loading")}</span>
               </div>
             </section>
-          ) : (
-            <LazyElementStateView
-              state={state()}
-              onRetry={() => props.controller.retry()}
-              onClose={close}
-            />
-          )}
+          </Show>
         </openclaw-modal-dialog>
       )}
     </Show>
@@ -107,9 +100,12 @@ export function LazyElementModal(props: {
 export function LazyViewError(props: {
   actionLabel?: string;
   error: unknown;
+  hideDetail?: boolean;
   onClose?: (event: Event) => void;
   onRetry: (event: Event) => void;
+  retryRef?: (element: HTMLButtonElement) => void;
   render?: () => SolidJSX.Element;
+  inline?: boolean;
   stale?: boolean;
   subtitle?: string;
 }) {
@@ -124,18 +120,22 @@ export function LazyViewError(props: {
         }
         actions={
           <>
-            <button class="btn lazy-view-error__action" onClick={(event) => props.onRetry(event)}>
-              {props.actionLabel ?? (props.stale ? t("common.reload") : t("lazyView.retry"))}
-            </button>
             {props.onClose ? (
               <button class="btn" type="button" onClick={(event) => props.onClose?.(event)}>
                 {t("common.close")}
               </button>
             ) : undefined}
+            <button
+              ref={props.retryRef}
+              class="btn lazy-view-error__action"
+              onClick={(event) => props.onRetry(event)}
+            >
+              {props.actionLabel ?? (props.stale ? t("common.reload") : t("lazyView.retry"))}
+            </button>
           </>
         }
-        detail={formatUiError(props.error)}
-        inline={Boolean(props.render)}
+        detail={props.hideDetail ? undefined : props.error}
+        inline={props.inline ?? Boolean(props.render)}
         stale={props.stale}
       />
     </>
@@ -144,8 +144,8 @@ export function LazyViewError(props: {
 
 export function PanelErrorState(props: {
   actions?: SolidJSX.Element;
-  className?: string;
-  detail?: string;
+  class?: string;
+  detail?: unknown;
   inline?: boolean;
   role?: "alert" | "status";
   stale?: boolean;
@@ -156,22 +156,23 @@ export function PanelErrorState(props: {
     <div
       class={[
         "lazy-view-error",
-        props.className,
+        props.class,
         { "lazy-view-error--inline": props.inline, "lazy-view-error--stale": props.stale },
       ]}
       role={props.role ?? "alert"}
     >
       <div class="lazy-view-error__icon" aria-hidden="true">
-        <Icon name={props.stale ? "refresh" : "alertTriangle"} />
+        <StrokeIcon aria-hidden="true">
+          <path d={statusIconPaths[props.stale ? "refresh" : "alertTriangle"].join(" ")} />
+        </StrokeIcon>
       </div>
       <div class="lazy-view-error__title">{props.title}</div>
       <div class="lazy-view-error__subtitle">{props.subtitle}</div>
-      {props.actions ? <div class="lazy-view-error__actions">{props.actions}</div> : undefined}
-      {props.detail ? (
-        <details class="lazy-view-error__details">
-          <summary>{t("chat.details")}</summary>
-          <code class="lazy-view-error__detail">{props.detail}</code>
-        </details>
+      <ErrorDetails error={props.detail} />
+      {props.actions ? (
+        <openclaw-modal-actions class="lazy-view-error__actions">
+          {props.actions}
+        </openclaw-modal-actions>
       ) : undefined}
     </div>
   );

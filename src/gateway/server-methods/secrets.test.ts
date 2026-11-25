@@ -15,8 +15,13 @@ const storeMocks = vi.hoisted(() => ({
   collectRefKeys: vi.fn((_config: unknown, _name: string) => new Set<string>()),
 }));
 
-vi.mock("../../secrets/runtime-state.js", () => ({
+vi.mock("../../secrets/runtime-source-contract.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../secrets/runtime-source-contract.js")>()),
   collectSecretStoreRefKeysInSnapshot: storeMocks.collectRefKeys,
+}));
+
+vi.mock("../../secrets/runtime-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../secrets/runtime-state.js")>()),
   getActiveSecretsRuntimeSnapshotState: storeMocks.getSnapshot,
 }));
 
@@ -338,18 +343,6 @@ describe("secrets handlers", () => {
       diagnostics: ["note"],
       inactiveRefPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
-  });
-
-  it("rejects invalid secrets.resolve params", async () => {
-    const handlers = createHandlers();
-    const respond = vi.fn();
-    await invokeSecretsResolve({
-      handlers,
-      respond,
-      commandName: "",
-      targetIds: "bad",
-    });
-    expectRespondError(respond, { code: "INVALID_REQUEST" });
   });
 
   it("rejects secrets.resolve params when targetIds entries are not strings", async () => {

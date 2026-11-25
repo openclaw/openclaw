@@ -1,91 +1,16 @@
 /**
  * Builds and sanitizes bootstrap context inserted into embedded-agent sessions.
  */
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
+import { DEFAULT_BOOTSTRAP_MAX_CHARS } from "./bootstrap-limits.js";
 import type { EmbeddedContextFile } from "./context-file.js";
-export { sanitizeGoogleAssistantFirstOrdering as sanitizeGoogleTurnOrdering } from "../../shared/google-turn-ordering.js";
 
-type ContentBlockWithSignature = {
-  thought_signature?: unknown;
-  thoughtSignature?: unknown;
-  [key: string]: unknown;
-};
-
-type ThoughtSignatureSanitizeOptions = {
-  allowBase64Only?: boolean;
-  includeCamelCase?: boolean;
-};
-
-function isBase64Signature(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const compact = trimmed.replace(/\s+/g, "");
-  if (!/^[A-Za-z0-9+/=_-]+$/.test(compact)) {
-    return false;
-  }
-  const isUrl = compact.includes("-") || compact.includes("_");
-  try {
-    const buf = Buffer.from(compact, isUrl ? "base64url" : "base64");
-    if (buf.length === 0) {
-      return false;
-    }
-    const encoded = buf.toString(isUrl ? "base64url" : "base64");
-    const normalize = (input: string) => input.replace(/=+$/g, "");
-    return normalize(encoded) === normalize(compact);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Strips Claude-style thought_signature fields from content blocks.
- *
- * Gemini expects thought signatures as base64-encoded bytes, but Claude stores message ids
- * like "msg_abc123...". We only strip "msg_*" to preserve any provider-valid signatures.
- */
-export function stripThoughtSignatures<T>(
-  content: T,
-  options?: ThoughtSignatureSanitizeOptions,
-): T {
-  if (!Array.isArray(content)) {
-    return content;
-  }
-  const allowBase64Only = options?.allowBase64Only ?? false;
-  const includeCamelCase = options?.includeCamelCase ?? false;
-  const shouldStripSignature = (value: unknown): boolean => {
-    if (!allowBase64Only) {
-      return typeof value === "string" && value.startsWith("msg_");
-    }
-    return typeof value !== "string" || !isBase64Signature(value);
-  };
-  return content.map((block) => {
-    if (!block || typeof block !== "object") {
-      return block;
-    }
-    const rec = block as ContentBlockWithSignature;
-    const stripSnake = shouldStripSignature(rec.thought_signature);
-    const stripCamel = includeCamelCase ? shouldStripSignature(rec.thoughtSignature) : false;
-    if (!stripSnake && !stripCamel) {
-      return block;
-    }
-    const next = { ...rec };
-    if (stripSnake) {
-      delete next.thought_signature;
-    }
-    if (stripCamel) {
-      delete next.thoughtSignature;
-    }
-    return next;
-  }) as T;
-}
-
-const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
 const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
 // USER.md stays directive-sized so profile guidance cannot crowd out project
 // rules or durable facts from the shared bootstrap budget.
@@ -116,12 +41,13 @@ type TrimBootstrapResult = {
   originalLength: number;
 };
 
-type PolicyDigestCandidate = { text: string; highPriority: boolean };
+// Rendered text is bounded; compact warning identities live for the process so
+// cache eviction or a session reset cannot re-emit the same truncation warning.
+const trimmedBootstrapCache = new Map<string, TrimBootstrapResult>();
+const MAX_TRIMMED_BOOTSTRAP_ENTRIES = 256;
+const warnedBootstrapTruncations = new Set<string>();
 
-type PolicyDigest = {
-  text: string;
-  omittedLines: number;
-};
+type PolicyDigestCandidate = { text: string; highPriority: boolean };
 
 function resolveBootstrapCharLimit(
   cfg: OpenClawConfig | undefined,
@@ -170,10 +96,7 @@ function normalizePolicyDigestLine(line: string): string {
   return `${truncateUtf16Safe(normalized, AGENTS_POLICY_DIGEST_MAX_LINE_CHARS - 1)}…`;
 }
 
-function buildAgentsPolicyDigest(
-  candidates: readonly PolicyDigestCandidate[],
-  budget: number,
-): PolicyDigest {
+function buildAgentsPolicyDigest(candidates: readonly PolicyDigestCandidate[], budget: number) {
   if (budget <= 0) {
     return { text: "", omittedLines: 0 };
   }
@@ -375,7 +298,11 @@ function clampToBudget(content: string, budget: number): string {
 
 export function buildBootstrapContextFiles(
   files: (Omit<WorkspaceBootstrapFile, "name"> & { name: string })[],
-  opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
+  opts?: {
+    warn?: (message: string, dedupeKey?: string) => void;
+    maxChars?: number;
+    totalMaxChars?: number;
+  },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
   const totalMaxChars = Math.max(
@@ -428,17 +355,30 @@ export function buildBootstrapContextFiles(
       opts?.warn?.("Personal USER.md exceeds the bootstrap budget; using shared defaults.");
       continue;
     }
-    const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
-    const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
-    if (!contentWithinBudget) {
+    const content = file.content ?? "";
+    const contentHash = content.length > fileMaxChars ? sha256Hex(content) : undefined;
+    const cacheKey = contentHash && JSON.stringify([file.name, contentHash, fileMaxChars]);
+    const cached = cacheKey ? trimmedBootstrapCache.get(cacheKey) : undefined;
+    const trimmed = cached ?? trimBootstrapContent(content, file.name, fileMaxChars);
+    if (cacheKey) {
+      trimmedBootstrapCache.delete(cacheKey);
+      trimmedBootstrapCache.set(cacheKey, trimmed);
+      pruneMapToMaxSize(trimmedBootstrapCache, MAX_TRIMMED_BOOTSTRAP_ENTRIES);
+    }
+    if (!trimmed.content) {
       continue;
     }
-    if (trimmed.truncated || contentWithinBudget.length < trimmed.content.length) {
-      opts?.warn?.(
-        `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
-      );
+    if (trimmed.truncated && opts?.warn) {
+      const warningKey = sha256Hex(JSON.stringify([pathValue, contentHash, fileMaxChars]));
+      if (!warnedBootstrapTruncations.has(warningKey)) {
+        warnedBootstrapTruncations.add(warningKey);
+        opts.warn(
+          `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
+          warningKey,
+        );
+      }
     }
-    appendContext(contentWithinBudget, true);
+    appendContext(trimmed.content, true);
   }
   return result;
 }

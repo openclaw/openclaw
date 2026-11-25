@@ -19,7 +19,6 @@ export type BrowserProfileCapabilities = {
   usesChromeMcp: boolean;
   usesPersistentPlaywright: boolean;
   supportsPerTabWs: boolean;
-  supportsJsonTabEndpoints: boolean;
   supportsReset: boolean;
   supportsManagedTabLimit: boolean;
   supportsBatchActions: boolean;
@@ -33,10 +32,7 @@ export type BrowserProfileCapabilities = {
   supportsVisualActions: boolean;
   supportsUploads: boolean;
   supportsDialogs: boolean;
-  supportsStorage: boolean;
-  supportsScreencast: boolean;
   supportsConsole: boolean;
-  supportsMultipleTabs: boolean;
   /** Supports native CDP accessibility/role snapshot formats and scoped snapshots. */
   supportsNativeSnapshots: boolean;
   requiresCompleteTargetEnumeration: boolean;
@@ -52,7 +48,7 @@ export type BrowserEngineDescriptor = {
 
 type BrowserEngineCdpNormalizer = {
   send: (message: object) => object;
-  receive: (message: Record<string, unknown>) => Record<string, unknown> | undefined;
+  receive: (message: Record<string, unknown>) => Record<string, unknown>[];
   clear: () => void;
 };
 
@@ -62,6 +58,8 @@ export type BrowserEngineAdapter = {
   requiresDedicatedEndpoint: boolean;
   canReconnectForSafeReads: boolean;
   maxPagesPerConnection?: number;
+  /** Engines whose only page can be released only by disconnecting. */
+  closePageClosesConnection?: boolean;
   defaultSnapshotRefs?: "aria" | "role";
   capabilities: (profile: ResolvedBrowserProfile) => BrowserProfileCapabilities;
   /** Engines with their own external launch protocol validate and resolve their profile here. */

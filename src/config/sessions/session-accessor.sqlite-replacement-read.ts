@@ -9,10 +9,12 @@ import {
   readSessionKeyBySessionIdInDatabase,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
+import type { SessionEntryReplacementCommit } from "./session-accessor.sqlite-replacement-types.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 
 export type SessionEntryReplacementSelection = {
+  fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
   sessionKeys?: readonly string[];
   includeSessionWindowOwner?: string;
   includeLabelOwners?: string;
@@ -63,16 +65,16 @@ export function readSessionEntryReplacementState(
     ? uniqueStrings([...selectedSessionKeys, ...labelOwnerKeys])
     : [...iterateSessionEntryKeys(database)];
   const expectedRows = new Map<string, ResolvedSessionEntryRow>();
+  const projection = params.fieldPatch?.snapshotFields ?? (params.fieldPatch ? "list" : "full");
   const readPrepared =
-    selected.length > 1 ? prepareExactSessionEntryRowReads(database, selected) : undefined;
+    selected.length > 1
+      ? prepareExactSessionEntryRowReads(database, selected, projection)
+      : undefined;
   const entries = selected.flatMap((sessionKey) => {
     const row = readPrepared
       ? readPrepared(sessionKey)
-      : readExactSessionEntryRow(database, sessionKey);
+      : readExactSessionEntryRow(database, sessionKey, projection);
     if (!row) {
-      if (!selectedSessionKeys) {
-        throw new Error(`SQLite session entry changed before replacement for ${sessionKey}`);
-      }
       return [];
     }
     expectedRows.set(sessionKey, row);

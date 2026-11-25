@@ -40,10 +40,9 @@ export async function disposeOpenClawAgentDatabaseByPath(
     isSameOpenClawAgentDatabasePath(database.path, resolvedPath),
   );
   const database = native[0];
-  const incognito = database && agentDatabaseLifecycle.incognito.has(database);
   const identity = readDatabasePathIdentitySync(resolvedPath);
   const context =
-    !incognito && native.length <= 1 && (identity.key.startsWith("file:") || database)
+    native.length <= 1 && (identity.key.startsWith("file:") || database)
       ? captureOpenClawStateWorkerContext({
           env: options.env ?? (database && agentDatabaseLifecycle.leases.get(database.path)?.env),
         })
@@ -66,7 +65,7 @@ export async function disposeOpenClawAgentDatabaseByPath(
   };
   const dispose = async () => {
     for (const pathname of paths) {
-      invalidateOpenClawAgentDatabaseValidation(pathname);
+      invalidateOpenClawAgentDatabaseValidation(pathname, "agent database disposal");
     }
     for (const owner of pending) {
       revokePendingAgentDatabaseOpen(owner.path, owner.agentId);
@@ -93,8 +92,8 @@ export async function disposeOpenClawAgentDatabaseByPath(
       return results.some((result) => result.status === "fulfilled" && result.value);
     };
     if (!context) {
-      const closed = await closeCapturedPaths();
-      return incognito ? closed : false;
+      await closeCapturedPaths();
+      return false;
     }
     let target = database && { agentId: database.agentId, path: database.path };
     if (!target) {
@@ -124,7 +123,7 @@ export async function disposeOpenClawAgentDatabaseByPath(
     };
     return withAgentDatabaseCloseFence({ path: owned.path }, async () => {
       assertOwned();
-      invalidateOpenClawAgentDatabaseValidation(owned.path);
+      invalidateOpenClawAgentDatabaseValidation(owned.path, "agent database disposal");
       await closeCapturedPaths(owned.path);
       assertOwned();
       const publication = captureOpenClawAgentDatabaseRegistration({

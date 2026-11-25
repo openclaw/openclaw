@@ -97,7 +97,10 @@ package SHA/version, and skipped-live reason.
 
 ## Package Acceptance Plan
 
-Use this when validating a release branch, beta, or candidate package:
+Full Release Validation owns final candidate qualification with admitted Q
+(default Q=C, or an explicit reviewed exact Q) and the
+exact publication tarballs. Use standalone Package Acceptance for diagnostics
+or postpublish confidence, not as a replacement candidate qualification:
 
 ```bash
 gh workflow run package-acceptance.yml \
@@ -111,12 +114,14 @@ gh workflow run package-acceptance.yml \
   -f telegram_mode=mock-openai
 ```
 
-Use `source=npm -f package_spec=openclaw@beta` for published beta proof. Keep
-`workflow_ref` as trusted current harness code unless the release process says
-otherwise.
+Use `source=npm -f package_spec=openclaw@beta` for published beta proof. These
+standalone diagnostic/confidence runs may use trusted current harness code;
+candidate qualification must retain its exact admitted Q instead, without
+changing C's source, package bytes, version, or baselines.
 
 For extended-stable shared publication, require complete exact-target Full
-Release Validation from the trusted main-pinned `release-ci/*` harness. Direct
+Release Validation from the admitted `release-ci/*` harness at the exact Q,
+with trusted P admission and publication tooling separate. Direct
 canonical-branch or `main` producers do not satisfy the protected publisher.
 Package Acceptance is a post-publish selector smoke:
 

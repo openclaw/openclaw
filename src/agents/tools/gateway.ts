@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -39,9 +40,9 @@ import {
   loadOrCreateDeviceIdentityAsync,
 } from "../../infra/device-identity-async.js";
 import type { DeviceIdentity } from "../../infra/device-identity.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { prepareQuestionGatewayDispatch } from "../harness/host-private-capabilities.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
+import { hasInProcessGatewayToolCaller } from "./gateway-caller-availability.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { getGatewaySessionSpawnParentExecutionIdentityToken } from "./gateway-session-spawn-execution-identity.js";
@@ -60,11 +61,7 @@ export type GatewayCallOptions = {
 /** Presentation hint from the admitted operator source; RPC admission remains authoritative. */
 export function readGatewayToolOperatorScopes(): readonly string[] | undefined {
   const authority = getGatewayToolCallerIdentity()?.operatorAuthority;
-  if (!authority) {
-    return undefined;
-  }
-  authority.assertCurrent();
-  return [...authority.scopes];
+  return authority ? [...authority.scopes] : undefined;
 }
 
 type GatewayOverrideTarget = "local" | "remote";
@@ -250,26 +247,30 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "wake",
   "cron.list",
   "cron.get",
+  "cron.scratch.get",
+  "cron.scratch.set",
   "cron.add",
   "cron.update",
   "cron.remove",
+  "cron.bind",
   "cron.run",
   "cron.runs",
   "secrets.store.delete",
 ]);
 
 const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
+  "exec.approval.waitDecision",
   "ui.command",
   "node.invoke",
   "computer.invoke",
   "question.request",
 ]);
 
-function resolveApprovalRuntimeTokenForGatewayTool(params: {
+async function resolveApprovalRuntimeTokenForGatewayTool(params: {
   method: string;
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
-}): string | undefined {
+}): Promise<string | undefined> {
   if (!APPROVAL_RUNTIME_METHODS.has(params.method)) {
     return undefined;
   }
@@ -505,7 +506,6 @@ type MessageActionAgentRuntimeIdentityParams = {
   sessionId?: string;
   sourceReplyFinal?: boolean;
   sourceReplyToolCallId?: string;
-  callerOwnsTerminalReceipt?: boolean;
 };
 
 async function resolveMessageActionIdentity<T>(
@@ -542,7 +542,9 @@ async function resolveMessageActionIdentity<T>(
   });
   if (!messageActionContext) {
     if (terminalSourceReply) {
-      throw new Error("terminal source reply requires an active turn capability");
+      throw new Error(
+        "terminal source reply requires an active turn capability. This run has no live source turn to finish (it ended, or this is a heartbeat or background run), so changing channel or target will not help. To deliver the message anyway, send it again with final=false.",
+      );
     }
     return undefined;
   }
@@ -553,11 +555,8 @@ async function resolveMessageActionIdentity<T>(
     throw new Error("terminal source reply requires source-turn correlation");
   }
   if (usesUntrustedGatewayContext) {
-    if (params.callerOwnsTerminalReceipt !== true) {
-      throw new Error("terminal source reply requires the trusted local gateway context");
-    }
-    // Remote gateways cannot trust caller-supplied turn metadata. The agent
-    // process owns the durable receipt and sends no source authority over RPC.
+    // Remote gateways cannot trust caller-supplied turn metadata. Keep source
+    // completion authority in the originating agent process.
     return undefined;
   }
   if (!identity.operationalRunInstance) {
@@ -604,12 +603,10 @@ export async function resolveMessageActionAgentRuntimeIdentity(
 
 /** Explicit destinations remain transport calls; retired hosted bindings must reject locally. */
 export function shouldUseInProcessGatewayTool(opts: GatewayCallOptions): boolean {
-  const resolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   return (
-    Boolean(resolver) &&
     !trimToUndefined(opts.gatewayUrl) &&
     !trimToUndefined(opts.gatewayToken) &&
-    resolver?.()?.localEmbedded !== true
+    hasInProcessGatewayToolCaller()
   );
 }
 
@@ -672,7 +669,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   }
   const agentRuntimeIdentityToken =
     typeof runtimeIdentity === "string" ? runtimeIdentity : undefined;
-  const approvalRuntimeToken = resolveApprovalRuntimeTokenForGatewayTool({
+  const approvalRuntimeToken = await resolveApprovalRuntimeTokenForGatewayTool({
     method,
     opts,
     target: gateway.target,

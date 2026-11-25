@@ -3,21 +3,23 @@
  * Source presence selects the canonical loader; it does not resolve credentials.
  */
 import path from "node:path";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
-import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
-import { hasLegacyAuthProfileCredentialSource } from "./legacy-source-diagnostic.js";
-import { withAuthProfileCleanup } from "./operation-cleanup.js";
+import {
+  hasLegacyAuthProfileCredentialSource,
+  hasLegacyAuthProfileCredentialSourceAsync,
+} from "./legacy-source-diagnostic.js";
 import {
   resolveSharedAuthStoreOwnershipAsync,
   resolveSharedAuthStorePath,
 } from "./path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { coercePersistedAuthProfileStore } from "./persisted.js";
+import { withAuthProfileReaderCleanup } from "./reader-cleanup.js";
 import {
   getRuntimeAuthProfileStoreSnapshotCore,
   hasAnyRuntimeAuthProfileStoreSource,
@@ -29,7 +31,6 @@ import {
   inspectPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStateRaw,
   resolveAuthProfileDatabasePath,
-  resolveAuthProfileDatabaseOwnerId,
 } from "./sqlite.js";
 import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 
@@ -71,6 +72,7 @@ function canonicalStoreOwnsProviderRoute(
 
 /** Synchronous Doctor/CLI and released coding-tool construction compatibility. */
 export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
+  prepareSharedAuthStoreOwnershipForNative();
   if (hasLocalAuthProfileStoreSource(agentDir) || hasAnyRuntimeAuthProfileStoreSource(agentDir)) {
     return true;
   }
@@ -91,54 +93,63 @@ export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
 /** Runtime source detection retains the existing readers through classification and cleanup. */
 export async function hasAnyAuthProfileStoreSourceAsync(
   agentDir?: string,
-  reader?: SessionEntryCohortReader,
+  cohort?: { agentId: string; reader: SessionEntryCohortReader },
 ): Promise<boolean> {
+  const reader = cohort?.reader;
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const localPath = agentDir ? resolveAuthProfileDatabasePath(agentDir) : undefined;
   const localDir = localPath ? path.dirname(localPath) : undefined;
-  if (
-    localDir &&
-    (hasRuntimeAuthProfileStoreSource(localDir, env) ||
-      hasLegacyAuthProfileCredentialSource(localDir, env))
-  ) {
+  if (localDir && hasRuntimeAuthProfileStoreSource(localDir, env)) {
     return true;
   }
   const context = captureOpenClawStateWorkerContext({ env });
+  const assertRootCurrent = () => {
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
+  };
+  const localLegacy = localDir && (await hasLegacyAuthProfileCredentialSourceAsync(localDir, env));
+  assertRootCurrent();
+  if (localLegacy) {
+    return true;
+  }
   const legacySharedPath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir(env));
   const paths = [...new Set([legacySharedPath, ...(localPath ? [localPath] : [])])];
-  const cohortPath =
+  let cohortPath =
     reader &&
     path.resolve(resolveStateDir(reader.database.env)) === path.resolve(resolveStateDir(env))
       ? paths.find(
-          (databasePath) =>
-            path.resolve(databasePath) === path.resolve(reader.database.path) &&
-            resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)) ===
-              reader.database.agentId,
+          (databasePath) => path.resolve(databasePath) === path.resolve(reader.database.path),
         )
       : undefined;
-  // Capture both possible shared owners before the first read can yield.
+  if (cohortPath && cohort?.agentId !== reader?.database.agentId) {
+    cohortPath = undefined;
+  }
+  // Each possible shared owner captures revocation before filesystem preparation yields.
   const readers = new Map(
-    paths
-      .filter((databasePath) => databasePath !== cohortPath)
-      .map((databasePath) => [
-        databasePath,
-        prepareAgentAuthProfileRowsRead({
-          databasePath,
-          agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-          env,
-        }),
-      ]),
+    await Promise.all(
+      paths
+        .filter((databasePath) => databasePath !== cohortPath)
+        .map(
+          async (databasePath) =>
+            [
+              databasePath,
+              await prepareAgentAuthProfileRowsRead({
+                databasePath,
+                env,
+              }),
+            ] as const,
+        ),
+    ),
   );
-  const usedReaders = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
+  const usedReaders = new Set<Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>>();
   let usedShared = false;
   let usedCohort = false;
   const hasSource = (rows: AuthProfileRowRead): boolean =>
     rows.store.status !== "missing" ||
     (rows.state.status === "readable" && Boolean(rows.state.raw));
   const assertCohortCurrent = () => {
-    context.maintenanceScope?.assertAdmission();
-    context.admission.assertCurrent();
+    assertRootCurrent();
     reader?.assertCurrent();
   };
   const readAgentSource = async (databasePath: string): Promise<boolean> => {
@@ -176,34 +187,16 @@ export async function hasAnyAuthProfileStoreSourceAsync(
     if (localPath === sharedPath) {
       return false;
     }
-    if (hasLegacyAuthProfileCredentialSource(undefined, env)) {
+    if (await hasLegacyAuthProfileCredentialSourceAsync(undefined, env)) {
       return true;
     }
     return ownership.location === "state-db"
       ? hasSource(await readSharedAuthProfileRows(context))
       : readAgentSource(sharedPath);
   };
-  const result = await withAuthProfileCleanup(readSource, async (outcome) => {
-    const cleanup = await Promise.allSettled(
-      [...readers.values()].map((source) => source.dispose()),
-    );
-    const failures = cleanup.flatMap((entry) =>
-      entry.status === "rejected" ? [entry.reason] : [],
-    );
-    if (failures.length) {
-      const error =
-        failures.length === 1
-          ? failures[0]
-          : new AggregateError(failures, "Auth source reader cleanup failed", {
-              cause: failures[0],
-            });
-      throw outcome.ok
-        ? error
-        : withSqliteWorkerCleanupFailure(
-            toErrorObject(outcome.error, "Auth source read failed"),
-            error,
-          );
-    }
+  const result = await withAuthProfileReaderCleanup(readSource, readers.values(), {
+    read: "Auth source read failed",
+    cleanup: "Auth source reader cleanup failed",
   });
   for (const source of usedReaders) {
     source.assertCurrent();
@@ -212,14 +205,43 @@ export async function hasAnyAuthProfileStoreSourceAsync(
     assertCohortCurrent();
   }
   if (usedShared) {
-    context.maintenanceScope?.assertAdmission();
-    context.admission.assertCurrent();
+    assertRootCurrent();
   }
   return result;
 }
 
+/** Local-only presence keeps Doctor from inspecting inherited profiles as another store. */
+export async function hasLocalAuthProfileStoreSourceAsync(agentDir: string): Promise<boolean> {
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  if (
+    hasRuntimeAuthProfileStoreSource(agentDir, env) ||
+    (await hasLegacyAuthProfileCredentialSourceAsync(agentDir, env))
+  ) {
+    return true;
+  }
+  const databasePath = resolveAuthProfileDatabasePath(agentDir);
+  const source = await prepareAgentAuthProfileRowsRead({
+    databasePath,
+    env,
+  });
+  return withAuthProfileReaderCleanup(
+    async () => {
+      const rows = await source.read();
+      source.assertCurrent();
+      return (
+        rows.store.status !== "missing" ||
+        (rows.state.status === "readable" && Boolean(rows.state.raw))
+      );
+    },
+    [source],
+    { read: "Local auth source read failed", cleanup: "Local auth source cleanup failed" },
+  );
+}
+
 /** Returns true when the requested agent dir has a local auth profile source. */
 export function hasLocalAuthProfileStoreSource(agentDir?: string): boolean {
+  prepareSharedAuthStoreOwnershipForNative();
   return (
     hasRuntimeAuthProfileStoreSource(agentDir) ||
     hasLegacyAuthProfileCredentialSource(agentDir) ||
@@ -246,6 +268,7 @@ export function hasAuthProfileStoreSourceForProvider(
   if (profileIds?.length === 0) {
     return false;
   }
+  prepareSharedAuthStoreOwnershipForNative();
   // A retired credential source is intentionally opaque to runtime. Treat it
   // as potentially owning the provider so the canonical loader can fail closed
   // with AUTH_PROFILE_MIGRATION_REQUIRED instead of falling through to env auth.

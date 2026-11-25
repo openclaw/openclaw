@@ -97,6 +97,15 @@ function resolveLookupChildSchema(
   if (properties && Object.hasOwn(properties, segment)) {
     return asSchemaObject(properties[segment]);
   }
+  for (const [pattern, child] of Object.entries(schema.patternProperties ?? {})) {
+    try {
+      if (new RegExp(pattern).test(segment)) {
+        return asSchemaObject(child);
+      }
+    } catch {
+      // Config validation reports malformed plugin schemas; lookup remains available.
+    }
+  }
 
   const itemIndex = parseConfigPathArrayIndex(segment);
   const items = resolveItemsSchema(schema, itemIndex);
@@ -316,6 +325,14 @@ function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): Js
     next.additionalProperties = stripSchemaForLookup(
       schema.additionalProperties,
       nestedFormDepth + 1,
+    );
+  }
+  if (schema.patternProperties) {
+    next.patternProperties = Object.fromEntries(
+      Object.entries(schema.patternProperties).map(([pattern, child]) => [
+        pattern,
+        stripSchemaForLookup(child, nestedFormDepth + 1),
+      ]),
     );
   }
   if (Array.isArray(schema.items)) {

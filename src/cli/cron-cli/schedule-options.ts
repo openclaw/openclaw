@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isValidCronExpression } from "../../cron/expression.js";
 import type { CronSchedule } from "../../cron/types.js";
 import { CronCliError } from "./cron-cli-error.js";
 import {
@@ -12,7 +13,7 @@ import {
   parseCronStreamCommandArgv,
   parseCronTimezoneOption,
   parsePositiveCronDurationMs,
-} from "./shared.js";
+} from "./input-options.js";
 
 type ScheduleOptionInput = {
   at?: unknown;
@@ -60,12 +61,18 @@ export function resolveCronCreateScheduleFromArgs(
       );
     }
     normalized.every = /^every\s+(.+)$/iu.exec(positionalSchedule)?.[1]?.trim() ?? "";
-    const fields = positionalSchedule.split(/\s+/u).length;
-    normalized.cronExpr = fields === 5 || fields === 6 ? positionalSchedule : "";
-    normalized.at = normalized.every || normalized.cronExpr ? "" : positionalSchedule;
-  }
-  if (normalized.onExitCwd && !normalized.onExitCommand) {
-    throw new CronCliError("--on-exit-cwd requires --on-exit.");
+    if (normalized.every) {
+      // An every-prefixed positional owns the every slot: a valid cron expression
+      // starts with a minute field, so it can never begin with "every". Filling
+      // cronExpr from the word count here used to double-fill and surface
+      // "Choose exactly one schedule" for a single positional argument.
+      normalized.cronExpr = "";
+      normalized.at = "";
+    } else {
+      const fields = positionalSchedule.split(/\s+/u).length;
+      normalized.cronExpr = fields === 5 || fields === 6 ? positionalSchedule : "";
+      normalized.at = normalized.cronExpr ? "" : positionalSchedule;
+    }
   }
   const chosen = countChosenSchedules(normalized);
   if (chosen !== 1) {
@@ -180,7 +187,15 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
       throw new CronCliError("Schedule values must not be blank");
     }
   }
+  const onExitCommand = readNonBlankString(options.onExit) ?? "";
+  const onExitCwd = readNonBlankString(options.onExitCwd);
+  if (onExitCwd && !onExitCommand) {
+    throw new CronCliError("--on-exit-cwd requires --on-exit.");
+  }
   const staggerRaw = normalizeOptionalString(options.stagger) ?? "";
+  if (typeof options.stagger === "string" && !staggerRaw) {
+    throw new CronCliError("Invalid --stagger; use e.g. 30s, 1m, 5m");
+  }
   const useExact = Boolean(options.exact);
   if (staggerRaw && useExact) {
     throw new CronCliError("Choose either --stagger or --exact, not both");
@@ -207,10 +222,10 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
     at: normalizeOptionalString(options.at) ?? "",
     every: normalizeOptionalString(options.every) ?? "",
     cronExpr: normalizeOptionalString(options.cron) ?? "",
-    onExitCommand: readNonBlankString(options.onExit) ?? "",
-    onExitCwd: normalizeOptionalString(options.onExitCwd),
+    onExitCommand,
+    onExitCwd,
     streamCommand: parseCronStreamCommandArgv(options.streamCommand),
-    streamCwd: normalizeOptionalString(options.streamCwd),
+    streamCwd: readNonBlankString(options.streamCwd),
     streamCwdSupplied: options.streamCwd !== undefined,
     streamMode,
     streamModeSupplied,
@@ -250,9 +265,6 @@ function resolveDirectSchedule(
   options: NormalizedScheduleOptions,
   behavior: { deferStreamMetadataValidation?: boolean } = {},
 ): CronSchedule | undefined {
-  if (options.onExitCwd && !options.onExitCommand) {
-    throw new CronCliError("--on-exit-cwd requires --on-exit.");
-  }
   if (hasStreamSchedulePatch(options) && !options.streamCommand) {
     throw new CronCliError("Stream options require --stream-command.");
   }
@@ -277,10 +289,16 @@ function resolveDirectSchedule(
     return { kind: "every", everyMs };
   }
   if (options.cronExpr) {
+    const tz = parseCronTimezoneOption(options.tz);
+    if (!isValidCronExpression(options.cronExpr, tz)) {
+      throw new CronCliError(
+        `Invalid cron expression "${options.cronExpr}". Use 5 fields like "0 9 * * *" or 6 fields like "0 0 9 * * *".`,
+      );
+    }
     return {
       kind: "cron",
       expr: options.cronExpr,
-      tz: parseCronTimezoneOption(options.tz),
+      tz,
       staggerMs: options.requestedStaggerMs,
     };
   }

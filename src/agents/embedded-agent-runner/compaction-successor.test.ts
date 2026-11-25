@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionArtifactDirectory } from "../../config/sessions/paths.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { HookRunner } from "../../plugins/hooks.js";
@@ -54,6 +55,8 @@ async function withAcceptanceFixture(
   await withOpenClawTestState(
     { label: "compaction-successor", scenario: "minimal" },
     async (state) => {
+      const config = {};
+      setRuntimeConfigSnapshot(config, config);
       const {
         appendTranscriptMessage,
         applySessionEntryLifecycleMutation,
@@ -134,7 +137,7 @@ async function withAcceptanceFixture(
             activeWriterRunId: entry.activeWriterRunId,
           },
           assertActive,
-          config: {},
+          config,
           result: {
             ok: true,
             compacted: true,
@@ -255,14 +258,14 @@ describe("acceptCompactionSuccessor", () => {
     "owns MCP predecessor cleanup after %s",
     async (kind) => {
       await withAcceptanceFixture({}, async (fixture) => {
-        const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+        const { getOrCreateSessionMcpRuntime, getSessionMcpRuntimeTestManager, unopenedMcpConfig } =
           await import("../agent-bundle-mcp-manager.test-support.js");
-        const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
+        const { setSessionMcpRuntimeScheduler } =
           await import("../agent-bundle-mcp-manager-api.js");
         const scheduler = createTestGatewayScheduler();
         onTestFinished(() => scheduler.stop());
         await setSessionMcpRuntimeScheduler(scheduler);
-        const manager = getSessionMcpRuntimeManagerForTesting();
+        const manager = getSessionMcpRuntimeTestManager();
         const create = (sessionId: string) =>
           getOrCreateSessionMcpRuntime({
             sessionId,

@@ -9,13 +9,13 @@ import { isContainerEnvironment } from "./net.js";
  * Seeds runtime-only Control UI origins when a non-loopback gateway bind would
  * otherwise reject the browser that just opened the local UI.
  */
-export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
+export function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   config: OpenClawConfig;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   runtimeBind?: unknown;
   runtimePort?: unknown;
   publishedPort?: number;
-}): Promise<{ config: OpenClawConfig; seededAllowedOrigins: boolean }> {
+}): { config: OpenClawConfig; seededAllowedOrigins: boolean } {
   if (
     params.config.gateway?.controlUi?.allowedOrigins !== undefined ||
     resolveControlUiAllowedOrigins(params.config, params.publishedPort).length > 0

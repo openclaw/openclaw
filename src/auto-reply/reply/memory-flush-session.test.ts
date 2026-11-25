@@ -1,10 +1,12 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   loadTranscriptEventsSync,
   readActiveTranscriptEntryAnchor,
@@ -17,80 +19,7 @@ import { createSessionTranscriptHeader } from "../../config/sessions/transcript-
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { ensureMemoryFlushTargetFile, prepareMemoryFlushSession } from "./memory-flush-session.js";
-
-it.each(["mkdir", "open"] as const)(
-  "settles memory target preparation after operator revocation during %s",
-  async (boundary) => {
-    await withOpenClawTestState({ label: "memory-target-authority" }, async (state) => {
-      const targetPath = path.join(state.workspaceDir, "memory", "checkpoint.md");
-      const originalMkdir = fs.mkdir.bind(fs);
-      const originalOpen = fs.open.bind(fs);
-      const refusal = new Error("memory target authority revoked");
-      let operatorCurrent = true;
-      const operatorAuthority = createAdmittedRunOperatorAuthority({
-        profileId: "guest",
-        scopes: ["operator.write"],
-        assertCurrent: () => {
-          if (!operatorCurrent) {
-            throw refusal;
-          }
-        },
-      });
-      let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-      let closes = 0;
-      let restoreClose: (() => void) | undefined;
-      const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementationOnce(async (directory, options) => {
-        const created = await originalMkdir(directory, options);
-        if (boundary === "mkdir") {
-          operatorCurrent = false;
-        }
-        return created;
-      });
-      const openSpy = vi.spyOn(fs, "open").mockImplementationOnce(async (file, flags, mode) => {
-        handle = await originalOpen(file, flags, mode);
-        const close = handle.close.bind(handle);
-        const closeSpy = vi.spyOn(handle, "close").mockImplementation(async () => {
-          closes += 1;
-          await close();
-        });
-        restoreClose = () => closeSpy.mockRestore();
-        if (boundary === "open") {
-          operatorCurrent = false;
-        }
-        return handle;
-      });
-      try {
-        await expect(
-          ensureMemoryFlushTargetFile({
-            workspaceDir: state.workspaceDir,
-            relativePath: "memory/checkpoint.md",
-            assertCurrent: () => {
-              operatorAuthority.assertCurrent();
-            },
-          }),
-        ).rejects.toBe(refusal);
-        expect(openSpy).toHaveBeenCalledTimes(boundary === "open" ? 1 : 0);
-        expect(closes).toBe(boundary === "open" ? 1 : 0);
-        if (boundary === "open") {
-          await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("");
-        } else {
-          await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-      } finally {
-        mkdirSpy.mockRestore();
-        openSpy.mockRestore();
-        try {
-          if (handle && closes === 0) {
-            await handle.close();
-          }
-        } finally {
-          restoreClose?.();
-        }
-      }
-    });
-  },
-);
+import { prepareMemoryFlushSession } from "./memory-flush-session.js";
 
 async function withAdmittedInput(
   compacted: boolean,
@@ -104,6 +33,8 @@ async function withAdmittedInput(
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ label: "memory-checkpoint" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const scope = {
       agentId: "main",
       sessionId: "foreground-session",
@@ -207,26 +138,6 @@ it("isolates a required checkpoint while preserving compacted admitted input", a
   });
 });
 
-it("does not use an admission after the source transcript changes", async () => {
-  await withAdmittedInput(false, async ({ scope, workspaceDir, admission }) => {
-    const current = SessionManager.open(scope);
-    current.branch(admission.effectiveParentId!);
-    current.appendLeafControl({
-      targetId: current.getLeafId(),
-      appendParentId: current.getAppendParentId(),
-    });
-    await waitForSessionTranscriptProjection(scope);
-    await expect(
-      prepareMemoryFlushSession({
-        admission,
-        source: scope,
-        runId: "stale-helper",
-        workspaceDir,
-      }),
-    ).rejects.toThrow(/admission|visible/i);
-  });
-});
-
 it("does not acquire a checkpoint after caller cancellation", async () => {
   await withAdmittedInput(false, async ({ scope, workspaceDir, admission }) => {
     const before = loadTranscriptEventsSync(scope);
@@ -268,6 +179,8 @@ it("preserves empty transcript header handling during detached acquisition", asy
 
 it("rejects a partial bounded checkpoint instead of silently starting with less history", async () => {
   await withOpenClawTestState({ label: "bounded-memory-checkpoint" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const scope = {
       agentId: "main",
       sessionId: "bounded-checkpoint",

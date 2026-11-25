@@ -1,5 +1,6 @@
 // Real Memory Core manager and embedding close contract shared by Gateway close tests.
 import assert from "node:assert/strict";
+import path from "node:path";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
@@ -12,23 +13,37 @@ import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
+import {
+  resolveBundledPluginPublicModulePath,
+  resolveRelativeBundledPluginPublicModuleId,
+} from "../test-utils/bundled-plugin-public-surface.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
-export async function createGatewayMemoryCloseRegistryFactory(config: OpenClawConfig) {
-  const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
-    createMemoryRuntime: (host: {
-      runInBackgroundContext: <T>(run: () => T) => T;
-    }) => MemoryPluginRuntime;
-    configureMemoryCoreDreamingState: (
-      open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
-    ) => void;
-  }>(
-    resolveRelativeBundledPluginPublicModuleId({
-      fromModuleUrl: import.meta.url,
-      pluginId: "memory-core",
-      artifactBasename: "runtime-api.js",
-    }),
-  );
+// Load the real plugin fixture during collection, outside individual test deadlines.
+const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
+  createMemoryRuntime: (host: {
+    runInBackgroundContext: <T>(run: () => T) => T;
+  }) => MemoryPluginRuntime;
+  configureMemoryCoreDreamingState: (
+    open: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+  ) => void;
+}>(
+  resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "memory-core",
+    artifactBasename: "runtime-api.js",
+  }),
+);
+
+export function createGatewayMemoryCloseRegistryFactory(config: OpenClawConfig) {
+  // Workers must use the same source artifacts as the imported real Memory fixture.
+  const workerApi = resolveBundledPluginPublicModulePath({
+    pluginId: "memory-core",
+    artifactBasename: "worker-api.js",
+  });
+  // The enclosing Gateway/state fixture owns restoration of these selectors.
+  deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+  setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.dirname(path.dirname(workerApi)));
   const env = { ...process.env };
   const registry = (close: () => Promise<void>, beforeEmbedBatch?: () => Promise<void>) => {
     const builder = createPluginRegistry({

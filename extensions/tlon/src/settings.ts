@@ -1,17 +1,39 @@
 // Settings in Urbit's %settings agent hot-reload without restarting the Gateway.
-import { asBoolean, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asBoolean,
+  asNullableRecord,
+  filterStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  TlonClubPolicySchema,
+  TlonClubRulesSchema,
+  type TlonClubPolicy,
+  type TlonClubRules,
+} from "./config-schema.js";
+import { TLON_CLUB_ID_RE } from "./targets.js";
 import type { UrbitSSEClient } from "./urbit/sse-client.js";
 
 export const TLON_PENDING_APPROVAL_LIMIT = 100;
 
-/** Pending approval request stored for persistence */
 export type PendingApproval = {
   id: string;
-  type: "dm" | "channel" | "group";
+  type: "dm" | "channel" | "group" | "club";
   requestingShip: string;
   channelNest?: string;
   groupFlag?: string;
   messagePreview?: string;
+  /**
+   * Set when the request came from a group DM (club). The requesting ship is then only an
+   * unverified author claim, so approval replays must keep the club-scoped, non-owner identity.
+   */
+  clubId?: string;
+  /** Only new club requests may grant standing conversation access. */
+  clubMode?: "once" | "message";
+  /**
+   * Set when a DM request came from a verified 1:1 DM. DM requests stored before this marker
+   * existed cannot be told apart from group DM claims, so their messages are never replayed.
+   */
+  verifiedDirect?: boolean;
   /** Full message context for processing after approval */
   originalMessage?: {
     messageId: string;
@@ -27,6 +49,8 @@ export type PendingApproval = {
 export type TlonSettingsStore = {
   groupChannels?: string[];
   dmAllowlist?: string[];
+  clubPolicy?: TlonClubPolicy;
+  clubRules?: TlonClubRules;
   showModelSig?: boolean;
   autoAcceptDmInvites?: boolean;
   autoDiscoverChannels?: boolean;
@@ -44,7 +68,6 @@ export type TlonSettingsStore = {
   defaultAuthorizedShips?: string[];
   /** Ship that receives approval requests for DMs, channel mentions, and group invites */
   ownerShip?: string;
-  /** Pending approval requests awaiting owner response */
   pendingApprovals?: PendingApproval[];
 };
 
@@ -92,6 +115,8 @@ function parseSettingsResponse(raw: unknown): TlonSettingsStore {
     dmAllowlist: Array.isArray(settings.dmAllowlist)
       ? filterStringEntries(settings.dmAllowlist)
       : undefined,
+    clubPolicy: TlonClubPolicySchema.safeParse(settings.clubPolicy).data,
+    clubRules: TlonClubRulesSchema.safeParse(parseJsonSetting(settings.clubRules)).data,
     autoDiscoverChannels: asBoolean(settings.autoDiscoverChannels),
     showModelSig: asBoolean(settings.showModelSig),
     autoAcceptDmInvites: asBoolean(settings.autoAcceptDmInvites),
@@ -128,22 +153,31 @@ function parsePendingApprovals(value: unknown): PendingApproval[] | undefined {
     const obj = item as Record<string, unknown>;
     return (
       typeof obj.id === "string" &&
-      (obj.type === "dm" || obj.type === "channel" || obj.type === "group") &&
+      (obj.type === "dm" ||
+        obj.type === "channel" ||
+        obj.type === "group" ||
+        (obj.type === "club" &&
+          typeof obj.clubId === "string" &&
+          TLON_CLUB_ID_RE.test(obj.clubId) &&
+          (obj.clubMode === "once" || obj.clubMode === "message"))) &&
       typeof obj.requestingShip === "string" &&
-      typeof obj.timestamp === "number"
+      typeof obj.timestamp === "number" &&
+      (obj.clubId === undefined || typeof obj.clubId === "string") &&
+      (obj.verifiedDirect === undefined || typeof obj.verifiedDirect === "boolean")
     );
   });
 }
 
 function parseSettingsEvent(event: unknown): { key: string; value: unknown } | null {
-  if (!event || typeof event !== "object") {
+  const record = asNullableRecord(event);
+  if (!record) {
     return null;
   }
 
-  const evt = event as Record<string, unknown>;
+  const evt = asNullableRecord(record["settings-event"]) ?? record;
 
   const operation = evt["put-entry"] ? "put-entry" : "del-entry";
-  const entry = evt[operation] as Record<string, unknown> | undefined;
+  const entry = asNullableRecord(evt[operation]);
   if (!entry || entry.desk !== SETTINGS_DESK || entry["bucket-key"] !== SETTINGS_BUCKET) {
     return null;
   }
@@ -199,7 +233,7 @@ export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogg
         const allData = raw as { all?: Record<string, Record<string, unknown>> };
         const deskData = allData?.all?.[SETTINGS_DESK];
         current = parseSettingsResponse(deskData ?? {});
-        logger?.log?.(`[settings] Loaded: ${JSON.stringify(current)}`);
+        logger?.log?.("[settings] Loaded");
         return current;
       } catch (err) {
         // Settings desk may not exist yet - that's fine, use defaults
@@ -219,7 +253,7 @@ export function createSettingsManager(api: UrbitSSEClient, logger?: SettingsLogg
             return;
           }
 
-          logger?.log?.(`[settings] Update: ${update.key} = ${JSON.stringify(update.value)}`);
+          logger?.log?.(`[settings] Update: ${update.key}`);
           current = applySettingsUpdate(current, update.key, update.value);
           try {
             onChange(current);

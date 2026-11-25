@@ -197,7 +197,7 @@ async function runForkEvidence(
           allInputText: parentPrompt,
           toolOutput: "",
           plannedToolName: "sessions_spawn",
-          ...(receiptWire !== "direct" ? { plannedWireToolName: "tool_call" } : {}),
+          ...(receiptWire !== "direct" ? { plannedWireToolName: "dispatch_action" } : {}),
           plannedToolCallId: "spawn-call",
           plannedToolArgs: { context: "fork", mode: "run", task },
           body: { input: [userInput(parentPrompt)] },
@@ -212,7 +212,7 @@ async function runForkEvidence(
           cursor: 12,
           prompt: parentPrompt,
           toolOutputCallId: receiptWire === "unmatched-catalog-call" ? "other-call" : "spawn-call",
-          // Captured tool_call wire contract: target identity plus unchanged
+          // Captured dispatch_action wire contract: target identity plus unchanged
           // AgentToolResult content/details, rather than a flat spawn receipt.
           toolOutput: JSON.stringify(
             receiptWire === "direct"
@@ -297,12 +297,12 @@ async function runForkEvidence(
 
 describe("subagent forked-context evidence", () => {
   it.each([
-    { name: "catalog dispatcher alone", tools: ["tool_call"], delivery: undefined },
+    { name: "catalog dispatcher alone", tools: ["dispatch_action"], delivery: undefined },
     ...(["system", "developer", "instructions"] as const).map((carrier) => ({
       name: `ordinary message prose in ${carrier}`,
       // Reduced from the failed maintained canary: shell exec plus catalog
       // controls, with no named message definition. The prose is not a tool list.
-      tools: ["exec", "tool_call", "tool_describe", "tool_search", "sessions_yield"],
+      tools: ["exec", "dispatch_action", "tool_describe", "tool_search", "sessions_yield"],
       instructions:
         "Keep internal details private, and continue the request without waiting for another message.\n" +
         "## Messaging\n- Current-session final text normally routes to source.\n" +
@@ -311,20 +311,24 @@ describe("subagent forked-context evidence", () => {
       carrier,
       delivery: undefined,
     })),
-    { name: "similarly named tool", tools: ["tool_call", "message_preview"], delivery: undefined },
-    { name: "direct message", tools: ["tool_call", "message"], delivery: "message" },
+    {
+      name: "similarly named tool",
+      tools: ["dispatch_action", "message_preview"],
+      delivery: undefined,
+    },
+    { name: "direct message", tools: ["dispatch_action", "message"], delivery: "message" },
     {
       name: "named catalog message",
-      tools: ["tool_call"],
+      tools: ["dispatch_action"],
       instructions: "## Messaging\n### message tool\n- Proactive send/channel action: `message`.",
-      delivery: "tool_call",
+      delivery: "dispatch_action",
     },
     {
       name: "policy-filtered message list",
-      tools: ["tool_call"],
+      tools: ["dispatch_action"],
       instructions:
         "## Tooling\nTools policy-filtered. Names case-sensitive; call exact.\n- message: Message/channel actions\n## Safety\nFollow tool policy.",
-      delivery: "tool_call",
+      delivery: "dispatch_action",
     },
     {
       name: "Code Mode message",
@@ -397,7 +401,7 @@ describe("subagent forked-context evidence", () => {
               plannedWireToolName: "exec",
             });
           } else {
-            expect(actual).toEqual(delivery === "tool_call" ? { id: "message", args } : args);
+            expect(actual).toEqual(delivery === "dispatch_action" ? { id: "message", args } : args);
           }
         } else {
           expect(output).toMatchObject([

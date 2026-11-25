@@ -149,10 +149,6 @@ export function estimateMessageChars(msg: AgentMessage, contentOverride?: unknow
   return 256;
 }
 
-export function createMessageCharEstimateCache(): MessageCharEstimateCache {
-  return new WeakMap<AgentMessage, number>();
-}
-
 export function estimateMessageCharsCached(
   msg: AgentMessage,
   cache: MessageCharEstimateCache,

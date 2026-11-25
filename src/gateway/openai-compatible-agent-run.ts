@@ -1,7 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
+import { isClientToolNameConflictError } from "../agents/embedded-agent-runner/tool-name-allowlist.js";
 import { isFailoverError, isSignalTimeoutReason } from "../agents/failover/error.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
@@ -11,11 +11,11 @@ import { getRuntimeConfig } from "../config/io.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveAssistantResultText } from "./agent-event-assistant-text.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { resolveOpenAiCompatError, type OpenAiCompatError } from "./openai-compat-errors.js";
-import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayHttpOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
@@ -64,12 +64,21 @@ export function resolveOpenAiCompatibleAgentError(
 
 export function readOpenAiHttpRunTerminal(result: unknown): {
   runFailed: boolean;
+  incompleteTurnText?: string;
   stopReason: string | undefined;
   pendingToolCalls: OpenAiCompatiblePendingToolCall[] | undefined;
 } {
   const meta = asOptionalRecord(asOptionalRecord(result)?.meta);
   const stopReasonRaw = meta?.stopReason;
   const stopReason = typeof stopReasonRaw === "string" ? stopReasonRaw : undefined;
+  const runFailed = readAgentRunTerminalOutcome(result) === "failed";
+  // Other failures must not expose diagnostic payloads as assistant recovery text.
+  const incompleteTurnText =
+    runFailed &&
+    stopReason === "length" &&
+    asOptionalRecord(meta?.error)?.kind === "incomplete_turn"
+      ? resolveAssistantResultText(result)
+      : undefined;
   const pendingRaw = meta?.pendingToolCalls;
   const pendingToolCalls = Array.isArray(pendingRaw)
     ? pendingRaw.flatMap((call): OpenAiCompatiblePendingToolCall[] => {
@@ -87,7 +96,8 @@ export function readOpenAiHttpRunTerminal(result: unknown): {
       })
     : undefined;
   return {
-    runFailed: readAgentRunTerminalOutcome(result) === "failed",
+    runFailed,
+    ...(incompleteTurnText ? { incompleteTurnText } : {}),
     stopReason,
     pendingToolCalls,
   };
@@ -103,7 +113,6 @@ export async function runOpenAiCompatibleAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
-  senderIsOwner: boolean;
   requestAuth: AuthorizedGatewayHttpRequest;
   operatorScopes: readonly string[];
   abortSignal?: AbortSignal;
@@ -118,22 +127,27 @@ export async function runOpenAiCompatibleAgentCommand(params: {
       throw new ToolAuthorizationError(GATEWAY_UPLOADS_DISABLED_MESSAGE);
     }
     if (!admitted && params.hasCurrentClientAuthority?.() === false) {
-      throw new ToolAuthorizationError("Gateway requester authority changed");
+      throw new ToolAuthorizationError(
+        "Gateway requester changed during admission. Retry the request.",
+      );
     }
   };
   assertSourceCurrent();
   const client = createSyntheticPluginRuntimeClient({
     authenticatedUserProfile: params.requestAuth.authenticatedUserProfile,
     operatorRoleActor: params.requestAuth.operatorRoleActor,
+    openclawIdPrincipal: params.requestAuth.openclawIdPrincipal,
     scopes: [...params.operatorScopes],
   });
-  const operator = resolveGatewayOperatorRoleActor(client)?.kind === "operator";
-  const gatewayContext = operator ? params.resolveGatewayContext?.() : undefined;
-  if (operator && !gatewayContext) {
+  const requiresOperatorContext = Boolean(
+    params.requestAuth.authenticatedUserProfile || params.requestAuth.openclawIdPrincipal,
+  );
+  const gatewayContext = requiresOperatorContext ? params.resolveGatewayContext?.() : undefined;
+  if (requiresOperatorContext && !gatewayContext) {
     throw new Error("OpenAI-compatible operator execution requires a current Gateway context.");
   }
   const captured = gatewayContext
-    ? await captureGatewayOperatorRunAuthority({
+    ? await prepareGatewayHttpOperatorRunAuthority({
         client,
         context: {
           getRuntimeConfig: gatewayContext.getRuntimeConfig,
@@ -141,11 +155,11 @@ export async function runOpenAiCompatibleAgentCommand(params: {
           resolveGatewayContext: params.resolveGatewayContext,
         },
         sourceAuthority: params.requestAuth.operatorAccessAuthority,
+        hasCurrentClientAuthority: params.hasCurrentClientAuthority,
       })
     : undefined;
   try {
     assertSourceCurrent();
-    captured?.authority.assertCurrent();
     const sourceSignal = captured?.authority.signal;
     const abortSignal =
       params.abortSignal && sourceSignal
@@ -164,7 +178,7 @@ export async function runOpenAiCompatibleAgentCommand(params: {
         runId: params.runId,
         deliver: false,
         messageChannel: params.messageChannel,
-        senderIsOwner: params.senderIsOwner,
+        senderIsOwner: captured?.authority.grant.owner,
         bestEffortDeliver: false,
         allowModelOverride: params.modelOverride !== undefined,
         abortSignal,
@@ -179,9 +193,7 @@ export async function runOpenAiCompatibleAgentCommand(params: {
       },
       defaultRuntime,
       createDefaultDeps(),
-      {},
     );
-    captured?.authority.assertCurrent();
     return result;
   } finally {
     captured?.release();

@@ -4,6 +4,7 @@ import {
   type SqliteWorkerAdmissionRequest,
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type { DomainScope } from "../../state/openclaw-state-worker-store.types.js";
@@ -19,7 +20,10 @@ export function createPlacementWorkerMutation<Receipt>(params: {
   assertCurrent?: () => void;
   assertGrantCurrent?: () => void;
   admissionFacts?(request: SqliteWorkerAdmissionRequest): unknown;
-  stageCommit(facts: unknown): Publication | undefined;
+  stageCommit(
+    facts: unknown,
+    nativeSettlement: Promise<SqliteWorkerOperationSettlement>,
+  ): Publication | undefined;
   readReceipt(facts: unknown, publication: Publication | undefined): Receipt | undefined;
   publish?(receipt: Receipt): void;
   recoverUnknown?(
@@ -68,7 +72,7 @@ export function createPlacementWorkerMutation<Receipt>(params: {
           async (scope) => publish(await operation(scope)),
           {
             assertCurrent: check,
-            createAdmission: () => {
+            createAdmission: (retainedAdmission) => {
               let stage: "transaction" | "commit" = "transaction";
               admission = createSqliteWorkerOperationAdmission((request, grant) => {
                 if (params.orderedAdmission && request.stage !== stage) {
@@ -80,7 +84,7 @@ export function createPlacementWorkerMutation<Receipt>(params: {
                   ? params.admissionFacts(request)
                   : request.facts;
                 if (request.stage === "commit") {
-                  publication = params.stageCommit(facts) ?? publication;
+                  publication = params.stageCommit(facts, retainedAdmission.settled) ?? publication;
                 }
                 if (!grant()) {
                   publication?.rollback();

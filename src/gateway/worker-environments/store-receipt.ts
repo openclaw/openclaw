@@ -10,6 +10,7 @@ type Postimage = {
   environment: WorkerEnvironmentFacts["environments"][number] | null;
   credential: WorkerEnvironmentFacts["credentials"][number] | null;
   attachment: WorkerEnvironmentFacts["attachments"][number] | null;
+  placements?: WorkerEnvironmentFacts["placements"];
 };
 
 /** Each key replaces its entire environment, credential, and attachment set. */
@@ -30,6 +31,9 @@ export function createWorkerEnvironmentReceipt(
         environment: environments.get(id) ?? null,
         credential: credentials.get(id) ?? null,
         attachment: attachments.get(id) ?? null,
+        ...(facts.placements && {
+          placements: facts.placements.filter((placement) => placement.environmentId === id),
+        }),
       },
     }),
   });
@@ -77,6 +81,10 @@ export function readWorkerEnvironmentReceipt(
     }
     if (postimage.attachment) {
       facts.attachments.push(postimage.attachment);
+    }
+    if (postimage.placements) {
+      facts.placements ??= [];
+      facts.placements.push(...postimage.placements);
     }
   }
   return facts;

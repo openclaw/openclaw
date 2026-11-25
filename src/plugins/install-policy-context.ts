@@ -1,6 +1,5 @@
 // Builds payloads for the plugin-runtime before_install lifecycle hook.
 import type {
-  PluginHookBeforeInstallBuiltinScan,
   PluginHookBeforeInstallContext,
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallPlugin,
@@ -17,7 +16,6 @@ type BeforeInstallHookPayloadParams = {
   sourcePath: string;
   sourcePathKind: PluginInstallSourcePathKind;
   request: PluginHookBeforeInstallRequest;
-  builtinScan?: PluginHookBeforeInstallBuiltinScan;
   skill?: PluginHookBeforeInstallSkill;
   plugin?: PluginHookBeforeInstallPlugin;
 };
@@ -33,7 +31,7 @@ export function createBeforeInstallHookPayload(params: BeforeInstallHookPayloadP
     sourcePathKind: params.sourcePathKind,
     ...(params.origin ? { origin: params.origin } : {}),
     request: params.request,
-    builtinScan: params.builtinScan ?? {
+    builtinScan: {
       status: "ok",
       scannedFiles: 0,
       critical: 0,

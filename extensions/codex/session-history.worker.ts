@@ -27,9 +27,7 @@ export type CodexHistoryWorkerResult = {
   version?: SessionTranscriptContextVersion;
 };
 
-export async function runCodexHistoryWorkerInput(
-  input: unknown,
-): Promise<CodexHistoryWorkerResult> {
+async function runCodexHistoryWorkerInput(input: unknown): Promise<CodexHistoryWorkerResult> {
   // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
   const request = input as CodexHistoryWorkerInput;
   let version: SessionTranscriptContextVersion | undefined;

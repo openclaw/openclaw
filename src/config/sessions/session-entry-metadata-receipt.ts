@@ -8,6 +8,7 @@ import type { SessionRowChange, SessionRowFacts } from "../../sessions/session-r
 import { preparedSharingChanges } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import type { SessionEntryPublicationSource } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
+  discardSessionEntryPublicationSource,
   hasSessionEntryPublicationCapacity,
   sealSessionEntryPublicationSource,
 } from "./session-entry-publication-source.js";
@@ -18,6 +19,7 @@ export type SessionEntryMetadataFact = {
   fullEntry?: SessionEntry;
   previous?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
   facts: Extract<SessionRowFacts, { kind: "entry" }>;
+  memberFacts?: readonly Extract<SessionRowFacts, { kind: "member" }>[];
   sharingChange: "changed" | "unchanged";
 };
 export type SessionEntryMetadataReceipt = SqliteCommitReceipt<
@@ -27,6 +29,14 @@ export type SessionEntryMetadataReceipt = SqliteCommitReceipt<
 
 /** Reuse the native entry owner's already selected postimage and exact delta semantics. */
 export function captureSessionEntryMetadataReceipts(changes: readonly SessionRowChange[]) {
+  const members = new Map<string, Extract<SessionRowFacts, { kind: "member" }>[]>();
+  for (const change of changes) {
+    if ("sessionKey" in change && change.facts?.kind === "member") {
+      const facts = members.get(change.sessionKey) ?? [];
+      facts.push(change.facts);
+      members.set(change.sessionKey, facts);
+    }
+  }
   const latest = new Map<
     string,
     { source: SessionEntryPublicationSource; value: SessionEntryMetadataFact }
@@ -54,6 +64,7 @@ export function captureSessionEntryMetadataReceipts(changes: readonly SessionRow
         entry,
         fullEntry: publication.prepared.fullEntries?.get(change.sessionKey),
         previous: previous ? previous.value.previous : publication.previous,
+        memberFacts: members.get(change.sessionKey),
         sharingChange:
           previous?.value.sharingChange === "changed" ? "changed" : publication.sharingChange,
         facts: {
@@ -94,7 +105,7 @@ export function boundSessionEntryMetadataReceipts(
     return;
   }
   for (const receipt of receipts) {
-    delete receipt.source.writeToken;
+    discardSessionEntryPublicationSource(receipt.source);
     for (const fact of receipt.facts.values()) {
       if (fact.kind === "postimage") {
         delete fact.value.fullEntry;
@@ -156,7 +167,17 @@ export function parseSessionEntryMetadataReceipts(
         typeof row.facts.clearMembers !== "boolean" ||
         (row.facts.lifecycleChanged !== undefined &&
           typeof row.facts.lifecycleChanged !== "boolean") ||
-        (row.sharingChange !== "changed" && row.sharingChange !== "unchanged")
+        (row.sharingChange !== "changed" && row.sharingChange !== "unchanged") ||
+        (row.memberFacts !== undefined &&
+          (!Array.isArray(row.memberFacts) ||
+            !row.memberFacts.every(
+              (member) =>
+                isRecord(member) &&
+                member.kind === "member" &&
+                typeof member.sessionId === "string" &&
+                typeof member.identityId === "string" &&
+                typeof member.present === "boolean",
+            )))
       ) {
         return undefined;
       }

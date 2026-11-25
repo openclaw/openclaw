@@ -35,7 +35,7 @@ export function collectPluginConfigAssignments(params: {
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): void {
   const entries = params.config.plugins?.entries;
-  if (!isRecord(entries)) {
+  if (!isRecord(entries) || Object.keys(entries).length === 0) {
     return;
   }
 
@@ -54,7 +54,6 @@ export function collectPluginConfigAssignments(params: {
   const pluginContracts = resolvePluginConfigContractsById({
     config: params.config,
     env: params.context.env,
-    fallbackToBundledMetadata: true,
     fallbackToBundledMetadataForResolvedBundled: !params.context.manifestRegistry,
     fallbackBundledPluginIds: bundledLoadablePluginIds,
     pluginIds: Object.keys(entries),

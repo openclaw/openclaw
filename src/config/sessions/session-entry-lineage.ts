@@ -26,6 +26,7 @@ type InheritedSessionToolPolicy = Pick<
   SessionEntry,
   | "inheritedToolPolicyVersion"
   | "inheritedToolPolicySource"
+  | "delegatedOperatorSource"
   | "inheritedToolAllow"
   | "inheritedToolDeny"
   | "delegatedToolPolicy"
@@ -45,9 +46,23 @@ export function preserveSessionInheritedToolPolicy(
     ...(entry?.inheritedToolPolicySource
       ? { inheritedToolPolicySource: entry.inheritedToolPolicySource }
       : {}),
+    ...(entry?.delegatedOperatorSource
+      ? { delegatedOperatorSource: structuredClone(entry.delegatedOperatorSource) }
+      : {}),
     ...(entry?.inheritedToolAllow ? { inheritedToolAllow: [...entry.inheritedToolAllow] } : {}),
     ...(entry?.inheritedToolDeny ? { inheritedToolDeny: [...entry.inheritedToolDeny] } : {}),
   };
+}
+
+/** A logical child retains its original constraints through reset and stale full-row writes. */
+export function preserveSessionDelegatedOperatorSource<T extends SessionEntry>(
+  next: T,
+  previous: SessionEntry | undefined,
+): T {
+  if (previous?.delegatedOperatorSource === undefined) {
+    return next;
+  }
+  return { ...next, delegatedOperatorSource: previous.delegatedOperatorSource };
 }
 
 /**
@@ -103,6 +118,7 @@ export function preserveSessionLineage(
     | "spawnDepth"
     | "subagentRole"
     | "subagentControlScope"
+    | "blindPrompt"
   >
 > &
   InheritedSessionToolPolicy {
@@ -119,6 +135,7 @@ export function preserveSessionLineage(
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
+    blindPrompt: entry?.blindPrompt,
   };
 }
 

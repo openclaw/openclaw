@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -12,26 +13,28 @@ import { resetNodeHostPluginRegistry } from "./plugin-node-host.test-support.js"
 afterEach(() => {
   resetNodeHostPluginRegistry();
   resetPluginLoaderTestStateForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
 describe("Codex node command availability", () => {
   it.each(["missing", "disabled", "denied", "enabled"] as const)(
-    "advertises the real plugin only when installed and enabled (%s)",
+    "advertises the checkout plugin only when present and enabled (%s)",
     async (state) => {
       await withTempDir("openclaw-codex-node-", async (home) => {
         vi.stubEnv("HOME", home);
         vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "state"));
         vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(home, "openclaw.json"));
-        vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+        vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", state === "missing" ? "1" : "0");
+        vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
         const config: OpenClawConfig = {
           plugins: {
             allow: ["codex"],
-            ...(state === "missing" ? {} : { load: { paths: [path.resolve("extensions/codex")] } }),
             ...(state === "denied" ? { deny: ["codex"] } : {}),
             entries: { codex: { enabled: state !== "disabled" } },
           },
         };
+        setRuntimeConfigSnapshot(config);
         await ensureNodeHostPluginRegistry({
           config,
           env: process.env,

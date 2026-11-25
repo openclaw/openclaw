@@ -1,8 +1,10 @@
-import { createUnionActionGate } from "openclaw/plugin-sdk/channel-actions";
+import {
+  createUnionActionGate,
+  optionalNonNegativeIntegerSchema,
+} from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-  ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -12,7 +14,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { coerceDiscordComponentParam, readDiscordComponentSpec } from "./components.js";
@@ -30,29 +32,6 @@ const localExecutionActions = new Set<ChannelMessageActionName>([
   "sticker-upload",
   "event-create",
 ]);
-
-function resolveDiscordThreadReplyDeliveryAlias(args: Record<string, unknown>): string | undefined {
-  if (
-    normalizeOptionalString(args.target) ||
-    normalizeOptionalString(args.to) ||
-    normalizeOptionalString(args.channelId)
-  ) {
-    return undefined;
-  }
-  const threadId = normalizeOptionalString(args.threadId);
-  return threadId ? normalizeDiscordMessagingTarget(`channel:${threadId}`) : undefined;
-}
-
-function resolveDiscordThreadReplyTarget(args: Record<string, unknown>): string | undefined {
-  const threadId = normalizeOptionalString(args.threadId);
-  const target =
-    threadId !== undefined
-      ? `channel:${threadId}`
-      : (normalizeOptionalString(args.channelId) ??
-        normalizeOptionalString(args.to) ??
-        normalizeOptionalString(args.target));
-  return target ? normalizeDiscordMessagingTarget(target) : undefined;
-}
 
 const loadDiscordChannelActionsRuntime = createLazyRuntimeModule(
   () => import("./actions/handle-action.js"),
@@ -95,84 +74,83 @@ const discordActionGroups: ReadonlyArray<{
   { gate: "presence", actions: ["set-presence"], defaultEnabled: false },
 ];
 
-function describeDiscordMessageTool({
-  cfg,
-  accountId,
-}: Parameters<
-  NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
->[0]): ChannelMessageToolDiscovery {
-  const accounts = (accountId ? [accountId] : listDiscordAccountIds(cfg))
-    .map((id) => inspectDiscordAccount({ cfg, accountId: id }))
-    .filter((account) => account.enabled && account.configured);
-  if (accounts.length === 0) {
-    return {
-      actions: [],
-      capabilities: [],
-      schema: null,
-    };
-  }
-  const isEnabled = createUnionActionGate(accounts, (account) =>
-    createDiscordActionGate({ cfg, accountId: account.accountId }),
-  );
-  const actions = new Set<ChannelMessageActionName>(["send"]);
-  for (const group of discordActionGroups) {
-    if (isEnabled(group.gate, group.defaultEnabled ?? true)) {
-      for (const action of group.actions) {
-        actions.add(action);
-      }
-    }
-  }
-  const schema: ChannelMessageToolSchemaContribution[] = [];
-  if (actions.has("react")) {
-    schema.push({
-      actions: ["react", "reactions"],
-      properties: {
-        emoji: Type.Optional(
-          Type.String({
-            description: `Unicode emoji or custom name:id (also <:name:id> / <a:name:id>).${actions.has("emoji-list") ? ' Use action:"emoji-list" for server emojis.' : ""}`,
-          }),
-        ),
-      },
-    });
-  }
-  schema.push({
-    actions: ["send"],
-    visibility: "all-configured",
-    properties: {
-      components: Type.Optional(
-        Type.Object(
-          {
-            blocks: Type.Optional(
-              Type.Array(Type.Unknown(), {
-                description:
-                  "Discord Components V2 blocks such as text, buttons, selects, media, containers, and separators.",
-              }),
-            ),
-            modal: Type.Optional(
-              Type.Object(
-                {},
-                {
-                  additionalProperties: true,
-                  description: "Optional Discord modal triggered by generated components.",
-                },
-              ),
-            ),
-          },
-          {
-            additionalProperties: true,
-            description:
-              "Discord Components V2 payload for send actions. Accepts the same object consumed by the Discord components adapter.",
-          },
-        ),
-      ),
-    },
-  });
-  return {
-    actions: Array.from(actions),
-    capabilities: ["presentation"],
-    schema,
-  };
-}
+const optionalStringSchema = (description?: string) =>
+  Type.Optional(Type.String(description === undefined ? undefined : { description }));
+const optionalBooleanSchema = (description?: string) =>
+  Type.Optional(Type.Boolean(description === undefined ? undefined : { description }));
+const actionFields = (
+  actions: readonly ChannelMessageActionName[],
+  properties: Record<string, TSchema>,
+): ChannelMessageToolSchemaContribution => ({ actions, properties, visibility: "all-configured" });
+const channelLayoutActions: readonly ChannelMessageActionName[] = [
+  "channel-create",
+  "channel-edit",
+  "channel-move",
+  "category-create",
+  "category-edit",
+  "category-delete",
+];
+const moderationActions: readonly ChannelMessageActionName[] = ["timeout", "kick", "ban"];
+
+// Discord-only params for shared action names. Core keeps channel-neutral fields,
+// so other channels' turns do not carry guild, role, or channel-layout fields.
+// All-configured keeps them for Discord actions advertised from bound or scheduled turns.
+const discordActionFieldSchemas: readonly ChannelMessageToolSchemaContribution[] = [
+  actionFields(
+    [
+      "search",
+      "thread-list",
+      "thread-create",
+      "thread-reply",
+      "channel-info",
+      "channel-list",
+      "channel-delete",
+      ...channelLayoutActions,
+      "permissions",
+      "member-info",
+      "role-info",
+      "role-add",
+      "role-remove",
+      "event-create",
+      "event-list",
+      ...moderationActions,
+      "emoji-list",
+      "emoji-upload",
+      "sticker-upload",
+      "voice-status",
+    ],
+    { guildId: optionalStringSchema() },
+  ),
+  actionFields(["role-add", "role-remove"], { roleId: optionalStringSchema() }),
+  actionFields(["search"], { authorIds: Type.Optional(Type.Array(Type.String())) }),
+  actionFields(["emoji-upload"], {
+    emojiName: optionalStringSchema("Name for an uploaded custom emoji."),
+    roleIds: Type.Optional(Type.Array(Type.String())),
+  }),
+  actionFields(["sticker-upload"], {
+    stickerName: optionalStringSchema(),
+    stickerDesc: optionalStringSchema(),
+    stickerTags: optionalStringSchema(),
+  }),
+  actionFields(moderationActions, {
+    deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
+    durationMin: optionalNonNegativeIntegerSchema(),
+    until: optionalStringSchema(),
+  }),
+  actionFields(channelLayoutActions, {
+    channelType: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description: "Numeric channel type; avoids schema type collision.",
+      }),
+    ),
+    position: optionalNonNegativeIntegerSchema(),
+    nsfw: optionalBooleanSchema(),
+    rateLimitPerUser: optionalNonNegativeIntegerSchema(),
+    categoryId: optionalStringSchema(),
+    clearParent: optionalBooleanSchema("Clear parent/category when supported."),
+  }),
+];
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
   providerOwnedReadGates: true,
@@ -196,15 +174,109 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
   // Send/file-style actions stay local because core owns their thread, media,
   // component, and client-local payload semantics.
   resolveExecutionMode: ({ action }) => (localExecutionActions.has(action) ? "local" : "gateway"),
-  describeMessageTool: describeDiscordMessageTool,
+  describeMessageTool: ({ cfg, accountId }) => {
+    const accounts = (accountId ? [accountId] : listDiscordAccountIds(cfg))
+      .map((id) => inspectDiscordAccount({ cfg, accountId: id }))
+      .filter((account) => account.enabled && account.configured);
+    if (accounts.length === 0) {
+      return {
+        actions: [],
+        capabilities: [],
+        schema: null,
+      };
+    }
+    const isEnabled = createUnionActionGate(accounts, (account) =>
+      createDiscordActionGate({ cfg, accountId: account.accountId }),
+    );
+    const actions = new Set<ChannelMessageActionName>(["send"]);
+    for (const group of discordActionGroups) {
+      if (isEnabled(group.gate, group.defaultEnabled ?? true)) {
+        for (const action of group.actions) {
+          actions.add(action);
+        }
+      }
+    }
+    const schema: ChannelMessageToolSchemaContribution[] = [];
+    if (actions.has("react")) {
+      schema.push({
+        actions: ["react", "reactions"],
+        properties: {
+          emoji: Type.Optional(
+            Type.String({
+              description: `Unicode emoji or custom name:id (also <:name:id> / <a:name:id>).${actions.has("emoji-list") ? ' Use action:"emoji-list" for server emojis.' : ""}`,
+            }),
+          ),
+        },
+      });
+    }
+    schema.push({
+      actions: ["send"],
+      visibility: "all-configured",
+      properties: {
+        components: Type.Optional(
+          Type.Object(
+            {
+              blocks: Type.Optional(
+                Type.Array(Type.Unknown(), {
+                  description:
+                    "Discord Components V2 blocks such as text, buttons, selects, media, containers, and separators.",
+                }),
+              ),
+              modal: Type.Optional(
+                Type.Object(
+                  {},
+                  {
+                    additionalProperties: true,
+                    description: "Optional Discord modal triggered by generated components.",
+                  },
+                ),
+              ),
+            },
+            {
+              additionalProperties: true,
+              description:
+                "Discord Components V2 payload for send actions. Accepts the same object consumed by the Discord components adapter.",
+            },
+          ),
+        ),
+      },
+    });
+    for (const contribution of discordActionFieldSchemas) {
+      if (contribution.actions?.some((action) => actions.has(action))) {
+        schema.push(contribution);
+      }
+    }
+    return {
+      actions: Array.from(actions),
+      capabilities: ["presentation"],
+      schema,
+    };
+  },
   supportsAction: ({ action }) => action !== "poll",
   messageActionTargetAliases: {
     "thread-reply": {
       aliases: ["threadId"],
       deliveryTargetAliases: ["threadId"],
-      resolveDeliveryTarget: ({ args }) => resolveDiscordThreadReplyDeliveryAlias(args),
+      resolveDeliveryTarget: ({ args }) => {
+        if (
+          normalizeOptionalString(args.target) ||
+          normalizeOptionalString(args.to) ||
+          normalizeOptionalString(args.channelId)
+        ) {
+          return undefined;
+        }
+        const threadId = normalizeOptionalString(args.threadId);
+        return threadId ? normalizeDiscordMessagingTarget(`channel:${threadId}`) : undefined;
+      },
       matchesCurrentConversation: ({ args, toolContext }) => {
-        const target = resolveDiscordThreadReplyTarget(args);
+        const threadId = normalizeOptionalString(args.threadId);
+        const rawTarget =
+          threadId !== undefined
+            ? `channel:${threadId}`
+            : (normalizeOptionalString(args.channelId) ??
+              normalizeOptionalString(args.to) ??
+              normalizeOptionalString(args.target));
+        const target = rawTarget ? normalizeDiscordMessagingTarget(rawTarget) : undefined;
         return target ? matchesDiscordToolContextTarget({ target, toolContext }) : false;
       },
     },
