@@ -78,7 +78,7 @@ describe.skipIf(!connection)("PostgreSQL tool usage migration", () => {
       });
       fixture.invalidate();
       expect(() => fixture.open(source)).toThrow(
-        new RegExp(`newer|version.*${OPENCLAW_AGENT_SCHEMA_VERSION}`, "iu"),
+        new RegExp(`minimum reader ${OPENCLAW_AGENT_SCHEMA_VERSION}`, "iu"),
       );
     });
   });
