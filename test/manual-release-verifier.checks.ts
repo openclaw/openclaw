@@ -80,9 +80,9 @@ it.each([".", "trusted-workflow", ".closeout-tooling"])(
         "-e",
         `
       import assert from 'node:assert/strict';
-      const { parseFastTrackApproval, releaseFastTrackDigest } = await import(${JSON.stringify(verifier.href)});
+      const { parseFastTrackPacket, releaseFastTrackDigest } = await import(${JSON.stringify(verifier.href)});
       assert.match(releaseFastTrackDigest({ synthetic: true }), /^sha256:[a-f0-9]{64}$/);
-      assert.throws(() => parseFastTrackApproval({}), error => error.name === 'ZodError');
+      assert.throws(() => parseFastTrackPacket({}), error => error.name === 'ZodError');
     `,
       ],
       { cwd: root, encoding: "utf8", timeout: 10_000 },
