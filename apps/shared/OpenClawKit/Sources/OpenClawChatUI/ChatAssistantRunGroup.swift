@@ -170,6 +170,7 @@ struct ChatAssistantRunGroup: Identifiable {
                 continue
             }
             let items: [ChatToolActivityItem]
+            let sourceID: UUID?
             switch part {
             case let .tool(tool):
                 let item = ChatToolActivityItem(live: tool)
@@ -178,29 +179,40 @@ struct ChatAssistantRunGroup: Identifiable {
                     continue
                 }
                 items = [item]
+                sourceID = nil
             case let .row(.message(message)) where !message.isNestedToolActivity &&
                 (message.isToolResult || Self.isLiveToolEnvelope(message)):
-                items = ChatToolActivity.items(
-                    message: message,
-                    liveTools: callsByRun[runID] ?? [],
-                    assumesPendingInActiveRun: true)
-                if items.contains(where: { $0.sessionLaunch != nil }) {
-                    compacted.append(part)
-                    continue
-                }
+                items = Self.activeToolItems([message], calls: callsByRun[runID] ?? [])
+                sourceID = message.presentationID
+            case let .row(.completedWork(work)) where work.isActivityRun:
+                items = Self.activeToolItems(work.messages, calls: callsByRun[runID] ?? [])
+                sourceID = work.anchorID
             default:
                 compacted.append(part)
                 continue
             }
-            let visible = items.filter(\.isVisible)
-            guard let first = visible.first else { continue }
+            if items.contains(where: { $0.sessionLaunch != nil }) {
+                compacted.append(part)
+                continue
+            }
+            guard let first = items.first else { continue }
+            let anchor = sourceID.map { "recorded:\($0):\(first.id)" } ?? first.id
             if case let .liveTools(previous, anchor, earlier) = compacted.last, previous == runID {
-                compacted[compacted.count - 1] = .liveTools(runID: runID, anchor: anchor, items: earlier + visible)
+                compacted[compacted.count - 1] = .liveTools(runID: runID, anchor: anchor, items: earlier + items)
             } else {
-                compacted.append(.liveTools(runID: runID, anchor: first.id, items: visible))
+                compacted.append(.liveTools(runID: runID, anchor: anchor, items: items))
             }
         }
         return compacted
+    }
+
+    private static func activeToolItems(
+        _ messages: [OpenClawChatMessage],
+        calls: [OpenClawChatPendingToolCall]) -> [ChatToolActivityItem]
+    {
+        messages.flatMap {
+            ChatToolActivity.items(message: $0, liveTools: calls, assumesPendingInActiveRun: true)
+        }
     }
 
     /// Index of the group that starts the latest turn, or the end when no group starts one.

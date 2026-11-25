@@ -1,6 +1,5 @@
 import Foundation
 import OpenClawChatUI
-import OpenClawProtocol
 
 extension LocalFixtureChatStore {
     func replayLiveToolActivity(sessionKey: String, runId: String) async {
@@ -75,10 +74,13 @@ extension LocalFixtureChatStore {
             timestamp: startedAt + 1,
             transcriptMessageID: "compact-process-call",
             transcriptRunID: runId))
-        publishEmptyThinking(3)
         self.messages.append(OpenClawChatMessage(
             role: "assistant",
-            content: [.init(type: "toolcall", id: "compact-read", name: "read")],
+            content: [.init(
+                type: "toolcall",
+                id: "compact-read",
+                name: "read",
+                arguments: .init(["path": "REFRESHED.md"]))],
             timestamp: Date().timeIntervalSince1970 * 1000,
             transcriptMessageID: "compact-read-call",
             transcriptRunID: runId))

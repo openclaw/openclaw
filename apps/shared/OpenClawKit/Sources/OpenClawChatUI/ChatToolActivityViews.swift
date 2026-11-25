@@ -966,7 +966,8 @@ struct ChatLiveToolActivityDisclosure: View {
     @State private var expanded = false
 
     var body: some View {
-        if let headline = self.items.last(where: \.isPending) ?? self.items.last {
+        let visible = self.items.filter(\.isVisible)
+        if let headline = visible.last(where: \.isPending) ?? visible.last {
             let disclosure = DisclosureGroup(isExpanded: self.$expanded) {
                 ChatToolActivityList(items: self.items, compactLive: true)
             } label: {
@@ -979,6 +980,8 @@ struct ChatLiveToolActivityDisclosure: View {
             #else
             disclosure
             #endif
+        } else {
+            ChatToolActivityList(items: self.items, compactLive: true)
         }
     }
 }

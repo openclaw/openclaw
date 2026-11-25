@@ -544,6 +544,20 @@ extension OpenClawSnapshotUITests {
             self.attachScreenshot(named: "live-mixed-expanded")
         }
 
+        let refreshed = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label == %@",
+            "chat-live-tool-activity-recorded:", "Read REFRESHED.md")).firstMatch
+        XCTAssertTrue(refreshed.waitForExistence(timeout: 12), "REFRESHED_TOOLS_NOT_GROUPED")
+        if refreshed.exists {
+            self.attachScreenshot(named: "live-after-history-refresh")
+            refreshed.tap()
+            let refreshedRead = app.descendants(matching: .any).matching(NSPredicate(
+                format: "value CONTAINS %@", "REFRESHED.md")).firstMatch
+            XCTAssertTrue(refreshedRead.waitForExistence(timeout: 4))
+            XCTAssertTrue((refreshedRead.value as? String)?.contains("Working") == true)
+            self.attachScreenshot(named: "live-after-history-expanded")
+        }
+
         XCTAssertTrue(app.staticTexts["The checks are complete."].waitForExistence(timeout: 26))
         self.attachScreenshot(named: "live-finished")
     }

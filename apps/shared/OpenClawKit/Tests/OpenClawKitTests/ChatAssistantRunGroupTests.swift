@@ -165,7 +165,7 @@ struct ChatAssistantRunGroupTests {
     }
 
     @Test
-    func `live tool stretch skips quiet rows and keeps narration in place`() {
+    func `live tool stretch retains quiet details and keeps narration in place`() {
         let narration = Self.message("assistant", at: 5, phase: "commentary")
         let read = Self.tool("read", at: 2)
         var hidden = Self.tool("wrapper", at: 3)
@@ -180,10 +180,47 @@ struct ChatAssistantRunGroupTests {
         let parts = groups.flatMap(\.parts)
         #expect(parts.map(\.id) == ["read", "row:\(narration.id)", "next"])
         if case let .liveTools(_, _, items) = parts.first {
-            #expect(items.map(\.id) == ["read", "process"])
+            #expect(items.map(\.id) == ["read", "wrapper", "process"])
+            #expect(items.filter(\.isVisible).map(\.id) == ["read", "process"])
         } else {
             Issue.record("Adjacent visible tools must share a live disclosure")
         }
+    }
+
+    @Test
+    func `all quiet tools still have a details group`() {
+        var hidden = Self.tool("wrapper", at: 3)
+        hidden.activity = .init(
+            itemId: "wrapper", toolCallId: "wrapper", kind: "tool", phase: "start",
+            title: "", name: "exec", status: nil, hideFromChannelProgress: nil, suppressChannelProgress: true)
+        let groups = ChatAssistantRunGroup.build(
+            [], tools: [hidden], liveRunID: "run", hasLiveContent: true,
+            searchActive: false, compactLiveRunIDs: ["run"])
+        guard case let .liveTools(_, _, items) = groups.flatMap(\.parts).first else {
+            Issue.record("Quiet activity must remain inspectable")
+            return
+        }
+        #expect(items.map(\.id) == ["wrapper"])
+        #expect(items.allSatisfy { !$0.isVisible })
+    }
+
+    @Test
+    func `ID-less recorded tools separated by narration have distinct anchors`() {
+        let rows = [1.0, 2.0, 3.0].map { time in
+            ChatTranscriptRow.message(OpenClawChatMessage(
+                role: "assistant",
+                content: time == 2 ? [.init(type: "text", text: "Checking another file.")] :
+                    [.init(type: "toolcall", name: "read")],
+                timestamp: time, transcriptRunID: "run"))
+        }
+        let groups = ChatAssistantRunGroup.build(
+            rows, liveRunID: "run", hasLiveContent: true, searchActive: false, compactLiveRunIDs: ["run"])
+        let anchors = groups.flatMap(\.parts).compactMap { part -> String? in
+            guard case let .liveTools(_, anchor, _) = part else { return nil }
+            return anchor
+        }
+        #expect(anchors.count == 2)
+        #expect(Set(anchors).count == 2)
     }
 
     @Test
@@ -193,7 +230,7 @@ struct ChatAssistantRunGroupTests {
             timestamp: 2, transcriptRunID: "run")
         let thinking = OpenClawChatMessage(
             role: "assistant", content: [.init(type: "thinking", thinking: "")],
-            timestamp: 3, transcriptRunID: "run")
+            timestamp: 1, transcriptRunID: "run")
         let process = OpenClawChatMessage(
             role: "assistant",
             content: [
@@ -201,7 +238,14 @@ struct ChatAssistantRunGroupTests {
                 .init(type: "tool_result", text: "ready", id: "process"),
             ],
             timestamp: 4, transcriptRunID: "run")
-        let rows = ChatTranscriptRow.build(from: [exec, thinking, process])
+        let messages = ChatTranscriptRow.mergeToolResults(in: [thinking, exec, process])
+        let rows = ChatTranscriptRow.collapseCompletedWork(
+            ChatTranscriptRow.build(from: messages),
+            runWorking: true, activeRunIDs: ["run"], searchActive: false)
+        #expect(rows.contains { row in
+            if case let .completedWork(work) = row { return work.isActivityRun }
+            return false
+        })
         let groups = ChatAssistantRunGroup.build(
             rows, tools: [], liveRunID: "run", hasLiveContent: true, searchActive: false,
             compactLiveRunIDs: ["run"])
