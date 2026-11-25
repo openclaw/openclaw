@@ -26,7 +26,11 @@ import {
   detachActiveEmbeddedRun,
   isActiveEmbeddedRunId,
 } from "../embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle, testing } from "../embedded-agent-runner/runs.test-support.js";
+import {
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun,
+  testing,
+} from "../embedded-agent-runner/runs.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import {
   getGatewayToolCallerIdentity,
@@ -174,6 +178,37 @@ it("isolates overlapping participant sessions", async ({ onTestFinished }) => {
       expect(isActiveEmbeddedRunId(bob.runId)).toBe(true);
       expect(captureParticipants(bob.identity)?.participants?.resolve()?.profileId).toBe("bob");
     });
+  });
+});
+
+it("rejects a registered run without tool authority through the existing owner assertion", async () => {
+  await admitted(async ({ admittedRunContext }) => {
+    const delegated = expectDefined(
+      getAdmittedRunDelegatedAuthority(admittedRunContext),
+      "admitted run delegation",
+    );
+    const handle = createEmbeddedRunHandle({ runId: attempt.runId });
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey,
+        operationalRunInstance: admittedRunContext.operationalRunInstance,
+      },
+      async () => {
+        registerTestEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile, "main");
+      },
+    );
+    const identity: AgentRuntimeIdentity = {
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey,
+      operationalRunInstance: admittedRunContext.operationalRunInstance,
+      delegatedAuthority: { ...delegated, kind: "local" },
+    };
+    expect(() => captureParticipants(identity)).toThrow(
+      "This agent run is no longer active. Start a new turn to retry.",
+    );
+    expect(captureParticipants(identity, { allowMissingRegistry: true })).toBeUndefined();
   });
 });
 
