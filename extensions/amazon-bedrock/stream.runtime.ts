@@ -75,6 +75,7 @@ import {
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createBedrockStreamClient, getConfiguredBedrockRegion } from "./bedrock-client.js";
 import {
+  buildBedrockInferenceConfig,
   resolveBedrockCachePoint,
   resolveBedrockCacheRetention,
   resolveBedrockPromptCachePolicy,
@@ -379,14 +380,10 @@ function streamBedrock(
         modelId: model.id,
         messages: convertMessages(context, model, cachePoint, toolConfig !== undefined),
         system: buildBedrockSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
-        inferenceConfig: {
-          ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
-          // Grok 4.6 Converse profiles reject temperature rather than ignoring it.
-          ...(options.temperature !== undefined &&
-            !sendsAdaptiveThinking &&
-            model.id !== "us.xai.grok-4.6" &&
-            model.id !== "global.xai.grok-4.6" && { temperature: options.temperature }),
-        },
+        inferenceConfig: buildBedrockInferenceConfig(options, model.id, {
+          adaptiveThinking: sendsAdaptiveThinking,
+          claude: isAnthropicClaudeModel(model),
+        }),
         toolConfig,
         additionalModelRequestFields,
         ...(isClaude5BedrockModel(model)

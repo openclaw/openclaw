@@ -168,6 +168,46 @@ it.each([
     expect(send.mock.calls[0]?.[0]).not.toHaveProperty("input.inferenceConfig.temperature");
   }
 });
+
+describe("Bedrock sampling request composition", () => {
+  it("sends temperature and topP for a supported non-Claude model", async () => {
+    const input = await capturePayload(bedrockModel(), userContext(), {
+      temperature: 0.2,
+      topP: 0.4,
+    });
+
+    expect(input.inferenceConfig).toEqual({ temperature: 0.2, topP: 0.4 });
+  });
+
+  it("forwards a zero topP value", async () => {
+    const input = await capturePayload(bedrockModel(), userContext(), { topP: 0 });
+
+    expect(input.inferenceConfig).toEqual({ topP: 0 });
+  });
+
+  it("omits topP when it is not configured", async () => {
+    const input = await capturePayload(bedrockModel(), userContext(), { temperature: 0.2 });
+
+    expect(input.inferenceConfig).not.toHaveProperty("topP");
+  });
+
+  it("omits topP for Claude while preserving temperature", async () => {
+    const model = claudeModel("anthropic.claude-3-5-sonnet-20241022-v2:0", {
+      reasoning: false,
+    });
+    const input = await capturePayload(model, userContext(), { temperature: 0.2, topP: 0.4 });
+
+    expect(input.inferenceConfig).toEqual({ temperature: 0.2 });
+    expect(input.inferenceConfig).not.toHaveProperty("topP");
+  });
+
+  it.each(["us.xai.grok-4.6", "global.xai.grok-4.6"])("omits topP for %s", async (id) => {
+    const input = await capturePayload(bedrockModel({ id }), userContext(), { topP: 0.4 });
+
+    expect(input.inferenceConfig).toEqual({});
+  });
+});
+
 it.each([
   [BedrockStopReason.STOP_SEQUENCE, "stop", undefined],
   [BedrockStopReason.MAX_TOKENS, "length", undefined],
