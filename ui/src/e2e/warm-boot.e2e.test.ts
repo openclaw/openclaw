@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "../pages/chat/session-snapshot-record.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { captureUiProofEnabled, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
@@ -402,7 +403,7 @@ suite.define(() => {
             }
           }, seeded.cacheKey),
         )
-        .toBe(16);
+        .toBe(CHAT_SNAPSHOT_PROJECTION_VERSION);
       await page.reload();
       await gateway.waitForRequest("connect");
       await gateway.resolveDeferred("connect");
