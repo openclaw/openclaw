@@ -119,6 +119,12 @@ it.each(["specific", "gateway"])("handles skipped civil dates in %s mode", (mode
       Date.UTC(2011, 11, 29, 10),
       Date.UTC(2011, 11, 30, 10) - 1,
     ]);
+    // Local Dec 31 follows Dec 29. A trailing two-day window includes only Dec 31.
+    vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(new Date("2011-12-30T22:00:00Z"));
+    expectRange({ ...params, days: 2 }, [
+      Date.UTC(2011, 11, 30, 10),
+      Date.UTC(2011, 11, 31, 10) - 1,
+    ]);
   });
 });
 

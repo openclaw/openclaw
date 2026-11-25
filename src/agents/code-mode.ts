@@ -130,7 +130,8 @@ function formatCodeModeCatalogIndex(
     .toSorted((a, b) => priority(a) - priority(b) || a.callableName.localeCompare(b.callableName))
     .map((entry) => ({
       id: entry.id,
-      line: `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
+      // On-demand tools run only as their own top-level call; guest calls refuse them.
+      line: `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}${entry.call ? " [top-level call only; not from exec]" : ""}`,
       pinned: priority(entry) === 0,
     }));
   const lines = rows.map((row) => row.line);

@@ -99,7 +99,9 @@ are not ranked, and Claude CLI runs keep Claude's native `ToolSearch`. The lab
 does not enable Code Mode or Tool Search, authorize any tool, or change search
 results. Core coding tools retain their pinned places. Each surface reserves part
 of its existing budget for new tools, and selected entries render in canonical
-order.
+order. A tool counts as new for 14 days after the agent first offers it in a
+ranked prompt; tools already available when the agent first ranks are not new.
+Space new tools do not use goes to ranked tools.
 
 Successful calls contribute to a score with a 14-day half-life. Failed,
 cancelled, pending, client-delegated, and incognito calls do not count. Nested

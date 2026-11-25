@@ -134,7 +134,8 @@ export function createWorkerGatewayToolRuntime(params: {
                 definition: {
                   ...projectAgentToolDefinition(tool),
                   outputSchema: tool.outputSchema,
-                  catalogMode: tool.catalogMode,
+                  // Workers have no on-demand promotion; on-demand tools keep the direct contract.
+                  catalogMode: tool.catalogMode ? "direct-only" : undefined,
                 },
               };
             }),

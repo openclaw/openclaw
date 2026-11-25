@@ -498,6 +498,25 @@ describe("grouped chat rendering", () => {
     },
   );
 
+  it("shows an approved suggestion as the approver's turn credited to its author", () => {
+    const message = createUserMessage("why you no answer", {
+      timestamp: 1000,
+      __openclaw: {
+        senderId: "profile-josh",
+        senderName: "Josh",
+        senderIdentity: { type: "profile", id: "profile-josh" },
+        suggestedBy: { id: "profile-jason", name: "Jason" },
+      },
+    });
+    const group = prepareMessageGroup(createMessageEntry("suggested-message", message));
+    render(renderTestMessageGroup(group, { userId: "profile-josh", userName: "Josh" }));
+
+    expectAbsent(".chat-group--peer");
+    expect(elementText(".chat-group.user .chat-sender-name")).toBe("Josh");
+    expect(elementText(".chat-message-source")).toBe("Suggested by Jason");
+    expectPresent(".chat-group-footer--persistent-identity");
+  });
+
   it("sender provenance links only profiles and does not identify colliding legacy senders as you", () => {
     const navigate = vi.fn();
     const renderSender = (senderId: string, profile = true) => {

@@ -117,7 +117,7 @@ const SessionsToolSchema = Type.Object(
     pinned: Type.Optional(
       Type.Boolean({
         description:
-          "Pin session (root and Home-linked sessions only; spawned, subagent, and nested-child sessions cannot be pinned)",
+          "Set the requesting person’s sidebar pin. Send separately from shared session settings. Only roots and Home-linked conversations can be pinned; rail-only shortcuts are independent.",
       }),
     ),
     archived: Type.Optional(

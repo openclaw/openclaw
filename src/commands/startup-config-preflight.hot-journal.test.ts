@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
-import { prepareGatewayRunBootstrap } from "../cli/gateway-cli/pre-bootstrap.js";
+import {
+  prepareGatewayRunBootstrap,
+  recheckGatewayRunBootstrap,
+} from "../cli/gateway-cli/pre-bootstrap.js";
+import type { ConfigFileSnapshot } from "../config/types.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { ExitError } from "../runtime.js";
@@ -9,6 +13,7 @@ import { withLiveStateReads } from "../state/artifact-preserving-state-reads.js"
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   getActiveOpenClawStateDatabaseReadSnapshot,
+  withExistingOpenClawStateDatabaseReadOnly,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -146,3 +151,71 @@ it.each([
     await closeOpenClawStateDatabaseAsync();
   });
 });
+
+it.each(["heartbeat", "included diagnostics"] as const)(
+  "admits %s repair before changing authored files",
+  async (legacy) => {
+    await withOpenClawTestState({ label: "gateway-config-repair-admission" }, async (state) => {
+      const local = { gateway: { mode: "local" }, plugins: { enabled: false } };
+      await state.writeConfig(local);
+      const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+      await closeOpenClawStateDatabaseAsync();
+      const includePath = state.statePath("diagnostics.json");
+      await state.writeConfig({
+        ...local,
+        ...(legacy === "heartbeat"
+          ? { agents: { defaults: { heartbeat: { every: "30m" } } } }
+          : { diagnostics: { $include: "diagnostics.json" } }),
+      });
+      if (legacy === "included diagnostics") {
+        fs.writeFileSync(includePath, '{"otel":{"protocol":"grpc"}}\n');
+      }
+      const rootBefore = fs.readFileSync(state.configPath, "utf8");
+      const includeBefore =
+        legacy === "included diagnostics" ? fs.readFileSync(includePath, "utf8") : undefined;
+      const runtime = {
+        log() {},
+        error() {},
+        exit(code: number): never {
+          throw new ExitError(code);
+        },
+      };
+      const copies = vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync");
+      expect(await prepareGatewayRunBootstrap({ opts: {}, runtime })).toBe(true);
+      const guard = vi.fn(async (snapshot?: ConfigFileSnapshot): Promise<boolean> => {
+        if (guard.mock.calls.length === 1) {
+          expect(fs.readFileSync(state.configPath, "utf8")).toBe(rootBefore);
+          if (includeBefore !== undefined) {
+            expect(fs.readFileSync(includePath, "utf8")).toBe(includeBefore);
+          }
+          // Current guards deliberately leave the discovery snapshot. Inspect the
+          // actual native reader so a private copy cannot satisfy this source check.
+          expect(
+            withExistingOpenClawStateDatabaseReadOnly(
+              ({ db }) => db.prepare("PRAGMA database_list").get()?.file,
+              { env: state.env },
+            ),
+          ).toBe(databasePath);
+        }
+        return recheckGatewayRunBootstrap({ opts: {}, runtime, snapshot });
+      });
+      const ready = await runStartupConfigPreflight({
+        gateway: true,
+        observe: false,
+        beforeStatePreparation: guard,
+      });
+      expect(ready.snapshot.valid).toBe(true);
+      expect(guard).toHaveBeenCalled();
+      expect(copies.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(0);
+      if (legacy === "heartbeat") {
+        expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).not.toHaveProperty(
+          "agents.defaults.heartbeat",
+        );
+      } else {
+        expect(fs.readFileSync(state.configPath, "utf8")).toBe(rootBefore);
+        expect(JSON.parse(fs.readFileSync(includePath, "utf8"))).toEqual({ otel: {} });
+      }
+      await closeOpenClawStateDatabaseAsync();
+    });
+  },
+);

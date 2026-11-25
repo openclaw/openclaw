@@ -1,5 +1,6 @@
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import { monotonicNow } from "../../../../src/shared/monotonic-time.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import {
@@ -30,7 +31,7 @@ import type { SessionListRefreshHost } from "./session-refresh-types.ts";
 import {
   buildSessionListParams,
   normalizeManagedSessionListQuery,
-  requestSessionListParams,
+  requestSessionListWindow,
   sessionListQueryKey,
   sessionListRequestKey,
 } from "./session-requests.ts";
@@ -117,6 +118,7 @@ export function createSessionManagedListRefresh(
     release: (entry: ManagedSessionList) => void;
     primary: {
       prepare: (
+        read: SessionListRead,
         options: SessionRefreshOptions,
         bootstrap: boolean,
         isErrorCurrent: (() => boolean) | undefined,
@@ -205,6 +207,7 @@ export function createSessionManagedListRefresh(
     entry.receivedKeys = receivedKeys;
     entry.connectionEpoch = read.scope.epoch;
     entry.startupRetryAttempt = 0;
+    entry.coordinator.acceptWindowExpiry(read.expiry, next.append);
     const snapshot: SessionListSnapshot = {
       readSucceeded: true,
       pagination,
@@ -239,11 +242,13 @@ export function createSessionManagedListRefresh(
         ? managedIsCurrent(read)
         : [...read.primary].some((consumer) => consumer.presentation?.isCurrent() !== false);
     try {
-      const response = await requestSessionListParams(
+      const window = await requestSessionListWindow(
         read.scope.client,
         read.params,
         () => readIsCurrent(read) && hasDemand(),
       );
+      const response = window?.result ?? null;
+      read.expiry = window?.expiry;
       if (readIsCurrent(read) && (read.managed || hasDemand())) {
         // Settled reads are no longer joinable from synchronous publication listeners.
         entry.reads.delete(read);
@@ -289,7 +294,9 @@ export function createSessionManagedListRefresh(
       }
     } finally {
       entry.reads.delete(read);
+      read.managed?.finishWindowRead(failure?.error);
       for (const consumer of read.primary) {
+        consumer.presentation?.finishWindowRead(failure?.error);
         const current = consumer.presentation?.isCurrent() === true;
         if (current) {
           if (isAgentDatabaseInspectionPendingError(failure?.error)) {
@@ -298,7 +305,7 @@ export function createSessionManagedListRefresh(
             primaryRetryAttempt = 0;
           }
         }
-        const attempt = consumer.presentation?.accept(read, result, failure) ?? null;
+        const attempt = consumer.presentation?.accept(result, failure) ?? null;
         if (primaryRead === consumer) {
           primaryRead = null;
         }
@@ -383,6 +390,7 @@ export function createSessionManagedListRefresh(
     if (!read) {
       read = {
         entry,
+        issuedAt: monotonicNow(),
         params,
         scope,
         revision: nextRevision(),
@@ -395,7 +403,15 @@ export function createSessionManagedListRefresh(
       if (!refresh.append) {
         entry.coordinator.absorb();
       }
-      read.managed = { refresh, completion };
+      read.managed = {
+        refresh,
+        completion,
+        finishWindowRead: entry.coordinator.beginWindowRead(
+          read.issuedAt,
+          () => managedIsCurrent(read),
+          refresh.append,
+        ),
+      };
       entry.readRevision = read.revision;
       entry.deniedConnectionEpoch = null;
       publishManagedList(entry, { ...entry.snapshot, loading: true, error: null }, () =>
@@ -404,7 +420,7 @@ export function createSessionManagedListRefresh(
     }
     if (consumer) {
       read.primary.add(consumer);
-      consumer.presentation = primary.prepare(consumer.options, bootstrap, isErrorCurrent);
+      consumer.presentation = primary.prepare(read, consumer.options, bootstrap, isErrorCurrent);
     }
     if (fresh) {
       void execute(read);
