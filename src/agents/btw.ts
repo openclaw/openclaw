@@ -213,6 +213,7 @@ export async function runBtwSideQuestion(
               agentId: sessionAgentId,
               agentDir: params.agentDir,
               workspaceDir,
+              requiredAuthProfileId: runtime.requiredAuthProfileId,
               authProfileId: runtime.authProfileId,
               authProfileIdSource: runtime.authProfileIdSource,
               harnessId: selectedHarness.id,

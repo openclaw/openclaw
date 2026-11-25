@@ -533,7 +533,7 @@ async function runIsolatedCompletionOwned(
             authProfileStore,
             sessionAuthProfileId: request.authProfileId,
             sessionAuthProfileSource: request.authProfileId ? "user" : undefined,
-            ...(request.authProfileId ? { allowAuthProfileFallback: false } : {}),
+            requiredAuthProfileId: request.authProfileId,
             harnessId: harness.id,
             harnessRuntime: harness.id,
             harnessAuthBootstrap: harness.authBootstrap,

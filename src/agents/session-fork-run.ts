@@ -75,7 +75,7 @@ type SessionForkRunParams = {
   runId: string;
   /** Owner label for admission, lane and diagnostics, such as `core:skill-workshop`. */
   owner: string;
-  model: { provider: string; model: string; authProfileId?: string };
+  model: NonNullable<ReturnType<typeof resolveSessionForkModel>["model"]>;
   /** The session's durable workspace, never a throwaway worktree. */
   workspaceDir: string;
   /** The finished turn's requester; its current policy is checked again for the run. */
@@ -182,7 +182,14 @@ export function resolveSessionForkModel(params: {
     turnModel,
     model: turnModel && {
       ...turnModel,
-      ...(sessionProfile ? { authProfileId: sessionProfile } : {}),
+      ...(sessionProfile
+        ? {
+            authProfileId: sessionProfile,
+            ...(params.entry.authProfileOverrideRequired
+              ? { requiredAuthProfileId: sessionProfile }
+              : {}),
+          }
+        : {}),
     },
   };
 }
@@ -631,6 +638,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       prompt: params.prompt,
       provider: params.model.provider,
       model: params.model.model,
+      requiredAuthProfileId: params.model.requiredAuthProfileId,
       ...(params.model.authProfileId
         ? { authProfileId: params.model.authProfileId, authProfileIdSource: "user" as const }
         : {}),

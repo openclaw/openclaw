@@ -237,10 +237,10 @@ describe("plugin forked turns through the real Gateway", () => {
     },
   );
 
-  it(
-    "runs the fork on the auth profile the session's turns use",
+  it.each([false, true])(
+    "runs the fork on the session account (required=%s)",
     { timeout: 150_000 },
-    async () => {
+    async (required) => {
       const first = "mock-openai:first";
       const rotated = "mock-openai:rotated";
       await withForkGateway(
@@ -283,11 +283,20 @@ describe("plugin forked turns through the real Gateway", () => {
               sessionKey,
               storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
             },
-            () => ({ authProfileOverride: rotated, authProfileOverrideSource: "auto" }),
+            () => ({
+              authProfileOverride: rotated,
+              authProfileOverrideSource: "auto",
+              ...(required ? { authProfileOverrideRequired: true as const } : {}),
+            }),
           );
           const turn = await fixture.dashboardTurn(sessionKey);
           expect(fixture.authorizations.foreground).toEqual([`Bearer key-${rotated}`]);
-          await expect(fixture.fork(turn, {})).resolves.toMatchObject({
+          await expect(
+            fixture.fork(
+              turn,
+              required ? { provider: "mock-openai", model: `fork-proof@${rotated}` } : {},
+            ),
+          ).resolves.toMatchObject({
             ok: true,
             result: { status: "settled" },
           });

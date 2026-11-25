@@ -221,7 +221,7 @@ export function createRuntimeLlm(
       const selection = resolveSimpleCompletionSelectionForAgent({
         cfg,
         agentId,
-        modelRef: requestedModel,
+        modelRef: requestedModel ?? normalizeOptionalString(authority?.defaultModel),
       });
       if (!selection) {
         throw completionError("LLM_COMPLETION_FAILED", `No model configured for agent ${agentId}.`);

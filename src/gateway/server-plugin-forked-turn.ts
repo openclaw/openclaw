@@ -264,7 +264,14 @@ export async function forkPluginSession<T>(input: {
     ? {
         provider: expectDefined(input.override?.provider, "override provider"),
         model: override.model,
-        ...(override.profile ? { authProfileId: override.profile } : {}),
+        ...(override.profile
+          ? {
+              authProfileId: override.profile,
+              ...(override.profile === sessionForkModel?.requiredAuthProfileId
+                ? { requiredAuthProfileId: override.profile }
+                : {}),
+            }
+          : {}),
       }
     : sessionForkModel;
   if (!model) {

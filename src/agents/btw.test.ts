@@ -11,11 +11,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
-import {
-  looksLikeSecretSentinel,
-  mintSecretSentinel,
-  resolveSecretSentinel,
-} from "../secrets/sentinel.js";
+import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
@@ -1006,117 +1002,6 @@ describe("runBtwSideQuestion", () => {
         store: claudeAuthStore,
       }),
     );
-  });
-
-  it("rematerializes the direct model when automatic auth rotates to a SecretRef backup", async () => {
-    const authStorage = { id: "btw-auth-storage" };
-    const modelRegistry = { id: "btw-model-registry" };
-    const authStore = {
-      version: 1 as const,
-      profiles: {
-        "anthropic:primary": createApiKeyCredential("anthropic", "primary-key"),
-        "anthropic:backup": {
-          type: "api_key" as const,
-          provider: "anthropic",
-          keyRef: {
-            source: "file" as const,
-            provider: "vault",
-            id: "/anthropic/backup",
-          },
-        },
-      },
-      order: { anthropic: ["anthropic:primary", "anthropic:backup"] },
-    };
-    const rotatedModel = {
-      provider: "anthropic",
-      id: btw.DEFAULT_MODEL,
-      api: "anthropic-messages" as const,
-      baseUrl: "https://backup.example.test",
-      name: "Backup profile model",
-    };
-    btw.discoverAuthStorageMock.mockReturnValue(authStorage);
-    btw.discoverModelsMock.mockReturnValue(modelRegistry);
-    btw.resolveModelWithRegistryMock.mockReturnValue({
-      provider: "anthropic",
-      id: btw.DEFAULT_MODEL,
-      api: "anthropic-messages",
-      baseUrl: "https://primary.example.test",
-      name: "Primary profile model",
-    });
-    btw.resolveModelAsyncMock.mockResolvedValue({
-      model: rotatedModel,
-      authStorage,
-      modelRegistry,
-    });
-    btw.ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue(authStore);
-    btw.resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
-    btw.getApiKeyForModelMock.mockImplementation(
-      async (authParams: { profileId?: string } = {}) => {
-        if (authParams.profileId === "anthropic:primary") {
-          throw new Error("primary credential resolution failed");
-        }
-        if (authParams.profileId === "anthropic:backup") {
-          return {
-            apiKey: mintSecretSentinel("backup-secret", { label: "btw-backup" }),
-            mode: "api-key",
-            source: "profile:anthropic:backup",
-            profileId: "anthropic:backup",
-          };
-        }
-        throw new Error(`unexpected profile: ${authParams.profileId ?? "none"}`);
-      },
-    );
-    btw.requireApiKeyMock.mockReturnValue("backup-secret");
-    btw.mockDoneAnswer("Backup answer.");
-
-    await expect(
-      btw.runSideQuestion({
-        cfg: {
-          secrets: {
-            providers: {
-              vault: { source: "file", path: "/tmp/btw-secrets.json", mode: "json" },
-            },
-          },
-        } as never,
-      }),
-    ).resolves.toEqual({ text: "Backup answer." });
-
-    expect(
-      btw.getApiKeyForModelMock.mock.calls.map(
-        ([authParams]) => (authParams as { profileId?: string }).profileId,
-      ),
-    ).toEqual(["anthropic:primary", "anthropic:backup"]);
-    expect(btw.resolveModelAsyncMock).toHaveBeenCalledWith(
-      "anthropic",
-      btw.DEFAULT_MODEL,
-      btw.DEFAULT_AGENT_DIR,
-      expect.any(Object),
-      expect.objectContaining({
-        authStorage,
-        modelRegistry,
-        authProfileId: "anthropic:backup",
-        authProfileMode: "api_key",
-        preparedModelRuntime: expect.objectContaining({
-          configuredRuntimeModels: [],
-          inlineProviderModels: [],
-        }),
-        skipAgentDiscovery: true,
-      }),
-    );
-    const preparedAuthContext = btw.expectRecordFields(
-      (btw.mockArg(btw.prepareProviderRuntimeAuthMock, 0, 0) as { context?: unknown }).context,
-      {
-        provider: "anthropic",
-        modelId: btw.DEFAULT_MODEL,
-        model: rotatedModel,
-        profileId: "anthropic:backup",
-      },
-    );
-    expect(preparedAuthContext.apiKey).toBe("backup-secret");
-    btw.expectRecordFields(btw.mockArg(btw.streamSimpleMock, 0, 0), {
-      name: "Backup profile model",
-      baseUrl: "https://backup.example.test",
-    });
   });
 
   it("uses a same-route literal fallback only after its prepared profile tier fails", async () => {

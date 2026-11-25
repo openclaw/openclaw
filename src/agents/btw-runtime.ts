@@ -70,6 +70,7 @@ export async function prepareBtwRuntimeAuth(params: {
   workspaceDir?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  requiredAuthProfileId?: string;
   harnessId?: string;
   harnessAuthBootstrap?: AgentHarness["authBootstrap"];
 }) {
@@ -125,6 +126,8 @@ export async function prepareBtwRuntimeAuth(params: {
         ? undefined
         : params.authProfileId,
     sessionAuthProfileSource: params.authProfileIdSource,
+    requiredAuthProfileId: params.requiredAuthProfileId,
+    ...(params.requiredAuthProfileId ? { allowAuthProfileFallback: false } : {}),
     harnessId: params.harnessId,
     harnessRuntime: params.harnessId,
     harnessAuthBootstrap: params.harnessAuthBootstrap,
@@ -333,6 +336,7 @@ export async function resolveRuntimeModel(params: {
   model: Model;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  requiredAuthProfileId?: string;
   authProfileStore: AuthProfileStore;
   runtimeAuthPreparation: BtwRuntimeAuthPreparation;
   authStorage: PreparedModelRuntimeStores["authStorage"];
@@ -398,6 +402,9 @@ export async function resolveRuntimeModel(params: {
     storePath: params.storePath,
     isNewSession: params.isNewSession,
   });
+  const requiredAuthProfileId = params.sessionEntry?.authProfileOverrideRequired
+    ? params.sessionEntry.authProfileOverride
+    : undefined;
   const { store: authProfileStore, preparation: runtimeAuthPreparation } =
     await prepareBtwRuntimeAuth({
       cfg,
@@ -405,6 +412,7 @@ export async function resolveRuntimeModel(params: {
       agentId: params.agentId,
       agentDir,
       workspaceDir,
+      requiredAuthProfileId,
       authProfileId: authSelection?.profileId,
       authProfileIdSource: authSelection?.source,
       harnessId: params.harnessId,
@@ -422,6 +430,7 @@ export async function resolveRuntimeModel(params: {
   });
   return {
     model,
+    requiredAuthProfileId,
     authProfileId: runtimeAuthPreparation.plan.forwardedAuthProfileId,
     authProfileIdSource: runtimeAuthPreparation.plan.forwardedAuthProfileSource,
     authProfileStore,

@@ -468,6 +468,8 @@ OAuth re-authentication preserves an existing profile id only when the provider'
 - A valid session user pin is an explicit per-session exception: OpenClaw tries that profile first even when it is omitted from the provider order, then uses the ordered same-provider profiles as retry candidates. A cooldown or disabled window applies only to the affected profile; it does not suppress its eligible siblings.
 - A native child spawned with an explicit `model@profile` is bound to that exact configured profile. Its initial run, thread follow-ups, model fallback, transcript compaction (including context-engine host completions), and forks that inherit the selected profile cannot select another profile; an unavailable profile stops the run. Configured/automatic spawn selection and ordinary user pins retain the retry policy above. Explicitly selecting another account replaces the child binding.
 
+The same requirement applies to host-prepared `/btw` side questions. Worker-local inference cannot map a Gateway profile to a node-local credential, so a bound child must use Gateway-owned inference. Codex-native `/btw` is a separate owner: it forks the existing native thread and retains the native login, rather than preparing an OpenClaw profile. This marker does not redefine that native account identity; see [BTW side questions](/tools/btw).
+
 Prepared agent requests use their selected plugin metadata, configuration, workspace, and environment for auth profile eligibility, ordering, and environment credential evidence. An empty selected plugin set remains authoritative; another request’s plugin aliases cannot add profiles or change the credential owner.
 
 ## Model catalog discovery

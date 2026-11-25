@@ -315,6 +315,18 @@ describe("compaction runtime context", () => {
     expect(matching.runtimeAuthPlan).toBe(runtimeAuthPlan);
     expect(matching.authProfileIdSource).toBe("user");
     expect(
+      createContext({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        authProfileId: "openai:other",
+        authProfileIdSource: "user",
+        runtimeAuthPlan,
+      }).runtimeAuthPlan,
+    ).toBeUndefined();
+    expect(
+      createContext({ provider: "openai", modelId: "gpt-5.5", runtimeAuthPlan }).runtimeAuthPlan,
+    ).toBeUndefined();
+    expect(
       createContext({ provider: "openai", modelId: "gpt-5.4", runtimeAuthPlan }).runtimeAuthPlan,
     ).toBeUndefined();
   });

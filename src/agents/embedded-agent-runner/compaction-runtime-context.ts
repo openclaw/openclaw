@@ -288,6 +288,19 @@ export function buildEmbeddedCompactionRuntimeContext(
     params.runtimeAuthPlan &&
     resolved.provider &&
     resolved.model &&
+    // A model match alone cannot reuse a plan prepared for a replaced account.
+    (!(
+      resolved.authProfileId ||
+      params.authProfileIdSource === "user" ||
+      params.runtimeAuthPlan.forwardedAuthProfileSource === "user"
+    ) ||
+      (resolved.authProfileId === params.runtimeAuthPlan.forwardedAuthProfileId &&
+        params.authProfileIdSource === params.runtimeAuthPlan.forwardedAuthProfileSource)) &&
+    (!params.requiredAuthProfileId ||
+      (params.runtimeAuthPlan.forwardedAuthProfileId === params.requiredAuthProfileId &&
+        !params.runtimeAuthPlan.forwardedAuthProfileCandidateIds?.some(
+          (id) => id !== params.requiredAuthProfileId,
+        ))) &&
     agentRuntimeAuthPlanMatchesTarget(params.runtimeAuthPlan, {
       provider: resolved.provider,
       modelId: resolved.model,

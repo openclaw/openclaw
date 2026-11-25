@@ -184,14 +184,17 @@ describe("runtime.llm.complete", () => {
   it.each([false, true])(
     "binds context-engine account selection (required=%s)",
     async (required) => {
+      const profileId = required ? "anthropic:configured" : "openai:configured";
       const prepared = createPreparedModel();
-      prepared.auth.profileId = "openai:configured";
+      prepared.auth.profileId = profileId;
       hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(prepared);
       const runtimeContext = resolveContextEngineCapabilities({
         config: cfg,
         sessionKey: "agent:ada:session:abc",
-        authProfileId: "openai:configured",
-        requiredAuthProfileId: required ? "openai:configured" : undefined,
+        provider: "anthropic",
+        model: "claude-test",
+        authProfileId: profileId,
+        requiredAuthProfileId: required ? profileId : undefined,
         purpose: "context-engine.after-turn",
       });
 
@@ -203,9 +206,11 @@ describe("runtime.llm.complete", () => {
       expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
         cfg,
         agentId: "ada",
-        preferredProfile: "openai:configured",
+        preferredProfile: profileId,
         profileFailover: !required,
-        ...(required ? { bindAuthOwner: true, modelRef: "openai/gpt-5.5@openai:configured" } : {}),
+        ...(required
+          ? { bindAuthOwner: true, modelRef: `anthropic/claude-test@${profileId}` }
+          : {}),
         allowBundledStaticCatalogFallback: true,
         allowMissingApiKeyModes: ["aws-sdk"],
         skipAgentDiscovery: true,

@@ -39,6 +39,15 @@ export function buildCompactionFailureResult(
   return { ok: false, compacted: false, reason, ...(failure ? { failure } : {}) };
 }
 
+export function buildLockedCompactionRuntimeFailure(runtime?: string): EmbeddedAgentCompactResult {
+  return buildCompactionFailureResult(
+    runtime
+      ? `Model selection is locked to native agent harness "${runtime}", but native compaction is unavailable.`
+      : "Model selection is locked but the persisted agent harness is unavailable.",
+    { reason: "model_selection_locked" },
+  );
+}
+
 function isGenericCompactionCancelledReason(reason: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(reason);
   return normalized === "compaction cancelled" || normalized === "error: compaction cancelled";

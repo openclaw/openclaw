@@ -118,3 +118,28 @@ it("retains OAuth ownership on an API destination without converting the grant t
     resolveIsolatedCompletionAuthorizationOwner({ ...plan, selectedAuthMode: "api-key" }),
   ).toBe("host");
 });
+
+it("refuses an incompatible required profile before native completion dispatch", async () => {
+  const { prepareAgentRuntimeAuth } = await vi.importActual<typeof RuntimeAuth>(
+    "./runtime-plan/prepare-auth.js",
+  );
+  mocks.prepareAgentRuntimeAuth.mockImplementation(prepareAgentRuntimeAuth);
+  mocks.ensureAuthProfileStore.mockReturnValue({
+    version: 1,
+    profiles: {
+      "anthropic:delegated": { type: "api_key", provider: "anthropic", key: "synthetic" },
+      "openai:default": createOAuthRefreshCredential(),
+    },
+  });
+  const dispatch = vi.fn(async () => ({
+    assistant: isolatedAssistant([{ type: "text", text: "wrong account" }]),
+  }));
+  registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+  await expect(
+    runIsolatedCompletion({
+      ...isolatedRequest(),
+      authProfileId: "anthropic:delegated",
+    }),
+  ).rejects.toThrow();
+  expect(dispatch).not.toHaveBeenCalled();
+});

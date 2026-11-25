@@ -46,6 +46,25 @@ describe("resolveCompactionLiveModelSelection", () => {
     });
   });
 
+  it("clears the exact requirement when its projection replaces a selected account", () => {
+    const selected = resolveCompactionLiveModelSelection({
+      current,
+      requested: { provider: "anthropic", model: current.model, authProfileId: "anthropic:other" },
+    });
+    expect({ ...current, ...selected }).toMatchObject({
+      authProfileId: "anthropic:other",
+      requiredAuthProfileId: undefined,
+    });
+    const cleared = resolveCompactionLiveModelSelection({
+      current,
+      requested: { provider: "openai", model: "gpt-5.5" },
+    });
+    expect({ ...current, ...cleared }).toMatchObject({
+      authProfileId: undefined,
+      requiredAuthProfileId: undefined,
+    });
+  });
+
   it("retains the active profile for a same-provider model switch", () => {
     expect(
       resolveCompactionLiveModelSelection({

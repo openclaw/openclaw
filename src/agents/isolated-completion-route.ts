@@ -214,7 +214,7 @@ export async function resolveIsolatedCompletionRuntime(params: {
           authProfileStore: prepared.preparedAuthStore,
           sessionAuthProfileId: params.authProfileId,
           sessionAuthProfileSource: params.authProfileId ? "user" : undefined,
-          ...(params.authProfileId ? { allowAuthProfileFallback: false } : {}),
+          requiredAuthProfileId: params.authProfileId,
           harnessId: harness.id,
           harnessRuntime: harness.id,
           harnessAuthBootstrap: harness.authBootstrap,

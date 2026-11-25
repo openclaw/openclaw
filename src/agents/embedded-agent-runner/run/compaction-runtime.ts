@@ -209,7 +209,7 @@ async function executeRecoveryCompaction(
     ),
     ...resolveContextEngineCapabilities({
       config: runParams.config,
-      requiredAuthProfileId: input.modelSelection.requiredAuthProfileId,
+      ...input.modelSelection,
       sessionKey: runParams.sessionKey,
       explicitAgentId: input.contextEngineAgentId,
       contextEnginePluginId: input.resolveContextEnginePluginId(),
