@@ -1,4 +1,5 @@
 import { readRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createSelectedAuthProfileUnavailableError } from "../../agents/auth-profiles/selection-error.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
@@ -296,6 +297,17 @@ export async function runCliFallbackCandidate(
                   : undefined,
             )
           : await resolveLiveProfile();
+        if (
+          params.candidateRun.authProfileRequired &&
+          params.candidateRun.authProfileId &&
+          authProfileId !== params.candidateRun.authProfileId
+        ) {
+          throw createSelectedAuthProfileUnavailableError({
+            profileId: params.candidateRun.authProfileId,
+            provider: params.provider,
+            modelId: params.model,
+          });
+        }
         if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {
           throw createUnrecordedScheduledAccountRefusal({
             runtime: params.cliExecutionProvider,

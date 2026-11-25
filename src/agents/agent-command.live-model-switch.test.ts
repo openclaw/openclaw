@@ -1237,6 +1237,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expectedOverride: false,
     },
     {
+      name: "model-only",
+      switchOptions: {
+        provider: "anthropic",
+        model: "claude-new",
+        authProfileId: "anthropic:delegated",
+        authProfileIdSource: "user",
+        authProfileRequired: true,
+      },
+      expectedOverride: true,
+    },
+    {
       name: "provider",
       switchOptions: { provider: "openai", model: "claude" },
       expectedOverride: true,
@@ -1250,7 +1261,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     async ({ name, switchOptions, expectedOverride }) => {
       if (name === "runtime") {
         setupBareStoredSession({ agentRuntimeOverride: "openclaw" });
-      } else if (name === "auth") {
+      } else if (name === "auth" || name === "model-only") {
         setupBareStoredSession({
           authProfileOverride: "anthropic:delegated",
           authProfileOverrideSource: "user",
@@ -1286,6 +1297,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         });
       }
       expectAttempt({ deferTerminalLifecycle: true });
+      if (name === "model-only") {
+        const lastAttempt = state.runAgentAttemptMock.mock.calls.at(-1)?.[0] as
+          | AgentAttemptParams
+          | undefined;
+        expect(lastAttempt?.sessionEntry?.authProfileOverride).toBe("anthropic:delegated");
+        expect(lastAttempt?.sessionEntry?.authProfileOverrideRequired).toBe(true);
+      }
       if (name === "auth") {
         const lastAttempt = state.runAgentAttemptMock.mock.calls.at(-1)?.[0] as
           | AgentAttemptParams

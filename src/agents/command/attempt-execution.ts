@@ -291,9 +291,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     authProfileMode: harnessAuthSelection.authProfileMode,
     sessionAuthProfileId: harnessAuthSelection.authProfileId,
   });
-  const { authProfileId, cliAuthNeedsSessionBinding, buildCliAuthContext } =
+  const { authProfileId, cliAuthNeedsSessionBinding, buildCliAuthContext, embeddedAuthProfile } =
     await prepareCommandRuntimeAuthProfile(params, {
       cliExecutionProvider,
+      useCliExecution: isCliExecutionProvider,
       allowCliAuthProfileForwarding,
       isRawModelRun,
       harnessAuthSelection,
@@ -665,9 +666,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     resolvedModelSelection: params.resolvedModelSelection,
     modelThinkingCapability: params.modelThinkingCapability,
     modelFallbacksOverride: params.modelFallbacksOverride,
-    authProfileId,
-    authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
-    allowAuthProfileFallback: params.sessionEntry?.authProfileOverrideRequired ? false : undefined,
+    ...embeddedAuthProfile,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     execSession: params.sessionEntry,

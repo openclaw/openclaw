@@ -222,14 +222,11 @@ describe("agent-runner-utils", () => {
         authProfileRequired: true,
       });
       const attempt = buildExecution({ run, provider, model: "gpt-4.1-mini" });
-      if (provider === "openai") {
-        await expect(attempt).resolves.toMatchObject({
-          authProfileId: "profile-openai",
-          allowAuthProfileFallback: false,
-        });
-      } else {
-        await expect(attempt).rejects.toMatchObject({ code: "selected_auth_profile_unavailable" });
-      }
+      await expect(attempt).resolves.toMatchObject({
+        authProfileId: "profile-openai",
+        allowAuthProfileFallback: false,
+        requiredAuthProfileId: "profile-openai",
+      });
     },
   );
 

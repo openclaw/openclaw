@@ -517,6 +517,23 @@ describe("refused pins use the primary instead of catalog order", () => {
     },
   );
 
+  it("preserves the delegated connection when repairing a disallowed model", async () => {
+    const entry = userPin("provider-c", "model-c1", {
+      authProfileOverride: "provider-c:delegated",
+      authProfileOverrideSource: "user",
+      authProfileOverrideRequired: true,
+    });
+    const state = await selectSession(cfg, "provider-b", "model-b1", entry, {
+      agentCfg: cfg.agents?.defaults,
+      sessionStore: { [sessionKey]: entry },
+    });
+    expect(state.resetModelOverride).toBe(true);
+    expect(entry).toMatchObject({
+      authProfileOverride: "provider-c:delegated",
+      authProfileOverrideRequired: true,
+    });
+  });
+
   it.each(["direct", "parent", "degraded", "concurrent"] as const)(
     "uses the primary for a refused %s pin",
     async (source) => {

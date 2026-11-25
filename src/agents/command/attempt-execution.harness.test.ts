@@ -292,14 +292,12 @@ describe("embedded attempt harness pinning", () => {
           ...(required ? { authProfileOverrideRequired: true } : {}),
         }),
       });
-      if (required) {
-        await expect(attempt).rejects.toMatchObject({ code: "selected_auth_profile_unavailable" });
-        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-        expect(runCliAgentMock).not.toHaveBeenCalled();
-      } else {
-        await attempt;
-        expectMockArgFields(runEmbeddedAgentMock, { authProfileId: undefined });
-      }
+      await attempt;
+      expectMockArgFields(runEmbeddedAgentMock, {
+        authProfileId: required ? "openai:work" : undefined,
+        requiredAuthProfileId: required ? "openai:work" : undefined,
+        allowAuthProfileFallback: required ? false : undefined,
+      });
     },
   );
 

@@ -26,15 +26,15 @@ import type {
 } from "../../runtime-plan/types.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../scheduled-unrecorded-account.js";
 import { resolveModelAsync } from "../model.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import type { PreparedNativeSessionRuntime } from "./model-setup.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
 
 type ModelResolution = Awaited<ReturnType<typeof resolveModelAsync>>;
 type RuntimeModel = NonNullable<ModelResolution["model"]>;
 
 export async function prepareEmbeddedRunAuthPlan(params: {
   assertCurrent: () => void;
-  runParams: RunEmbeddedAgentParams;
+  runParams: RunEmbeddedAgentInternalParams;
   provider: string;
   /** Selected logical ID returned by the model resolver. */
   modelId: string;
@@ -131,10 +131,8 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   const createAuthPreparation = (): PreparedAgentRuntimeAuth => {
     const harness = params.getAgentHarness();
     if (params.nativeSessionRuntime?.auth === "native") {
-      if (runParams.authProfileBinding) {
-        throw new Error(
-          "A native connection cannot replace the automation’s recorded inference account.",
-        );
+      if (runParams.authProfileBinding || runParams.requiredAuthProfileId) {
+        throw new Error("A native connection cannot replace the selected inference account.");
       }
       // Only the binding-owned connection bypasses host credentials and routes;
       // preserving a native model alone still uses the normal auth planner below.
@@ -165,7 +163,8 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       authProfileStore: attemptAuthProfileStore,
       sessionAuthProfileId: preferredProfileId,
       sessionAuthProfileSource: runParams.authProfileIdSource,
-      requiredAuthProfileId: runParams.authProfileBinding?.profileId,
+      requiredAuthProfileId:
+        runParams.authProfileBinding?.profileId ?? runParams.requiredAuthProfileId,
       ...(runParams.authProfileBinding
         ? {
             routeIntent: {

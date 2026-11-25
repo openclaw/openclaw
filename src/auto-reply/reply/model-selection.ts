@@ -375,7 +375,8 @@ export async function createModelSelectionState(params: {
       const { updated } = applyModelOverrideToSessionEntry({
         entry: nextSessionEntry,
         selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
-        preserveAuthProfileOverride: staleDirectStoredOverride,
+        preserveAuthProfileOverride:
+          staleDirectStoredOverride || sessionEntry?.authProfileOverrideRequired,
       });
       let resetApplied = updated;
       if (updated) {
@@ -572,6 +573,7 @@ export async function createModelSelectionState(params: {
         : undefined;
     assertSelectionCurrent();
     const preserveUnavailableSelection =
+      sessionEntry.authProfileOverrideRequired ||
       missingPersonalProfile ||
       shouldPreserveUnavailableSessionAuthProfileOverride({
         store,

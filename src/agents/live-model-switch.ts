@@ -70,6 +70,9 @@ function resolveSelectionFromSessionEntry(params: {
     ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
     authProfileId,
     authProfileIdSource: authProfileId ? resolveCollapsedSessionAuthPinSource(entry) : undefined,
+    ...(authProfileId && entry?.authProfileOverrideRequired
+      ? { authProfileRequired: true as const }
+      : {}),
   };
 }
 

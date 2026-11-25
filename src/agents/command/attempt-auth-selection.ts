@@ -57,6 +57,7 @@ export async function prepareCommandRuntimeAuthProfile(
   params: AgentAttemptParams,
   options: {
     cliExecutionProvider: string;
+    useCliExecution: boolean;
     allowCliAuthProfileForwarding: boolean;
     isRawModelRun: boolean;
     harnessAuthSelection: HarnessAuthProfileSelection;
@@ -83,14 +84,28 @@ export async function prepareCommandRuntimeAuthProfile(
   const required = params.sessionEntry?.authProfileOverrideRequired
     ? params.sessionEntry.authProfileOverride?.trim()
     : undefined;
-  if (required && authProfileId !== required) {
+  if (options.useCliExecution && required && authProfileId !== required) {
     throw createSelectedAuthProfileUnavailableError({
       profileId: required,
       provider: params.providerOverride,
       modelId: params.modelOverride,
     });
   }
-  return { authProfileId, cliAuthNeedsSessionBinding, buildCliAuthContext };
+  return {
+    authProfileId,
+    cliAuthNeedsSessionBinding,
+    buildCliAuthContext,
+    embeddedAuthProfile: {
+      authProfileId: required ?? authProfileId,
+      authProfileIdSource: required
+        ? resolveCollapsedSessionAuthPinSource(params.sessionEntry)
+        : authProfileId
+          ? options.harnessAuthSelection.authProfileIdSource
+          : undefined,
+      allowAuthProfileFallback: required ? false : undefined,
+      requiredAuthProfileId: required,
+    },
+  };
 }
 
 export async function resolveHarnessAuthProfileSelection(params: {

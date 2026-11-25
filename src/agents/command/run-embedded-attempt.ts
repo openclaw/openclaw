@@ -656,7 +656,9 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             ? err.authProfileIdSource
             : undefined;
           sessionEntry.authProfileOverrideCompactionCount = undefined;
-          sessionEntry.authProfileOverrideRequired = undefined;
+          sessionEntry.authProfileOverrideRequired = err.authProfileId
+            ? err.authProfileRequired
+            : undefined;
           sessionEntryForAttempt = sessionEntry;
         }
         attemptLifecycleState.lifecycleEnded = false;

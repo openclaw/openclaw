@@ -254,6 +254,23 @@ describe("refreshQueuedFollowupSession", () => {
     expect(run?.scheduledAutomation).toBe(automation);
   });
 
+  it.each([true, undefined] as const)(
+    "copies committed auth strictness on same-ID retarget (%s)",
+    (required) => {
+      const run = retarget(
+        { authProfileId: "profile-a", authProfileRequired: true },
+        {
+          nextProvider: "openai",
+          nextModel: "new-model",
+          nextAuthProfileId: "profile-a",
+          nextAuthProfileRequired: required,
+        },
+      );
+      expect(run?.authProfileId).toBe("profile-a");
+      expect(run?.authProfileRequired).toBe(required);
+    },
+  );
+
   it.each([
     { requested: "high", stored: "low", expected: ["high", "high", "high"] },
     { requested: "off", stored: "high", expected: ["off", "off", "off"] },

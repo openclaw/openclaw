@@ -4,6 +4,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   createRunResult,
+  useProductionEmbeddedRunExecutionParamsForTest,
   runFallbackCandidate as runFallback,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
@@ -129,6 +130,33 @@ describe("executeAgentTurn: session state", () => {
     expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]).toMatchObject({
       agentHarnessRuntimeOverride: "codex",
       thinkLevel: "ultra",
+    });
+  });
+
+  it("retains strictness on a model-only live switch", async () => {
+    await useProductionEmbeddedRunExecutionParamsForTest();
+    state.runEmbeddedAgentMock
+      .mockRejectedValueOnce(
+        new LiveSessionModelSwitchError({
+          provider: "anthropic",
+          model: "claude-new",
+          authProfileId: "profile-a",
+          authProfileIdSource: "user",
+          authProfileRequired: true,
+        }),
+      )
+      .mockResolvedValueOnce(createRunResult("ok"));
+    const followupRun = createFollowupRun();
+    followupRun.run.authProfileId = "profile-a";
+    followupRun.run.authProfileIdSource = "user";
+    followupRun.run.authProfileRequired = true;
+    const result = await executeAgentTurn(createRunAgentTurnParams(followupRun));
+    expect(result.kind).toBe("success");
+    expect(followupRun.run.authProfileRequired).toBe(true);
+    expect(state.runEmbeddedAgentMock.mock.calls[1]?.[0]).toMatchObject({
+      authProfileId: "profile-a",
+      requiredAuthProfileId: "profile-a",
+      allowAuthProfileFallback: false,
     });
   });
 
