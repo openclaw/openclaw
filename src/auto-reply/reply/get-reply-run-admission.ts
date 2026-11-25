@@ -96,11 +96,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionStore,
   } = params;
   const assertPreparationActive = composeSessionSourceAssertion(
-    [
-      opts?.operatorAuthority?.assertCurrent,
-      opts?.internalEventExecution?.assertCurrent,
-      opts?.scheduledAutomation?.assertCurrent,
-    ],
+    [opts?.internalEventExecution?.assertCurrent, opts?.scheduledAutomation?.assertCurrent],
     (assertSourceCurrent) => {
       opts?.abortSignal?.throwIfAborted();
       opts?.replyOperation?.abortSignal.throwIfAborted();

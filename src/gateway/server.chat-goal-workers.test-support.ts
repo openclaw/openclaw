@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { it, expect, vi, type MockInstance, type Mock } from "vitest";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { runEmbeddedAgent as executeEmbeddedAgent } from "../agents/embedded-agent.js";
 import { registerAgentHarness, getRegisteredAgentHarness } from "../agents/harness/registry.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import * as runtimePlugins from "../agents/runtime-plugins.js";
 import { installSessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,9 +22,11 @@ import { captureSessionControllerSettlement } from "../sessions/session-controll
 import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { captureEnv } from "../test-utils/env.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import {
   createGoalChatStartRequest,
+  createGoalChatRunGate,
   readGoalChatUserMessages,
 } from "./server.chat-goal.test-support.js";
 import { gatewayProfile } from "./server/client-fixtures.test-support.js";
@@ -36,7 +43,14 @@ import {
   advancePlacementFixtureToActive,
   createPlacementTurnClaimFixtureOps,
 } from "./worker-environments/placement-test-fixtures.js";
+import { admitWorkerTurnInput } from "./worker-environments/placement-turn-claim-events.js";
+import { createWorkerSessionPlacementGate } from "./worker-environments/placement-worker-gate.js";
+import type { WorkerTurnTunnelHandle } from "./worker-environments/tunnel-contract.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
+import {
+  createWorkerTurnTunnel,
+  credential,
+} from "./worker-environments/worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 
 type Scope = { agentId: string; sessionKey: string; sessionId: string; storePath: string };
@@ -67,17 +81,41 @@ export function registerWorkerGoalChatCases(
       expect.anything(),
     ]);
   };
-  it.each([
+  const codexModes = [
     "continue",
     "preparation-failed",
     "transport-closed",
     "claim-revoked",
     "claim-reassigned",
-  ] as const)(
-    "admits native worker Goal input and continuation through current placement (%s)",
-    async (mode) => {
+  ] as const;
+  it.each([
+    ...codexModes.map((mode) => ({ runtime: "codex" as const, mode })),
+    { runtime: "openclaw" as const, mode: "continue" as const },
+    { runtime: "openclaw" as const, mode: "preparation-failed" as const },
+    { runtime: "openclaw" as const, mode: "claim-revoked" as const },
+    { runtime: "openclaw" as const, mode: "hook-block-start" as const },
+    { runtime: "openclaw" as const, mode: "hook-throw-start" as const },
+    { runtime: "openclaw" as const, mode: "hook-block-resume" as const },
+    { runtime: "openclaw" as const, mode: "hook-throw-resume" as const },
+  ])(
+    "admits $runtime worker Goal input and continuation through current placement ($mode)",
+    async ({ runtime, mode }) => {
       const { sessionKey, sessionId, storePath } = scope();
       const context = getContext();
+      const hookStart = mode === "hook-block-start" || mode === "hook-throw-start";
+      const hookResume = mode === "hook-block-resume" || mode === "hook-throw-resume";
+      const implicitRuntime = runtime === "openclaw" && mode === "continue";
+      const policyEnv = captureEnv([
+        "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        "OPENAI_API_KEY",
+      ]);
+      using _ = { [Symbol.dispose]: () => policyEnv.restore() };
+      if (implicitRuntime) {
+        delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+        process.env.OPENAI_API_KEY = "synthetic-goal-api-key";
+      }
       const waitForDispatchEnd = async () => {
         await captureSessionControllerSettlement({
           scope: storePath,
@@ -118,12 +156,49 @@ export function registerWorkerGoalChatCases(
         ...config.agents.entries,
         main: { ...config.agents.entries?.main, nativeRuntimeConsent: ["codex"] },
       };
+      if (runtime === "openclaw") {
+        config.agents.defaults = {
+          ...config.agents.defaults,
+          model: { primary: implicitRuntime ? "openai/gpt-5.5" : "goal-test/test-model" },
+        };
+        if (implicitRuntime) {
+          delete config.models;
+        } else {
+          config.models = {
+            providers: {
+              "goal-test": {
+                api: "openai-responses",
+                baseUrl: "https://goal-model.example.test/v1",
+                apiKey: "synthetic-goal-key",
+                models: [modelDefinition("test-model")],
+              },
+            },
+          };
+        }
+      }
       await prepareGatewayReplyRuntimeForTest({ force: true, config });
       await patchSessionEntryCore(scope(), () => ({
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
+        agentHarnessId: implicitRuntime ? undefined : runtime,
+        modelSelectionLocked: !implicitRuntime,
       }));
-      expect(getRegisteredAgentHarness("codex")?.harness.cloudPlacement?.mode).toBe("remote-exec");
+      if (implicitRuntime) {
+        expect(
+          resolveEffectiveAgentRuntime({
+            cfg: config,
+            agentId: "main",
+            sessionKey,
+            provider: "openai",
+            modelId: "gpt-5.5",
+            sessionEntry: loadSessionEntry(scope()),
+          }),
+        ).toBe("codex");
+      }
+      const { hook, installHook, removeHook } = createGoalChatRunGate(
+        mode === "hook-throw-start" || mode === "hook-throw-resume",
+      );
+      if (hookStart) {
+        installHook();
+      }
       const placements = createWorkerSessionPlacementStore();
       context.workerSessionPlacementService = placements;
       const environment = {
@@ -133,6 +208,13 @@ export function registerWorkerGoalChatCases(
         nodeDeviceId: "worker-goal-node",
         sshEndpoint: null,
         attachedSessionIds: [sessionId],
+        bootstrapReceipt: {
+          ...createDispatchEnvironmentFixtures().attached.bootstrapReceipt,
+          protocolFeatures: [
+            ...createDispatchEnvironmentFixtures().attached.bootstrapReceipt.protocolFeatures,
+            WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
+          ],
+        },
       };
       const placementOwner = {
         environmentId: environment.environmentId,
@@ -141,7 +223,12 @@ export function registerWorkerGoalChatCases(
       await advancePlacementFixtureToActive(
         placements,
         openOpenClawStateDatabase(),
-        { agentId: "main", sessionKey, sessionId, executionMode: "remote-exec" },
+        {
+          agentId: "main",
+          sessionKey,
+          sessionId,
+          executionMode: runtime === "codex" ? "remote-exec" : "worker-turn",
+        },
         {
           ...placementOwner,
           workerBundleHash: environment.bootstrapReceipt.bundleHash,
@@ -157,22 +244,35 @@ export function registerWorkerGoalChatCases(
           get: () => environment,
           ensureRetainedRunning: unexpectedTransport,
           inspectTurnLease: async ({ assertCurrent }) => assertCurrent(),
-          acquireTurnCredential: unexpectedTransport,
-          acknowledgeCredentialDelivery: unexpectedTransport,
+          acquireTurnCredential: async () => ({
+            ...credential(),
+            ...placementOwner,
+            sessionId,
+            bundleHash: environment.bootstrapReceipt.bundleHash,
+          }),
+          acknowledgeCredentialDelivery: async () => true,
+          createGatewayTools: async ({ prepareTools }) => prepareTools?.([]) ?? [],
           destroy: unexpectedTransport,
           stopTunnel: async () => {},
-          startTunnel: async () => ({
-            ...placementOwner,
-            runWorkspaceCommand: async (command) => {
-              command.assertCurrent?.();
-              expect(JSON.parse(command.input ?? "null")).toEqual({ op: "discover" });
-              return workerCommandResult();
-            },
-            quiesceWorkspace: unexpectedTransport,
-            reconcileWorkspace: unexpectedTransport,
-            syncWorkspace: unexpectedTransport,
-            stop: async () => {},
-          }),
+          startTunnel: async () =>
+            runtime === "openclaw"
+              ? createWorkerTurnTunnel({
+                  ...placementOwner,
+                  launchTurn: launchWorkerTurn,
+                  reconcileWorkspace: unexpectedTransport,
+                })
+              : {
+                  ...placementOwner,
+                  runWorkspaceCommand: async (command) => {
+                    command.assertCurrent?.();
+                    expect(JSON.parse(command.input ?? "null")).toEqual({ op: "discover" });
+                    return workerCommandResult();
+                  },
+                  quiesceWorkspace: unexpectedTransport,
+                  reconcileWorkspace: unexpectedTransport,
+                  syncWorkspace: unexpectedTransport,
+                  stop: async () => {},
+                },
         },
         resolveWorkspace: async () => ({
           kind: "device-folder",
@@ -244,7 +344,112 @@ export function registerWorkerGoalChatCases(
         },
       } satisfies GatewayClient;
       const send = (input = request) => rpc("chat.send", input, undefined, operator);
+      let input: Parameters<typeof executeEmbeddedAgent>[0];
+      async function beforeModel() {
+        if (mode === "claim-revoked" || mode === "claim-reassigned") {
+          const current = await placements.getAsync(sessionId);
+          if (current?.state !== "active") {
+            throw new Error("Expected active worker before Goal promotion");
+          }
+          revokedClaim = projectPlacementTurnClaim(current);
+          if (!revokedClaim || !placements.validateTurnClaim(revokedClaim)) {
+            throw new Error("Expected live worker claim");
+          }
+        }
+      }
+      async function runModel() {
+        const calls = runEmbeddedAgent.mock.calls.length;
+        expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
+        modelExecuted();
+        if (calls === 1 || calls === 4 || mode === "preparation-failed") {
+          await patchSessionEntryCore(scope(), (entry) => ({
+            goal: entry.goal && { ...entry.goal, status: calls === 1 ? "paused" : "complete" },
+          }));
+        }
+        return {
+          payloads: [{ text: "Checkpoint reached." }],
+          meta: {
+            durationMs: 1,
+            stopReason: "end_turn",
+            agentMeta: {
+              sessionId: input.sessionId,
+              provider: "test",
+              model: "test",
+              agentHarnessId: runtime,
+              usage: { input: 2, output: 1 },
+              lastCallUsage: { input: calls * 10, output: 1 },
+            },
+          },
+        };
+      }
+      async function launchWorkerTurn(launch: Parameters<WorkerTurnTunnelHandle["launchTurn"]>[0]) {
+        launch.onDispatchReady?.();
+        if (runEmbeddedAgent.mock.calls.length === 1) {
+          expectNoGoalInput();
+        }
+        if (runEmbeddedAgent.mock.calls.length === 2 && mode === "continue") {
+          expect(loadSessionEntry(scope())?.goal?.status).toBe("paused");
+        }
+        await beforeModel();
+        const admitted = await admitWorkerTurnInput(
+          {
+            ...placementOwner,
+            sessionId,
+            runId: input.runId,
+            turnClaim: launch.turnClaim,
+            credentialHash: credential().deliveryId,
+            bundleHash: environment.bootstrapReceipt.bundleHash,
+            rpcSetVersion: 1,
+            protocolFeatures: environment.bootstrapReceipt.protocolFeatures,
+            credentialExpiresAtMs: Date.now() + 60_000,
+          },
+          {
+            runEpoch: environment.ownerEpoch,
+            systemPrompt: launch.plan.assignment.systemPrompt ?? "",
+            prompt: input.prompt,
+            messages: [],
+          },
+          () => placements.validateTurnClaim(launch.turnClaim),
+        );
+        expect(admitted.ok).toBe(true);
+        if (admitted.ok && admitted.result.outcome === "block") {
+          return workerCommandResult();
+        }
+        expect(admitted).toMatchObject({ ok: true, result: { outcome: "allow" } });
+        await runModel();
+        const manager = await SessionManager.openAsync({
+          ...scope(),
+        });
+        const leaf = await manager.appendMessageAsync(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "Checkpoint reached." }],
+            timestamp: Date.now(),
+            usage: {
+              input: runEmbeddedAgent.mock.calls.length * 10,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: runEmbeddedAgent.mock.calls.length * 10 + 1,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+          }),
+        );
+        const seq = launch.plan.assignment.transcript.nextSeq;
+        await createWorkerSessionPlacementGate(placements).updateAckCursors({
+          claim: launch.turnClaim,
+          transcriptSeq: seq,
+          liveSeq: launch.plan.assignment.liveEvents.nextSeq,
+        });
+        return workerCommandResult({
+          stdout: JSON.stringify({
+            status: "completed",
+            transcriptLeafId: leaf,
+            transcriptNextSeq: seq + 1,
+          }),
+        });
+      }
       runEmbeddedAgent.mockImplementation(async (params) => {
+        input = params;
         prepared.resolve();
         await promote.promise;
         if (mode === "preparation-failed" && runEmbeddedAgent.mock.calls.length === 1) {
@@ -268,38 +473,9 @@ export function registerWorkerGoalChatCases(
             explicitSkillSelections: undefined,
           },
           async () => {
-            if (mode === "claim-revoked" || mode === "claim-reassigned") {
-              const current = await placements.getAsync(sessionId);
-              if (current?.state !== "active") {
-                throw new Error("Expected an active worker placement before Goal promotion");
-              }
-              revokedClaim = projectPlacementTurnClaim(current);
-              if (!revokedClaim || !placements.validateTurnClaim(revokedClaim)) {
-                throw new Error("Expected a live launcher-owned claim before Goal promotion");
-              }
-            }
+            await beforeModel();
             await params.userTurnTranscriptRecorder?.persistApproved();
-            modelExecuted();
-            if (calls === 1 || calls === 4 || mode === "preparation-failed") {
-              await patchSessionEntryCore(scope(), (entry) => ({
-                goal: entry.goal && { ...entry.goal, status: calls === 1 ? "paused" : "complete" },
-              }));
-            }
-            return {
-              payloads: [{ text: "Checkpoint reached." }],
-              meta: {
-                durationMs: 1,
-                stopReason: "end_turn",
-                agentMeta: {
-                  sessionId: params.sessionId,
-                  provider: "test",
-                  model: "test",
-                  agentHarnessId: "codex",
-                  usage: { input: 2, output: 1 },
-                  lastCallUsage: { input: calls * 10, output: 1 },
-                },
-              },
-            };
+            return await runModel();
           },
           undefined,
           params.preparedRunAdmission?.assertSourceCurrent,
@@ -324,6 +500,21 @@ export function registerWorkerGoalChatCases(
         }
         promote.resolve();
         const started = await starting;
+        if (hookStart) {
+          expect(started.mock.calls[0]?.[0]).toBe(false);
+          await waitForDispatchEnd();
+          expect(hook).toHaveBeenCalledOnce();
+          expect(loadSessionEntry(scope())?.goal).toBeUndefined();
+          expect(JSON.stringify(userMessages())).not.toContain(request.message);
+          expect(modelExecuted).not.toHaveBeenCalled();
+          removeHook();
+          context.dedupe.clear();
+          const rejectedReplay = await send();
+          expect(rejectedReplay.mock.calls[0]?.[0]).toBe(false);
+          expect(loadSessionEntry(scope())?.goal).toBeUndefined();
+          expect(modelExecuted).not.toHaveBeenCalled();
+          return;
+        }
         if (mode === "transport-closed") {
           expectAccepted(started, {
             status: "started",
@@ -340,7 +531,7 @@ export function registerWorkerGoalChatCases(
           expect(runEmbeddedAgent).toHaveBeenCalledOnce();
           return;
         }
-        if (mode !== "continue") {
+        if (mode !== "continue" && !hookResume) {
           expect(started.mock.calls[0]?.[0]).toBe(false);
           await waitForDispatchEnd();
           expectNoGoalInput();
@@ -382,19 +573,47 @@ export function registerWorkerGoalChatCases(
         const first = loadSessionEntry(scope())!.goal!;
         expect(first).toMatchObject({ status: "paused", continuationTurns: 0 });
         expect(userMessages()).toHaveLength(1);
-        const resumed = await rpc(
-          "sessions.goal.update",
-          {
-            sessionKey,
-            sessionId,
-            goalId: first.id,
-            action: "resume",
-            operationId: "resume-native-goal",
-            issuedAtMs: Date.now(),
-          },
-          undefined,
-          operator,
-        );
+        const resumeRequest = {
+          sessionKey,
+          sessionId,
+          goalId: first.id,
+          action: "resume",
+          operationId: randomUUID(),
+          issuedAtMs: Date.now(),
+        };
+        if (hookResume) {
+          installHook();
+        }
+        const resumed = await rpc("sessions.goal.update", resumeRequest, undefined, operator);
+        if (hookResume) {
+          expect(resumed.mock.calls[0]?.[0]).toBe(false);
+          await waitForDispatchEnd();
+          expect(hook).toHaveBeenCalledOnce();
+          expect(loadSessionEntry(scope())?.goal).toEqual(first);
+          expect(modelExecuted).toHaveBeenCalledOnce();
+          removeHook();
+          context.dedupe.clear();
+          const rejectedReplay = await rpc(
+            "sessions.goal.update",
+            resumeRequest,
+            undefined,
+            operator,
+          );
+          expect(rejectedReplay.mock.calls[0]?.[0]).toBe(false);
+          expect(loadSessionEntry(scope())?.goal).toEqual(first);
+          const retry = await rpc(
+            "sessions.goal.update",
+            { ...resumeRequest, operationId: randomUUID(), issuedAtMs: Date.now() },
+            undefined,
+            operator,
+          );
+          expectAccepted(retry, { action: "resume", goalId: first.id });
+          expect(retry.mock.calls[0]?.[1]).not.toHaveProperty("replayed", true);
+          expect((await waitForGatewayActiveWork(30_000)).drained).toBe(true);
+          expect(loadSessionEntry(scope())?.goal?.status).toBe("complete");
+          expect(modelExecuted.mock.calls.length).toBeGreaterThan(1);
+          return;
+        }
         expectAccepted(resumed, { action: "resume", goalId: first.id });
         expect((await waitForGatewayActiveWork(30_000)).drained).toBe(true);
         expect(loadSessionEntry(scope())?.goal).toMatchObject({
@@ -419,6 +638,7 @@ export function registerWorkerGoalChatCases(
         await starting;
         await waitForDispatchEnd();
         commitAdmission.mockRestore();
+        removeHook();
         releasePlacement();
         loadNative.mockRestore();
         loadNativeAsync.mockRestore();
@@ -426,7 +646,18 @@ export function registerWorkerGoalChatCases(
           await placements.releaseTurn(replacementClaim);
         }
         const active = await placements.getAsync(sessionId);
-        expect(active?.state).toBe("active");
+        const lostWorkerClaim = runtime === "openclaw" && mode === "claim-revoked";
+        expect(active?.state).toBe(lostWorkerClaim ? "failed" : "active");
+        if (active?.state === "failed") {
+          // A launched worker that loses its claim remains failed under the existing owner.
+          expect(modelExecuted).not.toHaveBeenCalled();
+          expectNoGoalInput();
+          await placements.retireSessionPlacementAsync({
+            sessionId,
+            expectedState: "failed",
+            expectedGeneration: active.generation,
+          });
+        }
         if (active?.state === "active") {
           const draining = await placements.startDrain({
             sessionId,

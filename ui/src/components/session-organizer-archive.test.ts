@@ -361,7 +361,7 @@ function withCronList(
   return cronList;
 }
 
-const cronPage = (...jobs: { id: string; name: string }[]) => ({
+const cronPage = (...jobs: { id: string; name: string; displayName?: string }[]) => ({
   jobs,
   total: jobs.length,
   offset: 0,
@@ -395,7 +395,8 @@ describe("archive confirmation for bound automations", () => {
       );
       expect(document.body.textContent).toContain('Archiving "Batch 1" pauses its automations.');
       expect(document.body.textContent).not.toContain("openclaw automations");
-      expect(document.body.textContent).toContain("Nightly digest (job-1)");
+      expect(document.body.textContent).toContain("Nightly digest");
+      expect(document.body.textContent).not.toContain("job-1");
       expect(actions.textContent).toContain("Archive anyway");
       answerConfirmDialog(actions, decision);
       await pending;
@@ -455,7 +456,10 @@ describe("archive confirmation for bound automations", () => {
     const child = gatewayRow(1, { parentSessionKey: root.key, hasAutomation: true });
     prepareArchiveTree(harness, [root, child]);
     const cronList = withCronList(harness, async () =>
-      cronPage({ id: "job-2", name: "Child report" }),
+      cronPage(
+        { id: "job-2", name: "child-report", displayName: "Child report" },
+        { id: "job-3", name: "Weekly backup" },
+      ),
     );
     const pending = modal.track(
       confirmSessionArchive(
@@ -470,7 +474,12 @@ describe("archive confirmation for bound automations", () => {
     expect(document.body.textContent).toContain(
       "Automations are bound to 1 of these conversations.",
     );
-    expect(document.body.textContent).toContain("Child report (job-2)");
+    expect(
+      Array.from(
+        document.body.querySelectorAll(".bound-automation-cards__row"),
+        (row) => row.textContent,
+      ),
+    ).toEqual(["Child report", "Weekly backup"]);
     expect(actions.textContent).toContain("Archive all (2)");
     answerConfirmDialog(actions, "cancel");
     await expect(pending).resolves.toBeNull();

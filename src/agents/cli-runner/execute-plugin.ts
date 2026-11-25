@@ -17,6 +17,7 @@ import type {
   CliBackendUserInputRequest,
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
+import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
 import { isHostGeneratedInputProvenance } from "../../sessions/input-provenance.js";
 import type { ReplyBackendTurnStatus } from "../../sessions/session-controller.turn-status.types.js";
@@ -387,6 +388,11 @@ export async function executePluginOwnedProcess(params: {
     {
       get turnStatus() {
         return turnStatus;
+      },
+      get supportsQueueMessageImages() {
+        // A fresh turn runs the image policy with the incoming sender's context.
+        // Native steering has no equivalent before_agent_run gate.
+        return messageInjection?.acceptsImages === true && !hasGlobalHooks("before_agent_run");
       },
       supportsTranscriptCommitWait: true,
       messageInjectionV2: createSteeredCliMessageInjection({

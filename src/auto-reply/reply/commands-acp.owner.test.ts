@@ -39,7 +39,7 @@ describe("ACP command authority", () => {
     [true, "100", "role"],
     [true, "100", "accepted"],
   ] as const)(
-    "fences ACP setMode=%s sender=%s transition=%s",
+    "keeps the start-time owner decision for ACP setMode=%s sender=%s transition=%s",
     async (setMode, senderId, transition) => {
       const action = setMode ? "set-mode plan" : "permissions auto-approve";
       const effect = setMode ? "mode=plan" : "approval_policy=auto-approve";
@@ -138,8 +138,8 @@ describe("ACP command authority", () => {
             releaseBoundary.resolve();
           }
           const result = await commandRun;
-          const applied =
-            senderId !== "ordinary-member" && (transition === "none" || transition === "accepted");
+          // The owner decision is fixed when the command starts; a started command finishes.
+          const applied = senderId !== "ordinary-member";
           expect(effects).toEqual(applied ? [effect] : []);
           const after = manager.resolveSession(target);
           if (applied) {
@@ -150,9 +150,7 @@ describe("ACP command authority", () => {
             });
           } else {
             expect(after).toEqual(before);
-            expect(result?.reply?.text).toContain(
-              senderId === "ordinary-member" ? "owner-only command" : "authority changed",
-            );
+            expect(result?.reply?.text).toContain("owner-only command");
           }
         } finally {
           releaseBoundary.resolve();

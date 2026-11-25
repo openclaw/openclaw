@@ -343,6 +343,24 @@ export function groupPreparedChatMessages(
   }
   let activityBoundary = false;
   return result.flatMap((item) => {
+    if (item.kind === "compaction") {
+      const startsActivityGroup = activityBoundary;
+      activityBoundary = false;
+      return [
+        {
+          kind: "group" as const,
+          key: `group:${item.key}`,
+          role: "tool",
+          messages: [],
+          compaction: item,
+          timestamp: item.timestamp,
+          visibleContent: "none" as const,
+          isStreaming: false,
+          ...(item.runId ? { runId: item.runId } : {}),
+          ...(startsActivityGroup ? { startsActivityGroup: true as const } : {}),
+        },
+      ];
+    }
     if (item.kind === "notice" && item.activityBoundary) {
       activityBoundary = true;
       return [];
@@ -434,6 +452,7 @@ function groupChatItemSegment(
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;
+    const suggestedBy = role === "user" ? normalized.suggestedBy : undefined;
     const timestamp = normalized.timestamp || Date.now();
     const runId =
       role === "assistant" || role === "tool" ? transcriptRunId(item.message) : undefined;
@@ -482,7 +501,8 @@ function groupChatItemSegment(
           currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||
           currentGroup.senderSession?.label !== normalized.senderSession?.label ||
           currentGroup.senderSession?.agentId !== normalized.senderSession?.agentId ||
-          senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
+          senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender) ||
+          senderIdentityKey(currentGroup.suggestedBy) !== senderIdentityKey(suggestedBy)))
     ) {
       if (currentGroup) {
         result.push(currentGroup);
@@ -496,6 +516,7 @@ function groupChatItemSegment(
         senderLabel,
         ...(normalized.senderSession ? { senderSession: normalized.senderSession } : {}),
         ...(sender ? { sender } : {}),
+        ...(suggestedBy ? { suggestedBy } : {}),
         ...(normalized.sourceClients ? { sourceClients: normalized.sourceClients } : {}),
         messages: [source],
         visibleContent,

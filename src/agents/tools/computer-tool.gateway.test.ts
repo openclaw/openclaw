@@ -41,7 +41,11 @@ function createHostedComputerTool(options: Parameters<typeof createVisionCompute
     operationalRunInstance,
     approvalAuthority: authority,
     gatewayContextResolver: () => gatewayContext,
-    receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+    receiptAuthority: () => {
+      if (!validateAgentRunDelegatedAuthority(authority)) {
+        throw new Error("agent tool caller authority is no longer active");
+      }
+    },
   });
 }
 

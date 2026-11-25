@@ -35,10 +35,14 @@ export async function approveOpenClawIdNodePairing(params: {
   if (!description || !principal.authority) {
     return null;
   }
+  if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
+    return null;
+  }
   const assertCurrent = () => {
-    // Check the live source at transaction and commit, after every broker wait.
-    if (!params.isCurrent() || !isOpenClawIdTunnelPrincipalCurrent(principal)) {
-      throw new DevicePairingAuthorityRefusedError("OpenClaw ID node authority changed");
+    if (!params.isCurrent()) {
+      throw new DevicePairingAuthorityRefusedError(
+        "Node pairing request ended. Reconnect to pair.",
+      );
     }
   };
   const result = await executeDevicePairingMutation(

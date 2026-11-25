@@ -9,6 +9,7 @@ import {
   validateProjectsCheckoutOptionsParams,
   validateProjectsRegisterParams,
   validateProjectsRemoveParams,
+  validateProjectsRenameParams,
   validateProjectsSearchRemoteParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -38,6 +39,7 @@ import {
   ProjectCheckoutError,
   registerProjectRegistry,
   removeProjectRegistry,
+  renameProjectRegistry,
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
@@ -169,7 +171,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
       const registryProjects = await filterProjectsForRequester(
         cfg,
         await listProjectRegistry(cfg),
-        projectRequesterForClient(client),
+        projectRequesterForClient(client, cfg),
       );
       diagnostics?.mark("sessions");
       const githubHost = resolveConfiguredGitHubHost(cfg);
@@ -343,7 +345,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
         cfg,
         projectId: params.projectId,
         targetAgentId: selected.agentId,
-        requester: projectRequesterForClient(client),
+        requester: projectRequesterForClient(client, cfg),
         resolveSandboxRequired: () =>
           resolveCreatorSandbox(cfg, resolveOperatorSessionCreation(client)) === "required",
         assertCurrent,
@@ -407,6 +409,27 @@ export const projectsHandlers: GatewayRequestHandlers = {
     },
     projectCheckoutError,
   ),
+  "projects.rename": defineValidatedGatewayHandler(
+    "projects.rename",
+    validateProjectsRenameParams,
+    async ({ params, respond, context }) => {
+      const unknownProject = errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `unknown project id: ${params.projectId}`,
+      );
+      const project = await resolveProjectRegistry(context.getRuntimeConfig(), params.projectId);
+      const renamed =
+        project && project.source !== "workspace"
+          ? await renameProjectRegistry(project, params.name.trim())
+          : undefined;
+      if (!renamed) {
+        respond(false, undefined, unknownProject);
+        return;
+      }
+      respond(true, sanitizeProjectRecord(renamed), undefined);
+    },
+    projectCheckoutError,
+  ),
   "projects.add": defineValidatedGatewayHandler(
     "projects.add",
     validateProjectsAddParams,
@@ -445,21 +468,12 @@ export const projectsHandlers: GatewayRequestHandlers = {
   "projects.searchRemote": defineValidatedGatewayHandler(
     "projects.searchRemote",
     validateProjectsSearchRemoteParams,
-    async ({ params, respond, context, signal, hasCurrentClientAuthority }) => {
+    async ({ params, respond, context, signal }) => {
       const cfg = context.getRuntimeConfig();
       const host = resolveConfiguredGitHubHost(cfg);
       const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(cfg);
       const assertCurrent = () => {
         signal?.throwIfAborted();
-        if (hasCurrentClientAuthority?.() === false) {
-          throw new Error("Project requester authority changed during search");
-        }
-        if (context.getRuntimeConfig() !== cfg) {
-          throw new gitHubPublicApi.ControlUiGitHubError(
-            502,
-            "GitHub host changed during project search",
-          );
-        }
       };
       assertCurrent();
       const nativeToken =

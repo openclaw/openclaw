@@ -20,6 +20,7 @@ import {
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
 import {
+  sidebarPinnedSessionRows,
   sidebarSessionPagination,
   isListedInPinnedSection,
   type SidebarPinZone,
@@ -53,6 +54,7 @@ type SidebarProjectionInput = {
   sections?: SidebarSessionSection<SidebarRecentSession>[];
   /** Personal pins render in the Pinned section above these sections, never twice. */
   pinnedKeys?: ReadonlySet<string>;
+  pinTime?: number;
   grouping: SidebarSessionsGrouping;
   knownGroups: string[] | undefined;
   selfOwnerId?: string | null;
@@ -60,6 +62,8 @@ type SidebarProjectionInput = {
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
   emptyGroupsMode: SidebarEmptyGroupsMode;
+  /** Empty Other still renders as a target for rows that can arrive or be dropped there. */
+  showEmptyOther: boolean;
   /** "owner" selects exactly one owner; "involvingMe" can span several. */
   ownerFilter: "owner" | "involvingMe" | null;
   visibleSessionLimits: ReadonlyMap<string, number>;
@@ -85,6 +89,8 @@ export type SidebarVisibleSections = {
     visibleLimit: number;
     collapsedVisibleRowCount: number;
     renderHeader: boolean;
+    /** Only the native, ungrouped Other section reveals held rows on scroll. */
+    continuesOnScroll?: boolean;
   })[];
   visibleRows: SidebarRecentSession[];
 };
@@ -100,6 +106,8 @@ type SidebarPresentationHost = Pick<
   | "expandedAgentId"
 > & {
   readonly sessionData: SessionDataOwner;
+  readonly collapsedSessionSections: ReadonlySet<string>;
+  readonly gatewayPinTime?: number;
   readonly sessionOwnershipVisibility: { filters: boolean; avatars: boolean };
   readonly sidebarMenus: { agentMenuPosition: { x: number; top: number } | null };
   readonly rosterSessionSource: {
@@ -195,6 +203,11 @@ export class SidebarSessionProjection {
     const presentation = [
       host.navigationView,
       railRows.map(({ children: _children, ...row }) => row),
+      // A collapsed Pinned header still publishes its count when no selected row changes.
+      sessionsVisible &&
+        host.collapsedSessionSections.has("pinned") &&
+        sidebarPinnedSessionRows(zone, context?.sessions.archiveVisibility, host.gatewayPinTime)
+          .length,
       host.connected,
       this.#helloPresentation.readRevision(
         () => [context?.gateway.snapshot.hello, context?.gateway.snapshot.pluginCapabilities],
@@ -557,7 +570,9 @@ export class SidebarSessionProjection {
       input.sections ??
       groupSidebarSessionRows(
         pinnedKeys.size > 0
-          ? input.rows.filter((row) => !isListedInPinnedSection(row, pinnedKeys))
+          ? input.rows.filter(
+              (row) => !isListedInPinnedSection(row, pinnedKeys, input.pinTime ?? Date.now()),
+            )
           : input.rows,
         {
           grouping,
@@ -569,8 +584,13 @@ export class SidebarSessionProjection {
       ).filter(
         (section) =>
           section.id !== "pinned" &&
-          // Catalog rows have their own projection; these sections are placeholders.
-          !(hideEmptyGroups && !section.id.startsWith("catalog:") && section.rows.length === 0),
+          // The one decision about which sections render: the renderer draws
+          // every returned section. Empty Coding never renders.
+          (section.rows.length > 0 ||
+            (section.id !== "work" &&
+              (section.id !== "ungrouped" || input.showEmptyOther) &&
+              // Catalog rows have their own projection; these sections are placeholders.
+              (!hideEmptyGroups || section.id.startsWith("catalog:")))),
       );
     const sectionIds = new Set<string>(sections.map((section) => section.id));
     for (const sectionId of this.#stickySections.keys()) {
@@ -579,7 +599,7 @@ export class SidebarSessionProjection {
       }
     }
     // A lone catch-all sits directly under the global Sessions toolbar. Empty
-    // Coding does not render, while empty custom/Groups sections remain targets.
+    // custom/Groups sections remain targets.
     // Headerless means no collapse control, so a stored ungrouped-collapsed
     // preference is deliberately inert here; it re-applies once a peer returns.
     // Flat mode ("none") holds every native row, so its "Other" label would
@@ -594,10 +614,7 @@ export class SidebarSessionProjection {
       pinnedKeys.size > 0 ||
       (input.grouping !== "none" &&
         sections.some(
-          (section) =>
-            section.id !== "ungrouped" &&
-            section.id !== soloOwnerSectionId &&
-            (section.id !== "work" || section.rows.length > 0),
+          (section) => section.id !== "ungrouped" && section.id !== soloOwnerSectionId,
         ));
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];
@@ -654,6 +671,7 @@ export class SidebarSessionProjection {
           visibleLimit,
           collapsedVisibleRowCount,
           renderHeader,
+          continuesOnScroll: !input.sections && grouping === "none" && section.id === "ungrouped",
         }),
       );
     }

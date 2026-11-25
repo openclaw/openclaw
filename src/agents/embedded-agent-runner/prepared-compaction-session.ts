@@ -1,5 +1,8 @@
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
-import { resolveOpenAIResponsesCompactEndpointPlan } from "@openclaw/ai/transports";
+import {
+  isOpenAIResponsesApi,
+  resolveOpenAIResponsesCompactEndpointPlan,
+} from "@openclaw/ai/transports";
 import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   compactFromSource,
@@ -157,11 +160,7 @@ export async function prepareEmbeddedCompactionSession(
       modelApi: model.api,
       policy,
     }),
-    isOpenAIResponsesApi: [
-      "openai-responses",
-      "openai-chatgpt-responses",
-      "azure-openai-responses",
-    ].includes(model.api),
+    isOpenAIResponsesApi: isOpenAIResponsesApi(model.api),
     sessionId: params.sessionId,
     replayEnabled,
     historyLimit: getHistoryLimitFromSessionKey(params.sessionKey, params.config, {
@@ -456,7 +455,8 @@ export async function prepareEmbeddedCompactionSession(
           completed.tokensBefore,
           completed.details,
           fromHook,
-          { itemId: work.itemId },
+          // Progress announced this run and item; the UI reconciles the entry by both.
+          { runId: runtime.runId, itemId: work.itemId },
           finalized.tokensAfter,
         ),
         appendIntent: "active-branch" as const,

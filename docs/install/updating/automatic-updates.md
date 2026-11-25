@@ -101,9 +101,11 @@ through the old entrypoint logs a warning when automatic updates are enabled.
 
 Look in the foreground node's stderr or its service logs for update preparation,
 busy deferral, activation, and fallback messages. If an update is deferred for
-schema migration or repair, run `openclaw update` on the node machine. Then
-restart its service with `openclaw node restart`, or relaunch the foreground
-`openclaw node run` command.
+schema migration or repair, stop the node with `openclaw node stop` (or end
+the foreground `openclaw node run` command), run `openclaw update` on the node
+machine, then start it again with `openclaw node start` or relaunch
+`openclaw node run`. A running node keeps the state database open, so
+`openclaw update` refuses while its service runs.
 
 If the launcher reports a stale `node-runtime/activation.lock`, confirm that no
 node update is running before removing the exact lock path from the message.

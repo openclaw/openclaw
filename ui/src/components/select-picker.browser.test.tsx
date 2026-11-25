@@ -14,7 +14,7 @@ import { SettingsRow } from "./solid/settings-ui.tsx";
 import "../styles/base.css";
 import "../styles/settings-controls.css";
 import "../styles/settings.css";
-import "../styles/model-providers.css";
+import "./solid/model-settings-rows.css";
 
 // Geometry assertions measure the settled list, not the Select entry scale.
 document.documentElement.style.setProperty("--select-enter-duration", "0s");

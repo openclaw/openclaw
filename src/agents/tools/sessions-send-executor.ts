@@ -60,6 +60,7 @@ import {
   createConfiguredAgentMainSession,
   isConfiguredAgentMainSessionKey,
   notifySessionsSendSession,
+  recordSessionsSendForRequester,
   resolveConfiguredAgentMainSessionKey,
 } from "./sessions-send-tool.delivery.js";
 import {
@@ -564,6 +565,21 @@ export async function executeSessionsSend(
           nativeChild: targetIsSubagent && !targetAcpMeta,
           inputProvenance,
         });
+        // Unsupervised sessions (no completion owner) keep ordinary recipient turns.
+        if (requesterSessionEntry?.completionOwnerSessionKey === targetSession.canonicalKey) {
+          return await recordSessionsSendForRequester({
+            cfg,
+            admissionConfig: communication.admissionConfig,
+            callGateway: communication.callGateway,
+            runId,
+            sendParams,
+            sessionKey: resolvedKey,
+            sessionStoreTarget: targetSession,
+            preparedTargetSessionId: targetSessionEntry?.sessionId,
+            assertSendCurrent: communication.assertCurrent,
+            displayKey,
+          });
+        }
         if (
           mode === "resume" ||
           (mode === undefined &&

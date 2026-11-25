@@ -157,6 +157,17 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       respond(true, await detectSetupInference(params.agentId), undefined);
     },
   ),
+  // Known choices from config and manifests answer before local discovery, so
+  // clients can offer sign-in and API keys while openclaw.setup.detect still probes.
+  "openclaw.setup.options": defineValidatedGatewayHandler(
+    "openclaw.setup.options",
+    validateSystemAgentSetupDetectParams,
+    async ({ params, respond }) => {
+      const { listManualSetupInferenceDetection } =
+        await import("../../system-agent/setup-inference.js");
+      respond(true, await listManualSetupInferenceDetection(params.agentId), undefined);
+    },
+  ),
   "openclaw.setup.auto": defineValidatedGatewayHandler(
     "openclaw.setup.auto",
     validateSystemAgentSetupAutoParams,

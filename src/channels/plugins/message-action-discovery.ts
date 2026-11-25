@@ -363,6 +363,8 @@ function mergeToolSchemaProperties(
 type ChannelMessageToolSchemaParams = ChannelMessageActionDiscoveryParams & {
   /** Core discovery selects the session channel set before merging plugin fields. */
   channels?: readonly { id: string; actions?: ChannelMessageToolDiscoveryAdapter }[];
+  /** Final action enum; fragments whose declared actions are all absent are omitted. */
+  advertisedActions?: readonly string[];
   /** Internal caller-owned account selection after the usual provider scoping. */
   resolveAccountIdForChannel?: (
     channel: string,
@@ -390,6 +392,7 @@ export function* resolveChannelMessageToolSchemaPropertiesSteps(
         : contextualAccountId,
     };
   };
+  const advertisedActions = params.advertisedActions && new Set(params.advertisedActions);
   const seenPluginIds = new Set<string>();
   function* mergePluginSchema(
     pluginId: string,
@@ -403,6 +406,14 @@ export function* resolveChannelMessageToolSchemaPropertiesSteps(
     };
     for (const contribution of discovered.schemaContributions) {
       const visibility = contribution.visibility ?? "current-channel";
+      const declaredActions = contribution.actions;
+      if (
+        advertisedActions &&
+        declaredActions?.length &&
+        !declaredActions.some((action) => advertisedActions.has(action))
+      ) {
+        continue;
+      }
       if (!currentChannel || visibility === "all-configured" || pluginId === currentChannel) {
         mergeToolSchemaProperties(properties, contribution.properties);
       }

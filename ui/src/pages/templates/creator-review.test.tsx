@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
-import type { TemplatesDraftsReviewResult } from "@openclaw/gateway-protocol";
 import { fireEvent, within } from "@solidjs/testing-library";
 import { createSignal, Show } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { reviewed } from "../../e2e/template-chat-review.test-support.ts";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -18,67 +18,10 @@ import { TemplateCreatorReview } from "./creator-review.tsx";
 
 const skillContent = "Read the release history and cite the source for each finding.";
 const pluginContent = "Connect to GitHub issues, pull requests, and checks.";
-const reviewed: TemplatesDraftsReviewResult = {
-  revision: "a".repeat(64),
-  reviewToken: "b".repeat(64),
-  publisher: "maker",
-  name: "@maker/release-brief",
-  displayName: "Release Brief",
-  version: "0.1.0",
-  description: "Summarizes releases",
-  scope: { input: "Repository", job: "Summarize", output: "Brief", authority: "Read only" },
-  items: [
-    {
-      id: "skill:release",
-      kind: "skill",
-      requirement: { source: "clawhub", ref: "@maker/release-notes", version: "1.2.3" },
-      label: "Release notes",
-      detail: "Read releases",
-      included: true,
-    },
-    {
-      id: "plugin:github",
-      kind: "plugin",
-      requirement: { source: "clawhub", ref: "@maker/github", version: "2.0.0" },
-      label: "GitHub",
-      detail: "github@1.0.0",
-      included: true,
-    },
-    {
-      id: "mcp:docs",
-      kind: "mcp",
-      label: "Docs",
-      detail: JSON.stringify({
-        transport: "streamable-http",
-        url: "https://example.test/mcp",
-        auth: "oauth",
-      }),
-      included: true,
-    },
-    {
-      id: "automation:brief",
-      kind: "automation",
-      automation: {
-        message:
-          "Read the latest repository releases, cite their sources, and prepare a concise morning brief. Never publish without human review.",
-        schedule: { cron: "0 9 * * 1-5", timezone: "America/Los_Angeles" },
-        session: "isolated",
-        enabled: true,
-      },
-      label: "Morning brief",
-      detail: "0 9 * * *",
-      included: true,
-    },
-  ],
-  files: [
-    { path: "CLAW.md", content: "Portable behavior" },
-    { path: "AGENTS.md", content: "Read only instructions" },
-  ],
-};
 const pendingPublication = {
   name: reviewed.name,
   version: reviewed.version,
-  url: "https://example.test/maker/templates/release-brief",
+  url: "https://example.test/maker/templates/research-brief",
   publicationStatus: "pending",
 };
 const target = {
@@ -86,7 +29,25 @@ const target = {
   draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
   sessionKey: "agent:research:main",
 };
-async function fixture(review = reviewed) {
+function mountInline(context: ReturnType<typeof createContext>) {
+  return mountSolid(() => (
+    <TemplateCreatorInlineReview context={context} payload={target} {...target} />
+  ));
+}
+function creatorContext(request: ReturnType<typeof vi.fn>, signIn = false) {
+  return createContext(request, {
+    methods: [
+      "templates.drafts.create",
+      "chat.send",
+      ...(signIn ? ["templates.drafts.signIn"] : []),
+    ],
+    scopes: ["operator.admin"],
+    runtimeConfig: createRuntimeConfigStub({
+      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
+    }),
+  });
+}
+function setup(review = reviewed) {
   const request = vi.fn(
     async (method: string, _params?: Record<string, unknown>): Promise<unknown> => {
       if (method === "plugins.catalog.get") {
@@ -116,13 +77,12 @@ async function fixture(review = reviewed) {
       throw new Error("Unexpected " + method);
     },
   );
-  const context = createContext(request, {
-    methods: ["templates.drafts.create", "chat.send"],
-    runtimeConfig: createRuntimeConfigStub({
-      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
-    }),
-  });
+  const context = creatorContext(request);
   context.router.subscribe = () => () => false;
+  return { request, context };
+}
+async function fixture(review = reviewed) {
+  const { request, context } = setup(review);
   const flow = templateCreatorFlow(context);
   flow.open(target.agentId, target.draftId);
   const page = mountSolid(() => <TemplateCreatorReview context={context} />);
@@ -137,8 +97,152 @@ beforeEach(async () => {
   vi.useFakeTimers();
 });
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.clearAllTimers();
   vi.useRealTimers();
+});
+
+it.each(["copied", "denied", "blocked"])(
+  "hands the code to ClawHub (%s), then resumes the same draft",
+  async (outcome) => {
+    const verificationUrl = "https://clawhub.example/cli/device";
+    const userCode = "ZYXW-2345";
+    const { agentId, draftId, sessionKey: sourceSessionKey } = target;
+    const started = createDeferred();
+    let approved = false;
+    const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "templates.drafts.signIn") {
+        expect(params).toMatchObject({ agentId, draftId, sourceSessionKey });
+        switch (params.action) {
+          case "status":
+            return { status: "required" };
+          case "start":
+            await started.promise;
+            return {
+              status: "pending",
+              requestId: "one",
+              verificationUrl,
+              userCode,
+              pollAfterMs: 20,
+              expiresAt: Date.now() + 60000,
+            };
+          case "poll":
+            expect(params.requestId).toBe("one");
+            approved = true;
+            return { status: "connected" };
+        }
+      }
+      if (method === "templates.drafts.read") {
+        return {
+          revision: approved ? "ready" : "drafting",
+          content: JSON.stringify({ scope: approved ? reviewed.scope : {} }),
+        };
+      }
+      if (method === "templates.drafts.review") {
+        expect(approved).toBe(true);
+        expect(params).toEqual({ agentId, draftId });
+        return reviewed;
+      }
+      throw new Error("Unexpected " + method);
+    });
+    const page = mountInline(creatorContext(call, true));
+    const write = createDeferred();
+    const writeText = vi.fn(() => write.promise);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const replace = vi.fn();
+    const close = vi.fn();
+    const tab = { location: { replace }, close } as unknown as Window;
+    const open = vi.spyOn(window, "open").mockReturnValue(outcome === "blocked" ? null : tab);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(page.getByRole("status").textContent).toBe("Sign in to ClawHub");
+    const button = page.getByRole("button", { name: "Sign in" });
+    expect(page.getAllByRole("button")).toEqual([button]);
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(page.getByRole("button", { name: "Sign in", busy: true })).toBe(button);
+    expect(page.getByRole("status").textContent).toBe("Sign in to ClawHub");
+    started.resolve();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(call.mock.calls.filter(([, p]) => p.action === "start")).toHaveLength(1);
+    expect(page.getByRole("status").textContent).toBe(userCode);
+    expect(open).not.toHaveBeenCalled();
+    expect(writeText).not.toHaveBeenCalled();
+    expect(page.getAllByRole("button")).toEqual([
+      page.getByRole("button", { name: "Copy & open ClawHub" }),
+    ]);
+    expect(page.queryByRole("link")).toBeNull();
+    fireEvent.click(button);
+    expect(writeText).toHaveBeenCalledWith(userCode);
+    expect(writeText).toHaveBeenCalledBefore(open);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(replace).not.toHaveBeenCalled();
+    if (outcome === "denied") {
+      write.reject(new Error("Permission denied"));
+    } else {
+      write.resolve();
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    if (outcome === "copied") {
+      expect(replace).toHaveBeenCalledWith(verificationUrl);
+      expect(page.queryByRole("alert")).toBeNull();
+    } else {
+      expect(replace).not.toHaveBeenCalled();
+      expect(page.getByRole("alert").textContent).toContain(
+        outcome === "denied" ? "Copy the code manually" : "Code copied",
+      );
+      expect(page.getByRole("link", { name: "Open ClawHub" }).getAttribute("href")).toBe(
+        verificationUrl,
+      );
+      if (outcome === "denied") {
+        expect(close).toHaveBeenCalledOnce();
+      }
+    }
+    await vi.advanceTimersByTimeAsync(30);
+    expect(page.getByRole("button", { name: "Publish" })).toBeTruthy();
+    const card = page.getByRole("region", { name: "Publish Template" });
+    expect(within(card).getByRole("status").textContent).toBe("Unpublished");
+    fireEvent.click(within(card).getByRole("button", { name: "Preview" }));
+    const preview = within(await page.findByRole("dialog", { name: "Preview Template" }));
+    expect(preview.getByRole("heading", { name: reviewed.displayName })).toBeTruthy();
+    fireEvent.click(preview.getByRole("button", { name: "Close" }));
+    await waitForSolid(() => expect(page.queryByRole("dialog")).toBeNull());
+    expect(page.getByRole("region", { name: "Publish Template" })).toBe(card);
+    const methods = call.mock.calls.map(([method]) => method);
+    expect(methods.filter((m) => m === "templates.drafts.review")).toHaveLength(1);
+    expect(methods).not.toContain("chat.send");
+    expect(methods).not.toContain("templates.drafts.publish");
+  },
+);
+
+it("offers retry without presenting a review card for a failed initial preparation", async () => {
+  const { request, context } = setup();
+  request
+    .mockResolvedValueOnce({
+      revision: reviewed.revision,
+      content: JSON.stringify({ scope: reviewed.scope }),
+    })
+    .mockRejectedValueOnce(new Error("Draft review failed"));
+  const page = mountSolid(() => (
+    <TemplateCreatorInlineReview
+      context={context}
+      payload={target}
+      sessionKey={target.sessionKey}
+    />
+  ));
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() =>
+    expect(page.getByRole("alert").textContent).toContain("Draft review failed"),
+  );
+  expect(page.queryByRole("region", { name: "Publish Template" })).toBeNull();
+  const retry = createDeferred<typeof reviewed>();
+  request.mockReturnValueOnce(retry.promise);
+  fireEvent.click(page.getByRole("button", { name: "Try again" }));
+  await waitForSolid(() => expect(page.container.textContent).toBe(""));
+  retry.resolve(reviewed);
+  await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
+  expect(page.getAllByRole("region", { name: "Publish Template" })).toHaveLength(1);
 });
 
 it.each(["skill", "plugin"] as const)("previews pinned and bundled %s", async (kind) => {
@@ -259,7 +363,7 @@ it("keeps the original card through a single explicit publication and pending re
   );
   expect(status()).toBe("Pending");
   expect(page.getByRole("link", { name: "View submission" }).getAttribute("href")).toBe(
-    pendingPublication.url,
+    `${pendingPublication.url}?view=submission`,
   );
 });
 
@@ -330,14 +434,7 @@ it("retains pending receipt across remount and promotes only a matching registry
   await flow.publish();
   page.unmount();
   flow.retirePresentation();
-  const remounted = mountSolid(() => (
-    <TemplateCreatorInlineReview
-      context={context}
-      payload={target}
-      sessionKey={target.sessionKey}
-      agentId={target.agentId}
-    />
-  ));
+  const remounted = mountInline(context);
   await waitForSolid(() => expect(remounted.getByText("Published", { exact: true })).toBeTruthy());
   expect(remounted.getByRole("button", { name: "Copy link" }).textContent).toBe("Copy link");
   expect(remounted.queryByRole("link", { name: "View on ClawHub" })).toBeNull();
@@ -386,15 +483,7 @@ it("retires the stale preview while the draft changes and offers only the refres
 it("shares the draft through sidebar handoff and remounts revised metadata before publication", async () => {
   const { page, flow, context, request } = await fixture();
   expect(templateCreatorFlow(context, target)).toBe(flow);
-  const renderInline = () => (
-    <TemplateCreatorInlineReview
-      context={context}
-      payload={target}
-      sessionKey={target.sessionKey}
-      agentId={target.agentId}
-    />
-  );
-  const inline = mountSolid(renderInline);
+  const inline = mountInline(context);
   await vi.advanceTimersByTimeAsync(0);
   await waitForSolid(() => expect(inline.getByRole("button", { name: "Publish" })).toBeTruthy());
   expect(page.queryByRole("region")).toBeNull();
@@ -417,7 +506,7 @@ it("shares the draft through sidebar handoff and remounts revised metadata befor
         ? updated
         : pendingPublication,
   );
-  const remounted = mountSolid(renderInline);
+  const remounted = mountInline(context);
   await vi.advanceTimersByTimeAsync(0);
   expect(
     request.mock.calls.findLast(([method]) => method === "templates.drafts.review")?.[1],

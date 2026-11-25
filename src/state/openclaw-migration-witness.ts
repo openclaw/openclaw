@@ -59,6 +59,7 @@ const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
     session_windows: ["row_transcript_json", "row_transcript_updated_at"],
     trajectory_runtime_events: ["event_utf8_bytes", "event_payload", "event_codec"],
     session_pending_inputs: ["end_cause", "origin_source_json"],
+    session_members: ["access"],
   }).map(([table, columns]) => [table, new Set<string>(columns)]),
 );
 
@@ -130,13 +131,13 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   return witness;
 }
 
-// Versioned projections and new pending-input facts may change across migration.
+// Versioned projections and new additive facts may change across migration.
 // Metadata also publishes the target app version/time; accepted payload bytes stay exact.
 function migrationColumn(role: OpenClawMigrationWitness["role"], table: string, column: string) {
   return !(
     role === "agent" &&
     ((table === "schema_meta" &&
-      ["schema_version", "app_version", "updated_at"].includes(column)) ||
+      ["schema_version", "min_reader", "app_version", "updated_at"].includes(column)) ||
       (table === "session_key_contract" && column === "canonical_ready") ||
       derivedMigrationColumns.get(table)?.has(column))
   );
@@ -526,7 +527,8 @@ export function captureOpenClawMigrationWitness(
       if (
         role === "agent" &&
         object.type === "table" &&
-        (object.name === "session_key_contract" ||
+        (object.name === "schema_meta" ||
+          object.name === "session_key_contract" ||
           object.name === "memory_entry_origins" ||
           derivedMigrationColumns.has(object.name))
       ) {

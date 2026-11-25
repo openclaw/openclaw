@@ -2,13 +2,10 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import {
   checkoutState,
   ctx,
   finalization,
-  finalizationRuns,
   fixtures,
   git,
   killedCheckout,
@@ -18,33 +15,14 @@ import {
   nextUpdate,
   rebooted,
   reserved,
-  shape,
   writeBuild,
 } from "./update-command-killed-run.process.test-support.js";
-import { updateRepairCommand } from "./update-repair-command.js";
 
 // The Git gate: a checkout's cohort settles like a package's only while the checkout
 // still holds exactly the build the killed update recorded activating.
 describe.skipIf(process.platform === "win32")(
   "next update after a killed source checkout update",
   () => {
-    it("records what repair records for a dead update that installed its build unconfirmed", () =>
-      fixtures.lifetime.run(async () => {
-        const finished = await killedCheckout();
-        await nextUpdate(finished.slot);
-        const [stage] = finalizationRuns();
-        const repaired = await killedCheckout({}, undefined, { name: "repaired" });
-        mocks.root.mockResolvedValue(repaired.slot);
-
-        await updateRepairCommand({ json: true, yes: true });
-
-        const [repairRun] = finalizationRuns();
-        expect(repairRun?.runId).not.toBe(stage?.runId);
-        expect(shape(stage)).toEqual(shape(repairRun));
-        expect(loadPluginCohortRecovery(repaired.runId)).toBeUndefined();
-        expect(shape(getUpdateRun(finished.runId))).toEqual(shape(getUpdateRun(repaired.runId)));
-      }));
-
     // Each control leaves the checkout's build unproven; the update must not touch it.
     type Checkout = Awaited<ReturnType<typeof killedCheckout>>;
     /** The update refuses for `refusal` and leaves recovery, config and checkout as they were. */

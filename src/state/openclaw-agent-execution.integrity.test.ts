@@ -225,7 +225,7 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
         db.exec("DROP INDEX idx_agent_session_nodes_active");
       }
     }
-    invalidateValidation(pathname);
+    invalidateValidation(pathname, "a maintenance write");
     revokeSqliteDatabaseAdmissionsForPath(pathname);
     const integrity = holdIntegrity(pathname);
     Object.assign(env, integrity.env);
@@ -394,7 +394,7 @@ it.for(["before-promotion", "revoked", "aborted"] as const)(
     // A noncanonical unique index, rather than owner death, still requires full admission.
     database.db.exec("DROP INDEX idx_agent_conversations_identity");
     closeAgent(database.path);
-    invalidateValidation(database.path);
+    invalidateValidation(database.path, "a maintenance write");
     revokeSqliteDatabaseAdmissionsForPath(database.path);
     expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
 
@@ -500,7 +500,7 @@ it.for(["warm", "cold", "peer"] as const)(
     const databases = ["slow", "ready", "next"].map((agentId) => openAgent({ agentId, env }));
     const integrity = holdIntegrity(databases[0]!.path);
     databases[0]!.db.exec("DROP INDEX idx_agent_conversations_identity");
-    invalidateValidation(databases[0]!.path);
+    invalidateValidation(databases[0]!.path, "a maintenance write");
     const executions = databases.map((database) =>
       capture({ agentId: database.agentId, path: database.path, env }),
     );
@@ -749,14 +749,14 @@ it.each([
       }
       if (proof === "revoked-before-grant" && request.facts.kind === "shared-owner") {
         // Revoke the already-sent proof while the native opener still awaits its grant.
-        invalidateValidation(database.path);
+        invalidateValidation(database.path, "a maintenance write");
         revokedBeforeGrant = true;
       }
       if (
         proof === "revoked-after-verification-admission" &&
         request.facts.kind === "agent-validation-start"
       ) {
-        invalidateValidation(database.path);
+        invalidateValidation(database.path, "a maintenance write");
         revokedAfterVerificationAdmission = true;
       }
     });
@@ -771,14 +771,14 @@ it.each([
       proof === "closed-host-revoked" ||
       proof === "revoked-after-verification-admission"
     ) {
-      invalidateValidation(database.path);
+      invalidateValidation(database.path, "a maintenance write");
     } else if (proof === "closed-host-replaced") {
       fs.copyFileSync(database.path, `${database.path}.replacement`);
       fs.renameSync(`${database.path}.replacement`, database.path);
     } else if (proof === "failed") {
       recordOpenClawAgentDatabaseOpenFailure(database.path, new Error("Synthetic host failure"));
     } else if (proof === "missing-metadata") {
-      invalidateValidation(database.path);
+      invalidateValidation(database.path, "a maintenance write");
       revokeSqliteDatabaseAdmissionsForPath(database.path);
     }
     const operation = vi.fn(async () => "opened");

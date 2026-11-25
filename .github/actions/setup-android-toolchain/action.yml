@@ -9,6 +9,10 @@ inputs:
     description: Override Gradle cache authority independently of the Android SDK cache; defaults to cache-mode.
     required: false
     default: ""
+  gradle-cache-key:
+    description: Lane name for the Gradle dependency cache; lanes resolve different artifacts.
+    required: false
+    default: shared
   install-screenshot-emulators:
     description: Install the pinned screenshot emulator images and enable Linux KVM access.
     required: false
@@ -80,13 +84,42 @@ runs:
         java-version: "21.0.12+101.0.LTS"
         set-default: false
 
-    - name: Setup Gradle cache
+    - name: Setup Gradle
       if: (inputs.gradle-cache-mode || inputs.cache-mode) != 'off'
       uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
       with:
-        cache-provider: basic
-        cache-read-only: ${{ (inputs.gradle-cache-mode || inputs.cache-mode) != 'read-write' }}
+        # The dependency cache below owns ~/.gradle. setup-gradle's basic provider keyed one
+        # entry on root-relative patterns that miss apps/android/gradle/libs.versions.toml,
+        # so the first lane's artifact set was restored forever and never saved again.
+        cache-disabled: true
         add-job-summary: never
+
+    # Network-fetched modules and wrapper distributions only, one entry per lane and dependency
+    # inputs, so every lane restores what it resolves instead of fetching it from Maven Central.
+    - name: Restore and save Gradle dependency cache
+      if: (inputs.gradle-cache-mode || inputs.cache-mode) == 'read-write'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.gradle/caches/modules-2
+          ~/.gradle/wrapper/dists
+        key: ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-${{ hashFiles('apps/android/gradle/wrapper/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+        # A dependency change starts from this lane's previous set, then any lane's.
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-
+          ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-
+
+    - name: Restore Gradle dependency cache
+      if: (inputs.gradle-cache-mode || inputs.cache-mode) == 'restore'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.gradle/caches/modules-2
+          ~/.gradle/wrapper/dists
+        key: ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-${{ hashFiles('apps/android/gradle/wrapper/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml', 'apps/android/**/*.gradle.kts', 'apps/android/gradle.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-${{ inputs.gradle-cache-key }}-
+          ${{ runner.os }}-${{ runner.arch }}-gradle-deps-v1-
 
     - name: Restore Android SDK cache
       id: android-sdk-cache

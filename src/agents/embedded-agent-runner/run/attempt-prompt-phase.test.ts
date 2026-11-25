@@ -290,7 +290,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     >("./attempt-prompt-submit.js");
     mocks.submitPrompt.mockImplementation(submitEmbeddedAttemptPrompt);
     streamMocks.streamSimple.mockImplementation((requestModel: Model) =>
-      createAssistantResultStream(createAssistant(requestModel, "Done.", "stop", 800_000)),
+      createAssistantResultStream(createAssistant(requestModel, "Done.", "stop", 870_000)),
     );
 
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
@@ -743,7 +743,9 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       expect(mocks.submitPrompt).not.toHaveBeenCalled();
       expect(mocks.handlePromptError).toHaveBeenCalledWith(
         expect.objectContaining({
-          error: expect.objectContaining({ message: "admitted run authority is no longer active" }),
+          error: expect.objectContaining({
+            message: "This agent run is no longer active. Start a new turn to retry.",
+          }),
         }),
       );
     } finally {

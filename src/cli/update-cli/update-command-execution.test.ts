@@ -310,6 +310,53 @@ describe("mutable update execution", () => {
     },
   );
 
+  it.each([
+    { node: "running", nodeState: "same" },
+    { node: "running", nodeState: "alias" },
+    { node: "running", nodeState: "other" },
+    { node: "running", nodeState: "default" },
+    { node: "stopped", nodeState: "same" },
+  ] as const)(
+    "refuses before the Gateway stops while a node service keeps the state open (node=$node, node state=$nodeState)",
+    async ({ node, nodeState }) => {
+      await withTestDir({ prefix: "update-node-" }, async (state) => {
+        // #203457: the node host keeps openclaw.sqlite open, so update Doctor cannot take exclusion.
+        vi.stubEnv("OPENCLAW_STATE_DIR", state);
+        const alias = path.join(path.dirname(state), `${path.basename(state)}-alias`);
+        await fs.symlink(state, alias);
+        const nodeStateDir = { same: state, alias, other: path.join(state, "other") };
+        mocks.nodeServiceCommand.mockResolvedValue({
+          programArguments: ["node", "openclaw.mjs", "node", "run"],
+          // A default node omits the selector and must not inherit this CLI's.
+          environment: {
+            OPENCLAW_SERVICE_KIND: "node",
+            ...(nodeState === "default" ? {} : { OPENCLAW_STATE_DIR: nodeStateDir[nodeState] }),
+          },
+        });
+        mocks.nodeServiceRuntime.mockResolvedValue({ status: node, pid: 5151 });
+        mocks.runPackageUpdate.mockImplementation(packageCandidate(state));
+        const params = executionParams("package");
+        params.opts.restart = params.shouldRestart = false;
+
+        const execution = await execute(params);
+
+        const refused = node === "running" && (nodeState === "same" || nodeState === "alias");
+        if (refused) {
+          expect(execution).toMatchObject({
+            mutationStarted: false,
+            result: { status: "error", reason: "database-migration-owner-live" },
+          });
+          expect(JSON.stringify(execution?.result)).toContain(
+            `needs exclusive access to ${path.join(state, "state", "openclaw.sqlite")}, but the node host service (PID 5151) keeps it open`,
+          );
+        } else {
+          expect(execution).toMatchObject({ mutationStarted: true, result: { status: "ok" } });
+        }
+        expect(mocks.serviceStopped).toBe(!refused);
+      });
+    },
+  );
+
   it.each([false, true])(
     "keeps plugin availability advisory (incompatible=%s)",
     async (incompatible) =>

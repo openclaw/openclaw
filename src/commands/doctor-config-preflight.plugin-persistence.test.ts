@@ -5,6 +5,7 @@ import { discoverConfigWidePluginManifestRegistry } from "../config/io.plugin-me
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as migrationCheckpoint from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import {
   getCurrentPluginMetadataSnapshot,
   withPluginMetadataSnapshotScope,
@@ -56,7 +57,7 @@ const metadata = (names: string[], version: string) => ({
 });
 const expectNotPersisted = () => {
   expect(readIndex()).toBeNull();
-  expect(migrationCheckpoint.hasActiveStartupMigrationLease({ env: process.env })).toBe(false);
+  expect(hasActiveStartupMigrationLeaseForTest({ env: process.env })).toBe(false);
 };
 const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
 const snapshotVersion = (snapshot: PluginMetadataSnapshot | undefined, name = "fixture") =>
@@ -152,7 +153,7 @@ it("admits validated derived metadata while the startup writer lease is unavaila
         pluginMetadataSnapshot: metadata(["fixture"], "1.0.0"),
       });
       expect(readIndex()).toBeNull();
-      expect(migrationCheckpoint.hasActiveStartupMigrationLease()).toBe(true);
+      expect(hasActiveStartupMigrationLeaseForTest()).toBe(true);
     } finally {
       acquire.mockRestore();
       lease.release();

@@ -22,6 +22,7 @@ import {
   config,
   configMocks,
   pluginResponses,
+  pluginMethods,
 } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -38,17 +39,6 @@ beforeEach(() => {
     proofDir = createControlUiE2eArtifactDir("plugin-settings-admin");
   }
 });
-
-const pluginMethods = [
-  "config.get",
-  "config.patch",
-  "config.schema",
-  "config.set",
-  "plugins.inspect",
-  "plugins.list",
-  "plugins.setEnabled",
-  "plugins.uninstall",
-];
 
 async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], baseUrl: string) {
   const response = await page.goto(`${baseUrl}settings/plugins`);
@@ -669,6 +659,9 @@ suite.define(() => {
 
       const toggle = page.getByRole("switch", { name: "Workboard", checked: true, exact: true });
       const connections = (await gateway.getRequests("connect")).length;
+      await gateway.deferNext("plugins.setEnabled");
+      await toggle.click();
+      await gateway.waitForRequest("plugins.setEnabled");
       const disabledConfig = structuredClone(config);
       disabledConfig.plugins.entries.workboard.enabled = false;
       await gateway.setMethodResponse("plugins.list", {
@@ -688,8 +681,7 @@ suite.define(() => {
         hash: "workboard-disabled",
         appliedConfigHash: "workboard-disabled",
       });
-      await toggle.click();
-      await gateway.waitForRequest("plugins.setEnabled");
+      await gateway.resolveDeferred("plugins.setEnabled");
 
       await page.getByRole("switch", { name: "Workboard", checked: false, exact: true }).waitFor();
       expect(await page.locator(".plugins-row-message.oc-banner-success").count()).toBe(0);
@@ -749,6 +741,7 @@ suite.define(() => {
       const catalogRequests = (await gateway.getRequests("plugins.list")).length;
       const workspaceInspections = (await gateway.getRequests("plugins.inspect")).length;
       await workspace.fill("Release planning");
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       await workspace.press("Tab");
       const save = await gateway.waitForRequest("config.set");
@@ -940,6 +933,8 @@ suite.define(() => {
       expect(
         await page.getByRole("button", { name: "Save configuration", exact: true }).count(),
       ).toBe(0);
+      await page.getByText("workboard_list", { exact: true }).waitFor();
+      expect(await page.getByRole("switch", { name: "Allow workboard_list" }).count()).toBe(0);
       const toggle = page.getByRole("switch", { name: "Workboard", checked: true, exact: true });
       await page
         .locator(".plugin-catalog-detail__actions")

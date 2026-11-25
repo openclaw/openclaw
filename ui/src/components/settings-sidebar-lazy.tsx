@@ -18,6 +18,7 @@ export type SettingsSidebarFallbackProps = Pick<
   | "activeRouteId"
   | "pluginTabs"
   | "activePluginTab"
+  | "embeddedPluginTitle"
   | "connectionStatus"
   | "footerStatus"
   | "onExit"
@@ -97,7 +98,7 @@ function SettingsSidebarFallback(props: {
             <h1 class="page-title">
               {props.sidebarProps.presentation === "embed-list"
                 ? t("nav.settings")
-                : (props.sidebarProps.activePluginTab?.label ??
+                : (props.sidebarProps.embeddedPluginTitle ??
                   titleForRoute(props.sidebarProps.activeRouteId, t))}
             </h1>
             <p role={props.failed ? "alert" : "status"}>

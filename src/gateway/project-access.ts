@@ -12,47 +12,30 @@ import type {
 } from "../projects/project-registry.types.js";
 import { gitHubPublicApi, githubApiToken } from "./github-public-api.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
-import { resolveOperatorRolePolicyForProfile } from "./operator-role-policy.js";
+import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
+import {
+  resolveCurrentProjectGrant,
+  resolveOperatorRolePolicyForProfile,
+} from "./operator-role-policy.js";
+import type { GatewayClient } from "./server-methods/shared-types.js";
+
+/** A named role's registry project grant: every project, or the listed project IDs. */
+type ProjectGrant = "*" | readonly string[];
 
 /**
  * Who asks for a registry project's source. Gateway-internal callers (owner runs,
  * cron, migrations, maintenance) keep full access; identified operators are bound
- * by their connection or role scopes.
+ * by their connection or role scopes and their current role's project grant.
  */
 export type ProjectRequester =
   | { readonly kind: "internal" }
-  | { readonly kind: "operator"; readonly scopes: readonly string[] };
+  | {
+      readonly kind: "operator";
+      readonly scopes: readonly string[];
+      readonly projects?: ProjectGrant;
+    };
 
 const INTERNAL_PROJECT_REQUESTER: ProjectRequester = Object.freeze({ kind: "internal" });
-
-function operatorProjectRequester(scopes: readonly string[] | undefined): ProjectRequester {
-  return { kind: "operator", scopes: scopes ?? [] };
-}
-
-/** Client-less dispatch is Gateway-internal; connected operators are bound by their scopes. */
-export function projectRequesterForClient(
-  client: { connect?: { scopes?: readonly string[] } } | null | undefined,
-): ProjectRequester {
-  return client ? operatorProjectRequester(client.connect?.scopes) : INTERNAL_PROJECT_REQUESTER;
-}
-
-/**
- * Background runs act for the operator that drove them (effective scopes, including
- * membership caps). Without one they fall back to the creator's live role; runs with
- * neither (owner, cron, unlinked channels) stay internal.
- */
-export function resolveRunProjectRequester(
-  cfg: OpenClawConfig,
-  spawnedBy: { profileId?: string; operatorScopes?: readonly string[] },
-): ProjectRequester {
-  if (spawnedBy.operatorScopes) {
-    return operatorProjectRequester(spawnedBy.operatorScopes);
-  }
-  const policy = spawnedBy.profileId
-    ? resolveOperatorRolePolicyForProfile(spawnedBy.profileId, cfg)
-    : undefined;
-  return policy ? operatorProjectRequester(policy.scopes) : INTERNAL_PROJECT_REQUESTER;
-}
 
 /** operator.write callers may use every registry project; restricted roles see a subset. */
 export function hasFullProjectAccess(requester: ProjectRequester): boolean {
@@ -60,6 +43,81 @@ export function hasFullProjectAccess(requester: ProjectRequester): boolean {
     requester.kind === "internal" ||
     authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, requester.scopes).allowed
   );
+}
+
+/** Only restricted operators resolve a grant; full-access callers never consult their role. */
+function operatorProjectRequester(
+  scopes: readonly string[] | undefined,
+  resolveProjects: () => ProjectGrant | undefined,
+): ProjectRequester {
+  const requester = { kind: "operator" as const, scopes: scopes ?? [] };
+  if (hasFullProjectAccess(requester)) {
+    return requester;
+  }
+  const projects = resolveProjects();
+  return projects ? { ...requester, projects } : requester;
+}
+
+/** Client-less dispatch is Gateway-internal; connected operators are bound by their scopes and role. */
+export function projectRequesterForClient(
+  client: GatewayClient | null | undefined,
+  cfg: OpenClawConfig,
+): ProjectRequester {
+  return client
+    ? operatorProjectRequester(client.connect?.scopes, () =>
+        resolveCurrentProjectGrant(cfg, { client }),
+      )
+    : INTERNAL_PROJECT_REQUESTER;
+}
+
+/** A profile-attributed operator outside a live connection carries its current role's grant. */
+export function projectRequesterForProfile(
+  cfg: OpenClawConfig,
+  scopes: readonly string[],
+  profileId: string | undefined,
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal,
+): ProjectRequester {
+  return operatorProjectRequester(scopes, () =>
+    profileId ? resolveCurrentProjectGrant(cfg, { profileId, openclawIdPrincipal }) : undefined,
+  );
+}
+
+/**
+ * Background runs act for the operator that drove them (effective scopes, including
+ * membership caps, plus that person's live project grant). Without one they fall back
+ * to the creator's live role; runs with neither (owner, cron, unlinked channels) stay internal.
+ */
+export function resolveRunProjectRequester(
+  cfg: OpenClawConfig,
+  spawnedBy: {
+    profileId?: string;
+    operatorAuthority?: {
+      readonly profileId: string;
+      readonly scopes: readonly string[];
+      readonly openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
+    };
+  },
+): ProjectRequester {
+  const authority = spawnedBy.operatorAuthority;
+  if (authority) {
+    return projectRequesterForProfile(
+      cfg,
+      authority.scopes,
+      authority.profileId,
+      authority.openclawIdPrincipal,
+    );
+  }
+  const policy = spawnedBy.profileId
+    ? resolveOperatorRolePolicyForProfile(spawnedBy.profileId, cfg)
+    : undefined;
+  return policy
+    ? projectRequesterForProfile(cfg, policy.scopes, spawnedBy.profileId)
+    : INTERNAL_PROJECT_REQUESTER;
+}
+
+function isProjectGranted(requester: ProjectRequester, projectId: string): boolean {
+  const grant = requester.kind === "operator" ? requester.projects : undefined;
+  return grant === "*" || grant?.includes(projectId) === true;
 }
 
 // Visibility changes are rare; the picker may lag by this TTL while every source
@@ -144,20 +202,46 @@ async function isPublicGitHubOrigin(
   return await loadRepositoryIsPublic({ cfg, apiBaseUrl, fullName, key });
 }
 
+type ProjectAccessTarget = Pick<ProjectRegistryIdentity, "id" | "source" | "originUrl">;
+
 /**
  * Restricted requesters may use agent-workspace pseudo-projects (governed by
- * roles.agents) and public GitHub repositories on the configured host.
+ * roles.agents), public GitHub repositories on the configured host, and
+ * registry projects their role grants.
  */
 export async function canRequesterUseProject(
   cfg: OpenClawConfig,
-  project: Pick<ProjectRegistryIdentity, "source" | "originUrl">,
+  project: ProjectAccessTarget,
   requester: ProjectRequester,
   options: ProjectAccessOptions = {},
 ): Promise<boolean> {
-  if (hasFullProjectAccess(requester) || project.source === "workspace") {
+  if (
+    hasFullProjectAccess(requester) ||
+    project.source === "workspace" ||
+    isProjectGranted(requester, project.id)
+  ) {
     return true;
   }
   return await isPublicGitHubOrigin(cfg, project.originUrl, options);
+}
+
+/**
+ * Why a requester may use a project. `"granted"` means a role grant alone admits it,
+ * so its source is handed out only as an isolated managed worktree.
+ */
+export async function resolveProjectAccess(
+  cfg: OpenClawConfig,
+  project: ProjectAccessTarget,
+  requester: ProjectRequester,
+  options: ProjectAccessOptions = {},
+): Promise<"full" | "public" | "granted" | undefined> {
+  if (hasFullProjectAccess(requester) || project.source === "workspace") {
+    return "full";
+  }
+  if (await isPublicGitHubOrigin(cfg, project.originUrl, options)) {
+    return "public";
+  }
+  return isProjectGranted(requester, project.id) ? "granted" : undefined;
 }
 
 /** Repository URLs follow the same public-only rule as registered projects. */
@@ -183,9 +267,7 @@ export async function resolveRequesterProject(
     : undefined;
 }
 
-export async function filterProjectsForRequester<
-  T extends Pick<ProjectRegistryIdentity, "source" | "originUrl">,
->(
+export async function filterProjectsForRequester<T extends ProjectAccessTarget>(
   cfg: OpenClawConfig,
   projects: readonly T[],
   requester: ProjectRequester,

@@ -56,6 +56,16 @@ export function canCallGatewayMethod(
   return canPresentGatewayMethod(snapshot, method, requiredScope, options);
 }
 
+/** Only a verified writable personal layout follows Gateway pin deadlines. */
+export function usesGatewayTimedSessionPins(snapshot: ApplicationGatewaySnapshot): boolean {
+  return (
+    Boolean(snapshot?.selfUser?.id) &&
+    canCallGatewayMethod(snapshot, "users.prefs.set", "operator.write", {
+      requireAdvertisement: false,
+    })
+  );
+}
+
 /** Last-known advertisement and scopes for presentation only, never dispatch admission. */
 export function canPresentGatewayMethod(
   snapshot: Pick<ApplicationGatewaySnapshot, "hello"> | null | undefined,

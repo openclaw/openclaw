@@ -28,16 +28,16 @@ import {
   settleSqliteWorkerJob,
   dispatchSqliteWorkerJob,
   failSqliteWorkerSlot,
-  type CompletedSqliteWorkerOutcome,
-  type SqliteWorkerReplyOwner,
 } from "./sqlite-worker-broker-reply.js";
 import type {
   Actor,
+  CompletedSqliteWorkerOutcome,
   EnqueueOptions,
   Job,
   PreparedSqliteWorkerOpen,
   RequestBody,
   Slot,
+  SqliteWorkerReplyOwner,
   SqliteWorkerStoreOptions,
   StoreClient,
   SqliteWorkerClientBinding,

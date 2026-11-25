@@ -3,8 +3,10 @@ import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { transformTransportMessages } from "../../../../src/agents/transport-message-transform.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { writerState } from "../provider-state.test-support.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
 import { streamOpenAIResponses } from "../providers/openai-responses.js";
-import { cleanupSessionResources } from "../session-resources.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import {
   createResponsesLoopbackServer,
@@ -143,6 +145,7 @@ it.each([
     const options = {
       apiKey: "synthetic-item-conflict-key",
       sessionId: `item-conflict-${transport}`,
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState(`item-conflict-${transport}`),
       transport,
       replayResponsesItemIds: true,
       onPayload: (payload: unknown) => ({ ...(payload as object), store: true }),
@@ -238,6 +241,7 @@ it.each([
     const options = {
       apiKey: "synthetic-replay-key",
       sessionId: "exact-replay",
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState("exact-replay"),
       transport: "sse",
       replayResponsesItemIds: true,
     } satisfies Parameters<typeof streamOpenAIResponses>[2];
@@ -302,7 +306,12 @@ it.each(["sse", "websocket-cached"] as const)(
     const stream = await createOpenAIResponsesTransportStreamFn()(
       responsesLoopbackModel,
       { messages: [userMessage("Continue.")] },
-      { apiKey: "synthetic-conflict-key", sessionId: "recovery-exhausted", transport },
+      {
+        apiKey: "synthetic-conflict-key",
+        sessionId: "recovery-exhausted",
+        ...writerState("recovery-exhausted"),
+        transport,
+      },
     );
     const result = await stream.result();
     expect(result).toMatchObject({ stopReason: "error", errorCode: "item_conflict" });
@@ -422,6 +431,7 @@ it.each(
     const options = {
       apiKey: "synthetic-late-conflict-key",
       sessionId: "late-conflict",
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState("late-conflict"),
       transport,
       replayResponsesItemIds: true,
     };
@@ -510,6 +520,7 @@ it.each(["sse", "websocket-cached"] as const)(
       const options = {
         apiKey: "synthetic-unstored-key",
         sessionId: `unstored-reasoning-${transport}`,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(`unstored-reasoning-${transport}`),
         transport,
         replayResponsesItemIds: true,
         onPayload: (payload: unknown) => ({ ...(payload as object), store }),

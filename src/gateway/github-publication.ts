@@ -231,11 +231,8 @@ export function createGitHubPublicationCoordinator(params: {
         assertCurrent();
         assertRequester();
         worktreeOwner.assertCurrent();
-        if (
-          !params.placements.validateTurnClaim(request.claim) ||
-          !matchesCurrentGitHubPublicationIdentity({ agentId: request.agentId, identity })
-        ) {
-          throw new Error("GitHub publication authority changed before recording.");
+        if (!params.placements.validateTurnClaim(request.claim)) {
+          throw new Error("GitHub publication turn ended. Retry the publication.");
         }
         bindGitHubPublicationSourceLifetime(source, signal);
         row = await insertGitHubPublicationRequestAsync(input, source);

@@ -23,6 +23,17 @@ const handlers = resolveGlobalSingleton(
 export function runWithMcpElicitationHandler<T>(handler: McpElicitationHandler, run: () => T): T {
   return handlers.run(handler, run);
 }
+const urlPresenters = resolveGlobalSingleton(
+  Symbol.for("openclaw.mcpElicitationUrlPresenter"),
+  () => new AsyncLocalStorage<(url: string) => void>(),
+);
+/**
+ * Agent turns show URL requests as the reply's Connect card. The card reaches the user
+ * only after the tool call returns, so the request is answered `cancel` at once.
+ */
+export function runWithMcpUrlPresenter<T>(present: (url: string) => void, run: () => T): T {
+  return urlPresenters.run(present, run);
+}
 /** Capture the current tool caller for harness-native, out-of-band requests. */
 export function captureMcpClientElicitation() {
   const handler = handlers.getStore();
@@ -109,6 +120,11 @@ export function createMcpClientElicitationHandler(params: {
             });
       if (input.kind === "unsupported") {
         throw new ProtocolError(ProtocolErrorCode.InvalidParams, input.message);
+      }
+      const presentUrl = urlPresenters.getStore();
+      if (input.plan.kind === "url" && input.plan.question.url && presentUrl) {
+        presentUrl(input.plan.question.url);
+        return { action: "cancel" };
       }
       const result = await runStructuredInput({
         input,

@@ -507,7 +507,7 @@ function renderRailPin(
         </Show>
       </a>
     ) : entry.type === "route" ? (
-      host.sidebarMenus.renderRoute(entry.route, host, triggerRef)
+      host.sidebarMenus.renderRoute(entry.route, host, triggerRef, { rail: true })
     ) : (
       <Show
         when={session()}

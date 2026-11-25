@@ -358,6 +358,7 @@ export function writeReply(
         },
       },
     ]);
+    return { id: `resp_${n}`, output: items };
   } else if (api === "google-generative-ai") {
     sse(response, [
       {
@@ -404,6 +405,8 @@ export function writeReply(
       ]),
     );
   }
+  // Only Responses returns its stored response, for `previous_response_id` expansion.
+  return undefined;
 }
 
 /**
@@ -413,10 +416,14 @@ export function writeReply(
 export function buildFakeProvider(
   api: FakeTransport,
   origin: string,
-  { reasoning = false }: { reasoning?: boolean } = {},
+  {
+    reasoning = false,
+    continuation = false,
+    hostedSearch = false,
+  }: { reasoning?: boolean; continuation?: boolean; hostedSearch?: boolean } = {},
 ) {
   const id = MODEL_IDS[api];
-  const providerId = `fake-${api}`;
+  const providerId = hostedSearch ? "clawrouter" : `fake-${api}`;
   const model = (modelId: string, contextWindow: number): ModelDefinitionConfig => ({
     id: modelId,
     name: `Fake ${modelId}`,
@@ -426,6 +433,12 @@ export function buildFakeProvider(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
     maxTokens: 4096,
+    ...(api === "openai-responses" && continuation
+      ? { compat: { supportsResponsesContinuation: true } }
+      : {}),
+    ...(hostedSearch
+      ? { params: { clawrouterRoute: { api, baseUrl, hostedWebSearch: true } } }
+      : {}),
   });
   const baseUrl =
     api === "anthropic-messages" || api === "bedrock-converse-stream"

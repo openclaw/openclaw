@@ -8,7 +8,7 @@ import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import type { StatelessTemplateAddOptions } from "./add-stateless-contract.js";
 import type { ClawHubCoordinate } from "./clawhub-source.js";
-import type { TemplateSetupReport } from "./conversation.js";
+import type { TemplateSetupOpening, TemplateSetupReport } from "./conversation.js";
 import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
 import type { GatewayTemplateAddPlanningContext } from "./gateway-add-plan.js";
 import type { TemplateAddSource, TemplateAddStageHook } from "./gateway-add-source.js";
@@ -47,8 +47,7 @@ export type ChatTemplateAddInput = ClawHubFetchOptions & {
    */
   onAgentCreated?: (
     agent: { agentId: string; sessionKey: string },
-    report: TemplateSetupReport,
-    dependenciesPending?: true,
+    opening: TemplateSetupOpening,
     onModelRequested?: () => void,
   ) => Promise<void>;
   /** A separate hidden turn reports results after the opening, never concurrently with it. */
@@ -56,6 +55,11 @@ export type ChatTemplateAddInput = ClawHubFetchOptions & {
     agent: { agentId: string; sessionKey: string },
     report: TemplateSetupReport,
   ) => Promise<void>;
+  /** Scheduler-owned declaration keys for this agent's setup conversation, including paused jobs. */
+  readSetupAutomationKeys?: (agent: {
+    agentId: string;
+    sessionKey: string;
+  }) => Promise<Set<string>>;
 };
 
 /** Both sources share the same installer; only registry coordinates can continue chat setup. */

@@ -3,6 +3,7 @@ import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-
 import { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
 import type {
   ReclamationDatabaseOptions,
+  SessionMaintenanceMcpRelease,
   SessionMaintenanceMetadataResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
@@ -76,6 +77,7 @@ export function finalizeSessionMaintenanceInWorker(
   execution: OpenClawAgentDatabaseExecution,
   assertCurrent: () => void,
   readCustody?: AgentDatabaseRequestExecutionSource["readCustody"],
+  onMcpCommit?: (release: SessionMaintenanceMcpRelease) => void,
 ): Promise<SessionMaintenanceFinalizationResult> {
   const entries = collectReclamationDeletionEntries(plan);
   const captured = captureNativeSessionWorkerDeletion(entries);
@@ -94,6 +96,13 @@ export function finalizeSessionMaintenanceInWorker(
     readCustody,
     assertCurrent,
     candidateKind: "session-maintenance-finalize",
+    onAgentCommitReceipt: onMcpCommit
+      ? ({ result }) => {
+          if (result.value.mcpRelease) {
+            onMcpCommit(result.value.mcpRelease);
+          }
+        }
+      : undefined,
     onCommitted(candidate, _published, identity) {
       prepareReclamationPublication(plan, identity, candidate.result)?.();
       return candidate.result;

@@ -85,6 +85,24 @@ function connectSideband(
 }
 
 describe("GPT-Live gateway relay bridge", () => {
+  it("sends the explicit Live 1.1 selector in the Discord relay's ChatGPT WebRTC offer", async () => {
+    const { bridge, fetchImpl } = createBridge({ model: "gpt-live-1.1-codex" });
+    onTestFinished(() => bridge.close());
+
+    await bridge.connect();
+
+    expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(
+      "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer oauth-token",
+          "Content-Type": "application/json",
+        }),
+        body: expect.stringContaining('"model":"gpt-live-1.1-codex"'),
+      }),
+    );
+  });
+
   it.each(["accepted", "rejected"])(
     "retains early readiness until the WebRTC answer is %s",
     async (outcome) => {

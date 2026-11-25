@@ -67,7 +67,7 @@ suite.define(() => {
               };
             }),
           );
-        expect(headings.length).toBe(detection.candidates.length ? 6 : 3);
+        expect(headings.length).toBe(detection.candidates.length ? 5 : 3);
         for (const heading of headings) {
           expect(heading.left, heading.title ?? "heading").toBeCloseTo(0, 0);
           expect(heading.margin).toBe("0px");

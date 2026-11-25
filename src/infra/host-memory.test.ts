@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { ensureCliLiveSessionMemory } from "../agents/cli-runner/cli-live-session-registry.js";
 import {
-  isConstrainedProcessLowOnMemory,
+  isMemoryPressureHigh,
   readHostFreeMemoryBytes,
   readProcessAvailableMemoryBytes,
 } from "./host-memory.js";
@@ -77,7 +77,7 @@ it("reads reclaimable memory from Mach VM statistics under Bun on macOS", () => 
 
   expect(readProcessAvailableMemoryBytes()).toBe(reclaimable);
   expect(readHostFreeMemoryBytes()).toBe(reclaimable);
-  expect(isConstrainedProcessLowOnMemory()).toBe(false);
+  expect(isMemoryPressureHigh()).toBe(false);
   expect(resolveUpdateHashWorkerCount()).toBe(Math.min(4, os.availableParallelism() - 1));
 });
 
@@ -85,7 +85,7 @@ it("still reports genuinely low macOS memory under Bun", () => {
   setMachMemory({ free: 128 * MiB, inactive: 128 * MiB, purgeable: 0 });
 
   expect(readHostFreeMemoryBytes()).toBe(256 * MiB);
-  expect(isConstrainedProcessLowOnMemory()).toBe(true);
+  expect(isMemoryPressureHigh()).toBe(true);
   expect(resolveUpdateHashWorkerCount()).toBe(0);
 });
 
@@ -124,6 +124,44 @@ it.each([
     vi.spyOn(process, "constrainedMemory").mockReturnValue(limit);
     vi.spyOn(process, "availableMemory").mockReturnValue(available);
 
-    expect(isConstrainedProcessLowOnMemory()).toBe(low);
+    expect(isMemoryPressureHigh()).toBe(low);
   },
 );
+
+it.each([
+  { name: "unbounded host", limit: 0, free: 40 * MiB, expected: true },
+  { name: "unlimited sentinel", limit: 2 ** 64, free: 40 * MiB, expected: true },
+  { name: "host pressure with process headroom", limit: GiB, free: 40 * MiB, expected: true },
+  { name: "exhausted process allowance", limit: GiB, available: 0, expected: true },
+  { name: "idle reclaimable host", limit: 0, free: 200 * MiB, expected: false },
+  {
+    name: "large host below the same threshold",
+    limit: 0,
+    free: 200 * GiB,
+    total: 1024 * GiB,
+    expected: true,
+  },
+  { name: "host at the threshold", limit: 0, free: 200, total: 1000, expected: true },
+  { name: "host above the threshold", limit: 0, free: 201, total: 1000, expected: false },
+  { name: "unknown host headroom", limit: 0, free: 0, expected: false },
+  { name: "unknown host capacity", limit: 0, free: 40 * MiB, total: 0, expected: false },
+  {
+    name: "non-Linux host",
+    limit: 0,
+    free: 40 * MiB,
+    platform: "win32" as const,
+    expected: false,
+  },
+  { name: "Bun host", limit: 0, free: 40 * MiB, bun: "1.4.4", expected: false },
+  { name: "Bun process pressure", limit: GiB, available: 0, bun: "1.4.4", expected: true },
+])("detects $name without changing process-limit policy", (sample) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue(sample.platform ?? "linux");
+  Object.defineProperty(process.versions, "bun", { configurable: true, value: sample.bun });
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(sample.limit);
+  vi.spyOn(process, "availableMemory").mockReturnValue(sample.available ?? GiB);
+  // Node/Linux os.freemem() exposes MemAvailable, including reclaimable pages, not MemFree.
+  vi.spyOn(os, "freemem").mockReturnValue(sample.free ?? 200 * MiB);
+  vi.spyOn(os, "totalmem").mockReturnValue(sample.total ?? 353 * MiB);
+
+  expect(isMemoryPressureHigh()).toBe(sample.expected);
+});
