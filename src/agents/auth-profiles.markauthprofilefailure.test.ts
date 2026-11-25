@@ -207,7 +207,10 @@ describe("provider-driven rate-limit cooldowns", () => {
 });
 
 const managedSnapshot = createPluginMetadataSnapshotFixture({
-  plugins: [{ id: "local-gateway", providers: ["local"], managesOwnAvailability: true }],
+  plugins: [
+    { id: "local-gateway", providers: ["local"], managesOwnAvailability: true },
+    { id: "litellm", providers: ["litellm"], managesOwnAvailability: true },
+  ],
 });
 const withManagedProvider = (run: () => Promise<void>) =>
   withPluginMetadataSnapshotScope(managedSnapshot, run, { trustConfigIdentity: true });
@@ -236,4 +239,60 @@ it("keeps subscription blocks and inline-key billing on self-managed providers",
     blockedReason: "subscription_limit",
   });
   expect(persisted.usageStats?.[inlineUsageId("local")]?.disabledReason).toBe("billing");
+});
+
+it("bypasses rate_limit and overloaded cooldown persistence for litellm while enforcing auth and billing", async () => {
+  const agentDir = tempDirs.make("openclaw-litellm-auth-");
+  const store: AuthProfileStore = {
+    version: 1,
+    profiles: {
+      "litellm:default": apiKey("litellm", "sk-litellm-test"),
+    },
+  };
+  saveStore(store, agentDir, saveOptions);
+  const auth = { store: loadStore(agentDir), agentDir };
+
+  await withManagedProvider(async () => {
+    // 429 rate_limit should be bypassed (not persisted)
+    await markFailure({
+      ...auth,
+      profileId: "litellm:default",
+      reason: "rate_limit",
+      retryAfterMs: 60_000,
+    });
+    // 503 overloaded should be bypassed (not persisted)
+    await markFailure({
+      ...auth,
+      profileId: "litellm:default",
+      reason: "overloaded",
+      retryAfterMs: 60_000,
+    });
+  });
+
+  let reloaded = loadStore(agentDir);
+  expect(reloaded.usageStats?.["litellm:default"]?.cooldownUntil).toBeUndefined();
+  expect(readPersistedAuthProfileStateRaw(agentDir)).toBeNull();
+
+  await withManagedProvider(async () => {
+    // 401 auth should be enforced
+    await markFailure({
+      ...auth,
+      profileId: "litellm:default",
+      reason: "auth",
+      retryAfterMs: 60_000,
+    });
+  });
+
+  reloaded = loadStore(agentDir);
+  expect(reloaded.usageStats?.["litellm:default"]?.cooldownUntil).toEqual(expect.any(Number));
+  expect(reloaded.usageStats?.["litellm:default"]?.cooldownReason).toBe("auth");
+
+  await withManagedProvider(async () => {
+    // 402 billing should be enforced
+    await markFailure({ ...auth, profileId: "litellm:default", reason: "billing" });
+  });
+
+  reloaded = loadStore(agentDir);
+  expect(reloaded.usageStats?.["litellm:default"]?.disabledReason).toBe("billing");
+  expect(reloaded.usageStats?.["litellm:default"]?.disabledUntil).toEqual(expect.any(Number));
 });
