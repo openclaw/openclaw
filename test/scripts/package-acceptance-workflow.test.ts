@@ -10911,7 +10911,12 @@ describe("package artifact reuse", () => {
     mkdirSync(join(root, "test"));
     writeFileSync(join(root, "test", "decision-index-providers.live.test.ts"), "");
     expect(run({})).toMatchObject({ status: 0, stdout: expect.stringContaining("::warning") });
-    for (const key of ["CELERIS_API_KEY", "FASTINO_API_KEY", "NACE_API_KEY", "PERPLEXITY_API_KEY"]) {
+    for (const key of [
+      "CELERIS_API_KEY",
+      "FASTINO_API_KEY",
+      "NACE_API_KEY",
+      "PERPLEXITY_API_KEY",
+    ]) {
       expect(run({ [key]: "fixture" })).toMatchObject({ status: 0, stdout: "" });
     }
   });
