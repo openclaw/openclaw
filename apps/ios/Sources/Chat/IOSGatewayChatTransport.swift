@@ -669,8 +669,13 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
         AsyncStream { continuation in
             let task = Task {
-                let stream = await self.gateway.subscribeServerEvents()
-                for await evt in stream {
+                let subscription = await self.gateway.makeServerEventSubscription(
+                    matching: { OpenClawChatGatewayPayloadCodec.acceptsEvent($0) })
+                defer {
+                    subscription.cancel()
+                    continuation.finish()
+                }
+                for await evt in subscription.events {
                     if Task.isCancelled {
                         return
                     }

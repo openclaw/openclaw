@@ -66,7 +66,7 @@ export function hasCredentials(config: RuntimeConfig): boolean {
 }
 
 /** A configured endpoint grants access to one loopback origin, never arbitrary private hosts. */
-export function localBaseUrl(value: unknown): string | undefined {
+function localBaseUrl(value: unknown): string | undefined {
   if (value === undefined) {
     return undefined;
   }

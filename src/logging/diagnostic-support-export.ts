@@ -11,7 +11,7 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { buildConfigSchemaCore } from "../config/schema.js";
 import { isMissingPathError } from "../infra/errors.js";
-import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { resolveFilesystemPath, resolveUserFilesystemPath } from "../infra/home-dir.js";
 import { collectRuntimeCapabilities } from "../infra/runtime-capabilities.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { parseBooleanValue } from "../utils/boolean.js";
@@ -436,7 +436,9 @@ export async function writeDiagnosticSupportExport(options: DiagnosticSupportExp
   if (!raw) {
     outputPath = path.join(stateDir, "logs", "support", filename);
   } else {
-    const resolved = raw.startsWith("~") ? resolveHomeRelativePath(raw) : path.resolve(raw);
+    const resolved = raw.startsWith("~")
+      ? resolveUserFilesystemPath(raw)
+      : resolveFilesystemPath(raw);
     outputPath = resolved;
     try {
       if (fs.statSync(resolved).isDirectory()) {

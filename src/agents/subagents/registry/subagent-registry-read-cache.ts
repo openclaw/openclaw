@@ -476,19 +476,13 @@ export function mergeSelectedFullRuns(
 ): Map<string, SubagentRunRecord> {
   const current = context && !freshPersisted ? acceptedFullSnapshot(cache, context) : undefined;
   const merged = new Map<string, SubagentRunRecord>();
-  const withPayload = (entry: SubagentRunRecord) => {
-    const payload = persisted.get(entry.runId);
-    return isSubagentRunPayloadEvicted(entry) && payload && !isSubagentRunPayloadEvicted(payload)
-      ? restoreSubagentRunPayload(entry, payload)
-      : entry;
-  };
   const durable = current ?? persisted;
   for (const [runId, entry] of selectedEntries(
     durable,
     select ? select(getSessionListLookup(cache, durable), []) : runIds,
   )) {
     if (matches(entry)) {
-      merged.set(runId, withPayload(entry));
+      merged.set(runId, entry);
     }
   }
   const state = selectSubagentCacheStateForRead(cache.state, context);
@@ -501,7 +495,7 @@ export function mergeSelectedFullRuns(
     })
   ) {
     for (const [runId, { entry }] of state.changes ? selectedEntries(state.changes, runIds) : []) {
-      setOrDeleteRun(merged, runId, entry && matches(entry) ? withPayload(entry) : undefined);
+      setOrDeleteRun(merged, runId, entry && matches(entry) ? entry : undefined);
     }
   }
   for (const [runId, entry] of selectedEntries(
@@ -509,7 +503,13 @@ export function mergeSelectedFullRuns(
     // Include durable members so a live ownership move still vetoes their old scope.
     select ? select(getSubagentSessionReadLookup(inMemoryRuns), [...merged.keys()]) : runIds,
   )) {
-    setOrDeleteRun(merged, runId, matches(entry) ? withPayload(entry) : undefined);
+    setOrDeleteRun(merged, runId, matches(entry) ? entry : undefined);
+  }
+  for (const [runId, entry] of merged) {
+    const payload = persisted.get(entry.runId);
+    if (isSubagentRunPayloadEvicted(entry) && payload && !isSubagentRunPayloadEvicted(payload)) {
+      merged.set(runId, restoreSubagentRunPayload(entry, payload));
+    }
   }
   return merged;
 }

@@ -99,7 +99,7 @@ export function sidebarPanelDefinitions(
   return [
     definePanel("conversation", "messageSquare", false),
     definePanel("subagents", "bot"),
-    definePanel("processes", "terminal"),
+    definePanel("processes", "listTree"),
     definePanel("context", "layers"),
     definePanel("detail", "diff", Boolean(data?.detailContent)),
     definePanel("terminal", "terminal", Boolean(state?.terminalAvailable)),

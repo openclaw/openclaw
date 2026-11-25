@@ -1,8 +1,15 @@
-import { expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { expect } from "vitest";
+import { parse } from "yaml";
+import { createCommandTest } from "../helpers/command-fixture.js";
 import { runCiGitStep } from "./ci-git-owner.test-support.js";
 
 // These admission jobs run on Ubuntu. The shared ci-platform-checkout suite
 // owns native Windows Job Object proof for the same pinned owner.
+const it = createCommandTest();
 const posixIt = it.skipIf(process.platform === "win32");
 const sha = "a".repeat(40);
 const otherSha = "f".repeat(40);
@@ -75,7 +82,20 @@ function selectedTagCheckout(signal: AbortSignal, options: RunOptions = {}) {
   });
 }
 
-const fetchMain = ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"];
+const fetchMain = [
+  "fetch",
+  "--no-tags",
+  "--filter=blob:none",
+  "--progress",
+  "origin",
+  "+refs/heads/main:refs/remotes/origin/main",
+];
+const fetchUnfilteredMain = [
+  "fetch",
+  "--no-tags",
+  "origin",
+  "+refs/heads/main:refs/remotes/origin/main",
+];
 const head = ["rev-parse", "HEAD"];
 const onMain = (revision: string) => ["merge-base", "--is-ancestor", revision, "origin/main"];
 
@@ -90,6 +110,8 @@ posixIt("retries selected-tag acquisition and checks out its exact commit", asyn
       "fetch",
       "--force",
       "--no-tags",
+      "--filter=blob:none",
+      "--progress",
       "origin",
       `+refs/tags/${releaseTag}:refs/tags/${releaseTag}`,
     ]),
@@ -106,6 +128,7 @@ posixIt(
     expect(gitCommands(report).filter(([operation]) => operation === "fetch")).toHaveLength(3);
     expect(gitCommands(report).some(([operation]) => operation === "checkout")).toBe(false);
     expect(report.output).toContain("Failed to fetch selected release tag after 3 attempts.");
+    expect(report.output).toContain("attempt 3/3 exited with code 23.");
   },
 );
 
@@ -135,7 +158,7 @@ posixIt.for([releaseTag, `${releaseTag}-2`])(
     expect(report.code, report.output).toBe(0);
     expect(report.githubOutput).toBe(`tag_sha=${sha}\n`);
     expect(gitCommands(report)).toContainEqual([
-      ...fetchMain.slice(0, 3),
+      ...fetchMain.slice(0, -1),
       "+refs/heads/release/2026.8.1:refs/remotes/origin/release/2026.8.1",
     ]);
   },
@@ -154,12 +177,12 @@ posixIt.for([
   },
   {
     mode: "macos" as const,
-    commands: [head, fetchMain],
+    commands: [head, fetchUnfilteredMain],
     output: "",
   },
   {
     mode: "placeholder" as const,
-    commands: [head, fetchMain, onMain(sha), onMain(sha)],
+    commands: [head, fetchUnfilteredMain, onMain(sha), onMain(sha)],
     output: `sha=${sha}\n`,
   },
 ])(
@@ -309,5 +332,79 @@ posixIt.for(failures)(
       },
       report.output,
     ).toMatchObject({ githubOutput: "", pnpm: false, ...expected });
+  },
+);
+
+posixIt(
+  "acquires exact release bytes without historical blobs and preserves branch ancestry",
+  async ({ command }) => {
+    const root = command.createTempDir("linux-release-fetch-");
+    const origin = join(root, "origin");
+    const checkout = join(root, "checkout");
+    mkdirSync(origin);
+    mkdirSync(checkout);
+    const config = join(root, "gitconfig");
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: "1" };
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", ["-C", cwd, ...args], { env, encoding: "utf8" }).trim();
+    writeFileSync(config, "[user]\nname = Fixture\nemail = fixture@example.invalid\n");
+    git(origin, "init", "--quiet", "--initial-branch=main");
+    git(origin, "config", "uploadpack.allowFilter", "true");
+    writeFileSync(join(origin, "obsolete"), "historical blob not required for release\n");
+    git(origin, "add", ".");
+    git(origin, "commit", "--quiet", "-m", "historical");
+    const historicalBlob = git(origin, "rev-parse", "HEAD:obsolete");
+    git(origin, "rm", "obsolete");
+    writeFileSync(join(origin, "release.txt"), "exact release bytes\n");
+    git(origin, "add", ".");
+    git(origin, "commit", "--quiet", "-m", "base");
+    const workflowSha = git(origin, "rev-parse", "HEAD");
+    git(origin, "checkout", "--quiet", "-b", "release/2026.8.1");
+    writeFileSync(join(origin, "release.txt"), "release branch bytes\n");
+    git(origin, "commit", "--quiet", "-am", "release");
+    git(origin, "tag", "-a", releaseTag, "-m", "release");
+    const tagSha = git(origin, "rev-parse", "HEAD");
+    git(
+      root,
+      "config",
+      "--file",
+      config,
+      "url." + pathToFileURL(origin).href + ".insteadOf",
+      "https://github.com/openclaw/openclaw.git",
+    );
+    const workflow = parse(readFileSync(".github/workflows/linux-app-release.yml", "utf8")) as {
+      jobs: { validate_release: { steps: { name: string; run?: string }[] } };
+    };
+    const output = join(root, "output");
+    for (const name of [
+      "Checkout selected tag",
+      "Ensure tag commit is reachable from its release branch",
+    ]) {
+      const step = workflow.jobs.validate_release.steps.find((entry) => entry.name === name);
+      expect(step?.run).toBeDefined();
+      const result = await command.run("bash", ["-c", step!.run!], {
+        cwd: checkout,
+        env: {
+          ...env,
+          CI_GIT_OWNER: resolve(".github/actions/git-owner/owner.py"),
+          GITHUB_WORKSPACE: checkout,
+          GITHUB_OUTPUT: output,
+          RELEASE_TAG: releaseTag,
+          WORKFLOW_SHA: workflowSha,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+    }
+    expect(git(checkout, "rev-parse", "HEAD")).toBe(tagSha);
+    expect(readFileSync(join(checkout, "release.txt"), "utf8")).toBe("release branch bytes\n");
+    expect(readFileSync(output, "utf8")).toBe("tag_sha=" + tagSha + "\n");
+    expect(git(checkout, "rev-parse", "--is-shallow-repository")).toBe("false");
+    const objects = git(
+      checkout,
+      "cat-file",
+      "--batch-all-objects",
+      "--batch-check=%(objectname)",
+    ).split("\n");
+    expect(objects).not.toContain(historicalBlob);
   },
 );

@@ -19,6 +19,10 @@ read_when:
   WebExtensions API calls. It is omitted for other drivers and must not replace
   `suggestedTargetId` or `tabId` in OpenClaw browser actions.
 
+Managed launches prepare profile files and hold lifecycle filesystem locks in workers,
+so filesystem writes do not block the Gateway event loop. The network-prediction
+guard is written before cosmetic profile state and before the managed launch.
+
 ## Browser selection
 
 When launching locally, OpenClaw picks the first available:

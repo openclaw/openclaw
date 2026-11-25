@@ -66,7 +66,7 @@ export async function prepareGatewaySessionFork(params: {
     );
   }
   if (fork.status !== "prepared") {
-    return unavailableSessionRequest("failed to fork parent session transcript");
+    return unavailableSessionRequest("failed to fork parent chat history");
   }
   return {
     ok: true as const,

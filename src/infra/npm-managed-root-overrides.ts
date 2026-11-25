@@ -38,3 +38,14 @@ export function filterUnsupportedManagedNpmRootOverrides(
   }
   return filtered;
 }
+
+// For bare package-name keys, object rules override the package itself only via ".".
+export function readRootOverrideSpec(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (isRecord(value) && typeof value["."] === "string") {
+    return value["."];
+  }
+  return undefined;
+}

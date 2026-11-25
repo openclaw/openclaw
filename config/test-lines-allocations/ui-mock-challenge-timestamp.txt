@@ -1,2 +1,0 @@
-# Integer challenge regression: 13 new fixture/test lines plus 18 inherited base lines.
-31

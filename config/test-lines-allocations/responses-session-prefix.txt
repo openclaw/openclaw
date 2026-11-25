@@ -1,2 +1,0 @@
-238
-# Real session prompts preserve immutable Responses prefixes through default OpenAI policy, live extension handlers and reloads.

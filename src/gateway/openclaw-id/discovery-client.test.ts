@@ -25,3 +25,23 @@ describe("Discovery client cancellation", () => {
     await expect(pending).rejects.toThrow("aborted");
   });
 });
+
+describe("Discovery client errors", () => {
+  it("carries the published binding a descriptor refusal names", async () => {
+    const binding = { body: { binding_seq: 3 }, sig: "x" };
+    const client = createDiscoveryClient({
+      baseUrl: "https://discovery.example.test",
+      signer: await generateEd25519Signer(),
+      fetchImpl: (async () =>
+        Response.json(
+          { error: { code: "stale_binding", message: "older", binding } },
+          { status: 409 },
+        )) as typeof fetch,
+    });
+    await expect(client.getRegistration("claw")).rejects.toMatchObject({
+      status: 409,
+      code: "stale_binding",
+      binding,
+    });
+  });
+});

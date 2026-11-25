@@ -322,8 +322,8 @@ suite.define(() => {
         await pairControlUiPage(page, runCli);
         for (const advertised of [
           undefined,
-          [],
           ["standard", "daybreak_blue"],
+          [],
           ["standard", "daybreak_red"],
         ]) {
           programs = advertised;
@@ -356,15 +356,6 @@ suite.define(() => {
           }
           await picker.locator(".chat-controls__effort-menu").waitFor();
           await expect
-            .poll(() =>
-              picker
-                .locator("[data-chat-access-option]")
-                .evaluateAll((nodes) =>
-                  nodes.map((node) => node.getAttribute("data-chat-access-option")),
-                ),
-            )
-            .toEqual(advertised?.filter((program) => program !== "standard") ?? []);
-          await expect
             .poll(() => picker.getByRole("switch", { name: "Daybreak", exact: true }).count())
             .toBe(advertised?.some((program) => program !== "standard") ? 1 : 0);
           expect(inferenceRequests).toBe(inferenceCount);
@@ -385,11 +376,7 @@ suite.define(() => {
         const toggle = picker.getByRole("switch", { name: "Daybreak", exact: true });
         await toggle.check();
         await expect.poll(() => toggle.isChecked()).toBe(true);
-        await expect
-          .poll(() =>
-            picker.locator('[data-chat-access-option="daybreak_red"]').getAttribute("aria-pressed"),
-          )
-          .toBe("true");
+        await picker.getByText("Red", { exact: true }).waitFor();
         await expect
           .poll(async () => {
             const result = await call<SessionsListResult>("sessions.list", { agentId: "main" });
@@ -621,7 +608,6 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         const picker = page.locator(".chat-controls__effort-picker").first();
         const menu = picker.locator(".chat-controls__effort-menu");
-        const select = picker.locator("[data-chat-access-program]");
         const toggle = menu.getByRole("switch", { name: "Daybreak", exact: true });
         const open = async () => {
           await expect
@@ -657,22 +643,76 @@ suite.define(() => {
             preferenceMobile: false,
             preferencePatch,
           });
-          await open();
-          if (value === "standard") {
-            await toggle.uncheck();
-          } else if (value) {
-            await toggle.check();
-            await select.locator(`[data-chat-access-option="${value}"]`).click();
-          } else {
-            // Automatic is an owner-level reset; the picker now offers an explicit on/off choice.
-            await evaluateControlUiContext(
-              page,
-              (context, sessionKey) =>
-                context.sessions.patch(sessionKey, { cyberAccessProgram: null }),
-              key,
-            );
-          }
           try {
+            await open();
+            await page.evaluate((activationChoice) => {
+              type ActivationEvent = Record<string, string | boolean>;
+              const activationWindow = window as typeof window & {
+                daybreakToggleActivation?: {
+                  choice: number;
+                  abort: AbortController;
+                  events: ActivationEvent[];
+                };
+              };
+              activationWindow.daybreakToggleActivation?.abort.abort();
+              const abort = new AbortController();
+              const events: ActivationEvent[] = [];
+              const initial = document.querySelector(
+                ".chat-controls__effort-picker .chat-controls__effort-menu [role='switch']",
+              );
+              activationWindow.daybreakToggleActivation = {
+                choice: activationChoice,
+                abort,
+                events,
+              };
+              for (const capturePhase of [true, false]) {
+                const observe = (event: Event) => {
+                  const target = event.target;
+                  if (
+                    !(target instanceof HTMLInputElement) ||
+                    !target.matches(
+                      ".chat-controls__effort-picker .chat-controls__effort-menu [role='switch']",
+                    )
+                  ) {
+                    return;
+                  }
+                  events.push({
+                    type: event.type,
+                    capture: capturePhase,
+                    checked: target.checked,
+                    disabled: target.disabled,
+                    prevented: event.defaultPrevented,
+                    connected: target.isConnected,
+                    initial: target === initial,
+                    firstPicker:
+                      target.closest(".chat-controls__effort-picker") ===
+                      document.querySelector(".chat-controls__effort-picker"),
+                  });
+                  if (events.length > 16) {
+                    events.shift();
+                  }
+                };
+                for (const type of ["pointerdown", "click", "input", "change"]) {
+                  document.addEventListener(type, observe, {
+                    capture: capturePhase,
+                    signal: abort.signal,
+                  });
+                }
+              }
+            }, choice);
+            if (value === "standard") {
+              await toggle.uncheck();
+            } else if (value) {
+              await toggle.check();
+            } else {
+              // Automatic is an owner-level reset; the picker now offers an explicit on/off choice.
+              await evaluateControlUiContext(
+                page,
+                (context, sessionKey) =>
+                  context.sessions.patch(sessionKey, { cyberAccessProgram: null }),
+                key,
+              );
+            }
             await expect
               .poll(async () => (await row()).cyberAccessProgram)
               .toBe(value || undefined);
@@ -681,30 +721,31 @@ suite.define(() => {
               .toBe(Boolean(value && value !== "standard"));
           } catch (error) {
             await withTimeout(
-              page.evaluate((expected) => {
+              page.evaluate((expectedChoice) => {
+                const activation = (
+                  window as typeof window & {
+                    daybreakToggleActivation?: {
+                      choice: number;
+                      events: Record<string, string | boolean>[];
+                    };
+                  }
+                ).daybreakToggleActivation;
+                const observed = activation?.choice === expectedChoice ? activation : undefined;
                 const element = document.querySelector(".chat-controls__effort-picker");
-                const selected = [
-                  ...(element?.querySelectorAll('[data-chat-access-option][aria-pressed="true"]') ??
-                    []),
-                ];
+                const caption = element?.querySelector(".chat-controls__access-caption");
                 return {
+                  preferenceActivationObserved: Boolean(observed),
+                  preferenceActivationEvents: observed?.events ?? [],
                   preferencePickerPresent: Boolean(element),
                   preferenceMenuOpen: element?.hasAttribute("open") ?? false,
                   preferenceToggleDisabled:
                     element?.querySelector<HTMLInputElement>('[role="switch"]')?.disabled ?? null,
                   preferenceToggleChecked:
                     element?.querySelector<HTMLInputElement>('[role="switch"]')?.checked ?? null,
-                  preferenceAnyPressed: selected.length > 0,
-                  preferenceExpectedPressed:
-                    Boolean(element) &&
-                    (expected && expected !== "standard"
-                      ? selected.some(
-                          (option) => option.getAttribute("data-chat-access-option") === expected,
-                        )
-                      : selected.length === 0),
+                  preferenceCaption: caption?.textContent ?? null,
                   preferenceSnapshot: Boolean(element?.closest("[data-composer-catalog-state]")),
                 };
-              }, value),
+              }, choice),
               500,
             )
               .then((facts) =>
@@ -730,14 +771,6 @@ suite.define(() => {
             { key, text, id: randomUUID() },
           );
         await open();
-        await expect.poll(() => select.count()).toBe(1);
-        expect(
-          await select
-            .locator("[data-chat-access-option]")
-            .evaluateAll((nodes) =>
-              nodes.map((node) => node.getAttribute("data-chat-access-option")),
-            ),
-        ).toEqual(["daybreak_blue", "daybreak_red"]);
         await expect.poll(() => toggle.isChecked()).toBe(false);
         const script = await page.locator('script[type="module"][src]').first().getAttribute("src");
         const bytes = await (
@@ -761,35 +794,16 @@ suite.define(() => {
           valueText: input.getAttribute("aria-valuetext"),
         }));
         await snapshot("both");
-        // Another session can have saved a different preferred program.
-        await choose("daybreak_blue");
-        await choose("standard");
-        await expect.poll(() => toggle.isEnabled()).toBe(true);
         await toggle.focus();
         await toggle.press("Space");
         await expect.poll(async () => (await row()).cyberAccessProgram).toBe("daybreak_blue");
-        const red = select.locator('[data-chat-access-option="daybreak_red"]');
-        await expect.poll(() => red.isEnabled()).toBe(true);
-        await red.focus();
-        await red.press("Enter");
-        await expect.poll(async () => (await row()).cyberAccessProgram).toBe("daybreak_red");
+        await menu.getByText("Blue", { exact: true }).waitFor();
         await expect
-          .poll(() => red.evaluate((element) => element === document.activeElement))
+          .poll(() => toggle.evaluate((element) => element === document.activeElement))
           .toBe(true);
-        await expect.poll(() => red.getAttribute("aria-pressed")).toBe("true");
-        await expect.poll(() => toggle.isEnabled()).toBe(true);
         await toggle.press("Space");
         await expect.poll(async () => (await row()).cyberAccessProgram).toBe("standard");
         await expect.poll(() => toggle.isChecked()).toBe(false);
-        await expect.poll(() => toggle.isEnabled()).toBe(true);
-        await toggle.press("Space");
-        await expect.poll(async () => (await row()).cyberAccessProgram).toBe("daybreak_red");
-        await expect.poll(() => red.getAttribute("aria-pressed")).toBe("true");
-        const blue = select.locator('[data-chat-access-option="daybreak_blue"]');
-        await expect.poll(() => blue.isEnabled()).toBe(true);
-        await blue.press("Space");
-        await expect.poll(async () => (await row()).cyberAccessProgram).toBe("daybreak_blue");
-        await expect.poll(() => blue.getAttribute("aria-pressed")).toBe("true");
         await choose("");
         for (const target of ["standard", ""]) {
           await choose("daybreak_blue");
@@ -847,40 +861,31 @@ suite.define(() => {
         await page.reload();
         await waitForControlUiGatewayReady(page);
         await open();
-        await expect
-          .poll(() => select.locator('[data-chat-access-option="daybreak_red"]').count())
-          .toBe(0);
+        await menu.getByText("Blue", { exact: true }).waitFor();
         await snapshot("blue-only");
-        programs = [];
-        await call("models.list", { agentId: "main", refresh: true });
-        await page.reload();
-        await waitForControlUiGatewayReady(page);
-        await open();
-        await expect.poll(() => select.locator("[data-chat-access-option]").count()).toBe(0);
-        await expect.poll(() => toggle.isChecked()).toBe(true);
-        await expect
-          .poll(() => menu.getByText("Blue (unavailable)", { exact: true }).isVisible())
-          .toBe(true);
-        expect((await row()).cyberAccessProgram).toBe("daybreak_blue");
-        await snapshot("no-access");
-        programs = undefined;
-        await call("models.list", { agentId: "main", refresh: true });
-        await page.reload();
-        await waitForControlUiGatewayReady(page);
-        await open();
-        await expect.poll(() => select.locator("[data-chat-access-option]").count()).toBe(0);
-        await expect.poll(() => toggle.isChecked()).toBe(true);
-        expect((await row()).cyberAccessProgram).toBe("daybreak_blue");
-        await snapshot("unknown");
-        // Turning off the last stale selection removes this switch.
-        await toggle.press("Space");
-        await expect.poll(async () => (await row()).cyberAccessProgram).toBe("standard");
-        await expect.poll(() => toggle.count()).toBe(0);
-        await snapshot("stale-selection");
+        for (const advertised of [undefined, []]) {
+          programs = advertised;
+          const catalog = await call<ModelCatalogResult>("models.list", {
+            agentId: "main",
+            sessionKey: key,
+            refresh: true,
+          });
+          const model = catalog.models.find((entry) => entry.id === "gpt-6.1-sol");
+          expect(model?.availableAccessPrograms?.cyber).toEqual(advertised);
+          await page.reload();
+          await waitForControlUiGatewayReady(page);
+          await open();
+          expect(await toggle.count()).toBe(0);
+          expect((await row()).cyberAccessProgram).toBe("daybreak_blue");
+          await snapshot(advertised ? "no-access" : "unknown");
+        }
+        await picker.locator("summary").click();
         const before = receipts.length;
-        await send("Continue after disabling stale Access.");
+        await page.locator(".agent-chat__composer-combobox textarea").fill("Continue on Standard.");
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
         await expect.poll(() => receipts.length).toBe(before + 1);
         expect(receipts[before]?.access).toEqual({ cyber: "standard" });
+        expect((await row()).cyberAccessProgram).toBeUndefined();
         await expect.poll(async () => Boolean((await row()).hasActiveRun)).toBe(false);
       },
     );

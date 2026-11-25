@@ -656,11 +656,6 @@ describe("executeNodeHostCommand", () => {
             expect(requireGatewayCommand("system.run").callOptions).toEqual({
               scopes: ["operator.write", "operator.approvals"],
               signal: controller.signal,
-              dispatchAuthority: {
-                version: 2,
-                kind: "source-bound",
-                assertCurrent: expect.any(Function),
-              },
             }),
           );
           controller.abort(new Error("run aborted during node invocation"));
@@ -703,11 +698,6 @@ describe("executeNodeHostCommand", () => {
     expect(call.params?.timeoutMs).toBe(35_000);
     expect(call.callOptions).toEqual({
       scopes: ["operator.write", "operator.approvals"],
-      dispatchAuthority: {
-        version: 2,
-        kind: "source-bound",
-        assertCurrent: expect.any(Function),
-      },
     });
     const runParams = requireRunParams(call);
     expect(runParams).toMatchObject({

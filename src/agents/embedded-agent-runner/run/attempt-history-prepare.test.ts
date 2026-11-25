@@ -12,6 +12,7 @@ import { createAnthropicMessagesTransportStreamFn } from "../../../../packages/a
 import { createAssistantOutput } from "../../../../packages/ai/src/transports/assistant-output.js";
 import { convertResponsesMessages } from "../../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import { freezeTranscriptSnapshot } from "../../../config/sessions/transcript-snapshot.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
   freezeJsonSnapshot,
@@ -21,6 +22,7 @@ import {
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
+import { buildInitialContext } from "../../sessions/session-manager-codec.js";
 import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
@@ -158,7 +160,7 @@ it("publishes restored assistant history without rehashing it on later model req
     },
   ];
   fixture.messages.push(restored);
-  const wire = (message: typeof restored) =>
+  const wire = (message: Extract<AgentMessage, { role: "assistant" }>) =>
     JSON.stringify(convertResponsesMessages(model, { messages: [message] }, new Set()));
   const before = wire(restored);
   await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
@@ -258,27 +260,60 @@ it("reuses restored tool history fragments across turns without changing request
   }
 });
 
-it("does not walk admitted history while sealing a new shallow-frozen reply", async () => {
-  const fixture = createFixture();
-  mocks.readEntry.mockResolvedValue(undefined);
-  const prefix = createAssistantOutput(model);
-  prefix.content = [{ type: "toolCall", id: "old", name: "read", arguments: { path: "old" } }];
-  const manager = SessionManager.inMemory();
-  await manager.appendMessageAsync(prefix);
-  const retained = await manager[sessionManagerReadInitialContext]();
-  const tail = Object.freeze({ ...prefix, content: [{ type: "text" as const, text: "new" }] });
-  fixture.messages.push(...retained.messages, tail);
-  const ownKeys = vi.spyOn(Reflect, "ownKeys");
-  await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
-  const prefixWalks = ownKeys.mock.calls.filter(([value]) => value === prefix).length;
-  ownKeys.mockRestore();
-  expect(prefixWalks).toBe(0);
-  expect(fixture.agent.state.messages.at(-2)).toBe(prefix);
-  expect(fixture.agent.state.messages.at(-1)).toBe(tail);
-  expect(Reflect.set(prefix.content[0]!, "name", "changed")).toBe(false);
-  expect(() => tail.content.push({ type: "text", text: "changed" })).toThrow(TypeError);
-  expect(Reflect.set(tail.content[0]!, "text", "changed")).toBe(false);
-});
+it.each(["appended", "hydrated"])(
+  "does not walk %s history while sealing a new shallow-frozen reply",
+  async (source) => {
+    const fixture = createFixture();
+    mocks.readEntry.mockResolvedValue(undefined);
+    const prefix = createAssistantOutput(model);
+    prefix.content = [{ type: "toolCall", id: "old", name: "read", arguments: { path: "old" } }];
+    const manager = SessionManager.inMemory();
+    if (source === "appended") {
+      await manager.appendMessageAsync(prefix);
+    }
+    const retained =
+      source === "hydrated"
+        ? buildInitialContext(
+            freezeTranscriptSnapshot({
+              events: [
+                {
+                  type: "message" as const,
+                  id: "old",
+                  parentId: null,
+                  timestamp: new Date(0).toISOString(),
+                  message: prefix,
+                },
+              ],
+              version: { generation: "hydrated", rawSeq: 1, updatedAt: 1 },
+            }).events,
+          )
+        : await manager[sessionManagerReadInitialContext]();
+    const tail = Object.freeze({ ...prefix, content: [{ type: "text" as const, text: "new" }] });
+    fixture.messages.push(...retained.messages, tail);
+    const wire = () =>
+      JSON.stringify(
+        convertResponsesMessages(
+          model,
+          { messages: convertToLlm(fixture.agent.state.messages) },
+          new Set(),
+        ),
+      );
+    const before = wire();
+    // Other sessions can evict generic proofs; transcript ownership must survive.
+    freezeJsonSnapshot(Array.from({ length: 300_000 }, () => ({})));
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+    const prefixWalks = ownKeys.mock.calls.filter(([value]) => value === prefix).length;
+    ownKeys.mockRestore();
+    expect(prefixWalks).toBe(0);
+    expect(wire()).toBe(before);
+    expect(fixture.agent.state.messages.at(-2)).toBe(prefix);
+    expect(fixture.agent.state.messages.at(-1)).toBe(tail);
+    expect(Reflect.set(prefix.content[0]!, "name", "changed")).toBe(false);
+    expect(() => tail.content.push({ type: "text", text: "changed" })).toThrow(TypeError);
+    expect(Reflect.set(tail.content[0]!, "text", "changed")).toBe(false);
+  },
+);
 
 it.each([
   [
@@ -401,5 +436,49 @@ it.each([
     if (stage !== "settlement") {
       expect(mocks.updateEntry).not.toHaveBeenCalled();
     }
+  },
+);
+
+it.each([
+  { budget: undefined, omitted: false },
+  { budget: 128, omitted: true },
+])(
+  "bounds settled finalization context without message timestamps (budget $budget)",
+  async ({ budget, omitted }) => {
+    const fixture = createFixture();
+    const call = createAssistantOutput(model);
+    call.content = [{ type: "toolCall", id: "call_1", name: "exec", arguments: { cmd: "ls" } }];
+    call.stopReason = "toolUse";
+    // Context engines may assemble summary rows without timestamps.
+    const settled = [
+      { role: "user", content: "Summary of earlier turns" } as AgentMessage,
+      { role: "user", content: "Recalled focus", timestamp: Number.NaN },
+      call,
+      {
+        role: "toolResult" as const,
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text" as const, text: "x".repeat(2048) }],
+        isError: false,
+        timestamp: 3,
+      },
+    ];
+    Object.assign(fixture.input.attempt, {
+      operation: "settled-tool-finalization",
+      sessionPersistence: "detached",
+      settledTurnFinalizationMessages: settled,
+      contextTokenBudget: budget,
+    });
+    await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+    const published = fixture.agent.state.messages;
+    expect(published.slice(0, 3)).toEqual(settled.slice(0, 3));
+    expect(published[3]).toMatchObject(
+      omitted
+        ? {
+            role: "toolResult",
+            content: [{ type: "text", text: expect.stringContaining("Tool result body omitted") }],
+          }
+        : settled[3]!,
+    );
   },
 );

@@ -1,9 +1,11 @@
+import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import { Type, type TSchema } from "typebox";
+import { SLACK_CONVERSATION_LIST_TYPES } from "./cursor-pages.js";
 import { listSlackMessageActions } from "./message-actions.js";
 
 const SLACK_MESSAGE_ID_ACTIONS = ["react", "reactions", "edit", "delete", "pin", "unpin"] as const;
@@ -104,6 +106,38 @@ export function describeSlackMessageTool({
             uniqueItems: true,
             description:
               'Slack conversation-open: 1-8 other member IDs. One opens a DM; multiple open or reuse a group DM. Exclude the calling account. Use the returned target with action="send". teamId defaults to the trusted current workspace for the selected account; detached Enterprise operations require it.',
+          }),
+        ),
+      },
+    });
+  }
+  if (actions.includes("channel-list")) {
+    schema.push({
+      actions: ["channel-list"],
+      properties: {
+        types: Type.Optional(
+          Type.Array(stringEnum(SLACK_CONVERSATION_LIST_TYPES), {
+            minItems: 1,
+            uniqueItems: true,
+            description:
+              'Slack channel-list conversation types. Default: ["public_channel","private_channel"]; add "im" or "mpim" to list DMs. Archived conversations need includeArchived. Pass nextPageToken as pageToken until it is absent; a page may hold fewer results than limit. Read a result with action="read" and its id as channelId.',
+          }),
+        ),
+      },
+    });
+  }
+  const readAsActions = (["read", "channel-list"] as const).filter((action) =>
+    actions.includes(action),
+  );
+  if (readAsActions.length > 0) {
+    schema.push({
+      actions: readAsActions,
+      visibility: "all-configured",
+      properties: {
+        readAs: Type.Optional(
+          stringEnum(["bot", "user"] as const, {
+            description:
+              'Slack token for read and channel-list. Omit for the account default (the user token when configured, else the bot token). "bot" forces the bot token; "user" requires a configured user token.',
           }),
         ),
       },

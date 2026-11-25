@@ -3,8 +3,8 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createStateWithRequest } from "./cron.test-support.ts";
+import { loadCronStatus } from "./editor-status.ts";
 import { getCronRunsViewState, loadCronRuns } from "./runs.ts";
-import { loadCronStatus } from "./state.ts";
 import type { CronState } from "./types.ts";
 
 function createRefreshHarness(method: "cron.status" | "cron.runs") {

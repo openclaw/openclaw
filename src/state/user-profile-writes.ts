@@ -37,6 +37,12 @@ import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
 import type { UserProfile } from "./user-profiles.types.js";
 import type { UserProfileWriteOperations } from "./user-profiles.worker.js";
 
+export type UserProfileRoleChange = {
+  profileId: string;
+  previousRole: string | null;
+  role: string | null;
+};
+
 type ProfileWriteOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
   assertCurrent?: () => void;
 };
@@ -218,14 +224,25 @@ async function write<Key extends keyof UserProfileWriteOperations>(
 export async function setCanonicalUserProfileRole(
   profileId: string,
   role: string | null,
-  options: ProfileWriteOptions & { onCommitted?: (profileId: string) => void } = {},
+  options: ProfileWriteOptions & {
+    onCommitted?: (profileId: string) => void;
+    /** Receives each committed role transition; an unchanged role reports nothing. */
+    onRoleChanged?: (change: UserProfileRoleChange) => void;
+  } = {},
 ) {
   const onCommitted = options.onCommitted;
   return unwrap(
     await write("userProfiles.setRole", { profileId, role }, options, (publication) => {
-      // The validated receipt names the canonical profile even when the caller used an alias.
-      for (const [id] of publication.after) {
+      // The transaction receipt names only changed authority, using canonical profile IDs.
+      for (const id of publication.changes.profiles) {
         onCommitted?.(id);
+      }
+      const before = new Map(publication.before);
+      for (const [id, row] of publication.after) {
+        const previousRole = before.get(id)?.role ?? null;
+        if (previousRole !== (row?.role ?? null)) {
+          options.onRoleChanged?.({ profileId: id, previousRole, role: row?.role ?? null });
+        }
       }
     }),
   );
@@ -330,6 +347,29 @@ export async function ensureCanonicalUserProfileForOpenClawIdIdentity(
   options: ProfileWriteOptions = {},
 ): Promise<UserProfile> {
   return unwrap(await write("userProfiles.ensureOpenClawId", input, options));
+}
+
+/** Links an OCID account to an existing personal profile; refuses one bound elsewhere. */
+export async function linkCanonicalOpenClawIdUserProfile(
+  input: UserProfileWriteOperations["userProfiles.linkOpenClawId"]["input"],
+  options: ProfileWriteOptions = {},
+) {
+  return unwrap(await write("userProfiles.linkOpenClawId", input, options));
+}
+
+/** Removes a profile's OCID link; owner devices of that account return to the shared owner. */
+export async function unlinkCanonicalOpenClawIdUserProfile(
+  input: UserProfileWriteOperations["userProfiles.unlinkOpenClawId"]["input"],
+  options: ProfileWriteOptions = {},
+) {
+  return unwrap(await write("userProfiles.unlinkOpenClawId", input, options));
+}
+
+export async function ensureCanonicalDelegatedUserProfile(
+  input: UserProfileWriteOperations["userProfiles.ensureDelegated"]["input"],
+  options: ProfileWriteOptions = {},
+): Promise<UserProfile> {
+  return unwrap(await write("userProfiles.ensureDelegated", input, options));
 }
 export async function syncCanonicalGitHubIdentity(
   input: UserProfileWriteOperations["userProfiles.syncGitHub"]["input"],

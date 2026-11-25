@@ -121,6 +121,36 @@ it("keeps the stronger summary when a corrective retry loses context", async () 
   expect(summarize).toHaveBeenCalledTimes(2);
 });
 
+it("takes its first summary from the warm request and keeps corrective retries bounded", async () => {
+  const warmSummary = vi.fn(async () => "Unstructured warm summary.");
+  summarize.mockResolvedValueOnce(structuredSummary({ decisions: "Keep blue." }));
+  const session = qualitySession({ qualityGuardMaxRetries: 1 });
+  const { result } = await runCompaction(session, {
+    ...compactionEvent({ preparation: { previousSummary: "Earlier summary." } }),
+    warmSummary,
+  });
+  expect(warmSummary).toHaveBeenCalledOnce();
+  const [instructions] = warmSummary.mock.calls[0] as unknown as [string];
+  // The warm request already holds the previous summary and the history.
+  expect(instructions).not.toContain("Earlier summary.");
+  expect(instructions).not.toContain("<conversation>");
+  expect(summarize).toHaveBeenCalledOnce();
+  expect(expectCompactionResult(result).summary).toContain("Keep blue.");
+});
+
+it("cancels without a recorded failure when the warm request fails", async () => {
+  const session = qualitySession();
+  const { result } = await runCompaction(session, {
+    ...compactionEvent(),
+    warmSummary: async () => {
+      throw new Error("the reply ended with toolUse and no usable summary");
+    },
+  });
+  expect(result).toEqual({ cancel: true });
+  expect(consumeCancellation(session)).toBeNull();
+  expect(summarize).not.toHaveBeenCalled();
+});
+
 it("keeps generated split-turn context when a terminal audit trims the suffix", async () => {
   const latestAsk = "roll back the api deployment and confirm health";
   const activeTurn = "Active turn: rolled back api-7 and is waiting on the health check.";

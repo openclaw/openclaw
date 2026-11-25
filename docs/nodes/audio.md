@@ -71,7 +71,7 @@ The provider inventory reports the local fallback winner separately from global 
 OpenAI audio uses the standard `/v1/audio/transcriptions` endpoint with the
 selected API-key or ChatGPT/Codex OAuth profile. An OAuth login can transcribe
 when the account permits it; access, quota, and billing remain account-specific.
-The default model is `gpt-4o-transcribe`; configured models, prompts, and language
+The default model is `gpt-transcribe`; configured models, prompts, and language
 hints are sent through the same multipart request for either credential class.
 Custom endpoints and request overrides require an API-key profile.
 
@@ -136,7 +136,7 @@ installation, run them once for that agent.
          models: [
            {
              provider: "openai",
-             model: "gpt-4o-transcribe",
+             model: "gpt-transcribe",
              profile: "openai:audio",
              baseUrl: "https://api.openai.com/v1",
              capabilities: ["audio"],
@@ -172,7 +172,7 @@ provider-wide rather than scoped to the audio model entry.
   tools: {
     media: {
       models: [
-        { provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] },
+        { provider: "openai", model: "gpt-transcribe", capabilities: ["audio"] },
         {
           type: "cli",
           command: "whisper",
@@ -181,7 +181,7 @@ provider-wide rather than scoped to the audio model entry.
           capabilities: ["audio"],
         },
       ],
-      audio: { enabled: true, preferredModel: "openai/gpt-4o-transcribe" },
+      audio: { enabled: true, preferredModel: "openai/gpt-transcribe" },
     },
   },
 }
@@ -260,7 +260,7 @@ provider-wide rather than scoped to the audio model entry.
 - The built-in audio size cap is 20MB. An entry-level `maxBytes` override can change it; oversize audio is skipped for that model and the next entry is tried.
 - Audio files below 1024 bytes are skipped before provider/CLI transcription.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
-- OpenAI auto-detect default is `gpt-4o-transcribe`; set `model: "gpt-4o-mini-transcribe"` for a cheaper/faster option.
+- OpenAI auto-detect default is `gpt-transcribe`; set `model: "gpt-4o-mini-transcribe"` for a cheaper/faster option.
 - Transcript is available to templates as `{{Transcript}}`.
 - `tools.media.audio.echoTranscript` is off by default; `echoFormat` accepts a `{transcript}` placeholder.
 - Telegram echoes with an account, chat, and source message ID use the durable outbound queue to suppress same-source replays. Completed receipts are retained for 24 hours, capped at 2,000 receipts across Telegram transcript echoes; replay after pruning can echo again. If durable admission fails, the keyed echo is skipped while transcription and agent replies continue.

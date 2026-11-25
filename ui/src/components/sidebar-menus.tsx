@@ -40,6 +40,7 @@ const positionedMenus = [
   "pluginNavigation",
   "sessionSort",
   "peopleFilter",
+  "automationsFilter",
   "catalogView",
   "identity",
 ] as const;
@@ -55,6 +56,9 @@ function menuPosition(x: number, y: number, width: number, height: number): Menu
 
 export type SidebarFilterMenuView = "root" | "specific-owner";
 
+/** Sidebar header filters that open a positioned popover from their trigger. */
+export type SidebarFilterMenu = "peopleFilter" | "sessionSort" | "automationsFilter";
+
 type SidebarMenusRenderer = typeof import("./sidebar-menus-render.tsx");
 type CatalogMenuView = ReturnType<ReturnType<typeof createSidebarCatalogMenu>["createView"]>;
 
@@ -68,6 +72,7 @@ type SidebarMenusState = {
   sessionGroupMenu: SidebarSessionGroupMenuState | null;
   sessionSortMenuPosition: MenuPosition | null;
   peopleFilterMenuPosition: MenuPosition | null;
+  automationsFilterMenuPosition: MenuPosition | null;
   catalogViewMenuPosition: (MenuPosition & { catalogId: string }) | null;
   filterMenuView: SidebarFilterMenuView;
   agentMenuPosition: { x: number; top: number; placement?: "right-start" } | null;
@@ -103,6 +108,7 @@ export function createSidebarMenus(deps: {
     sessionGroupMenu: null,
     sessionSortMenuPosition: null,
     peopleFilterMenuPosition: null,
+    automationsFilterMenuPosition: null,
     catalogViewMenuPosition: null,
     filterMenuView: "root",
     agentMenuPosition: null,
@@ -359,7 +365,7 @@ export function createSidebarMenus(deps: {
       openPositionedMenu("railPin", { ...menuPosition(x, y, 200, 140), entry, label }, trigger);
     },
 
-    togglePositionedMenu(menu: "peopleFilter" | "sessionSort", trigger: HTMLElement) {
+    togglePositionedMenu(menu: SidebarFilterMenu, trigger: HTMLElement) {
       if (state[`${menu}MenuPosition`]) {
         menus.closePositionedMenu(menu);
         return;
@@ -368,7 +374,8 @@ export function createSidebarMenus(deps: {
       if (menu === "peopleFilter") {
         host.peopleView?.dismiss();
       }
-      const [width, height] = menu === "peopleFilter" ? [320, 160] : [200, 280];
+      // Section filters share the Users filter's popover and size.
+      const [width, height] = menu === "sessionSort" ? [200, 280] : [320, 160];
       openPositionedMenu(menu, menuPosition(rect.right, rect.bottom + 4, width, height), trigger);
     },
 
@@ -608,6 +615,7 @@ export function createSidebarMenus(deps: {
             projection.read().sessionGroupMenu ||
             projection.read().sessionSortMenuPosition ||
             projection.read().peopleFilterMenuPosition ||
+            projection.read().automationsFilterMenuPosition ||
             projection.read().catalogViewMenuPosition
           }
         >
@@ -637,14 +645,24 @@ export function createSidebarMenus(deps: {
           : null;
       });
       // Menus retain this anchor as their return-focus target across sidebar updates.
+      const active = () => isSidebarRouteActive(view.activeRouteId, routeId);
+      const opensSection =
+        routeId === "cron" ||
+        routeId === "plugins" ||
+        routeId === "systems" ||
+        routeId === "workboard";
       const link = (
         <SidebarNavLink
           ref={triggerRef}
-          icon={<Icon name={navigationIconForRoute(routeId)} />}
+          icon={<Icon name={navigationIconForRoute(routeId)} filled={active()} />}
           label={titleForRoute(routeId, t)}
           href={sessionTarget()?.href ?? pathForRoute(routeId, view.basePath)}
-          active={isSidebarRouteActive(view.activeRouteId, routeId)}
-          onNavigate={() => view.onNavigate?.(routeId, sessionTarget()?.options)}
+          active={active()}
+          onNavigate={() =>
+            opensSection
+              ? view.onNavigate?.(routeId, undefined, "sidebar-section")
+              : view.onNavigate?.(routeId, sessionTarget()?.options)
+          }
         />
       );
       return <Show when={view.enabledRouteIds?.includes(routeId) ?? true}>{link}</Show>;

@@ -31,7 +31,7 @@ import {
 } from "./agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { MODELS_JSON_STATE } from "./models-config-state.js";
+import { MODELS_JSON_STATE, publishModelsJsonCostSource } from "./models-config-state.js";
 import { planOpenClawModelsJson, type PreparedModelsConfigContext } from "./models-config.plan.js";
 import {
   capturePluginModelCatalogAuth,
@@ -299,8 +299,13 @@ export async function ensureOpenClawModelsJsonWithInput(
       await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
       if (existingModelsFile.raw !== plan.contents) {
         await privateFileStore(path.dirname(targetPath)).writeText("models.json", plan.contents);
-        MODELS_JSON_STATE.costCache.delete(agentDir);
       }
+    }
+    publishModelsJsonCostSource(
+      agentDir,
+      plan.action === "write" ? plan.contents : existingModelsFile.raw || null,
+    );
+    if (plan.action === "write") {
       await ensureModelsFileModeForModelsJson(targetPath);
     }
     const publication = plan.pluginCatalogWrites

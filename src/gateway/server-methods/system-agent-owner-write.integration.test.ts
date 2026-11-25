@@ -6,10 +6,8 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-} from "../../agents/admitted-run-context.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
 import { createAgentTurnTaintState } from "../../agents/embedded-agent-runner/run/turn-taint-state.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -38,7 +36,7 @@ afterEach(() => vi.restoreAllMocks());
 
 // Synthetic inference chooses an operation; dispatch, approval, validation and persistence are real.
 it.for(["active", "revoked", "non-owner"] as const)(
-  "preserves the %s source grant through delegated role persistence after a network read",
+  "checks the %s source grant at admission for delegated role persistence after a network read",
   (state, { signal }) =>
     withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
       const config: OpenClawConfig = {
@@ -52,6 +50,7 @@ it.for(["active", "revoked", "non-owner"] as const)(
           profile: "full",
           allow: ["openclaw"],
           exec: { host: "gateway", security: "full", ask: "off" },
+          openclaw: { autoApproveChanges: true },
         },
         gateway: {
           roles: {
@@ -69,11 +68,10 @@ it.for(["active", "revoked", "non-owner"] as const)(
       const sessionId = "owner-role-write-session";
       replaceSessionEntrySync({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
       const lifetime = new AbortController();
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         profileId: GATEWAY_OWNER_PROFILE_ID,
         scopes: ["operator.admin"],
         signal: lifetime.signal,
-        assertCurrent: () => lifetime.signal.throwIfAborted(),
       });
       const operationalRunInstance = createOperationalRunInstanceRef("owner-role-write-run");
       const approvalAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -145,7 +143,6 @@ it.for(["active", "revoked", "non-owner"] as const)(
                   operationalRunInstance,
                   approvalAuthority,
                   operatorAuthority: authority,
-                  receiptAuthority: authority.assertCurrent,
                   gatewayContextResolver: () => context,
                 },
                 async () => {
@@ -170,8 +167,6 @@ it.for(["active", "revoked", "non-owner"] as const)(
                   assert(tool);
                   taint.observe({
                     toolName: "web_fetch",
-                    argsHash: "fixture-github-request",
-                    resultHash: "fixture-github-response",
                     resultContentSource: "network",
                   });
                   const pending = tool.execute("assign-fixture-role", {
@@ -201,16 +196,14 @@ it.for(["active", "revoked", "non-owner"] as const)(
                     } finally {
                       release.resolve();
                     }
-                    if (state === "revoked") {
-                      await expect(pending).rejects.toThrow(/revoked/);
-                    } else {
-                      expect(JSON.stringify(await pending)).toContain("done: config.set");
-                    }
+                    expect((await pending).details).toMatchObject({
+                      reply: expect.stringContaining("done: config.set"),
+                    });
                     await Promise.allSettled(handler.mock.results.map((result) => result.value));
                   }
                   expect(taint.isTainted()).toBe(true);
                   const saved = await fs.readFile(fixture.configPath, "utf8");
-                  if (state === "active") {
+                  if (state !== "non-owner") {
                     expect(JSON.parse(saved).gateway.roles.assignments.byGithubLogin).toEqual({
                       "fixture-contributor": "contributor",
                     });

@@ -17,14 +17,18 @@ logs live, how to read them, and how to configure log levels and formats.
 
 ## Where logs live
 
-By default, the Gateway writes a rolling log file per day. The default profile
-keeps the historical path:
+By default, the Gateway writes a rolling log file per day under the selected
+state directory's `logs/` directory. With the default state directory:
 
-`/tmp/openclaw/openclaw-YYYY-MM-DD.log`
+`~/.openclaw/logs/openclaw-YYYY-MM-DD.log`
 
-Named profiles use a profile-qualified filename in the same directory:
+Named profiles use their own state directory and a profile-qualified filename:
 
-`/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`
+`~/.openclaw-<profile>/logs/openclaw-<profile>-YYYY-MM-DD.log`
+
+`OPENCLAW_STATE_DIR` relocates both state and default logs. Test harnesses that
+allocate temporary state therefore keep their logs in that same temporary tree;
+separate Gateways no longer append to a host-wide daily file.
 
 The filename profile segment is lowercase and limited to letters, numbers, and
 dashes. Simple lowercase names stay readable, so the `--dev` shorthand writes
@@ -34,10 +38,18 @@ Oversized values set directly through the environment use a bounded hash suffix
 to stay within filesystem filename limits. An explicit `logging.file` overrides
 these defaults.
 
-The date uses the gateway host's local timezone. When `/tmp/openclaw` is unsafe
-or unavailable (and always on Windows), OpenClaw uses a user-scoped
-`openclaw-<uid>` directory under the OS temp dir instead. Dated log files are
-pruned after 24 hours.
+The date uses the gateway host's local timezone. When `logs/` is unsafe or
+unavailable (and always on Windows), OpenClaw uses `tmp/openclaw-<uid>` under
+the same state directory instead (`tmp/openclaw` without a numeric user ID).
+It never falls back to another Gateway's logs. Dated log files are pruned after
+24 hours.
+
+After upgrading from the host-wide `/tmp/openclaw/` default, use `openclaw logs`
+to discover the active path or update external file collectors to the selected
+state directory. Existing old files are not moved or imported into the new log.
+An explicit `logging.file` remains unchanged; distinct Gateways must use distinct
+override paths. The macOS `scripts/clawlog.sh` utility reads unified logs rather
+than these JSONL files and is unaffected.
 
 Each file rotates when the next write would exceed `logging.maxFileBytes`
 (default: 100 MB). OpenClaw keeps up to five numbered archives beside the
@@ -215,6 +227,40 @@ openclaw gateway
 openclaw gateway --verbose --ws-log compact
 openclaw gateway --verbose --ws-log full
 ```
+
+### Reply watchdog failures
+
+When the reply watchdog stops a run, the existing `lane task error` record includes
+`staleReason` (`no_activity` or `rate_limited`) and `pendingTools`. The latter lists
+at most the first five pending tools in start order, each with `toolName`,
+`toolCallId`, and `elapsedMs` measured at the stop decision, before recovery or
+abort cleanup can settle the tools. Code Mode entries can also include the bounded
+`awaiting` bridge details described in [Code Mode internals](/tools/code-mode/internals#nested-tool-execution).
+Tool arguments, results, and message content are excluded. Code Mode
+host calls carry their own tool name and call ID, including on worker turns.
+Automation run history appends these pending-tool details to its recovery cause;
+provider rate-limit text keeps precedence.
+
+### Operator authority failures
+
+The existing `lane task error` record carries three additional fields when a
+retained operator authority becomes inactive, including through sandbox and
+state-lease error wrappers:
+
+- `operatorAuthorityReason`: `source-invalidated`, `gateway-identity-retired`,
+  `closure-released`, or `closure-revoked`.
+- `operatorAuthorityCheck`: `source-current`, `source-revocation`, `gateway-current`,
+  `before-sources`, or `after-sources`, identifying the owner check that failed.
+- `operatorAuthorityAgeMs`: elapsed monotonic milliseconds from the original
+  run-authority capture to creation of that failure. Retained/delegated copies
+  keep the original capture age; a new admission creates a new capture.
+
+`source-invalidated` identifies the failed source check or revocation callback;
+it does not identify which upstream policy or lifecycle event invalidated it.
+`gateway-identity-retired` means the captured Gateway resolver no longer returns
+the same owner. Closure reasons distinguish a released final hold from a revoked
+closure. These fields add no content or identifiers and emit no additional log
+record. The recovery message remains visible to the user.
 
 ### Steering and input cancellation
 
@@ -497,8 +543,14 @@ both sinks.
 The Gateway logs `slow chat send` when acknowledgement or startup takes at least
 one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
 agent execution starts. `replyInitialization` covers inbound dispatch through
-session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
-preparation belong to `preparation`, before the first model request.
+session preparation. `preparation` covers work before the prepared reply starts.
+`run` covers the prepared reply, including its remaining runtime setup, until
+diagnostics finish. Ordinary startup still stops accounting when agent execution
+starts. A `stage=steer` send can await a whole prepared reply, so its `run` includes
+that turn's execution time rather than charging it to `preparation`. A `stage=queued`
+report stops at the existing queue-disposition boundary; later execution is excluded.
+These consecutive phases do not double-count prepared-reply time. Structured phase
+events use the same names, including `chat.send.run`.
 Fast sends retain numeric phase timings without formatting a log message;
 enabled diagnostic phase subscribers still receive their observations.
 
@@ -508,9 +560,9 @@ binding, cold transcript hydration, writer admission, snapshot reads, and commit
 alongside workspace, Git baseline, hooks, and embedded preparation when used.
 `reply.session.writer` includes both queue waiting and `reply.session.initialize`;
 their difference indicates the writer wait. Parent and child spans overlap and
-must not be summed. Unfinished spans stop at the startup boundary; later model
-and tool latency does not extend them. Structured `chat.send.detail.*` phase
-events use the same durations when diagnostics are enabled.
+must not be summed. Unfinished spans stop when that send's diagnostics finish;
+ordinary startup therefore excludes later model and tool latency. Structured
+`chat.send.detail.*` phase events use the same durations when diagnostics are enabled.
 
 Before acknowledgement, `detail.persist.stage.*` separates pending-input resolution,
 storage preparation, reads, authority preparation, message preparation, and durable
@@ -1316,22 +1368,27 @@ start and end times. Unattributed active-loop stalls use the observed gap betwee
 JavaScript callback lifetime. Idle monitoring uses the missed wake deadline and
 the resumed wake instead, without adding idle heartbeats.
 
-On supported Node runtimes, `main-thread stall profile` selects samples only
-inside the longest reported stall's saved interval. `windowStartMs` and
-`windowEndMs` identify that interval; `reportedAtMs` identifies profile emission.
-The recorder keeps its 25 ms sample interval and bounded profile buffers. Later
-work outside the interval is excluded, even when reporting is delayed. Sample
-counts include idle samples whose frames are omitted from `inclusive`, so a
-single listed stack does not mean that stack occupied the whole interval.
+A `main-thread stall profile` describes the longest reported stall in a batch,
+not every stall. To count the stalls the Gateway reported, use `main-thread
+stall` warnings that include `stallStartMs` and `stallEndMs`. `windowStartMs`
+and `windowEndMs` identify the selected profile interval; `reportedAtMs`
+identifies profile emission.
+
+On Node 26, the CPU flight recorder samples every 25 ms and uses only samples
+inside the saved interval. Counts can include idle samples whose frames are
+omitted from `inclusive`, so a single listed stack did not necessarily occupy
+the whole interval. On Node 24, `sampleMode=interrupt` reports up to three
+point-in-time stacks, not CPU-duration samples. `cpuProfile=unavailable`
+means no CPU samples were captured; Linux kernel evidence can still be present.
+See [CPU pressure and event-loop delay](/gateway/health#cpu-pressure-and-event-loop-delay) for runtime limits.
 
 The report also includes `self`, up to ten sampled leaf frames as
-`[frame, samples, sampledMs, nearestAppFrame]`. These identify the work beneath
-shared inclusive callers; `nearestAppFrame` is the nearest OpenClaw frame on
-that sampled stack, or `null` when none is visible. Sampled milliseconds use
-the selected profile time deltas, clipped at the start of the stall; they are
-an attribution estimate, not an exact CPU timer. `deepest` contains up to three
-hot stack tails as `[samples, frames]`, with up to eight frames ordered from
-caller to sampled leaf.
+`[frame, samples, sampledMs, nearestAppFrame]`. The `nearestAppFrame` is the
+nearest OpenClaw frame on that stack, or `null` when none is visible. For CPU
+profiles, `sampledMs` is an estimate from the profile time deltas clipped to
+the start of the stall. For interrupt samples, `sampledMs` is `null`.
+`deepest` contains up to three sampled stack tails as `[samples, frames]`,
+ordered from caller to sampled leaf.
 
 The report payload has a hard 2 KiB limit. `reportTruncated=true` means lower
 priority entries were omitted to fit: inclusive ancestors first, then extra
@@ -1413,10 +1470,10 @@ on an unchanged route.
 Drops classified as `unattributed` use `debug`; attributed drops remain warnings.
 `providerPrefix` compares final encoded request segments against the last request
 with usable cache-read usage: system instructions, tools, history messages, and
-other request parameters. It names the first differing segment or `prefix-match`
-when the previous prefix is unchanged. A match does not prove provider cache
-availability or retention. Unsupported transports and missing baselines report
-`unavailable`.
+other request parameters except output caps. It names the first differing
+segment or `prefix-match` when the previous prefix is unchanged. A match does
+not prove provider cache availability or retention. Unsupported transports and
+missing baselines report `unavailable`.
 
 Prompt content is retained only as hashes, within the existing 512-entry
 diagnostic tracker.

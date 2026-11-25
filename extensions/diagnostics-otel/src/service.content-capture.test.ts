@@ -134,6 +134,7 @@ test.each([
     const attributes = sdk.exporter
       .getFinishedSpans()
       .find((span) => span.name === name)?.attributes;
+    expect(attributes?.["openclaw.outcome"]).toBe(kind === "harness-error" ? "error" : "completed");
     if (captureContent) {
       expect(attributes).toMatchObject({
         "input.value": content.userPrompt,

@@ -1,4 +1,4 @@
-// Commits detached background results into an existing conversation generation.
+// Commits detached background results into an existing conversation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
@@ -35,14 +35,18 @@ export type BackgroundSessionResultProvenance =
 /** Appends a background result without waiting for the target conversation's active turn. */
 export async function commitBackgroundResultToSession(params: {
   agentId: string;
+  /** The result follows the key to the conversation's current transcript. */
   sessionKey: string;
-  /** Pins output to the conversation generation that admitted the background run. */
-  expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
   text: string;
   prepareDisplayContent?: () => Promise<readonly Record<string, unknown>[] | undefined>;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
   idempotencyKey: string;
   provenance?: BackgroundSessionResultProvenance;
+  /**
+   * The producing turn ran in this conversation, so its own reply already holds the text in
+   * model context. The row is then for display only and is never placed into model context.
+   */
+  displayOnly?: true;
   config: OpenClawConfig;
   signal?: AbortSignal;
   /** Revalidate the producer after preparation and inside the transcript commit. */
@@ -58,14 +62,6 @@ export async function commitBackgroundResultToSession(params: {
   const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
   });
-  const expectedSessionId = normalizeOptionalString(params.expectedGeneration.sessionId);
-  if (!expectedSessionId) {
-    return { ok: false, reason: "background session result has an invalid expected generation" };
-  }
-  const expectedLifecycleRevision = normalizeOptionalString(
-    params.expectedGeneration.lifecycleRevision,
-  );
-  const identities = [sessionKey, expectedSessionId];
 
   params.assertCurrent?.();
   return await runSessionMutation({
@@ -74,8 +70,6 @@ export async function commitBackgroundResultToSession(params: {
     target: captureSessionTarget({
       storeScope: storePath,
       sessionKey,
-      aliases: identities,
-      incarnation: expectedSessionId,
       agentId: params.agentId,
     }),
     signal: params.signal,
@@ -99,14 +93,12 @@ export async function commitBackgroundResultToSession(params: {
             throw read.error;
           }
           const current = read.value;
-          if (
-            current?.sessionId !== expectedSessionId ||
-            normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision
-          ) {
-            return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
+          if (!current?.sessionId) {
+            return { ok: false, reason: `session deleted for sessionKey: ${sessionKey}` };
           }
+          const sessionId = current.sessionId;
           const unavailable = resolveSessionWorkStartError(sessionKey, current, {
-            expectedSessionId,
+            expectedSessionId: sessionId,
             purpose: "accepted-result-settlement",
           });
           if (unavailable) {
@@ -115,7 +107,7 @@ export async function commitBackgroundResultToSession(params: {
           const scope = {
             agentId: params.agentId,
             sessionKey,
-            sessionId: expectedSessionId,
+            sessionId,
             storePath,
           };
           // A retry owns the original committed payload, including its managed-media IDs.
@@ -145,9 +137,11 @@ export async function commitBackgroundResultToSession(params: {
             stopReason: "stop",
             timestamp: Date.now(),
             idempotencyKey,
-            ...(isSessionControllerWorkActive(storePath, identities, params.agentId)
-              ? { excludeFromContext: true, openclawModelPlacement: "pending" as const }
-              : {}),
+            ...(params.displayOnly
+              ? { excludeFromContext: true }
+              : isSessionControllerWorkActive(storePath, [sessionKey, sessionId], params.agentId)
+                ? { excludeFromContext: true, openclawModelPlacement: "pending" as const }
+                : {}),
             ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
           } satisfies SessionTranscriptAssistantMessage & {
             idempotencyKey: string;
@@ -158,8 +152,8 @@ export async function commitBackgroundResultToSession(params: {
           params.assertCurrent?.();
           const committed = await persistSessionTranscriptTurn(scope, {
             cwd: current.spawnedCwd,
-            expectedSessionId,
-            expectedLifecycleRevision: expectedLifecycleRevision ?? null,
+            expectedSessionId: sessionId,
+            expectedLifecycleRevision: current.lifecycleRevision ?? null,
             assertCurrent: () => {
               owner.assertCurrent();
               params.assertCurrent?.();
@@ -188,7 +182,11 @@ export async function commitBackgroundResultToSession(params: {
               },
             ],
             touchSessionEntry: true,
-            sessionLifecyclePatch: { lastInteractionAt: message.timestamp },
+            // A committed background result is visible chat content.
+            sessionLifecyclePatch: {
+              lastInteractionAt: message.timestamp,
+              lastActivityAt: message.timestamp,
+            },
             updateMode: "inline",
             // A retry can finish media ownership after a committed append failed to publish.
             publishWhen: params.prepareDisplayContent ? "always" : undefined,

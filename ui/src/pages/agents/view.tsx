@@ -275,7 +275,7 @@ export function Agents(props: AgentsProps) {
                           visiblePanel() !== null &&
                           props.access.settings.reads.config &&
                           !props.config.configSaving &&
-                          !["error", "rejected", "conflict"].includes(
+                          !["error", "rejected", "conflict", "deferred"].includes(
                             props.config.configAutoSaveStatus,
                           )
                         }
@@ -353,6 +353,7 @@ export function Agents(props: AgentsProps) {
                               <AgentTools
                                 {...props.tools}
                                 {...configActions()}
+                                canReadConfig={props.access.settings.reads.config}
                                 readData={props.readData}
                                 agentId={agent().id}
                               />

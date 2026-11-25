@@ -111,9 +111,11 @@ Make intake explicit:
   audit lanes. Serialize changes to the canonical branch and record source and
   destination commits plus focused proof before taking the next group. Finish
   the complete inventory and resolve the final selection before freezing C/Q.
-  If the operator requests early diagnostic validation while more backports arrive,
-  record that it is provisional; it qualifies publication only if the final
-  candidate and all required inputs remain exactly unchanged and eligible.
+  If the operator requests an early run during intake, record it as provisional
+  and select `validation_purpose=diagnostic`. For publication, use a parent
+  admitted with `validation_purpose=publish` for the frozen candidate and
+  publication selection. Follow the [evidence reuse rules](../../../../docs/reference/full-release-validation/evidence.md)
+  for eligible prior work.
 - **Frozen/validating:** new opportunities normally queue for the next release;
   only confirmed blockers enter under the shared release boundaries. An explicit
   operator instruction may reopen intake for named backports. Record which
@@ -155,7 +157,8 @@ do not re-arm a watcher that has no new transition or work.
 Apply the existing blocker/flake policy: diagnose first, repair the owner,
 retry the affected surface within its budget, and retain successful exact-input
 evidence where allowed. P-only, credential, or infrastructure recovery does not
-change C/Q. A qualification-harness repair does. Do not scan moving main for
+change C/Q. A qualification-only repair may preserve C and newly admit an
+explicit reviewed exact Q; it requires a new request and successful parent. Do not scan moving main for
 opportunistic additions or let unrelated red main CI become the release queue.
 
 Keep the progress card compact: current validation/publication run link,
@@ -174,8 +177,10 @@ replace final tags or rebuild immutable published versions.
 Track every selected surface independently in the handoff table. A successful
 parent does not prove detached ClawHub or native-app completion. Preserve the
 track's scope: extended-stable excludes native apps and ClawHub. Native
-publication does not hold the priority npm/GitHub/main-closeout path; pending
-platform work still needs an owner and an accurate status.
+publication does not hold the priority npm/GitHub/main-closeout path. ClawHub
+starts at its existing dispatch point and runs independently thereafter; its
+authorization, failures, and recovery never block core or the closeout and
+retrospective PRs. Pending work still needs an owner and an accurate status.
 
 Finish the [hotfix ledger integrity check](hotfix-ledger-management.md#final-closeout-integrity-check),
 `$verify-release`, required platform work, applicable
@@ -187,6 +192,8 @@ boundaries; the retrospective PR is the explicitly required open deliverable.
 Report verified artifacts, included/deferred fixes, evidence gaps, retrospective
 PR, and any explicitly handed-off work. Do not call a pending handoff or
 publication approval wait “released.”
+
+Track ledger repairs in the [per-agent tracker](retrospective.md#track-in-flight-fixes-per-agent).
 
 ## Resume or hand off
 

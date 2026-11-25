@@ -7,10 +7,34 @@ import * as workflow from "./ci-workflow.test-support.js";
 const nightlyPath = ".github/workflows/full-release-validation-nightly.yml";
 const nightly = workflow.readWorkflow(nightlyPath);
 const frv = workflow.readWorkflow(".github/workflows/full-release-validation.yml");
+const watcher = workflow.readWorkflow(".github/workflows/full-release-state-watcher.yml").jobs
+  .watch;
 const job = nightly.jobs.validate;
 const steps: workflow.WorkflowStep[] = job.steps;
 const helperStep = steps.find((step) => step.run?.includes("pnpm ci:full-release"));
 const waitMinutes = validation.FULL_RELEASE_WAIT_TIMEOUT_MINUTES;
+
+it.each([
+  ["openclaw/openclaw", "refs/heads/main", "decision", "workflow_dispatch", true],
+  ["openclaw/openclaw", "refs/heads/release-ci/abcdef-123", "drain", "workflow_dispatch", true],
+  ["openclaw/openclaw", "refs/heads/topic", "decision", "workflow_dispatch", false],
+  ["fork/openclaw", "refs/heads/main", "decision", "workflow_dispatch", false],
+  ["openclaw/openclaw", "refs/heads/main", "unknown", "workflow_dispatch", false],
+  ["openclaw/openclaw", "refs/heads/main", "decision", "pull_request", false],
+] as const)(
+  "restricts the reusable watcher to its release caller: %s %s %s %s",
+  (repository, ref, mode, eventName, allowed) => {
+    expect(
+      workflow.evaluateWorkflow("${{ " + watcher.if + " }}", {
+        repository,
+        ref,
+        eventName,
+        workflowRef: repository + "/.github/workflows/full-release-validation.yml@" + ref,
+        inputs: { mode },
+      }),
+    ).toBe(allowed);
+  },
+);
 
 it("schedules nightly qualification every 3 hours without overlaps, with manual dispatch", () => {
   expect(nightly.on.schedule).toEqual([{ cron: "7 */3 * * *" }]);
@@ -182,7 +206,7 @@ it("pins candidate, tooling and qualification inputs through the SHA-pinned help
     "ubuntu-24.04",
   );
   expect(job["timeout-minutes"]).toBe(waitMinutes);
-  expect(frv.jobs.release_decision["timeout-minutes"]).toBe(waitMinutes);
+  expect(watcher["timeout-minutes"]).toBe(waitMinutes);
   expect(steps[0]).toMatchObject({
     uses: expect.stringMatching(/^actions\/checkout@[0-9a-f]{40}$/u),
     with: { ref: "${{ github.sha }}", "persist-credentials": false },
@@ -228,65 +252,54 @@ it("pins candidate, tooling and qualification inputs through the SHA-pinned help
   );
 });
 
-it("routes long watchers to their own Boat runner and always cleans up after them", () => {
-  for (const [selected, provision, waiters, cleanup] of [
-    [
-      frv,
-      "boat_release_runners",
-      ["release_decision", "diagnostic_drain"],
-      "cleanup_boat_release_runners",
-    ],
-    [nightly, "boat_nightly_runner", ["validate"], "cleanup_boat_nightly_runner"],
-  ] as const) {
-    const failedProvision = {
-      runnerBackend: "boat" as const,
-      ref: "refs/heads/main",
-      additionalNeeds: { [provision]: { result: "failure" as const, outputs: {} } },
-    };
-    for (const name of waiters) {
-      const waiter = selected.jobs[name];
-      expect(waiter.needs).toContain(provision);
-      expect(waiter["timeout-minutes"]).toBe(720);
-      expect(
-        workflow.evaluateWorkflow(waiter["runs-on"], {
-          runnerBackend: "boat",
-          releaseRunnerGroup: "hosted-controls",
-          boatReleaseRunnerGroup: "boat-watchers",
-          additionalNeeds: {
-            [provision]: {
-              result: "success",
-              outputs: {
-                decision_label: "decision",
-                drain_label: "drain",
-                nightly_label: "nightly",
-              },
-            },
+it("keeps the nightly watcher on its own Boat runner and always cleans up", () => {
+  const failedProvision = {
+    runnerBackend: "boat" as const,
+    ref: "refs/heads/main",
+    additionalNeeds: { boat_nightly_runner: { result: "failure" as const, outputs: {} } },
+  };
+  const waiter = nightly.jobs.validate;
+  expect(waiter.needs).toContain("boat_nightly_runner");
+  expect(waiter["timeout-minutes"]).toBe(720);
+  expect(
+    workflow.evaluateWorkflow(waiter["runs-on"], {
+      runnerBackend: "boat",
+      releaseRunnerGroup: "hosted-controls",
+      boatReleaseRunnerGroup: "boat-watchers",
+      additionalNeeds: {
+        boat_nightly_runner: {
+          result: "success",
+          outputs: {
+            nightly_label: "nightly",
           },
-        }),
-      ).toMatchObject({ group: "boat-watchers" });
-      expect(workflow.evaluateWorkflow(`\${{ ${waiter.if} }}`, failedProvision)).toBe(false);
-      expect(
-        workflow.evaluateWorkflow(`\${{ ${waiter.if} }}`, {
-          ...failedProvision,
-          additionalNeeds: { [provision]: { result: "success", outputs: {} } },
-        }),
-      ).toBe(true);
-    }
-    expect(selected.jobs[cleanup].needs).toEqual([provision, ...waiters]);
-    expect(
-      workflow.evaluateWorkflow(`\${{ ${selected.jobs[cleanup].if} }}`, {
-        ...failedProvision,
-        failed: true,
-        cancelled: true,
-      }),
-    ).toBe(true);
-    expect(
-      workflow.evaluateWorkflow(`\${{ ${selected.jobs[provision].if} }}`, {
-        ...failedProvision,
-        cancelled: true,
-      }),
-    ).toBe(false);
-  }
+        },
+      },
+    }),
+  ).toMatchObject({ group: "boat-watchers" });
+  expect(workflow.evaluateWorkflow(`\${{ ${waiter.if} }}`, failedProvision)).toBe(false);
+  expect(
+    workflow.evaluateWorkflow(`\${{ ${waiter.if} }}`, {
+      ...failedProvision,
+      additionalNeeds: { boat_nightly_runner: { result: "success", outputs: {} } },
+    }),
+  ).toBe(true);
+  expect(nightly.jobs.cleanup_boat_nightly_runner.needs).toEqual([
+    "boat_nightly_runner",
+    "validate",
+  ]);
+  expect(
+    workflow.evaluateWorkflow(`\${{ ${nightly.jobs.cleanup_boat_nightly_runner.if} }}`, {
+      ...failedProvision,
+      failed: true,
+      cancelled: true,
+    }),
+  ).toBe(true);
+  expect(
+    workflow.evaluateWorkflow(`\${{ ${nightly.jobs.boat_nightly_runner.if} }}`, {
+      ...failedProvision,
+      cancelled: true,
+    }),
+  ).toBe(false);
 });
 
 it.each([true, false])("honors child evidence reuse=%s on the helper ref", (reuseEvidence) => {

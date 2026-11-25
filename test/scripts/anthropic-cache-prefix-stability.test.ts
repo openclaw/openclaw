@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   assertStableProviderPrefix,
+  omitResponsesReplayEnvelopes,
   snapshotProviderPrefix,
 } from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
 
@@ -128,4 +129,86 @@ it("rejects a changed earlier breakpoint even when the last one is unchanged", (
     breakpoints: [{ index: 0, policy: "changed" }, snapshot.breakpoints[1]!],
   };
   stable(snapshot, after).toThrow(/segment=cacheBreakpoint.policy/);
+});
+
+it("compares a warm Responses continuation and its cold replay as the same prefix", () => {
+  // Warm continuation inherits stored output items with their envelopes; cold replay
+  // of the same turn omits IDs the store cannot verify (#200163). Only envelopes differ.
+  const warm = [
+    { role: "user", content: "private synthetic question" },
+    { id: "rs_1", type: "reasoning", summary: [], encrypted_content: "ciphertext" },
+    {
+      id: "fc_1",
+      type: "function_call",
+      status: "completed",
+      call_id: "call_1",
+      name: "read",
+      arguments: "{}",
+    },
+    { type: "function_call_output", call_id: "call_1", output: "private result" },
+    {
+      id: "msg_1",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text: "private answer", annotations: [] }],
+    },
+  ];
+  const cold: unknown[] = [
+    warm[0],
+    { type: "reasoning", summary: [], encrypted_content: "ciphertext" },
+    { type: "function_call", call_id: "call_1", name: "read", arguments: "{}" },
+    warm[3],
+    {
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "private answer", annotations: [] }],
+    },
+  ];
+  const snapshot = (input: unknown[]) =>
+    snapshotProviderPrefix("openai-responses", {
+      ...fixture(),
+      input: omitResponsesReplayEnvelopes(input),
+    });
+  expect(snapshot(cold).history).toEqual(snapshot(warm).history);
+  expect(() =>
+    assertStableProviderPrefix(
+      snapshot(warm),
+      snapshot([...cold, { role: "user", content: "next" }]),
+      {
+        label: "warm to cold",
+      },
+    ),
+  ).not.toThrow();
+  // Token-bearing fields still count: changed ciphertext is a prefix change.
+  const changed = cold.with(1, {
+    type: "reasoning",
+    summary: [],
+    encrypted_content: "other ciphertext",
+  });
+  expect(() =>
+    assertStableProviderPrefix(snapshot(warm), snapshot(changed), { label: "changed ciphertext" }),
+  ).toThrow(/history\[1\]/);
+  // The projection strips envelopes only: call IDs, arguments and content still count.
+  for (const [index, item, label] of [
+    [
+      2,
+      { type: "function_call", call_id: "call_1", name: "read", arguments: '{"path":"other"}' },
+      "arguments",
+    ],
+    [2, { type: "function_call", call_id: "call_2", name: "read", arguments: "{}" }, "call_id"],
+    [
+      4,
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "other answer", annotations: [] }],
+      },
+      "assistant content",
+    ],
+  ] satisfies Array<[number, Record<string, unknown>, string]>) {
+    expect(() =>
+      assertStableProviderPrefix(snapshot(warm), snapshot(cold.with(index, item)), { label }),
+    ).toThrow(new RegExp(`history\\[${index}\\]`));
+  }
 });

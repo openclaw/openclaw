@@ -21,14 +21,31 @@ import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.t
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
+import { requireWorkerProfile } from "./service-validation.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import {
   joinWorkerTunnelStops,
   type WorkerTunnelRequest,
   type WorkerTunnelStopReason,
+  type WorkerTunnelStatus,
 } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle, WorkerTunnelManager } from "./tunnel.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
+
+// Keep the persisted discriminated record named instead of expanding it in every service method.
+type WorkerEnvironmentProjection = WorkerEnvironmentRecord & {
+  startStatus?: WorkerEnvironmentStartStatus;
+  inference?: "worker";
+  preparation:
+    | WorkerEnvironmentRecord["preparation"]
+    | (NonNullable<WorkerEnvironmentRecord["preparation"]> & {
+        project: { label?: string; baseCommit: string };
+      });
+  error?: string;
+  desktopAvailable: boolean;
+  desktopApps: Array<"browser" | "terminal">;
+  tunnelStatus: WorkerTunnelStatus;
+};
 
 const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
 // Allow one normal 30-second node command to settle, then one native close command.
@@ -133,7 +150,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (options.getConfig().cloudWorkers?.desktop !== true) {
       throw serviceError(
         "invalid_state",
-        `worker desktop ${operation} is disabled; enable the Desktop lab in Control UI Settings -> Labs (config: cloudWorkers.desktop)`,
+        `worker desktop ${operation} is disabled; enable the Desktop lab under Settings -> Labs in the OpenClaw app (config: cloudWorkers.desktop)`,
       );
     }
     if (policy.signal.aborted) {
@@ -193,7 +210,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     throw serviceError("invalid_state", "Worker environment has no desktop transport");
   };
 
-  const project = (record: WorkerEnvironmentRecord) => {
+  const project = (record: WorkerEnvironmentRecord): WorkerEnvironmentProjection => {
     const desktopAvailable =
       options.getConfig().cloudWorkers?.desktop === true &&
       ["ready", "idle", "attached"].includes(record.state) &&
@@ -526,10 +543,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     };
   };
 
-  const launchDesktopApp = async (request: {
-    environmentId: string;
-    app: "browser" | "terminal";
-  }): Promise<WorkerDesktopLaunchResult> => {
+  const launchDesktopApp = async (
+    request: { environmentId: string; app: "browser" | "terminal" },
+    authorize?: () => void,
+  ): Promise<WorkerDesktopLaunchResult> => {
     const stopping = options.isStopping();
     const policy = desktopPolicy;
     const assertPolicy = () => requireDesktopPolicy("launch", policy);
@@ -553,6 +570,8 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     const { startup, launchEpoch } = await withLock(request.environmentId, async () => {
       const { app, record, leaseId } = requireLaunchable();
       const transport = desktopTransport(record, leaseId);
+      // Queued launches need current request authority; admitted launches may finish.
+      authorize?.();
       return {
         launchEpoch: record.ownerEpoch,
         startup:
@@ -628,6 +647,15 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   return {
+    resolveExecMemoryBoundary: (environmentId: string) => {
+      const record = store.get(environmentId);
+      if (!record?.leaseId || record.sharedHost !== false) {
+        return undefined;
+      }
+      return options
+        .resolveProvider(record.providerId)
+        ?.resolveExecMemoryBoundary?.(requireWorkerProfile(record.profileSnapshot.settings));
+    },
     bindPreparedWorkspace,
     get: (environmentId: string) => {
       const record = store.get(environmentId);

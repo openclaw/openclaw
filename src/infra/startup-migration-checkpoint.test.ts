@@ -19,7 +19,6 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { OpenClawStateOwnershipError } from "./sqlite-lifecycle-errors.js";
 import {
   acquireStartupMigrationLeaseWithWait,
-  hasActiveStartupMigrationLease,
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "./startup-migration-checkpoint.js";
 
@@ -67,14 +66,10 @@ function waitClock(initialNowMs = 1001, onSleep = () => {}) {
     },
   };
 }
-function isActive(nowMs: number) {
-  return hasActiveStartupMigrationLease({ env, nowMs });
-}
 async function assertReclaimed(stale: Lease, timeoutMs = 0) {
-  expect(isActive(1001)).toBe(false);
   using _ = await acquireLease({ owner: "replacement", now: () => 1001, timeoutMs });
   stale.release();
-  expect(isActive(1002)).toBe(true);
+  expect(readRow("SELECT owner FROM state_leases")).toEqual({ owner: "replacement" });
 }
 
 /** Models a prior host or recycled PID without replacing the real lease store. */
@@ -232,16 +227,14 @@ describe("startup migration lease", () => {
         `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after 1970-01-01T00:05:01.000Z. (held by pid ${process.pid})`,
       );
       expect(clock.monotonicNow()).toBe(500);
-      expect(isActive(clock.now())).toBe(true);
+      expect(readRow("SELECT owner FROM state_leases")).toEqual({ owner: "first" });
     },
   );
 
   it("waits for an unknown prior-host owner to expire before acquiring its lease", async () => {
     const prior = await acquireLease({ now: () => 1000, owner: "prior" });
     overwriteStartupMigrationLeaseOwner({ host: "previous-pod" });
-    const clock = waitClock(1000 + STARTUP_MIGRATION_LEASE_TTL_MS - 1, () => {
-      expect(isActive(clock.now())).toBe(true);
-    });
+    const clock = waitClock(1000 + STARTUP_MIGRATION_LEASE_TTL_MS - 1);
     using _ = await acquireLease({
       owner: "replacement",
       timeoutMs: 500,
@@ -250,7 +243,7 @@ describe("startup migration lease", () => {
     });
     expect(clock.monotonicNow()).toBe(250);
     prior.release();
-    expect(isActive(clock.now())).toBe(true);
+    expect(readRow("SELECT owner FROM state_leases")).toEqual({ owner: "replacement" });
   });
 
   it("reclaims an active startup migration lease whose owner process is gone", async () => {
@@ -281,23 +274,15 @@ describe("startup migration lease", () => {
       }
       const lease = await acquireLease({ now: () => 1000, owner: "first" });
 
-      const onActivity = vi.fn();
-      expect(hasActiveStartupMigrationLease({ env, nowMs: 1001, onActivity })).toBe(true);
       lease.heartbeat({ nowMs: 300_000 });
-      expect(hasActiveStartupMigrationLease({ env, nowMs: 301_001, onActivity })).toBe(true);
-      expect(onActivity).toHaveBeenLastCalledWith({
-        owner: "first",
-        pid: process.pid,
-        heartbeatAt: 300_000,
-      });
+      expect(readRow("SELECT expires_at FROM state_leases")).toEqual({ expires_at: 600_000 });
 
       await expect(acquireLease({ now: () => 301_001, owner: "second" })).rejects.toThrow(
         "OpenClaw startup migrations are already running",
       );
 
       lease.release();
-      expect(hasActiveStartupMigrationLease({ env, nowMs: 301_002, onActivity })).toBe(false);
-      expect(onActivity).toHaveBeenCalledTimes(2);
+      expect(readRow("SELECT owner FROM state_leases")).toBeUndefined();
     },
   );
 

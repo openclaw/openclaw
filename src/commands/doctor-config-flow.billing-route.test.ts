@@ -96,7 +96,7 @@ it("does not compare Decision selectors through conversational billing routes", 
       cfg: before,
       prompter: { confirmAutoFix: async () => true },
     });
-    expect(collectModelBillingRouteMigrationWarnings({ before, after })).toEqual([]);
+    expect(await collectModelBillingRouteMigrationWarnings({ before, after })).toEqual([]);
     const withChatSelection = (config: OpenClawConfig, model: string): OpenClawConfig => ({
       ...config,
       agents: {
@@ -104,7 +104,7 @@ it("does not compare Decision selectors through conversational billing routes", 
         entries: { main: { ...config.agents?.entries?.main, model } },
       },
     });
-    const warnings = collectModelBillingRouteMigrationWarnings({
+    const warnings = await collectModelBillingRouteMigrationWarnings({
       before: withChatSelection(before, "openai/gpt-4o-mini"),
       after: withChatSelection(after, "openai/gpt-5.6-luna"),
     });
@@ -137,7 +137,7 @@ it("compares credential kinds for providers without catalog billing routes", asy
       prompter: { confirmAutoFix: async () => true },
     });
     expect(
-      collectModelBillingRouteMigrationWarnings({
+      await collectModelBillingRouteMigrationWarnings({
         before,
         after: withPrimary("anthropic/claude-opus-4-6@anthropic:sub"),
       }),

@@ -71,6 +71,27 @@ you only need an issued ClawRouter key.
   </Step>
 </Steps>
 
+## Bedrock Converse
+
+The exact `aws-bedrock/amazon.nova-lite-v1:0` row can use the native Bedrock
+ConverseStream SDK when a current proxy-key catalog grants `llm.chat` and the
+`aws_bedrock.converse_stream` → `aws_bedrock.converse_eventstream` operation.
+This requires qualified router runtime support and an explicit model declaration;
+client support alone does not activate an offer or prove live AWS entitlement.
+Claude models, regional aliases and inference profiles do not inherit this qualification.
+
+Native transport uses `/v1/native/aws-bedrock/model/<encoded-model>/converse-stream`.
+Manifest transport uses its declared `/v1/proxy/aws-bedrock/<endpoint>` and wraps
+the **final AWS-serialized JSON** in `{ method, pathParams: { model }, query, body }`.
+The selected model owns the path. The SDK retains native message, tool and image
+serialization and EventStream decoding. The client accepts a complete bounded
+response; this is not an incremental-delivery guarantee.
+
+Both transports use only the selected ClawRouter key, recheck its fresh catalog,
+honor caller cancellation and disable SDK retries. AWS environment credentials,
+profiles and `AWS_BEDROCK_SKIP_AUTH` cannot change proxy authentication or destination.
+Direct Amazon Bedrock configuration keeps its existing behavior.
+
 ## Vercel native Messages
 
 The frozen `vercel-ai-gateway/anthropic/claude-sonnet-4.6` row uses OpenClaw's
@@ -457,18 +478,23 @@ different key or silently replacing the configured search provider.
 ## Image generation
 
 The bundled plugin also registers ClawRouter with the native image runtime,
-`image_generate` tool, and `openclaw infer image generate` CLI. This is **JSON
-generation only** through `/v1/images/generations`: edits, masks, variations, and
-streaming are not supported. The ClawRouter deployment must support this route.
-Plugin readiness alone does not mean the current key can generate images.
+`image_generate` tool, and `openclaw infer image generate` CLI. Text-only requests
+use `/v1/images/generations`; requests with reference images use the JSON
+`/v1/images/edits` route without changing the selected model. The ClawRouter
+deployment must support the requested route. Masks, variations, and streaming
+are not supported; plugin readiness alone does not establish key access.
 
 Supported wire-model IDs are `openai/gpt-image-2.5-flare`,
 `openai/gpt-image-2.5-sunburst`, and their `-2026-09-08` snapshots. These IDs are
-protocol support, not grants. Image discovery advertises a model only when the
+protocol support, not grants. Text-only generation is advertised only when the
 same key's live `/v1/catalog` contains its `image.generation` capability and an
-eligible HTTP offer for the unified `/v1/images/generations` route.
+eligible HTTP offer for the unified `/v1/images/generations` route. Editing
+requires its own `image.edit` capability and eligible `/v1/images/edits` offer.
+Each mode is listed independently; a generation grant does not enable edits.
 Request-dependent affordability remains selectable; the service decides the
-actual request's grant and budget. Missing, unknown, empty, or failed catalogs
+actual request's grant and budget. Unbounded reference-input tokens fail closed
+under hard budgets unless an existing fixed tariff applies; existing soft/unmetered
+policies can settle measured usage. The plugin changes neither policies nor keys. Missing, unknown, empty, or failed catalogs
 never fall back to a static list or a previous successful image lookup.
 
 There is no implicit ClawRouter image default. Select an entitled image model
@@ -482,7 +508,11 @@ openclaw infer image generate \
   --size 1024x1024 --output-format png --output ./square.png
 ```
 
-Generation and the immediately preceding catalog check use the same resolved
+The tool sends authorized reference bytes as inline PNG, JPEG, or WebP—not file
+paths, remote URLs, or file IDs. Before purchase, it enforces at most 16 references,
+4 MiB decoded per image, and 8 MiB for the entire JSON request, including base64 encoding.
+
+Generation/editing and the immediately preceding catalog check use the same resolved
 ClawRouter credential, including a configured auth-profile binding. A missing
 or rejected bound profile does not switch to another profile or an upstream
 OpenAI key. HTTP failures preserve their status and do not retry a paid image

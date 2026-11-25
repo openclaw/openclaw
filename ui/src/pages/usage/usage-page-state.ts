@@ -22,7 +22,7 @@ import {
 import { createProviderUsageLoader } from "./provider-usage-load.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
-import { createUsageDetails } from "./usage-details.ts";
+import { createUsageDetails, resolveUsageConversationTarget } from "./usage-details.ts";
 import type {
   UsageDetailPresentation,
   UsagePresentation,
@@ -41,23 +41,19 @@ export function createUsagePage(context: ApplicationContext) {
     result: SessionsUsageResult | null;
   } | null = null;
   let usageError: string | null = null;
-  let sessionLoadedAtMs: number | null = null;
   let filters: Omit<UsageFilterState, "selectedSessions"> = {
     ...createDefaultUsageDateRange(),
     scope: "family",
     creatorKey: null,
     selectedDays: [],
-    selectedHours: [],
     query: "",
     queryDraft: "",
     timeZone: "local",
   };
-  // Sorting and recent selection belong to the next request, before Solid commits.
+  // Sorting belongs to the next request, before Solid commits.
   let display: Omit<UsageDisplayState, keyof UsagePresentation["display"]> = {
     sessionSort: DEFAULT_USAGE_SESSION_SORT.sort,
     sessionSortDir: DEFAULT_USAGE_SESSION_SORT.sortDirection,
-    recentSessions: [],
-    sessionsTab: "all",
   };
   const [presentation, setPresentation] = createStore<UsagePresentation>({
     display: {
@@ -71,8 +67,6 @@ export function createUsagePage(context: ApplicationContext) {
       timeSeriesBreakdownMode: "by-type",
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
-      sessionLogsExpanded: false,
-      logFilters: { roles: [], tools: [], hasTools: false, query: "" },
     },
   });
   let usageSelectedSessions: string[] = [];
@@ -95,21 +89,19 @@ export function createUsagePage(context: ApplicationContext) {
   const routeRead = Promise.withResolvers<PageReadResult>();
   let dateRead: PromiseWithResolvers<PageReadResult> | null = null;
   const refreshPolicy = new UsageRefreshPolicy({
-    isLoading: usageLoading,
-    reload: (reason) => {
-      // Retries exist for incomplete provider plans; they never re-read session usage.
-      if (reason === "poll") {
-        return providerUsage.load();
-      }
-      if (reason === "manual") {
+    isSessionLoading: usageLoading,
+    isProviderLoading: () => providerUsage.pending,
+    reload: ({ sessions, provider, manual }) => {
+      if (manual) {
         usageUpdatedAt = usagePublication().updatedAt;
+        clearDebounce("dateDebounceTimer");
       }
-      clearDebounce("dateDebounceTimer");
       const sessionKey =
-        reason === "manual" && usageSelectedSessions.length === 1
-          ? usageSelectedSessions[0]
-          : undefined;
-      return loadAll(sessionKey);
+        manual && usageSelectedSessions.length === 1 ? usageSelectedSessions[0] : undefined;
+      return Promise.all([
+        sessions && loadUsage(sessionKey),
+        provider && providerUsage.load(),
+      ]).then(() => undefined);
     },
     onIncompleteUsageExhausted: notify,
   });
@@ -143,11 +135,9 @@ export function createUsagePage(context: ApplicationContext) {
       [client, refreshSessionKey]: readonly [GatewayBrowserClient, string | undefined],
       { signal },
     ) => {
-      refreshPolicy.beginLoad();
-      const epoch = connectionEpoch;
+      refreshPolicy.beginSessionsLoad();
       const query = currentQuery();
       return {
-        epoch,
         query,
         refreshSessionKey,
         snapshot: await requestUsageSnapshot(client, query, signal),
@@ -174,13 +164,15 @@ export function createUsagePage(context: ApplicationContext) {
       } else if (current && !snapshot.ok) {
         applyUsageError(snapshot.error.cause);
       }
-      markUsageLoaded(value.epoch, current && snapshot.ok ? Date.now() : null);
-      refreshPolicy.flushPending();
+      refreshPolicy.markSessionsLoaded(
+        current && snapshot.ok && !usageCacheIncomplete() ? Date.now() : null,
+      );
+      void refreshPolicy.flushPending();
     },
     onError: (error) => {
       applyUsageError(error);
-      markUsageLoaded(connectionEpoch, null);
-      refreshPolicy.flushPending();
+      refreshPolicy.markSessionsLoaded(null);
+      void refreshPolicy.flushPending();
     },
   });
 
@@ -211,7 +203,8 @@ export function createUsagePage(context: ApplicationContext) {
       gateway.connected &&
       !usageLoading()
     ) {
-      void loadAll();
+      void loadUsage();
+      void providerUsage.load();
     }
     notify();
   }
@@ -245,7 +238,7 @@ export function createUsagePage(context: ApplicationContext) {
       query: currentQuery(),
       result: data.result,
     };
-    markUsageLoaded(connectionEpoch, data.loadedAtMs);
+    refreshPolicy.markSessionsLoaded(usageCacheIncomplete() ? null : data.loadedAtMs);
     void providerUsage.load();
     usageError = data.error;
     const preloadUpdatedAt = resolveUsagePublication(
@@ -255,7 +248,7 @@ export function createUsagePage(context: ApplicationContext) {
     if (usagePublication().committedAt > preloadUpdatedAt) {
       void refreshPolicy.request("publication");
     }
-    refreshPolicy.flushPending();
+    void refreshPolicy.flushPending();
   }
 
   function resetForClientChange() {
@@ -274,29 +267,17 @@ export function createUsagePage(context: ApplicationContext) {
   }
 
   function resetProviderUsage() {
-    sessionLoadedAtMs = null;
     providerUsage.reset();
     refreshPolicy.resetPayload();
-  }
-
-  // Only the session read owns freshness: a provider result reuses the last session timestamp,
-  // so provider plans add their retry state and never make a failed session read look fresh.
-  // Session rollups converge on publication; only provider usage needs timed retries.
-  function markUsageLoaded(connection: unknown, loadedAtMs = sessionLoadedAtMs): void {
-    sessionLoadedAtMs = loadedAtMs;
-    refreshPolicy.setLastLoadedAtMs(usageCacheIncomplete() ? null : loadedAtMs, {
-      incomplete: providerUsage.incomplete,
-      connection,
-    });
   }
 
   const providerUsage = createProviderUsageLoader({
     client: () => (gateway.connected && canReadUsage() ? gateway.client : null),
     epoch: () => connectionEpoch,
     isCurrent: (epoch) => epoch === connectionEpoch,
-    onResult: (epoch) => markUsageLoaded(epoch),
+    onResult: () => refreshPolicy.markProviderLoaded(providerUsage.incomplete ? null : Date.now()),
     onSettled: () => {
-      refreshPolicy.flushPending();
+      void refreshPolicy.flushPending();
       notify();
     },
   });
@@ -323,9 +304,7 @@ export function createUsagePage(context: ApplicationContext) {
       creatorKey: filters.creatorKey ?? undefined,
       query: filters.query,
       selectedDays: filters.selectedDays,
-      selectedHours: filters.selectedHours,
       selectedSessions: usageSelectedSessions,
-      recentKeys: display.sessionsTab === "recent" ? display.recentSessions : undefined,
       offset: usageOffset,
       sort: display.sessionSort,
       sortDirection: display.sessionSortDir,
@@ -347,11 +326,8 @@ export function createUsagePage(context: ApplicationContext) {
       (projection === "filterOptions" || query.query === current.query) &&
       (projection === "calendar" ||
         JSON.stringify(query.selectedDays) === JSON.stringify(current.selectedDays)) &&
-      JSON.stringify(query.selectedHours) === JSON.stringify(current.selectedHours) &&
       (projection === "roster" ||
         JSON.stringify(query.selectedSessions) === JSON.stringify(current.selectedSessions)) &&
-      (projection === "calendar" ||
-        JSON.stringify(query.recentKeys) === JSON.stringify(current.recentKeys)) &&
       // Chart/filter projections describe the whole selection, not its roster page or order.
       (projection === "calendar" ||
         projection === "filterOptions" ||
@@ -397,10 +373,6 @@ export function createUsagePage(context: ApplicationContext) {
     return !routeDataInitialized || timers.dateDebounceTimer !== null || usageRequest.pending;
   }
 
-  function loadAll(refreshSessionKey?: string): Promise<void> {
-    return Promise.all([loadUsage(refreshSessionKey), providerUsage.load()]).then(() => undefined);
-  }
-
   const canReadUsage = () => hasOperatorReadAccess(gateway.snapshot?.hello?.auth ?? null);
 
   function loadUsage(refreshSessionKey?: string): Promise<void> {
@@ -423,7 +395,7 @@ export function createUsagePage(context: ApplicationContext) {
 
   function clearSelectionsAndDetails() {
     usageExportRequest.reset();
-    setFilters({ selectedDays: [], selectedHours: [] });
+    setFilters({ selectedDays: [] });
     usageSelectedSessions = [];
     selectedSession = null;
     usageOffset = 0;
@@ -439,14 +411,18 @@ export function createUsagePage(context: ApplicationContext) {
     }
   }
 
-  function scheduleUsageLoad() {
+  function changeDates(dates: Partial<Pick<UsageFilterState, "startDate" | "endDate">>) {
+    usageError = null;
+    setFilters(dates);
     clearSelectionsAndDetails();
     clearDebounce("dateDebounceTimer");
-    usageRequest.reset();
-    usageError = null;
-    // Cancel the old query's poll before it can consume this debounce and retry budget.
-    refreshPolicy.resetPayload();
     routeDataEnabled = false;
+    if (dates.startDate !== undefined && dates.endDate !== undefined) {
+      // A preset supplies the complete range. Only individual date edits need to settle.
+      void loadUsage();
+      return;
+    }
+    usageRequest.reset();
     dateRead = Promise.withResolvers<PageReadResult>();
     timers.dateDebounceTimer = window.setTimeout(() => {
       clearDebounce("dateDebounceTimer");
@@ -488,11 +464,6 @@ export function createUsagePage(context: ApplicationContext) {
       usageRosterResult()?.sessions.find((session) => session.key === key) ??
       usageResult()?.overview?.selectedRows.find((session) => session.key === key);
     details.clear();
-    display = {
-      ...display,
-      recentSessions: [key, ...display.recentSessions.filter((entry) => entry !== key)].slice(0, 8),
-    };
-
     usageSelectedSessions = toggleUsageRangeSelection(
       usageSelectedSessions,
       key,
@@ -524,6 +495,7 @@ export function createUsagePage(context: ApplicationContext) {
 
   function read() {
     const timeSeries = details.timeSeries.data;
+    const conversation = resolveUsageConversationTarget(context, selectedSession);
     return {
       result: usageResult(),
       data: {
@@ -560,6 +532,7 @@ export function createUsagePage(context: ApplicationContext) {
       filters: { ...filters, selectedSessions: usageSelectedSessions },
       display,
       detail: {
+        conversationHref: conversation?.href ?? null,
         context: {
           weight: details.session.data?.contextWeight,
           read: details.session.read,
@@ -574,10 +547,7 @@ export function createUsagePage(context: ApplicationContext) {
       },
       callbacks: {
         filters: {
-          onDatesChange: (dates: Partial<Pick<UsageFilterState, "startDate" | "endDate">>) => {
-            setFilters(dates);
-            scheduleUsageLoad();
-          },
+          onDatesChange: changeDates,
           onScopeChange: (
             scope: Partial<Pick<UsageFilterState, "scope" | "creatorKey" | "timeZone">>,
           ) => {
@@ -595,18 +565,6 @@ export function createUsagePage(context: ApplicationContext) {
             setPresentation((draft) => {
               draft.display.headerPinned = !draft.display.headerPinned;
             });
-          },
-          onSelectHour: (hour: number, shiftKey: boolean) => {
-            setFilters({
-              selectedHours: toggleUsageRangeSelection(
-                filters.selectedHours,
-                hour,
-                Array.from({ length: 24 }, (_, index) => index),
-                shiftKey,
-                "append",
-              ),
-            });
-            refreshOverview();
           },
           onQueryDraftChange: (query: string) => {
             setFilters({ queryDraft: query });
@@ -638,10 +596,6 @@ export function createUsagePage(context: ApplicationContext) {
             setFilters({ selectedDays: [] });
             refreshOverview();
           },
-          onClearHours: () => {
-            setFilters({ selectedHours: [] });
-            refreshOverview();
-          },
           onClearSessions: () => {
             usageSelectedSessions = [];
             selectedSession = null;
@@ -662,40 +616,29 @@ export function createUsagePage(context: ApplicationContext) {
             void loadUsage();
           },
           onChange: (next: Partial<UsageDisplayState>) => {
-            const { sessionSort, sessionSortDir, sessionsTab, recentSessions, ...local } = next;
+            const { sessionSort, sessionSortDir, ...local } = next;
             display = {
               sessionSort: sessionSort ?? display.sessionSort,
               sessionSortDir: sessionSortDir ?? display.sessionSortDir,
-              sessionsTab: sessionsTab ?? display.sessionsTab,
-              recentSessions: recentSessions ?? display.recentSessions,
             };
             setPresentation((draft) => {
               Object.assign(draft.display, local);
             });
-            if (
-              next.sessionSort !== undefined ||
-              next.sessionSortDir !== undefined ||
-              next.sessionsTab !== undefined
-            ) {
+            if (next.sessionSort !== undefined || next.sessionSortDir !== undefined) {
               refreshOverview();
             }
             notify();
           },
         },
         details: {
+          onOpenConversation: () => {
+            if (conversation) {
+              context.navigate("chat", conversation.options);
+            }
+          },
           onToggleContextExpanded: () => {
             setPresentation((draft) => {
               draft.display.contextExpanded = !draft.display.contextExpanded;
-            });
-          },
-          onToggleSessionLogsExpanded: () => {
-            setPresentation((draft) => {
-              draft.detail.sessionLogsExpanded = !draft.detail.sessionLogsExpanded;
-            });
-          },
-          onLogFiltersChange: (next: Partial<UsageDetailPresentation["logFilters"]>) => {
-            setPresentation((draft) => {
-              Object.assign(draft.detail.logFilters, next);
             });
           },
           onSelectSession: selectSession,

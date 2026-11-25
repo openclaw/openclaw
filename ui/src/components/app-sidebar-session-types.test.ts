@@ -82,7 +82,15 @@ describe("sidebar session preferences", () => {
     expect(() => storeOwner(null, true)).not.toThrow();
   });
 
+  it.each([null, "", "unexpected"])("defaults missing or invalid sort %s to updated", (stored) => {
+    if (stored !== null) {
+      localStorage.setItem("openclaw:sidebar:sessions:sort-mode", stored);
+    }
+    expect(loadStoredSidebarSessionSortMode()).toBe("updated");
+  });
+
   it.each([
+    ["created", undefined, "created"],
     ["updated", undefined, "updated"],
     ["people", true, "people"],
     ["people", false, "created"],

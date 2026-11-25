@@ -31,7 +31,7 @@ export function isSidebarRouteActive(
 export function sidebarPluginTabs(
   tabs: readonly GatewayControlUiPluginTab[] | undefined,
 ): GatewayControlUiPluginTab[] {
-  const known = tabs ?? [];
+  const known = (tabs ?? []).filter((tab) => tab.placement !== "settings");
   return ["chat", "control", "agent", "settings"].flatMap((group) =>
     known.filter((tab) => (tab.group ?? "control") === group),
   );

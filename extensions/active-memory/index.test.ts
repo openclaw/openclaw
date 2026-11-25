@@ -1133,6 +1133,30 @@ describe("active-memory plugin", () => {
     }
   });
 
+  it("warns once per provider and agent when the provider lacks protected transcript recall", async () => {
+    syncRuntimePluginConfig({ agents: [], logging: true, toolsAllow: ["memory_search"] });
+    setMemorySlot("memory-lancedb");
+    setAgents({ personal: { memory: { search: { rememberAcrossConversations: true } } } });
+    const sessionKey = "agent:personal:telegram:direct:owner";
+    seedSession(sessionKey, "s-personal");
+    const target = {
+      agentId: "personal",
+      sessionKey,
+      messageProvider: "telegram",
+      channelId: "owner",
+    };
+    await runRecall(target);
+    await runRecall(target);
+    await runRecall(target);
+    const unsupported = (level: "warn" | "debug") =>
+      logLines(level).filter((line) =>
+        line.includes("does not support protected private transcript recall"),
+      ).length;
+    expect(unsupported("warn")).toBe(1);
+    expect(unsupported("debug")).toBe(2);
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("runs product recall by default for a personal install without Active Memory config", async () => {
     configFile = {
       agents: {

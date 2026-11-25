@@ -4,9 +4,6 @@ import SwiftUI
 @MainActor
 struct ChatSourcePreviewsView: View {
     let sources: [ChatSourcePreview]
-    let contextRevision: UUID
-    let faviconsEnabled: Bool
-    let loadFavicon: @MainActor @Sendable (String) async -> Data?
     @State private var selectedSource: ChatSourcePreview?
 
     var body: some View {
@@ -63,11 +60,7 @@ struct ChatSourcePreviewsView: View {
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 5) {
-                ChatSourceFavicon(
-                    host: source.domain,
-                    contextRevision: self.contextRevision,
-                    enabled: self.faviconsEnabled,
-                    load: self.loadFavicon)
+                ChatSourceFavicon(host: source.domain)
                 Text(verbatim: source.domain)
                     .font(OpenClawChatTypography.caption2)
                     .lineLimit(1)
@@ -144,23 +137,23 @@ private struct ChatSourcePreviewDetail: View {
     }
 }
 
+/// The only source view that reads the source context, so a context refresh restarts favicon loads
+/// without re-running the rows that hold the cards.
 @MainActor
 private struct ChatSourceFavicon: View {
+    @Environment(\.openClawChatGateway) private var gateway
     let host: String
-    let contextRevision: UUID
-    let enabled: Bool
-    let load: @MainActor @Sendable (String) async -> Data?
     @State private var image: CGImage?
 
     private struct RequestIdentity: Hashable {
         let host: String
-        let revision: UUID
-        let enabled: Bool
+        let context: OpenClawChatSourceContext?
     }
 
     var body: some View {
+        let context = self.gateway?.faviconContext()
         Group {
-            if self.enabled, let image {
+            if context != nil, let image {
                 Image(decorative: image, scale: 1)
                     .resizable()
                     .scaledToFit()
@@ -171,9 +164,9 @@ private struct ChatSourceFavicon: View {
         }
         .frame(width: 14, height: 14)
         .accessibilityHidden(true)
-        .task(id: RequestIdentity(host: self.host, revision: self.contextRevision, enabled: self.enabled)) {
+        .task(id: RequestIdentity(host: self.host, context: context)) {
             self.image = nil
-            guard self.enabled, let data = await self.load(self.host), !Task.isCancelled,
+            guard context != nil, let data = await self.gateway?.loadFavicon(self.host), !Task.isCancelled,
                   data.count <= 256 * 1024,
                   let source = CGImageSourceCreateWithData(data as CFData, nil)
             else { return }

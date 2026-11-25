@@ -1,6 +1,7 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
@@ -13,6 +14,15 @@ import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
 import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
+import {
+  isSessionKeyAddressable,
+  sessionNavigationTarget,
+  resolveSessionNavigationAgentId,
+} from "../../lib/sessions/route-navigation.ts";
+import {
+  isUiGlobalScopeConfigured,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
 import {
   requestSessionUsage,
   type SessionUsageQuery,
@@ -218,4 +228,27 @@ export function createUsageDetails(
     cancel: () => requests.forEach((request) => request.cancel()),
     clear: () => requests.forEach((request) => request.clear()),
   };
+}
+
+/** Use the authoritative Usage owner, including raw global keys outside the active agent. */
+export function resolveUsageConversationTarget(
+  context: ApplicationContext,
+  selectedSession: UsageSessionEntry | null,
+) {
+  const navigationDefaults = {
+    agentsList: context.agents.state.agentsList,
+    hello: context.gateway.snapshot.hello,
+  };
+  return selectedSession &&
+    isSessionKeyAddressable(selectedSession.key, isUiGlobalScopeConfigured(navigationDefaults))
+    ? sessionNavigationTarget({
+        face: "chat",
+        sessionKey: selectedSession.key,
+        basePath: context.basePath,
+        fallbackAgentId: resolveSessionNavigationAgentId(context, selectedSession.agentId),
+        mainKey: resolveUiConfiguredMainKey(navigationDefaults),
+        row: { key: selectedSession.key, displayName: selectedSession.label },
+        exactKey: true,
+      })
+    : null;
 }

@@ -2,7 +2,10 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   configSnapshot,
   objectSchema,
@@ -103,6 +106,7 @@ suite.define(() => {
     await withPage(async ({ page }) => {
       const initial = config();
       const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "agents.list", "config.get"],
         methodResponses: {
           "config.get": configSnapshot(initial, "agent-list-initial", true),
           "config.schema": schema,
@@ -127,7 +131,10 @@ suite.define(() => {
         has: page.locator(".settings-row__title").getByText("Agent code mode", { exact: true }),
       });
       await revealControl(rawOnly, ["Tools"]);
-      expect(await rawOnly.textContent()).toContain("Unsupported schema node. Use Raw mode.");
+      expect(await rawOnly.textContent()).toContain(
+        "Edit this setting in the Raw tab of Advanced settings.",
+      );
+      expect(await page.getByRole("button", { name: "Raw", exact: true }).count()).toBe(0);
       expect(await rawOnly.locator("input,select,textarea").count()).toBe(0);
 
       const agentKey = page.locator('input[aria-label="Key: main"]').first();

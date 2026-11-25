@@ -53,7 +53,7 @@ function queueReply(id: string, blocks: Record<string, unknown>[] = [], compacti
   );
 }
 const blockStop = (index: number) => ({ type: "content_block_stop", index });
-const replayIdentity = { authProfileId: "anthropic:work", sessionId: "session-1" };
+const replayIdentity = { sessionId: "session-1" };
 const replayOptions = {
   apiKey: "sk-ant-api",
   anthropicServerCompaction: true,

@@ -22,6 +22,9 @@ it.each([
   { width: 1280, details: 0, mobile: false, savedWidth: "" },
   { width: 1280, details: 320, mobile: false, savedWidth: "" },
   { width: 1280, details: 0, mobile: false, savedWidth: "600px" },
+  { width: 1280, details: 320, mobile: false, savedWidth: "none" },
+  { width: 1280, details: 320, mobile: false, savedWidth: "50%" },
+  { width: 1280, details: 320, mobile: false, savedWidth: "calc(50% + 10px)" },
   { width: 820, details: 0, mobile: false, savedWidth: "" },
   { width: 820, details: 320, mobile: false, savedWidth: "" },
   { width: 400, details: 0, mobile: true, savedWidth: "" },
@@ -34,8 +37,10 @@ it.each([
     vi.stubGlobal("cancelAnimationFrame", clock.cancel);
     const transcript = createChatTranscript(() => "loading-width");
     onTestFinished(() => transcript.dispose());
+    const selectedSession = { key: "agent:main:main", kind: "direct", hasMessages: true } as const;
     const [props, setProps] = createSignal(
       threadProps("loading-width", undefined, [], {
+        selectedSession,
         loading: true,
         routeLoadingSkeleton: true,
       }),
@@ -74,10 +79,10 @@ it.each([
     clock.flush(performance.now());
     flush();
     const loading = mobile ? bounds() : null;
-    setProps(threadProps("loading-width", undefined, [], { loading: true }));
+    setProps(threadProps("loading-width", undefined, [], { selectedSession, loading: true }));
     flush();
     const refreshLoading = mobile ? bounds() : null;
-    setProps(threadProps("loading-width"));
+    setProps(threadProps("loading-width", undefined, undefined, { selectedSession }));
     flush();
     transcript.update();
     await waitForSolid(() =>

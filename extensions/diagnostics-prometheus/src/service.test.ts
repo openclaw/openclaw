@@ -98,12 +98,12 @@ openclaw_gateway_rpc_requests_total{method="health"} 8`);
 openclaw_gateway_rpc_client_requests_total{client_kind="macos",method="health"} 1`);
     expectMetrics(rendered)(`openclaw_gateway_rpc_requests_total{method="sessions.list"} 3
 openclaw_gateway_rpc_requests_total{method="cron.list"} 3
-openclaw_cron_list_requests_total{client_kind="openclaw-control-ui",compact="true",page="first",scope="session",source="wire"} 2
-openclaw_cron_list_requests_total{client_kind="openclaw-control-ui",compact="true",page="first",scope="session",source="internal"} 1
+openclaw_cron_list_requests_total{compact="true",page="first",scope="session",source="wire"} 2
+openclaw_cron_list_requests_total{compact="true",page="first",scope="session",source="internal"} 1
 openclaw_sessions_list_requests_total{caller_source="sidebar",client_kind="openclaw-control-ui",filter="general",row_mode="sidebar",source="wire"} 2
 openclaw_sessions_list_requests_total{caller_source="sidebar",client_kind="openclaw-control-ui",filter="general",row_mode="sidebar",source="internal"} 1
-openclaw_models_list_requests_total{client_kind="openclaw-control-ui",prepared_only="true",refresh="false",scope="agent",source="wire",view="configured"} 2
-openclaw_models_list_requests_total{client_kind="openclaw-control-ui",prepared_only="true",refresh="false",scope="agent",source="internal",view="configured"} 1`);
+openclaw_models_list_requests_total{scope="agent",source="wire",view="configured"} 2
+openclaw_models_list_requests_total{scope="agent",source="internal",view="configured"} 1`);
     expect(
       rendered
         .split("\n")
@@ -540,19 +540,6 @@ openclaw_liveness_sessions{state="active"} 2
 openclaw_liveness_event_loop_delay_p99_seconds_sum{reason="event_loop_delay:cpu"} 0.25
 openclaw_liveness_cpu_core_ratio_sum{reason="event_loop_delay:cpu"} 1.4`,
       ["chat-should-not-export", "sk-secret"],
-    ));
-
-  it("keeps only the bounded prefix from scoped queue lane labels", () =>
-    expectRecordedMetrics(
-      [
-        {
-          type: "queue.lane.enqueue",
-          lane: "dreaming-narrative:session-main",
-          queueSize: 2,
-        },
-      ],
-      `openclaw_queue_lane_size{lane="dreaming-narrative"} 2`,
-      ["session-main"],
     ));
 
   it("records skill usage metrics without raw paths or session identifiers", () =>

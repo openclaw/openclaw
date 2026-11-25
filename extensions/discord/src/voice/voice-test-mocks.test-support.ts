@@ -405,7 +405,7 @@ vi.mock("../runtime.js", () => ({
   getDiscordRuntime: () => ({
     agent: {
       runCommandFromIngress: mocks.agentCommandMock,
-      session: { getSessionEntry: () => undefined },
+      session: { getSessionEntryAsync: async () => undefined },
     },
     mediaUnderstanding: {
       resolveAudioInputBudget: mocks.resolveAudioInputBudgetMock,

@@ -296,13 +296,15 @@ function updateChatScrollPosition(
     return;
   }
   if (
-    takeover === false ||
+    (takeover === false && scrollTop > 0) ||
     (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
   ) {
     // An upward key owns the viewport before its native movement. Otherwise
     // incoming content can restart following between keydown and that movement.
     // Taking control before initial history settles must retire its queued
     // force-scroll. Otherwise that delayed commit can overwrite the viewport.
+    // The native wheel movement may arrive after adjacent composer input; its
+    // resize correction must already see that the reader owns this viewport.
     host.chatHasAutoScrolled = true;
     host.chatFollowLocked = true;
     host.chatReadingHistory = true;

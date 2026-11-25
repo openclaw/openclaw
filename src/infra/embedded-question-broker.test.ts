@@ -96,7 +96,18 @@ describe("EmbeddedQuestionBroker", () => {
       }
       const status = ending === "expiry" ? "expired" : "cancelled";
       expect(await answer).toEqual({ status });
-      expect(events.at(-1)).toEqual({ event: "question.resolved", payload: { id, status } });
+      expect(events.at(-1)).toEqual({
+        event: "question.resolved",
+        payload: {
+          id,
+          status,
+          ...(ending === "expiry"
+            ? {}
+            : {
+                resolvedBy: ending === "run-abort" ? "requester-inactive" : "tui:embedded:stopped",
+              }),
+        },
+      });
       expect(broker.list().questions).toEqual([]);
     },
   );

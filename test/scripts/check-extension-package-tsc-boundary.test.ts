@@ -26,6 +26,8 @@ import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { withinTest } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
+import { resolveNativeDeclarationFixtureSources } from "./native-declaration-fixture-sources.js";
+import { fixtureGit } from "./release-publish.test-support.js";
 
 const tempRoots = createTempDirTracker();
 let receipts: FixtureReceiptChannel;
@@ -175,8 +177,11 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
   })) {
     write(file, source);
   }
-  // Hold preparation fixed; scheduling, config parsing, and compilation remain real.
-  write("scripts/prepare-extension-package-boundary-artifacts.mts", "export {};\n");
+  // Observe the real checker's preparation request; compilation and receipts remain native.
+  write(
+    "scripts/prepare-extension-package-boundary-artifacts.mts",
+    `console.log("preparation request: " + (process.argv.find(arg => arg.startsWith("--extensions=")) ?? "full"));\n`,
+  );
   for (const file of [
     "check-extension-package-tsc-boundary.mts",
     "compile-extension-boundary.mts",
@@ -191,8 +196,10 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
     "scripts/lib",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
+    "src/infra/directory-walk.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
     "src/plugins/package-entrypoints.ts",
+    ...resolveNativeDeclarationFixtureSources(),
   ]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.cpSync(path.resolve(file), path.join(root, file), { recursive: true });
@@ -202,7 +209,20 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.symlinkSync(path.resolve(file), path.join(root, file));
   }
-  const run = () =>
+  const git = fixtureGit(root, "Boundary fixture", "fixture@example.invalid", true);
+  git("init", "-q");
+  git("add", "extensions");
+  const commitManifests = () => {
+    git("add", "extensions/demo/package.json", "extensions/larger/package.json");
+    git("commit", "-qm", "fixture");
+    return git("rev-parse", "HEAD");
+  };
+  const fullBase = commitManifests();
+  write("extensions/larger/package.json", '{"name":"@openclaw/larger","version":"1.0.0"}');
+  const subsetBase = commitManifests();
+  write("extensions/demo/package.json", JSON.stringify({ ...demoPackage, version: "1.0.0" }));
+  commitManifests();
+  const run = (base = fullBase) =>
     spawnSync(
       process.execPath,
       ["scripts/check-extension-package-tsc-boundary.mts", "--mode=compile"],
@@ -210,12 +230,37 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
         cwd: root,
         encoding: "utf8",
         timeout: 20_000,
-        env: { ...process.env, OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: "1" },
+        env: {
+          ...process.env,
+          OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: "1",
+          GITHUB_EVENT_NAME: "pull_request",
+          OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: base,
+          OPENCLAW_CI_EXTENSION_BOUNDARY_FULL: "",
+          GITHUB_STEP_SUMMARY: "",
+        },
       },
     );
+  expectCompile(
+    run(subsetBase),
+    0,
+    "1 selected, 1 skipped",
+    'preparation request: --extensions=["demo"]',
+    "compiled plugins: 1",
+  );
   const cold = run();
   expect(cold.error, cold.stderr).toBeUndefined();
-  expectCompile(cold, 0, "compiled plugins: 2");
+  expectCompile(
+    cold,
+    0,
+    "compiled plugins: 2",
+    "2 selected, 0 skipped",
+    "preparation request: full",
+  );
+  for (const id of ["demo", "larger"]) {
+    expect(cold.stdout).toContain(
+      `| ${id} | selected | PR changes extensions/${id}/package.json |`,
+    );
+  }
   expect(cold.stdout.indexOf("] larger")).toBeLessThan(cold.stdout.indexOf("] demo"));
   const receipt = JSON.parse(
     fs.readFileSync(
@@ -225,6 +270,48 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
   );
   expect(receipt.inputs.some((file: string) => file.endsWith("/demo/src/worker.ts"))).toBe(true);
   expectCompile(run(), 0, "compiled plugins: 0", "skipped plugins: 2");
+  const originalIndex = fs.readFileSync(path.join(root, "extensions/demo/index.ts"), "utf8");
+  const external = tempRoots.make("openclaw-boundary-external-");
+  // Reading this file would fail diagnostics before the worker's final input admission.
+  fs.writeFileSync(
+    path.join(external, "outside.d.ts"),
+    "export type Escaped = MissingBoundaryType;\n",
+  );
+  const alias = path.join(root, "extensions/demo/escaped");
+  fs.symlinkSync(external, alias, "junction");
+  for (const emit of [false, true]) {
+    const inputReceipt = path.join(root, `.artifacts/worker-${emit}.inputs.json`);
+    const outDir = path.join(root, `.artifacts/worker-${emit}`);
+    const request = {
+      configFile: path.join(
+        root,
+        ".artifacts/extension-package-boundary/compile/demo.tsconfig.json",
+      ),
+      inputReceipt,
+      compilerOptions: { outDir, skipLibCheck: false },
+      emit,
+    };
+    const worker = () =>
+      spawnSync(
+        process.execPath,
+        ["scripts/compile-extension-boundary.mts", JSON.stringify(request)],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 20_000,
+        },
+      );
+    expectCompile(worker(), 0);
+    expect(JSON.parse(fs.readFileSync(inputReceipt, "utf8")).inputs).toContain(
+      "extensions/demo/index.ts",
+    );
+    write("extensions/demo/index.ts", 'export type { Escaped } from "./escaped/outside.js";\n');
+    // The real worker must remove its prior success receipt and refuse publication.
+    expectCompile(worker(), 1, "Declaration input escapes checkout");
+    expect(fs.existsSync(inputReceipt)).toBe(false);
+    write("extensions/demo/index.ts", originalIndex);
+  }
+  fs.unlinkSync(alias);
   write("test/new-unrelated.test.ts", 'export const unrelated: number = "invalid";\n');
   expectCompile(run(), 0, "compiled plugins: 0", "skipped plugins: 2");
   write(

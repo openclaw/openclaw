@@ -10,6 +10,7 @@ export function buildHarnessHostRequester(
     | "senderId"
     | "senderIsOwner"
     | "memberRoleIds"
+    | "approvalReviewerDeviceId"
   >,
 ) {
   const channel = attempt.messageChannel ?? attempt.messageProvider;
@@ -21,5 +22,6 @@ export function buildHarnessHostRequester(
     ...(attempt.memberRoleIds?.length
       ? { roleIds: Object.freeze([...attempt.memberRoleIds]) }
       : {}),
+    ...(attempt.approvalReviewerDeviceId ? { deviceId: attempt.approvalReviewerDeviceId } : {}),
   };
 }

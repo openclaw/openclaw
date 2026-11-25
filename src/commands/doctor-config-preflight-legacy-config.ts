@@ -113,6 +113,7 @@ export async function prepareDoctorConfigRecovery(params: {
     const recovery = await prepareConfigRecoveryFromContext(
       createConfigIoContext({ configPath: snapshot.path }, transformDoctorRecoveryCandidate),
       snapshot,
+      "doctor-repair",
     );
     if (recovery) {
       await recovery.apply();

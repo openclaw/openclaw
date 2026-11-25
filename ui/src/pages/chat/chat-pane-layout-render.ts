@@ -8,11 +8,12 @@ import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { resolveChatPaneDesktopTarget } from "../../components/desktop/desktop-source.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
-import { PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
+import { filesJump, PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { ChatPaneHeaderLayout, type PaneDetailsActions } from "./chat-pane-header-layout.ts";
 import type { PaneLayoutData } from "./chat-pane-layout-view.tsx";
@@ -25,7 +26,6 @@ import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-cont
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import type { ChatDetailsElements } from "./components/chat-details.tsx";
 import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
@@ -68,7 +68,7 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
-  private readonly detailsElements: ChatDetailsElements = {
+  private readonly detailsElements: import("./components/chat-details.tsx").ChatDetailsElements = {
     getComposerInput: () => getChatComposerState(this.presentationId).composerInput,
   };
 
@@ -99,7 +99,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
     if (!this.active || !composer?.isConnected || composer.disabled) {
       return false;
     }
-    composer.focus({ preventScroll: true });
+    focusComposerInput(composer, { preventScroll: true });
     return true;
   }
 
@@ -237,6 +237,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       this.sessionPresentation === "desktop" &&
       !this.onBackToSubagents &&
       chatProps.disabledBanner?.presentation === "compact";
+    const canShowNewMessages = this.sessionPresentation !== "desktop" || conversationVisible;
     const paneChatProps: ChatProps = merge(chatProps, {
       onConversationFrameRef: (element) => this.registerDetailsElement("frame", element),
       onFooterElementRef: (element) => this.registerDetailsElement("footer", element),
@@ -245,9 +246,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
           ? { ...chatProps.disabledBanner, stop: subagentStop }
           : chatProps.disabledBanner,
       mobileComposer: Boolean(mobileHost),
-      showNewMessages:
-        (this.sessionPresentation !== "desktop" || conversationVisible) &&
-        chatProps.showNewMessages,
+      // Composer extensions build session authority from the row; they mount once it exists.
+      sessionAdmitted: Boolean(selectedSession),
+      get showNewMessages() {
+        return canShowNewMessages && chatProps.showNewMessages;
+      },
       mobileActivities: mobileHost
         ? this.mobileChatActivities(state, selectedSession, chatProps)
         : undefined,
@@ -289,7 +292,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         : undefined,
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
-      onOpenProcesses: ownsSubagentsPanel ? this.showDetailsProcess : undefined,
+      onOpenProcesses: ownsSubagentsPanel
+        ? this.processesOpener(state, selectedSession)
+        : undefined,
       composerRecovery: recovery,
       pluginToolIcons: this.toolIcons,
       presented: {
@@ -298,7 +303,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       },
       progressCardVisibility: panePresentation,
       transcriptVisible: slotPresentation("conversation"),
-      latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
     } satisfies Partial<ChatProps>);
     sessionWorkspace.transcriptAttachments = this.attachmentCatalog.read({
@@ -310,6 +314,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       gateway: this.context.gateway,
       presentation: this.sessionPresentation,
       workspacePresented: slotPresentation("workspace").isPresented(),
+      showMessage: filesJump(chatProps, mobileHost, conversationVisible, openPanelSlot),
       sessionWorkspace,
     });
     const { headerDetails, subagentHeader } = this.renderHeaderDetails({
@@ -708,10 +713,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       background: {
         context: this.context,
         surface: "session",
-        presented:
-          this.presented &&
-          this.visuallyPresented &&
-          isSidebarSlotVisible(sidebarLayout, "conversation"),
+        presented: this.presented && this.visuallyPresented && conversationVisible,
       },
       overlays: {
         presentation: panePresentation,

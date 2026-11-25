@@ -80,7 +80,7 @@ import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.
 import { discordSetupContract } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
-import { parseDiscordTarget } from "./target-parsing.js";
+import { normalizeDiscordSnowflake, parseDiscordTarget } from "./target-parsing.js";
 import { discordConversationBindings } from "./thread-bindings-channel.js";
 
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
@@ -629,6 +629,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
     security: discordSecurityAdapter,
     threading: {
       matchesToolContextTarget: matchesDiscordToolContextTarget,
+      isThreadAddressedByTarget: ({ to, threadId }) =>
+        /^\d+$/.test(String(threadId)) &&
+        to === resolveDiscordAttachedOutboundTarget({ to, threadId }),
       // A Discord thread is addressed by its own channel id, so only a send to
       // that thread's channel carries the current thread. Parent and sibling
       // channels stay unthreaded; this never redirects a send into the thread.
@@ -659,10 +662,14 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
             : currentMessagingTarget,
           currentChatType,
           currentMessagingTarget,
-          currentMessageId: context.CurrentMessageId,
+          currentMessageId: normalizeDiscordSnowflake(context.CurrentMessageId ?? "") ?? undefined,
           hasRepliedRef,
         };
       },
+      // Session-event turns carry internal UUIDs as message ids; Discord rejects a
+      // reply reference that is not a message snowflake, so drop such anchors.
+      resolveReplyTransport: ({ replyToId }) =>
+        replyToId && !normalizeDiscordSnowflake(replyToId) ? { replyToId: null } : null,
     },
     outbound: {
       ...discordOutbound,

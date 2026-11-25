@@ -5,6 +5,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
@@ -48,6 +49,7 @@ export function useTranscriptFixture(prefix: string) {
         { type: "session", version: 3, id: sessionId },
         ...events,
       ]);
+      await waitForSessionTranscriptProjection(scope);
       return scope;
     },
     appendMessages: (

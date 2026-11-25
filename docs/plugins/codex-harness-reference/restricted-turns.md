@@ -12,9 +12,11 @@ Which tool policies push a Codex turn onto the restricted native surface. Part o
 
 ## Restricted turns
 
-The Codex harness evaluates the effective tool policy for every turn. It marks
-the turn policy-restricted when any explicit policy would otherwise leave a
-Codex-native capability outside the OpenClaw policy boundary.
+The Codex harness evaluates the effective tool policy when each turn starts. It
+marks the turn policy-restricted when any explicit policy would otherwise leave
+a Codex-native capability outside the OpenClaw policy boundary. Changes apply
+when the next turn starts, including in an existing conversation; they do not
+revoke the policy of a turn already in progress.
 
 Restriction sources include global, provider, agent, group, sender, sandbox,
 subagent, inherited, scheduled/runtime, and per-run tool policies. A finite

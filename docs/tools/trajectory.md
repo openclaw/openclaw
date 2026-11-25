@@ -148,6 +148,10 @@ append.
 During a sweep, committed appends mark their session for accounting. The next
 cleanup batch refreshes each changed session once before starting its write
 transaction, rather than summarizing its retained rows after every append.
+After a restart or loss of in-memory window facts, UTF-8 stores recover the
+sequence and byte total from existing indexes. Appends read event rows only for
+the prefix that must expire, so recovering a cold window does not reload every
+retained event while holding the database writer.
 
 Runtime export reads the SQLite capture. Pre-July 2026 `.trajectory.jsonl` and
 `.trajectory-path.json` sidecars are no longer read or followed. Existing files

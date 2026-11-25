@@ -371,6 +371,7 @@ describe("cron handler inference binding persistence", () => {
     await fixture.invoke("cron.add", createParams());
     const created = await fixture.reload();
     fixture.addAgent("secondary");
+    fixture.setSystemAgent("main");
     await fixture.invoke("cron.update", { id: created.id, patch: { agentId: "main" } });
     expect((await fixture.reload()).inferenceBinding).toEqual(created.inferenceBinding);
     await fixture.invoke("cron.update", { id: created.id, patch: { agentId: "secondary" } }, null, {
@@ -392,6 +393,25 @@ describe("cron handler inference binding persistence", () => {
     expect(moved.inferenceBinding?.authorizationId).not.toBe(
       created.inferenceBinding?.authorizationId,
     );
+  });
+
+  it("edits an agent-less job on a multi-agent gateway through the configured system agent", async ({
+    fixture,
+  }) => {
+    await fixture.invoke("cron.add", createParams());
+    const created = await fixture.reload();
+    expect(created.agentId).toBeUndefined();
+    fixture.addAgent("secondary");
+    fixture.setSystemAgent("main");
+    await fixture.invoke("cron.update", { id: created.id, patch: { name: "Renamed" } });
+    expect(await fixture.reload()).toMatchObject({
+      name: "Renamed",
+      inferenceBinding: created.inferenceBinding,
+    });
+    await updateModel(fixture, created.id, "openai/gpt-4o@" + subscriptionId);
+    const updated = await fixture.reload();
+    expect(updated.agentId).toBeUndefined();
+    expect(updated.inferenceBinding).toMatchObject({ profileId: subscriptionId, source: "user" });
   });
 
   it("adopts an explicit account on an aliased model but not on a plain alias", async ({

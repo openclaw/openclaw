@@ -33,7 +33,8 @@ jobs:
     name: Provision Boat nightly runner
     if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && !cancelled() && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary'))
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    # Leave setup time around the 15-minute provision and 10-minute registration.
+    timeout-minutes: 30
     outputs:
       nightly_vm: ${{ steps.nightly.outputs.vm }}
       nightly_runner: ${{ steps.nightly.outputs.runner }}

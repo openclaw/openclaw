@@ -627,6 +627,20 @@ it.for([
   },
 );
 
+it.skipIf(process.platform === "win32")(
+  "certifies a running service before an empty package destination is published",
+  async () => {
+    const root = state.path("not-yet-installed");
+    const run: Run = updateRun(state.env);
+    await withUpdateCommandExecutor(run.runId, async (executor) => {
+      run.executorFence = await executor.enter(root, { serviceRoot: rootA });
+      await expect(
+        observeOriginalManagedServiceRuntime({ root, opts: { json: true, run } }, before),
+      ).resolves.toMatchObject({ root: rootA, verified: true });
+    });
+  },
+);
+
 it("refuses B ledger admission independently from compatible service A state", async () => {
   const parentDir = state.path("parent-state");
   await fs.mkdir(parentDir);
@@ -663,7 +677,7 @@ it.each([
   "missing-env",
   "missing-schema",
   "unverified-health",
-  "operator-overrides",
+  "launcher-overrides",
   "unknown-overrides",
   "reload-pending",
   "no-restart",
@@ -678,10 +692,10 @@ it.each([
   if (scenario === "missing-env") {
     before.serviceEnv = undefined;
   }
-  if (scenario === "operator-overrides" || scenario === "unknown-overrides") {
+  if (scenario === "launcher-overrides" || scenario === "unknown-overrides") {
     serviceState.command!.managedDefinition = structuredClone(serviceState.command!);
-    if (scenario === "operator-overrides") {
-      serviceState.command!.managedOverrides = { environment: { keys: ["NODE_OPTIONS"] } };
+    if (scenario === "launcher-overrides") {
+      serviceState.command!.managedOverrides = { launcher: "command" };
     }
   }
   if (scenario === "reload-pending") {

@@ -160,6 +160,8 @@ A plugin selected through `plugins.load.paths` is operator-managed. Named update
   <Accordion title="Version checks and integrity drift">
     Before a live npm update, OpenClaw checks the installed package version against the npm registry metadata. If the installed version and recorded artifact identity already match the resolved target, it avoids downloading or reinstalling. A requested selector change or managed release-pin recovery can still update the plugin index without rewriting `openclaw.json`.
 
+    ClawHub updates also retain an unchanged installation when the verified artifact digest, package, version, and archive kind match the install record. ClawHub compatibility and release-trust checks still run, and the installed package must pass the normal package validation and host-link audit. The archive is still downloaded and verified; damaged installs or changed artifacts use the normal replacement path. File-list-only releases without an attested archive digest are reinstalled.
+
     When a stored integrity hash exists and the fetched artifact hash changes, OpenClaw treats that as npm artifact drift. The interactive `openclaw plugins update` command prints the expected and actual hashes and asks for confirmation before proceeding. Non-interactive update helpers refuse the update unless the caller supplies an explicit continuation policy.
 
   </Accordion>
@@ -289,6 +291,10 @@ host-attributed agent/session/run/service fields when available. Missing attribu
 is explicitly `unknown`. Derived consumers can name their parent reference.
 Gateway turn preparation attributes its leases to the run ID and the
 `gateway-agent-turn` service, including before embedded execution starts.
+Model catalog work (provider and native catalog lookups, catalog auth refreshes,
+and native login checks) holds a plugin only while a call into it is running, and
+attributes those calls to the agent ID and the `model-catalog-discovery` service,
+even when an agent run started it.
 The `omitted` count reports truncation. These are acquisition facts, not proof
 that a holder is currently executing or exclusively owns shared resources.
 

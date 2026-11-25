@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { commandResult } from "../agents/github-identity.test-support.js";
 import {
   inspectGitHubOAuthRecord,
   listGitHubDeviceAuthorizationRecords,
@@ -12,12 +13,15 @@ import {
   type GitHubOAuthRecord,
   type GitHubIdentityScope,
 } from "../agents/github-oauth-records.js";
+import { clearNativeGitHubTokenCache } from "../agents/github-read-identity.js";
 import {
   GitHubAccountMismatchError,
   resolveConfiguredGitHubToolIdentity,
 } from "../agents/github-tool-identity.js";
+import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
+import * as processExec from "../process/exec.js";
 import * as hiddenSecrets from "../secrets/store/secret-store-hidden-github.js";
 import { writeHiddenGitHubSecretRecord } from "../secrets/store/secret-store.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
@@ -216,6 +220,8 @@ beforeEach(() => {
   time = createGatewaySchedulerClock(NOW);
   vi.spyOn(Date, "now").mockImplementation(time.clock.now);
   currentConfig = configForScope("system");
+  clearNativeGitHubTokenCache();
+  vi.spyOn(processExec, "runCommandBuffered").mockResolvedValue(commandResult("", 1));
   installedTokens = [];
   refreshedTokens = [];
   lifecycleInstances = [];
@@ -265,6 +271,56 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
+it("offers only receipt observation after native configuration is authoritatively absent", async () => {
+  const buildListing = (config = currentConfig) =>
+    createOpenClawTools({
+      config,
+      githubPublicationAvailable: true,
+      githubPublicationConfigurationAware: true,
+      requesterAgentIdOverride: "main",
+      senderIsOwner: false,
+    });
+  vi.stubEnv("GH_TOKEN", undefined);
+  vi.stubEnv("GITHUB_TOKEN", undefined);
+  const native = vi
+    .spyOn(processExec, "runCommandBuffered")
+    .mockImplementation(async (argv) =>
+      commandResult(argv[2] === "status" ? '{"hosts":{}}' : "", argv[2] === "status" ? 0 : 1),
+    );
+  const lifecycle = createLifecycle();
+  lifecycle.start();
+  await time.wake();
+  const tools = buildListing();
+  expect(tools.find((tool) => tool.name === "github_publish")?.parameters).toMatchObject({
+    properties: { action: { enum: ["readiness"] } },
+    required: ["action"],
+  });
+  expect(tools.some((tool) => tool.name === "github_identity_status")).toBe(true);
+  const configuredCases: OpenClawConfig[] = [
+    { tools: { github: identity(OLD_PROFILE) } },
+    { agents: { entries: { main: { tools: { github: identity(OLD_PROFILE) } } } } },
+    { agents: { entries: { main: {}, publisher: { tools: { github: identity(OLD_PROFILE) } } } } },
+  ];
+  for (const config of configuredCases) {
+    // Missing/unhealthy profile files do not turn configured identities into absence.
+    const configured = buildListing(config);
+    expect(configured.find((tool) => tool.name === "github_publish")?.parameters).toMatchObject({
+      properties: { action: { enum: expect.arrayContaining(["publish"]) } },
+    });
+  }
+  expect(native.mock.calls.map(([argv]) => argv.slice(0, 3).join(" "))).toEqual([
+    "gh auth token",
+    "gh auth status",
+  ]);
+  native.mockResolvedValue(commandResult("", 1));
+  await time.advanceBy(60_000);
+  const unknown = buildListing();
+  expect(unknown.find((tool) => tool.name === "github_publish")?.parameters).toMatchObject({
+    properties: { action: { enum: expect.arrayContaining(["publish"]) } },
+  });
+  expect(native).toHaveBeenCalledTimes(4);
+});
+
 describe("GitHub OAuth authorization lifecycle", () => {
   it("rejects a missing GitHub CLI before requesting a device code", async () => {
     mocks.assertCli.mockImplementationOnce(() => {
@@ -278,6 +334,29 @@ describe("GitHub OAuth authorization lifecycle", () => {
     expect(mocks.requestDeviceCode).not.toHaveBeenCalled();
     expect(await listGitHubDeviceAuthorizationRecords()).toEqual([]);
   });
+
+  it.each(["identity change", "shutdown"])(
+    "does not request a device code after %s during CLI preflight",
+    async (change) => {
+      const preflight = deferred();
+      mocks.assertCli.mockReturnValueOnce(preflight.promise);
+      const lifecycle = createLifecycle();
+      const starting = startAuthorization(lifecycle, "system");
+      const refused = expect(starting).rejects.toThrow();
+      try {
+        if (change === "shutdown") {
+          await lifecycle.stop();
+        } else {
+          setSelectedIdentity("system", "main", identity(OTHER_PROFILE));
+        }
+      } finally {
+        preflight.resolve();
+      }
+      await refused;
+      expect(mocks.requestDeviceCode).not.toHaveBeenCalled();
+      expect(await listGitHubDeviceAuthorizationRecords()).toEqual([]);
+    },
+  );
 
   registerGitHubOAuthRetirementTests({
     createLifecycle: () => {

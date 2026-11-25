@@ -11,6 +11,8 @@ import {
 } from "../../test/helpers/gateway/chat-display-replay.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { collectTextContentBlocks } from "../agents/content-blocks.js";
+import { loadPreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
+import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -188,6 +190,16 @@ beforeAll(async () => {
       }
     },
   });
+  // Settle catalog persistence before chat retains the initially absent session store.
+  const cfg = loadConfig();
+  for (const agentId of scenarios) {
+    const owner = await loadPreparedModelRuntimeSnapshot({
+      config: cfg,
+      agentId,
+      agentDir: path.join(home.tempHome, ".openclaw", "agents", agentId, "agent"),
+    });
+    await owner.loadFullModelCatalog?.({ refresh: true, wait: true });
+  }
 }, 90_000);
 
 afterAll(async () => {

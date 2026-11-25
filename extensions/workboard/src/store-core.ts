@@ -58,6 +58,7 @@ import {
 import { readCards } from "./store-read.js";
 import { resolveLifecycleStatusWrite, settleManualStatusTransition } from "./store-status-write.js";
 import { normalizeCappedStringList } from "./store-string-lists.js";
+import { normalizeWithoutVerifications, withStoredVerifications } from "./store-verification.js";
 
 export class WorkboardCoreStore extends WorkboardBoardStore {
   private lastNotificationSequence = 0;
@@ -486,12 +487,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
           ? existing.execution
           : syncExecutionSessionKey(existing.execution, sessionKey)
         : normalizeExecution(effectivePatch.execution);
-    let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
-      automationLaunch: options.automationLaunch,
-      allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
-      preserveProofId: options.preserveProofId,
-      preserveNotificationId: options.preserveNotificationId,
-    });
+    let metadata = normalizeWithoutVerifications(effectivePatch.metadata, existing, options);
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
       ({ execution, metadata } = settleManualStatusTransition({
         existing,
@@ -565,8 +561,9 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       ...(startedAt ? { startedAt } : {}),
       ...(completedAt ? { completedAt } : {}),
     });
-    next.metadata = trimMetadataToBudget(
+    next.metadata = withStoredVerifications(
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
+      existing,
       options,
     );
     next.events = appendEvent(
@@ -597,8 +594,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         next.id,
         nextEntry,
         expectedUpdatedAt,
-        options.ownerSlot.ownerId,
-        options.ownerSlot.now,
+        options.ownerSlot,
       );
       if (result === "owner_busy") {
         throw new Error(`Owner ${options.ownerSlot.ownerId} already has active Workboard work.`);

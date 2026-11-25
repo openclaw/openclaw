@@ -16,13 +16,13 @@ import {
   type PluginCache,
 } from "../plugins/plugin-cache.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
+import { restorePrivateStateStoreModes } from "../state/openclaw-state-db-permissions.js";
 import {
   readAdmittedConfigSnapshot,
   createConfigPreflightSnapshotReader,
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
-import { refreshStartupPluginQuarantine } from "./doctor-config-preflight-plugin-verification.js";
 import {
   rethrowStartupConfigFailure,
   throwStartupMigrationGuardRejected,
@@ -120,6 +120,8 @@ async function prepareStartupConfig(
     return result(read);
   }
 
+  const { refreshStartupPluginQuarantine } =
+    await import("./doctor-config-preflight-plugin-verification.js");
   const readAdmitted = () =>
     readAdmittedConfigSnapshot({
       env,
@@ -128,6 +130,8 @@ async function prepareStartupConfig(
       beforeStatePreparation,
       prepareClientCredentials: async (snapshot) => {
         const { prepareStartupClientCredentials } = await import("./startup-client-credentials.js");
+        // Repair modes broadened by remount before strict startup credential reads.
+        restorePrivateStateStoreModes(env);
         await prepareStartupClientCredentials({ env, config: snapshot.config });
       },
     });
@@ -170,7 +174,8 @@ async function prepareStartupConfig(
       await withPluginLifecycleLease(
         { env, assertCurrent: assertLeaseCurrent, processBound: true },
         async (pluginLease) => {
-          // Recovery must consume the current config after both writers settle.
+          // Refuse backup drift before a fresh plan can skip the changed candidate.
+          read.recovery?.assertBackupUnchanged();
           read = await readAdmitted();
           if (!read.snapshot.valid) {
             return;

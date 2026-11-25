@@ -22,7 +22,7 @@ async function decideCommand(
   options: Pick<Parameters<typeof planShellAuthorization>[0], "cwd" | "env"> = {},
 ) {
   const plan = await planShellAuthorization({ command, ...options });
-  return resolveAllowAlwaysPersistenceDecision({
+  return await resolveAllowAlwaysPersistenceDecision({
     segments: plannedSegments(plan),
     commandText: command,
     platform: process.platform,
@@ -32,7 +32,7 @@ async function decideCommand(
 }
 
 function expectOneShotApproval(
-  decision: ReturnType<typeof resolveAllowAlwaysPersistenceDecision>,
+  decision: Awaited<ReturnType<typeof resolveAllowAlwaysPersistenceDecision>>,
   reason = "no-reusable-pattern",
 ) {
   expect(decision).toEqual({ kind: "one-shot", reasons: expect.arrayContaining([reason]) });
@@ -110,12 +110,12 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     const plan = await planShellAuthorization({ command, cwd: dir, env });
 
     expect(plan.ok).toBe(false);
-    const decision = resolveAllowAlwaysPersistenceDecision({
+    const decision = await resolveAllowAlwaysPersistenceDecision({
       segments: [
         {
           raw: "git status",
           argv: ["git", "status"],
-          resolution: resolveCommandResolutionFromArgv(["git", "status"], dir, env),
+          resolution: await resolveCommandResolutionFromArgv(["git", "status"], dir, env),
         },
       ],
       commandText: command,
@@ -133,7 +133,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     const plan = await planShellAuthorization({ command });
 
     expect(plan.ok).toBe(true);
-    const decision = resolveAllowAlwaysPersistenceDecision({
+    const decision = await resolveAllowAlwaysPersistenceDecision({
       segments: plannedSegments(plan),
       commandText: command,
       platform: process.platform,

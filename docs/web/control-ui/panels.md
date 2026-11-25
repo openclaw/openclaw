@@ -50,7 +50,11 @@ Outside onboarding, this page can show at most one dismissible event chip per vi
 
 Use the **Home** button in the sidebar footer, or in the toolbar when the sidebar is collapsed, to open the selected agent's main conversation alongside your current page. Select the **Ask OpenClaw** tab in the same dock for system setup and repair. When the same Home conversation is already open as the page, the dock stays hidden rather than showing it twice.
 
+The Home dock uses the same session read permissions as the full page. If you can read the selected Home conversation but cannot write to it, you can open it in view-only mode; sending and session actions remain unavailable. Opening Home does not change its sharing permissions or create a missing conversation for a reader.
+
 Your Home draft and attachments follow the conversation between the page and dock. Files still being prepared keep their progress and Remove action, and Send waits until preparation finishes.
+
+To see pull requests or saved task progress, open Home full page and select **Details**. Neither appears above the dock composer.
 
 Home can include a bounded, quoted work-context reference with your message. Before sending, that reference follows the page's agent, session, title, and visible file, not merely the Home conversation receiving it. You can remove it before sending.
 
@@ -114,7 +118,7 @@ A connected **Desktop** viewer stays connected for 30 seconds while its tab is h
 
 When you open a chat, the panel automatically reveals an available desktop assigned to that exact session. Discovery only reads existing resources: it never provisions a desktop or attaches an unrelated global or child-session resource. Session and inventory events refresh desktop discovery while the chat is visible. Resources without explicit session metadata remain available through the manual panel controls.
 
-Browser-tool results stay inline on desktop and mobile; they do not automatically open the Browser panel. Choose **Open** on a browser preview card, use the panel controls, or ask your agent to show it. A panel you explicitly opened still follows its saved per-session layout when you return or reload.
+Browser tool calls do not add automatic preview cards or open the Browser panel. To inspect the agent’s browser, choose **Browser** from the panel’s **+** menu or ask your agent to show it. The panel uses the session’s latest successful browser target. A panel you explicitly opened still follows its saved per-session layout when you return or reload.
 
 Automatic desktop reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered desktops stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. If discovery confirms that the desktop is no longer available, its automatic tab closes without affecting an explicitly selected desktop or disabling future automatic reveals. Mobile chat shows these panels full-width, just like manually opened panels; other narrow panes retain their bottom-docked layout. Minimizing the panel or closing a Browser or Desktop tab disables further automatic desktop reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
 
@@ -203,6 +207,8 @@ To paste into an Agent browser tab or Browser dashboard, click the page's input 
 
 In the macOS app, the same panel also hosts **Mac tabs**, rendered natively by WebKit, alongside **Agent browser tabs** from the Gateway. Mac tabs are available without `browser.request`; Agent browser tabs retain the Gateway and operator-access requirements above. External links clicked in the dashboard open as Mac tabs in the chat side panel, or in the shell-level Browser dock on non-chat routes. While Settings is open, external links open in the default browser because the Browser panel is hidden. Mac tabs have a tab strip, URL bar, back/forward/reload/stop, open-in-default-browser, and close controls. Mac tabs show the page’s own icon. Mac tabs belong to the chat session that opened them: another session starts with its own empty Browser panel, and returning restores the original session’s tabs. The window retains those tabs until they are closed or the window ends. Opening the same link reuses its existing tab only within that session, including a retained original URL after a redirect. The non-chat Browser dock has its own tabs. Login cookies remain shared within the window. Selecting another tab while a link is opening keeps your selection when the open request completes.
 
+In the macOS dashboard, press **⌘T** to open a blank Mac tab in the Browser panel without leaving the conversation. This also works while another Mac tab has focus. In a regular web browser, **⌘T** keeps its usual behavior.
+
 Session-local Mac tabs require both the Mac app and Gateway-served Control UI to support session ownership. During staggered upgrades, older app/UI combinations keep their existing shared-tab behavior so browsing continues to work. Tabs created without session ownership remain window-shared until closed or the window ends; new tabs become session-local once both sides are updated.
 
 Outside the macOS app, enable **Open links in Control UI browser** under **Settings → Infrastructure → Browser** to route external HTTP(S) links into new Agent browser tabs in this panel. The browser-local preference is off by default and appears only while the panel is available. It is hidden in the macOS app because unmodified external dashboard links open as Mac tabs outside Settings. Older Control UI bundles that send legacy `inline` requests open the default browser. Same-origin links, links marked for download, Shift/Alt clicks, file/editor links, email and phone links, right-click actions, and explicit open-in-your-browser actions keep their existing behavior.
@@ -239,6 +245,10 @@ same item from chat selects its existing tab. Links inside the reader and URLs
 entered in the address bar navigate the current tab, with independent Back and
 Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
 including their loaded documents while you switch between them.
+
+Hold Ctrl or Cmd to suppress link hover previews while opening several links.
+Pressing either key also dismisses an open preview and cancels a pending one.
+Normal hover and keyboard-focus previews resume on the next interaction after release.
 
 Loaded reader documents and link previews stay visible while the same Gateway
 reconnects. The reader refreshes after reconnect without clearing its address

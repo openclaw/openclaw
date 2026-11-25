@@ -40,8 +40,10 @@ import {
 } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
+import { openClawIdAccessWarning } from "../openclaw-id/access-plugin.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { resolveSharedGatewaySessionGeneration } from "../server/ws-shared-generation.js";
+import { replyWithBillingRouteWarnings } from "./config-write-reply.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -301,7 +303,7 @@ async function collectConfigWriteBillingRouteWarnings(params: {
     }
     const { collectModelBillingRouteMigrationWarnings } =
       await import("../../commands/doctor/shared/model-billing-route-migration.js");
-    const warnings = collectModelBillingRouteMigrationWarnings({
+    const warnings = await collectModelBillingRouteMigrationWarnings({
       before,
       after,
       // The published snapshot can predate this write's plugin changes; a write that also
@@ -314,28 +316,6 @@ async function collectConfigWriteBillingRouteWarnings(params: {
     params.context?.logGateway?.warn(`billing route comparison skipped: ${String(error)}`);
     return [];
   }
-}
-
-/**
- * Success replies carry and log the write's billing-route warnings. Error replies, including a
- * write that persisted but was not applied, moved no route and stay unchanged.
- */
-export function replyWithBillingRouteWarnings(
-  respond: RespondFn | undefined,
-  warnings: readonly string[],
-  context: GatewayRequestContext | undefined,
-): RespondFn {
-  return (...args) => {
-    const [ok, payload] = args;
-    if (ok && warnings.length > 0 && isRecord(payload)) {
-      for (const warning of warnings) {
-        context?.logGateway?.warn(warning);
-      }
-      args[1] = { ...payload, billingRouteWarnings: warnings };
-    }
-    // Forward the caller's exact arguments; responders and tests observe their arity.
-    respond?.(...args);
-  };
 }
 
 /** Persists a gateway config write and returns follow-up work that must run after response. */
@@ -381,7 +361,12 @@ export async function commitGatewayConfigWrite(params: {
     path: resolveGatewayConfigPath(params.snapshot),
     config: result.nextConfig,
     ...(billingRouteWarnings.length > 0 ? { billingRouteWarnings } : {}),
-    reply: replyWithBillingRouteWarnings(params.respond, billingRouteWarnings, params.context),
+    reply: replyWithBillingRouteWarnings(
+      params.respond,
+      billingRouteWarnings,
+      params.context,
+      openClawIdAccessWarning(result.nextConfig),
+    ),
     // Acknowledge this commit; a later config.get can observe an external edit.
     hash: result.persistedHash,
     ...(application

@@ -38,7 +38,26 @@ const methods = [
 function restrictedPage(panel: AgentsPanel, scopes = ["operator.sessions.read"], pending = false) {
   const request = vi.fn(async (method: string) => {
     if (method === "tools.effective") {
-      return { agentId: "main", profile: "full", groups: [] };
+      return {
+        agentId: "main",
+        profile: "full",
+        groups: [
+          {
+            id: "core",
+            label: "Built-in",
+            source: "core",
+            tools: [
+              {
+                id: "read",
+                label: "Readable preview",
+                description: "Read",
+                rawDescription: "Read",
+                source: "core",
+              },
+            ],
+          },
+        ],
+      };
     }
     if (method === "models.list") {
       return { models: [] };
@@ -134,5 +153,17 @@ describe("Agent Settings access at the page boundary", () => {
     expect(view.container.querySelector(".agent-panel-restricted")).toBeNull();
     expect(view.ensureLoaded).not.toHaveBeenCalled();
     expect(view.request.mock.calls.map(([method]) => method)).toEqual(["tools.effective"]);
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".agent-tools-runtime-chip")?.textContent).toContain(
+        "Readable preview",
+      ),
+    );
+    expect(view.container.querySelector("a.agent-tools-runtime-chip")).toBeNull();
+    expect(view.container.querySelector(".agent-tools-buttons")).toBeNull();
+    expect(view.container.querySelector(".agent-tools-group")).toBeNull();
+    expect(view.container.textContent).not.toContain("Load the config");
+    expect(
+      [...view.container.querySelectorAll(".settings-kv dt")].map((term) => term.textContent),
+    ).not.toContain("Tool profile");
   });
 });

@@ -5,6 +5,12 @@ import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
+import {
+  resolveGitReleaseEntrypointForLauncher,
+  resolveGitReleaseLauncherForEntrypoint,
+  resolveGitReleasePrefix,
+  servingGitReleaseSlot,
+} from "../infra/git-release-paths.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   buildGatewayDistEntrypointCandidates,
@@ -216,6 +222,7 @@ export async function resolveOpenClawWrapperPath(
 
 async function resolveCliProgramArguments(params: {
   cliEntrypoint?: string | PlannedCliEntrypoint;
+  env?: NodeJS.ProcessEnv;
   service?: "gateway" | "node";
   args: string[];
   dev?: boolean;
@@ -260,10 +267,27 @@ async function resolveCliProgramArguments(params: {
     };
   }
 
+  // The selected state's launcher owns ordinary installs; retained recovery entries stay explicit.
+  const launcher =
+    params.service === "node"
+      ? null
+      : typeof params.cliEntrypoint === "string"
+        ? resolveGitReleaseEntrypointForLauncher(params.cliEntrypoint)
+          ? params.cliEntrypoint
+          : null
+        : resolveGitReleaseLauncherForEntrypoint(
+            path.join(
+              servingGitReleaseSlot(resolveGitReleasePrefix(params.env)),
+              "dist",
+              "index.js",
+            ),
+          );
   const cliEntrypointPath =
-    typeof params.cliEntrypoint === "object"
-      ? params.cliEntrypoint.planned
-      : await resolveCliEntrypointPathForService(params.cliEntrypoint, params.service);
+    launcher && (await canAccessEntrypoint(launcher))
+      ? launcher
+      : typeof params.cliEntrypoint === "object"
+        ? params.cliEntrypoint.planned
+        : await resolveCliEntrypointPathForService(params.cliEntrypoint, params.service);
   return {
     programArguments: [
       runtimePath,
@@ -279,6 +303,8 @@ async function resolveCliProgramArguments(params: {
 export async function resolveGatewayProgramArguments(params: {
   /** Retained or planned CLI entrypoint to use instead of this process's argv[1]. */
   cliEntrypoint?: string | PlannedCliEntrypoint;
+  /** Captured install environment selecting the service's state directory. */
+  env?: NodeJS.ProcessEnv;
   port: number;
   allowUnconfigured?: boolean;
   dev?: boolean;

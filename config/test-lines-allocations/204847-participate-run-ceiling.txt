@@ -1,0 +1,15 @@
+# Participate split, part 2 of 6: participant limits on admitted runs.
+# Measured with check-test-lines-ratchet against main after part 1 landed (230456c).
+# This layer adds 3,422 net test lines; 3,022 exceed the ordinary allowance.
+# The cases cover separate authority boundaries that a helper-only test cannot
+# prove: the participation ceiling and its tool/permission/exec intersections,
+# source capture and revocation across storage reopen, queued-input custody and
+# private revoked inputs, cron and child inheritance (spawn, completion batch,
+# delegated source, reactivation, restart custody, requester yield), durable
+# context-engine maintenance authority, worker and non-OpenClaw runtime refusal,
+# exec workdir/process isolation, file-tool containment and the in-process
+# self-authority deny set. The ordinary-upgrade fixture proves that queued and
+# cron sources written before this change still recover unchanged.
+# Existing Gateway, cron, session-store and context-engine fixtures are reused.
+# No assertion, timeout, runtime or production-code limit is exempted.
+3022

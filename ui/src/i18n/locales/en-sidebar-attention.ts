@@ -36,7 +36,6 @@ const enSidebarAttention = {
     dismissItem: "Dismiss {item}",
     dismissShown: "Dismiss shown",
     emptyTitle: "No requests or alerts yet.",
-    emptyBody: "New requests and alerts land here.",
     issues: "Inbox",
     issueCount: "{count} inbox item",
     issueCountPlural: "{count} inbox items",

@@ -56,8 +56,8 @@ export type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
     state.sidebarContent = resolveSessionDiffSidebarContent(state);
-    sessionWorkspaceForHost(state).publish();
   }
+  sessionWorkspaceForHost(state).publish();
 }
 
 async function readWorkspaceContent<T>(
@@ -67,6 +67,7 @@ async function readWorkspaceContent<T>(
 ): Promise<T | null> {
   const client = state.client;
   const {
+    checkFileLinkAvailability,
     downloadSessionFile,
     loadSessionWorkspaceArtifactContent,
     loadSessionWorkspaceFileContent,
@@ -74,6 +75,7 @@ async function readWorkspaceContent<T>(
   // Loading code cannot transfer an admitted preview to a replacement connection or checkout.
   return state.connected && state.client === client && isCurrentSessionWorkspace(state, workspace)
     ? read({
+        checkFileLinkAvailability,
         downloadSessionFile,
         loadSessionWorkspaceArtifactContent,
         loadSessionWorkspaceFileContent,
@@ -199,8 +201,23 @@ export function openSessionWorkspaceFile(
   });
 }
 
+/** Turns settled transcript file links that `openSessionWorkspaceFile` cannot open into text. */
+function checkSessionWorkspaceFileLinks(
+  state: SessionWorkspaceHost,
+  links: HTMLElement[],
+  scope: string,
+) {
+  const workspace = getSessionWorkspace(state);
+  readWorkspaceContent(state, workspace, (runtime) =>
+    runtime.checkFileLinkAvailability(state, workspace, links, scope),
+  ).catch(() => {
+    // Links stay usable when the check cannot load. main.ts owns lazy-chunk fetch
+    // recovery through the Vite preload-error listener.
+  });
+}
+
 /** Resolve a chat reference without moving the original attachment's history ownership. */
-export function openSessionWorkspaceManagedArtifact(state: SessionWorkspaceHost, href: string) {
+function openSessionWorkspaceManagedArtifact(state: SessionWorkspaceHost, href: string) {
   if (!isManagedOutgoingMediaSource(href)) {
     return false;
   }
@@ -482,6 +499,10 @@ export function createSessionWorkspaceProps(
       ),
     onSetFilter: (filter: SessionWorkspaceFilter) => {
       workspace.filter = filter;
+      // Activity reveals default results; refresh and All preserve manual disclosure.
+      if (options?.presentation === undefined && filter !== "all") {
+        workspace.tree!.sessionExpanded = true;
+      }
       if (mobile && filter !== "all") {
         mobile.expandedGroups[filter] = true;
       }
@@ -652,4 +673,25 @@ export function resolveSessionDiffSidebarContent(
       }
     },
   );
+}
+
+/** One permission scope drives both retained Markdown restoration and availability answers. */
+export function sessionWorkspaceFileLinkProps(
+  state: SessionWorkspaceHost,
+  session: { permissionMode?: string | null } | null | undefined,
+  picker: { defaultMode?: string | null } | undefined,
+) {
+  const scope = JSON.stringify([
+    session?.permissionMode,
+    picker?.defaultMode,
+    state.sessionWorkspaceState?.fileLinksRevision ?? 0,
+  ]);
+  return {
+    workspaceFileLinkScope: scope,
+    onWorkspaceFileLinks: (links: HTMLElement[]) =>
+      checkSessionWorkspaceFileLinks(state, links, scope),
+    onOpenWorkspaceFile: (target: WorkspaceFileLinkTarget) =>
+      void openSessionWorkspaceFile(state, target),
+    onOpenManagedArtifact: (href: string) => openSessionWorkspaceManagedArtifact(state, href),
+  };
 }

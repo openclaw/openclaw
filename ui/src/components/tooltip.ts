@@ -190,8 +190,13 @@ export class TooltipElement extends HTMLElement implements TooltipPolicyProps {
     this.#stopListeners = [
       listen(this.#triggerSlot, "slotchange", () => this.#owner.refresh()),
       listen(this.#contentSlot, "slotchange", () => this.#owner.contentChanged()),
-      listen(this.#rich, "pointerenter", (event) => this.#owner.handleContentPointerEnter(event)),
-      listen(this.#rich, "pointerleave", (event) => this.#owner.handleContentPointerLeave(event)),
+      // The whole visible card, padding included, keeps rich content open.
+      listen(this.#surface, "pointerenter", (event) =>
+        this.#owner.handleContentPointerEnter(event),
+      ),
+      listen(this.#surface, "pointerleave", (event) =>
+        this.#owner.handleContentPointerLeave(event),
+      ),
       listen(this.#rich, "focusin", () => this.#owner.handleFocusIn()),
       listen(this.#rich, "focusout", (event) => this.#owner.handleFocusOut(event)),
     ];

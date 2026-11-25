@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
@@ -9,12 +17,18 @@ import {
   evaluateWorkflowCondition,
   evaluateWorkflowExpression,
   expectIncludes,
+  quoteShell,
   readWorkflowOutputs as readGitHubEnvironment,
   requiredWorkflowStep,
   readWorkflow,
   writeExecutable,
   type WorkflowStep as BaseStep,
 } from "./ci-workflow.test-support.js";
+import {
+  gitPathShimJavaScriptPrelude,
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 
 type WorkflowStep = Omit<BaseStep, "env"> & { env?: NodeJS.ProcessEnv };
 
@@ -35,8 +49,8 @@ const securitySteps: WorkflowStep[] = readWorkflow(".github/workflows/ci.yml").j
 const securityStep = (name: string) => requiredWorkflowStep(securitySteps, name);
 const securityStepIndex = (name: string) => securitySteps.indexOf(securityStep(name));
 
-function runGit(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, {
+function runGit(realGit: string, cwd: string, ...args: string[]): string {
+  return execFileSync(realGit, args, {
     cwd,
     encoding: "utf8",
     env: { ...process.env, ...localGitEnvironment },
@@ -63,6 +77,8 @@ function writeTree(root: string, files: Record<string, string | Buffer>) {
 }
 
 function createFixture() {
+  const lookupPath = process.env.PATH ?? "";
+  const realGit = resolveGitOutsideFixtures();
   const root = tempDirs.make("openclaw-security-fast-");
   const repo = join(root, "repo");
   const bin = join(root, "bin");
@@ -72,7 +88,7 @@ function createFixture() {
     mkdirSync(dir, { recursive: true });
   }
   const write = (files: Record<string, string | Buffer>) => writeTree(repo, files);
-  const git = (...args: string[]) => runGit(repo, ...args);
+  const git = (...args: string[]) => runGit(realGit, repo, ...args);
   const commit = (message: string) => {
     git("add", ".");
     git("commit", "-m", message);
@@ -102,11 +118,10 @@ function createFixture() {
     [`.ci-harness/${scannerPath}`]: realScanner,
   });
 
-  const realGit = execFileSync("sh", ["-c", "command -v git"], {
-    encoding: "utf8",
-  }).trim();
   writeExecutable(join(bin, "git"), [
     `#!${process.execPath}`,
+    // A configured Git wrapper may rediscover its backend through PATH.
+    gitPathShimJavaScriptPrelude({ PATH: lookupPath }),
     String.raw`
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
@@ -131,15 +146,17 @@ process.exit(result.status ?? 1);
   ]);
 
   const environment = {
+    ...localGitEnvironment,
     GITHUB_ENV: githubEnv,
     OPENCLAW_TEST_REAL_GIT: realGit,
-    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+    PATH: `${bin}${delimiter}${lookupPath}`,
     RUNNER_TEMP: runnerTemp,
   };
   const run = (step: WorkflowStep | string, env: NodeJS.ProcessEnv = {}) =>
     runStep(typeof step === "string" ? securityStep(step) : step, repo, { ...environment, ...env });
   return {
     repo,
+    bin,
     write,
     git,
     commit,
@@ -159,6 +176,47 @@ process.exit(result.status ?? 1);
   };
 }
 
+it("rejects a previous fixture Git, including a symlink alias", () => {
+  const fixture = createFixture();
+  const alias = tempDirs.make("openclaw-security-fast-alias-");
+  symlinkSync(join(fixture.bin, "git"), join(alias, "git"));
+  for (const bin of [fixture.bin, alias]) {
+    expect(() => resolveGitOutsideFixtures({ ...process.env, PATH: bin })).toThrow(
+      "Refusing fixture Git as a shim backend",
+    );
+  }
+});
+
+it("refuses nested Git shims and still forbids network Git", () => {
+  const fixture = createFixture();
+  const backend = join(fixture.bin, "backend");
+  const shellShim = join(fixture.bin, "shell-git");
+  writeExecutable(shellShim, [
+    "#!/bin/sh",
+    gitPathShimShellPrelude(),
+    'exec "$OPENCLAW_TEST_REAL_GIT" "$@"',
+  ]);
+  for (const shim of [join(fixture.bin, "git"), shellShim]) {
+    // Re-enter once, then delegate to native Git if the sentinel is broken.
+    writeExecutable(backend, [
+      "#!/bin/sh",
+      `export OPENCLAW_TEST_REAL_GIT=${quoteShell(resolveGitOutsideFixtures())}`,
+      `exec ${quoteShell(shim)} "$@"`,
+    ]);
+    const nested = fixture.run(
+      { run: `${quoteShell(shim)} --version` },
+      { OPENCLAW_TEST_REAL_GIT: backend },
+    );
+    expect(nested.status, nested.stderr).toBe(98);
+    expect(nested.stderr).toContain("recursive test Git shim invocation refused");
+  }
+  for (const command of ["clone", "fetch", "ls-remote"]) {
+    const network = fixture.run({ run: `git -C . ${command} https://example.invalid/repo` });
+    expect(network.status, network.stderr).toBe(97);
+    expect(network.stderr).toContain("network Git is forbidden in security-fast");
+  }
+});
+
 it.each(["same revision", "different revision", "manual target", "missing HEAD", "export failure"])(
   "reuses only successfully exported workflow-owned security files: %s",
   (scenario) => {
@@ -169,6 +227,8 @@ it.each(["same revision", "different revision", "manual target", "missing HEAD",
       [scannerPath]: fixture.realScanner,
       "scripts/ci-production-audit.mjs": "// trusted audit\n",
       "scripts/ci-collect-checks.sh": "#!/bin/sh\nexit 0\n",
+      "scripts/stage-openclaw-bun.sh": "#!/bin/sh\nexit 0\n",
+      "scripts/lib/openclaw-bun.json": '{"tag":"synthetic-pin"}\n',
     };
     fixture.write(files);
     fixture.git("add", ...Object.keys(files));

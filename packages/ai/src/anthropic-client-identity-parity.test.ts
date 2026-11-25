@@ -116,4 +116,37 @@ describe("Anthropic OAuth client identity", () => {
     }
     resetLearnedClaudeCodeVersionForTest();
   });
+
+  // Body shape captured from api.anthropic.com for claude-sonnet-5-5 on 2026-11-10.
+  it("resends at standard speed when the model has no fast mode and tells the owner", async () => {
+    const speedUnsupported = () =>
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message:
+              "'claude-zzz-9-9' does not support the `speed` parameter. This feature is only available on supported models.",
+          },
+        }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    for (const implementation of ["provider", "transport"] as const) {
+      const unsupported: string[] = [];
+      const exchange = await captureAnthropicExchange(implementation, {
+        model: { id: "claude-zzz-9-9" },
+        leadingResponses: [speedUnsupported, speedUnsupported],
+        onPayloadPatch: (payload) => {
+          payload.speed = "fast";
+        },
+        onFastModeUnsupported: (id) => unsupported.push(id),
+      });
+      expect(exchange.terminal.stopReason).toBe("error");
+      expect(exchange.requests.map((request) => request.payload.speed)).toEqual([
+        "fast",
+        undefined,
+      ]);
+      expect(unsupported).toEqual(["claude-zzz-9-9"]);
+    }
+  });
 });

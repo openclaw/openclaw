@@ -6,6 +6,8 @@
 
 openclaw-chat-question-panel {
   display: block;
+  width: 100%;
+  min-width: 0;
 }
 
 .chat-question-panel {

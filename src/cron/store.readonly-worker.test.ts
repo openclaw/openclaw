@@ -10,12 +10,24 @@ import { collectLegacyCronStoreHealthFindings } from "../commands/doctor/cron/in
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveCronJobsStorePath, saveCronQuarantinedJobs } from "./store.js";
 import { withCronStore } from "./store.worker.test-support.js";
-import { inspectCronJobsReadOnly } from "./store/read-only.js";
+import {
+  inspectCronJobsReadOnly,
+  loadCronJobsStoreWithConfigJobsReadOnlyByKey,
+} from "./store/read-only.js";
 import type { CronStoreFile } from "./types.js";
+
+it("leaves absent cron state absent without synchronous filesystem probes", () =>
+  withCronStore("cron-readonly-absent", async (state) => {
+    using observation = observeMainThreadFs();
+    const loaded = await loadCronJobsStoreWithConfigJobsReadOnlyByKey("absent", state.env);
+    expect(loaded.store.jobs).toEqual([]);
+    expect(observation.calls()).toEqual({});
+  }));
 
 it("cancels Doctor cron inventory during copying without an orphan child or snapshot", async ({
   signal,

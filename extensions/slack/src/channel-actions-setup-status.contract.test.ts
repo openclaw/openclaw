@@ -67,6 +67,7 @@ const slackDefaultActions = [
   "list-pins",
   "member-info",
   "emoji-list",
+  "channel-list",
 ] as const;
 
 afterEach(() => {
