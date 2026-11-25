@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  assertCompletedUpdate,
+  assertTerminalUpdateReceipt,
+} from "../../../lib/update-receipt.mjs";
 import { readJson } from "../fixtures/common.mjs";
 
 const [command, ...args] = process.argv.slice(2);
@@ -167,7 +171,7 @@ function assertUpdate(channel, expectedVersion) {
   const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
   if (channel === "beta" && Object.hasOwn(payload, "phase")) {
     // The fixture already runs the candidate, so switching to beta changes only the channel.
-    assert.equal(payload.phase, "finished");
+    assertTerminalUpdateReceipt(payload, "skipped");
     assert.equal(payload.reason, "already-current");
     assert.equal(payload.target?.version, expectedVersion);
     assert(
@@ -176,9 +180,7 @@ function assertUpdate(channel, expectedVersion) {
     );
     return;
   }
-  if (payload.status !== "ok") {
-    throw new Error(`expected ${channel} update status ok, got ${payload.status}`);
-  }
+  assertCompletedUpdate(payload);
   if (channel === "dev" && payload.mode !== "git") {
     throw new Error(`expected dev update mode git, got ${payload.mode}`);
   }

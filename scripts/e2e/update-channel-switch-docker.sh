@@ -69,6 +69,11 @@ node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$
   if [ "$git_mode" = detached ]; then
     # The release builder requires a frozen lockfile for the rewritten fixture manifest.
     fixture_install=(pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts)
+    if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-}" ]; then
+      # Native pnpm does not read npm_config_registry. The lockfile must retain
+      # the candidate-only tarball URLs for the later frozen release build.
+      fixture_install+=(--registry="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL")
+    fi
   else
     # The in-place updater needs the fixture runtime and its optional native prebuilds.
     fixture_install=(npm install --omit=dev --no-fund --no-audit)
