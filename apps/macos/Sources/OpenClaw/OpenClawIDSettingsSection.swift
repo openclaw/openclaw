@@ -154,7 +154,7 @@ final class OpenClawIDSettingsModel {
         }
     }
 
-    private func actions(_ device: MacOpenClawIDDevice) async throws -> OpenClawIDOwnerDeviceActions {
+    private func actions(_ device: OpenClawIDDevice) async throws -> OpenClawIDOwnerDeviceActions {
         let live = try await MacOpenClawIDOperatorRoute.shared.current()
         return try await OpenClawIDOwnerDeviceActions(
             tunnel: live.tunnel, hostname: device.hostname, device: self.store.deviceKey(device))
@@ -210,7 +210,7 @@ final class OpenClawIDSettingsModel {
     }
 
     /// Whether the claw's verified snapshot no longer lists this Mac's peer key.
-    private func removed(_ device: MacOpenClawIDDevice) async -> Bool {
+    private func removed(_ device: OpenClawIDDevice) async -> Bool {
         guard let enrollment = self.store.operatorEnrollment(), enrollment.id == device.deviceEnrollmentID,
               let credential = try? await enrollment.credential()
         else { return false }

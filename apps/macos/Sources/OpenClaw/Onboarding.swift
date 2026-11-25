@@ -916,7 +916,7 @@ struct OnboardingView: View {
         initialPage: OnboardingFirstRun.Page = .welcome,
         initialError: String? = nil,
         state: AppState = AppStateStore.shared,
-        openClawIDService: any OpenClawIDSetupService = OnboardingOpenClawIDSignInService(),
+        openClawIDService: any OpenClawIDSetupService = MacOpenClawIDFeature.setupService(),
         discoveryModel: GatewayDiscoveryModel = GatewayDiscoveryModel(
             localDisplayName: InstanceIdentity.displayName,
             filterLocalGateways: false),

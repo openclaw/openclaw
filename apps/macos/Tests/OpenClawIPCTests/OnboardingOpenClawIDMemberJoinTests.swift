@@ -19,7 +19,7 @@ struct OnboardingOpenClawIDMemberJoinTests {
 
     /// What one test observes of the service's effects.
     private final class Effects {
-        var installed: [MacOpenClawIDDevice] = []
+        var installed: [OpenClawIDDevice] = []
         var forgotten: [UUID] = []
         var joined: [String] = []
         var saved: OpenClawIDDiscoverySession?
@@ -254,10 +254,10 @@ struct OnboardingOpenClawIDMemberJoinTests {
         http: MemberDiscovery,
         effects: Effects,
         defaults: UserDefaults,
-        approveWhileWaiting: Bool = false) -> OnboardingOpenClawIDSignInService
+        approveWhileWaiting: Bool = false) -> OpenClawIDAccountSetupService
     {
         let database = self.database()
-        return OnboardingOpenClawIDSignInService(
+        return OpenClawIDAccountSetupService(
             configuration: self.configuration,
             databaseURL: database,
             nodeInvitations: OnboardingNodeInvitationService(
@@ -278,7 +278,7 @@ struct OnboardingOpenClawIDMemberJoinTests {
                 trustStore: { _, _ in TrustStore() },
                 readKitFile: { nil },
                 readInviteLink: { effects.clipboard },
-                store: MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: database),
+                records: MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: database).records,
                 savedSession: { effects.saved },
                 saveSession: { effects.saved = $0 },
                 forgetKeys: { device, _ in effects.forgotten.append(device) },

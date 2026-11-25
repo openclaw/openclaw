@@ -16,7 +16,7 @@ struct OpenClawIDRemovalTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = MacOpenClawIDDeviceStore(
             defaults: defaults, databaseURL: URL(fileURLWithPath: "/unused.sqlite"))
-        let device = try MacOpenClawIDDevice(
+        let device = try OpenClawIDDevice(
             hostname: "studio.example.test",
             clawID: "fixture",
             discoveryOrigin: #require(URL(string: "https://id.example.test")),
@@ -77,7 +77,7 @@ struct OpenClawIDRemovalTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: URL(fileURLWithPath: "/unused.sqlite"))
-        let member = try MacOpenClawIDDevice(
+        let member = try OpenClawIDDevice(
             hostname: "team.example.test", clawID: "fixture",
             discoveryOrigin: #require(URL(string: "https://id.example.test")), deviceEnrollmentID: UUID(),
             nodeEnrollmentID: nil, approvedWith: .invite, memberRole: "operator")
@@ -101,17 +101,17 @@ struct OpenClawIDRemovalTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: URL(fileURLWithPath: "/unused.sqlite"))
-        let captured = try MacOpenClawIDDevice(
+        let captured = try OpenClawIDDevice(
             hostname: "studio.example.test", clawID: "fixture",
             discoveryOrigin: #require(URL(string: "https://id.example.test")), deviceEnrollmentID: UUID(),
             nodeEnrollmentID: UUID(), approvedWith: .device)
         var current = captured
         current.nodeEnrollmentID = UUID()
         store.save(current)
-        let reenrolled = MacOpenClawIDDevice(
+        let reenrolled = OpenClawIDDevice(
             hostname: captured.hostname, clawID: captured.clawID, discoveryOrigin: captured.discoveryOrigin,
             deviceEnrollmentID: UUID(), nodeEnrollmentID: UUID(), approvedWith: .recoveryKit)
-        var deleted: MacOpenClawIDDevice?
+        var deleted: OpenClawIDDevice?
         await store.remove(
             captured, origin: .elsewhere, stopRoute: {}, deselectNode: {},
             forgetKeys: { retired in
@@ -134,7 +134,7 @@ struct OpenClawIDRemovalTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: URL(fileURLWithPath: "/unused.sqlite"))
-        let device = try MacOpenClawIDDevice(
+        let device = try OpenClawIDDevice(
             hostname: "studio.example.test",
             clawID: "fixture",
             discoveryOrigin: #require(URL(string: "https://id.example.test")),

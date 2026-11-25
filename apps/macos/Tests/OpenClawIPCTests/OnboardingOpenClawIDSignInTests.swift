@@ -19,7 +19,7 @@ struct OnboardingOpenClawIDSignInTests {
         #expect(defaults?.clientID == MacOpenClawIDFeature.stagingClientID)
         #expect(MacOpenClawIDFeature.configuration(info: ["OpenClawIDClientID": ""]) == nil)
         #expect(MacOpenClawIDFeature.configuration(info: ["OpenClawIDIssuer": "http://id.example.test"]) == nil)
-        let service = OnboardingOpenClawIDSignInService(
+        let service = OpenClawIDAccountSetupService(
             configuration: nil, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: Self.environment(http: Discovery()))
         #expect(service.accountUnavailableReason != nil)
@@ -54,7 +54,7 @@ struct OnboardingOpenClawIDSignInTests {
 
     @Test func `sign in lists claws and routes each relationship`() async throws {
         let http = Discovery()
-        let service = OnboardingOpenClawIDSignInService(
+        let service = OpenClawIDAccountSetupService(
             configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: Self.environment(http: http))
         #expect(try await service.start(.connect) == .signIn)
@@ -78,17 +78,17 @@ struct OnboardingOpenClawIDSignInTests {
     @Test func `an account without claws and a cancelled sign in`() async throws {
         let http = Discovery(empty: true)
         var environment = Self.environment(http: http)
-        let service = OnboardingOpenClawIDSignInService(
+        let service = OpenClawIDAccountSetupService(
             configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: environment)
         #expect(try await service.perform(.signIn) == .problem(.notInvited(account: "owner@example.test")))
         environment.signIn = { _ in throw OpenClawIDSignInError.cancelled }
-        let cancelled = OnboardingOpenClawIDSignInService(
+        let cancelled = OpenClawIDAccountSetupService(
             configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: environment)
         #expect(try await cancelled.perform(.signIn) == .signIn)
         environment.signIn = { _ in throw OpenClawIDSignInError.stateMismatch }
-        let failed = OnboardingOpenClawIDSignInService(
+        let failed = OpenClawIDAccountSetupService(
             configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: environment)
         #expect(try await failed.perform(.signIn) == .problem(.signInFailed))
@@ -124,7 +124,7 @@ struct OnboardingOpenClawIDSignInTests {
             if fresh { throw OpenClawIDSignInError.cancelled }
             return "fixture-id-token"
         }
-        let service = OnboardingOpenClawIDSignInService(
+        let service = OpenClawIDAccountSetupService(
             configuration: Self.configuration,
             databaseURL: Self.database(),
             nodeInvitations: Self.nodeInvitations(),
@@ -161,7 +161,7 @@ struct OnboardingOpenClawIDSignInTests {
         var installed = false
         var environment = Self.environment(http: http)
         environment.install = { _, _ in installed = true }
-        let service = OnboardingOpenClawIDSignInService(
+        let service = OpenClawIDAccountSetupService(
             configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: environment)
         _ = try await service.perform(.signIn)
@@ -232,7 +232,7 @@ struct OnboardingOpenClawIDSignInTests {
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: Self.database())
-        let device = MacOpenClawIDDevice(
+        let device = OpenClawIDDevice(
             hostname: "studio.example.test", clawID: Discovery.studio,
             discoveryOrigin: Self.configuration.discoveryOrigin, deviceEnrollmentID: UUID(),
             nodeEnrollmentID: UUID(), approvedWith: .device)
@@ -257,7 +257,7 @@ struct OnboardingOpenClawIDSignInTests {
         environment.trustStore = { _, _ in trust }
         var installed = false
         environment.install = { _, _ in installed = true }
-        let service = OnboardingOpenClawIDSignInService(
+        let service = OpenClawIDAccountSetupService(
             configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: environment)
         _ = try await service.perform(.signIn)
@@ -335,8 +335,8 @@ struct OnboardingOpenClawIDSignInTests {
             isConnected: { _ in false })
     }
 
-    private static func environment(http: Discovery) -> OnboardingOpenClawIDSignInEnvironment {
-        OnboardingOpenClawIDSignInEnvironment(
+    private static func environment(http: Discovery) -> OpenClawIDAccountSetupEnvironment {
+        OpenClawIDAccountSetupEnvironment(
             signIn: { _ in "fixture-id-token" },
             discovery: { _ in http },
             describeNode: {
@@ -347,9 +347,9 @@ struct OnboardingOpenClawIDSignInTests {
             keyStore: { _, _ in MemoryKey() },
             readKitFile: { nil },
             readInviteLink: { nil },
-            store: MacOpenClawIDDeviceStore(
+            records: MacOpenClawIDDeviceStore(
                 defaults: UserDefaults(suiteName: "ocid-sign-in-\(UUID().uuidString)") ?? .standard,
-                databaseURL: self.database()),
+                databaseURL: self.database()).records,
             savedSession: { nil },
             saveSession: { _ in },
             forgetKeys: { _, _ in },
