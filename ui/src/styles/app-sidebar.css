@@ -12,36 +12,34 @@
   }
 }
 
-/* The mobile drawer keeps management actions in its always-reachable menu, with the
-   dots ending on the same edge as the filter control above the list. */
+/* Center the dots on New session above. The 36px hit target starts at the same
+   edge as the 28px toolbar button; its extra width stays tappable. */
 .shell--mobile-nav .sidebar-recent-session {
   &.session-row-host {
     --session-row-actions-reserve: var(--sidebar-session-menu-size);
   }
 
   [data-sidebar-session-pin],
-  [data-sidebar-session-archive] {
+  [data-sidebar-session-archive],
+  .session-row-badge--draft {
     display: none;
   }
 
   .session-action--touch-menu {
     display: inline-flex;
-    justify-content: flex-end;
     width: var(--sidebar-session-menu-size);
     height: var(--sidebar-session-row-floor);
-    padding-inline-end: 6px;
+    padding-inline: var(--row-menu-padding, var(--sidebar-inset) 0);
     opacity: 1;
     pointer-events: auto;
-  }
-
-  .session-row-badge--draft {
-    display: none;
   }
 }
 
 /* Every row pays once for the menu at its edge. Signals exist only when they have
    something to say, so a row without any gives that width back to its title. */
 .shell--mobile-nav .sidebar-recent-session:not(.sidebar-recent-session--team) {
+  /* Ordinary rows extend past the toolbar button; roster targets end flush with it. */
+  --row-menu-padding: 0 var(--sidebar-inset);
   padding-inline: var(--sidebar-session-row-inset) var(--sidebar-session-menu-size);
 
   &.session-row-host {
@@ -119,13 +117,8 @@
   }
 }
 
-/* Child rows keep their hierarchy indent on the logical side so RTL dots stay on the axis. */
-.shell--mobile-nav .sidebar-session-tree__children {
-  margin-inline: calc(var(--sidebar-lead) + 5px) 0;
-}
-
 .shell--mobile-nav .sidebar-recent-sessions__head {
-  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset)) 0.75px;
+  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset));
 }
 
 /* Each person pays only for what it shows: the dots end on the filter control's edge and

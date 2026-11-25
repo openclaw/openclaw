@@ -184,6 +184,10 @@ extension GatewayConnectionController {
                 """),
                 host,
                 String(port))
+        case .endpointRefused:
+            kind = .connectionRefused
+            title = "Gateway refused the connection"
+            message = GatewayConnectionIssue.refusedMessage(host: host, port: port)
         case .tlsHandshakeTimeout:
             kind = .timeout
             title = "TLS verification timed out"
@@ -214,6 +218,7 @@ extension GatewayConnectionController {
                 host,
                 String(port))
         }
+        let refused = failure == .endpointRefused
         return GatewayConnectionProblem(
             kind: kind,
             owner: .network,
@@ -221,7 +226,9 @@ extension GatewayConnectionController {
             message: message,
             actionLabel: "Retry",
             messagePresentation: .verbatim(message),
-            docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+            actionCommand: refused ? GatewayConnectionIssue.refusedActionCommand : nil,
+            docsURL: (refused ? GatewayConnectionIssue.refusedDocsURL(host: host) : nil)
+                ?? URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
             retryable: true,
             pauseReconnect: false)
     }

@@ -73,6 +73,8 @@ describe("assembled Gateway update capability", () => {
       expect(gatewayActions(createTools({ tools: { profile } }))).toEqual([
         "config.get",
         "config.schema.lookup",
+        "users.getRole",
+        "users.setRole",
         ...updateActions,
       ]);
     },

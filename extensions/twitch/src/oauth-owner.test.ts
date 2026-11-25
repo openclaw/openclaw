@@ -62,7 +62,15 @@ const rotated = {
 };
 const logger = { info() {}, warn() {}, error() {} };
 let current: OpenClawConfig;
-vi.mock("node:dns/promises", { spy: true });
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: vi.fn(actual.lookup),
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 let stateDir: string;
 function manager() {
   return new TwitchClientManager(logger);

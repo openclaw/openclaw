@@ -47,12 +47,12 @@ suite.define(() => {
               "usage.status": usage,
             },
           });
-          await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+          await page.goto(`${suite.server.baseUrl}settings/model-providers?provider=openai`);
           await waitForControlUiRoute(page, {
             pathname: "/settings/model-providers",
             routeId: "model-providers",
           });
-          const search = page.getByRole("searchbox", { name: "Search providers" });
+          const search = page.locator(".model-providers__search input");
           const filter = async (query: string, count: number) => {
             await search.fill(query);
             await expect

@@ -4,7 +4,10 @@ import type {
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
+  resolveMergedModelProviderConfig,
+  type ProviderCatalogContext,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -141,16 +144,25 @@ export default defineSingleProviderPluginEntry({
         if (!apiKey) {
           return null;
         }
+        const configuredBaseUrl = resolveMergedModelProviderConfig(
+          ctx.config,
+          PROVIDER_ID,
+        )?.baseUrl?.trim();
+        const providerConfig = {
+          ...buildStaticBasetenProvider(),
+          ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+        };
         if (!discoveryApiKey) {
-          return { provider: { ...buildStaticBasetenProvider(), apiKey } };
+          return { provider: { ...providerConfig, apiKey } };
         }
         return await buildOpenAICompatibleLiveProviderCatalog({
           discoveryMode: "strict",
           providerId: PROVIDER_ID,
-          providerConfig: buildStaticBasetenProvider(),
+          providerConfig,
           apiKey,
           discoveryApiKey,
           profileId,
+          signal: ctx.signal,
           modelDiscovery: {
             timeoutMs: 10_000,
             ttlMs: 5 * 60 * 1000,

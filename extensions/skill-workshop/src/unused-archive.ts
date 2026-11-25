@@ -50,6 +50,9 @@ export async function archiveUnusedWorkshopSkills(
     return [];
   }
   const model = runtime.modelConfig.resolveDefaultModelForAgent({ cfg: config, agentId });
+  if (!model) {
+    return [];
+  }
   const agentRuntime = resolveEffectiveAgentRuntime({
     cfg: config,
     provider: model.provider,

@@ -31,6 +31,12 @@ export interface SqlConnection {
 
 const postgresConnectionBrand = Symbol.for("openclaw.postgres-sync-connection");
 
+export type PostgresTransactionOptions = {
+  withCommit?: (commit: () => void) => void;
+  /** Schema migration and whole-store derived rebuilds use the maintenance budget. */
+  maintenance?: boolean;
+};
+
 export interface PostgresSqlConnection extends SqlConnection {
   readonly anchor: DatabaseSync;
   readonly mutationRevision: number;
@@ -46,7 +52,7 @@ export interface PostgresSqlConnection extends SqlConnection {
   };
   runTransaction<T>(
     operation: () => T,
-    options?: { withCommit?: (commit: () => void) => void },
+    options?: PostgresTransactionOptions,
     ...modes: [readOnly?: boolean, reserved?: boolean]
   ): T;
 }

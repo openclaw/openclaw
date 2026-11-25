@@ -97,7 +97,7 @@ describe("doctor repair sequencing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasDeferredRetirement.mockReturnValue(false);
-    mocks.applyPluginAutoEnable.mockImplementation(unchangedConfig);
+    mocks.applyPluginAutoEnableAsync.mockImplementation(unchangedConfig);
     mocks.materializePluginAutoEnableCandidates.mockImplementation(unchangedConfig);
     mocks.ensureAuthProfileStore.mockReturnValue({ profiles: {}, usageStats: {} });
     mocks.evaluateStoredCredentialEligibility.mockReturnValue({ eligible: true, reasonCode: "ok" });
@@ -138,37 +138,36 @@ describe("doctor repair sequencing", () => {
 
   registerSharedRuntimeReaderDoctorTests();
 
-  it.each<[string, Record<string, unknown>, boolean]>([
-    ["retirement", {}, true],
-    ["custom-command", { appServer: { command: "/synthetic/codex" } }, true],
-    ["inline-command", { appServer: { command: "node --bad-inline-arg" } }, false],
-    ["computer-use", { computerUse: { enabled: true } }, true],
-    ["prior-config", {}, false],
-    ["prior-state", {}, false],
-    ["prior-warning", {}, false],
-    ["uncertain-retirement", {}, false],
-  ])("proves retirement-only from recorded work: %s", async (kind, config, expected) => {
+  it.each<[string, Record<string, unknown>, string[]]>([
+    ["retirement", {}, []],
+    ["custom-command", { appServer: { command: "/synthetic/codex" } }, []],
+    [
+      "inline-command",
+      { appServer: { command: "node --bad-inline-arg" } },
+      ["warning-notes", "warning-notes.codex-routes"],
+    ],
+    ["computer-use", { computerUse: { enabled: true } }, []],
+    ["service-tier", {}, ["pending-changes"]],
+    ["uncertain-retirement", {}, ["model-repair-warnings"]],
+  ])("proves retirement-only from recorded work: %s", async (kind, config, blockers) => {
     hasDeferredRetirement.mockReturnValue(true);
-    if (kind === "prior-config") {
-      mocks.maybeRepairStaleConfiguredAuthOrders.mockReturnValueOnce(mutation({}, "Order repair"));
-    }
-    if (kind === "prior-state" || kind === "prior-warning") {
-      mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValueOnce({
-        changes: kind === "prior-state" ? ["Repaired identity"] : [],
-        warnings: kind === "prior-warning" ? ["Unresolved identity"] : [],
-      });
+    const cfg: OpenClawConfig = { plugins: { entries: { codex: { config } } } };
+    if (kind === "service-tier") {
+      const model = "openai/gpt-5.6-sol";
+      const entry = {
+        agentRuntime: { id: "codex" },
+        params: { fastMode: true, serviceTier: "priority" },
+      } as const;
+      cfg.agents = { defaults: { model, models: { [model]: entry } } };
     }
     mocks.repairStaleAgentModelRefs.mockReturnValueOnce({
       ...mutation({}, "Retired model"),
       warnings: kind === "uncertain-retirement" ? ["Catalog unavailable"] : [],
     });
-    const result = await runRepairs({ plugins: { entries: { codex: { config } } } });
-    expect(result.modelRetirementOnly).toBe(expected);
-    if (Object.keys(config).length > 0) {
-      expect(result.warningNotes.length).toBeGreaterThan(0);
-      expect(result.displayWarningNotes).toEqual(result.warningNotes);
-    }
-    expect(result.state.pendingChanges).toBe(true);
+    const result = await runRepairs(cfg);
+    expect(result.modelRetirementBlockers).toEqual(
+      blockers.map((why) => `model-retirement.${why}`),
+    );
   });
 
   it.each([
@@ -339,14 +338,15 @@ describe("doctor repair sequencing", () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce(
       installedPlugin("brave", "@openclaw/brave-plugin"),
     );
-    mocks.applyPluginAutoEnable.mockImplementationOnce(({ config }: { config: OpenClawConfig }) =>
-      mutation(
-        {
-          ...config,
-          plugins: { allow: ["telegram", "brave"], entries: { brave: { enabled: true } } },
-        },
-        "brave web search provider selected, enabled automatically.",
-      ),
+    mocks.applyPluginAutoEnableAsync.mockImplementationOnce(
+      ({ config }: { config: OpenClawConfig }) =>
+        mutation(
+          {
+            ...config,
+            plugins: { allow: ["telegram", "brave"], entries: { brave: { enabled: true } } },
+          },
+          "brave web search provider selected, enabled automatically.",
+        ),
     );
 
     const result = await runRepairs({
@@ -384,7 +384,7 @@ describe("doctor repair sequencing", () => {
       },
     });
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
+    expect(mocks.applyPluginAutoEnableAsync).toHaveBeenCalledWith(
       expect.objectContaining({ manifestRegistry }),
     );
   });

@@ -61,12 +61,8 @@ export function registerResearchViewApi(
             });
             return;
           }
-          const incarnation = hash(
-            JSON.stringify([
-              authority.target.sessionId,
-              authority.target.lifecycleRevision ?? null,
-            ]),
-          );
+          // Jobs follow the conversation key; only a new job store needs a refresh.
+          const incarnation = hash(JSON.stringify([authority.target.sessionId]));
           if (
             action !== "list" &&
             action !== "read" &&

@@ -82,6 +82,7 @@ public actor GatewayNodeSession {
     private static let computerInvokeReceiptLimit = 256
     private var channel: GatewayChannelActor?
     private var activeURL: URL?
+    private var activeWorkerTransportURL: String?
     private var activeCredentials: GatewayNodeSessionCredentials?
     private var activeSessionIdentity: ObjectIdentifier?
     private var channelGeneration: UInt64 = 0
@@ -111,6 +112,7 @@ public actor GatewayNodeSession {
     var reactionAccess: GatewayReactionAccessFacts?
     private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
+    private var controlUiBasePath: String?
     // `computer.act` is not safe to repeat after a response is lost. Keep recent
     // in-flight/results on the long-lived node session so a channel reconnect can
     // replay the receipt without posting input twice. App restart intentionally
@@ -127,6 +129,7 @@ public actor GatewayNodeSession {
         let continuation: AsyncStream<EventFrame>.Continuation
         /// Filters before buffering so unrelated traffic cannot evict awaited events.
         let matches: @Sendable (EventFrame) -> Bool
+        var droppedCount = 0
     }
 
     private var serverEventSubscribers: [UUID: ServerEventSubscriber] = [:]
@@ -153,6 +156,7 @@ public actor GatewayNodeSession {
         credentials: GatewayNodeSessionCredentials,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
+        workerTransportURL: String? = nil,
         extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
@@ -167,6 +171,7 @@ public actor GatewayNodeSession {
         let ownerChanged = self.connectOptions?.deviceAuthGatewayID.map { Array($0.utf8) } !=
             connectOptions.deviceAuthGatewayID.map { Array($0.utf8) }
         let shouldReconnect = self.activeURL != url ||
+            self.activeWorkerTransportURL != workerTransportURL ||
             self.activeCredentials != credentials ||
             self.connectOptions != connectOptions || ownerChanged ||
             self.activeSessionIdentity != nextSessionIdentity ||
@@ -217,6 +222,7 @@ public actor GatewayNodeSession {
                 extraHeadersProvider: extraHeadersProvider)
             self.channel = channel
             self.activeURL = url
+            self.activeWorkerTransportURL = workerTransportURL
             self.activeCredentials = credentials
             self.activeSessionIdentity = nextSessionIdentity
             self.activeTLSRouteMetadataProvider = nextTLSRouteMetadataProvider
@@ -296,6 +302,7 @@ public actor GatewayNodeSession {
 
     private func clearActiveRoute() {
         self.activeURL = nil
+        self.activeWorkerTransportURL = nil
         self.activeCredentials = nil
         self.activeSessionIdentity = nil
         self.activeTLSRouteMetadataProvider = nil
@@ -567,16 +574,20 @@ public actor GatewayNodeSession {
             socketGeneration: socketGeneration)
     }
 
-    /// Private app-worker context from the authenticated socket, never configured fallback routes.
+    /// Private app-worker context from the authenticated socket. Native transports
+    /// supply their bounded worker bridge rather than expose the logical public URL.
+    /// That bridge carries worker ingress/HTTP transfers, not ticketed portal attachments.
     public func workerConnectionData(ifCurrentRoute route: GatewayNodeSessionRoute) async -> Data? {
         guard self.isCurrentRoute(route), let channel, let url = self.activeURL,
               let hello = self.workerHello else { return nil }
         let edge = await channel.currentWorkerEdgeCredentials()
         guard self.isCurrentRoute(route), self.channel === channel else { return nil }
         var connection: [String: Any] = [
-            "url": url.absoluteString,
+            "url": self.activeWorkerTransportURL ?? url.absoluteString,
             "protocol": hello.protocolVersion,
-            "capabilities": hello.capabilities.sorted(),
+            "capabilities": hello.capabilities.filter {
+                self.activeWorkerTransportURL == nil || $0 != "node-worker-portal-stream-v1"
+            }.sorted(),
         ]
         if let fingerprint = self.activeTLSRouteMetadataProvider?.effectiveTLSFingerprintSHA256 {
             connection["tlsFingerprint"] = fingerprint
@@ -667,6 +678,10 @@ public actor GatewayNodeSession {
 
     public func currentAttachmentLimits(ifCurrentRoute route: GatewayNodeSessionRoute) -> GatewayAttachmentLimits? {
         self.currentRouteValue(self.attachmentLimits, ifCurrentRoute: route)
+    }
+
+    public func currentControlUiBasePath(ifCurrentRoute route: GatewayNodeSessionRoute) -> String? {
+        self.currentRouteValue(self.controlUiBasePath, ifCurrentRoute: route)
     }
 
     private func currentRouteValue<T>(
@@ -842,6 +857,7 @@ extension GatewayNodeSession {
         self.reactionAccess = GatewayReactionAccessFacts(hello: snapshot)
         self.attachmentLimits = snapshot.advertisedAttachmentLimits()
         self.mainSessionKey = snapshot.snapshot.sessiondefaults?["mainSessionKey"]?.stringValue?.trimmedNonEmpty
+        self.controlUiBasePath = snapshot.controluibasepath?.trimmedNonEmpty
     }
 
     private func handlePush(
@@ -883,6 +899,7 @@ extension GatewayNodeSession {
         self.reactionAccess = nil
         self.attachmentLimits = nil
         self.mainSessionKey = nil
+        self.controlUiBasePath = nil
     }
 
     private func handleChannelDisconnected(
@@ -1205,8 +1222,10 @@ extension GatewayNodeSession {
     }
 
     // periphery:ignore - package tests verify event stream filtering without a live gateway.
-    func _test_broadcastServerEvent(_ event: EventFrame) {
+    @discardableResult
+    func _test_broadcastServerEvent(_ event: EventFrame) -> [Int] {
         self.broadcastServerEvent(event)
+        return self.serverEventSubscribers.values.map(\.droppedCount).sorted()
     }
 
     #endif
@@ -1529,13 +1548,30 @@ extension GatewayNodeSession {
 
     private func broadcastServerEvent(_ evt: EventFrame) {
         for (id, subscriber) in self.serverEventSubscribers where subscriber.matches(evt) {
-            if case .terminated = subscriber.continuation.yield(evt) {
-                self.serverEventSubscribers.removeValue(forKey: id)
+            switch subscriber.continuation.yield(evt) {
+            case .dropped:
+                // Only overflow mutates diagnostics; ordinary delivery does no logging work.
+                if subscriber.droppedCount < Int.max {
+                    self.serverEventSubscribers[id]?.droppedCount += 1
+                }
+                if subscriber.droppedCount == 0 {
+                    self.logger.warning(
+                        "server event subscriber buffer overflow; further drops counted until termination")
+                }
+            case .terminated:
+                self.removeServerEventSubscriber(id)
+            case .enqueued:
+                break
+            @unknown default:
+                break
             }
         }
     }
 
     private func removeServerEventSubscriber(_ id: UUID) {
-        self.serverEventSubscribers.removeValue(forKey: id)
+        guard let subscriber = self.serverEventSubscribers.removeValue(forKey: id),
+              subscriber.droppedCount > 0 else { return }
+        // At most two content-free records per subscriber: first drop and lifetime total.
+        self.logger.warning("server event subscriber ended; dropped=\(subscriber.droppedCount, privacy: .public)")
     }
 }

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import fsSync, { existsSync, readFileSync, writeSync } from "node:fs";
+import { existsSync, readFileSync, writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { clearTimeout as clearRealTimeout, setTimeout as realTimeout } from "node:timers";
@@ -14,12 +14,15 @@ import { inspectLinuxProcessGroup, isQaPosixProcessGroupAlive } from "./posix-pr
 import { runQaCli } from "./qa-cli-process.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-// Intercept the named ESM export consumed by the bootstrap owners; the default
-// fs object remains native so unrelated fixture writes still reach the filesystem.
+// Observe bootstrap writes on both builtin surfaces, retaining native passthrough.
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, writeSync: vi.fn(actual.writeSync) };
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { writeSync: vi.fn(actual.writeSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
+const nativeFs = await vi.importActual<typeof import("node:fs")>("node:fs");
 
 // RPC is outside these process-lifetime tests. HTTP readiness and all processes stay real.
 vi.mock("./gateway-rpc-client.js", () => ({
@@ -206,7 +209,7 @@ afterEach(async () => {
 
 function captureBootstrapBoundaries(failSink = false) {
   const messages: Array<{ command: string; event: string; [key: string]: unknown }> = [];
-  const write = fsSync.writeSync;
+  const write = nativeFs.writeSync;
   vi.mocked(writeSync).mockImplementation((...args) => {
     const line = args[1];
     if (args[0] === 2 && typeof line === "string" && line.startsWith("[qa-bootstrap] ")) {
@@ -216,7 +219,7 @@ function captureBootstrapBoundaries(failSink = false) {
       }
       return Buffer.byteLength(line);
     }
-    return Reflect.apply(write, fsSync, args);
+    return Reflect.apply(write, nativeFs, args);
   });
   return messages;
 }

@@ -22,6 +22,8 @@ registerEnglishCatalog(registerChatComposerEnglish);
 
 const PDF_PREVIEW_MAX_BYTES = 16 * 1024 * 1024;
 const PDF_PREVIEW_TIMEOUT_MS = 10_000;
+// Chromium uses view/navpanes; Firefox uses zoom/pagemode. Keep the native toolbar.
+const PDF_VIEWER_FRAGMENT = "#view=FitH&navpanes=0&zoom=page-width&pagemode=none";
 
 export function isPdfAttachment(rawMimeType: string, filename: string): boolean {
   const mimeType = rawMimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -180,7 +182,7 @@ export function ChatPdfPreview(props: {
             <iframe
               class="sidebar-pdf-preview__frame"
               title={props.label}
-              src={url()}
+              src={`${url()}${PDF_VIEWER_FRAGMENT}`}
               referrerpolicy="no-referrer"
             />
           </Show>

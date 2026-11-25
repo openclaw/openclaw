@@ -78,15 +78,15 @@ describe("AppSidebar session sort persistence", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const first = await mountSidebar(gateway, createSessions("main", ["agent:main:session-a"]));
     const firstSidebar = first.sidebar as unknown as SidebarSortModeHost;
-    expect(firstSidebar.sessionSortMode).toBe("created");
+    expect(firstSidebar.sessionSortMode).toBe("updated");
 
-    firstSidebar.setSessionSortMode("updated");
-    expect(localStorage.getItem("openclaw:sidebar:sessions:sort-mode")).toBe("updated");
+    firstSidebar.setSessionSortMode("created");
+    expect(localStorage.getItem("openclaw:sidebar:sessions:sort-mode")).toBe("created");
 
     document.body.replaceChildren();
     const second = await mountSidebar(gateway, createSessions("main", ["agent:main:session-a"]));
 
-    expect((second.sidebar as unknown as SidebarSortModeHost).sessionSortMode).toBe("updated");
+    expect((second.sidebar as unknown as SidebarSortModeHost).sessionSortMode).toBe("created");
   });
 });
 
@@ -108,6 +108,8 @@ describe("AppSidebar session pagination", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", olderKeys);
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.setSessionSortMode("created");
+    await sidebar.updateComplete;
     const refreshed = createSessionState("main", [...olderKeys, "agent:main:external-new"]);
     required(refreshed.result?.sessions.at(-1)).createdAt = 2_000;
 
@@ -197,6 +199,19 @@ async function createReconnectFixture(initial: ReturnType<typeof createSessionSt
 }
 
 describe("AppSidebar session source lifecycle", () => {
+  it("keeps the context-menu row highlighted until its menu closes", async () => {
+    const { sidebar, menu } = await mountRow("agent:main:target", {});
+    const row = required(sidebar.querySelector('[data-session-key="agent:main:target"]'));
+    expect(row.classList.contains("sidebar-recent-session--menu-open")).toBe(true);
+
+    required(menu.querySelector<HTMLElement>('[data-shortcut="p"]')).dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }),
+    );
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector("openclaw-session-menu")).toBeNull();
+    expect(row.classList.contains("sidebar-recent-session--menu-open")).toBe(false);
+  });
+
   it("disables Fork session for model-selection-locked rows", async () => {
     const { menu } = await mountRow("agent:main:locked", { modelSelectionLocked: true });
     expect(menu.forkDisabled).toBe(true);

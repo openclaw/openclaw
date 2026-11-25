@@ -19,6 +19,10 @@ export async function prepareGatewayShutdownRuntime() {
     { prepareActivePluginRegistryShutdown },
     { waitForPluginCacheRetirement },
     { loadSubagentSessionCleanupRuntime },
+    sessionRestartResume,
+    subagentRegistry,
+    { prepareSqliteWorkerBrokerClose },
+    { loadSupervisorLogRuntime },
   ] = await Promise.all([
     import("./server-close.runtime.js"),
     import("../plugins/hook-runner-global.js"),
@@ -34,8 +38,17 @@ export async function prepareGatewayShutdownRuntime() {
     import("../plugins/runtime.js"),
     import("../plugins/plugin-cache.js"),
     import("../agents/subagents/registry/subagent-session-cleanup.js"),
+    import("./session-restart-resume.js"),
+    import("../agents/subagents/registry/subagent-registry.js"),
+    import("../infra/sqlite-worker-store.js"),
+    import("../process/supervisor/released-processes.js"),
   ]);
-  await Promise.all([prepareActivePluginRegistryShutdown(), loadSubagentSessionCleanupRuntime()]);
+  await Promise.all([
+    prepareActivePluginRegistryShutdown(),
+    loadSubagentSessionCleanupRuntime(),
+    prepareSqliteWorkerBrokerClose(),
+    loadSupervisorLogRuntime(),
+  ]);
 
   return {
     prepareGatewayClose,
@@ -53,6 +66,9 @@ export async function prepareGatewayShutdownRuntime() {
     disposeAllCodeModeRuns,
     closeProviderTransportDispatcherPool,
     waitForPluginCacheRetirement,
+    // Close calls late-bound exports through these retained namespaces, never a new import.
+    sessionRestartResume,
+    subagentRegistry,
   };
 }
 

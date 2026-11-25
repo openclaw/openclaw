@@ -108,9 +108,11 @@ it("keeps the wrapped document bytes stable", () => {
     '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
   );
 
-  expect(Buffer.byteLength(html)).toBe(17967);
+  expect(html).toContain("--scrollbar-thumb-near:color-mix(in srgb,var(--muted) 16%,transparent)");
+  expect(html).toContain("border:var(--scrollbar-thumb-inset,calc(var(--scrollbar-size)/4))");
+  expect(Buffer.byteLength(html)).toBe(22943);
   expect(createHash("sha256").update(html).digest("hex")).toBe(
-    "c7d26e46938bab7e73a1902c863092740b44f6a72b7837033e386549abc84d6e",
+    "9662faa40f8a387da978f00eb70154535b744b50075b27577d91aa0b4b8dc231",
   );
 });
 // The host side reads port data through the pristine getter, so a widget

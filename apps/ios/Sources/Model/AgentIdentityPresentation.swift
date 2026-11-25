@@ -1,6 +1,45 @@
 import Foundation
+import ImageIO
+import OpenClawChatUI
+import OpenClawKit
+import OpenClawProtocol
+import UIKit
 
 enum AgentIdentityPresentation {
+    nonisolated static func displayName(for agent: AgentSummary) -> String {
+        agent.name?.trimmedNonEmpty ?? agent.id
+    }
+
+    nonisolated static func modelLabel(for agent: AgentSummary) -> String? {
+        guard let model = agent.model else { return nil }
+        for key in ["primary", "name", "id", "model"] {
+            if let value = (model[key]?.value as? String)?.trimmedNonEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
+    nonisolated static func imageSource(identity: [String: AnyCodable]?) -> String? {
+        for key in ["avatarUrl", "avatar"] {
+            guard let source = identity?[key]?.value as? String else { continue }
+            let choice = OpenClawChatAgentChoice(id: "", avatar: source)
+            if let avatar = choice.avatar { return avatar }
+        }
+        return nil
+    }
+
+    nonisolated static func image(data: Data) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceThumbnailMaxPixelSize: 144,
+              ] as CFDictionary)
+        else { return nil }
+        return UIImage(cgImage: image)
+    }
+
     nonisolated static func badge(avatarText: String?, displayName: String) -> String {
         self.normalizedBadgeEmoji(avatarText) ?? self.initialsBadge(for: displayName)
     }

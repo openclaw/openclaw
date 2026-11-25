@@ -1,6 +1,7 @@
 import { getObserver } from "@solidjs/signals";
-import type { JSX } from "@solidjs/web";
+import { dynamic, type JSX } from "@solidjs/web";
 import { createMemo, lazy, Loading, Show } from "solid-js";
+import { isRailSectionPin } from "../app-navigation.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { patchSettings } from "../app/settings.ts";
@@ -10,8 +11,12 @@ import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { IdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import { projectGateway, projectOverlays } from "../lib/reactive/application.ts";
-import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
+import {
+  projectApplicationConfig,
+  projectGateway,
+  projectOverlays,
+} from "../lib/reactive/application.ts";
+import { projectAgents, projectRuntimeConfig } from "../lib/reactive/domain-capabilities.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
@@ -27,11 +32,14 @@ import {
   runSessionNavigationAction,
 } from "../lib/sessions/session-menu-navigation.ts";
 import { showToast } from "../lib/toast.ts";
+import { shareAgentAsTemplate } from "../pages/templates/creator-owner.ts";
+import { canCreateTemplateDraft } from "../pages/templates/draft-navigation.ts";
 import {
   pluginSessionMenuActions,
   runControlUiPluginAction,
 } from "../plugins/control-ui-actions.ts";
 import { renderSidebarAgentMenu as SidebarAgentMenu } from "./app-sidebar-agent-menu.tsx";
+import { renderSidebarAutomationsFilterMenuForMenus } from "./app-sidebar-automations-filter.tsx";
 import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
 import { renderSidebarIdentityMenu as SidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
 import { renderSidebarPeopleFilterMenuForMenus } from "./app-sidebar-people-filter-menu.tsx";
@@ -52,7 +60,8 @@ import {
   runSessionAction,
   runBatchSessionAction,
 } from "./session-organizer-menu.runtime.ts";
-import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
+import { moveSessionFromMenu, sessionMenuPlacementAction } from "./session-placement-action.ts";
+import { resolveAgentMenuSessionKey } from "./sidebar-agent-menu-session-key.ts";
 import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
@@ -62,6 +71,10 @@ import type { MenuEntry } from "./solid/menu.tsx";
 
 export { SidebarCatalogMenu as CatalogSessionMenu } from "./app-sidebar-catalog-menu.runtime.tsx";
 export { createSessionMenuWork } from "./session-menu-work.ts";
+
+const OpenClawIdIdentityMenu = lazy(() => import("./openclaw-id/identity-menu.tsx"), {
+  export: "OpenClawIdIdentityMenu",
+});
 
 const AgentCreateDialog = lazy(() => import("./agent-create-dialog.tsx"), {
   export: "AgentCreateDialog",
@@ -97,8 +110,10 @@ function renderSidebarMenus(
   return [
     <Show when={projected.railPinMenuPosition} keyed>
       {(menu) => {
+        // Moves stay within the pin's rail group: sections above the separator, the rest below.
+        const group = isRailSectionPin(menu.entry);
         const entries = [...projected.railPins]
-          .filter(([, element]) => element.isConnected)
+          .filter(([entry, element]) => element.isConnected && isRailSectionPin(entry) === group)
           .toSorted(([, left], [, right]) =>
             left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
           )
@@ -179,6 +194,18 @@ function renderSidebarMenus(
             }
             return t("agentChip.creationRequiresAdmin");
           });
+          const runtimeConfig = createMemo(() => {
+            const source = view.sessionDataContext?.runtimeConfig;
+            return source && projectRuntimeConfig(source);
+          });
+          const shareAgent = createMemo(() => {
+            const context = view.sessionDataContext;
+            gateway()?.read();
+            runtimeConfig()?.read();
+            return context && canCreateTemplateDraft(context)
+              ? (agentId: string) => void shareAgentAsTemplate(context, agentId)
+              : undefined;
+          });
           return (
             <SidebarAgentMenu
               {...{
@@ -221,8 +248,9 @@ function renderSidebarMenus(
                   if (view.sidebarAgentsMode === "roster") {
                     patchSettings({ sidebarAgentsMode: "chip" });
                   }
-                  view.switchChipAgent(agentId);
+                  view.switchChipAgent(agentId, resolveAgentMenuSessionKey);
                 },
+                onShareAgent: shareAgent(),
                 onCreateAgent: () => {
                   if (view.sessionDataContext) {
                     projected.closeAgentMenu();
@@ -280,6 +308,11 @@ function renderSidebarMenus(
           const user = selfUser();
           return user ? { ...user, watchedSessions: [] } : undefined;
         });
+        const config =
+          view.sessionDataContext && projectApplicationConfig(view.sessionDataContext.config);
+        const IdentityMenu = dynamic(() =>
+          config?.read().openclawIdEnabled ? OpenClawIdIdentityMenu : SidebarIdentityMenu,
+        );
         const updateAvailable = createMemo(
           () =>
             isReleaseUpdateAvailable(
@@ -292,7 +325,7 @@ function renderSidebarMenus(
             !isUpdateAttentionForced(overlaySnapshot()?.updateStatusBanner?.tone),
         );
         return (
-          <SidebarIdentityMenu
+          <IdentityMenu
             {...{
               nativeGatewaySnapshot: view.nativeGatewaySnapshot,
               position: menu,
@@ -387,6 +420,7 @@ function renderSidebarMenus(
         const assignmentAccess = createMemo(() =>
           view.readSessionMutationAccess({
             method: "sessions.assignOwner",
+            missingScopeReasonKey: "sessionsView.assignPermissionDenied",
             params: {
               key: session().key,
               owner: { type: "human", id: selfUser()?.id ?? "profile" },
@@ -414,7 +448,10 @@ function renderSidebarMenus(
           <SessionMenu
             session={{
               label: session().label,
-              placementAction: sessionPlacementAction(currentPlacementSession()),
+              placementAction: sessionMenuPlacementAction(
+                currentPlacementSession(),
+                context()?.agents.state.agentsList,
+              ),
               target: { key: session().key, agentId: session().agentId },
               sessionId: session().sessionId ?? null,
               isChild: session().isChild,
@@ -426,6 +463,7 @@ function renderSidebarMenus(
               effectiveCommunication: session().effectiveCommunication,
               archived: allArchived(),
               snoozedUntil: session().snoozedUntil ?? null,
+              snoozeTime: view.gatewayTimeForSavedPin(session()),
               archiving: rows().some(
                 (row) => context()?.sessions.archiveVisibility(row.key) === "pending",
               ),
@@ -570,6 +608,9 @@ function renderSidebarMenus(
     </Show>,
     <Show when={projected.peopleFilterMenuPosition} keyed>
       {(menu) => renderSidebarPeopleFilterMenuForMenus(projected, view, menu)}
+    </Show>,
+    <Show when={projected.automationsFilterMenuPosition}>
+      {renderSidebarAutomationsFilterMenuForMenus(projected, view)}
     </Show>,
     <Show when={projected.catalogViewMenuPosition} keyed>
       {(menu) => renderSidebarCatalogViewMenuForMenus(projected, view, menu)}

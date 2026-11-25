@@ -53,7 +53,7 @@ export function registerNativePluginPolicyCases(options: NativePluginSpawnTestOp
       const { parentSessionKey, parentRunId } = bound;
       const { context, runtime } = await createBoundGateway(bound);
       const failures: unknown[] = [];
-      const agentTools = await import("../../agent-tools.js");
+      const agentTools = await import("../../agent-tools.async.js");
       const original = agentTools.createOpenClawCodingToolsInternalAsync;
       const preparation =
         reader === "absent"
@@ -92,10 +92,13 @@ export function registerNativePluginPolicyCases(options: NativePluginSpawnTestOp
                   inheritRuntimeToolAllowlist: true,
                 },
                 operatorAuthority: source.authority,
-                assertCurrent: source.authority.assertCurrent,
+                assertCurrent: () => bound.parent.controller.signal.throwIfAborted(),
                 prepareSpawn,
               },
-              { pluginId: "native-test", assertCurrent: source.authority.assertCurrent },
+              {
+                pluginId: "native-test",
+                assertCurrent: () => bound.parent.controller.signal.throwIfAborted(),
+              },
             );
             await expect(expectDefined(native.list, "denied native listing")()).rejects.toThrow(
               "agents_wait is not available",

@@ -1,5 +1,7 @@
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
+import { formatGatewayPendingCloseSteps } from "../../gateway/restart-trace.js";
 import { flushDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   GATEWAY_SIGNAL_REPEAT_WINDOW_MS,
   formatGatewayRepeatedSignalHint,
@@ -7,6 +9,7 @@ import {
 import { flushLogger } from "../../logging/logger.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { sleep } from "../../utils/sleep.js";
+import { armShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
 
 export async function waitForLaunchdRestartHandoff(handoffSpawned?: Promise<boolean>) {
   const delay = sleep(1_500);
@@ -67,4 +70,19 @@ export function createGatewayStabilityReporter(
     );
     logger.warn(result.message);
   };
+}
+
+export function armGatewayShutdownHardExitWatchdog(
+  delayMs: number,
+  logger: Pick<SubsystemLogger, "warn">,
+) {
+  return armShutdownHardExitWatchdog({
+    delayMs,
+    describePending: formatGatewayPendingCloseSteps,
+    onError: (error) => {
+      logger.warn(
+        `hard-exit watchdog failed; retaining main-thread shutdown timer: ${formatErrorMessage(error)}`,
+      );
+    },
+  });
 }

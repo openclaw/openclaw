@@ -307,9 +307,6 @@ export async function createExecApprovalRequestRoute<TTimeoutContext = undefined
 
 function classifyExecApprovalWaitFailure(error: unknown) {
   // Only fixed owner errors become categories; command-bearing transport payloads stay private.
-  if (error instanceof Error && error.message === "Approval requester authority changed") {
-    return "authority-changed";
-  }
   if (error instanceof GatewayProtocolRequestTimeoutError) {
     return "gateway-timeout";
   }

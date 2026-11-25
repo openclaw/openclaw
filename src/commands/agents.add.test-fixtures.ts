@@ -21,7 +21,7 @@ export async function createAgentForAddCommandTest(params: {
         match: { channel: params.bindingSpecs[0].split(":")[0] },
       }
     : undefined;
-  const receipt = await params.prepareConfigCommit?.();
+  const receipt = await params.prepareConfigCommit?.(params.stagedConfig?.config ?? {});
   await receipt?.commit();
   const committed = committedConfigFiles.write(params.stagedConfig?.config ?? {});
   return {

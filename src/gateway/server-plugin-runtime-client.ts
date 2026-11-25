@@ -6,9 +6,14 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { isPluginBuiltCoreToolId } from "../agents/core-tool-facts.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
@@ -16,6 +21,10 @@ import {
   readInProcessSubagentResume,
 } from "./in-process-subagent-resume.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import {
+  readOperatorToolGatewayAuthority,
+  runOutsideOperatorToolGatewayAuthority,
+} from "./operator-tool-gateway-authority.js";
 import type { GatewayNodeInvokeStream, GatewayRequestOptions } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -33,7 +42,6 @@ export function createSyntheticPluginRuntimeClient(
       | "openclawIdPrincipal"
       | "operatorRunAuthority"
       | "operatorAccessAuthority"
-      | "cronRunContinuation"
       | "runtimeContextFragments"
       | "internalDeliverySuppressErrors"
       | "pluginRuntimeOwnerId"
@@ -77,7 +85,6 @@ export function createSyntheticPluginRuntimeClient(
       ...(params?.agentToolCaller ? { agentToolCaller: params.agentToolCaller } : {}),
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
-      ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
       ...(params?.runtimeContextFragments
         ? { runtimeContextFragments: params.runtimeContextFragments }
         : {}),
@@ -197,15 +204,17 @@ export function resolvePluginSubagentToolsAlsoAllow(params: {
     throw new Error("toolsAlsoAllow requires plugin identity for subagent runs.");
   }
   const registry = getActivePluginRegistry();
-  // A catalog id is the plugin's own when its manifest declares the tool (as `browser` and
-  // `skill_workshop` are); every other catalog id is a core tool a plugin may not hand a fork.
+  // A catalog id is the plugin's own only when the catalog marks it plugin-built (as `browser` and
+  // `skill_workshop`) and its manifest declares it. Every other catalog id is a core tool a plugin
+  // may not hand a subagent run, since the grant widens the session's tool profile.
   const declaredTools = new Set(
     (registry?.plugins.find((plugin) => plugin.id === pluginId)?.contracts?.tools ?? []).map(
       (name) => normalizeToolPolicyName(name),
     ),
   );
   for (const toolName of requested) {
-    if (isKnownCoreToolId(toolName) && !declaredTools.has(toolName)) {
+    const pluginOwned = declaredTools.has(toolName) && isPluginBuiltCoreToolId(toolName);
+    if (isKnownCoreToolId(toolName) && !pluginOwned) {
       throw new Error(`plugin "${pluginId}" may not add core tool "${toolName}" to subagent runs.`);
     }
     const owners = uniqueStrings(
@@ -222,4 +231,34 @@ export function resolvePluginSubagentToolsAlsoAllow(params: {
     }
   }
   return { pluginId, toolNames: requested };
+}
+/** Transfer bounded cleanup without retaining the finished operator invocation. */
+export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
+  const authority = readOperatorToolGatewayAuthority();
+  if (!authority) {
+    return run();
+  }
+  authority.signal.throwIfAborted();
+  const scope = getPluginRuntimeGatewayRequestScope();
+  // Retain the effective actor and scopes after releasing the invocation;
+  // profile attribution alone does not establish authority.
+  const client = createSyntheticPluginRuntimeClient({
+    authenticatedUserProfile: authority.authenticatedUserProfile,
+    scopes: [...authority.scopes],
+    operatorRoleActor:
+      authority.operatorRoleActor ??
+      scope?.client?.internal?.operatorRoleActor ??
+      (authority.authenticatedUserProfile
+        ? {
+            kind: "operator",
+            profileId: authority.authenticatedUserProfile.profileId,
+          }
+        : undefined),
+  });
+  return runOutsideOperatorToolGatewayAuthority(() =>
+    withPluginRuntimeGatewayRequestScope(
+      { ...scope, client, isWebchatConnect: scope?.isWebchatConnect ?? (() => false) },
+      run,
+    ),
+  );
 }

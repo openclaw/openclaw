@@ -3,7 +3,7 @@ import {
   WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE,
 } from "@openclaw/ai/diagnostics";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
-import { REPEATED_TOOL_ERROR_CODE } from "../../../packages/agent-core/src/errors.js";
+import { TOOL_REPEAT_LIMIT_CODE } from "../../../packages/agent-core/src/tool-repeat-guard.js";
 import { classifyFailoverSignal } from "../../agents/failover/classify.js";
 import {
   extractFailoverHttpStatus,
@@ -15,11 +15,11 @@ import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   REPETITIVE_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
-  type AssistantMessage,
+  type AssistantHistoryMessage,
 } from "../types.js";
 
 const TERMINAL_ASSISTANT_ERROR_CODES = new Set([
-  REPEATED_TOOL_ERROR_CODE,
+  TOOL_REPEAT_LIMIT_CODE,
   REPETITIVE_OUTPUT_ERROR_CODE,
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
@@ -32,10 +32,10 @@ const TERMINAL_ASSISTANT_ERROR_CODES = new Set([
  */
 export function isTerminalAssistantError(
   message:
-    | (Pick<AssistantMessage, "diagnostics" | "errorCode"> &
+    | (Pick<AssistantHistoryMessage, "diagnostics" | "errorCode"> &
         Partial<
           Pick<
-            AssistantMessage,
+            AssistantHistoryMessage,
             "stopReason" | "errorBody" | "errorMessage" | "errorType" | "content"
           >
         >)
@@ -53,7 +53,7 @@ export function isTerminalAssistantError(
 }
 
 /** Classify transient provider/transport failures for session retries. */
-export function isRetryableAssistantError(message: AssistantMessage): boolean {
+export function isRetryableAssistantError(message: AssistantHistoryMessage): boolean {
   if (
     message.stopReason !== "error" ||
     !message.errorMessage ||

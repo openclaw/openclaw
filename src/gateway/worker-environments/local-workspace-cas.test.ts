@@ -1,14 +1,19 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize, serialize } from "node:v8";
-import { inflateRawSync } from "node:zlib";
-import { assert, expect, it, vi } from "vitest";
+import { inflateRawSync, zstdDecompressSync } from "node:zlib";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import {
   decodeLocalWorkspaceTree,
   localWorkspaceDigestBytes,
+  localWorkspaceDigestReference,
   prepareLocalWorkspaceSourcePathSet,
   prepareLocalWorkspaceTreePacks,
   type LocalWorkspacePreparation,
@@ -18,9 +23,9 @@ import {
   deleteLocalWorkspaceSweepBatchInDatabase,
   prepareLocalWorkspaceContentInDatabase,
   readLocalWorkspaceSourcePaths,
-  readLocalWorkspaceSweepCandidates,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
+import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
 import {
   executeLocalWorkspaceManifestRead,
   readLocalWorkspaceManifestRows,
@@ -29,8 +34,18 @@ import {
   createLocalWorkspaceManifestTree,
   localWorkspaceManifestRootReference,
 } from "./local-workspace-manifest-tree.js";
-import { mutateLocalWorkspaceProjection } from "./local-workspace-store.kernel.js";
+import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
+import {
+  localWorkspaceReadOperations,
+  mutateLocalWorkspaceProjection,
+  readLocalWorkspaceProjectionInDatabase,
+} from "./local-workspace-store.kernel.js";
 import { localWorkspaceProjectionFixture } from "./local-workspace-store.test-support.js";
+import type { LocalWorkspaceManifestAction } from "./local-workspace-store.types.js";
+import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 function tree(character: string) {
   return createLocalWorkspaceManifestTree([
@@ -59,13 +74,19 @@ it("materializes a manifest snapshot after its database closes", async () => {
     { path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) },
   ]);
   const action = { kind: "materialize" as const };
+  const paths = prepareLocalWorkspaceSourcePathSet(JSON.stringify(["src/retained.ts"]));
   const snapshot = (() => {
     try {
       mutateLocalWorkspaceProjection(database, worktreeId, {
         kind: "create",
-        row: localWorkspaceProjectionFixture(worktreeId, "/synthetic"),
+        row: {
+          ...localWorkspaceProjectionFixture(worktreeId, "/synthetic"),
+          source_paths_digest: localWorkspaceDigestBytes(paths.digest),
+          canonical_fingerprints: Buffer.alloc(1024, 1),
+          projection_fingerprints: Buffer.alloc(2048, 2),
+        },
       });
-      prepareTreePacks(database, records);
+      prepareTreePacks(database, records, paths);
       mutateLocalWorkspaceProjection(database, worktreeId, {
         kind: "update",
         revision: 0,
@@ -80,11 +101,33 @@ it("materializes a manifest snapshot after its database closes", async () => {
         },
       });
       using parsing = vi.spyOn(JSON, "parse");
+      const reads = trackSqliteStatementExecutions(database, ["projection", "paths"], (sql) =>
+        !/^select\b/i.test(sql)
+          ? null
+          : sql.includes('from "local_workspace_source_path_sets"')
+            ? "paths"
+            : sql.includes('from "local_workspace_projections"')
+              ? "projection"
+              : null,
+      );
       const captured = readLocalWorkspaceManifestRows(database, {
         id: worktreeId,
         revision: 1,
         action,
       });
+      reads.restore();
+      expect(reads.counts.paths).toBe(0);
+      expect(captured.row.source_paths_json).toBe("[]");
+      // Only the tree/source digests are needed, not fingerprint or admitted-path payloads.
+      expect(reads.blobBytes.projection).toBe(64);
+      const cached = readLocalWorkspaceManifestRows(database, {
+        id: worktreeId,
+        revision: 1,
+        action,
+        knownTreeRoot: records.get("")!.treeRef,
+      });
+      expect(cached.records).toBeUndefined();
+      expect(cached.row.source_paths_json).toBe("[]");
       expect(parsing.mock.calls.filter(([text]) => text.includes('"node":'))).toHaveLength(0);
       return deserialize(serialize(captured)) as typeof captured;
     } finally {
@@ -93,15 +136,259 @@ it("materializes a manifest snapshot after its database closes", async () => {
   })();
   // The read scope is closed: materialization must own all facts, not a live SQLite cursor.
   const value = await executeLocalWorkspaceManifestRead(snapshot, action);
-  expect(value).toMatchObject({
+  const expected = JSON.stringify({
+    version: 1,
+    baseCommit: "a".repeat(40),
+    entries: [{ path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) }],
+  });
+  expect(value).toEqual({
     kind: "materialize",
-    rawManifest: JSON.stringify({
-      version: 1,
-      baseCommit: "a".repeat(40),
-      entries: [{ path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) }],
-    }),
+    rawManifest: expected,
+    manifestRef: `sha256:${createHash("sha256").update(expected).digest("hex")}`,
   });
 });
+
+it.each(["inline", "CAS"] as const)(
+  "preserves %s source admission across prepared manifest updates and conversion",
+  async (storage) => {
+    using database = new DatabaseSync(":memory:");
+    const sourcePaths = JSON.stringify(["src/retained.ts", "build/retained-input.bin"]);
+    const paths = prepareLocalWorkspaceSourcePathSet(sourcePaths);
+    const records = createLocalWorkspaceManifestTree([]);
+    const baselineRef = localWorkspaceManifestRootReference(records, "a".repeat(40));
+    const row = {
+      ...localWorkspaceProjectionFixture(randomUUID(), "/synthetic"),
+      source_paths_json: sourcePaths,
+      source_paths_digest: storage === "CAS" ? localWorkspaceDigestBytes(paths.digest) : null,
+      tree_root_digest: localWorkspaceDigestBytes(records.get("")!.treeRef),
+      baseline_ref: baselineRef,
+    };
+    mutateLocalWorkspaceProjection(database, row.worktree_id, { kind: "create", row });
+    prepareTreePacks(database, records, paths);
+    const rawManifest = JSON.stringify({ version: 1, baseCommit: row.base_commit, entries: [] });
+    const actions: LocalWorkspaceManifestAction[] = [
+      {
+        kind: "prepare",
+        manifest: {
+          records: [],
+          removed: [],
+          previousRoot: baselineRef,
+          resultingRoot: baselineRef,
+        },
+        patch: {},
+      },
+      {
+        kind: "replace",
+        rawManifest,
+        manifestRef: `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`,
+        buildCacheInputs: [],
+        patch: {},
+      },
+    ];
+    let revision = 0;
+    for (const action of actions) {
+      const reads = trackSqliteStatementExecutions(database, ["projection", "paths"], (sql) =>
+        !/^select\b/i.test(sql)
+          ? null
+          : sql.includes('from "local_workspace_source_path_sets"')
+            ? "paths"
+            : sql.includes('from "local_workspace_projections"')
+              ? "projection"
+              : null,
+      );
+      const captured = readLocalWorkspaceManifestRows(database, {
+        id: row.worktree_id,
+        revision,
+        action,
+      });
+      reads.restore();
+      expect(reads.counts.paths).toBe(0);
+      expect(captured.row.source_paths_json).toBe("[]");
+      expect(reads.textBytes.projection).toBe(
+        Buffer.byteLength(row.projection_path + row.base_commit + baselineRef + "[]"),
+      );
+      const prepared = await executeLocalWorkspaceManifestRead(captured, action);
+      assert(prepared.kind === "replace");
+      mutateLocalWorkspaceProjection(
+        database,
+        row.worktree_id,
+        deserialize(zstdDecompressSync(prepared.update.mutation)),
+      );
+      revision += 1;
+      expect(readLocalWorkspaceProjectionInDatabase(database, row.worktree_id)).toMatchObject({
+        revision,
+        source_paths_json: sourcePaths,
+      });
+    }
+    const action = { kind: "convert" as const };
+    const captured = readLocalWorkspaceManifestRows(database, {
+      id: row.worktree_id,
+      revision,
+      action,
+    });
+    const converted = await executeLocalWorkspaceManifestRead(captured, action);
+    assert(converted.kind === "replace");
+    expect(converted.update.patch.source_paths_json).toBe(sourcePaths);
+  },
+);
+
+it.each(["canonical", "projection"] as const)(
+  "preserves opposite-side hash reuse after accepting changes toward %s",
+  async (target) => {
+    using database = new DatabaseSync(":memory:");
+    const root = await fs.realpath(dirs.make("workspace-manifest-fingerprint-"));
+    const canonicalRoot = path.join(root, "canonical");
+    const projectionRoot = path.join(root, "projection");
+    const baselinePaths = ["entry.txt", "kept.txt", "mode.txt", "removed.txt"];
+    const records = createLocalWorkspaceManifestTree(
+      baselinePaths.map((entryPath) => ({
+        path: entryPath,
+        type: "file" as const,
+        mode: 0o644,
+        size: 1,
+        sha256: createHash("sha256").update("a").digest("hex"),
+      })),
+    );
+    const treeRoot = records.get("")!.treeRef;
+    const fingerprints: Buffer[] = [];
+    for (const directory of [canonicalRoot, projectionRoot]) {
+      await fs.mkdir(directory);
+      const scan = prepareLocalWorkspaceFingerprints(records, treeRoot, null, Date.now() + 3000);
+      for (const entryPath of baselinePaths) {
+        await fs.writeFile(path.join(directory, entryPath), "a");
+        const stats = await fs.lstat(path.join(directory, entryPath), { bigint: true });
+        scan.observe(
+          entryPath,
+          `gateway:${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`,
+        );
+      }
+      fingerprints.push(scan.encode(records, treeRoot)!);
+    }
+    await requireGit(canonicalRoot, ["init", "--quiet"]);
+    await requireGit(canonicalRoot, ["add", "--all"]);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3000);
+    const row = {
+      ...localWorkspaceProjectionFixture("fingerprints", projectionRoot),
+      projection_path: projectionRoot,
+      tree_root_digest: localWorkspaceDigestBytes(treeRoot),
+      baseline_ref: localWorkspaceManifestRootReference(records, "a".repeat(40)),
+      canonical_fingerprints: fingerprints[0]!,
+      projection_fingerprints: fingerprints[1]!,
+    };
+    mutateLocalWorkspaceProjection(database, row.worktree_id, { kind: "create", row });
+    prepareTreePacks(database, records);
+    for (const kind of ["scan", "probe"] as const) {
+      const action = { kind, target, canonicalRoot };
+      const captured = readLocalWorkspaceManifestRows(database, {
+        id: row.worktree_id,
+        revision: 0,
+        action,
+        knownTreeRoot: treeRoot,
+      });
+      expect(captured.records).toBeUndefined();
+      const metrics = { contentHashCount: 0, memoHitCount: 0 };
+      const value = await withWorkspaceHashMemo(
+        new Map(),
+        () => executeLocalWorkspaceManifestRead(captured, action, new Map(records)),
+        metrics,
+      );
+      expect(value).toMatchObject({ kind: "scan", resultingRoot: row.baseline_ref });
+      expect(metrics.contentHashCount).toBe(0);
+    }
+    const archived = readLocalWorkspaceManifestRows(database, {
+      id: row.worktree_id,
+      revision: 0,
+      action: {
+        kind: "archive",
+        canonicalRoot,
+        archiveRoot: canonicalRoot,
+        snapshotCommit: "a".repeat(40),
+      },
+      knownTreeRoot: treeRoot,
+    });
+    expect(archived.row.canonical_fingerprints).toBeNull();
+    expect(Buffer.from(archived.row.projection_fingerprints!)).toEqual(fingerprints[1]);
+
+    const changeFiles = async (directory: string) => {
+      await fs.writeFile(path.join(directory, "entry.txt"), "b");
+      await fs.writeFile(path.join(directory, "added.txt"), "c");
+      if (process.platform === "win32") {
+        await fs.writeFile(path.join(directory, "mode.txt"), "d");
+      } else {
+        await fs.chmod(path.join(directory, "mode.txt"), 0o755);
+      }
+      await fs.unlink(path.join(directory, "removed.txt"));
+      await requireGit(canonicalRoot, ["add", "--all"]);
+    };
+    await changeFiles(target === "canonical" ? projectionRoot : canonicalRoot);
+    const action = { kind: "scan" as const, target, canonicalRoot };
+    const checkpoint = await executeLocalWorkspaceManifestRead(
+      readLocalWorkspaceManifestRows(database, { id: row.worktree_id, revision: 0, action }),
+      action,
+    );
+    assert(checkpoint.kind === "scan");
+    expect(checkpoint.resultingRoot).not.toBe(row.baseline_ref);
+    for (const preparation of checkpoint.preparations ?? []) {
+      prepareLocalWorkspaceContentInDatabase(
+        database,
+        deserialize(inflateRawSync(preparation)) as LocalWorkspacePreparation,
+      );
+    }
+    // Model successful patch application; manifest production and acceptance stay real.
+    await changeFiles(target === "canonical" ? canonicalRoot : projectionRoot);
+    mutateLocalWorkspaceProjection(database, row.worktree_id, {
+      kind: "update",
+      revision: 0,
+      patch: {},
+      manifest: checkpoint,
+    });
+    const metrics = { contentHashCount: 0, memoHitCount: 0 };
+    const probe = {
+      kind: "probe" as const,
+      target: target === "canonical" ? ("projection" as const) : ("canonical" as const),
+      canonicalRoot,
+    };
+    // A fresh tree read and empty memo model a worker restart after acceptance.
+    const observed = await withWorkspaceHashMemo(
+      new Map(),
+      () =>
+        executeLocalWorkspaceManifestRead(
+          readLocalWorkspaceManifestRows(database, {
+            id: row.worktree_id,
+            revision: 1,
+            action: probe,
+          }),
+          probe,
+        ),
+      metrics,
+    );
+    expect(observed).toMatchObject({ kind: "scan", resultingRoot: checkpoint.resultingRoot });
+    const accepted = decodeLocalWorkspaceTree(
+      readLocalWorkspaceTree(database, localWorkspaceDigestBytes(checkpoint.treeRoot!)),
+    );
+    expect([...accepted.keys()].toSorted()).toEqual([
+      "",
+      "added.txt",
+      "entry.txt",
+      "kept.txt",
+      "mode.txt",
+    ]);
+    for (const [entryPath, content] of [
+      ["added.txt", "c"],
+      ["entry.txt", "b"],
+      ["kept.txt", "a"],
+      ["mode.txt", process.platform === "win32" ? "d" : "a"],
+    ] as const) {
+      expect(accepted.get(entryPath)?.node).toMatchObject({
+        mode: entryPath === "mode.txt" && process.platform !== "win32" ? 0o755 : 0o644,
+        size: 1,
+        sha256: createHash("sha256").update(content).digest("hex"),
+      });
+    }
+    expect(metrics.contentHashCount).toBe(3);
+    expect(metrics.memoHitCount).toBe(1);
+  },
+);
 
 it.each([
   ["empty", ""],
@@ -146,10 +433,6 @@ it.each([2, 64])("loads %i directories with reads bounded by tree depth", (count
     ]).flat(),
   );
   prepareTreePacks(db, records);
-  // One sentinel/root pack, one root-directory pack, and one per child directory.
-  expect(db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs").get()!.n).toBe(
-    count + 2,
-  );
   const counter = trackSqliteStatementExecutions(db, ["reads"], (sql) =>
     /^(?:select|with)\b/i.test(sql) ? "reads" : null,
   );
@@ -203,14 +486,8 @@ it("shares an unchanged subdirectory pack across different projection roots", ()
       patch: { tree_root_digest: localWorkspaceDigestBytes(records.get("")!.treeRef) },
     });
   }
-  // Three packs per tree; only the sentinel and root-directory packs differ.
-  expect(db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs").get()!.n).toBe(5);
   const shared = first.get(first.get("shared")!.children!)!.treeRef;
   expect(second.get(second.get("shared")!.children!)!.treeRef).toBe(shared);
-  const packed = db
-    .prepare("SELECT records_json FROM local_workspace_tree_packs WHERE tree_digest = ?")
-    .get(localWorkspaceDigestBytes(shared));
-  expect(JSON.parse(String(packed!.records_json))).toHaveLength(2);
   for (const [index, records] of [first, second].entries()) {
     const loaded = readLocalWorkspaceManifestRows(db, {
       id: `sharing-${index}`,
@@ -222,8 +499,7 @@ it("shares an unchanged subdirectory pack across different projection roots", ()
   }
 });
 
-it("accepts a prepared tree with only the projection root flip inside the writer transaction", () => {
-  using cleanup = new DisposableStack();
+it("commits the prepared tree as the current projection root", () => {
   using db = new DatabaseSync(":memory:");
   const id = randomUUID();
   mutateLocalWorkspaceProjection(db, id, {
@@ -232,21 +508,6 @@ it("accepts a prepared tree with only the projection root flip inside the writer
   });
   const records = tree("a");
   prepareTreePacks(db, records);
-  const counters = trackSqliteStatementExecutions(db, ["nodeWrites", "rootFlip"], (sql) => {
-    if (
-      /^(?:insert|update|delete)\b/i.test(sql) &&
-      /local_workspace_(?:tree_packs|manifest_nodes)/i.test(sql)
-    ) {
-      return "nodeWrites";
-    }
-    if (/^update\b/i.test(sql) && /local_workspace_projections/i.test(sql)) {
-      return "rootFlip";
-    }
-    return null;
-  });
-  cleanup.defer(counters.restore);
-  prepareTreePacks(db, records);
-  expect(counters.counts.nodeWrites).toBe(0);
   mutateLocalWorkspaceProjection(db, id, {
     kind: "update",
     revision: 0,
@@ -260,18 +521,19 @@ it("accepts a prepared tree with only the projection root flip inside the writer
       replace: true,
     },
   });
-  expect(counters.counts).toEqual({ nodeWrites: 0, rootFlip: 1 });
   expect(
     decodeLocalWorkspaceTree(
-      readLocalWorkspaceTree(db, localWorkspaceDigestBytes(records.get("")!.treeRef)),
+      readLocalWorkspaceTree(db, readLocalWorkspaceProjectionInDatabase(db, id)!.tree_root_digest!),
     ),
   ).toEqual(records);
 });
 
-it("sweeps unreachable content while retaining baseline, previous and pending roots and newly reused content", () => {
-  using db = new DatabaseSync(":memory:");
+it("releases sweep read pages for checkpoints while retaining live and concurrently reused content", () => {
+  const databasePath = path.join(dirs.make("workspace-sweep-pages-"), "state.sqlite");
+  using db = new DatabaseSync(databasePath);
+  db.exec("PRAGMA journal_mode=WAL");
   db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
-  const id = randomUUID();
+  const id = "m-existing-projection";
   const baseline = createLocalWorkspaceManifestTree(
     Array.from({ length: 300 }, (_, index) => [
       { path: `dir-${index}`, type: "directory" as const },
@@ -288,15 +550,17 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   const pending = tree("c");
   const abandoned = tree("d");
   const reused = tree("e");
+  const published = tree("f");
   mutateLocalWorkspaceProjection(db, id, {
     kind: "create",
     row: localWorkspaceProjectionFixture(id, "/synthetic"),
   });
-  for (const records of [baseline, previous, pending, abandoned, reused]) {
+  for (const records of [baseline, previous, pending, abandoned, reused, published]) {
     prepareTreePacks(db, records);
   }
   const livePaths = prepareLocalWorkspaceSourcePathSet('["entry.txt"]');
-  const orphanPaths = prepareLocalWorkspaceSourcePathSet('["abandoned.txt"]');
+  // This digest sorts after the live path set, exercising the final unbounded range.
+  const orphanPaths = prepareLocalWorkspaceSourcePathSet('["orphan-after-retained.txt"]');
   const reusedPaths = prepareLocalWorkspaceSourcePathSet('["reused.txt"]');
   for (const paths of [livePaths, orphanPaths, reusedPaths]) {
     prepareLocalWorkspaceContentInDatabase(db, { paths });
@@ -334,23 +598,41 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   });
   expect(beginLocalWorkspaceSweepInDatabase(db)).toBe(1);
   const epoch = beginLocalWorkspaceSweepInDatabase(db);
+  assert(epoch !== null);
   expect(epoch).toBe(2);
-  const packCount = Number(
-    db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs").get()!.n,
+  using reader = new DatabaseSync(databasePath, { readOnly: true });
+  const checkpointBusy: number[] = [];
+  const reads = trackSqliteStatementExecutions(reader, ["packs", "epochs"], (sql) => {
+    if (!/^select\b/i.test(sql) || !sql.includes('from "local_workspace_tree_packs"')) {
+      return null;
+    }
+    if (!checkpointBusy.length) {
+      // Publish behind the projection cursor, after its first page but before graph reads.
+      prepareTreePacks(db, published);
+      mutateLocalWorkspaceProjection(db, "a-new-projection", {
+        kind: "create",
+        row: {
+          ...localWorkspaceProjectionFixture("a-new-projection", "/synthetic/new"),
+          baseline_ref: reference(published),
+          tree_root_digest: localWorkspaceDigestBytes(root(published)),
+        },
+      });
+      checkpointBusy.push(Number(db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()!.busy));
+    }
+    return sql.includes("sweep_epoch") ? "epochs" : "packs";
+  });
+  const { candidates } = localWorkspaceReadOperations["localWorkspace.sweepCandidates"](
+    { epoch },
+    reader,
   );
-  const reads = trackSqliteStatementExecutions(db, ["packs"], (sql) =>
-    /^select\b/i.test(sql) && sql.includes('from "local_workspace_tree_packs"') ? "packs" : null,
-  );
-  const candidates = readLocalWorkspaceSweepCandidates(db, epoch);
   reads.restore();
-  // Every old digest is returned by candidate discovery; traversal already knows its lookup keys.
-  expect(reads.blobBytes.packs).toBe(packCount * 32);
+  expect(checkpointBusy).toEqual([0]);
   expect(candidates.packs).toHaveLength(4);
   expect(candidates.paths).toHaveLength(2);
-  // A writer reusing content after the snapshot protects it with the current epoch.
+  // A writer reusing content after discovery protects it with the current epoch.
   prepareTreePacks(db, reused, reusedPaths);
   deleteLocalWorkspaceSweepBatchInDatabase(db, epoch, candidates);
-  for (const records of [baseline, previous, pending, reused]) {
+  for (const records of [baseline, previous, pending, reused, published]) {
     expect(
       decodeLocalWorkspaceTree(
         readLocalWorkspaceTree(db, localWorkspaceDigestBytes(root(records))),
@@ -369,4 +651,36 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   expect(() =>
     readLocalWorkspaceSourcePaths(db, localWorkspaceDigestBytes(orphanPaths.digest)),
   ).toThrow("source path set is missing");
+  // With no retained path roots, the same paging still collects expired content.
+  mutateLocalWorkspaceProjection(db, id, {
+    kind: "update",
+    revision: 1,
+    patch: { source_paths_digest: null },
+  });
+  const next = localWorkspaceReadOperations["localWorkspace.sweepCandidates"]({ epoch }, reader);
+  expect(next.candidates.paths.map(localWorkspaceDigestReference)).toEqual([livePaths.digest]);
+});
+
+it("distinguishes committed deletion from unknown or mismatched mutation coverage", () => {
+  const worktreeId = randomUUID();
+  const previous = { ...localWorkspaceProjectionFixture(worktreeId, "/synthetic"), revision: 0 };
+  const mutation = { kind: "delete" as const, revision: 0 };
+  expect(readLocalWorkspaceCommit(null, worktreeId, mutation, previous)).toBeUndefined();
+  expect(() => readLocalWorkspaceCommit(undefined, worktreeId, mutation, previous)).toThrow(
+    "coverage is incomplete",
+  );
+  for (const receipt of [
+    null,
+    { worktree_id: randomUUID(), revision: 1 },
+    { worktree_id: worktreeId, revision: 2 },
+  ]) {
+    expect(() =>
+      readLocalWorkspaceCommit(
+        receipt,
+        worktreeId,
+        { kind: "update", revision: 0, patch: {} },
+        previous,
+      ),
+    ).toThrow("commit identity is invalid");
+  }
 });

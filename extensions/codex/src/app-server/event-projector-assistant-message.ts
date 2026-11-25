@@ -1,7 +1,10 @@
 import { createAgentHarnessAssistantMessage } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
-import type {
-  NormalizedUsage,
-  AgentHarnessAttemptParamsV2,
+import {
+  AgentHarnessModelRequestPolicyError,
+  formatErrorMessage,
+  type AgentMessage,
+  type NormalizedUsage,
+  type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { CodexAsyncQuestion } from "./async-questions.js";
@@ -32,6 +35,31 @@ export type AssistantMessageOptions = {
 export type CodexAsyncAssistantMessage = AssistantMessage & {
   openclawAsyncDelivery: { itemId: string; questions?: CodexAsyncQuestion[] };
 };
+
+/** Apply final failure enrichment before transcript hooks consume this turn's rows. */
+export function applyCodexAssistantTerminalOutcome(
+  message: AgentMessage | undefined,
+  aborted: boolean,
+  promptError: unknown,
+): void {
+  if (message?.role !== "assistant") {
+    return;
+  }
+  const providerRefusal = message.diagnostics?.some(
+    (diagnostic) => diagnostic.type === "provider_refusal",
+  );
+  // Preserve the projector's refusal unless a stronger local failure supersedes it.
+  if (providerRefusal && !aborted && !promptError) {
+    return;
+  }
+  message.stopReason = aborted ? "aborted" : promptError ? "error" : "stop";
+  if (promptError instanceof AgentHarnessModelRequestPolicyError) {
+    message.errorCode = promptError.code;
+  } else if (message.errorCode === "model_request_policy_denied") {
+    delete message.errorCode;
+  }
+  message.errorMessage = promptError ? formatErrorMessage(promptError) : undefined;
+}
 
 export function createAssistantMessage(
   params: CodexAssistantMessageParams,

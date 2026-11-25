@@ -40,19 +40,14 @@ final class LiveActivityManager {
         self.hydrateCurrentAndPruneDuplicates()
     }
 
-    func showConnecting(
-        statusText: String = String(localized: "Connecting..."),
-        agentName: String,
-        sessionKey: String)
-    {
-        let presentation = Self.connectingPresentation(statusText: statusText)
+    func showConnecting(reconnect: Bool, agentName: String, sessionKey: String) {
         let startedAt = Self.lifecycleStartedAt(
             existing: self.arbiter.connection,
             agentName: agentName,
             sessionKey: sessionKey)
         let state = OpenClawActivityAttributes.ContentState(
-            status: presentation.status,
-            verbatimDetail: presentation.verbatimDetail,
+            status: reconnect ? .reconnecting : .connecting,
+            verbatimDetail: nil,
             startedAt: startedAt)
         self.arbiter.setConnection(self.request(
             state: state,
@@ -470,16 +465,6 @@ final class LiveActivityManager {
 
     /// Existing callers still pass rendered app copy. Collapse known values here so
     /// ActivityKit persists semantics; only unknown external detail remains verbatim.
-    private static func connectingPresentation(statusText: String) -> StatusPresentation {
-        if statusText == String(localized: "Connecting...") || statusText == "Connecting..." {
-            return StatusPresentation(status: .connecting, verbatimDetail: nil)
-        }
-        if statusText == String(localized: "Reconnecting...") || statusText == "Reconnecting..." {
-            return StatusPresentation(status: .reconnecting, verbatimDetail: nil)
-        }
-        return StatusPresentation(status: .connecting, verbatimDetail: statusText.trimmedNonEmpty)
-    }
-
     private static func attentionPresentation(statusText: String) -> StatusPresentation {
         if statusText == String(localized: "Approval needed") || statusText == "Approval needed" {
             return StatusPresentation(status: .approvalNeeded, verbatimDetail: nil)

@@ -25,6 +25,22 @@ struct ChatSessionRosterSnapshot: Sendable {
         self.isComplete = isComplete
     }
 
+    /// User-facing notice for a partial roster (a later page failed or a scan bound was hit),
+    /// letting consumers keep the retained rows visible while offering a refresh path.
+    /// `nil` when the snapshot is complete or served from cache.
+    var incompleteLoadMessage: String? {
+        guard !self.isComplete, !self.isCached else { return nil }
+        if let totalCount = self.totalCount {
+            // Localization: arguments (20, 100) mean 20 displayed out of 100 total, with 80 still to load.
+            // Keep the displayed count first; rephrase the sentence instead of reversing argument roles.
+            return String(
+                format: String(localized: "Showing %lld sessions; %lld total. Refresh to load the rest."),
+                self.sessions.count,
+                totalCount)
+        }
+        return String(localized: "Some sessions could not be loaded. Refresh to try again.")
+    }
+
     @MainActor
     static func collect(
         fetchPage: @MainActor (Int) async throws -> OpenClawChatSessionsListResponse) async throws -> Self
@@ -137,10 +153,21 @@ extension NodeAppModel {
                         agentID: sourceAgentID,
                         offset: offset)
                     let data = try await self.operatorSession.request(request, ifCurrentRoute: route)
-                    guard self.operatorAuthorityGeneration == sourceAuthorityGeneration,
+                    let response: Result<OpenClawChatSessionsListResponse, Error>
+                    do {
+                        response = try await .success(GatewayPayloadDecoding.decode(
+                            OpenClawChatSessionsListResponse.self, from: data))
+                    } catch {
+                        response = .failure(error)
+                    }
+                    // Decoding suspends this owner; a retired page or error cannot publish a partial roster.
+                    guard await self.operatorSession.currentRoute(ifGatewayID: sourceGatewayID) == route,
+                          self.operatorAuthorityGeneration == sourceAuthorityGeneration,
                           self.chatDeliveryAgentId == sourceAgentID
-                    else { throw CancellationError() }
-                    return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+                    else {
+                        throw CancellationError()
+                    }
+                    return try response.get()
                 }
                 guard await self.operatorSession.currentRoute(ifGatewayID: sourceGatewayID) == route,
                       self.isOperatorGatewayConnected,
@@ -306,6 +333,8 @@ final class RootSidebarModel {
             activeAgentID: activeAgentID,
             groups: groups,
             excludesMainSession: true,
+            // Empty headers are move targets while browsing, not search results.
+            includeEmptyGroups: !isSearching,
             query: query,
             sessionRoutingContract: sessionRoutingContract)
     }
@@ -374,6 +403,7 @@ final class RootSidebarModel {
     }
 
     func refreshSessions(appModel: NodeAppModel) async {
+        await appModel.sessionGroups.refresh(appModel: appModel)
         self.rosterGeneration &+= 1
         self.sessionChangesDuringLoad = [:]
         let rosterGeneration = self.rosterGeneration
@@ -390,6 +420,7 @@ final class RootSidebarModel {
         switch loadedRoster {
         case let .success(roster):
             self.applyRoster(roster, activeAgentID: appModel.chatDeliveryAgentId)
+            appModel.sessionGroups.pruneCollapsed(for: self.sessions)
         case let .failure(message):
             self.sessionErrorText = message
         case .cancelled:
@@ -420,10 +451,17 @@ final class RootSidebarModel {
     }
 
     func observeSessionEvents(appModel: NodeAppModel) async {
-        defer { self.sessionRefreshCoordinator.cancel() }
+        var subscription: GatewayServerEventSubscription?
+        defer {
+            subscription?.cancel()
+            self.sessionRefreshCoordinator.cancel()
+        }
         await Self.consumeSubscribedSessionEvents(
             makeStream: {
-                await appModel.operatorSession.subscribeServerEvents(bufferingNewest: 200)
+                subscription?.cancel()
+                let current = await Self.makeSessionEventSubscription(gateway: appModel.operatorSession)
+                subscription = current
+                return current.events
             },
             subscribe: {
                 let request = OpenClawChatGatewayRequests.subscribeSessions(timeoutMs: 12000)
@@ -438,6 +476,17 @@ final class RootSidebarModel {
             declareObserverVisibility: { [weak self] visible in
                 await self?.setSessionObserverVisibility(appModel: appModel, visible: visible)
             })
+    }
+
+    static func makeSessionEventSubscription(gateway: GatewayNodeSession) async -> GatewayServerEventSubscription {
+        // Filter on the Gateway actor, before unrelated chat payloads enter this
+        // MainActor consumer or displace a roster update in its bounded buffer.
+        await gateway.makeServerEventSubscription(bufferingNewest: 200, matching: { frame in
+            switch frame.event {
+            case "sessions.changed", "session.observer", "seqGap": true
+            default: false
+            }
+        })
     }
 
     static func consumeSubscribedSessionEvents(
@@ -602,20 +651,7 @@ final class RootSidebarModel {
                 activeAgentId: activeAgentID)?.first ?? held
         }
         self.isSessionRosterComplete = roster.isComplete
-        guard !roster.isComplete, !roster.isCached else {
-            self.sessionErrorText = nil
-            return
-        }
-        if let totalCount = roster.totalCount {
-            // Localization: arguments (20, 100) mean 20 displayed out of 100 total, with 80 still to load.
-            // Keep the displayed count first; rephrase the sentence instead of reversing argument roles.
-            self.sessionErrorText = String(
-                format: String(localized: "Showing %lld sessions; %lld total. Refresh to load the rest."),
-                roster.sessions.count,
-                totalCount)
-        } else {
-            self.sessionErrorText = String(localized: "Some sessions could not be loaded. Refresh to try again.")
-        }
+        self.sessionErrorText = roster.incompleteLoadMessage
     }
 
     private func loadRoster(
@@ -664,7 +700,7 @@ final class RootSidebarModel {
         return snapshot?.jobs
     }
 
-    private func request<T: Decodable>(
+    private func request<T: Decodable & Sendable>(
         _ type: T.Type,
         appModel: NodeAppModel,
         method: String,
@@ -675,7 +711,7 @@ final class RootSidebarModel {
                 method: method,
                 paramsJSON: paramsJSON,
                 timeoutSeconds: 12)
-            return try JSONDecoder().decode(type, from: data)
+            return try await GatewayPayloadDecoding.decode(type, from: data)
         } catch {
             return nil
         }

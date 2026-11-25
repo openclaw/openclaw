@@ -149,14 +149,18 @@ let connectionWork: GatewayConnectionWork;
 let logWsControl: ReturnType<typeof makeLogger>;
 const socketCleanups: Array<() => Promise<void>> = [];
 
-async function connectWs(params: Omit<Parameters<typeof attachForTest>[0], "attach"> = {}) {
-  attachForTest({
+function attachWs(params: Omit<Parameters<typeof attachForTest>[0], "attach"> = {}) {
+  return attachForTest({
     attach: attachConnection,
     socket,
     clients,
     ...params,
     options: { connectionWork, ...params.options, logWsControl: logWsControl as never },
   });
+}
+
+async function connectWs(params: Omit<Parameters<typeof attachForTest>[0], "attach"> = {}) {
+  attachWs(params);
   await vi.dynamicImportSettled();
   return attachMessage.mock.calls[0]![0];
 }
@@ -825,3 +829,111 @@ it.each([
     expect(JSON.stringify(logWsControl.info.mock.calls)).not.toContain("private");
   },
 );
+
+it("aggregates native refusal warnings across reconnects without hiding other closes", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const headers = {
+    origin: "http://127.0.0.1:19001",
+    "user-agent": "native-refusal-callback-test",
+  };
+  const closeAttempt = async (
+    at: number,
+    code = 4008,
+    reason = "native authorization unavailable",
+    extraHeaders: Record<string, string> = {},
+  ) => {
+    vi.setSystemTime(at);
+    const next = makeSocket();
+    next["_socket"].remotePort = 30000 + at / 1000;
+    attachWs({ socket: next, headers: { ...headers, ...extraHeaders } });
+    next.emit("close", code, Buffer.from(reason));
+    await vi.dynamicImportSettled();
+  };
+  for (const at of [0, 13_000, 26_000, 39_000, 52_000, 65_000, 78_000]) {
+    await closeAttempt(at);
+  }
+  expect(logWsControl.warn.mock.calls.map(([message]) => message)).toEqual([
+    expect.stringContaining("code=4008 reason=native authorization unavailable"),
+    expect.stringContaining("suppressed=2"),
+    expect.stringContaining("suppressed=2"),
+  ]);
+  expect(logWsControl.warn.mock.calls[0]![0]).not.toContain("suppressed=");
+  expect(logWsControl.debug).not.toHaveBeenCalled();
+  for (const [code, reason] of [
+    [1006, "native authorization unavailable"],
+    [4008, "native authorization unavailable "],
+    [4008, "native authorization unavailable\n"],
+    [4008, "connect failed"],
+  ] as const) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const before = logWsControl.warn.mock.calls.length;
+      await closeAttempt(79_000, code, reason);
+      expect(logWsControl.warn.mock.calls.length).toBe(before + 1);
+    }
+  }
+  const distinctClients: Record<string, string>[] = [
+    { origin: "https://other.example" },
+    { "user-agent": "other-document-client" },
+  ];
+  for (const extraHeaders of distinctClients) {
+    const before = logWsControl.warn.mock.calls.length;
+    await closeAttempt(79_000, 4008, "native authorization unavailable", extraHeaders);
+    expect(logWsControl.warn.mock.calls.length).toBe(before + 1);
+  }
+});
+
+it("preserves missing-credential close aggregation and mismatch warnings", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  const closeAttempt = async (at: number, authReason: string) => {
+    vi.setSystemTime(at);
+    const next = makeSocket();
+    const handler = await connectWs({ socket: next });
+    handler.setCloseCause("unauthorized", {
+      authReason,
+      client: "missing-credential-callback-test",
+      mode: "backend",
+    });
+    next.emit("close", 1008, Buffer.from("unauthorized"));
+    await vi.dynamicImportSettled();
+    attachMessage.mockClear();
+  };
+  await closeAttempt(0, "token_missing");
+  await closeAttempt(1_000, "token_missing");
+  await closeAttempt(30_000, "token_missing");
+  expect(logWsControl.warn.mock.calls.map(([message]) => message)).toEqual([
+    expect.stringContaining("reason=unauthorized"),
+    expect.stringContaining("suppressed=1"),
+  ]);
+  await closeAttempt(31_000, "token_mismatch");
+  await closeAttempt(32_000, "token_mismatch");
+  expect(logWsControl.warn).toHaveBeenCalledTimes(4);
+});
+
+it("aggregates native refusals received over real WebSocket close frames", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  for (const at of [0, 1_000, 30_000]) {
+    vi.setSystemTime(at);
+    const pair = await openSocketPair();
+    attachWs({
+      socket: pair.socket as unknown as TestSocket,
+      requestSocket: pair.request.socket,
+      headers: {
+        origin: "http://127.0.0.1:19001",
+        "user-agent": "native-refusal-transport-test",
+      },
+    });
+    const closed = once(pair.socket, "close");
+    pair.peer.close(4008, "native authorization unavailable");
+    await closed;
+    await vi.dynamicImportSettled();
+  }
+  expect(logWsControl.warn.mock.calls.map(([message]) => message)).toEqual([
+    expect.stringContaining("code=4008 reason=native authorization unavailable"),
+    expect.stringContaining("suppressed=1"),
+  ]);
+  expect(logWsControl.warn.mock.calls[0]![1]).toMatchObject({
+    handshake: "pending",
+    phase: "ws_upgrade_started",
+    lastFrameType: undefined,
+  });
+});

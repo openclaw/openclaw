@@ -7,6 +7,7 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.bindNodeRuntimeTestFixture
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.i18n.NativeStringResources
@@ -20,6 +21,7 @@ import android.view.inspector.WindowInspector
 import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.InputModeManager
@@ -33,6 +35,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -45,7 +48,9 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
+import androidx.compose.ui.unit.dp
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
@@ -72,6 +77,7 @@ class SidebarNavigationAccessibilityTest {
   private val models = ViewModelStore()
   private val mounted = mutableStateOf(true)
   private val selections = mutableListOf<SidebarDestination>()
+  private val selectedSessions = mutableListOf<String>()
   private lateinit var app: NodeApp
   private lateinit var prefs: SecurePrefs
   private lateinit var runtime: NodeRuntime
@@ -114,6 +120,33 @@ class SidebarNavigationAccessibilityTest {
       Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, previousScale)
       NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
     }
+  }
+
+  @Test
+  fun compactSidebarTargetsDoNotRouteEdgeTapsToAdjacentActions() {
+    showSidebar()
+    val pinned = composeRule.onNodeWithText("Pinned")
+    val pinnedCenter = pinned.fetchSemanticsNode().boundsInRoot.center
+    // A 44dp row can report expanded touch bounds, but the next row wins this tap.
+    composeRule.onRoot().performTouchInput {
+      click(pinnedCenter + Offset(0f, 23.dp.toPx()))
+    }
+    pinned.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
+    composeRule.onNodeWithText("Recent").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+    pinned.performClick()
+
+    val menuCenter =
+      composeRule
+        .onNodeWithTag("sidebar-pages-menu")
+        .fetchSemanticsNode()
+        .boundsInRoot.center
+    // The pencil's left edge must open its menu, not collapse the neighboring Pages row.
+    composeRule.onRoot().performTouchInput {
+      click(menuCenter - Offset(23.dp.toPx(), 0f))
+    }
+    composeRule.onNode(isPopup()).assertIsDisplayed()
+    composeRule.onNode(hasText("Edit pinned items") and hasAnyAncestor(isPopup())).assertIsDisplayed()
+    composeRule.runOnIdle { assertTrue(selections.isEmpty()) }
   }
 
   @Test
@@ -237,6 +270,77 @@ class SidebarNavigationAccessibilityTest {
     capture("reset-sidebar")
   }
 
+  @Test
+  fun childSessionsOpenFromTheirParentsDisclosure() {
+    val parent = ChatSessionEntry(key = "agent:main:dashboard:release", displayName = "Release planning", updatedAtMs = 50, lastActivityAt = 50)
+    val child =
+      ChatSessionEntry(
+        key = "agent:main:subagent:changelog",
+        displayName = "Draft changelog",
+        updatedAtMs = 90,
+        lastActivityAt = 90,
+        parentSessionKey = parent.key,
+        status = "running",
+        hasActiveRun = true,
+      )
+    val other = ChatSessionEntry(key = "agent:main:dashboard:notes", displayName = "Product notes", updatedAtMs = 40, lastActivityAt = 40)
+    showSidebar(sessions = listOf(parent, child, other), activeSessionKey = other.key)
+    // The collapsed section announces its hidden child's work with its expansion state.
+    composeRule
+      .onNodeWithText("Recent")
+      .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed, Working"))
+      .performClick()
+
+    composeRule.onNodeWithText("Release planning").assertIsDisplayed()
+    composeRule.onNodeWithText("Product notes").assertIsDisplayed()
+    composeRule.onNodeWithText("Draft changelog").assertDoesNotExist()
+    val toggle = composeRule.onNodeWithTag("sidebar-session-children-toggle")
+    toggle.assert(SemanticsMatcher.expectValue(SemanticsProperties.ContentDescription, listOf("Expand child sessions")))
+    // The collapsed parent still shows that its child is working.
+    composeRule
+      .onNode(
+        SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Working") and
+          hasAnyAncestor(hasTestTag("sidebar-session-children-toggle")),
+        useUnmergedTree = true,
+      ).assertExists()
+    capture("child-sessions-collapsed")
+
+    toggle.performClick()
+    toggle.assert(SemanticsMatcher.expectValue(SemanticsProperties.ContentDescription, listOf("Collapse child sessions")))
+    val childRow = composeRule.onNodeWithText("Draft changelog").assertIsDisplayed()
+
+    // Unmerged titles report the text position rather than the full-width row.
+    fun title(text: String) = composeRule.onNodeWithText(text, useUnmergedTree = true).fetchSemanticsNode().positionInRoot
+    assertTrue("The child sits below its parent", title("Draft changelog").y > title("Release planning").y)
+    assertTrue("The child is indented", title("Draft changelog").x > title("Release planning").x)
+    assertTrue("Product notes follows the parent's children", title("Product notes").y > title("Draft changelog").y)
+    capture("child-sessions-expanded")
+    childRow.performClick()
+    composeRule.runOnIdle { assertEquals(listOf(child.key), selectedSessions) }
+
+    toggle.performClick()
+    composeRule.onNodeWithText("Draft changelog").assertDoesNotExist()
+  }
+
+  @Test
+  fun anOpenChildSessionKeepsItsParentExpanded() {
+    val parent = ChatSessionEntry(key = "agent:main:dashboard:release", displayName = "Release planning", updatedAtMs = 50, lastActivityAt = 50)
+    val child =
+      ChatSessionEntry(
+        key = "agent:main:subagent:changelog",
+        displayName = "Draft changelog",
+        updatedAtMs = 90,
+        lastActivityAt = 90,
+        parentSessionKey = parent.key,
+      )
+    showSidebar(sessions = listOf(parent, child), activeSessionKey = child.key)
+    composeRule.onNodeWithText("Recent").performClick()
+
+    composeRule.onNodeWithText("Draft changelog").assertIsDisplayed()
+    composeRule.onNodeWithTag("sidebar-session-children-toggle").performClick()
+    composeRule.onNodeWithText("Draft changelog").assertDoesNotExist()
+  }
+
   private fun sidebarRow(label: String) = composeRule.onNode(hasText(label) and hasAnyAncestor(hasTestTag("sidebar-drawer")))
 
   private fun assertDefaultRows() {
@@ -253,7 +357,10 @@ class SidebarNavigationAccessibilityTest {
 
   private fun newPrefs() = SecurePrefs(app, app.getSharedPreferences("sidebar-reorder-secure", Context.MODE_PRIVATE))
 
-  private fun showSidebar() {
+  private fun showSidebar(
+    sessions: List<ChatSessionEntry> = emptyList(),
+    activeSessionKey: String = "agent:main:test",
+  ) {
     composeRule.setContent {
       if (mounted.value) {
         inputModeManager = LocalInputModeManager.current
@@ -262,8 +369,8 @@ class SidebarNavigationAccessibilityTest {
             viewModel = model,
             agents = emptyList(),
             selectedAgentId = "main",
-            sessions = emptyList(),
-            activeSessionKey = "agent:main:test",
+            sessions = sessions,
+            activeSessionKey = activeSessionKey,
             activeDestination = SidebarDestination.Home,
             connection = GatewayConnectionDisplay(false, "Offline", null),
             visible = true,
@@ -272,7 +379,7 @@ class SidebarNavigationAccessibilityTest {
             onDragActiveChange = {},
             onNewSession = {},
             onSelectAgent = {},
-            onSelectSession = {},
+            onSelectSession = { selectedSessions += it.key },
             onSelectCatalogSession = {},
             onCreateCatalogSession = {},
             onSelectDestination = { selections += it },

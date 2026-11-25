@@ -16,7 +16,7 @@ import {
   assertSqliteTranscriptDigestUnchanged,
   type SqliteTranscriptSnapshotDigest,
 } from "./session-accessor.sqlite-read.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionTranscriptManualTrimResult } from "./session-accessor.types.js";

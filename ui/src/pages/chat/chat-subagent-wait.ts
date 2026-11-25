@@ -45,7 +45,7 @@ export type ChatSubagentWait = {
 export type ChatHandoffSession = {
   key: string;
   label: string;
-  status: "attention" | "paused" | "running" | "failed" | "stopped" | "done";
+  status: "attention" | "paused" | "background" | "running" | "failed" | "stopped" | "done";
   /** The child's own attention note, when it asked for the user. */
   note?: string;
 };
@@ -55,13 +55,19 @@ const HANDOFF_STATUS_ORDER: readonly ChatHandoffSession["status"][] = [
   "paused",
   "failed",
   "running",
+  "background",
   "stopped",
   "done",
 ];
 
 /** Yielded on sessions_yield and awaiting a continuation; a newer run in it is running. */
-function isPausedChild(row: GatewaySessionRow) {
+function isYieldedChild(row: GatewaySessionRow) {
   return row.subagentRunState === "paused" && row.status !== "queued" && !isUnfinishedSubagent(row);
+}
+
+/** A yielded child whose own background exec still runs is working, not paused. */
+function isPausedChild(row: GatewaySessionRow) {
+  return isYieldedChild(row) && !row.backgroundProcessCount;
 }
 
 /**
@@ -84,7 +90,7 @@ function listHandoffSessions(
         (window.to === undefined || started <= window.to) &&
         (row.status === "queued" ||
           isUnfinishedSubagent(row) ||
-          isPausedChild(row) ||
+          isYieldedChild(row) ||
           (row.endedAt ?? 0) >= window.from)
       );
     })
@@ -97,8 +103,10 @@ function listHandoffSessions(
         status:
           row.status === "queued" || isUnfinishedSubagent(row)
             ? "running"
-            : isPausedChild(row)
-              ? "paused"
+            : isYieldedChild(row)
+              ? isPausedChild(row)
+                ? "paused"
+                : "background"
               : (endedWithoutFinishing(row) ?? "done"),
       };
       if (attention.kind === "agent") {
@@ -164,6 +172,7 @@ function handoffFactsKey(rows: readonly GatewaySessionRow[] | undefined): string
         row.key,
         resolveSessionDisplayName(row.key, row),
         attention.kind === "agent" ? attention.note : null,
+        isYieldedChild(row),
         isPausedChild(row),
       ]);
     })
@@ -364,14 +373,14 @@ export function projectSubagentStatus(
 ) {
   const session = input.selectedSession;
   const hydrated = input.subagentSessionsHydrated && !input.subagentSessionsPending;
-  // A child paused on sessions_yield keeps the wait open without counting as
+  // A child yielded on sessions_yield keeps the wait open without counting as
   // running. Only the pane's complete child query can say one remains.
-  const paused =
+  const yielded =
     hydrated && session && !session.archived
-      ? directChildren(session, input).filter(isPausedChild)
+      ? directChildren(session, input).filter(isYieldedChild)
       : [];
   const eligible =
-    session && !session.archived && (session.hasActiveSubagentRun === true || paused.length > 0);
+    session && !session.archived && (session.hasActiveSubagentRun === true || yielded.length > 0);
   // Descendant activity alone is not a parent wait: plugin-owned children can
   // belong to a session that has never executed. Every settled parent turn has
   // a lifecycle end; a partial row must not invent that boundary from transcript text.
@@ -404,11 +413,13 @@ export function projectSubagentStatus(
   const working = children.filter(isWorkingSubagent).length;
   // Paused children alone keep the wait. Once the parent has resumed (its latest
   // turn is not the loaded handoff), nothing is running: they read as a note.
-  const pausedOnly = hydrated && unfinished.length === 0 && paused.length > 0;
+  // A yielded child's running background job is work, so the clock keeps going.
+  const pausedOnly =
+    hydrated && unfinished.length === 0 && yielded.length > 0 && yielded.every(isPausedChild);
   const pausedNote = pausedOnly && !handoffRunId;
   // A hydrated roster with no unfinished or paused children ends the wait.
   const wait: ChatSubagentWait | null =
-    waitStartedAt !== null && (!hydrated || unfinished.length + paused.length > 0)
+    handoffRunId && waitStartedAt !== null && (!hydrated || unfinished.length + yielded.length > 0)
       ? {
           startedAt: waitStartedAt,
           ...(handoffRunId ? { runId: handoffRunId } : {}),
@@ -421,7 +432,7 @@ export function projectSubagentStatus(
           sessions:
             hydrated && session
               ? pausedNote
-                ? listHandoffSessions(paused, { from: 0 })
+                ? listHandoffSessions(yielded, { from: 0 })
                 : listHandoffSessions(directChildren(session, input), {
                     from: yieldedAt ?? waitStartedAt,
                   })

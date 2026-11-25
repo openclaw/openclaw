@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -64,6 +64,40 @@ const buildPlan = (
 ) => buildGatewayTemplateAddPlan(source, { config, agentId, sourceMcpServers: {} });
 
 describe("Gateway Template Add plan", () => {
+  it("does not load host MCP configuration for a Template with no MCP declarations", async () => {
+    const source = await readGatewayPackageFixture();
+    source.manifest = { ...source.manifest, mcpServers: {} };
+    const loadMcp = vi.fn(async () => ({}));
+    const plan = await buildGatewayTemplateAddPlan(source, {
+      config: { agents: { entries: {} } },
+      sourceMcpServers: loadMcp,
+    });
+    expect(plan.blockers).toEqual([]);
+    expect(loadMcp).not.toHaveBeenCalled();
+  });
+
+  it("loads current authored MCP configuration when the Template declares MCP", async () => {
+    const source = await readGatewayPackageFixture();
+    source.manifest = {
+      ...source.manifest,
+      mcpServers: { fixture: { command: "fixture-server" } },
+    };
+    const loadMcp = vi.fn(async () => ({ fixture: { command: "fixture-server" } }));
+    const plan = await buildGatewayTemplateAddPlan(source, {
+      config: { agents: { entries: {} } },
+      sourceMcpServers: loadMcp,
+    });
+    expect(loadMcp).toHaveBeenCalledTimes(1);
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "mcpServer",
+        id: "fixture",
+        action: "configure",
+        details: { command: "fixture-server", expectedState: "present-exact", prerequisites: [] },
+      }),
+    );
+  });
+
   it("compares relocated plan paths without treating sibling paths as source contents", () => {
     const previewRoot = path.resolve("preview-template");
     const persistedRoot = path.resolve("persisted-template");
@@ -120,6 +154,21 @@ describe("Gateway Template Add plan", () => {
     expect(pinned.planIntegrity).toBe(plan.planIntegrity);
   });
 
+  it.each([
+    ["its identity name", { identity: { name: "Workspace" } }, "Workspace 2"],
+    ["no name", {}, undefined],
+  ] as const)("names a copy of a Template without agent.name from %s", async (_, naming, name) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-templates-unnamed-copy-"));
+    const fixture = await readFixture();
+    const source = {
+      ...fixture,
+      manifest: { ...fixture.manifest, agent: { id: "workspace-agent", ...naming } },
+    };
+    const plan = await buildPlan(source, { agents: { entries: { "workspace-agent": {} } } });
+    expect(plan.agent.finalId).toBe("workspace-agent-2");
+    expect(plan.agent.config.name).toBe(name);
+  });
+
   it("uses the canonical planner and keeps source paths out of reviewed facts", async () => {
     const source = await readGatewayPackageFixture();
     const config = { agents: { entries: {} } };
@@ -171,7 +220,7 @@ describe("Gateway Template Add plan", () => {
     expect(preflightTemplatePackage).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "plugin" }),
       expect.any(String),
-      { config },
+      { config, packageRoot: source.source.packageRoot },
     );
   });
 
@@ -223,6 +272,25 @@ describe("Gateway Template Add plan", () => {
     expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
     expect(projected.target.workspace).toBe(`${retained}-2`);
     expect(readFileSync(path.join(retained, "USER.md"), "utf8")).toBe("retained operator note");
+  });
+
+  it("accepts its own admitted workspace when the state directory path is a symlink", async () => {
+    const realRoot = tempDirs.make("openclaw-templates-gateway-admitted-real-");
+    const linkRoot = `${tempDirs.make("openclaw-templates-gateway-admitted-link-")}/state`;
+    symlinkSync(realRoot, linkRoot, "dir");
+    vi.stubEnv("OPENCLAW_STATE_DIR", linkRoot);
+    const admittedWorkspace = path.join(linkRoot, "workspace-workflow-operator");
+    mkdirSync(admittedWorkspace);
+
+    const plan = await buildGatewayTemplateAddPlan(await readGatewayPackageFixture(), {
+      config: { agents: { entries: {} } },
+      agentId: "workflow-operator",
+      admittedWorkspace,
+      sourceMcpServers: {},
+    });
+
+    expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
+    expect(plan.actions.filter((action) => action.blocked)).toEqual([]);
   });
 
   it.each([
@@ -334,6 +402,41 @@ describe("Gateway Template Add plan", () => {
     },
   );
 
+  it.each([
+    [
+      "pager-duty",
+      'Plugin "pager-duty" is not in plugins.allow. Add "pager-duty" to plugins.allow, then add this Template again.',
+    ],
+    [
+      undefined,
+      "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed.",
+    ],
+  ])(
+    "reviews a plugin blocked by plugins.allow with its runtime id (%s)",
+    async (allowlistPluginId, message) => {
+      const source = await readGatewayPackageFixture("incident-response");
+      const config = { agents: { entries: {} }, plugins: { allow: ["other-plugin"] } };
+      const plan = await buildGatewayTemplateAddPlan(source, {
+        config,
+        sourceMcpServers: {},
+        packagePreflight: async () => ({
+          ok: false,
+          code: "plugin_disabled",
+          message: "Local preview detail /tmp/source/plugins/pager-duty",
+          ...(allowlistPluginId ? { allowlistPluginId } : {}),
+        }),
+      });
+      const projected = projectGatewayTemplateAddPlan(plan, source, trust, config);
+
+      expect(projected.blockers).toContainEqual({
+        code: "plugin_disabled",
+        path: "$.plugins[0]",
+        message,
+      });
+      expect(JSON.stringify(projected.blockers)).not.toContain("/tmp/source");
+    },
+  );
+
   it("reviews configured access and recurring work without exposing source secrets", async () => {
     const source = await readGatewayPackageFixture("incident-response");
     const config = { agents: { entries: {} } };
@@ -367,6 +470,7 @@ describe("Gateway Template Add plan", () => {
           action: "schedule",
           blocked: false,
           proposed: {
+            enabled: true,
             schedule: { everyMs: 1_800_000 },
             session: "isolated",
             delivery: "owner",
@@ -379,9 +483,10 @@ describe("Gateway Template Add plan", () => {
           action: "schedule",
           blocked: false,
           proposed: {
+            enabled: true,
             schedule: { cron: "0 * * * *", timezone: "UTC" },
             session: "isolated",
-            delivery: "last-channel",
+            delivery: "none",
             message: "Review active incidents and prepare a concise status summary.",
             messageDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
           },

@@ -404,7 +404,7 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
   let completed = false;
   try {
     bridgeLocalTools(root, source, platform);
-    if (platform !== "ios" || stageExisting) {
+    if (stageExisting) {
       run(
         process.execPath,
         [
@@ -453,7 +453,7 @@ async function prepareAndUpload(root, platform, recovery, releaseArgs, destinati
         env: releaseEnvironment(platform, recovery, sourceSha),
       },
     );
-    if (platform === "ios" && !stageExisting) {
+    if (!stageExisting) {
       retainSummary(notesPath);
     }
     const playRef = uploadedRef(root, platform, plan, planPath);

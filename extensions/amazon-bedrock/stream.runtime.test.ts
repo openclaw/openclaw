@@ -264,7 +264,6 @@ describe("Bedrock thinking request composition", () => {
     ["legacy budget exhausted", legacy, { reasoning: "minimal" }, 1024, undefined],
     ["explicit request cap", adaptive, { reasoning: "high", maxTokens: 32_000 }, 32_000, "high"],
     ["native cap with thinking off", adaptive, { reasoning: "off" }, 128_000, undefined],
-    ["descriptive profile name", named, { reasoning: "xhigh" }, undefined, "xhigh"],
     [
       "authored 32768 cap",
       { ...named, maxTokens: 32_768 },
@@ -502,7 +501,10 @@ describe("Bedrock prompt cache ownership", () => {
     expect(payload.system).toEqual(
       mode === "none"
         ? [wireText("Stable workspace\nToday: Monday")]
-        : [wireText("Stable workspace"), ...(point ? [point] : []), wireText("Today: Monday")],
+        : [wireText("Stable workspace"), ...(point ? [point] : []), wireText("\nToday: Monday")],
+    );
+    expect(payload.system?.flatMap((block) => (block.text ? [block.text] : [])).join("")).toBe(
+      "Stable workspace\nToday: Monday",
     );
     expect(payload.messages?.[0]?.content).toEqual([wireText("Hello"), ...(point ? [point] : [])]);
     expect(payload.toolConfig?.tools?.map((tool) => tool.toolSpec?.name)).toEqual([

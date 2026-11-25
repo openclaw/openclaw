@@ -27,12 +27,9 @@ import {
   resolveSessionResetType,
   resolveThreadFlag,
 } from "../../config/sessions/reset.js";
-import {
-  commitReplySessionInitialization,
-  loadReplySessionInitializationSnapshot,
-} from "../../config/sessions/session-accessor.js";
+import { commitReplySessionInitialization } from "../../config/sessions/session-accessor.js";
+import { buildNewSessionCreationFields } from "../../config/sessions/session-diff-baseline-capture.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { selectSessionModelOverride } from "../../config/sessions/session-entry-selection.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
@@ -126,9 +123,9 @@ import type {
 } from "./session-init.types.js";
 import {
   assertReplySessionInitializationAllowed,
+  loadReplySessionInitializationForAttempt,
   prepareReplySessionInitialization,
   resolveInitSessionStateAttemptContext,
-  resolveInitializationSessionReader,
   type InitSessionStateParams,
   type InitSessionStateAttemptContext,
 } from "./session-initialization-admission.js";
@@ -136,7 +133,7 @@ import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js"
 import {
   clearCommittedSessionResetRuntimeState,
   prepareSessionResetCleanupGuard,
-  stopSessionResetSubagents,
+  stopSessionResetWork,
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
 import { runReplySessionRolloverMutation } from "./session-rollover-mutation.js";
@@ -249,7 +246,7 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
               assertCurrent: () => params.signal?.throwIfAborted(),
             });
             try {
-              return await stopSessionResetSubagents({
+              return await stopSessionResetWork({
                 cfg: params.cfg,
                 sessionKey: candidate.sessionKey,
                 agentId: attemptContext.agentId,
@@ -358,13 +355,11 @@ async function initSessionStateAttemptLocked(
   const initializationSnapshot = await measureDiagnosticsTimelineSpan(
     "reply.session.snapshot",
     () =>
-      loadReplySessionInitializationSnapshot(
+      loadReplySessionInitializationForAttempt(
         { ...sessionTarget, relatedSessionKeys },
-        {
-          reader: resolveInitializationSessionReader(params, attemptContext),
-          includeLifecycle: true,
-          assertCurrent: () => params.signal?.throwIfAborted(),
-        },
+        params,
+        attemptContext,
+        mainSessionKey,
       ),
   );
   if (ingressTimingEnabled) {
@@ -599,7 +594,7 @@ async function initSessionStateAttemptLocked(
           origin: baseDeliveryOrigin,
         });
   const creationStamp =
-    !entry && ctx.SessionCreation ? buildSessionCreationStamp(ctx.SessionCreation) : undefined;
+    !entry && ctx.SessionCreation ? buildNewSessionCreationFields(ctx.SessionCreation) : undefined;
   const recordedActivity =
     !isNewSession &&
     params.recordedSessionActivity?.sessionId === sessionId &&
@@ -623,11 +618,11 @@ async function initSessionStateAttemptLocked(
     sessionStartedAt: isNewSession
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
-    lastInteractionAt: isSystemEvent
-      ? baseEntry?.lastInteractionAt
-      : recordedActivity
-        ? Math.max(baseEntry?.lastInteractionAt ?? 0, recordedActivity.at)
-        : now,
+    // An inbound message is visible chat content; internal turns keep both stored values.
+    ...(!isSystemEvent && {
+      lastInteractionAt: Math.max(baseEntry?.lastInteractionAt ?? 0, recordedActivity?.at ?? now),
+      lastActivityAt: Math.max(baseEntry?.lastActivityAt ?? 0, recordedActivity?.at ?? now),
+    }),
     agentStatus: isSystemEvent ? baseEntry?.agentStatus : undefined,
     pinnedAt: entry?.pinnedAt,
     snoozedUntil: isSystemEvent ? entry?.snoozedUntil : undefined,

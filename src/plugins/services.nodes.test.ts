@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGatewayMethodRegistry } from "../gateway/methods/registry.js";
 import { NodeRegistry } from "../gateway/node-registry.js";
@@ -22,6 +21,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import * as nativeModuleRequire from "./native-module-require.js";
@@ -142,7 +142,11 @@ const request = {
 describe("service-owned node invocation", () => {
   it("releases retiring callers while stopped node capabilities remain reachable", async () => {
     type NodeInvoker = NonNullable<ReturnType<typeof createPluginServiceNodeInvoker>>;
+    const references: WeakRef<object>[] = [];
     class RetiringCaller {
+      constructor() {
+        references.push(new WeakRef(this));
+      }
       stop(invoker: NodeInvoker) {
         invoker.stop();
       }
@@ -160,7 +164,7 @@ describe("service-owned node invocation", () => {
       return invoker;
     });
     // Inspect retention before any error matcher can materialize the lazy stack.
-    expect(queryObjects(RetiringCaller)).toBe(0);
+    await expectCollected(...references);
     for (const invoker of invokers) {
       const reason: unknown = await invoker.invoke(request).catch((error: unknown) => error);
       expect(reason).toBeInstanceOf(Error);

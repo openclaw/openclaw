@@ -279,6 +279,8 @@ struct OnboardingWelcomeStep: View {
     let isConnecting: Bool
     let onScanQRCode: () -> Void
     let onManualSetup: () -> Void
+    /// Set only while no Gateway has ever been saved on this device.
+    let onShowNewUserGuide: (() -> Void)?
 
     var body: some View {
         let statusText = self.statusLine.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -324,6 +326,16 @@ struct OnboardingWelcomeStep: View {
                         }
                         .buttonStyle(OpenClawSecondaryActionButtonStyle(height: 54))
                         .disabled(self.isConnecting)
+                    }
+
+                    if let onShowNewUserGuide {
+                        Button(action: onShowNewUserGuide) {
+                            Text("New to OpenClaw? Start here")
+                                .font(OpenClawType.subheadSemiBold)
+                                .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.top, 46)

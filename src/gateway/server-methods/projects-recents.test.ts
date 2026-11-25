@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import type { ProjectRecent } from "../../../packages/gateway-protocol/src/index.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -28,6 +28,14 @@ import { listProjectRecents } from "./projects-recents.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import { initializeRepository, invokeProjectMethod } from "./projects.test-support.js";
 
+beforeEach(() => {
+  // Read-scoped listings check repository visibility; recents must not depend on live GitHub.
+  const visibility = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(Response.json({ visibility: "public" }));
+  return () => visibility.mockRestore();
+});
+
 const folderRecent = (name: string) => ({
   kind: "folder",
   folder: `/work/${name}`,
@@ -54,6 +62,29 @@ test("folder recents deduplicate normalized nodes without merging different runn
     { kind: "folder", folder: "/work/app", displayName: "app" },
   ]);
   expect([...usedSessions]).toEqual([0, 2, 3].map((index) => `agent:main:folder-${index}`));
+});
+
+test("folder recents skip agent-spawned helper sessions", async () => {
+  const candidates = [
+    {
+      key: "agent:main:subagent:helper",
+      agentId: "main",
+      entry: {
+        sessionId: "helper",
+        updatedAt: 2,
+        spawnedBy: "agent:main:dashboard:parent",
+        spawnedCwd: "/work/helper-worktree",
+      },
+    },
+    {
+      key: "agent:main:dashboard:parent",
+      agentId: "main",
+      entry: { sessionId: "parent", updatedAt: 1, spawnedCwd: "/work/app" },
+    },
+  ];
+  const usedSessions = new Set<string>();
+  expect(await listProjectRecents(candidates, [], usedSessions)).toEqual([folderRecent("app")]);
+  expect([...usedSessions]).toEqual(["agent:main:dashboard:parent"]);
 });
 
 test("projects.list returns only the caller's deterministic resolved recents", async () => {

@@ -24,6 +24,7 @@ import {
   isUpdateActionable,
 } from "../../app/update-schedule-projection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   RetryAction,
   SettingsPage,
@@ -420,16 +421,16 @@ function GatewayUpdates(props: UpdatesViewProps) {
     props.update.updateStatusRefreshing && !props.updateBusy
       ? t("updates.page.checking")
       : !props.canAdmin
-        ? t("updates.adminRequired")
+        ? t("updates.adminRequiredTooltip")
         : checkRequired()
           ? t("updates.page.checkRequired")
           : "";
   return (
     <>
       <Show when={!props.canAdmin}>
-        <div class="callout warning" role="note">
+        <InlineAlert tone="warning" role="note">
           {t("updates.adminRequired")}
-        </div>
+        </InlineAlert>
       </Show>
       <BuildFacts {...props} />
       <RecordedAttempt
@@ -494,8 +495,8 @@ function GatewayUpdates(props: UpdatesViewProps) {
               : undefined
           }
           control={
-            <div class="updates-status-control">
-              <div>
+            <div class="updates-status-control" style={{ width: "340px", "max-width": "100%" }}>
+              <div style={{ flex: "1 1 0", "min-width": "0" }}>
                 <Errored
                   fallback={(error, reset) => (
                     <span class="updates-status-check-failed">
@@ -535,7 +536,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
                       ? t("updates.page.checking")
                       : props.canCheckStatus
                         ? ""
-                        : t("updates.adminRequired")
+                        : t("updates.adminRequiredTooltip")
                   }
                   disabled={
                     !props.canCheckStatus ||
@@ -656,7 +657,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
       </p>
       <Errored
         fallback={(error, reset) => (
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {formatUiError(error())}
             <RetryAction
               type="button"
@@ -665,7 +666,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
                 void updateNow();
               }}
             />
-          </div>
+          </InlineAlert>
         )}
       >
         <Loading>{latest(confirmationOutcome) ?? null}</Loading>

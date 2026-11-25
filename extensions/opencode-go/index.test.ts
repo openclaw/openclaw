@@ -47,6 +47,7 @@ function makeRuntimeModel(id: string, overrides: Partial<Parameters<StreamFn>[0]
 function upstreamModel(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
+    modalities: { input: ["text"], output: ["text"] },
     limit: { context: 262_144, output: 32_768 },
     ...overrides,
   };
@@ -262,16 +263,15 @@ describe("opencode-go provider plugin", () => {
       discoveryApiKey: "resolved-opencode-key",
       fetchGuard,
     });
-    expect(result.models).toMatchObject([
+    expect(result.models.filter((model) => model.inference === undefined)).toMatchObject([
       { id: "known", name: "Enriched" },
-      {
-        id: "unknown",
-        provider: "opencode-go",
-        api: "openai-completions",
-        baseUrl: OPENAI_URL,
-        input: ["text"],
-      },
+      { id: "unknown", api: "openai-completions", baseUrl: OPENAI_URL },
     ]);
+    // Only the id names a non-text family: kept out of default pickers, runnable by ref.
+    expect(result.models.find((model) => model.id === "future-embedding")?.inference).toEqual({
+      chat: true,
+      chatEvidence: "unlikely",
+    });
     const listingRequest = fetchGuard.mock.calls.find(
       ([request]) => request.url === "https://opencode.ai/inference/go/v1/models",
     )?.[0];
@@ -380,6 +380,38 @@ describe("opencode-go provider plugin", () => {
         expect(fetchMock).not.toHaveBeenCalled();
       }),
   );
+
+  it("lists the signed-in account's models for a browser sign-in", async () => {
+    await liveCatalog({ "kimi-k3": upstreamModel("kimi-k3") }, ["kimi-k3"], "console-access");
+    const resolveProviderAuth = vi.fn(() => ({
+      apiKey: "oauth:opencode-go",
+      discoveryApiKey: "console-access",
+      mode: "oauth" as const,
+      source: "profile" as const,
+      profileId: "opencode-go:default",
+    }));
+    let result: Awaited<ReturnType<NonNullable<typeof provider.catalog>["run"]>>;
+    await withFetchSpy(async (fetchMock) => {
+      fetchMock.mockRejectedValue(new Error("blocked fetch"));
+      result = await provider.catalog?.run({
+        config: {},
+        env: {},
+        providerIds: ["opencode-go"],
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+    expect(result).toMatchObject({
+      provider: { apiKey: "oauth:opencode-go" },
+    });
+    expect(result && "provider" in result && result.provider.models.map((m) => m.id)).toEqual([
+      "kimi-k3",
+    ]);
+    expect(resolveProviderAuth).toHaveBeenCalledWith("opencode-go", {
+      oauthMarker: expect.stringContaining("opencode-go"),
+    });
+  });
 
   it("does not select an unavailable preferred onboarding model", async () => {
     await expect(

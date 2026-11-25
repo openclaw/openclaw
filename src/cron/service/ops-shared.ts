@@ -15,7 +15,7 @@ export function markManualCronJobActive(
   runReceipt: CronRunReceiptHandle,
 ): CronActiveJobMarker | undefined {
   state.activeManualRunJobIds.add(job.id);
-  return markServiceCronJobActive(state, job, runReceipt);
+  return markServiceCronJobActive(job, runReceipt);
 }
 
 export function clearManualCronJobActive(

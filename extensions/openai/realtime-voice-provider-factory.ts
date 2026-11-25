@@ -27,6 +27,7 @@ import {
   OPENAI_QUICKSILVER_CAPABILITIES,
   isOpenAIGptLiveModel,
   isOpenAIGptLiveSubscriptionModel,
+  requiresOpenAIGptLiveSubscriptionAuth,
   resolveOpenAIQuicksilverVoiceCapabilities,
 } from "./realtime-quicksilver.js";
 import { OpenAIRealtimeBridge } from "./realtime-voice-bridge.js";
@@ -145,6 +146,7 @@ export function buildOpenAIRealtimeVoiceProvider(
     }
     return {
       authParams: { configuredApiKey: config.apiKey, cfg, agentId },
+      allowsPlatform: !requiresOpenAIGptLiveSubscriptionAuth(model),
       allowsSubscription: hasBroker && (!isGptLive || isOpenAIGptLiveSubscriptionModel(model)),
     };
   };
@@ -162,6 +164,9 @@ export function buildOpenAIRealtimeVoiceProvider(
     resolveConfigAsync: (params) => resolveOpenAIRealtimeVoiceConfigAsync(params, context),
     isConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
+      if (requiresOpenAIGptLiveSubscriptionAuth(config.model)) {
+        return false;
+      }
       if (config.azureEndpoint || config.azureDeployment) {
         return hasOpenAIRealtimeApiKeyInput(config.apiKey);
       }
@@ -176,6 +181,9 @@ export function buildOpenAIRealtimeVoiceProvider(
     },
     isConfiguredAsync: async ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
+      if (requiresOpenAIGptLiveSubscriptionAuth(config.model)) {
+        return false;
+      }
       if (config.azureEndpoint || config.azureDeployment) {
         return hasOpenAIRealtimeApiKeyInput(config.apiKey);
       }
@@ -222,6 +230,11 @@ export function buildOpenAIRealtimeVoiceProvider(
                 resolveOpenAIQuicksilverBridgeAuth({ ...authParams, model }, context),
             },
             context,
+          );
+        }
+        if (requiresOpenAIGptLiveSubscriptionAuth(model)) {
+          throw new Error(
+            "gpt-live-1.1-codex requires the ChatGPT voice route in Talk or a Gateway relay",
           );
         }
         return new OpenAIQuicksilverVoiceBridge(
@@ -466,7 +479,8 @@ export function buildOpenAIRealtimeVoiceProvider(
     const prepared = prepareBrowserSessionAuth({ cfg, providerConfig, agentId });
     return (
       prepared &&
-      ((await hasOpenAIRealtimePlatformAuthInputAsync(prepared.authParams, context)) ||
+      ((prepared.allowsPlatform &&
+        (await hasOpenAIRealtimePlatformAuthInputAsync(prepared.authParams, context))) ||
         (prepared.allowsSubscription &&
           (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context))))
     );
@@ -483,7 +497,8 @@ export function buildOpenAIRealtimeVoiceProvider(
       const prepared = prepareBrowserSessionAuth({ cfg, providerConfig, agentId });
       return (
         prepared &&
-        (hasOpenAIRealtimePlatformAuthInput(prepared.authParams, context) ||
+        ((prepared.allowsPlatform &&
+          hasOpenAIRealtimePlatformAuthInput(prepared.authParams, context)) ||
           (prepared.allowsSubscription &&
             hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context)))
       );
@@ -560,10 +575,11 @@ export function buildOpenAIRealtimeVoiceProvider(
         return false;
       }
       return (
-        hasOpenAIRealtimePlatformAuthInput(
-          { configuredApiKey: config.apiKey, cfg, agentId },
-          context,
-        ) ||
+        (!requiresOpenAIGptLiveSubscriptionAuth(config.model) &&
+          hasOpenAIRealtimePlatformAuthInput(
+            { configuredApiKey: config.apiKey, cfg, agentId },
+            context,
+          )) ||
         (isOpenAIGptLiveSubscriptionModel(config.model) &&
           hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
       );
@@ -577,10 +593,11 @@ export function buildOpenAIRealtimeVoiceProvider(
         return false;
       }
       return (
-        (await hasOpenAIRealtimePlatformAuthInputAsync(
-          { configuredApiKey: config.apiKey, cfg, agentId },
-          context,
-        )) ||
+        (!requiresOpenAIGptLiveSubscriptionAuth(config.model) &&
+          (await hasOpenAIRealtimePlatformAuthInputAsync(
+            { configuredApiKey: config.apiKey, cfg, agentId },
+            context,
+          ))) ||
         (isOpenAIGptLiveSubscriptionModel(config.model) &&
           (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context)))
       );

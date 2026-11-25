@@ -1,37 +1,13 @@
 import { createMemo, For, Show } from "solid-js";
-import { TEMPLATE_BOOTSTRAP_FILE_NAMES } from "../../../../src/templates/manifest-contract.js";
-import { Icon, type IconName } from "../../components/solid/icon.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { Tooltip } from "../../components/solid/tooltip.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { agentDocuments, fileRole } from "./template-workspace-file-roles.ts";
 import type { TemplateCatalogDetail } from "./templates-catalog-client.ts";
 
 registerEnglishCatalog(registerTemplatesEnglish);
-
-// Match workspace destinations, never package-source basenames.
-const agentDocuments = new Set<string>([
-  ...TEMPLATE_BOOTSTRAP_FILE_NAMES,
-  "BOOTSTRAP.md",
-  "USER.md",
-  "MEMORY.md",
-]);
-
-// Workspace roles use exact root-relative names; nested lookalikes are ordinary files.
-const fileRoles = new Map<string, readonly [IconName, string]>([
-  ["AGENTS.md", ["scrollText", "agents"]],
-  ["SOUL.md", ["palette", "soul"]],
-  ["USER.md", ["circleUser", "user"]],
-  ["IDENTITY.md", ["bot", "identity"]],
-  ["BOOTSTRAP.md", ["flag", "bootstrap"]],
-  ["MEMORY.md", ["brain", "memory"]],
-  ["TOOLS.md", ["wrench", "tools"]],
-  ["HEARTBEAT.md", ["activity", "heartbeat"]],
-]);
-
-function fileRole(name: string): readonly [IconName, string] {
-  return fileRoles.get(name) ?? ["fileText", "generic"];
-}
 
 export function TemplateWorkspaceFiles(props: {
   files: TemplateCatalogDetail["contents"]["instructions"];
@@ -55,7 +31,7 @@ export function TemplateWorkspaceFiles(props: {
                   <Icon name={fileRole(file.name)[0]} />
                 </span>
                 <div class="settings-row__text oc-settings-row-content">
-                  <div class="templates-workspace-file__title">
+                  <div class="row templates-workspace-file__title">
                     <button
                       type="button"
                       class="templates-workspace-file__open"
@@ -69,7 +45,7 @@ export function TemplateWorkspaceFiles(props: {
                     >
                       <button
                         type="button"
-                        class="templates-workspace-file__info"
+                        class="template-art templates-workspace-file__info"
                         aria-label={t("templatesCatalog.aboutFile", { name: file.name })}
                       >
                         <Icon name="info" />

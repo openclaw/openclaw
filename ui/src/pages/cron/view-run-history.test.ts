@@ -9,7 +9,7 @@ import {
 
 function renderView(props: Parameters<typeof renderCronView>[0] = {}, scope = "overview") {
   return renderCronView({
-    listTab: "activity",
+    activityOpen: true,
     detailTab: "history",
     editingJob: scope === "job" ? createCronViewJob("job-1", { state: {} }) : null,
     ...props,
@@ -40,12 +40,74 @@ describe("cron view run history", () => {
     expect(entries).toHaveLength(cases.length);
     cases.forEach(([, title, facts, error], index) => {
       const entry = entries[index]!;
-      expect(entryText(entry, "title")?.replace(/\s+/g, " ").trim()).toBe(`job-1 · ${title}`);
+      expect(entryText(entry, "title")?.replace(/\s+/g, " ").trim()).toBe(title);
       expect(entryText(entry, "facts")).toBe(facts);
       if (error) {
         expect(entry.textContent).toContain(error);
       }
     });
+  });
+
+  it("renders a condition-script failure once, without unknown delivery or a transcript", async () => {
+    const error = `cron trigger evaluation failed (internal_error): Error: ${Array(80).fill("HTTP 403").join(", ")}`;
+    const container = await renderView(
+      {
+        runs: [
+          createRun({
+            status: "error",
+            completionStatus: "failed",
+            triggerFired: false,
+            deliveryStatus: "unknown",
+            runId: "receipt-1",
+            sessionKey: "agent:main:cron:job-1",
+            error,
+          }),
+        ],
+      },
+      "job",
+    );
+    const entry = container.querySelector(".cron-run-entry");
+    expect(entryText(entry ?? undefined, "title")).toContain("Condition check failed");
+    expect(entryText(entry ?? undefined, "facts")).toBe("");
+    expect(entryText(entry ?? undefined, "meta") ?? "").not.toContain("403");
+    expect(entry?.textContent?.split(error)).toHaveLength(2);
+    expect(entry?.querySelector(".cron-error--clamped")).not.toBeNull();
+    expect(
+      [...(entry?.querySelectorAll("button:not(.cron-run-entry__header)") ?? [])].map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Show details"]);
+  });
+
+  it("keeps distinct delivery explanations and drops copies of the run error", async () => {
+    const container = await renderView({
+      runs: [
+        createRun({
+          ts: 3,
+          summary: "Report ready",
+          deliveryStatus: "not-delivered",
+          deliveryError: "Telegram chat not found",
+        }),
+        createRun({
+          ts: 2,
+          summary: "Report ready",
+          deliveryStatus: "unknown",
+          deliveryError: "Send returned no message id",
+        }),
+        createRun({
+          ts: 1,
+          status: "error",
+          error: "boom",
+          deliveryStatus: "unknown",
+          deliveryError: "boom",
+        }),
+      ],
+    });
+    const [failed, uncertain, copied] = container.querySelectorAll(".cron-run-entry");
+    expect(entryText(failed, "delivery-error")).toBe("Delivery failed: Telegram chat not found");
+    expect(entryText(uncertain, "delivery-error")).toBe("Delivery: Send returned no message id");
+    expect(entryText(uncertain, "facts")).toContain("Unknown");
+    expect(copied?.querySelector(".cron-run-entry__delivery-error")).toBeNull();
   });
 
   it("formats run token counts and durations in the rendered entry", async () => {
@@ -61,24 +123,34 @@ describe("cron view run history", () => {
     const entries = Array.from(container.querySelectorAll(".cron-run-entry"));
     const [total, split, zero, invalid, unknown] = entries;
     expect(entryText(total, "facts")).toContain("1.2M Tokens");
-    expect(entryText(total, "meta")).toContain("1m 30s");
+    expect(entryText(total, "facts")).toContain("1m 30s");
     expect(total?.textContent).not.toContain("1234567");
     expect(total?.textContent).not.toContain("90000ms");
 
     expect(entryText(split, "facts")).toContain("50k in / 999 out");
-    expect(entryText(split, "meta")).toContain("500ms");
-    expect(entryText(zero, "meta")).toContain("0ms");
-    expect(entryText(invalid, "meta")).toContain("n/a");
-    expect(entryText(unknown, "meta")).toContain("n/a");
+    expect(entryText(split, "facts")).toContain("500ms");
+    expect(entryText(zero, "facts")).toContain("0ms");
+    expect(entryText(invalid, "facts")).toContain("n/a");
+    // A run without a recorded duration omits it rather than printing a placeholder.
+    expect(entryText(unknown, "facts")).not.toContain("n/a");
   });
 
-  it("renders run summaries as sanitized markdown", async () => {
+  it("only exposes links and sanitized Markdown after expanding a run summary", async () => {
     const container = await renderView({
-      runs: [createRun({ summary: "**bold** <script>alert(1)</script>" })],
+      runs: [
+        createRun({
+          summary: "**bold** [Report](https://example.com/report) <script>alert(1)</script>",
+        }),
+      ],
     });
-    const body = getElement(container, ".cron-run-entry__body", HTMLDivElement);
-    expect(body.querySelector("strong")?.textContent).toBe("bold");
-    expect(body.querySelector("script")).toBeNull();
+    const body = () => getElement(container, ".cron-run-entry__summary", HTMLDivElement);
+    expect(body().textContent).toContain("bold Report");
+    expect(body().querySelector("a")).toBeNull();
+
+    getElement(container, ".cron-run-entry__header", HTMLButtonElement).click();
+    await vi.waitFor(() => expect(body().querySelector("strong")?.textContent).toBe("bold"));
+    expect(body().querySelector("a")?.getAttribute("href")).toBe("https://example.com/report");
+    expect(body().querySelector("script")).toBeNull();
   });
 
   it("shows empty guidance only for settled history and offers recovery after failure", async () => {
@@ -129,7 +201,7 @@ describe("cron view run history", () => {
         }),
       ],
     });
-    const facts = getElement(container, ".cron-run-entry__facts", HTMLDivElement);
+    const facts = getElement(container, ".cron-run-entry__facts", HTMLElement);
     expect(facts.textContent).toContain("Delivery suppression: silent <img");
     expect(facts.textContent).toContain("Bearer [redacted]");
     expect(facts.textContent).not.toContain("abcdefghijkl");

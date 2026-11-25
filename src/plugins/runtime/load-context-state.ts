@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { Model } from "../../llm/types.js";
 import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 
 export type PluginRuntimeLoadContextState = {
@@ -6,6 +7,7 @@ export type PluginRuntimeLoadContextState = {
   activationInputFingerprint: string;
   controlPlaneFingerprint: string;
   registrationConfigKey: string;
+  fallbackRateLimitModels?: WeakMap<OpenClawConfig, Map<string, Model | undefined>>;
   loaderCacheIdentity?: Readonly<{ requestKey: string; resolvedKey: string }>;
   preferBuiltPluginArtifacts?: boolean;
   declaredProviderOwners: DeclaredProviderOwnerIndex;

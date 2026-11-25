@@ -5,9 +5,42 @@ import type {
 } from "@openclaw/acp-core/runtime/types";
 import { runWithAgentToolSourceExecutionScope } from "../../agents/agent-tool-source-execution-guard.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import type { SessionControllerWatchdog } from "../../sessions/session-controller.watchdog.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
+import { resolveAcpToolTerminalOutcome } from "../tool-status.js";
 import { normalizeAcpErrorCode } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
+
+type AcpTurnOutputEvent = Extract<AcpRuntimeEvent, { type: "text_delta" | "tool_call" }>;
+
+export function createAcpTurnProgressReporter(
+  watchdog: Pick<SessionControllerWatchdog, "progress"> | undefined,
+  signal: AbortSignal,
+): (event: AcpTurnOutputEvent) => void {
+  const completedTools = new Set<string>();
+  return (event) => {
+    if (!watchdog || signal.aborted) {
+      return;
+    }
+    // The reply controller owns liveness. Report progress before
+    // projection so hidden tools and buffered replies count too.
+    if (event.type === "text_delta") {
+      if (event.text.trim()) {
+        watchdog.progress("semantic", "acp:text");
+      }
+      return;
+    }
+    const toolCallId = event.toolCallId?.trim();
+    if (
+      toolCallId &&
+      resolveAcpToolTerminalOutcome(event.status) &&
+      !completedTools.has(toolCallId)
+    ) {
+      completedTools.add(toolCallId);
+      watchdog.progress("semantic", "acp:tool_completed");
+    }
+  };
+}
 
 /** Mutable gate used to suppress late events after timeout/cancel races. */
 type AcpTurnEventGate = {
@@ -24,9 +57,7 @@ async function consumeAcpTurnEvents(params: {
   events: AsyncIterable<AcpRuntimeEvent>;
   eventGate: AcpTurnEventGate;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
-  onOutputEvent?: (
-    event: Extract<AcpRuntimeEvent, { type: "text_delta" | "tool_call" }>,
-  ) => Promise<void> | void;
+  onOutputEvent?: (event: AcpTurnOutputEvent) => Promise<void> | void;
 }): Promise<AcpTurnStreamOutcome> {
   let streamError: AcpRuntimeError | null = null;
   let sawOutput = false;
@@ -102,9 +133,7 @@ export async function consumeAcpTurnStream(params: {
   onCancellation?: () => Promise<void>;
   onPromptStarted?: (params: { authoritative: boolean }) => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
-  onOutputEvent?: (
-    event: Extract<AcpRuntimeEvent, { type: "text_delta" | "tool_call" }>,
-  ) => Promise<void> | void;
+  onOutputEvent?: (event: AcpTurnOutputEvent) => Promise<void> | void;
 }): Promise<AcpTurnStreamOutcome> {
   if (params.turn.signal?.aborted) {
     await params.onCancellation?.();

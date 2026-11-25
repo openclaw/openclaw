@@ -13,6 +13,10 @@ import {
   signStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-method-policy.js";
+import {
+  authorizationClient,
+  sendAuthorizationRequest,
+} from "../server-methods.authorization.test-support.js";
 import { openclawIdHandlers } from "../server-methods/openclaw-id.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { linkedClaw, nowSeconds, serviceFor, type LinkedClaw } from "./openclaw-id.test-support.js";
@@ -28,7 +32,7 @@ type Response = {
 // the tunnel with its device key, or anything else (LAN, proxied).
 const loopback = { internal: { isLocalClient: true } };
 const tunnel = (peerKey: string) => ({
-  internal: { isLocalClient: true, openclawIdPeerKey: peerKey },
+  internal: { isLocalClient: true as const, openclawIdPeerKey: peerKey },
 });
 const lan = { internal: {} };
 
@@ -97,6 +101,64 @@ describe("OpenClaw ID people access", () => {
   it("needs the admin scope as well as an owner", () => {
     expect(resolveCoreOperatorGatewayMethodScope("openclawId.people")).toBe("operator.admin");
     expect(resolveCoreOperatorGatewayMethodScope("openclawId.status")).toBe("operator.read");
+  });
+
+  it("admits a verified viewer status read through the dispatcher without granting owner methods", async () => {
+    const claw = await linkedClaw();
+    const peerKey = await addMember(claw, "acct-viewer", "viewer");
+    await addMember(claw, "acct-other", "operator");
+    const { service } = serviceFor(claw.authority);
+    const client = authorizationClient("viewer", ["operator.sessions.read"], {
+      ...tunnel(peerKey),
+      authenticatedUserProfile: {
+        profileId: "viewer-profile",
+        displayName: null,
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    });
+    const context = { openclawIdService: service };
+    const status = await sendAuthorizationRequest("openclawId.status", {}, { client, context });
+    expect(status).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        owner: false,
+        channel: "tunnel",
+        connection: expect.objectContaining({ kind: "member", accountId: "acct-viewer" }),
+      }),
+    );
+    const payload = status.mock.calls[0]?.[1];
+    expect(Object.keys(payload.link).toSorted()).toEqual(SUMMARY_KEYS);
+    expect(payload).not.toHaveProperty("ownerDeviceCount");
+    expect(payload).not.toHaveProperty("publication");
+    expect(JSON.stringify(payload)).not.toMatch(
+      /acct-other|ownerDevices|sessionKey|runId|lastSeenAt/,
+    );
+    for (const method of ["openclawId.people", "openclawId.authority"]) {
+      const response = await sendAuthorizationRequest(method, {}, { client, context });
+      expect(response).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: "missing scope: operator.admin" }),
+      );
+    }
+    const unverified = authorizationClient(
+      "unverified",
+      ["operator.sessions.read"],
+      tunnel(peerKey),
+    );
+    const denied = await sendAuthorizationRequest(
+      "openclawId.status",
+      {},
+      { client: unverified, context },
+    );
+    expect(denied).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "Session-scoped access requires a verified user profile.",
+      }),
+    );
   });
 
   it("gives a viewer and an operator member only the summary and refuses them people", async () => {
@@ -247,6 +309,7 @@ describe("OpenClaw ID people access", () => {
       context: {
         openclawIdService: service,
         getRuntimeConfig: () => ({ gateway: { openclawId: { enabled: true } } }),
+        logGateway: { info: () => {}, warn: () => {} },
       },
     } as unknown as GatewayRequestHandlerOptions);
     expect(response).toMatchObject({ ok: false, error: { details: { code: "not_owner" } } });

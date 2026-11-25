@@ -100,10 +100,32 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
         #expect(ExecApprovalIdentifier.exact("") == nil)
         #expect(ExecApprovalIdentifier.key(".") == nil)
         #expect(ExecApprovalIdentifier.key("..") == nil)
+        #expect(ExecApprovalIdentifier.exact(".") == nil)
         #expect(ExecApprovalIdentifier.exact(" approval ") == " approval ")
+        #expect(ExecApprovalIdentifier.exact("\u{001C}approval") == "\u{001C}approval")
         #expect(ExecApprovalIdentifier.exact("\u{0085}approval") == "\u{0085}approval")
         #expect(GatewayStableIdentifier.exact(" gateway ") == " gateway ")
         #expect(GatewayStableIdentifier.exact("\u{0085}gateway") == "\u{0085}gateway")
+    }
+
+    @Test func `exact opaque identifier keys stay byte exact and dot safe`() throws {
+        let composedID = "approval-\u{00E9}"
+        let decomposedID = "approval-e\u{0301}"
+        let composedKey = ExactOpaqueIdentifierKey(composedID)
+        let decomposedKey = ExactOpaqueIdentifierKey(decomposedID)
+        #expect(composedID == decomposedID)
+        #expect(composedKey != decomposedKey)
+
+        var pending = [composedKey: composedID, decomposedKey: decomposedID]
+        pending.removeValue(forKey: composedKey)
+        let remainingID = try #require(pending[decomposedKey])
+        #expect(Array(remainingID.utf8) == Array(decomposedID.utf8))
+
+        let left = ExactOpaqueIdentifierKey("a.b").notificationComponent + "."
+            + ExactOpaqueIdentifierKey("c").notificationComponent
+        let right = ExactOpaqueIdentifierKey("a").notificationComponent + "."
+            + ExactOpaqueIdentifierKey("b.c").notificationComponent
+        #expect(left != right)
     }
 
     @Test func `custom headers round trip per gateway`() {
@@ -389,7 +411,10 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
         defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
         let firstGatewayID = "manual|first.example.com|443"
         let secondGatewayID = "manual|second.example.com|443"
-        GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest("legacy-token", instanceId: instanceID)
+        #expect(GenericPasswordKeychainStore.saveString(
+            "legacy-token",
+            service: gatewayService,
+            account: "gateway-token.\(instanceID)"))
 
         GatewaySettingsStore.discardUnscopedGatewayCredentials(instanceId: instanceID)
 
@@ -418,9 +443,10 @@ private func withLastGatewaySnapshot(_ body: () -> Void) async {
             gatewayStableID: gatewayID,
             suppressStoredDeviceAuth: true,
             instanceId: instanceID)
-        GatewaySettingsStore.saveLegacyGatewayTokenForMigrationTest(
+        #expect(GenericPasswordKeychainStore.saveString(
             "obsolete-token",
-            instanceId: instanceID)
+            service: gatewayService,
+            account: "gateway-token.\(instanceID)"))
 
         #expect(GatewaySettingsStore.migrateProvenRelayCredentials(
             instanceId: instanceID,

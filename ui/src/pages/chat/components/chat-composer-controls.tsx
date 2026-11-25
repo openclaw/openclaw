@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createSignal, createUniqueId, lazy, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Kbd } from "../../../components/solid/kbd.tsx";
+import { Kbd, KeyboardShortcut, ShortcutHint } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { registerSessionNavigationEnglish } from "../../../i18n/locales/en-session-navigation.ts";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
@@ -137,6 +137,10 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
             props.onOpenTalkSettings?.();
           } else if (item.id === "capability:dictation") {
             props.onOpenDictationSettings?.();
+          } else if (item.id === "speech-api-key") {
+            props.onConfigureApiKey?.(undefined);
+          } else if (item.id.startsWith("api-key:")) {
+            props.onConfigureApiKey?.(item.id.slice("api-key:".length));
           }
         }}
       />
@@ -299,7 +303,13 @@ export function renderChatAbortActionSolid(
   return (
     <>
       {props.canAbort ? (
-        <openclaw-tooltip prop:content={t("chat.runControls.stopWithShortcut")}>
+        <openclaw-tooltip>
+          <span slot="content">
+            <ShortcutHint
+              label={t("chat.runControls.stop")}
+              combo={KEYBOARD_SHORTCUT_COMBOS.escape}
+            />
+          </span>
           <button
             class="chat-send-btn chat-send-btn--stop"
             ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
@@ -352,15 +362,12 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
   const hasSendableContent = () =>
     hasComposedContent() && props.canSend && !props.sending && !sendDisabledReason();
   const showShortcutTooltip = () =>
-    !isMobileBrowserPlatform() &&
-    !props.preparingAttachments &&
-    sendStatus() == null &&
-    alternateAvailable();
+    !isMobileBrowserPlatform() && !props.preparingAttachments && sendStatus() == null;
   const SendAction = () => (
     <openclaw-tooltip
       prop:content={
         props.preparingAttachments
-          ? t("chat.composer.preparingAttachments")
+          ? (props.videoPreparationStatus?.message ?? t("chat.composer.preparingAttachments"))
           : showShortcutTooltip()
             ? ""
             : (sendStatus() ?? label())
@@ -368,17 +375,27 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
     >
       <Show when={showShortcutTooltip()}>
         <span slot="content">
-          {label()} <Kbd keys="⏎" inline />
-          {" · "}
-          {alternateLabel()}{" "}
-          <Kbd
-            keys={
-              isApplePlatform()
-                ? t("chat.sendShortcutModifierEnter")
-                : formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, false)
+          {label()}{" "}
+          <KeyboardShortcut
+            combo={
+              props.sendShortcut === "modifier-enter"
+                ? KEYBOARD_SHORTCUT_COMBOS.modifiedEnter
+                : KEYBOARD_SHORTCUT_COMBOS.sendMessage
             }
             inline
           />
+          <Show when={alternateAvailable()}>
+            {" · "}
+            {alternateLabel()}{" "}
+            <Kbd
+              keys={
+                isApplePlatform()
+                  ? t("chat.sendShortcutModifierEnter")
+                  : formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, false)
+              }
+              inline
+            />
+          </Show>
         </span>
       </Show>
       <button
@@ -387,7 +404,11 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
         onClick={(event) => props.onSend(event)}
         disabled={!hasSendableContent()}
         aria-label={sendStatus() ?? description()}
-        aria-busy={sendBusy() || props.preparingAttachments ? "true" : "false"}
+        aria-busy={
+          sendBusy() || (props.videoPreparationStatus?.busy ?? props.preparingAttachments)
+            ? "true"
+            : "false"
+        }
       >
         {sendBusy() ? <span class="btn__spinner" aria-hidden="true" /> : <Icon name="arrowUp" />}
         <span class="agent-chat__control-label">{label()}</span>

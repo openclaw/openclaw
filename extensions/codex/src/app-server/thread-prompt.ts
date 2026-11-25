@@ -13,7 +13,7 @@ import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plu
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
 import { readCodexConfigValue } from "./config-layer-policy.js";
-import { joinPresentSections } from "./developer-instruction-sections.js";
+import { joinPresentSections, renderCodexThreadPolicy } from "./developer-instruction-sections.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
@@ -65,7 +65,7 @@ const CODEX_NATIVE_TOOL_GUIDANCE = [
 ];
 
 /** Ring-zero threads pin empty base instructions, so their policy stays in the developer carrier. */
-export function isCodexRingZeroThread(
+function isCodexRingZeroThread(
   params: Pick<CodexThreadPromptContext, "toolsAllow">,
   hostSystemAgentActive?: boolean,
 ): boolean {
@@ -87,7 +87,7 @@ function listDynamicToolNames(dynamicTools: readonly CodexDynamicToolSpec[] | un
  * the rollout, so it renders from thread-stable facts only: the thread fingerprint
  * covers it, and a changed render reaches an existing thread on its next cold resume.
  */
-export function buildCodexBaseInstructions(
+function buildCodexBaseInstructions(
   params: CodexThreadPromptContext,
   options: {
     dynamicTools?: readonly CodexDynamicToolSpec[];
@@ -139,7 +139,7 @@ export function buildCodexBaseInstructions(
 }
 
 // Neither key has a Codex default, so a string in the effective config is authored.
-function hasAuthoredCodexBaseInstructions(
+export function hasAuthoredCodexBaseInstructions(
   options: Pick<CodexThreadConfigurationOptions, "config" | "nativeConfig">,
 ): boolean {
   return ["model_instructions_file", "instructions"].some((key) =>
@@ -189,13 +189,18 @@ export function placeCodexBaseInstructions(
   ringZero: { baseInstructions?: string },
 ): { baseInstructions?: string; developerInstructions: string } {
   if (isCodexRingZeroThread(params, options.hostSystemAgentActive)) {
-    return { ...ringZero, developerInstructions };
+    return { ...ringZero, developerInstructions: renderCodexThreadPolicy(developerInstructions) };
   }
   const baseInstructions = resolveCodexOpenClawBaseInstructions(params, options);
   if (hasAuthoredCodexBaseInstructions(options)) {
-    return { developerInstructions: joinPresentSections(baseInstructions, developerInstructions) };
+    return {
+      developerInstructions: renderCodexThreadPolicy(baseInstructions, developerInstructions),
+    };
   }
-  return { baseInstructions: baseInstructions ?? "", developerInstructions };
+  return {
+    baseInstructions: baseInstructions ?? "",
+    developerInstructions: renderCodexThreadPolicy(developerInstructions),
+  };
 }
 
 /** Move only the exact section annotated by its producer; later policy additions survive. */
@@ -233,10 +238,14 @@ export function buildCodexConversationTurnInstructions(
     spec.type === "namespace" ? spec.tools.map((tool) => `${spec.name}.${tool.name}`) : [spec.name],
   );
   return [
-    "Current OpenClaw conversation instructions (replace earlier conversation context, not persistent policy):",
+    "## OpenClaw conversation instructions",
+    "Instructions in the following conversation_instructions block supersede earlier versions of this block delivered as developer instructions.",
+    "<conversation_instructions>",
     splitCodexExtraSystemPrompt(params).turn ??
       "No additional conversation instructions for this turn.",
+    "### Tool Bindings",
     `Current OpenClaw tool bindings for this turn (accepted declarations alone do not grant execution): ${availableNames.length ? availableNames.toSorted().join(", ") : "none"}.`,
+    "</conversation_instructions>",
   ].join("\n\n");
 }
 

@@ -48,11 +48,59 @@ describe("sessions-list inventory queries", () => {
     mocks.getSessionStateVersions.mockReturnValue({});
   });
 
+  it("preserves dashboard presence and active safety metadata across visible inventory pages", async () => {
+    const withoutBoard = dashboard("without-board", "main", {
+      hasBoard: false,
+      status: "running",
+      updatedAt: 100,
+    });
+    const withBoard = dashboard("with-board", "main", {
+      hasBoard: true,
+      status: "queued",
+      updatedAt: 90,
+    });
+    const unknownBoard = dashboard("unknown-board", "main", { status: "done", updatedAt: 80 });
+    mockSessionPages([
+      [dashboard("hidden-board", "other", { hasBoard: true }), withoutBoard],
+      [dashboard("incognito-private", "main", { hasBoard: false }), withBoard, unknownBoard],
+    ]);
+    const tool = createTool();
+
+    const first = await page({ limit: 2 }, tool);
+
+    expect(first).toMatchObject({ count: 2, hasMore: true, nextOffset: 4 });
+    expect(first.sessions).toEqual([
+      expect.objectContaining({
+        key: withoutBoard.key,
+        hasBoard: false,
+        status: "running",
+        updatedAt: 100,
+      }),
+      expect.objectContaining({
+        key: withBoard.key,
+        hasBoard: true,
+        status: "queued",
+        updatedAt: 90,
+      }),
+    ]);
+    expect(Value.Check(tool.outputSchema!, first)).toBe(true);
+    expect(mocks.gatewayCall).toHaveBeenCalledTimes(2);
+    mockSessionPages([[unknownBoard]], 4);
+
+    const resumed = await page({ offset: first.nextOffset, limit: 2 }, tool);
+
+    expectExhausted(resumed, 1);
+    expect(resumed.sessions?.[0]).toMatchObject({ key: unknownBoard.key, status: "done" });
+    expect(resumed.sessions?.[0]).not.toHaveProperty("hasBoard");
+    expect(Value.Check(tool.outputSchema!, resumed)).toBe(true);
+  });
+
   it("forwards exact inventory filters without turning explicit actor IDs into identity", async () => {
     mocks.gatewayCall.mockResolvedValue({ sessions: [] });
     const params = {
       group: "P1 issues",
       pinned: true,
+      hasBoard: false,
       activeOnly: true,
       excludeSubagents: true,
       ownerId: "profile-owner",
@@ -292,7 +340,7 @@ describe("sessions-list inventory queries", () => {
     });
     expect(sessionKeys(details)).toEqual([firstRow.key]);
     expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(64 * 1024);
-    expect(text).toBe(JSON.stringify(result.details, null, 2));
+    expect(text).toBe(JSON.stringify(result.details));
     expect(Value.Check(tool.outputSchema!, details)).toBe(true);
     mockSessionPages([[omittedRow, finalRow]], 23);
 
@@ -352,8 +400,9 @@ describe("sessions-list inventory queries", () => {
   });
 
   it("does not advertise or silently ignore live-activity filtering in embedded mode", async () => {
-    const tool = createSessionsListTool({ config: VALID_CONFIG, supportsActiveOnly: false });
+    const tool = createSessionsListTool({ config: VALID_CONFIG, gatewayBacked: false });
     expect(tool.parameters).not.toHaveProperty("properties.activeOnly");
+    expect(tool.parameters).not.toHaveProperty("properties.pinned");
     await expect(tool.execute("embedded-activity", { activeOnly: true })).rejects.toThrow(
       "activeOnly requires a Gateway-backed inventory",
     );

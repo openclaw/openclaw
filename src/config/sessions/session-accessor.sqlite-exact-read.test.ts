@@ -569,7 +569,7 @@ describe("SQLite exclusions and candidate reference reads", () => {
     }
   });
 
-  it.each(["UTF-8", "UTF-16le"] as const)(
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
     "preserves exact exclusions across %s text conversion",
     (encoding) => {
       const { database, seed, cap } = excludedRowsFixture(encoding);
@@ -579,11 +579,16 @@ describe("SQLite exclusions and candidate reference reads", () => {
       seed(keys);
       expect(database.db.prepare("PRAGMA encoding").get()?.encoding).toBe(encoding);
       const excluded = new Set(["agent:main:\uFFFE", "agent:main:\uFFFF", ...keys.slice(1)]);
+      const storedRows = database.db
+        .prepare("SELECT session_key, current_session_id FROM session_nodes")
+        .all();
       expect(read(excluded).toSorted()).toEqual(
-        encoding === "UTF-8" ? ["id-0"] : ["id-0", "id-1", "id-2"],
+        storedRows
+          .filter((row) => !excluded.has(String(row.session_key)))
+          .map((row) => String(row.current_session_id))
+          .toSorted(),
       );
-      const storedKeys = database.db.prepare("SELECT session_key FROM session_nodes").all();
-      expect(read(new Set(storedKeys.map((row) => String(row.session_key))))).toEqual([]);
+      expect(read(new Set(storedRows.map((row) => String(row.session_key))))).toEqual([]);
     },
   );
 

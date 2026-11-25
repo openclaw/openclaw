@@ -10,6 +10,7 @@ import * as gateway from "../gateway/call.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
 import { buildWorkspaceHookStatus } from "../hooks/hooks-status.js";
 import { defaultRuntime } from "../runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { makeHookStatusEntry } from "./cli-fixtures.test-support.js";
 import { registerHooksCli } from "./hooks-cli.js";
@@ -169,17 +170,16 @@ describe("hooks cli formatting", () => {
   });
 
   it("classifies eventless hooks as not eligible in JSON check output", async () => {
-    const output = JSON.parse(await runHooksReport(eventless, ["check", "--json"]));
-
-    expect(output).toMatchObject({
+    expect(JSON.parse(await runHooksReport(eventless, ["check", "--json"]))).toMatchObject({
       total: 1,
       eligible: 0,
-      notEligible: 1,
-      hooks: {
-        eligible: [],
-        notEligible: [{ name: "session-memory", blockedReason: "no events defined" }],
-      },
+      hooks: { notEligible: [{ name: "session-memory", blockedReason: "no events defined" }] },
     });
+  });
+  it.each(["list", "info session-memory", "check --json"])("drops interrupted %s", async (args) => {
+    const work = new AsyncWorkScope();
+    work.beginClose();
+    expect(await work.run(() => runHooksReport(withHook(), args.split(" ")))).toBe("");
   });
 
   it.each([

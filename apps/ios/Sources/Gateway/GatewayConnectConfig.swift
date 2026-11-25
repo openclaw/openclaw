@@ -19,6 +19,9 @@ struct GatewayConnectConfig: Sendable {
     var nodeOptions: GatewayConnectOptions
     var personalTailscaleAuthentication: Bool = false
     var ingressAuthorization: GatewayIngressAuthorization?
+    /// Control UI mount advertised by the connected operator session's hello-ok.
+    /// Learned after connect, so it stays out of the connection and WebView identity inputs.
+    var controlUiBasePath: String?
 
     func operatorCredentials(fallback: GatewayNodeSessionCredentials) -> GatewayNodeSessionCredentials {
         self.personalTailscaleAuthentication ? .init() : fallback

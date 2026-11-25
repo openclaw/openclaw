@@ -1,10 +1,15 @@
 // Control UI tests cover plugin mutations serialized behind pending config drafts.
 import { expect, it } from "vitest";
 import type { PluginsInspectResult } from "../lib/plugins/index.ts";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openAgentFallbackChain, requestRaw } from "./model-providers.test-support.ts";
 import { inspection } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -78,6 +83,12 @@ suite.define(() => {
         mutationAllowed: true,
       });
       const gateway = await installMockGateway(page, {
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.list",
+          "config.get",
+          "models.list",
+        ],
         methodResponses: {
           "agents.list": {
             defaultId: "main",
@@ -94,7 +105,8 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}settings/agents/main/overview`);
       expect(response?.status()).toBe(200);
 
-      const fallbackInput = page.locator("openclaw-multi-select.agent-fallbacks input");
+      const chain = await openAgentFallbackChain(page.locator("openclaw-agents-page"));
+      const fallbackInput = chain.getByRole("combobox", { name: "Fallback model", exact: true });
       await fallbackInput.waitFor();
       await gateway.deferNext("config.set");
       await fallbackInput.fill("anthropic/claude-sonnet-4-6");
@@ -119,11 +131,17 @@ suite.define(() => {
       });
 
       await gateway.deferNext("plugins.setEnabled");
-      await page.getByRole("button", { name: "Enable Workboard", exact: true }).click();
+      await page.getByRole("switch", { name: "Workboard", checked: false, exact: true }).click();
       expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
       const pendingDraft = await gateway.waitForRequest("config.set");
       expect(pendingDraft.params).toMatchObject({ baseHash: "config-hash-1" });
+      expect(requestRaw(pendingDraft).agents).toEqual({
+        defaults: { model: { primary: "openai/gpt-5" } },
+        entries: {
+          main: { model: { primary: "openai/gpt-5", fallbacks: ["anthropic/claude-sonnet-4-6"] } },
+        },
+      });
       await gateway.resolveDeferred("config.set");
 
       const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
@@ -141,7 +159,7 @@ suite.define(() => {
         runtime: { operationId: "enable-workboard", generation: 1, pluginIds: ["workboard"] },
       });
 
-      await page.getByRole("button", { name: "Disable Workboard", exact: true }).waitFor();
+      await page.getByRole("switch", { name: "Workboard", checked: true, exact: true }).waitFor();
       expect((await gateway.getRequests("plugins.inspect")).length).toBeGreaterThan(0);
       expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
       await expect

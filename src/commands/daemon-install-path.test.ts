@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type * as ProgramArgs from "../daemon/program-args.js";
 import { auditGatewayInstallPreservation } from "../daemon/service-audit-preservation.js";
 import type { ServiceDefinitionDrift } from "../daemon/service-audit-types.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
@@ -62,6 +63,42 @@ function buildPlan(params: Partial<Parameters<typeof buildGatewayInstallPlan>[0]
     ...params,
   });
 }
+
+describe("Gateway install resident entrypoint", () => {
+  it("selects the resident launcher from the install plan environment without changing the process", async () => {
+    const originalArgv = process.argv;
+    const originalState = process.env.OPENCLAW_STATE_DIR;
+    const { resolveGatewayProgramArguments } = await vi.importActual<typeof ProgramArgs>(
+      "../daemon/program-args.js",
+    );
+    mocks.resolveGatewayProgramArguments.mockImplementation(resolveGatewayProgramArguments);
+    try {
+      const npmRoot = path.join(tmpDir, "npm", "lib", "node_modules", "openclaw");
+      fs.mkdirSync(path.join(npmRoot, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(npmRoot, "dist", "index.js"), "");
+      process.argv = [process.execPath, path.join(npmRoot, "dist", "index.js")];
+      for (const profile of ["first", "second"]) {
+        const state = path.join(tmpDir, profile);
+        const prefix = path.join(state, "git-install");
+        const release = path.join(prefix, "releases", "active", "openclaw");
+        const launcher = path.join(prefix, "openclaw-launcher.mjs");
+        fs.mkdirSync(release, { recursive: true });
+        fs.symlinkSync(release, path.join(prefix, "openclaw"), "junction");
+        fs.writeFileSync(launcher, "");
+        const plan = await buildPlan({
+          env: { HOME: tmpDir, OPENCLAW_STATE_DIR: state, OPENCLAW_PROFILE: profile },
+          devMode: false,
+          runtimePath: process.execPath,
+          config: {},
+        });
+        expect(plan.programArguments.at(-4)).toBe(launcher);
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(originalState);
+      }
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+});
 
 describe("Gateway install PATH preservation", () => {
   it.skipIf(process.platform === "win32")(
@@ -310,5 +347,37 @@ describe("Gateway install PATH preservation", () => {
 
     expect(findings).toEqual([]);
     expect(plan.environment.PATH).toBe(testCase.expectedPath);
+  });
+});
+
+describe("Gateway allocator startup environment", () => {
+  it.each([
+    ["linux", undefined, undefined, undefined, "2"],
+    ["linux", "4", undefined, undefined, "4"],
+    ["linux", "0", undefined, undefined, "0"],
+    ["linux", "", undefined, undefined, ""],
+    ["linux", undefined, "6", undefined, "6"],
+    ["linux", undefined, "2", "8", "8"],
+    ["darwin", undefined, undefined, undefined, undefined],
+    ["win32", undefined, undefined, undefined, undefined],
+  ] as const)(
+    "preserves allocator choices on %s (shell=%s, installed=%s, config=%s)",
+    async (platform, shell, installed, configured, expected) => {
+      const plan = await buildPlan({
+        env: { HOME: tmpDir, MALLOC_ARENA_MAX: shell },
+        platform,
+        existingEnvironment: { MALLOC_ARENA_MAX: installed },
+        config: configured === undefined ? {} : { env: { MALLOC_ARENA_MAX: configured } },
+      });
+      expect(plan.environment.MALLOC_ARENA_MAX).toBe(expected);
+    },
+  );
+
+  it("uses the durable dotenv allocator choice before the Linux default", async () => {
+    const stateDir = path.join(tmpDir, ".openclaw");
+    fs.mkdirSync(stateDir);
+    fs.writeFileSync(path.join(stateDir, ".env"), "MALLOC_ARENA_MAX=6\n");
+    const plan = await buildPlan({ env: { HOME: tmpDir }, platform: "linux" });
+    expect(plan.environment.MALLOC_ARENA_MAX).toBe("6");
   });
 });

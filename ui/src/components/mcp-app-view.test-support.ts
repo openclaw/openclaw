@@ -40,6 +40,7 @@ export function mockMcpSandboxProxyReady() {
       window.dispatchEvent(
         new MessageEvent("message", {
           source: window,
+          origin: new URL(value).origin,
           data: { method: "ui/notifications/sandbox-proxy-ready" },
         }),
       ),

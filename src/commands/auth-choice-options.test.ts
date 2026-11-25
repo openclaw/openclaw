@@ -102,6 +102,9 @@ describe("buildAuthChoiceOptions", () => {
       groupedFlow("litellm", "litellm-api-key", "LiteLLM API key", "LiteLLM"),
       groupedFlow("openai", "openai-api-key", "OpenAI API key", "OpenAI"),
       groupedFlow("anthropic", "apiKey", "Anthropic API key", "Anthropic"),
+      groupedFlow("github-copilot", "github-copilot", "GitHub Copilot", "Copilot", {
+        group: { id: "copilot", label: "Copilot" },
+      }),
       groupedFlow("byteplus", "byteplus-api-key", "BytePlus API key", "BytePlus"),
       groupedFlow("openrouter", "openrouter-oauth", "OpenRouter OAuth", "OpenRouter"),
       groupedFlow("meta", "meta-api-key", "Meta API key", "Meta", {
@@ -119,6 +122,7 @@ describe("buildAuthChoiceOptions", () => {
       "xAI (Grok)",
       "Google",
       "Anthropic",
+      "Copilot",
       "BytePlus",
       "Custom Provider",
       "LiteLLM",
@@ -130,6 +134,7 @@ describe("buildAuthChoiceOptions", () => {
       "xAI (Grok)",
       "Google",
       "Anthropic",
+      "Copilot",
     ]);
   });
 

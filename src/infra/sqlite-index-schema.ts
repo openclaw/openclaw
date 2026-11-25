@@ -27,6 +27,8 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 const SQLITE_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
+type DeferredForeignKeyMismatch = { error: Error; parentTable: string };
+
 type RepairCanonicalSqliteIndexesOptions = {
   /**
    * A recognized schema migration may add a column before recreating its
@@ -41,7 +43,27 @@ type RepairCanonicalSqliteIndexesOptions = {
   validateUnchanged?: (readTable?: SqliteTableContractReader) => void;
   verifyPhysicalIntegrity?: boolean;
   integrity?: SqliteIntegrityCheckOptions;
+  /** The integrity child completed physical checks before this schema-only FK failure. */
+  deferredForeignKeyMismatch?: DeferredForeignKeyMismatch;
 };
+
+function foreignKeyMismatch(error: unknown): DeferredForeignKeyMismatch | undefined {
+  if (
+    !(error instanceof Error) ||
+    error.name !== "SqliteIntegrityError" ||
+    !error.message.startsWith("SQLite foreign_key_check failed for ") ||
+    !(error.cause instanceof Error) ||
+    !("code" in error.cause) ||
+    error.cause.code !== "ERR_SQLITE_ERROR"
+  ) {
+    return undefined;
+  }
+  const match =
+    /^foreign key mismatch - "[A-Za-z_][A-Za-z0-9_]*" referencing "([A-Za-z_][A-Za-z0-9_]*)"$/u.exec(
+      error.cause.message,
+    );
+  return match?.[1] ? { error, parentTable: match[1] } : undefined;
+}
 
 /**
  * Verify the whole file before schema convergence. Physical corruption belongs
@@ -57,22 +79,34 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
   } = {},
 ): SqliteIntegrityOperation<string[]> {
   const { diagnostics, reuseIntegrity, ...repairOptions } = options;
+  let deferredForeignKeyMismatch: DeferredForeignKeyMismatch | undefined;
   if (reuseIntegrity) {
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "cached";
     }
   } else {
-    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics, options.integrity);
+    try {
+      yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics, options.integrity);
+    } catch (error) {
+      deferredForeignKeyMismatch = foreignKeyMismatch(error);
+      if (!deferredForeignKeyMismatch) {
+        throw error;
+      }
+    }
   }
 
   const indexesStartedAt = performance.now();
   const repairedIndexes = repairCanonicalSqliteIndexes(db, databaseLabel, schemaSql, {
     ...repairOptions,
     verifyPhysicalIntegrity: false,
+    deferredForeignKeyMismatch,
   });
   if (diagnostics) {
     diagnostics.canonicalIndexMs = Math.floor(performance.now() - indexesStartedAt);
     diagnostics.repairedIndexCount = repairedIndexes.length;
+    if (deferredForeignKeyMismatch) {
+      diagnostics.integrityGateOutcome = "healthy";
+    }
   }
   return repairedIndexes;
 }
@@ -88,6 +122,7 @@ export function repairCanonicalSqliteIndexes(
   options: RepairCanonicalSqliteIndexesOptions = {},
 ): string[] {
   const repairIndexes = new Set<CanonicalSqliteNamedIndexContract>();
+  let deferredForeignKeyMismatch = options.deferredForeignKeyMismatch;
   // One read snapshot also avoids a network lock round trip per metadata query.
   runSqliteSchemaReadSnapshotSync(db, () => {
     const readTable = createSqliteTableContractReader(db);
@@ -137,7 +172,22 @@ export function repairCanonicalSqliteIndexes(
     }
 
     if (options.verifyPhysicalIntegrity !== false) {
-      assertSqliteIntegrity(db, databaseLabel, options.integrity);
+      try {
+        assertSqliteIntegrity(db, databaseLabel, options.integrity);
+      } catch (error) {
+        deferredForeignKeyMismatch = foreignKeyMismatch(error);
+        if (!deferredForeignKeyMismatch) {
+          throw error;
+        }
+      }
+    }
+    if (
+      deferredForeignKeyMismatch &&
+      ![...repairIndexes].some(
+        (index) => index.unique && index.tableName === deferredForeignKeyMismatch?.parentTable,
+      )
+    ) {
+      throw deferredForeignKeyMismatch.error;
     }
     if (repairIndexes.size === 0) {
       options.validateUnchanged?.(readTable);
@@ -172,6 +222,9 @@ export function repairCanonicalSqliteIndexes(
       }
     }
     if (repairIndexes.size === 0) {
+      if (deferredForeignKeyMismatch) {
+        throw deferredForeignKeyMismatch.error;
+      }
       // Skipped column migrations rolled back DDL after the inspection snapshot ended.
       options.validateUnchanged?.();
       db.exec(`RELEASE SAVEPOINT ${savepoint};`);
@@ -182,6 +235,11 @@ export function repairCanonicalSqliteIndexes(
       assertSqliteTableIntegrity(db, databaseLabel, table);
     }
     options.validateAfterRepair?.();
+    if (deferredForeignKeyMismatch) {
+      // A missing unique parent index made FK validation impossible before DDL.
+      // Complete the original gate before publishing, including real orphan refusal.
+      assertSqliteIntegrity(db, databaseLabel, { ...options.integrity, schemaOnly: undefined });
+    }
     db.exec(`RELEASE SAVEPOINT ${savepoint};`);
   } catch (error) {
     try {
