@@ -412,6 +412,7 @@ export async function prepareSessionEventTargetForHost(
         requester: scope.scheduledRequester.requester,
         grant: await admitScheduledRequesterGrant(
           getSessionEventRuntimeConfig(),
+          target.agentId,
           scope.scheduledRequester.requester,
         ),
       };

@@ -660,6 +660,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
  */
 export async function admitScheduledRequesterGrant(
   config: OpenClawConfig,
+  agentId: string,
   requester:
     | { kind: "channel"; requester: CronAuthenticatedChannelRequester }
     | { kind: "profile"; profileId: string },
@@ -680,7 +681,11 @@ export async function admitScheduledRequesterGrant(
     if (!isOperatorRoleEnforcedFor(config, subject)) {
       return decideTurnGrant(["operator.admin"]);
     }
-    const facts = { kind: "person", snapshot: { profileId: requester.profileId } } as const;
+    const facts = {
+      kind: "person",
+      snapshot: { profileId: requester.profileId },
+      agentId,
+    } as const;
     const admitted = decideOperatorAdmission(
       facts,
       await prepareOperatorAdmission(facts, { getRuntimeConfig: () => config }),

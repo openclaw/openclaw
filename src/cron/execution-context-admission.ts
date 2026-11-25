@@ -276,6 +276,7 @@ export async function admitScheduledOccurrence(
           (requester?.kind === "channel" || requester?.kind === "profile")
             ? await admitScheduledRequesterGrant(
                 await captureRuntimeConfigAsyncReader()(),
+                run.agentId,
                 requester,
               )
             : undefined;

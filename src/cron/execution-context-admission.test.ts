@@ -154,9 +154,12 @@ describe("admitScheduledOccurrence", () => {
         sessionId: "parent-session",
         lifecycleRevision: "rev-1",
       });
-      const role = (scopes: GatewayOperatorRoleDefinition["scopes"]) => ({
+      const role = (
+        scopes: GatewayOperatorRoleDefinition["scopes"],
+        agents: GatewayOperatorRoleDefinition["agents"] = "*",
+      ) => ({
         scopes,
-        agents: "*" as const,
+        agents,
         sessions: { others: "none" as const },
       });
       const cfg = {
@@ -165,6 +168,7 @@ describe("admitScheduledOccurrence", () => {
             default: "member",
             definitions: {
               admin: role(["operator.admin"]),
+              "research-admin": role(["operator.admin"], ["research"]),
               member: role(["operator.read", "operator.write"]),
             },
           },
@@ -174,10 +178,11 @@ describe("admitScheduledOccurrence", () => {
       const profile = ensureProfileForEmail("scheduled-requester@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const stored = job({ ...LINKED_JOB, ownerProfileId: profile.id });
-      // An admin role is the owner on every entry; a member role and an untiered
+      // An admin role is the owner on every entry its agents allow; a member role and an untiered
       // install keep the answer they had before admission decided it.
       for (const [assigned, roles, owner] of [
         ["admin", cfg, true],
+        ["research-admin", cfg, false],
         ["member", cfg, false],
         ["member", {}, true],
       ] as const) {
