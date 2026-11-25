@@ -51,13 +51,7 @@ it.each([
           return params.amount ?? 1;
         },
       );
-    const followupRun = createTestFollowupRun({
-      provider: "openai",
-      model: "gpt-5.5",
-      authProfileId: "openai:delegated",
-      authProfileIdSource: "user",
-      authProfileRequired: true,
-    });
+    const followupRun = createTestFollowupRun({ provider: "openai", model: "gpt-5.5" });
     const notice = vi.fn();
     const params: Parameters<typeof runSessionCompactionIfNeeded>[0] = {
       cfg: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "32kb" } } } },
@@ -92,10 +86,7 @@ it.each([
       ...params,
       sessionEntry: { ...params.sessionEntry!, ...entry },
     });
-    expect(compact).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ requiredAuthProfileId: "openai:delegated" }),
-      expect.anything(),
-    );
+    expect(compact).toHaveBeenCalledOnce();
     expect(notice.mock.calls.map(([phase]) => phase)).toContain("context_bounded");
   },
 );

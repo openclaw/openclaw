@@ -176,8 +176,13 @@ export function createSessionMaintenanceFollowup(params: {
       groupSpace: run.groupSpace,
       provider: params.provider,
       model: params.model,
-      authProfileId: params.auth.authProfileId,
-      authProfileIdSource: params.auth.authProfileIdSource,
+      authProfileId: sessionEntry.authProfileOverrideRequired
+        ? sessionEntry.authProfileOverride
+        : params.auth.authProfileId,
+      authProfileIdSource: sessionEntry.authProfileOverrideRequired
+        ? "user"
+        : params.auth.authProfileIdSource,
+      authProfileRequired: sessionEntry.authProfileOverrideRequired,
       blockReplyBreak: "message_end",
       skillsSnapshot: run.skillsSnapshot,
       thinkingCatalog: run.thinkingCatalog,

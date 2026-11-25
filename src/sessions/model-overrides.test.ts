@@ -133,21 +133,23 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.modelOverrideSource).toBe("user");
   });
 
-  it("clears auth profile metadata on an unpreserved model switch", () => {
-    const entry = makeEntry({
-      ...override,
-      authProfileOverride: "openai:work",
-      authProfileOverrideSource: "user",
-      authProfileOverrideCompactionCount: 2,
-    });
-    applyModelOverrideToSessionEntry({ entry, selection: { ...openai, model: "gpt-4.1" } });
-    expectCleared(
-      entry,
-      "authProfileOverride",
-      "authProfileOverrideSource",
-      "authProfileOverrideCompactionCount",
-    );
-  });
+  it.each([undefined, true] as const)(
+    "preserves only required accounts on a model-only switch (%s)",
+    (required) => {
+      const entry = makeEntry({
+        ...override,
+        authProfileOverride: "openai:work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+        authProfileOverrideRequired: required,
+      });
+      applyModelOverrideToSessionEntry({ entry, selection: anthropic });
+      expect(entry.authProfileOverride).toBe(required ? "openai:work" : undefined);
+      expect(entry.authProfileOverrideRequired).toBe(required);
+      expect(entry.authProfileOverrideSource).toBe(required ? "user" : undefined);
+      expect(entry.authProfileOverrideCompactionCount).toBe(required ? 2 : undefined);
+    },
+  );
 });
 
 describe("repairProviderWrappedModelOverride", () => {
