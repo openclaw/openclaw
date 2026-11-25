@@ -348,7 +348,7 @@ export class EmbeddedBlockChunker {
       removedFenceInfoLength += removedLength;
     }
     const tables = findTableSpans(source, fenceSpans, maxChars, !force);
-    const htmlBlocks = findHtmlBlockSpans(source, fenceSpans, maxChars, !force);
+    const htmlBlocks = findHtmlBlockSpans(source, maxChars, !force, startsAtLineStart);
     const unsafe =
       htmlBlocks.length > 0
         ? mergeBreakSpans([...fenceSpans, ...tables, ...htmlBlocks])

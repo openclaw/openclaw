@@ -87,11 +87,53 @@ describe("EmbeddedBlockChunker HTML islands", () => {
     expect(chunks.join("").replace(/\s+/g, "")).toBe(huge.replace(/\s+/g, ""));
   });
 
-  it("ignores tags inside fenced code and inline code", () => {
-    const prose = Array.from({ length: 6 }, () => intro).join(" ");
-    const fenced = `${prose}\n\n\`\`\`html\n<details>\n\`\`\`\n\n${prose}\n\nUse \`<details>\` for folds.\n\n${prose}\n\n${prose}`;
-    const chunks = chunkStream(fenced, 30);
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.join("").replace(/\s+/g, "")).toBe(fenced.replace(/\s+/g, ""));
+  it("does not let tags inside code change chunk boundaries", () => {
+    const prose = Array.from(
+      { length: 30 },
+      (_, i) => `Sentence ${i} about regional revenue.`,
+    ).join(" ");
+    const withCode = (inline: string, fenced: string) =>
+      `Use ${inline} for folds.\n\n${prose}\n\n\`\`\`html\n${fenced}\n\`\`\`\n\n${prose}`;
+    const lengths = (text: string) => chunkStream(text, 20).map((chunk) => chunk.length);
+    expect(lengths(withCode("`<details>`", "<details>"))).toEqual(
+      lengths(withCode("`<xxxxxxx>`", "<xxxxxxx>")),
+    );
+    expect(lengths(withCode("``a <ul> b``", "<ul><li>"))).toEqual(
+      lengths(withCode("``a <xx> b``", "<xx><xx>")),
+    );
+  });
+
+  it("does not close an island on a literal closer inside a code span", () => {
+    const text =
+      "<details><summary>Code</summary>\nKeep ``</details>`` literal.\n\nBody.\n</details>\n\nAfter the fold.";
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 5,
+      maxChars: 1200,
+      flushOnParagraph: true,
+    });
+    const chunks: string[] = [];
+    const emit = (chunk: string) => chunks.push(chunk);
+    for (let start = 0; start < text.length; start += 4) {
+      chunker.append(text.slice(start, start + 4));
+      chunker.drain({ force: false, emit });
+    }
+    chunker.drain({ force: true, emit });
+    expect(chunks.join("").replace(/\s+/g, "")).toBe(text.replace(/\s+/g, ""));
+    expect(
+      chunks.some((chunk) => chunk.includes("<details>") && chunk.includes("Body.\n</details>")),
+    ).toBe(true);
+  });
+
+  it("keeps the end of a still-open island unsafe while streaming", () => {
+    const chunker = new EmbeddedBlockChunker({ minChars: 800, maxChars: 1200 });
+    const chunks: string[] = [];
+    const emit = (chunk: string) => chunks.push(chunk);
+    chunker.append(`<details><summary>Notes</summary>${"x".repeat(800)}.`);
+    chunker.drain({ force: false, emit });
+    expect(chunks).toEqual([]);
+    chunker.append("</details>");
+    chunker.drain({ force: true, emit });
+    expect(chunks).toHaveLength(1);
+    expect(balanced(chunks[0] ?? "", "details")).toBe(true);
   });
 });

@@ -1,4 +1,5 @@
-import { isSafeFenceBreak, type FenceSpan } from "../../packages/markdown-core/src/fences.js";
+import { buildCodeSpanIndex } from "../../packages/markdown-core/src/code-spans.js";
+import { isSafeFenceBreak } from "../../packages/markdown-core/src/fences.js";
 import type { BreakSpan, BreakSpans } from "./embedded-agent-block-chunker.tables.js";
 
 // Block-level HTML islands that channel renderers (for example Telegram rich
@@ -6,52 +7,40 @@ import type { BreakSpan, BreakSpans } from "./embedded-agent-block-chunker.table
 const HTML_BLOCK_TAG_RE =
   /<(\/?)(details|table|ul|ol|dl|aside|blockquote|figure|tg-collage|tg-slideshow)(?=[\s/>])[^<>]*>/gi;
 
-function isInsideInlineCode(source: string, index: number): boolean {
-  const lineStart = source.lastIndexOf("\n", index - 1) + 1;
-  let ticks = 0;
-  for (let i = lineStart; i < index; i += 1) {
-    if (source.charCodeAt(i) === 96 /* ` */) {
-      ticks += 1;
-    }
-  }
-  return ticks % 2 === 1;
-}
-
 /**
  * Keep fitting block-level HTML islands (`<details>`, `<ul>`, `<table>`, ...)
  * whole, so a chunk boundary never lands between an opening tag and its
- * closer. Islands longer than `maxChars` keep the ordinary hard-split
- * fallback. While streaming, a still-open island holds back breaks until it
- * closes or outgrows `maxChars`.
+ * closer. Tags inside fenced or inline code are ignored. Islands longer than
+ * `maxChars` keep the ordinary hard-split fallback. While streaming, a
+ * still-open island holds back breaks until it closes or outgrows `maxChars`.
  */
 export function findHtmlBlockSpans(
   source: string,
-  fenceSpans: FenceSpan[],
   maxChars: number,
   streaming: boolean,
+  atLineStart = true,
 ): BreakSpan[] {
   if (!source.includes("<")) {
     return [];
   }
+  const code = buildCodeSpanIndex(source, undefined, { atLineStart });
   const spans: BreakSpan[] = [];
   const stack: string[] = [];
   let openStart = -1;
   HTML_BLOCK_TAG_RE.lastIndex = 0;
   let match: RegExpExecArray | null;
   while ((match = HTML_BLOCK_TAG_RE.exec(source)) !== null) {
-    const index = match.index;
-    if (!isSafeFenceBreak(fenceSpans, index) || isInsideInlineCode(source, index)) {
+    if (code.isInside(match.index)) {
       continue;
     }
     const closing = match[1] === "/";
     const name = (match[2] ?? "").toLowerCase();
-    const selfClosing = !closing && /\/\s*>$/.test(match[0]);
-    if (selfClosing) {
+    if (!closing && /\/\s*>$/.test(match[0])) {
       continue;
     }
     if (!closing) {
       if (stack.length === 0) {
-        openStart = index;
+        openStart = match.index;
       }
       stack.push(name);
       continue;
@@ -62,7 +51,7 @@ export function findHtmlBlockSpans(
     }
     stack.length = openIndex;
     if (stack.length === 0 && openStart >= 0) {
-      const end = index + match[0].length;
+      const end = match.index + match[0].length;
       if (end - openStart <= maxChars) {
         spans.push({ start: openStart, end });
       }
@@ -70,7 +59,9 @@ export function findHtmlBlockSpans(
     }
   }
   if (streaming && stack.length > 0 && openStart >= 0 && source.length - openStart <= maxChars) {
-    spans.push({ start: openStart, end: source.length });
+    // The closer has not arrived yet, so the current buffer end is still inside
+    // the island: extend past it so a break exactly at the end stays unsafe.
+    spans.push({ start: openStart, end: source.length + 1 });
   }
   return spans;
 }
