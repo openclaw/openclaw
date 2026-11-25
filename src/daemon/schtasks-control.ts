@@ -551,7 +551,10 @@ export async function startScheduledTask({
     await changeScheduledTaskEnabledState({
       env: effectiveEnv,
       enabled: true,
-      beforeMutation: assertSelected,
+      beforeMutation: async () => {
+        await assertSelected();
+        beforeEffect?.();
+      },
       assertCurrent,
     });
     reportMutation("enable");

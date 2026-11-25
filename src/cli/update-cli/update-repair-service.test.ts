@@ -224,6 +224,55 @@ it("finalizes an interrupted managed update, then starts and verifies its stoppe
   expect(service.start).toHaveBeenCalledTimes(1);
 });
 
+it("does not start a rebound service after native preparation", async () => {
+  seed(true);
+  vi.mocked(service.start).mockImplementation(async (args) => {
+    vi.mocked(service.readCommand).mockResolvedValue({
+      programArguments: [process.execPath, state.path("openclaw.mjs"), "gateway"],
+      sourcePath: state.path("gateway.service"),
+      environment: { OPENCLAW_STATE_DIR: state.path("other-state") },
+    });
+    await args.beforeMutation?.();
+    args.beforeEffect?.();
+    events.push("start");
+  });
+  await repair();
+  expect(events).toEqual(["finalized"]);
+  expect(healthApi.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+  expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+    expect.objectContaining({ status: "warning", restart: false }),
+  );
+});
+
+it("fails repair when interrupted database publication appears before restoration", async () => {
+  seed(true);
+  vi.mocked(service.readCommand).mockImplementation(async () => {
+    if (events.includes("finalized")) {
+      const { resolveOpenClawStateSqlitePath } =
+        await import("../../state/openclaw-state-db.paths.js");
+      const path = await import("node:path");
+      await fs.mkdir(
+        path.join(
+          path.dirname(resolveOpenClawStateSqlitePath(process.env)),
+          ".openclaw-restore-regression",
+        ),
+        { recursive: true },
+      );
+    }
+    return {
+      programArguments: [process.execPath, state.path("openclaw.mjs"), "gateway"],
+      sourcePath: state.path("gateway.service"),
+    };
+  });
+  await repair();
+  expect(events).toContain("finalized");
+  expect(events).not.toContain("start");
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  expect(defaultRuntime.writeJson).not.toHaveBeenCalledWith(
+    expect.objectContaining({ status: "warning" }),
+  );
+});
+
 it("does not revoke a successful repair start during post-effect authority checks", async () => {
   const original = seed(true);
   vi.mocked(service.start).mockImplementation(async (args) => {

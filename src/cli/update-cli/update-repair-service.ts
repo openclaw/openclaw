@@ -21,7 +21,11 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import {
+  assertUpdateRecoveryAdmission,
+  InterruptedStateRestoreError,
+} from "../../infra/update-run-recovery-admission.js";
+import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery-schema.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -33,6 +37,7 @@ import { readPackageVersion } from "./shared.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import {
   GatewayServiceUpdateOwnershipError,
+  assertGatewayServiceAdmissionUnchanged,
   inspectManagedGatewayServiceBeforeUpdate,
   readGatewayServiceStateForUpdate,
   resolveUpdatedGatewayRestartPort,
@@ -215,8 +220,7 @@ export async function restoreRepairGateway(params: {
     };
     const expectedVersion = await readPackageVersion(params.root);
     const expectedBuildId = await readBuiltGatewayBuildId(params.root);
-    // Inspect the service once; synchronous guards cover our awaits and native
-    // preparation without repeating the full ownership inspection.
+    // Capture the selected binding; native preparation verifies it again before mutation.
     const state = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
     assertDoctorServiceSelection(env, state.env);
     const verdict = await inspectManagedGatewayServiceBeforeUpdate({ root: params.root, state });
@@ -248,6 +252,16 @@ export async function restoreRepairGateway(params: {
         env: state.env,
         stdout: params.json ? process.stderr : process.stdout,
         preserveDefinition: true,
+        beforeMutation: async () => {
+          const current = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
+          assertDoctorServiceSelection(env, current.env);
+          const currentVerdict = await inspectManagedGatewayServiceBeforeUpdate({
+            root: params.root,
+            state: current,
+          });
+          assertGatewayServiceAdmissionUnchanged({ serviceUpdateVerdict: verdict }, currentVerdict);
+          assertCurrent();
+        },
         assertCurrent,
         beforeEffect: () => {
           assertCurrent();
@@ -302,7 +316,12 @@ export async function restoreRepairGateway(params: {
     }
     return { restart, verification };
   }).catch((error: unknown) => {
-    if (hasCommandProcessCleanupError(error) || risk()) {
+    if (
+      hasCommandProcessCleanupError(error) ||
+      risk() ||
+      error instanceof InterruptedStateRestoreError ||
+      error instanceof UpdateRecoveryRequiredError
+    ) {
       throw error;
     }
     // An unmanaged service (for example a non-default state dir) is not this
