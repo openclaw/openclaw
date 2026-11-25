@@ -640,6 +640,16 @@ export function createTalkRealtimeRelaySession(
       const active = relaySessions.get(relaySessionId);
       if (active) {
         void closeRelaySession(active, "completed");
+        return;
+      }
+      // A close that failed admission keeps the session in the draining set
+      // until its durable close settles; expire it through the same owner so
+      // a persistent connection cannot occupy the slot indefinitely (#204615).
+      for (const draining of drainingRelaySessions) {
+        if (draining.id === relaySessionId) {
+          void closeRelaySession(draining, "completed");
+          return;
+        }
       }
     }, RELAY_SESSION_TTL_MS),
     activeAgentRuns: new Map(),

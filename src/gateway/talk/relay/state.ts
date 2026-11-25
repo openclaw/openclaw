@@ -324,6 +324,8 @@ export type RelaySession = {
     runTranscript?: (run: () => boolean) => boolean;
     /** Set when close admission failed: a later close attempt may retry the durable voice close. */
     voiceCloseRetryable?: boolean;
+    /** Shared promise for the retried durable close, joined by later callers. */
+    retryCompletion?: Promise<void>;
   };
   failSession: (message: string) => void;
 };

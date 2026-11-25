@@ -109,6 +109,12 @@ export function closeRelaySession(
     if (reason === "error") {
       session.closing.reason = reason;
     }
+    // A retried durable close is shared with every later caller so disconnect
+    // cleanup joins its actual outcome instead of the already-rejected close
+    // completion (#204615).
+    if (session.closing.retryCompletion) {
+      return session.closing.retryCompletion;
+    }
     // A close that failed settlement admission drained the accepted transcript
     // but never ran the durable voice close, and the session stays in the
     // draining set for exactly this retry. Re-attempt the real close through
@@ -119,11 +125,14 @@ export function closeRelaySession(
         (isTalkVoiceSessionReplacing(session.id, session.connId, session.sessionTarget.agentId)
           ? "detach"
           : "abort");
-      void closeRelayVoiceSession(session, disposition).catch((error: unknown) => {
+      const retry = closeRelayVoiceSession(session, disposition);
+      session.closing.retryCompletion = retry;
+      void retry.catch((error: unknown) => {
         session.context.logGateway.warn(
           `retried realtime relay voice session close failed: ${formatError(error)}`,
         );
       });
+      return retry;
     }
     return session.closing.completion;
   }
@@ -225,7 +234,10 @@ function finishRelaySessionClose(
   relaySessions.delete(session.id);
   drainingRelaySessions.add(session);
   forgetUnifiedTalkSession(session.id);
-  clearTimeout(session.cleanupTimer);
+  // The expiry timer stays armed: for a close that failed admission the
+  // session remains in the draining set until its durable close settles, and
+  // the timer is its cleanup path on a persistent connection (#204615). For
+  // a fully settled close the timer is a no-op at TTL (both maps are empty).
   retireRelayAgentRuns(
     session,
     disposition === "detach" ? undefined : reason === "error" ? "relay-error" : "relay-closed",

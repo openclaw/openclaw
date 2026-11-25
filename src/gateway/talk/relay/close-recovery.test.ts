@@ -101,7 +101,12 @@ it("keeps an admission-failed close retryable and settles the durable record on 
 
   // Restore the source; the next close attempt runs the real durable close.
   session.voiceSessionSource = source as never;
-  void closeRelaySession(session, "completed");
-  await vi.waitFor(() => expect(closeRecord).toHaveBeenCalledOnce());
+  const retried = closeRelaySession(session, "completed");
+  expect(retried).toBeInstanceOf(Promise);
+  // Later callers join the same retry completion instead of the rejected
+  // close completion (#204615).
+  expect(closeRelaySession(session, "completed")).toBe(retried);
+  await Promise.resolve(retried);
+  expect(closeRecord).toHaveBeenCalledOnce();
   expect(drainingRelaySessions.has(session)).toBe(false);
 });
