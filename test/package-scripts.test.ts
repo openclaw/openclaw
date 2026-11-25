@@ -291,6 +291,7 @@ describe("package scripts", () => {
       "test/scripts/check-deadcode-unused-files.test.ts",
       "test/scripts/format-generated-module.test.ts",
       "test/scripts/direct-run-entrypoints.test.ts",
+      "test/helpers/run-node-script.test.ts",
       "test/scripts/vitest-worker-artifacts.test.ts",
       "test/scripts/vitest-worker-artifacts.transforms.test.ts",
       "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
