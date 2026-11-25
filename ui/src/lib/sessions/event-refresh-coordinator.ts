@@ -134,6 +134,8 @@ export function createSessionEventRefreshCoordinator({
   const reset = () => {
     absorb();
     acceptWindowExpiry(null);
+    // A consumer wake can exist without a receipt for acceptance to retire.
+    windowWake = undefined;
     windowRead = undefined;
     pending = null;
     nextAllowed = 0;

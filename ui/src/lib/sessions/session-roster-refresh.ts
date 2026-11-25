@@ -433,10 +433,16 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       });
     },
     wakeList(this: void, scope: SessionListScope) {
-      (isPrimarySessionListQuery(scope)
-        ? eventRefreshCoordinator
-        : managedList(scope).coordinator
-      ).wake();
+      const agentId = (options: SessionListScope) =>
+        options.agentId ? normalizeAgentId(options.agentId) : null;
+      if (!isPrimarySessionListQuery(scope)) {
+        managedList(scope).coordinator.wake();
+      } else if (agentId(scope) === agentId(lastListOptions)) {
+        eventRefreshCoordinator.wake();
+      } else {
+        // Another agent's read owns the primary window; read the requested agent instead.
+        void refresh({ ...scope, force: true });
+      }
     },
     isPrimaryList: isPrimarySessionListQuery,
     async refreshManagedLists() {
