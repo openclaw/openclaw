@@ -114,7 +114,7 @@ tools. To keep the defaults and add browser access instead, use:
 Both fields require `maxInvitedAccess` and `others: "invited"`. Setting both is a
 config error, even if either list is empty. Omit both, or use
 `invitedAlsoAllow: []`, to keep the defaults. These include file, shell, web,
-discovery, skill, image, progress, and native child tools.
+discovery, skill, image, progress, GitHub publication, and native child tools.
 Both lists accept ordinary tool names, groups, and wildcards for core, plugin,
 and MCP tools that are otherwise offered and authorized. There is no fixed upper
 allowlist, but the `openclaw` tool and Gateway configuration, role, membership,
