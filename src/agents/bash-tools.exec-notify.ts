@@ -3,29 +3,32 @@ import { enqueueBatchedSessionEventForHost as enqueueSessionEvent } from "../aut
 import type {
   SessionEventOptions,
   SessionEventOutcome,
+  SessionEventTarget,
 } from "../auto-reply/reply/session-event-contract.js";
 import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
-import {
-  readSessionEventTargetCommandOwner,
-  readSessionEventTargetOperatorAuthority,
-  readSessionEventTargetRequesterOwner,
-} from "../auto-reply/reply/session-event-target.js";
+import { readSessionEventTargetOperatorAuthority } from "../auto-reply/reply/session-event-target.js";
 import { runWithoutSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import type { OperatorAdmissionContext } from "../gateway/operator-admission.js";
+import { captureQueuedOperatorRecoverySource } from "../gateway/operator-run-recovery-source.js";
+import { restoreGatewayQueuedOperatorRecovery } from "../gateway/operator-run-recovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import {
   enqueueSystemEventWithReceipt,
   SystemEventQueueFullError,
 } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
+import { getInProcessGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
 import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import { chatRef } from "../sessions/chat-ref.js";
+import { chatRef, type ChatRef } from "../sessions/chat-ref.js";
 import { owe, readPendingOwed, withhold, type Owed } from "../sessions/owed.js";
 import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { resolvePendingInputEndCause } from "../sessions/user-turn-transcript-processing.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   listFinishedSessions,
@@ -251,18 +254,58 @@ function prepareExecExitWake(
   return appendExecTimeoutRetryGuidance(summary, session.exitReason);
 }
 
+/** The requester whose turn started the command, as a saved source; none when unavailable. */
+export function captureExecRequesterSource(target: SessionEventTarget | undefined) {
+  const source = captureQueuedOperatorRecoverySource(
+    target && readSessionEventTargetOperatorAuthority(target),
+  );
+  return source?.kind === "unavailable" ? undefined : source;
+}
+
+/**
+ * Admits a saved requester again and captures their chat as them, so the wake runs as them. The
+ * caller releases the admission once the wake and its retry settle (`wakeOwedExec` resolves).
+ */
+export async function captureOwedRequesterTarget(
+  to: ChatRef,
+  source: unknown,
+  context: OperatorAdmissionContext | undefined,
+  assertCurrent: () => void,
+): Promise<{ target: SessionEventTarget; release: () => void }> {
+  if (!context) {
+    throw new GatewayOperatorAccessUnavailableError();
+  }
+  const admitted = await restoreGatewayQueuedOperatorRecovery({
+    agentId: to.agentId,
+    context,
+    source,
+    assertCurrent,
+  });
+  try {
+    const target = await captureSessionEventTarget(to.agentId, to.sessionKey, {
+      operatorAuthority: admitted.authority,
+      assertCurrent,
+    });
+    return { target, release: admitted.release };
+  } catch (error) {
+    admitted.release();
+    throw error;
+  }
+}
+
 /**
  * The one exec wake: it delivers a stored exec result through session-event admission. A live
  * wake passes the producer's captured target; restart recovery passes none, so admission
  * captures the chat's current target. Its settlement reads the stored row; `retries` stored
- * wakes follow a failed one.
+ * wakes follow a failed one. Resolves once the last attempt settles, so a caller holding the
+ * target's admission keeps it for the retry too.
  */
 export function wakeOwedExec(
   owed: Owed,
   options: Omit<SessionEventOptions, "agentId" | "sessionKey" | "source"> = {},
   onWake?: (cancel: () => boolean) => void,
   retries = 0,
-): void {
+): Promise<void> {
   const wakeAgain =
     retries > 0 ? (stored: Owed) => wakeOwedExec(stored, options, onWake, retries - 1) : undefined;
   let receipt: ReturnType<typeof enqueueSessionEvent>;
@@ -278,11 +321,10 @@ export function wakeOwedExec(
   } catch (error) {
     // A refused enqueue (for example a full wake pool) settles like a wake that never started.
     const failed = { status: "failed", executionStarted: false, delivered: false } as const;
-    void settleOwedExecWake(owed, { ...failed, error: formatErrorMessage(error) }, wakeAgain);
-    return;
+    return settleOwedExecWake(owed, { ...failed, error: formatErrorMessage(error) }, wakeAgain);
   }
   onWake?.(receipt.cancel);
-  void receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome, wakeAgain));
+  return receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome, wakeAgain));
 }
 
 /**
@@ -296,7 +338,7 @@ export function wakeOwedExec(
 async function settleOwedExecWake(
   owed: Owed,
   outcome: SessionEventOutcome,
-  wakeAgain?: (stored: Owed) => void,
+  wakeAgain?: (stored: Owed) => Promise<void>,
 ) {
   if (outcome.status === "failed") {
     logWarn(
@@ -311,7 +353,7 @@ async function settleOwedExecWake(
     if (outcome.status === "completed") {
       await withhold(owed, "failed", "interrupted");
     } else if (outcome.status === "failed" && wakeAgain) {
-      wakeAgain(stored);
+      await wakeAgain(stored);
     } else {
       await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
     }
@@ -354,19 +396,16 @@ async function notifyOnExit(
       return;
     }
     try {
-      const commandOwner = readSessionEventTargetCommandOwner(target)?.requester;
-      const operatorProfileId = readSessionEventTargetOperatorAuthority(target)?.profileId;
+      // A restored process carries its saved requester; a live one has it on the captured target.
+      const operatorSource = session.operatorSource ?? captureExecRequesterSource(target);
       // The result is stored before any delivery: a Goal check or restart sees it from here on.
       const owed: Owed = {
         id: `exec:${processSessionInstanceId(session)}`,
         to: chatRef({ agentId, storePath: target.storePath, sessionKey: eventSessionKey }),
         kind: "exec",
         text: eventText,
-        originFacts: {
-          requester: readSessionEventTargetRequesterOwner(target)?.requester,
-          ...(commandOwner ? { commandOwner } : {}),
-          ...(operatorProfileId ? { operatorProfileId } : {}),
-        },
+        // Restart recovery replays the requester through admission, not the session principal.
+        ...(operatorSource ? { originFacts: { operatorSource } } : {}),
       };
       // The completion outlives the turn that started the command, so it stores and wakes under
       // its own session actor and work scope: an incognito turn's actor and signal end with it.
@@ -383,14 +422,38 @@ async function notifyOnExit(
               return false;
             },
           );
+          let admitted: { target: SessionEventTarget; release: () => void } | undefined;
+          if (session.operatorSource) {
+            // A restored process wakes as its requester, admitted again now. If their access
+            // ended, the stored result stays in the chat with that cause.
+            try {
+              admitted = await captureOwedRequesterTarget(
+                owed.to,
+                session.operatorSource,
+                getInProcessGatewayRequestContext(),
+                () => target.assertCurrent?.(),
+              );
+            } catch (error) {
+              if (!stored) {
+                throw error;
+              }
+              await withhold(owed, resolvePendingInputEndCause(undefined, error) ?? "failed");
+              return;
+            }
+          }
           // Admission resolves the chat by key: a deleted chat refuses the wake. The captured
           // target and request owners carry the requester's authority into the one retry too.
-          wakeOwedExec(
+          // The admission is held until the last attempt settles, so the retry keeps it too.
+          void wakeOwedExec(
             owed,
-            { ...eventOptions, sourceRunId: session.startedByRunId, expectedTarget: target },
+            {
+              ...eventOptions,
+              sourceRunId: session.startedByRunId,
+              expectedTarget: admitted?.target ?? target,
+            },
             (cancel) => recordNotifyOnExitRemoval(session, cancel),
             stored ? 1 : 0,
-          );
+          ).finally(() => admitted?.release());
         }),
       );
     } catch (error) {

@@ -43,7 +43,6 @@ function fixture() {
     reference: {
       releaseTag: "v2026.11.8",
       targetSha: sha,
-      validationEvidenceDigest: `sha256:${sha}000000000000000000000000`,
     },
     delta: { commits: 1, added: 1, deleted: 0 },
     artifacts: [{ name: "publication-artifacts", digest: `sha256:${"c".repeat(64)}` }],
@@ -55,13 +54,6 @@ function fixture() {
   const packet = {
     request,
     digest: fastTrackRequestDigest(request),
-    approval: {
-      approver: "octocat",
-      decidedAt: new Date(Date.now() - 60000).toISOString(),
-      url: "https://chat.google.com/room/synthetic/message",
-    },
-    referenceRunId: "1",
-    referenceRunAttempt: "1",
   };
   const env = {
     GITHUB_REPOSITORY: "openclaw/openclaw",
@@ -75,7 +67,7 @@ function fixture() {
     RELEASE_TAG: releaseTag,
     TARGET_SHA: target,
     RELEASE_NPM_DIST_TAG: "beta",
-    FAST_TRACK_APPROVAL_JSON: JSON.stringify(packet),
+    FAST_TRACK_REQUEST_JSON: JSON.stringify(packet),
   };
   const approvals = [
     { state: "approved", environments: [{ name: "npm-release" }], user: { login: "octocat" } },
@@ -91,7 +83,7 @@ function fixture() {
     releaseTag,
     targetSha: target,
     npmDistTag: "beta",
-    fastTrackApproval: packet,
+    fastTrackRequest: packet,
   };
   const parentRun = {
     id: 10,
@@ -143,7 +135,7 @@ it("checks fast-track expiry after the environment approval wait before issuing 
   );
   // Ordinary publication does not acquire a new fast-track requirement.
   expect(
-    createReleaseApprovalReceipt({ ...f.env, FAST_TRACK_APPROVAL_JSON: "" }, () => f.approvals),
+    createReleaseApprovalReceipt({ ...f.env, FAST_TRACK_REQUEST_JSON: "" }, () => f.approvals),
   ).toMatchObject({ version: 1 });
 });
 
@@ -154,12 +146,9 @@ it("binds the whole fast-track packet to the existing receipt and rejects missin
     fastTrackDigest: releaseFastTrackDigest(f.packet),
   });
   expect(verifyReleaseApprovalReceipt(f)).toBe(f.receipt);
-  for (const fastTrackApproval of [
-    undefined,
-    { ...f.packet, approval: { ...f.packet.approval, url: "https://chat.google.com/changed" } },
-  ]) {
+  for (const fastTrackRequest of [undefined, { ...f.packet, digest: `sha256:${"0".repeat(64)}` }]) {
     expect(() =>
-      verifyReleaseApprovalReceipt({ ...f, expected: { ...f.expected, fastTrackApproval } }),
+      verifyReleaseApprovalReceipt({ ...f, expected: { ...f.expected, fastTrackRequest } }),
     ).toThrow("fast-track packet");
   }
   for (const receipt of [
@@ -280,7 +269,7 @@ it("returns the verified original approval-job timestamp for active and complete
   vi.stubEnv("RELEASE_PUBLISH_RUN_ATTEMPT", "2");
   f.parentJobs.jobs[0]!.started_at = f.packet.request.expiresAt;
   await expect(fastTrackAdmissionTime(f.packet)).rejects.toThrow(
-    "did not admit this exact approval before expiry",
+    "did not admit this exact request before expiry",
   );
   f.parentJobs.jobs[0]!.started_at = "invalid";
   await expect(download()).rejects.toThrow("no valid start timestamp");

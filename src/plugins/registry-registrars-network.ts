@@ -139,6 +139,7 @@ function adaptPluginGatewayMethodHandler(
               ...scope,
               revalidate: parent ? () => parent.revalidate() : scope.revalidate,
               gatewayMethodDispatchAllowed: mayDispatch && scope.client != null,
+              sessionResourceForFork: opts.sessionAccessAuthority,
             },
             invoke,
             parent || operator

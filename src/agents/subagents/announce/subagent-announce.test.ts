@@ -79,7 +79,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 
 vi.mock("../registry/subagent-registry-read.js", () => subagentRegistryRuntimeMock);
 vi.mock("../registry/subagent-registry.js", () => subagentRegistryRuntimeMock);
-import { testing as outputTesting } from "./subagent-announce-output.test-support.js";
+import { outputTesting } from "./subagent-announce-overrides.test-support.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 
 function readEntry(storePath: string, sessionKey: string) {

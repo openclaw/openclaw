@@ -85,7 +85,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
 
   if (
     normalized.endsWith("/ui/src/styles/settings.css") ||
-    normalized.endsWith("/ui/src/styles/hub-tabs.css")
+    normalized.endsWith("/ui/src/styles/hub-tabs.css") ||
+    normalized.endsWith("/ui/src/components/solid/model-settings-rows.css")
   ) {
     // Share document CSS without coupling style-only consumers to page chrome or inline CSS text.
     return "route-chrome-styles";
@@ -193,7 +194,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/confirm-dialog.ts":
     case "ui/src/components/confirm-dialog-loading.tsx":
     case "ui/src/components/menu-surface.ts":
-    case "ui/src/components/session-menu-access.ts":
     case "ui/src/components/session-menu-data.ts":
     case "ui/src/components/session-placement-action.ts":
     case "ui/src/lib/editor-links.ts":

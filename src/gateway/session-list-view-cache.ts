@@ -71,14 +71,15 @@ class SelectionPartitions extends Map<object, SessionListFilteredEntries> {
 
 export function retainCurrentSessionListPartitions(
   retained: Map<object, SessionListFilteredEntries>,
-  partitions: Iterable<{ revision: object; entries: { size: number } }>,
+  partitions: Iterable<{ revision: object; invitedRevision?: object; entries: { size: number } }>,
+  invited?: boolean,
 ) {
   // Only current nonempty partitions can be reused. Retire obsolete values and
   // their charges together, without waiting for revision tokens to be collected.
   const revisions = new Set<object>();
   for (const partition of partitions) {
     if (partition.entries.size) {
-      revisions.add(partition.revision);
+      revisions.add((invited && partition.invitedRevision) || partition.revision);
     }
   }
   for (const revision of retained.keys()) {
@@ -129,6 +130,7 @@ export type SessionListView = {
   rowKeys?: Set<string>;
   selectedAt?: number;
   activityExpiresAt?: number;
+  invited?: boolean;
   partitions?: SelectionPartitions;
 };
 
@@ -152,9 +154,12 @@ export class SessionListViewCache {
     return this.lists.values();
   }
 
-  invalidateSelections() {
+  invalidateSelections(invitedOnly = false) {
     // Release obsolete entries even without another read; each populated view retires once.
     for (const view of this.selections) {
+      if (invitedOnly && !view.invited) {
+        continue;
+      }
       view.selection = undefined;
       this.update(view);
     }

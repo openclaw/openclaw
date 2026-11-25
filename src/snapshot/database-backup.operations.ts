@@ -350,7 +350,7 @@ export async function inspectPostgresUpgradeInWorker(params: {
 }) {
   const anchor = requirePostgresUpgradeAnchor(params.sourcePath);
   return withDatabasePortConnection(params.config, async (client) => {
-    const { store: family, version } = await readPostgresStoreMetadata(client, anchor);
+    const { store: family, version, minReader } = await readPostgresStoreMetadata(client, anchor);
     // Total relation size already includes indexes and TOAST. Partition parents
     // have no storage; their ordinary-table partitions are counted individually.
     const size = await client.query<{ physical_bytes: string }>(
@@ -387,6 +387,7 @@ export async function inspectPostgresUpgradeInWorker(params: {
       ...anchor,
       family,
       version,
+      minReader,
       physicalBytes,
       retainedAgentIds,
       registeredAgentDatabases,
@@ -539,6 +540,7 @@ export type PostgresUpgradeInspection = {
   namespace: string;
   family: string;
   version: number;
+  minReader: number;
   physicalBytes: number;
   retainedAgentIds: string[];
   registeredAgentDatabases: { agentId: string; path: string }[];

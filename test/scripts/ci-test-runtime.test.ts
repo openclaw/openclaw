@@ -14,6 +14,7 @@ import { createUnitFastFakeTimersVitestConfig } from "../vitest/vitest.unit-fast
 import { listMatchedTestFiles } from "./ci-node-test-plan.test-support.js";
 
 const nodeOnly = "src/cli/cli-process-diagnostics.test.ts";
+const gitRelease = "src/infra/git-release.test.ts";
 const bothHosts = "src/infra/sqlite-schema-facts.physical-cache.test.ts";
 const bunEligible = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
 const config = "test/vitest/vitest.unit-fast.config.ts";
@@ -130,24 +131,54 @@ describe("CI runtime job inventory", () => {
     expect(planner).not.toHaveBeenCalled();
   });
 
-  it.each([bothHosts, "test/scripts/vitest-pair-benchmark.test.ts"])(
-    "keeps Node exceptions and both-host %s coverage in a mixed bun-all group",
-    (bothHost) => {
-      const group = { configs: [config], includePatterns: [nodeOnly, bothHost, bunEligible] };
+  it.each([
+    [nodeOnly, bothHosts],
+    [nodeOnly, "test/scripts/vitest-pair-benchmark.test.ts"],
+    [nodeOnly, "test/scripts/node-cache-disabled-control.test.ts"],
+    [nodeOnly, "test/scripts/node-cache-qualification.test.ts"],
+    [nodeOnly, "test/vitest-performance-config.test.ts"],
+    [gitRelease, bothHosts],
+    ["test/scripts/upgrade-survivor-sqlite-observer.test.ts", bothHosts],
+    ["test/scripts/upgrade-survivor-bulk-access.test.ts", bothHosts],
+    ["test/scripts/upgrade-survivor-migration-chain.test.ts", bothHosts],
+  ])(
+    "keeps Node-only %s and both-host %s coverage in a mixed bun-all group",
+    (nodeContract, bothHost) => {
+      const group = { configs: [config], includePatterns: [nodeContract, bothHost, bunEligible] };
       const original = resolveCiTestRuntimeSelections(group, "bun-all");
       expect(original).toEqual([
-        { runtime: "node", vitestArgs: [path.resolve(nodeOnly), path.resolve(bothHost)] },
-        { runtime: "bun", vitestArgs: ["--exclude=" + path.resolve(nodeOnly)] },
+        { runtime: "node", vitestArgs: [path.resolve(nodeContract), path.resolve(bothHost)] },
+        { runtime: "bun", vitestArgs: ["--exclude=" + path.resolve(nodeContract)] },
       ]);
       expect(ciTestShardRuntimes({ groups: [group] }, "bun-all")).toEqual(["node", "bun"]);
       expect(
         ciTestShardRuntimes(
-          { groups: [{ configs: [config], includePatterns: [nodeOnly] }] },
+          { groups: [{ configs: [config], includePatterns: [nodeContract] }] },
           "bun-all",
         ),
       ).toEqual(["node"]);
     },
   );
+
+  it.each([
+    { configs: ["test/vitest/vitest.infra.config.ts"] },
+    { targets: [gitRelease] },
+    { configs: ["test/vitest/vitest.infra.config.ts"], includePatterns: [gitRelease] },
+  ])("runs Git release contracts on Node under bun-all: %j", (selection) => {
+    const selected = resolveCiTestRuntimeSelections(selection, "bun-all");
+    if ("includePatterns" in selection || "targets" in selection) {
+      expect(selected).toEqual([{ runtime: "node" }]);
+    } else {
+      expect(selected[0]).toEqual({
+        runtime: "node",
+        vitestArgs: expect.arrayContaining([path.resolve(gitRelease)]),
+      });
+      expect(selected[1]).toEqual({
+        runtime: "bun",
+        vitestArgs: expect.arrayContaining([`--exclude=${path.resolve(gitRelease)}`]),
+      });
+    }
+  });
 
   it("includes inherited CLI arguments when selecting grouped runtime jobs", () => {
     const group = { configs: ["test/vitest/vitest.cron.config.ts"] };

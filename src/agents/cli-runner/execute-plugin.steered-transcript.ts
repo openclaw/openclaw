@@ -5,6 +5,7 @@ import {
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { labelRuntimeContextText } from "../../llm/types.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../../media/media-facts.js";
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import type {
   CliBackendMessageInjection,
@@ -29,6 +30,7 @@ export function createSteeredCliMessageInjection(params: {
   /** Owning run: its working directory, media roots, and before_model_request gate. */
   context: {
     params: Pick<PreparedCliRunContext["params"], "cwd" | "workspaceDir" | "config" | "agentId">;
+    backendResolved: Pick<PreparedCliRunContext["backendResolved"], "id">;
     beforeModelRequest?: PreparedCliRunContext["beforeModelRequest"];
   };
   /** Native owns the steered input; tool tracking starts a new input's reply state. */
@@ -87,7 +89,7 @@ export function createSteeredCliMessageInjection(params: {
         steeredText = request.prompt;
         promptContext = readCliPromptContext(request);
       }
-      await injection.queueMessage(
+      const nativeInput = await injection.queueMessage(
         steeredText,
         async (submit) => {
           let submitted = false;
@@ -128,6 +130,18 @@ export function createSteeredCliMessageInjection(params: {
             errorMessage: "steered CLI user turn transcript commitment could not be confirmed",
           };
         }
+      }
+      if (
+        nativeInput &&
+        recorder?.hasPersisted() &&
+        message &&
+        readPersistedMediaFacts(message)?.some(isMeaningfulMediaFact)
+      ) {
+        options?.onNativeInputCommitted?.({
+          importedFrom: params.context.backendResolved.id,
+          cliSessionId: nativeInput.cliSessionId,
+          externalId: nativeInput.externalId,
+        });
       }
     } catch (error) {
       failure = toErrorObject(error, "CLI steering failed.");

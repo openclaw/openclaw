@@ -107,9 +107,10 @@ export function prepareMessageGroupFrame(
     !isForwarded &&
     !sourceOnly &&
     (normalizedRole !== "user" || !isOwnGroup || opts.showOwnSenderName !== false);
-  const visibleSources = group.sourceClients?.filter(
-    (source) => gatewayClientKind(source) !== "web",
-  );
+  const visibleSources = group.sourceClients?.filter((source) => {
+    const kind = gatewayClientKind(source);
+    return kind !== "web" && kind !== "app";
+  });
   const who = resolveMessageGroupSenderLabel(group, opts);
   const roleClass =
     normalizedRole === "user" || normalizedRole === "assistant" || normalizedRole === "tool"

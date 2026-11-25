@@ -498,6 +498,44 @@ export function projectChatTranscript(
     props.queuedMessageAction?.onDiscard,
     props.replyMessageAccess?.navigationId ?? "",
   ]);
+  transcript.entryAnimations.project(chatItems);
+  transcript.syncMessageRows(
+    messageRowKeysById,
+    transcriptMessageKeys,
+    search.open ? { query: search.query.trim(), empty: searchFiltering && isEmpty } : null,
+  );
+  const contentRows: PlacedContentRow[] = [];
+  const appendContent = (key: string, content: NativeTranscriptView, after?: string | null) =>
+    contentRows.push({
+      kind: "content",
+      key,
+      content: new GuardedTranscriptItem([content], content),
+      after,
+    });
+  for (const { afterMessageId, content } of realtimeConversation.blocks()) {
+    appendContent(
+      afterMessageId === undefined ? "realtime-talk" : `realtime-talk:${afterMessageId ?? ""}`,
+      content,
+      afterMessageId ? messageRowKeysById.get(afterMessageId) : afterMessageId,
+    );
+  }
+  if (subagents.wait && !subagents.placedWait && !searchFiltering) {
+    appendContent("waiting-subagents", {
+      kind: "wait",
+      sessionKey: props.sessionKey,
+      wait: subagents.wait,
+      options: streamGroupOptions,
+    });
+  }
+  if (props.typingActors?.length) {
+    appendContent("presence:typing", {
+      kind: "typing",
+      actors: props.typingActors,
+      avatarPlacement,
+      overflow: props.typingOverflow,
+    });
+  }
+  const transcriptRows = projectTranscriptRows(rows, contentRows, !searchFiltering);
   const renderDependencies = createTranscriptRenderDependencies(
     state.transcriptRenderDependencies,
     (item) => {
@@ -595,40 +633,6 @@ export function projectChatTranscript(
     }
     return undefined;
   });
-  transcript.entryAnimations.project(chatItems);
-  transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
-  const contentRows: PlacedContentRow[] = [];
-  const appendContent = (key: string, content: NativeTranscriptView, after?: string | null) =>
-    contentRows.push({
-      kind: "content",
-      key,
-      content: new GuardedTranscriptItem([content], content),
-      after,
-    });
-  for (const { afterMessageId, content } of realtimeConversation.blocks()) {
-    appendContent(
-      afterMessageId === undefined ? "realtime-talk" : `realtime-talk:${afterMessageId ?? ""}`,
-      content,
-      afterMessageId ? messageRowKeysById.get(afterMessageId) : afterMessageId,
-    );
-  }
-  if (subagents.wait && !subagents.placedWait && !searchFiltering) {
-    appendContent("waiting-subagents", {
-      kind: "wait",
-      sessionKey: props.sessionKey,
-      wait: subagents.wait,
-      options: streamGroupOptions,
-    });
-  }
-  if (props.typingActors?.length) {
-    appendContent("presence:typing", {
-      kind: "typing",
-      actors: props.typingActors,
-      avatarPlacement,
-      overflow: props.typingOverflow,
-    });
-  }
-  const transcriptRows = projectTranscriptRows(rows, contentRows);
   state.transcriptRenderContext.threadMediaMessages = snapshot.threadMediaMessages;
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {

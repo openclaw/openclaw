@@ -145,6 +145,35 @@ it.each(["live", "history"] as const)("binds %s commentary to the next root call
   ]);
 });
 
+it("orders completed native text before each root call without rolling over the reply", () => {
+  const h = commentaryHarness();
+  const order = () =>
+    buildStateItems(h.host).flatMap((item) =>
+      item.kind === "group"
+        ? item.messages.flatMap(({ message }) => callIdsOrText(message, extractText(message) ?? ""))
+        : item.kind === "stream" && item.text.trim()
+          ? [item.text.trim()]
+          : [],
+    );
+  const call = (id: string, text: string) => {
+    h.stream(undefined, text);
+    h.agent("tool", {
+      name: "read",
+      phase: "start",
+      toolCallId: id,
+      textLengthBeforeTool: text.length,
+    });
+    vi.advanceTimersByTime(100);
+  };
+  call("amber", "Amber.");
+  expect(order()).toEqual(["Amber.", "amber"]);
+  const cumulative = "Amber.\n\nCobalt.";
+  call("cobalt", cumulative);
+  expect(order()).toEqual(["Amber.", "amber", "Cobalt.", "cobalt"]);
+  h.stream(undefined, cumulative + "\n\nAmber. New result.");
+  expect(order()).toEqual(["Amber.", "amber", "Cobalt.", "cobalt", "Amber. New result."]);
+});
+
 it("does not let stale item identity prune a newer unscoped append", () => {
   const h = commentaryHarness();
   h.stream("commentary-1", COMMENTARY);

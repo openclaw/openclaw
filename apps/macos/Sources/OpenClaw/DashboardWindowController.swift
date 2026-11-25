@@ -13,14 +13,22 @@ private final class DashboardWindowContentView: NSView {
         // Command-translated characters preserve the shortcut on alternate layouts.
         guard event.type == .keyDown,
               event.modifierFlags.intersection([.command, .control, .option, .shift]) == .command,
-              event.characters?.lowercased() == "w",
               let window, window.attachedSheet == nil,
               let controller = window.windowController as? DashboardWindowController
         else { return super.performKeyEquivalent(with: event) }
-        // Claim the key before AppKit's Close Window menu action. The web owner
-        // decides whether a focused side tab exists; the traffic light is unchanged.
-        controller.closeFocusedPanelOrWindow()
-        return true
+        switch event.characters?.lowercased() {
+        case "w":
+            // Claim the key before AppKit's Close Window menu action.
+            controller.closeFocusedPanelOrWindow()
+            return true
+        case "t" where controller.canDispatchNativeCommands:
+            if !event.isARepeat {
+                controller.dispatchNativeCommand(.newBrowserTab)
+            }
+            return true
+        default:
+            return super.performKeyEquivalent(with: event)
+        }
     }
 }
 
@@ -680,8 +688,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var activeNavigationWebView: WKWebView {
         var responderView = window?.firstResponder as? NSView
         while let view = responderView {
-            if let webView = view as? WKWebView, self.nativeBrowser.owns(webView) {
-                return webView
+            if let tab = view as? DashboardBrowserTab, self.nativeBrowser.owns(tab.webView) {
+                return tab.webView
             }
             responderView = view.superview
         }
@@ -1041,7 +1049,7 @@ extension DashboardWindowController {
         ControlUIDocumentHost.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 
-    private var canDispatchNativeCommands: Bool {
+    fileprivate var canDispatchNativeCommands: Bool {
         self.documentHost.hasLiveContent && self.pendingGatewaySwitch == nil && self.isTrustedDashboardDocument &&
             self.nativeCommandsReady
     }
