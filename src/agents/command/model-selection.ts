@@ -46,7 +46,10 @@ import {
   resolveNativeModelPrimary,
   resolveSessionAgentId,
 } from "../agent-scope.js";
-import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
+import {
+  isConfiguredAwsSdkAuthProfileForProvider,
+  isStoredCredentialCompatibleWithAuthProvider,
+} from "../auth-profiles/order.js";
 import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../auth-profiles/store-runtime.js";
@@ -527,14 +530,19 @@ export async function resolveEmbeddedModelSelection(params: {
     const authProvider = params.pluginsEnabled
       ? resolveProviderIdForAuth(providerForAuthProfileValidation, authAliasLookupParams)
       : providerForAuthProfileValidation;
-    const profileMatchesRuntime =
-      profile &&
-      isStoredCredentialCompatibleWithAuthProvider({
-        cfg: authConfig,
-        authAliasLookupParams,
-        provider: authProvider,
-        credential: profile,
-      });
+    const profileMatchesRuntime = profile
+      ? isStoredCredentialCompatibleWithAuthProvider({
+          cfg: authConfig,
+          authAliasLookupParams,
+          provider: authProvider,
+          credential: profile,
+        })
+      : isConfiguredAwsSdkAuthProfileForProvider({
+          cfg: authConfig,
+          authAliasLookupParams,
+          provider: authProvider,
+          profileId: authProfileId,
+        });
     const preserveUnavailableSelection = shouldPreserveUnavailableSessionAuthProfileOverride({
       store,
       recordedProvider: { provider: profile?.provider },
