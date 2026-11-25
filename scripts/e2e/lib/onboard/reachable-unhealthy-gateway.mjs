@@ -3,7 +3,7 @@ import { WebSocket, WebSocketServer } from "ws";
 
 const port = Number(process.env.OPENCLAW_ONBOARD_FIXTURE_PORT);
 const backendPort = Number(process.env.OPENCLAW_ONBOARD_BACKEND_PORT);
-if (!Number.isInteger(port) || port < 1 || port > 65535) {
+if (!Number.isInteger(port) || port < 0 || port > 65535) {
   throw new Error("OPENCLAW_ONBOARD_FIXTURE_PORT must be a valid TCP port");
 }
 if (!Number.isInteger(backendPort) || backendPort < 1 || backendPort > 65535) {
@@ -29,6 +29,7 @@ const server = createServer((front, reply) => {
 });
 const sockets = new WebSocketServer({ server });
 const peers = new Set();
+let backendHealthRequests = 0;
 
 sockets.on("connection", (front) => {
   const back = new WebSocket(`ws://127.0.0.1:${backendPort}`);
@@ -44,8 +45,14 @@ sockets.on("connection", (front) => {
     if (request.type === "req" && request.method === "connect") {
       clientMode = request.params?.client?.mode;
     }
-    // Startup probes use probe mode; only fail Classic finalization's CLI request.
-    if (request.type === "req" && request.method === "health" && clientMode === "cli") {
+    // Classic uses probe mode for reachability, then two backend health calls:
+    // diagnostic preflight must succeed before the final health command fails.
+    if (
+      request.type === "req" &&
+      request.method === "health" &&
+      clientMode === "backend" &&
+      ++backendHealthRequests > 1
+    ) {
       console.log("QA_ONBOARD_HEALTH_FAULT");
       front.send(
         JSON.stringify({
@@ -91,4 +98,6 @@ const stop = () => {
 };
 process.once("SIGINT", stop);
 process.once("SIGTERM", stop);
-server.listen(port, "127.0.0.1");
+server.listen(port, "127.0.0.1", () => {
+  console.log(`QA_ONBOARD_PROXY_PORT=${server.address().port}`);
+});

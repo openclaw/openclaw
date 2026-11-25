@@ -144,7 +144,16 @@ start_wizard_gateway() {
   esac
   gw_pid="$GATEWAY_PID"
   gw_backend_pid="${GATEWAY_BACKEND_PID:-}"
-  wait_for_gateway
+  wait_for_gateway || return $?
+  # Listening precedes operator handshake admission during startup.
+  for _ in $(seq 1 60); do
+    if openclaw_e2e_probe_http_status "http://127.0.0.1:18789/startupz" 200 1000; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Gateway did not complete startup" >&2
+  return 1
 }
 
 wait_for_gateway() {

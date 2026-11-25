@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { createConnection } from "node:net";
 import { expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 
@@ -30,24 +29,13 @@ it("preserves startup diagnostics and fails only the Classic health command", as
   if (!backendAddress || typeof backendAddress === "string") {
     throw new Error("Missing backend port");
   }
-  const reservation = createServer();
-  await new Promise<void>((resolve) => {
-    reservation.listen(0, "127.0.0.1", resolve);
-  });
-  const address = reservation.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Missing proxy port");
-  }
-  await new Promise<void>((resolve) => {
-    reservation.close(() => resolve());
-  });
   const child = spawn(
     process.execPath,
     ["scripts/e2e/lib/onboard/reachable-unhealthy-gateway.mjs"],
     {
       env: {
         ...process.env,
-        OPENCLAW_ONBOARD_FIXTURE_PORT: String(address.port),
+        OPENCLAW_ONBOARD_FIXTURE_PORT: "0",
         OPENCLAW_ONBOARD_BACKEND_PORT: String(backendAddress.port),
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -59,25 +47,19 @@ it("preserves startup diagnostics and fails only the Classic health command", as
   });
   const exited = once(child, "exit");
   try {
-    await vi.waitFor(async () => {
-      const socket = createConnection({ port: address.port, host: "127.0.0.1" });
-      try {
-        await once(socket, "connect");
-      } finally {
-        socket.destroy();
-      }
-    });
-    const url = `http://127.0.0.1:${address.port}`;
+    await vi.waitFor(() => expect(output).toMatch(/QA_ONBOARD_PROXY_PORT=\d+/));
+    const port = /QA_ONBOARD_PROXY_PORT=(\d+)/.exec(output)![1];
+    const url = `http://127.0.0.1:${port}`;
     await expect(
       fetch(`${url}/startupz`, { signal: AbortSignal.timeout(1_000) }).then((response) =>
         response.json(),
       ),
     ).resolves.toEqual({ ready: true });
-    for (const mode of ["probe", "cli"]) {
+    for (const [index, mode] of ["probe", "backend", "backend"].entries()) {
       const socket = new WebSocket(url.replace("http:", "ws:"));
       try {
-        await once(socket, "open");
-        const connected = once(socket, "message");
+        await once(socket, "open", { signal: AbortSignal.timeout(2_000) });
+        const connected = once(socket, "message", { signal: AbortSignal.timeout(2_000) });
         socket.send(
           JSON.stringify({
             type: "req",
@@ -87,17 +69,17 @@ it("preserves startup diagnostics and fails only the Classic health command", as
           }),
         );
         await connected;
-        const response = once(socket, "message");
+        const response = once(socket, "message", { signal: AbortSignal.timeout(2_000) });
         socket.send(JSON.stringify({ type: "req", id: "health", method: "health" }));
         expect(JSON.parse(String((await response)[0]))).toMatchObject({
           id: "health",
-          ok: mode === "probe",
+          ok: index < 2,
         });
       } finally {
         socket.terminate();
       }
     }
-    expect(forwarded).toEqual(["probe:health"]);
+    expect(forwarded).toEqual(["probe:health", "backend:health"]);
     await vi.waitFor(() => expect(output).toContain("QA_ONBOARD_HEALTH_FAULT"));
   } finally {
     child.kill("SIGTERM");
