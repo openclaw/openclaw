@@ -76,9 +76,10 @@ or apply to Codex-native Code Mode.
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
   such as the native-vision `view_image` loader whose image result cannot survive
   the guest bridge.
-- On-demand tools such as `computer` stay out of that list until the model calls
-  one by name as a top-level tool; it then stays direct for the prompt series.
-  Guest code that calls one gets an error saying to call it directly. See
+- On-demand tools such as `computer` stay out of that list until the model looks
+  one up with `describe()` or calls it; it then loads as a top-level tool and
+  stays direct for the prompt series. Guest code that calls one gets an error
+  saying to call it directly as a top-level tool. See
   [On-demand tools](/tools/tool-search#on-demand-tools).
 - `exec` evaluates model-generated JavaScript in the selected executor's worker
   thread.

@@ -104,8 +104,10 @@ export type ToolSearchCatalogRef = {
    * compaction keeps on-demand tools direct, like direct-only ones.
    */
   loadsOnDemandTools?: true;
-  /** On-demand tools this session already called by name; compaction keeps them direct. */
+  /** On-demand tools this session already loaded; compaction keeps them direct. */
   promotedToolNames?: ReadonlySet<string>;
+  /** Set by a runner that loads an on-demand tool as soon as the model looks it up. */
+  loadOnDemandTool?: (name: string) => void;
   directOnlyToolNames?: ReadonlySet<string>;
   baselineDirectOnlyToolNames?: ReadonlySet<string>;
   closedTelemetry?: ToolSearchCatalogTelemetry;

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AssistantMessage } from "@openclaw/llm-core";
-import type { AgentToolCall } from "./types.js";
+import type { AgentTool, AgentToolCall } from "./types.js";
 
 /** Observation only: the exact runtime queue retains input and delivery custody. */
 export type AgentToolPendingInput = {
@@ -15,9 +15,29 @@ export interface AgentToolExecutionContext {
   pendingInput?: AgentToolPendingInput;
   /** Earlier async calls in this response have not reached a subsequent model request. */
   hasUnobservedAsyncToolResults?: boolean;
+  /** Send this tool's definition with later provider requests in this run. */
+  loadTool?: (tool: AgentTool) => void;
 }
 
 const activeToolExecution = new AsyncLocalStorage<AgentToolExecutionContext>();
+
+const runLoadedTools = new WeakSet<AgentTool>();
+
+/** Add a tool to a run context once; later provider requests in the run send it. */
+export function appendRunContextTool(
+  context: { tools?: AgentTool[] },
+  tool: AgentTool | undefined,
+): void {
+  if (tool && !context.tools?.some((existing) => existing.name === tool.name)) {
+    runLoadedTools.add(tool);
+    context.tools = [...(context.tools ?? []), tool];
+  }
+}
+
+/** True for a tool a run added to its own context, such as a looked-up or resolved deferred tool. */
+export function isRunLoadedTool(tool: AgentTool): boolean {
+  return runLoadedTools.has(tool);
+}
 const inputScopeByInvocation = new WeakMap<AssistantMessage, WeakMap<AgentToolCall, object>>();
 
 /** Bind before awaited admission; later input must not relabel an in-flight call. */

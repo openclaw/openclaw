@@ -121,9 +121,9 @@ for privileged PR actions when called. Listing an action does not grant it.
 
 With Tool Search or Code Mode active, `computer` and the yielding
 `github_publish` listing are [on-demand](/tools/tool-search#on-demand-tools):
-they stay out of the provider tool list until the session first calls one by
-name. The session pin then appends that definition, so the tool list changes
-once, at the next turn's first request, and stays fixed for the rest of the
+they stay out of the provider tool list until the model first looks one up or
+calls it. Loading appends that definition, so the tool list changes once, on
+the next request, and the session pin keeps it fixed for the rest of the
 series.
 
 The `message` description and schema use the session's channel, bound account,

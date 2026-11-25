@@ -53,7 +53,7 @@ import {
   type FinalizedToolCallOutcome,
   type ImmediateToolCallOutcome,
 } from "./tool-call-outcome.js";
-import { captureAgentToolInputScope } from "./tool-execution-context.js";
+import { appendRunContextTool, captureAgentToolInputScope } from "./tool-execution-context.js";
 import {
   TOOL_REPEAT_LIMIT_CODE,
   createToolRepeatState,
@@ -809,6 +809,7 @@ async function prepareToolCallEntry(
           ? { hasPending: () => inputQueue.peek().length > 0, subscribe: subscribeInput }
           : undefined,
       toolCall: preparation.toolCall,
+      loadTool: (tool) => appendRunContextTool(batch.currentContext, tool),
       hasUnobservedAsyncToolResults:
         batch.hasUnobservedAsyncToolResults ||
         batch.assistantMessage.content
@@ -852,10 +853,8 @@ async function resolveToolCallTool(
         );
       }
       tool = resolvedTool;
-      if (tool) {
-        // Make the recovered tool visible to later provider continuations in this run.
-        batch.currentContext.tools = [...(batch.currentContext.tools ?? []), tool];
-      }
+      // Make the recovered tool visible to later provider continuations in this run.
+      appendRunContextTool(batch.currentContext, tool);
     }
     resolution = { kind: "resolved", ...(tool ? { tool } : {}) };
   } catch (error) {

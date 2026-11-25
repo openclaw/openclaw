@@ -319,6 +319,10 @@ export class ToolSearchRuntime {
     if (entry.source !== "openclaw" && options?.parentToolCallId) {
       this.observeNetworkContent(options.parentToolCallId);
     }
+    // Looking up an on-demand tool loads it, so the model can call it by name next.
+    if (entry.onDemand) {
+      this.ctx.catalogRef?.loadOnDemandTool?.(entry.name);
+    }
     return describeToolSearchCatalogEntry(entry);
   };
 
@@ -397,8 +401,12 @@ export class ToolSearchRuntime {
     );
     // Bridges serialize results and cannot carry a turn handoff; the direct call can.
     if (entry.onDemand) {
+      const loader = this.ctx.catalogRef?.loadOnDemandTool;
+      loader?.(entry.name);
       throw new ToolInputError(
-        `${entry.name} runs only as its own top-level tool call. Call ${entry.name} directly by name with its parameters, not through dispatch_action or exec; tool_describe or describe() returns its input schema. After that call it stays a direct tool in this session.`,
+        loader
+          ? `${entry.name} is now loaded as a top-level tool for this session. Call ${entry.name} directly by name with its parameters, not through dispatch_action or exec.`
+          : `${entry.name} runs only as its own top-level tool call. Call ${entry.name} directly by name with its parameters, not through dispatch_action or exec.`,
       );
     }
     return runScheduledToolSearchCall({

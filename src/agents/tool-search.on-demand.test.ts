@@ -1,4 +1,4 @@
-// On-demand tools stay out of the provider tool list until the session calls them by name.
+// On-demand tools stay out of the provider tool list until the model looks them up or calls them.
 import { afterEach, expect, it } from "vitest";
 import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "./code-mode.js";
 import { createCodeModeHarness, resetCodeModeTestState } from "./code-mode.test-support.js";
@@ -68,14 +68,22 @@ it("keeps on-demand tools out of a headless catalog, like direct-only tools", ()
   expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["read"]);
 });
 
-it("tells the model to call it by name and refuses dispatch_action and Code Mode guest calls", async () => {
-  const control = (name: string) => surface("tools").tools.find((tool) => tool.name === name)!;
+it("loads it when looked up or refused, and refuses dispatch_action and Code Mode guest calls", async () => {
+  const tools = surface("tools");
+  const loaded: string[] = [];
+  tools.catalogRef.loadOnDemandTool = (name) => loaded.push(name);
+  const control = (name: string) => tools.tools.find((tool) => tool.name === name)!;
   const search = await control("tool_search").execute("search", { query: "computer desktop" });
-  expect(JSON.stringify(search.content)).toContain("top-level by name; not dispatch_action");
-  const refusal = "computer runs only as its own top-level tool call. Call computer directly";
+  expect(JSON.stringify(search.content)).toContain("loads as a top-level tool once looked up");
+  expect(loaded).toEqual([]);
+  await control("tool_describe").execute("describe", { id: "computer" });
+  expect(loaded).toEqual(["computer"]);
   await expect(
     control("dispatch_action").execute("call", { id: "computer", args: { action: "screenshot" } }),
-  ).rejects.toThrow(refusal);
+  ).rejects.toThrow("computer is now loaded as a top-level tool for this session. Call computer");
+  expect(loaded).toEqual(["computer", "computer"]);
+  // Without a loading runner the refusal still names the direct call.
+  const refusal = "computer runs only as its own top-level tool call. Call computer directly";
   const code = surface("code-mode").tools.find((tool) => tool.name === "exec")!;
   const guest = await code.execute("cell", {
     code: "try { await computer({ action: 'screenshot' }); } catch (error) { return error.message; }",
@@ -84,14 +92,14 @@ it("tells the model to call it by name and refuses dispatch_action and Code Mode
   expect(JSON.stringify(guest.details)).toContain(refusal);
   // Prompt directories and the Code Mode index mark them and exempt them from dispatch_action.
   for (const [mode, rule] of [
-    ["tools", "Call tools marked [call directly] by name as top-level calls. Other deferred"],
-    ["directory", "; call tools marked [call directly] only by name."],
+    ["tools", "Tools marked [loads on lookup] become top-level tools after tool_describe; then"],
+    ["directory", "; tools marked [loads on lookup] become top-level after tool_describe, then"],
   ] as const) {
     const prompt = buildToolSchemaDirectoryPrompt({
       config: { tools: { toolSearch: { mode } } },
       catalogRef: surface(mode).catalogRef,
     });
-    expect(prompt).toContain("- computer (core) [call directly]");
+    expect(prompt).toContain("- computer (core) [loads on lookup]");
     expect(prompt).toContain(rule);
   }
   const { catalogRef } = surface("code-mode");

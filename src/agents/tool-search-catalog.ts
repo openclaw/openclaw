@@ -554,7 +554,11 @@ export function compactToolSearchCatalogEntry(
     input: entry.source === "client" ? "unknown" : compactToolInputHint(entry.parameters),
     ...(instructionsHint ? { instructionsHint } : {}),
     ...(output ? { output } : {}),
-    ...(entry.onDemand ? { call: "top-level by name; not dispatch_action or exec" } : {}),
+    ...(entry.onDemand
+      ? {
+          call: "loads as a top-level tool once looked up; call it by name, not through dispatch_action or exec",
+        }
+      : {}),
   };
 }
 
