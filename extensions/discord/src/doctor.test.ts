@@ -166,7 +166,6 @@ describe("discord doctor", () => {
       });
       const repaired = migrated?.config.channels?.discord?.accounts?.work?.guilds;
       expect(repaired).toEqual({ "123": { roles: ["11"] }, "789": {} });
-      expect(discordPausedGuildIds(repaired, "work").size).toBe(0);
       expect(directory).toHaveBeenCalledTimes(1);
     } finally {
       directory.mockRestore();

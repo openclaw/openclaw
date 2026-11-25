@@ -290,12 +290,22 @@ export const discordDoctor: ChannelDoctorAdapter = {
       return { changeNotes: [], warningNotes: warnings };
     }
     const { mutateConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
-    const committed = await mutateConfigFile({
-      baseHash: unattendedSourceHash,
-      base: "source",
-      mutate: (draft) => applyDiscordGuildPauses(draft, changes),
-    });
-    return { changeNotes: committed.result ?? [], warningNotes: warnings };
+    try {
+      const committed = await mutateConfigFile({
+        baseHash: unattendedSourceHash,
+        base: "source",
+        mutate: (draft) => applyDiscordGuildPauses(draft, changes),
+      });
+      return { changeNotes: committed.result ?? [], warningNotes: warnings };
+    } catch {
+      // Directory lookup can outlive the config revision. Never retry against a different rule.
+      for (const { rule, accountId, ids } of changes) {
+        warnings.push(
+          `- Discord account ${accountId}: could not confirm a saved pause for servers ${ids.join(", ")} at ${rule.path}. Check the current config and rerun Doctor, or resolve the name in the deployment source.`,
+        );
+      }
+      return { changeNotes: [], warningNotes: warnings };
+    }
   },
   repairConfig: async ({ cfg, doctorFixCommand, requestText, env = process.env }) => {
     const result = maybeRepairDiscordNumericIds(cfg, doctorFixCommand);

@@ -44,6 +44,18 @@ describe("authorizeDiscordVoiceIngress", () => {
     expect((await check()).ok).toBe(false);
   });
 
+  it("checks the account's paused guilds before admitting an otherwise allowed speaker", async () => {
+    const discordConfig = {
+      guilds: { ops: { doctorPausedGuildIds: { work: ["11"] }, channels: { c1: ownerChannel } } },
+    };
+    const params = { discordConfig, guildName: "Ops", accountId: "work" };
+    expect(await authorize({ ...params, guildId: "11" })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("paused"),
+    });
+    expect((await authorize({ ...params, guildId: "22" })).ok).toBe(true);
+  });
+
   it.each([
     { name: "direct guild and channel", guildKey: "g1", channelKey: "c1", guildName: undefined },
     { name: "slug-keyed guild", guildKey: "guild-one", channelKey: "*", guildName: "Guild One" },
