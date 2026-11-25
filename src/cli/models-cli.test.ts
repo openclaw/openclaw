@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesListCommand: vi.fn().mockResolvedValue(undefined),
+  modelsFallbacksListCommand: vi.fn().mockResolvedValue(undefined),
+  modelsImageFallbacksListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
@@ -170,6 +172,16 @@ describe("models cli", () => {
       "models --agent other-person accounts list",
       "does not support --agent",
       mocks.modelsAccountsListCommand,
+    ],
+    [
+      "models --agent other-person fallbacks list",
+      "does not support --agent",
+      mocks.modelsFallbacksListCommand,
+    ],
+    [
+      "models --agent other-person image-fallbacks list",
+      "does not support --agent",
+      mocks.modelsImageFallbacksListCommand,
     ],
   ] as const)("rejects unsupported agent scope: %s", async (args, message, command) => {
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
