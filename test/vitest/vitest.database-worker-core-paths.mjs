@@ -117,6 +117,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/github-publication.conformance.test.ts",
   "src/infra/database-engine/gateway-session-startup.conformance.test.ts",
   "src/infra/database-engine/session-actor.conformance.test.ts",
+  "src/infra/database-engine/audit-receipt-read.conformance.test.ts",
   "src/infra/database-engine/audit-retention.conformance.test.ts",
   "src/infra/database-engine/row-limit.conformance.test.ts",
   "src/infra/database-engine/session-owner-portability.conformance.test.ts",

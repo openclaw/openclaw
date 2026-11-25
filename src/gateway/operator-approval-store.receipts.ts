@@ -281,10 +281,10 @@ function operatorApprovalSelectorId(
 }
 
 function operatorApprovalPayloadBytes() {
-  return /* kysely-allow-raw: SQLite byte length excludes oversized retained presentation JSON before materialization. */ sql<number>`
-    length(CAST(operator_approvals.presentation_json AS BLOB)) +
-    length(CAST(operator_approvals.reviewer_device_ids_json AS BLOB)) +
-    length(CAST(operator_approvals.audience_session_keys_json AS BLOB))
+  return /* kysely-allow-raw: the combined byte bound keeps oversized owner payloads out of the snapshot. */ sql<number>`
+    octet_length(operator_approvals.presentation_json) +
+    octet_length(operator_approvals.reviewer_device_ids_json) +
+    octet_length(operator_approvals.audience_session_keys_json)
   `;
 }
 

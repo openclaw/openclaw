@@ -1,6 +1,6 @@
 /** Immutable decision facts for action boundaries without an owner-native record. */
 
-import { sql, type Selectable } from "kysely";
+import type { Selectable } from "kysely";
 import { validateDecisionReceiptV1 } from "../../packages/gateway-protocol/src/audit-run-validators.js";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
 import {
@@ -298,16 +298,6 @@ function retainedDecisionFactsForContextQuery(
     .where("occurred_at", ">=", now - EXECUTION_DECISION_FACT_RETENTION_MS);
 }
 
-function executionDecisionPayloadBytes() {
-  return /* kysely-allow-raw: SQLite byte length excludes oversized retained receipt JSON before materialization. */ sql<number>`length(CAST(execution_decision_facts.receipt_json AS BLOB))`;
-}
-
-function executionDecisionBoundedPayload() {
-  return /* kysely-allow-raw: one page snapshot returns bounded payload bytes beside the owning cursor. */ sql<
-    string | null
-  >`CASE WHEN length(CAST(execution_decision_facts.receipt_json AS BLOB)) <= ${EXECUTION_DECISION_FACT_MAX_BYTES} THEN execution_decision_facts.receipt_json ELSE NULL END`;
-}
-
 function executionDecisionSelectorId(row: ExecutionDecisionMetadataRow): string {
   const rowId = normalizeSqliteNumber(row.cursor_id);
   if (rowId === undefined || rowId < 1) {
@@ -368,10 +358,19 @@ function retainedDecisionFactMetadata(params: {
         "occurred_at",
         "receipt_bytes",
       ])
-      .select([
-        executionDecisionPayloadBytes().as("payload_bytes"),
-        executionDecisionBoundedPayload().as("bounded_receipt_json"),
-      ])
+      .select((eb) => {
+        const payloadBytes = eb.fn<number>("octet_length", ["receipt_json"]);
+        return [
+          payloadBytes.as("payload_bytes"),
+          eb
+            .case()
+            .when(payloadBytes, "<=", EXECUTION_DECISION_FACT_MAX_BYTES)
+            .then(eb.ref("receipt_json"))
+            .else(null)
+            .end()
+            .as("bounded_receipt_json"),
+        ];
+      })
       .orderBy("occurred_at", "asc")
       .orderBy("receipt_id", "asc")
       .$if(params.offset !== undefined, (query) => query.offset(params.offset!))
