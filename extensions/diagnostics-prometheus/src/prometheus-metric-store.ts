@@ -370,13 +370,14 @@ export function createPrometheusMetricStore(onSeriesDropped?: (name: string) => 
     if (family.type === "histogram") {
       recordHistogram(family.name, family.help, labels, value, family.buckets);
     } else {
+      // inc(labels, 0) exports a known label set at 0; max keeps an existing series unchanged.
       scalar(
         family.type === "counter" ? counters : gauges,
         family.name,
         family.help,
         labels,
         value,
-        family.type === "counter" ? "add" : "set",
+        family.type === "counter" ? (value === 0 ? "max" : "add") : "set",
       );
     }
   };

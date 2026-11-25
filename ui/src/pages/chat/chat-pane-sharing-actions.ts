@@ -286,10 +286,12 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       return;
     }
     const cacheKey = this.sessionSharingCacheKey(currentRow.key);
-    const current = this.collaboration.sharingStates.get(cacheKey);
-    if (current?.loading && !force) {
+    const cached = this.collaboration.sharingStates.get(cacheKey);
+    if (cached?.loading && !force) {
       return;
     }
+    // Another session generation under this key never seeds this read.
+    const current = cached?.sessionId === currentRow.sessionId ? cached : undefined;
     // Sharing data (membership + paired identities) is connection-scoped. A
     // gateway/account change bumps the generation and clears this cache, so a
     // request that resolves after the switch must be dropped rather than
@@ -314,6 +316,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
         );
         next = {
           loading: false,
+          sessionId: currentRow.sessionId,
           result,
           ...(result.publicShare ? { publicUrl: this.sessionPublicUrl(scope, currentRow) } : {}),
         };
