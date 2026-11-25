@@ -498,4 +498,50 @@ describe("cron-execution heartbeat wakes", () => {
 
     expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
   });
+
+  it("keeps cron turns whose terminal row is empty and aborted", () => {
+    const messages = [
+      cronWake,
+      { role: "assistant", content: [], stopReason: "aborted", display: false },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+
+  it("keeps cron turns whose HEARTBEAT_OK ack carries a substantive suffix", () => {
+    const messages = [
+      cronWake,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "HEARTBEAT_OK\nDeployment failed" }],
+        stopReason: "stop",
+        display: false,
+      },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+
+  it("keeps cron turns that end in a truncated NO_REPLY token", () => {
+    const messages = [
+      cronWake,
+      { role: "assistant", content: [{ type: "text", text: "NO_RE" }], display: false },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+
+  it("removes cron turns that end in a bare HEARTBEAT_OK token", () => {
+    const messages = [
+      cronWake,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "HEARTBEAT_OK" }],
+        stopReason: "stop",
+        display: false,
+      },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual([]);
+  });
 });
