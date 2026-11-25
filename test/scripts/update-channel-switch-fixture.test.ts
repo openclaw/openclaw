@@ -16,12 +16,14 @@ const testNodeExecPath = resolveTestNodeExecPath();
 const assertionScript = "scripts/e2e/lib/update-channel-switch/assertions.mjs";
 
 it.each([
-  { name: "already-current", version: "2026.11.15-beta.1", status: 0 },
-  { name: "different version", version: "2026.11.10-beta.3", status: 1 },
-])("checks the beta channel switch receipt: $name", ({ version, status }) => {
+  { name: "already-current", version: "2026.11.15-beta.1", status: "skipped", exit: 0 },
+  { name: "different version", version: "2026.11.10-beta.3", status: "skipped", exit: 1 },
+  { name: "failed", version: "2026.11.15-beta.1", status: "failed", exit: 1 },
+])("checks the beta channel switch receipt: $name", ({ version, status, exit }) => {
   const receipt = {
+    runId: "beta-switch",
     phase: "finished",
-    status: "skipped",
+    status,
     reason: "already-current",
     target: { kind: "package", version },
     steps: [{ step: "requested", status: "completed" }],
@@ -31,7 +33,7 @@ it.each([
     [assertionScript, "assert-update", "beta", "2026.11.15-beta.1"],
     { encoding: "utf8", env: { ...process.env, UPDATE_JSON: JSON.stringify(receipt) } },
   );
-  expect(result.status, result.stderr).toBe(status);
+  expect(result.status, result.stderr).toBe(exit);
 });
 
 it("preserves the package-derived Git fixture identity through build and lifecycle completion", async () => {
