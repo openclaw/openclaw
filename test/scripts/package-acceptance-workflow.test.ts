@@ -12804,7 +12804,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         "${{ needs.resolve_windows_node_release_artifacts.outputs.stable_release_sha }}",
       windows_node_workflow_sha: "15b4276c7d2ce696918d5fa7a4cf5010db25c6a4",
     });
-    expect(main.uses).toBe(reusableWorkflow);
+    const mainWorkflowSha = "17cadf79dbea1b1623f3301a01f9af590cea93bb";
+    expect(main.uses).toBe(
+      `openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@${mainWorkflowSha}`,
+    );
     expect(main.needs).toEqual([
       "resolve_target",
       "prepare_release_package",
@@ -12818,7 +12821,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       windows_node_source: "main",
       windows_node_source_sha:
         "${{ needs.resolve_windows_node_main_source.outputs.main_source_sha }}",
-      windows_node_workflow_sha: "15b4276c7d2ce696918d5fa7a4cf5010db25c6a4",
+      windows_node_workflow_sha: mainWorkflowSha,
       allow_protocol_mismatch: false,
     });
   });

@@ -1726,7 +1726,8 @@ jobs:
       actions: read
       contents: read
       id-token: write
-    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@15b4276c7d2ce696918d5fa7a4cf5010db25c6a4
+    # Let the app-under-test revision choose its Reactor NuGet feed path.
+    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@17cadf79dbea1b1623f3301a01f9af590cea93bb
     with:
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
       candidate_artifact_run_id: ${{ github.run_id }}
@@ -1734,7 +1735,7 @@ jobs:
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       windows_node_source: main
       windows_node_source_sha: ${{ needs.resolve_windows_node_main_source.outputs.main_source_sha }}
-      windows_node_workflow_sha: 15b4276c7d2ce696918d5fa7a4cf5010db25c6a4
+      windows_node_workflow_sha: 17cadf79dbea1b1623f3301a01f9af590cea93bb
       allow_protocol_mismatch: false
 
   live_repo_e2e_release_checks:
