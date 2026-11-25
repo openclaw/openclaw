@@ -1,4 +1,60 @@
 {
   "schema": "openclaw.release-validation-waivers/v1",
-  "waivers": []
+  "waivers": [
+    {
+      "targetVersion": "2026.10.34",
+      "targetSha": "c50d7cc6ef660ce9b59a4ad2cbb01a86715c35ec",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+      "step": "Run package Telegram E2E",
+      "reason": "Pre-existing v2026.10.33 Telegram package acceptance failure: pre-traffic onboarding exited 1."
+    },
+    {
+      "targetVersion": "2026.10.34",
+      "targetSha": "c50d7cc6ef660ce9b59a4ad2cbb01a86715c35ec",
+      "childRole": "productPerformance",
+      "jobName": "Kova mock provider performance",
+      "reason": "Approved Kova mock-provider performance gate exception for 2026.10.34; original run 45546076177 retained a non-passing Kova verdict."
+    },
+    {
+      "targetVersion": "2026.10.34",
+      "targetSha": "c50d7cc6ef660ce9b59a4ad2cbb01a86715c35ec",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run QA Live Matrix catalog / Run Matrix live QA lane",
+      "step": "Run Matrix live lane",
+      "reason": "Isolated Matrix QA worker hit a runner port collision (EADDRINUSE) in matrix-approval-channel-target-both."
+    },
+    {
+      "targetVersion": "2026.10.34",
+      "targetSha": "c50d7cc6ef660ce9b59a4ad2cbb01a86715c35ec",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Gateway E2E / Repo E2E (Gateway 3/4)",
+      "step": "Run repo E2E suite",
+      "reason": "Intermittent prepared-model-runtime supersession in codex-account-model-route; direct A/B checks passed 5/5 on candidate and baseline."
+    },
+    {
+      "targetVersion": "2026.10.34",
+      "targetSha": "c50d7cc6ef660ce9b59a4ad2cbb01a86715c35ec",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "Run package acceptance / Verify package acceptance",
+      "step": "Verify package acceptance results",
+      "reason": "Derived failure: verifier only reported the approved package_telegram failure (job 138990973115)."
+    },
+    {
+      "targetVersion": "2026.10.34",
+      "targetSha": "c50d7cc6ef660ce9b59a4ad2cbb01a86715c35ec",
+      "childRole": "releaseChecksCandidate",
+      "jobName": "Verify release checks",
+      "step": "Verify release check results",
+      "reason": "Derived failure: verifier only reported the package_acceptance_release_checks failure from the approved Telegram package acceptance failure."
+    },
+    {
+      "targetVersion": "2026.10.34",
+      "targetSha": "c50d7cc6ef660ce9b59a4ad2cbb01a86715c35ec",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Verify release checks",
+      "step": "Verify release check results",
+      "reason": "Derived failure: verifier reported only live_repo_e2e_release_checks and qa_live_release_checks, from the approved Gateway 3/4 and Matrix jobs."
+    }
+  ]
 }
