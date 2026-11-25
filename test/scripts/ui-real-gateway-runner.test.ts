@@ -6,6 +6,7 @@ import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-descriptor.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { runRealGatewayUiTests } from "../../scripts/test-ui-real-gateway.mts";
+import { withEnvAsync } from "../../src/test-utils/env.js";
 import { createDeferred } from "../helpers/promise.js";
 
 const fixtures = vi.hoisted(() => ({
@@ -161,17 +162,68 @@ it.each([
   expect(createWorkers).not.toHaveBeenCalled();
 });
 
-it.each([false, true])(
-  "waits for native resolution before admission (reject: %s)",
-  async (reject) => {
+it.each(
+  [
+    { name: "default absent", ambient: undefined, configured: undefined, useDefault: true },
+    {
+      name: "explicit production",
+      ambient: "development",
+      configured: "production",
+      useDefault: false,
+    },
+    {
+      name: "explicit empty",
+      ambient: "production",
+      configured: "",
+      useDefault: false,
+    },
+  ].flatMap((scenario) => [false, true].map((reject) => ({ ...scenario, reject }))),
+)("restores $name environment before admission (reject: $reject)", async (scenario) => {
+  const ambientEnv = {
+    ...env,
+    NODE_ENV: scenario.ambient,
+    OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: undefined,
+  };
+  await withEnvAsync(ambientEnv, async () => {
     const resolution = createDeferred<Awaited<ReturnType<typeof fixtures.resolveConfig>>>();
     const failure = new Error("native config resolution failed");
-    fixtures.resolveConfig.mockReturnValue(resolution.promise);
-    const running = runRealGatewayUiTests([], env);
+    const selectedEnv = { ...env, NODE_ENV: scenario.configured };
+    const childNodeEnv = scenario.useDefault ? scenario.ambient : scenario.configured;
+    const resolutionNodeEnv = childNodeEnv ?? "test";
+    const assertRestored = () => {
+      expect(process.env.NODE_ENV).toBe(scenario.ambient);
+      expect(Object.hasOwn(process.env, "NODE_ENV")).toBe(scenario.ambient !== undefined);
+    };
+    fixtures.resolveConfig.mockImplementation(async () => {
+      expect(process.env.NODE_ENV).toBe(resolutionNodeEnv);
+      // Vite defaults NODE_ENV independently of its test mode.
+      if (!process.env.NODE_ENV) {
+        process.env.NODE_ENV = "development";
+      }
+      try {
+        return await resolution.promise;
+      } finally {
+        expect(process.env.NODE_ENV).toBe(resolutionNodeEnv || "development");
+      }
+    });
+    const createWorker = createWorkers.getMockImplementation()!;
+    createWorkers.mockImplementation((...args) => {
+      assertRestored();
+      expect(args[0]?.NODE_ENV).toBe(childNodeEnv);
+      return createWorker(...args);
+    });
+    managed.mockImplementation(async ({ env: childEnv }) => {
+      assertRestored();
+      expect(childEnv?.NODE_ENV).toBe(childNodeEnv);
+      return 0;
+    });
+    const running = scenario.useDefault
+      ? runRealGatewayUiTests([])
+      : runRealGatewayUiTests([], selectedEnv);
     expect(fixtures.resolveConfig).toHaveBeenCalledTimes(1);
     expect(managed).not.toHaveBeenCalled();
     expect(createWorkers).not.toHaveBeenCalled();
-    if (reject) {
+    if (scenario.reject) {
       const rejected = expect(running).rejects.toBe(failure);
       resolution.reject(failure);
       await rejected;
@@ -191,8 +243,10 @@ it.each([false, true])(
       expect(managed).toHaveBeenCalledTimes(3);
       expect(createWorkers).toHaveBeenCalledTimes(1);
     }
-  },
-);
+    assertRestored();
+    expect(selectedEnv.NODE_ENV).toBe(scenario.configured);
+  });
+});
 
 it.each([
   { ownership: "local", parent: undefined },
@@ -213,11 +267,15 @@ it.each([
     .mockResolvedValueOnce(undefined)
     .mockReturnValueOnce(qualifiedBorrowerJoined.promise);
   const receiptRead = createDeferred();
+  const commandsStarted = createDeferred();
   vi.mocked(fs.readFile).mockImplementation(async () => {
     receiptRead.resolve();
     return JSON.stringify(safeReceipt);
   });
   managed.mockImplementation(async ({ args, onReady }) => {
+    if (managed.mock.calls.length === 2) {
+      commandsStarted.resolve();
+    }
     onReady?.(new ChildProcess());
     if (project(args) === "ui-e2e-serial") {
       return serial.promise;
@@ -231,7 +289,7 @@ it.each([
     return desktop.promise;
   });
   const running = runRealGatewayUiTests([], env);
-  await Promise.resolve();
+  await commandsStarted.promise;
   expect(managed).toHaveBeenCalledTimes(2);
   const [serialCall, desktopCall] = managed.mock.calls.map(([call]) => call);
   if (process.platform !== "win32") {
@@ -285,14 +343,18 @@ it.each([false, true])(
     const serial = createDeferred<number>();
     const desktop = createDeferred<number>();
     const cleanupError = new Error("cleanup failed");
+    const commandsStarted = createDeferred();
     managed.mockImplementation(({ args, onReady }) => {
+      if (managed.mock.calls.length === 2) {
+        commandsStarted.resolve();
+      }
       onReady?.(new ChildProcess());
       return project(args) === "ui-e2e-serial" ? serial.promise : desktop.promise;
     });
     const settled = vi.fn();
     const running = runRealGatewayUiTests([], env);
     const observed = running.then(settled, settled);
-    await Promise.resolve();
+    await commandsStarted.promise;
     expect(managed).toHaveBeenCalledTimes(2);
     managed.mock.calls[0]![0].onSignal!("SIGTERM");
     if (failCleanup) {

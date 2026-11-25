@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveConfig } from "vitest/node";
+import { withEnvAsync } from "../src/test-utils/env.ts";
 import { createPrebuiltUiE2eVitestConfig } from "../test/vitest/vitest.ui-e2e-prebuilt.config.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
@@ -127,8 +128,10 @@ export async function runRealGatewayUiTests(
     }
     return mergeVitestExitCodes(desktopCode, await vitest());
   }
-  // Leaf patterns are final only after native config hooks apply their constraints.
-  const { test: resolved } = await resolveConfig({ config: false }, config);
+  // Resolve final leaf patterns with the child CLI's environment, then restore ours.
+  const { test: resolved } = await withEnvAsync({ NODE_ENV: env.NODE_ENV ?? "test" }, () =>
+    resolveConfig({ config: false }, config),
+  );
   const selected = (names: string[]) =>
     names.filter((name) =>
       resolved.resolvedProjects.some(

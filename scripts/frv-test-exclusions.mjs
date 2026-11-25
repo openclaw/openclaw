@@ -160,7 +160,10 @@ export function applyTestExclusions(config, paths, cwd, defaultExcludes) {
       return async (env) => overlayProject(await project(env));
     }
     if (project && typeof project.then === "function") {
-      return Promise.resolve(project).then(overlayProject);
+      const mapped = Promise.resolve(project).then(overlayProject);
+      // Native project resolution may await an earlier factory before this promise.
+      void mapped.catch(() => {});
+      return mapped;
     }
     return overlayProject(project);
   });

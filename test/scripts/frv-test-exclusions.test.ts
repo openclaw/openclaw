@@ -327,7 +327,8 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { validateTestExclusions } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/frv-test-exclusions.mjs")).href)};
+import { setImmediate } from "node:timers/promises";
+import { applyTestExclusions, validateTestExclusions } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/frv-test-exclusions.mjs")).href)};
 
 const root = ${JSON.stringify(root)};
 const mode = process.argv[2];
@@ -373,7 +374,31 @@ if (!mode) {
   configs.forEach((config, index) => write(config, original[index]));
 }
 const candidateRequire = createRequire(path.join(root, "package.json"));
-const { createVitest } = await import(pathToFileURL(candidateRequire.resolve("vitest/node")).href);
+const { createVitest, resolveConfig } = await import(pathToFileURL(candidateRequire.resolve("vitest/node")).href);
+
+if (!mode) {
+  const failure = new Error("later project failed while the first factory was pending");
+  let rejectLater;
+  const laterProject = new Promise((_resolve, reject) => { rejectLater = reject; });
+  // Observe the input itself; the overlay owns observing its new mapped promise.
+  void laterProject.catch(() => {});
+  let factoryCalls = 0;
+  let factoryFinished = false;
+  const config = applyTestExclusions({ test: { root, projects: [
+    async () => {
+      factoryCalls++;
+      rejectLater(failure);
+      await setImmediate();
+      factoryFinished = true;
+      return { test: { name: "delayed-first", include: [] } };
+    },
+    laterProject,
+  ] } }, [], root, []);
+  assert.equal(factoryCalls, 0);
+  await assert.rejects(resolveConfig({ config: false }, config), error => error === failure);
+  assert.equal(factoryCalls, 1);
+  assert.equal(factoryFinished, true);
+}
 
 async function discover(config) {
   const runner = await createVitest({
