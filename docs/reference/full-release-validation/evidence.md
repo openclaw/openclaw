@@ -228,6 +228,12 @@ fail closed: recovery never dispatches qualification jobs as a fallback. Keep th
 request: reconciliation never redispatches an uncertain request. Recovery preserves the
 original publication selection. Fresh qualification is a separate, explicit operation.
 
+If reconciliation reports `recovery-prepared`, it saw no recorded dispatch attempt or
+matching run. The original command may still be checking admission. Wait for it to
+exit and reconcile the same file again. If it is still prepared with no matching run,
+resolve the original error and use a new private request file for a fresh recovery.
+An `attempted` request may already have reached GitHub. Continue reconciling that file.
+
 ### Recover with a later waiver ledger
 
 Use a separately admitted policy Q only when an authorized operator approved new

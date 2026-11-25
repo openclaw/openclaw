@@ -494,6 +494,36 @@ describe("retained receipt recovery operator", () => {
     expect(f.client.postRecovery).not.toHaveBeenCalled();
   });
 
+  it("reports a prepared request while admission is pending and after a pre-dispatch 503", async () => {
+    const f = fixture();
+    const prepared = {
+      action: "recovery-prepared",
+      phase: "prepared",
+      runId: null,
+      complete: false,
+      guidance: expect.stringContaining("original command"),
+    };
+    const admission = f.client.verifyQualificationAdmission.getMockImplementation()!;
+    f.client.verifyQualificationAdmission
+      .mockImplementationOnce(admission)
+      .mockImplementationOnce(async () => {
+        // Another observer can reconcile while the original command still checks admission.
+        expect(await reconcileReceiptRecovery(f.path, f.client)).toMatchObject(prepared);
+        throw new Error("HTTP 503");
+      });
+    await expect(dispatchReceiptRecovery(f.options, f.client)).rejects.toThrow("HTTP 503");
+    expect(await dispatchReceiptRecovery(f.options, f.client)).toMatchObject(prepared);
+    f.observeRecovery();
+    const observed = await reconcileReceiptRecovery(f.path, f.client);
+    expect(observed).toMatchObject({
+      action: "recovery-unconfirmed",
+      phase: "prepared",
+      runId: "99",
+    });
+    expect(observed).not.toHaveProperty("guidance");
+    expect(f.client.postRecovery).not.toHaveBeenCalled();
+  });
+
   it("does not send after P moves and rejects changed retained identity", async () => {
     const f = fixture();
     f.client.getRef.mockResolvedValue({ object: { type: "commit", sha: Q } });
