@@ -11,11 +11,14 @@ struct ChatModelPickerSheet: View {
     let onSignIn: () -> Void
 
     @State private var detent: PresentationDetent?
-    /// Tall enough for up to four providers and Model sign-in to rest above the search field. It grows with
-    /// the text size but never shrinks below its default, since rows keep their minimum height at small sizes;
-    /// it stays one height through a push.
-    @ScaledMetric(relativeTo: .body) private var scaledRestingHeight: CGFloat = Self.restingHeight
-    private static let restingHeight: CGFloat = 456
+    /// The root's height, taken from its content once per presentation, so everything on it, Model sign-in
+    /// included, rests above the search field. It may grow once when the catalog arrives after the sheet is up,
+    /// never shrinks, and holds through a push, a search and the way back.
+    @State private var fittedHeight: CGFloat?
+    @State private var fittedWithCatalog = false
+    /// The least it rests at: the height it had before it fitted its content, growing with the text size.
+    @ScaledMetric(relativeTo: .body) private var scaledMinimumHeight: CGFloat = Self.minimumHeight
+    private static let minimumHeight: CGFloat = 456
     /// The first card sits this far below the title bar, as in the system's own sheets with a headerless first
     /// section (Reminders' New List: 8.7 pt); the list's default top inset left 33.6 pt.
     static let listTopMargin: CGFloat = 9
@@ -33,6 +36,14 @@ struct ChatModelPickerSheet: View {
             .listStyle(.insetGrouped)
             .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
             .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
+            .onScrollGeometryChange(for: CGFloat.self) {
+                // Nothing to fit until the list has laid out its rows.
+                $0.contentSize.height > 0 ? $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom : 0
+            } action: { _, height in
+                // The system's bottom inset already holds the search field; the extra margin is only there so
+                // the last row can scroll clear at large, and the resting height does not need it.
+                self.fitRestingHeight(to: height > 0 ? height - self.searchClearance : 0)
+            }
             .navigationTitle(Text("Model"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -75,7 +86,22 @@ struct ChatModelPickerSheet: View {
     }
 
     private var restingDetent: PresentationDetent {
-        .height(max(Self.restingHeight, self.scaledRestingHeight))
+        // Above the large detent the system rests at large, and the list scrolls.
+        .height(max(Self.minimumHeight, self.scaledMinimumHeight, self.fittedHeight ?? 0))
+    }
+
+    private func fitRestingHeight(to height: CGFloat) {
+        // Search results are not the root; the first fit holds.
+        guard self.query.isEmpty, height > 0 else { return }
+        let hasCatalog = !self.viewModel.modelChoices.isEmpty
+        if self.fittedHeight == nil {
+            self.fittedHeight = height
+            self.fittedWithCatalog = hasCatalog
+        } else if !self.fittedWithCatalog, hasCatalog {
+            // The catalog arrived after the sheet was up: grow once, in the frame the list fills.
+            self.fittedHeight = max(self.fittedHeight ?? 0, height)
+            self.fittedWithCatalog = true
+        }
     }
 
     @ViewBuilder
