@@ -199,14 +199,19 @@ it("keeps a screenshot-free browser usable without reporting a load failure", as
   const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
   expect(input.value).toBe("https://example.test/article");
   const typedUrl = "https://example.test/typed";
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   input.focus();
   input.value = typedUrl;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await panel.updateComplete;
   expect(document.activeElement).not.toBe(input);
+  expect(input.value).toBe(typedUrl);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(input.value).toBe(typedUrl);
   navigation.resolve();
-  await waitForSolid(() => expect(input.value).toBe(typedUrl));
+  await waitForSolid(() => expect(reloadButton(panel)).not.toBeNull());
+  expect(input.value).toBe(typedUrl);
   reloadButton(panel)!.click();
   await waitForSolid(() =>
     expect(requests(gateway).filter(({ path }) => path === "/navigate")).toHaveLength(2),
@@ -214,7 +219,6 @@ it("keeps a screenshot-free browser usable without reporting a load failure", as
   expect(requests(gateway).findLast(({ path }) => path === "/navigate")?.body?.url).toBe(typedUrl);
   const captures = () =>
     requests(gateway).filter(({ path }) => path === "/screenshot" || path === "/screencast");
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   url = "https://example.test/next";
   panel.preferredTab = { tab: hostTab, revision: "next-result" };
   await panel.updateComplete;

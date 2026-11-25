@@ -227,7 +227,9 @@ export function BrowserToolbar(
           !event.currentTarget.contains(event.relatedTarget)
         ) {
           props.controller.urlDraftEditing = false;
-          props.controller.setState("urlDraft", activeUrl());
+          if (!props.controller.loading) {
+            props.controller.setState("urlDraft", activeUrl());
+          }
         }
       }}
     >
