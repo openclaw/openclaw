@@ -15,10 +15,15 @@ import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 const CLAUDE_CLI_RUNTIME_ID = "claude-cli";
 const ANTHROPIC_WILDCARD_REF = "anthropic/*";
 
-/** Project the account menu onto canonical identities without admitting hosted-only models. */
+/**
+ * Project the account menu onto canonical identities without admitting hosted-only models.
+ * `catalogRows` is the effective catalog (bundled plus hosted): it describes a listed ID the
+ * snapshot holds no Anthropic row for, and never lists one.
+ */
 export function projectClaudeCliNativeCatalog(
   snapshot: ModelCatalogSnapshot,
   cliOnly: boolean,
+  catalogRows: readonly ModelCatalogEntry[] = [],
 ): ModelCatalogSnapshot {
   const listing = snapshot.providerOutcomes?.find(
     (outcome) => outcome.provider === CLAUDE_CLI_RUNTIME_ID && outcome.listedModelIds !== undefined,
@@ -29,7 +34,16 @@ export function projectClaudeCliNativeCatalog(
     (entry) => entry.provider === CLAUDE_CLI_RUNTIME_ID && listed.has(entry.id),
   );
   const metadata = new Map(
-    [...(snapshot.staticEntries ?? []), ...snapshot.entries]
+    [
+      // Hosted rows may declare document input, which registry rows never carry.
+      ...catalogRows.map((entry) =>
+        entry.input
+          ? { ...entry, input: entry.input.filter((item) => item !== "document") }
+          : entry,
+      ),
+      ...(snapshot.staticEntries ?? []),
+      ...snapshot.entries,
+    ]
       .filter((entry) => entry.provider === "anthropic")
       .map((entry) => [entry.id, entry]),
   );

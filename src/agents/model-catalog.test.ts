@@ -8,6 +8,8 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { resolveRemoteCatalogUrl } from "../model-catalog/remote-config.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import {
   buildOpenAICompatibleLiveProviderCatalog,
   clearLiveCatalogCacheForTests,
@@ -931,6 +933,34 @@ describe("catalog declaration planning", () => {
         normalize.mock.results.map(({ type, value }) => (type === "return" ? value.length : type)),
       ).toEqual([2]);
     });
+  });
+  it("replans manifest rows when a newer hosted catalog is published", () => {
+    const { load } = catalog("static", "bundled");
+    const hosted = (generatedAt: number, ...modelIds: string[]) => ({
+      sourceUrl: resolveRemoteCatalogUrl({}),
+      generatedAt,
+      revision: `fixture-${generatedAt}`,
+      recommendations: {},
+      providers: {
+        "catalog-fixture": {
+          api: "openai-responses" as const,
+          models: modelIds.map((id) => ({ id, name: id })),
+        },
+      },
+      pricing: {},
+      upstreamPricing: {},
+    });
+    const ids = (rows: ReturnType<typeof load>) => rows.map((entry) => entry.id).toSorted();
+    // Startup reads plan before the first hosted download; the same config must not pin them.
+    expect(ids(load())).toEqual(["bundled"]);
+    const first = hosted(1, "hosted-a");
+    const firstRows = withRemoteModelCatalogSnapshot(first, load);
+    expect(ids(firstRows)).toEqual(["bundled", "hosted-a"]);
+    expect(withRemoteModelCatalogSnapshot(first, load)).toBe(firstRows);
+    expect(ids(withRemoteModelCatalogSnapshot(hosted(2, "hosted-b"), load))).toEqual([
+      "bundled",
+      "hosted-b",
+    ]);
   });
   it("keeps the old declaration cache when replacement planning fails", async () => {
     const initial = catalog("static", "initial");
