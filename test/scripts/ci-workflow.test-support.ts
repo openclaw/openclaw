@@ -279,6 +279,13 @@ export function evaluateWorkflowExpression(
         result: context.jobResults?.["build-artifacts"] ?? "success",
         outputs: {},
       },
+      "docker-survivor-fixtures": {
+        result:
+          context.jobResults?.["docker-survivor-fixtures"] ??
+          (context.preflightOutputs?.run_docker_survivor_fixtures === "true"
+            ? "success"
+            : "skipped"),
+      },
       ...Object.fromEntries(
         Object.entries(context.additionalNeeds ?? {}).map(([name, need]) => [
           name,

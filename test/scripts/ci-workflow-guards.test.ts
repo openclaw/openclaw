@@ -2047,7 +2047,7 @@ AFTER_CD
     expect(job.steps.indexOf(baseline)).toBeLessThan(job.steps.indexOf(run));
     const previousReader = requiredWorkflowStep(job.steps, "Pin previous schema reader source");
     expect(previousReader.if).toBe(
-      "github.event_name == 'pull_request' && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor ')",
+      "needs.preflight.outputs.run_docker_survivor_fixtures == 'true'",
     );
     expect(previousReader.env).toEqual({
       GH_TOKEN: "${{ github.token }}",
@@ -2143,7 +2143,11 @@ AFTER_CD
     ] as const) {
       const context = {
         eventName,
-        preflightOutputs: { run_docker_seed_e2e: "true", docker_seed_lanes: lanes },
+        preflightOutputs: {
+          run_docker_seed_e2e: "true",
+          docker_seed_lanes: lanes,
+          run_docker_survivor_fixtures: String(selected),
+        },
         jobResults: { "docker-survivor-fixtures": result },
       };
       expect(evaluateWorkflowExpression("${{ " + builders.if + " }}", context)).toBe(selected);
