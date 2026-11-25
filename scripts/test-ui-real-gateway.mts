@@ -29,9 +29,26 @@ async function resolveInventoryConfig(
 ) {
   // Config-only resolution never installs Vitest's terminal cleanup. Forward its
   // diagnostics without claiming the parent terminal, and join forwarded writes.
+  const destination = process.stdout;
   const output = new Writable({
     write(chunk, encoding, callback) {
-      process.stdout.write(chunk, encoding, callback);
+      if (!destination.writable) {
+        callback(destination.errored ?? new Error("UI config stdout is not writable"));
+        return;
+      }
+      let writeError: Error | null | undefined;
+      const onError = (error: Error) => callback(writeError ?? error);
+      // Hold failed writes until stdout emits its error, so owned completion
+      // cannot leave an unhandled error on the shared destination.
+      destination.once("error", onError);
+      destination.write(chunk, encoding, (error) => {
+        if (error) {
+          writeError = error;
+        } else {
+          destination.off("error", onError);
+          callback();
+        }
+      });
     },
   });
   const drained = finished(output, { cleanup: true });
