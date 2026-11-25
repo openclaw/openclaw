@@ -454,8 +454,8 @@ Work that OpenClaw resolves outside a turn, such as subagent spawn and cleanup
 and queued or CLI compaction, uses process quarantine instead. If the engine
 fails during that work, including a throw from one of its lifecycle methods,
 OpenClaw quarantines it for the current Gateway process. Those calls then use `legacy` until the plugin is
-reloaded or the Gateway restarts. Agent turns ignore this quarantine and keep
-retrying the plugin engine. `openclaw health` and `openclaw status` report the
+reloaded or the Gateway restarts. Agent turns, including their overflow
+compaction, ignore this quarantine and keep retrying the plugin engine. `openclaw health` and `openclaw status` report the
 quarantine, and the log names the failed operation, so the operator can repair,
 update, or disable the plugin without the agent going silent.
 
@@ -598,7 +598,7 @@ The slot is exclusive at run time - only one registered context engine is resolv
 
 - Use `openclaw doctor` to verify your engine is loading correctly.
 - If switching engines, existing sessions continue with their current history. The new engine takes over for future runs.
-- Engine errors are logged. A failing agent turn falls back to `legacy` for that turn only, and failures in subagent or compaction work quarantine the engine for those calls until the plugin reloads or the Gateway restarts. Replies continue either way, but you should still repair, update, disable, or uninstall the broken plugin.
+- Engine errors are logged. If an agent turn cannot resolve the engine, that turn uses `legacy` and the next turn retries it. Failures in subagent work or queued and CLI compaction quarantine the engine for those calls until the plugin reloads or the Gateway restarts; agent turns, including their overflow compaction, keep using it. Replies continue either way, but you should still repair, update, disable, or uninstall the broken plugin.
 - For development, use `openclaw plugins install -l ./my-engine` to link a local plugin directory without copying.
 
 ## Related

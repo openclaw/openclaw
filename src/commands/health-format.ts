@@ -30,7 +30,7 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
     return null;
   }
   const engines = quarantined.map((entry) => entry.engineId).join(", ");
-  return `Context engine: warning (${quarantined.length} quarantined: ${engines}; subagent and compaction work use legacy until restart or plugin reload; agent turns still retry the engine)`;
+  return `Context engine: warning (${quarantined.length} quarantined: ${engines}; subagent work and queued or CLI compaction use legacy until restart or plugin reload; agent turns, including their overflow compaction, still retry the engine)`;
 }
 
 export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
