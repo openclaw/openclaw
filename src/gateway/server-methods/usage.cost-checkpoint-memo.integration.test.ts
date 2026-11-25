@@ -125,3 +125,55 @@ it("refreshes registered usage.cost without decoding unchanged date partitions",
       );
     });
   }));
+
+it.each([
+  {
+    timeZone: "America/St_Johns",
+    prior: "2007-11-03",
+    repeated: "2007-11-04",
+    instants: ["2007-11-04T02:30:30Z", "2007-11-04T02:31:30Z", "2007-11-04T03:30:30Z"],
+  },
+  {
+    timeZone: "Antarctica/Casey",
+    prior: "2010-03-04",
+    repeated: "2010-03-05",
+    instants: ["2010-03-04T14:30:00Z", "2010-03-04T15:30:00Z", "2010-03-04T16:30:00Z"],
+  },
+])(
+  "counts each event on its civil date across repeated midnight in $timeZone",
+  ({ timeZone, prior, repeated, instants }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config = {};
+      setRuntimeConfigSnapshot(config);
+      const session = { agentId: "main", sessionKey: "agent:main:midnight", sessionId: "midnight" };
+      const timestamps = instants.map((time) => Date.parse(time));
+      replaceSessionEntrySync(session, { sessionId: session.sessionId, updatedAt: timestamps[2]! });
+      // The first and last events belong to the repeated day. The middle event belongs to the previous day.
+      for (const [index, timestamp] of timestamps.entries()) {
+        await writeUsage(session, state.workspaceDir, 2 ** index, timestamp);
+      }
+      await loadCostUsageSummary({
+        config,
+        agentId: session.agentId,
+        startMs: timestamps[0]!,
+        endMs: timestamps[2]!,
+      });
+      const before = { date: prior, totalTokens: 2 };
+      const after = { date: repeated, totalTokens: 5 };
+      for (const [startDate, endDate, totalTokens, daily] of [
+        [repeated, repeated, 5, [after]],
+        [prior, prior, 2, [before]],
+        [prior, repeated, 7, [before, after]],
+      ] as const) {
+        const respond = await invokeUsage(
+          "usage.cost",
+          { startDate, endDate, agentId: session.agentId, mode: "specific", timeZone },
+          config,
+          { handlers: coreGatewayHandlers, context: { getRuntimeConfig: () => config } },
+        );
+        expect(respond.mock.calls).toMatchObject([
+          [true, { totals: { totalTokens }, daily, cacheStatus: { status: "fresh" } }, undefined],
+        ]);
+      }
+    }),
+);
