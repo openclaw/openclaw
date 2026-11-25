@@ -10,7 +10,7 @@ actor MacNodeOpenClawIDBridge {
     /// finish all descriptor operations before returning. Production uses the shared
     /// transport's dedicated worker admission path, never the node/operator factory.
     typealias WorkerWebSocketHandler = @Sendable (
-        MacNodeOpenClawIDBridgeRequest, MacNodeOpenClawIDBridgeReader, MacNodeOpenClawIDBridgeIO) async throws -> Void
+        OpenClawIDBridgeRequest, OpenClawIDBridgeReader, OpenClawIDBridgeIO) async throws -> Void
 
     nonisolated let socketPath: String
     /// Existing Bun transfer and worker endpoint owners already understand ws+unix.
@@ -44,17 +44,17 @@ actor MacNodeOpenClawIDBridge {
     {
         let session = OpenClawIDNodeWebSocketSession(tunnel: tunnel, logicalOrigin: logicalOrigin)
         let handler: WorkerWebSocketHandler = workerWebSocket ?? { request, reader, io in
-            try await MacNodeOpenClawIDBridgeWebSocket.serve(request: request, reader: reader, io: io) {
+            try await OpenClawIDBridgeWebSocket.serve(request: request, reader: reader, io: io) {
                 try await session.prepareWorkerWebSocket()
             }
         }
         var template = Array("/tmp/oc-node-XXXXXX".utf8CString)
-        guard let path = mkdtemp(&template) else { throw MacNodeOpenClawIDBridgeError.unavailable }
+        guard let path = mkdtemp(&template) else { throw OpenClawIDBridgeError.unavailable }
         let directory = String(cString: path)
         let bridge = MacNodeOpenClawIDBridge(directory: directory, tunnel: tunnel, workerWebSocket: handler)
         guard chmod(directory, 0o700) == 0 else {
             try? FileManager.default.removeItem(atPath: directory)
-            throw MacNodeOpenClawIDBridgeError.unavailable
+            throw OpenClawIDBridgeError.unavailable
         }
         let ready = await bridge.server.start(handler: { [weak bridge] handle in
             await bridge?.serve(handle)
@@ -64,7 +64,7 @@ actor MacNodeOpenClawIDBridge {
         })
         guard ready, !Task.isCancelled else {
             await bridge.shutdown()
-            throw MacNodeOpenClawIDBridgeError.unavailable
+            throw OpenClawIDBridgeError.unavailable
         }
         return bridge
     }
@@ -88,13 +88,13 @@ actor MacNodeOpenClawIDBridge {
         // The tunnel's stream credit owns admission and queueing for this private
         // listener; local handlers only refuse new work during route retirement.
         guard self.stopping == nil else { return }
-        guard let io = try? MacNodeOpenClawIDBridgeIO(handle: handle) else { return }
-        let reader = MacNodeOpenClawIDBridgeReader(io: io)
+        guard let io = try? OpenClawIDBridgeIO(handle: handle) else { return }
+        let reader = OpenClawIDBridgeReader(io: io)
         do {
             try await withTaskCancellationHandler {
                 let bytes = try await reader.through(
-                    Data([13, 10, 13, 10]), limit: MacNodeOpenClawIDBridgeRequest.maximumHeadBytes)
-                let request = try MacNodeOpenClawIDBridgeRequest.parse(bytes)
+                    Data([13, 10, 13, 10]), limit: OpenClawIDBridgeRequest.maximumHeadBytes)
+                let request = try OpenClawIDBridgeRequest.parse(bytes)
                 try Task.checkCancellation()
                 if request.isWebSocket {
                     guard request.path == "/__openclaw__/worker" else {
@@ -104,7 +104,7 @@ actor MacNodeOpenClawIDBridge {
                     }
                     try await self.workerWebSocket(request, reader, io)
                 } else {
-                    try await MacNodeOpenClawIDBridgeHTTP.serve(
+                    try await OpenClawIDBridgeHTTP.serve(
                         request: request, reader: reader, io: io, tunnel: self.tunnel)
                 }
             } onCancel: { io.interrupt() }

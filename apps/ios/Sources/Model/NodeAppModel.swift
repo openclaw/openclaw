@@ -131,6 +131,12 @@ struct GatewayConnection: Equatable {
     var node = GatewaySessionPhase.idle
     var `operator` = GatewaySessionPhase.idle
 
+    /// The session Gateway surfaces follow: the node, unless the route runs no node session (an
+    /// OpenClaw ID device that does not run tools), where the operator is the whole connection.
+    var gateway: GatewaySessionPhase {
+        self.node == .idle && self.operator != .idle ? self.operator : self.node
+    }
+
     var isPaused: Bool {
         self.pausedProblem != nil
     }
@@ -449,11 +455,11 @@ final class NodeAppModel {
     }
 
     var gatewayServerName: String? {
-        self.connection.node.connectedInfo?.serverName
+        self.connection.gateway.connectedInfo?.serverName
     }
 
     var gatewayRemoteAddress: String? {
-        self.connection.node.connectedInfo?.remoteAddress
+        self.connection.gateway.connectedInfo?.remoteAddress
     }
 
     var connectedGatewayID: String?
@@ -3540,7 +3546,7 @@ extension NodeAppModel {
         prepareForGatewayConnect(
             stableID: effectiveStableID,
             connection: GatewayConnection(
-                node: nextConfig.openClawIDOperatorSession == nil ? attempting : .idle,
+                node: Self.runsNodeSession(nextConfig) ? attempting : .idle,
                 operator: operatorLoopRequired ? attempting : .idle),
             preservingGatewayProblem: isSameGatewayTarget || preservesPreconnectProblem,
             preservingFocusedChatSession: isSameGatewayTarget)
@@ -3552,8 +3558,8 @@ extension NodeAppModel {
             self.operatorGatewayTask = nil
             Task { await self.operatorGateway.disconnect() }
         }
-        // An OpenClaw ID route carries only the operator session; the human key is not a node key.
-        guard nextConfig.openClawIDOperatorSession == nil else { return }
+        // Without W_node an OpenClaw ID route carries only the operator; the human key is not a node key.
+        guard Self.runsNodeSession(nextConfig) else { return }
         startNodeGatewayLoop(
             config: nextConfig,
             sessionBox: sessionBox)
@@ -4787,10 +4793,15 @@ extension NodeAppModel {
         _ = self.talkMode.cancelPushToTalk(expectedTranscriptionOnly: false)
     }
 
+    nonisolated static func runsNodeSession(_ config: GatewayConnectConfig) -> Bool {
+        config.openClawIDOperatorSession == nil || config.openClawIDNodeSession != nil
+    }
+
     private func startNodeGatewayLoop(
         config: GatewayConnectConfig,
         sessionBox: WebSocketSessionBox?)
     {
+        let sessionBox = config.openClawIDNodeSession ?? sessionBox
         let stableID = config.effectiveStableID
         let routeGeneration = self.gatewayRouteGeneration
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }

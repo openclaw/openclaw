@@ -934,7 +934,7 @@ extension RootTabs {
     private func presentOnboarding() {
         if IOSOpenClawIDFeature.isEnabled {
             self.openClawIDSetup = OpenClawIDSetupModel(
-                service: IOSOpenClawIDFeature.setupService(),
+                service: IOSOpenClawIDFeature.setupService(gatewayController: self.gatewayController),
                 onJoined: { _ in
                     self.onboardingComplete = true
                     OnboardingStateStore.markCompleted(mode: nil)
@@ -965,17 +965,15 @@ extension RootTabs {
             .environment(self.gatewayController)
     }
 
-    /// Connects chat to this device's OpenClaw ID claw through its tunnel.
+    /// Connects to this device's OpenClaw ID claw through its tunnels. When the claw stops listing
+    /// this device, the route disconnects and sign-in shows again.
     private func connectOpenClawID() {
+        IOSOpenClawIDRoute.shared.onRemoved = {
+            self.appModel.disconnectGateway()
+            self.presentOnboarding()
+        }
         Task { @MainActor in
-            let options = await self.gatewayController.makeConnectOptions(deviceAuthGatewayID: nil)
-            do {
-                guard let config = try await IOSOpenClawIDRoute.shared.connectConfig(options: options) else { return }
-                self.appModel.applyGatewayConnectConfig(config)
-            } catch {
-                IOSOpenClawIDFeature.logger.error(
-                    "OpenClaw ID route failed: \(String(reflecting: error), privacy: .public)")
-            }
+            await IOSOpenClawIDFeature.connect(appModel: self.appModel, gatewayController: self.gatewayController)
         }
     }
 

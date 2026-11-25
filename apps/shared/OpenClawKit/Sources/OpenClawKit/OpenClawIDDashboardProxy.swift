@@ -1,17 +1,17 @@
+#if os(iOS) || os(macOS)
 import Darwin
 import Foundation
-import OpenClawKit
 import Synchronization
 
 /// Loopback HTTP/WebSocket proxy that lets the dashboard WebView reach the claw over the Mac's
 /// operator tunnel. The tunnel key is the authority, so the proxy admits only requests carrying
 /// its per-launch secret cookie (set in the dashboard's cookie store) and its exact Host. Other
 /// local processes, including commands the node runs, cannot borrow the operator grant.
-final class MacOpenClawIDDashboardProxy: Sendable {
-    static let cookieName = "openclaw_ocid_dashboard"
+public final class OpenClawIDDashboardProxy: Sendable {
+    public static let cookieName = "openclaw_ocid_dashboard"
 
-    let baseURL: URL
-    let cookie: HTTPCookie
+    public let baseURL: URL
+    public let cookie: HTTPCookie
     private let listener: Int32
     private let secret: String
     private let host: String
@@ -24,7 +24,7 @@ final class MacOpenClawIDDashboardProxy: Sendable {
     private init(listener: Int32, port: UInt16, tunnel: OpenClawIDNodeTunnel, logicalOrigin: URL) throws {
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
-            throw MacNodeOpenClawIDBridgeError.unavailable
+            throw OpenClawIDBridgeError.unavailable
         }
         self.secret = bytes.map { String(format: "%02x", $0) }.joined()
         self.listener = listener
@@ -40,18 +40,18 @@ final class MacOpenClawIDDashboardProxy: Sendable {
             .path: "/",
             .init("HttpOnly"): "TRUE",
             .sameSitePolicy: HTTPCookieStringPolicy.sameSiteStrict,
-        ]) else { throw MacNodeOpenClawIDBridgeError.unavailable }
+        ]) else { throw OpenClawIDBridgeError.unavailable }
         self.cookie = cookie
     }
 
     /// Binds an ephemeral 127.0.0.1 port and starts accepting.
-    static func start(
+    public static func start(
         tunnel: OpenClawIDNodeTunnel,
         logicalOrigin: URL,
-        onUnexpectedStop: @escaping @Sendable () -> Void) async throws -> MacOpenClawIDDashboardProxy
+        onUnexpectedStop: @escaping @Sendable () -> Void) async throws -> OpenClawIDDashboardProxy
     {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw MacNodeOpenClawIDBridgeError.unavailable }
+        guard fd >= 0 else { throw OpenClawIDBridgeError.unavailable }
         var address = sockaddr_in()
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         address.sin_family = sa_family_t(AF_INET)
@@ -66,11 +66,11 @@ final class MacOpenClawIDDashboardProxy: Sendable {
         }
         guard bound, fcntl(fd, F_SETFD, FD_CLOEXEC) == 0 else {
             close(fd)
-            throw MacNodeOpenClawIDBridgeError.unavailable
+            throw OpenClawIDBridgeError.unavailable
         }
-        let proxy: MacOpenClawIDDashboardProxy
+        let proxy: OpenClawIDDashboardProxy
         do {
-            proxy = try MacOpenClawIDDashboardProxy(
+            proxy = try OpenClawIDDashboardProxy(
                 listener: fd, port: UInt16(bigEndian: address.sin_port), tunnel: tunnel, logicalOrigin: logicalOrigin)
         } catch {
             close(fd)
@@ -85,7 +85,7 @@ final class MacOpenClawIDDashboardProxy: Sendable {
     }
 
     /// Stops accepting, cancels every client and waits for them before closing the listener.
-    func shutdown() async {
+    public func shutdown() async {
         let (accept, clients) = self.state.withLock { state -> (Task<Void, Never>?, [Task<Void, Never>]) in
             guard !state.stopping else { return (nil, []) }
             state.stopping = true
@@ -132,14 +132,14 @@ final class MacOpenClawIDDashboardProxy: Sendable {
     }
 
     private func serve(_ fd: Int32) async {
-        guard let io = try? MacNodeOpenClawIDBridgeIO(handle: FileHandle(fileDescriptor: fd, closeOnDealloc: false))
+        guard let io = try? OpenClawIDBridgeIO(handle: FileHandle(fileDescriptor: fd, closeOnDealloc: false))
         else { return }
-        let reader = MacNodeOpenClawIDBridgeReader(io: io)
+        let reader = OpenClawIDBridgeReader(io: io)
         do {
             try await withTaskCancellationHandler {
                 let bytes = try await reader.through(
-                    Data([13, 10, 13, 10]), limit: MacNodeOpenClawIDBridgeRequest.maximumHeadBytes)
-                let parsed = try MacNodeOpenClawIDBridgeRequest.parse(bytes)
+                    Data([13, 10, 13, 10]), limit: OpenClawIDBridgeRequest.maximumHeadBytes)
+                let parsed = try OpenClawIDBridgeRequest.parse(bytes)
                 guard let request = self.admit(parsed) else {
                     try await io.write(Data(
                         "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".utf8))
@@ -147,13 +147,13 @@ final class MacOpenClawIDDashboardProxy: Sendable {
                 }
                 if request.isWebSocket {
                     // The Control UI's Gateway socket is the root path, never the worker route.
-                    try await MacNodeOpenClawIDBridgeWebSocket.serve(
+                    try await OpenClawIDBridgeWebSocket.serve(
                         request: request, reader: reader, io: io, path: "/")
                     {
                         try await self.session.prepareWebSocket(request: self.upstreamRequest(request))
                     }
                 } else {
-                    try await MacNodeOpenClawIDBridgeHTTP.serve(
+                    try await OpenClawIDBridgeHTTP.serve(
                         request: request, reader: reader, io: io, tunnel: self.tunnel, dashboard: true)
                 }
             } onCancel: { io.interrupt() }
@@ -164,7 +164,7 @@ final class MacOpenClawIDDashboardProxy: Sendable {
 
     /// Admits only the exact loopback Host with this launch's cookie, then presents the request
     /// to the Gateway as coming from the claw's own origin, without the proxy cookie.
-    private func admit(_ request: MacNodeOpenClawIDBridgeRequest) -> MacNodeOpenClawIDBridgeRequest? {
+    private func admit(_ request: OpenClawIDBridgeRequest) -> OpenClawIDBridgeRequest? {
         guard request.values("host") == [self.host] else { return nil }
         // Only the dashboard's own documents may drive the proxy: refuse cross-origin requests
         // and WebSocket upgrades from any other page, even one that is same-site on loopback.
@@ -186,20 +186,20 @@ final class MacOpenClawIDDashboardProxy: Sendable {
         for origin in request.values("origin") {
             headers.append(["origin", origin == "http://\(self.host)" ? logicalOriginText : origin])
         }
-        return MacNodeOpenClawIDBridgeRequest(
+        return OpenClawIDBridgeRequest(
             method: request.method, path: request.path, headers: headers, body: request.body)
     }
 
-    private func upstreamRequest(_ request: MacNodeOpenClawIDBridgeRequest) throws -> URLRequest {
+    private func upstreamRequest(_ request: OpenClawIDBridgeRequest) throws -> URLRequest {
         guard var components = URLComponents(url: self.logicalOrigin, resolvingAgainstBaseURL: false) else {
-            throw MacNodeOpenClawIDBridgeError.malformedRequest
+            throw OpenClawIDBridgeError.malformedRequest
         }
         let parts = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
         components.percentEncodedPath = String(parts[0])
         components.percentEncodedQuery = parts.count > 1 ? String(parts[1]) : nil
-        guard let url = components.url else { throw MacNodeOpenClawIDBridgeError.malformedRequest }
+        guard let url = components.url else { throw OpenClawIDBridgeError.malformedRequest }
         var upstream = URLRequest(url: url)
-        for pair in MacNodeOpenClawIDBridgeRequest.endToEndHeaders(request.headers)
+        for pair in OpenClawIDBridgeRequest.endToEndHeaders(request.headers)
             where !pair[0].hasPrefix("sec-websocket-") && pair[0] != "host"
         {
             upstream.addValue(pair[1], forHTTPHeaderField: pair[0])
@@ -208,8 +208,8 @@ final class MacOpenClawIDDashboardProxy: Sendable {
     }
 
     /// WebKit content rules that strip cookies from every request except this proxy's origin.
-    static func cookieRules(for baseURL: URL) throws -> String {
-        guard let port = baseURL.port else { throw MacNodeOpenClawIDBridgeError.unavailable }
+    public static func cookieRules(for baseURL: URL) throws -> String {
+        guard let port = baseURL.port else { throw OpenClawIDBridgeError.unavailable }
         let rules: [[String: Any]] = [
             ["trigger": ["url-filter": ".*"], "action": ["type": "block-cookies"]],
         ] + ["http", "ws"].map { scheme in
@@ -228,3 +228,4 @@ final class MacOpenClawIDDashboardProxy: Sendable {
         return zip(a, b).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
     }
 }
+#endif

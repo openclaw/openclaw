@@ -124,6 +124,11 @@ extension SettingsProTab {
         self.isReconnectingGateway = true
         self.gatewayActionStatusText = nil
         defer { self.isReconnectingGateway = false }
+        if IOSOpenClawIDFeature.isEnabled, IOSOpenClawIDFeature.records.load() != nil {
+            IOSOpenClawIDRoute.shared.stop()
+            await IOSOpenClawIDFeature.connect(appModel: self.appModel, gatewayController: self.gatewayController)
+            return
+        }
         let result = if let ingressAttention {
             await gatewayController.retryGatewayIngress(ingressAttention)
         } else {
@@ -757,7 +762,7 @@ extension SettingsProTab {
         }
         let trimmedSetup = self.setupStatusText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         // An idle gateway adds nothing unless an action left a notice.
-        let source = GatewayStatusBuilder.source(for: self.appModel.connection.node, appModel: self.appModel)
+        let source = GatewayStatusBuilder.source(for: self.appModel.connection.gateway, appModel: self.appModel)
         let gatewayStatus = source == .phase(.idle) ? nil : source.statusText
         if let friendly = self.friendlyGatewayMessage(from: trimmedSetup) { return friendly }
         if self.isTransientSetupStatus(trimmedSetup), let gatewayStatus { return gatewayStatus }

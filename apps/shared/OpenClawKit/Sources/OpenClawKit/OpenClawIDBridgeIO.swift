@@ -1,8 +1,9 @@
+#if os(iOS) || os(macOS)
 import Darwin
 import Foundation
 
 /// Errors intentionally omit socket paths, HTTP headers and worker credentials.
-enum MacNodeOpenClawIDBridgeError: Error {
+public enum OpenClawIDBridgeError: Error {
     case unavailable
     case malformedRequest
     case limitExceeded
@@ -12,13 +13,13 @@ enum MacNodeOpenClawIDBridgeError: Error {
 /// One accepted descriptor, owned and closed by LocalSocketServer. Blocking Darwin I/O
 /// runs on dedicated dispatch queues, never the Swift cooperative executor. Shutdown
 /// wakes both queues without closing a descriptor that an operation is still using.
-final class MacNodeOpenClawIDBridgeIO: Sendable {
+public final class OpenClawIDBridgeIO: Sendable {
     private let descriptor: Int32
     private let readQueue = DispatchQueue(label: "ai.openclaw.node-bridge.read")
     private let writeQueue = DispatchQueue(label: "ai.openclaw.node-bridge.write")
-    static let blockBytes = 64 * 1024
+    public static let blockBytes = 64 * 1024
 
-    init(handle: FileHandle) throws {
+    public init(handle: FileHandle) throws {
         self.descriptor = handle.fileDescriptor
         var timeout = timeval(tv_sec: 120, tv_usec: 0)
         guard setsockopt(
@@ -33,11 +34,11 @@ final class MacNodeOpenClawIDBridgeIO: Sendable {
                 SO_SNDTIMEO,
                 &timeout,
                 socklen_t(MemoryLayout<timeval>.size)) == 0
-        else { throw MacNodeOpenClawIDBridgeError.unavailable }
+        else { throw OpenClawIDBridgeError.unavailable }
     }
 
     /// Reads one bounded chunk; the caller supplies framing and retains any remainder.
-    func read() async throws -> Data {
+    public func read() async throws -> Data {
         try Task.checkCancellation()
         return try await withCheckedThrowingContinuation { continuation in
             self.readQueue.async {
@@ -48,7 +49,7 @@ final class MacNodeOpenClawIDBridgeIO: Sendable {
                 } while count < 0 && errno ==
                     EINTR
                 guard count > 0 else {
-                    continuation.resume(throwing: MacNodeOpenClawIDBridgeError.closed)
+                    continuation.resume(throwing: OpenClawIDBridgeError.closed)
                     return
                 }
                 continuation.resume(returning: Data(bytes.prefix(count)))
@@ -57,7 +58,7 @@ final class MacNodeOpenClawIDBridgeIO: Sendable {
     }
 
     /// Serializes complete writes and waits for kernel backpressure before returning.
-    func write(_ bytes: Data) async throws {
+    public func write(_ bytes: Data) async throws {
         try Task.checkCancellation()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             self.writeQueue.async {
@@ -76,44 +77,44 @@ final class MacNodeOpenClawIDBridgeIO: Sendable {
                     return true
                 }
                 if succeeded { continuation.resume() } else {
-                    continuation.resume(throwing: MacNodeOpenClawIDBridgeError.closed)
+                    continuation.resume(throwing: OpenClawIDBridgeError.closed)
                 }
             }
         }
     }
 
     /// Must run while LocalSocketServer still owns the descriptor.
-    func interrupt() {
+    public func interrupt() {
         _ = Darwin.shutdown(self.descriptor, SHUT_RDWR)
     }
 }
 
 /// Single-consumer buffered reader shared by HTTP framing and the upgraded WebSocket.
-actor MacNodeOpenClawIDBridgeReader {
-    private let io: MacNodeOpenClawIDBridgeIO
+public actor OpenClawIDBridgeReader {
+    private let io: OpenClawIDBridgeIO
     private var buffer = Data()
 
-    init(io: MacNodeOpenClawIDBridgeIO) {
+    public init(io: OpenClawIDBridgeIO) {
         self.io = io
     }
 
     /// Consumes through a delimiter without accepting an unbounded header or chunk line.
-    func through(_ delimiter: Data, limit: Int) async throws -> Data {
+    public func through(_ delimiter: Data, limit: Int) async throws -> Data {
         while true {
             if let range = self.buffer.range(of: delimiter) {
                 let count = self.buffer.distance(from: self.buffer.startIndex, to: range.upperBound)
-                guard count <= limit else { throw MacNodeOpenClawIDBridgeError.limitExceeded }
+                guard count <= limit else { throw OpenClawIDBridgeError.limitExceeded }
                 let result = Data(self.buffer.prefix(count))
                 self.buffer.removeFirst(count)
                 return result
             }
-            guard self.buffer.count < limit else { throw MacNodeOpenClawIDBridgeError.limitExceeded }
+            guard self.buffer.count < limit else { throw OpenClawIDBridgeError.limitExceeded }
             try await self.buffer.append(self.io.read())
         }
     }
 
     /// Reads at most count bytes; large bodies are never accumulated in this reader.
-    func portion(_ count: Int) async throws -> Data {
+    public func portion(_ count: Int) async throws -> Data {
         guard count > 0 else { return Data() }
         if self.buffer.isEmpty { self.buffer = try await self.io.read() }
         let amount = min(count, self.buffer.count)
@@ -123,7 +124,7 @@ actor MacNodeOpenClawIDBridgeReader {
     }
 
     /// Used only after validating a fixed-width field or bounded WS payload length.
-    func exactly(_ count: Int) async throws -> Data {
+    public func exactly(_ count: Int) async throws -> Data {
         var result = Data()
         while result.count < count {
             try await result.append(self.portion(count - result.count))
@@ -131,3 +132,4 @@ actor MacNodeOpenClawIDBridgeReader {
         return result
     }
 }
+#endif

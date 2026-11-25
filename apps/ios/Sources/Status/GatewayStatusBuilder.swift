@@ -63,11 +63,11 @@ enum GatewayStatusSource: Equatable {
 }
 
 /// Every connection surface derives from the session phases, the retained problem, and preconnect
-/// progress. Gateway surfaces follow the node session; chat and operator surfaces follow the operator.
+/// progress. Gateway surfaces follow `GatewayConnection.gateway`; chat and operator surfaces follow the operator.
 enum GatewayStatusBuilder {
     @MainActor
     static func build(appModel: NodeAppModel) -> GatewayDisplayState {
-        self.source(for: appModel.connection.node, appModel: appModel).displayState
+        self.source(for: appModel.connection.gateway, appModel: appModel).displayState
     }
 
     @MainActor
@@ -112,7 +112,7 @@ enum GatewayStatusBuilder {
         progress: GatewayConnectionProgress?) -> GatewayDisplayState
     {
         self.source(
-            for: connection.node,
+            for: connection.gateway,
             connection: connection,
             lastGatewayProblem: lastGatewayProblem,
             progress: progress,

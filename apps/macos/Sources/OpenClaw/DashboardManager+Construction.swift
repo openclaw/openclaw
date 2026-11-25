@@ -280,7 +280,7 @@ extension DashboardManager {
             // on requests to the proxy's exact HTTP and WebSocket origin only.
             operatorCookieRule = try await WKContentRuleListStore.default().compileContentRuleList(
                 forIdentifier: "openclaw.ocid-operator-cookie-origin",
-                encodedContentRuleList: MacOpenClawIDDashboardProxy.cookieRules(for: operatorDashboard.url))
+                encodedContentRuleList: OpenClawIDDashboardProxy.cookieRules(for: operatorDashboard.url))
             await operatorDataStore.httpCookieStore.setCookie(operatorDashboard.cookie)
         }
         try browserSession?.validate(for: url)

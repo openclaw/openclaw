@@ -42,7 +42,7 @@ enum AuthenticatedControlUI {
         queryItems: [URLQueryItem]) -> URL?
     {
         guard let config,
-              var components = URLComponents(url: config.url, resolvingAgainstBaseURL: false)
+              var components = URLComponents(url: config.webURL, resolvingAgainstBaseURL: false)
         else {
             return nil
         }
@@ -86,7 +86,7 @@ enum AuthenticatedControlUI {
     {
         guard let config, let pageURL else { return nil }
         var payload: [String: Any] = [
-            "gatewayUrl": config.url.absoluteString,
+            "gatewayUrl": config.webURL.absoluteString,
             "nativeConnectAuth": true,
         ]
         if let token = legacyCredentials?["token"]?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
@@ -131,7 +131,7 @@ enum AuthenticatedControlUI {
         usesNativeNavigationChrome: Bool = false) -> String?
     {
         guard let config, let pageURL else { return nil }
-        var payload: [String: Any] = ["gatewayUrl": config.url.absoluteString]
+        var payload: [String: Any] = ["gatewayUrl": config.webURL.absoluteString]
         let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let password = config.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let storedToken = storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -278,6 +278,10 @@ enum AuthenticatedControlUI {
 /// before the Access cookie is installed, so another port cannot receive it.
 enum AuthenticatedControlUIAccessCookieBoundary {
     static func rules(for url: URL) -> String? {
+        // The OpenClaw ID dashboard proxy is plain HTTP on one loopback port.
+        if url.scheme == "http", url.host == "127.0.0.1", url.port != nil {
+            return try? OpenClawIDDashboardProxy.cookieRules(for: url)
+        }
         guard let authority = GatewayTLSAuthority(url: url),
               authority.scheme == "https",
               let host = url.host

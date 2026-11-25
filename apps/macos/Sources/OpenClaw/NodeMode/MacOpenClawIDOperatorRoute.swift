@@ -54,7 +54,7 @@ final class MacOpenClawIDOperatorRoute {
 
     private struct Resources: Sendable {
         let tunnel: OpenClawIDNodeTunnel
-        let proxy: MacOpenClawIDDashboardProxy
+        let proxy: OpenClawIDDashboardProxy
         let credential: MacOpenClawIDOperatorCredential
     }
 
@@ -174,7 +174,7 @@ final class MacOpenClawIDOperatorRoute {
                 },
                 relayURL: relayURL)
             do {
-                let proxy = try await MacOpenClawIDDashboardProxy.start(
+                let proxy = try await OpenClawIDDashboardProxy.start(
                     tunnel: tunnel, logicalOrigin: origin, onUnexpectedStop: onInvalidated)
                 do {
                     try authority.check()

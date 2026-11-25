@@ -34,17 +34,50 @@ enum IOSOpenClawIDFeature {
         return directory.appendingPathComponent("openclaw-id.sqlite")
     }
 
-    /// Sign-in-first setup for this device. It joins without a node: chat and the dashboard only.
+    /// Connects chat, the dashboard and, when this device runs tools, the node to the saved claw.
+    /// Returns false when this device has no OpenClaw ID claw.
     @MainActor
-    static func setupService() -> OpenClawIDAccountSetupService {
-        let configuration = Self.configuration()
-        let signIn = configuration.map { configuration in
-            OpenClawIDSignIn(configuration: configuration) {
-                UIApplication.shared.connectedScenes
-                    .compactMap { ($0 as? UIWindowScene)?.keyWindow }
-                    .first ?? ASPresentationAnchor()
-            }
+    @discardableResult
+    static func connect(appModel: NodeAppModel, gatewayController: GatewayConnectionController) async -> Bool {
+        let options = await gatewayController.makeConnectOptions(deviceAuthGatewayID: nil)
+        do {
+            guard let config = try await IOSOpenClawIDRoute.shared.connectConfig(options: options) else { return false }
+            appModel.applyGatewayConnectConfig(config, forceReconnect: true)
+        } catch {
+            self.logger.error("OpenClaw ID route failed: \(String(reflecting: error), privacy: .public)")
         }
+        return true
+    }
+
+    /// PKCE sign-in presented over this app's key window.
+    @MainActor
+    static func signIn(_ configuration: OpenClawIDConfiguration) -> OpenClawIDSignIn? {
+        OpenClawIDSignIn(configuration: configuration) {
+            UIApplication.shared.connectedScenes
+                .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+                .first ?? ASPresentationAnchor()
+        }
+    }
+
+    /// What this device offers its claw as a node: the same surface its node session advertises.
+    @MainActor
+    static func nodeDescription(gatewayController: GatewayConnectionController) async throws
+        -> OpenClawIDNodeEnrollmentDescription
+    {
+        let options = await gatewayController.makeConnectOptions(deviceAuthGatewayID: nil)
+        return try OpenClawIDNodeEnrollmentDescription(
+            displayName: String((options.clientDisplayName ?? UIDevice.current.name).prefix(64)),
+            platform: "ios",
+            commands: options.commands,
+            caps: options.caps)
+    }
+
+    /// Sign-in-first setup for this device. An owner device also joins as a node, so the claw can use
+    /// it for tools; a member device has chat and the dashboard only.
+    @MainActor
+    static func setupService(gatewayController: GatewayConnectionController) -> OpenClawIDAccountSetupService {
+        let configuration = Self.configuration()
+        let signIn = configuration.flatMap(Self.signIn)
         let records = Self.records
         return OpenClawIDAccountSetupService(
             configuration: configuration,
@@ -56,7 +89,7 @@ enum IOSOpenClawIDFeature {
                     return try await signIn.signIn(freshLogin: freshLogin)
                 },
                 cancelSignIn: { signIn?.cancel() },
-                describeNode: nil,
+                describeNode: { try await Self.nodeDescription(gatewayController: gatewayController) },
                 deviceName: { UIDevice.current.name },
                 readKitFile: { nil },
                 readInviteLink: { UIPasteboard.general.string },

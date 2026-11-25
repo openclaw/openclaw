@@ -110,12 +110,12 @@ struct MacNodeOpenClawIDBridgeTests {
             "Transfer-Encoding: gzip, chunked\r\n", " folded: value\r\n",
             "X-Header: bad\nvalue\r\n", "Trailer: authorization\r\n", "Expect: other\r\n",
         ] {
-            #expect(throws: (any Error).self) { try MacNodeOpenClawIDBridgeRequest.parse(self.request(extra)) }
+            #expect(throws: (any Error).self) { try OpenClawIDBridgeRequest.parse(self.request(extra)) }
         }
         #expect(throws: (any Error).self) {
-            try MacNodeOpenClawIDBridgeRequest.parse(Data(repeating: 65, count: 65537))
+            try OpenClawIDBridgeRequest.parse(Data(repeating: 65, count: 65537))
         }
-        let parsed = try MacNodeOpenClawIDBridgeRequest.parse(self.request(
+        let parsed = try OpenClawIDBridgeRequest.parse(self.request(
             "Transfer-Encoding: chunked\r\nConnection: keep-alive, X-Hop\r\n" +
                 "X-Hop: removed\r\nAuthorization: Bearer synthetic\r\n"))
         #expect(parsed.body == .chunked)
@@ -129,12 +129,12 @@ struct MacNodeOpenClawIDBridgeTests {
             "/__openclaw__/worker-transfer/v1/environments/test?part=1",
             "/__openclaw__/worker-bootstrap/artifacts/test",
         ] {
-            let request = try MacNodeOpenClawIDBridgeRequest.parse(
+            let request = try OpenClawIDBridgeRequest.parse(
                 Data("GET \(path) HTTP/1.1\r\nHost: localhost\r\n\r\n".utf8))
             #expect(request.isWorkerHTTP)
         }
         for path in ["/__openclaw__/worker-bootstrap-other", "/__openclaw__/worker-transfer/v10", "/"] {
-            let request = try MacNodeOpenClawIDBridgeRequest.parse(
+            let request = try OpenClawIDBridgeRequest.parse(
                 Data("GET \(path) HTTP/1.1\r\nHost: localhost\r\n\r\n".utf8))
             #expect(!request.isWorkerHTTP)
         }
@@ -142,12 +142,12 @@ struct MacNodeOpenClawIDBridgeTests {
 
     @Test func `response cannot inject headers or reuse remote framing`() throws {
         #expect(throws: (any Error).self) {
-            try MacNodeOpenClawIDBridgeHTTP.responseHead(
+            try OpenClawIDBridgeHTTP.responseHead(
                 status: 200,
                 headers: [["x-test", "ok\r\nInjected: bad"]],
                 method: "GET")
         }
-        let head = try MacNodeOpenClawIDBridgeHTTP.responseHead(
+        let head = try OpenClawIDBridgeHTTP.responseHead(
             status: 200,
             headers: [["Content-Length", "500"], ["Connection", "X-Hop"], ["X-Hop", "removed"]],
             method: "GET")
@@ -162,17 +162,17 @@ struct MacNodeOpenClawIDBridgeTests {
             [["Content-Length", "999999999999999999999999"]],
         ] {
             #expect(throws: (any Error).self) {
-                try MacNodeOpenClawIDBridgeHTTP.responseHead(status: 200, headers: headers, method: "GET")
+                try OpenClawIDBridgeHTTP.responseHead(status: 200, headers: headers, method: "GET")
             }
         }
         for (status, method) in [(200, "HEAD"), (304, "GET")] {
-            let response = try MacNodeOpenClawIDBridgeHTTP.responseHead(
+            let response = try OpenClawIDBridgeHTTP.responseHead(
                 status: status, headers: [["Content-Length", "500"]], method: method)
             #expect(response.noBody)
             #expect(response.length == 500)
             #expect(try #require(String(bytes: response.bytes, encoding: .utf8)).contains("Transfer-Encoding") == false)
         }
-        let empty = try MacNodeOpenClawIDBridgeHTTP.responseHead(
+        let empty = try OpenClawIDBridgeHTTP.responseHead(
             status: 204, headers: [["Content-Length", "500"]], method: "GET")
         #expect(empty.noBody)
         #expect(empty.length == nil)
@@ -192,8 +192,8 @@ struct MacNodeOpenClawIDBridgeTests {
         do {
             let handle = try self.connect(bridge.socketPath)
             defer { try? handle.close() }
-            let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
-            let reader = MacNodeOpenClawIDBridgeReader(io: io)
+            let io = try OpenClawIDBridgeIO(handle: handle)
+            let reader = OpenClawIDBridgeReader(io: io)
             let range = status == 206 ? "Range: bytes=10-\r\n" : ""
             try await io
                 .write(
@@ -236,10 +236,10 @@ struct MacNodeOpenClawIDBridgeTests {
             #expect(bridge.gatewayURL == "ws+unix:\(bridge.socketPath):/")
             let handle = try self.connect(bridge.socketPath)
             defer { try? handle.close() }
-            let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
+            let io = try OpenClawIDBridgeIO(handle: handle)
             try await io
                 .write(Data("GET /__openclaw__/worker HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\r\n".utf8))
-            let response = try await MacNodeOpenClawIDBridgeReader(io: io).through(Data([13, 10, 13, 10]), limit: 1024)
+            let response = try await OpenClawIDBridgeReader(io: io).through(Data([13, 10, 13, 10]), limit: 1024)
             #expect(try #require(String(bytes: response, encoding: .utf8)).hasPrefix("HTTP/1.1 400 "))
             #expect(await stream.snapshot().0.isEmpty)
         } catch {
@@ -267,7 +267,7 @@ struct MacNodeOpenClawIDBridgeTests {
         do {
             let handle = try self.connect(bridge.socketPath)
             defer { try? handle.close() }
-            let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
+            let io = try OpenClawIDBridgeIO(handle: handle)
             try await io
                 .write(Data("GET /__openclaw__/worker HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\r\n".utf8))
             var iterator = entered.stream.makeAsyncIterator()
@@ -304,10 +304,10 @@ struct MacNodeOpenClawIDBridgeTests {
             for _ in 0..<65 {
                 let handle = try self.connect(bridge.socketPath)
                 handles.append(handle)
-                let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
+                let io = try OpenClawIDBridgeIO(handle: handle)
                 try await io.write(Data(("GET /__openclaw__/worker HTTP/1.1\r\n" +
                         "Host: localhost\r\nUpgrade: websocket\r\n\r\n").utf8))
-                #expect(try await MacNodeOpenClawIDBridgeReader(io: io).exactly(1) == Data([1]))
+                #expect(try await OpenClawIDBridgeReader(io: io).exactly(1) == Data([1]))
                 _ = await admissions.next()
             }
         } catch {
@@ -324,7 +324,7 @@ struct MacNodeOpenClawIDBridgeTests {
     @Test func `rejects BOM prefixed chunk size before forwarding body`() async throws {
         var descriptors: [Int32] = [0, 0]
         guard socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors) == 0 else {
-            throw MacNodeOpenClawIDBridgeError.unavailable
+            throw OpenClawIDBridgeError.unavailable
         }
         let server = FileHandle(fileDescriptor: descriptors[0], closeOnDealloc: true)
         let client = FileHandle(fileDescriptor: descriptors[1], closeOnDealloc: true)
@@ -332,18 +332,18 @@ struct MacNodeOpenClawIDBridgeTests {
             try? server.close()
             try? client.close()
         }
-        let io = try MacNodeOpenClawIDBridgeIO(handle: server)
-        let sender = try MacNodeOpenClawIDBridgeIO(handle: client)
-        let request = try MacNodeOpenClawIDBridgeRequest.parse(self.request("Transfer-Encoding: chunked\r\n"))
+        let io = try OpenClawIDBridgeIO(handle: server)
+        let sender = try OpenClawIDBridgeIO(handle: client)
+        let request = try OpenClawIDBridgeRequest.parse(self.request("Transfer-Encoding: chunked\r\n"))
         let head = try OpenClawIDNodeTunnelCodec
             .frame(Data("{\"status\":200,\"headers\":[[\"Content-Length\",\"0\"]]}".utf8))
         let stream = BridgeTestStream(response: head)
         let tunnel = self.tunnel(stream)
         try await sender.write(Data([0xEF, 0xBB, 0xBF]) + Data("1\r\nx\r\n0\r\n\r\n".utf8))
-        await #expect(throws: MacNodeOpenClawIDBridgeError.self) {
-            try await MacNodeOpenClawIDBridgeHTTP.serve(
+        await #expect(throws: OpenClawIDBridgeError.self) {
+            try await OpenClawIDBridgeHTTP.serve(
                 request: request,
-                reader: MacNodeOpenClawIDBridgeReader(io: io),
+                reader: OpenClawIDBridgeReader(io: io),
                 io: io,
                 tunnel: tunnel)
         }
@@ -372,14 +372,14 @@ struct MacNodeOpenClawIDBridgeTests {
         do {
             let handle = try self.connect(bridge.socketPath)
             defer { try? handle.close() }
-            let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
+            let io = try OpenClawIDBridgeIO(handle: handle)
             let body = Data(repeating: 120, count: 2 * 1024 * 1024 + 31)
             try await io.write(self.request("Transfer-Encoding: chunked\r\n") +
                 Data("\(String(body.count, radix: 16))\r\n".utf8) + body + Data("\r\n0\r\n\r\n".utf8))
-            let actual = try await MacNodeOpenClawIDBridgeReader(io: io).exactly(expected.count)
+            let actual = try await OpenClawIDBridgeReader(io: io).exactly(expected.count)
             #expect(actual == expected)
             let (written, sizes) = await stream.snapshot()
-            #expect(sizes.allSatisfy { $0 <= MacNodeOpenClawIDBridgeIO.blockBytes + 4 })
+            #expect(sizes.allSatisfy { $0 <= OpenClawIDBridgeIO.blockBytes + 4 })
             var frames = written
             var payload = Data()
             var first = true
@@ -416,8 +416,8 @@ struct MacNodeOpenClawIDBridgeTests {
         do {
             let handle = try self.connect(bridge.socketPath)
             defer { try? handle.close() }
-            let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
-            let reader = MacNodeOpenClawIDBridgeReader(io: io)
+            let io = try OpenClawIDBridgeIO(handle: handle)
+            let reader = OpenClawIDBridgeReader(io: io)
             try await io.write(Data(("GET /__openclaw__/worker HTTP/1.1\r\nHost: localhost\r\n" +
                     "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n" +
                     "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").utf8))
@@ -457,7 +457,7 @@ struct MacNodeOpenClawIDBridgeTests {
 
     private func connect(_ path: String) throws -> FileHandle {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw MacNodeOpenClawIDBridgeError.unavailable }
+        guard fd >= 0 else { throw OpenClawIDBridgeError.unavailable }
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
@@ -472,7 +472,7 @@ struct MacNodeOpenClawIDBridgeTests {
             }
         }
         guard result == 0 else { Darwin.close(fd)
-            throw MacNodeOpenClawIDBridgeError.unavailable
+            throw OpenClawIDBridgeError.unavailable
         }
         var enabled: Int32 = 1
         _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))

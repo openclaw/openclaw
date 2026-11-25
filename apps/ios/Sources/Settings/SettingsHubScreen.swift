@@ -215,7 +215,7 @@ struct EmbeddedDashboardContent: View {
                         }
                     } else {
                         self.dashboardWebView(
-                            accessCookie: nil,
+                            accessCookie: self.config?.openClawIDDashboard?.cookie,
                             authorization: nil,
                             webContentIdentity: webContentIdentity)
                     }

@@ -21,9 +21,22 @@ struct GatewayConnectConfig: Sendable {
     /// Control UI mount advertised by the connected operator session's hello-ok.
     /// Learned after connect, so it stays out of the connection and WebView identity inputs.
     var controlUiBasePath: String?
-    /// The operator session through this device's OpenClaw ID tunnel; the node session does not
-    /// run on that route.
+    /// Sessions through this device's OpenClaw ID tunnels: the operator over the owner or member
+    /// key, and the node over W_node when this device runs tools. Tunnel admission is their only
+    /// authentication.
     var openClawIDOperatorSession: WebSocketSessionBox?
+    var openClawIDNodeSession: WebSocketSessionBox?
+    /// The loopback proxy the Control UI loads in place of the claw, with its cookie.
+    var openClawIDDashboard: (url: URL, cookie: HTTPCookie)?
+
+    /// Where web content reaches this Gateway: the OpenClaw ID dashboard proxy, else the Gateway.
+    var webURL: URL {
+        guard let dashboard = self.openClawIDDashboard,
+              var components = URLComponents(url: dashboard.url, resolvingAgainstBaseURL: false)
+        else { return self.url }
+        components.scheme = "ws"
+        return components.url ?? self.url
+    }
 
     /// Stable, non-empty route identifier used for UI/event ownership.
     /// If the caller doesn't provide a stableID, fall back to URL identity.
@@ -35,6 +48,7 @@ struct GatewayConnectConfig: Sendable {
         let ingressRevision: UInt64?
         let ingressRegistrationID: UUID?
         let url: URL
+        let webURL: URL
         let stableID: ExactOpaqueIdentifierKey
         let tlsRequired: Bool?
         let tlsExpectedFingerprint: String?
@@ -56,6 +70,7 @@ struct GatewayConnectConfig: Sendable {
             ingressRevision: self.ingressAuthorization?.revision,
             ingressRegistrationID: self.ingressAuthorization?.registrationID,
             url: self.url,
+            webURL: self.webURL,
             stableID: ExactOpaqueIdentifierKey(self.effectiveStableID),
             tlsRequired: self.tls?.required,
             tlsExpectedFingerprint: self.tls?.expectedFingerprint,

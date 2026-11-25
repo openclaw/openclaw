@@ -6,7 +6,7 @@ import Testing
 
 private struct BridgeWebSocketUnusedEndpoint: OpenClawIDNodeEndpoint {
     func connect(serverKey _: String, relayURL _: URL, alpn _: Data) async throws -> any OpenClawIDNodeConnection {
-        throw MacNodeOpenClawIDBridgeError.unavailable
+        throw OpenClawIDBridgeError.unavailable
     }
 
     func relayStatus() async -> [OpenClawIDNodeRelayStatus] {
@@ -49,14 +49,14 @@ private final class BridgeWebSocketEcho: WebSocketTasking, Sendable {
     }
 }
 
-struct MacNodeOpenClawIDBridgeWebSocketTests {
-    private typealias Codec = MacNodeOpenClawIDBridgeWebSocketCodec
+struct OpenClawIDBridgeWebSocketTests {
+    private typealias Codec = OpenClawIDBridgeWebSocketCodec
     private let upgrade = Data(("GET /__openclaw__/worker HTTP/1.1\r\nHost: localhost\r\n" +
             "Connection: keep-alive, Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n" +
             "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n").utf8)
 
     @Test func `rfc upgrade vector and invalid handshakes`() throws {
-        let request = try MacNodeOpenClawIDBridgeRequest.parse(self.upgrade)
+        let request = try OpenClawIDBridgeRequest.parse(self.upgrade)
         let response = try #require(String(bytes: Codec.upgrade(request), encoding: .utf8))
         #expect(response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"))
         for (old, replacement) in [
@@ -69,7 +69,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
                 of: old,
                 with: replacement)
             #expect(throws: (any Error).self) {
-                try Codec.upgrade(MacNodeOpenClawIDBridgeRequest.parse(Data(modified.utf8)))
+                try Codec.upgrade(OpenClawIDBridgeRequest.parse(Data(modified.utf8)))
             }
         }
     }
@@ -78,12 +78,12 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
         // Regression: the dashboard's Control UI socket targets "/", which the worker-only
         // upgrade refused, so the dashboard never reached the Gateway.
         let text = try #require(String(bytes: self.upgrade, encoding: .utf8))
-        let root = try MacNodeOpenClawIDBridgeRequest.parse(Data(
+        let root = try OpenClawIDBridgeRequest.parse(Data(
             text.replacingOccurrences(of: "/__openclaw__/worker", with: "/").utf8))
         let response = try #require(String(bytes: Codec.upgrade(root, path: "/"), encoding: .utf8))
         #expect(response.hasPrefix("HTTP/1.1 101 "))
         #expect(throws: (any Error).self) { try Codec.upgrade(root) }
-        let worker = try MacNodeOpenClawIDBridgeRequest.parse(self.upgrade)
+        let worker = try OpenClawIDBridgeRequest.parse(self.upgrade)
         #expect(throws: (any Error).self) { try Codec.upgrade(worker, path: "/") }
     }
 
@@ -160,8 +160,8 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
         do {
             let handle = try self.connect(bridge.socketPath)
             defer { try? handle.close() }
-            let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
-            let reader = MacNodeOpenClawIDBridgeReader(io: io)
+            let io = try OpenClawIDBridgeIO(handle: handle)
+            let reader = OpenClawIDBridgeReader(io: io)
             try await io.write(self.upgrade)
             var iterator = entered.stream.makeAsyncIterator()
             _ = await iterator.next()
@@ -199,8 +199,8 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
             ] {
                 let handle = try self.connect(bridge.socketPath)
                 defer { try? handle.close() }
-                let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
-                let reader = MacNodeOpenClawIDBridgeReader(io: io)
+                let io = try OpenClawIDBridgeIO(handle: handle)
+                let reader = OpenClawIDBridgeReader(io: io)
                 try await io.write(self.upgrade)
                 _ = try await reader.through(Data([13, 10, 13, 10]), limit: 1024)
                 try await io.write(frame)
@@ -224,8 +224,8 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
             do {
                 let handle = try self.connect(bridge.socketPath)
                 defer { try? handle.close() }
-                let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
-                let reader = MacNodeOpenClawIDBridgeReader(io: io)
+                let io = try OpenClawIDBridgeIO(handle: handle)
+                let reader = OpenClawIDBridgeReader(io: io)
                 try await io.write(self.upgrade)
                 _ = try await reader.through(Data([13, 10, 13, 10]), limit: 1024)
                 echo.messages.continuation.finish(throwing: OpenClawIDNodeTransportError.webSocketClosed(code, reason))
@@ -256,15 +256,15 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
             do {
                 let handle = try self.connect(bridge.socketPath)
                 defer { try? handle.close() }
-                let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
-                let reader = MacNodeOpenClawIDBridgeReader(io: io)
+                let io = try OpenClawIDBridgeIO(handle: handle)
+                let reader = OpenClawIDBridgeReader(io: io)
                 try await io.write(self.upgrade)
                 _ = try await reader.through(Data([13, 10, 13, 10]), limit: 1024)
                 echo.messages.continuation.finish(throwing: failure)
                 do {
                     _ = try await reader.exactly(1)
                     Issue.record("Malformed remote close or transport failure emitted a wire frame")
-                } catch MacNodeOpenClawIDBridgeError.closed {
+                } catch OpenClawIDBridgeError.closed {
                     // Expected abnormal closure: no invented close code or reason.
                 }
             } catch {
@@ -278,13 +278,13 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
     }
 
     @Test func `upstream failure never acknowledges local upgrade`() async throws {
-        let (bridge, tunnel) = try await self.bridge { throw MacNodeOpenClawIDBridgeError.unavailable }
+        let (bridge, tunnel) = try await self.bridge { throw OpenClawIDBridgeError.unavailable }
         do {
             let handle = try self.connect(bridge.socketPath)
             defer { try? handle.close() }
-            let io = try MacNodeOpenClawIDBridgeIO(handle: handle)
+            let io = try OpenClawIDBridgeIO(handle: handle)
             try await io.write(self.upgrade)
-            let response = try await MacNodeOpenClawIDBridgeReader(io: io).through(Data([13, 10, 13, 10]), limit: 1024)
+            let response = try await OpenClawIDBridgeReader(io: io).through(Data([13, 10, 13, 10]), limit: 1024)
             #expect(try #require(String(bytes: response, encoding: .utf8)).hasPrefix("HTTP/1.1 502 "))
         } catch {
             await bridge.shutdown()
@@ -301,7 +301,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
             Data(bytes.enumerated().map { $0.element ^ key[$0.offset % 4] })
     }
 
-    private func bridge(_ prepare: @escaping MacNodeOpenClawIDBridgeWebSocket.Prepare) async throws
+    private func bridge(_ prepare: @escaping OpenClawIDBridgeWebSocket.Prepare) async throws
         -> (MacNodeOpenClawIDBridge, OpenClawIDNodeTunnel)
     {
         let tunnel = OpenClawIDNodeTunnel(
@@ -312,7 +312,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
             tunnel: tunnel,
             logicalOrigin: URL(string: "wss://claw.invalid")!,
             workerWebSocket: { request, reader, io in
-                try await MacNodeOpenClawIDBridgeWebSocket.serve(
+                try await OpenClawIDBridgeWebSocket.serve(
                     request: request,
                     reader: reader,
                     io: io,
@@ -323,7 +323,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
 
     private func connect(_ path: String) throws -> FileHandle {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw MacNodeOpenClawIDBridgeError.unavailable }
+        guard fd >= 0 else { throw OpenClawIDBridgeError.unavailable }
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
@@ -338,7 +338,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
             }
         }
         guard result == 0 else { Darwin.close(fd)
-            throw MacNodeOpenClawIDBridgeError.unavailable
+            throw OpenClawIDBridgeError.unavailable
         }
         var enabled: Int32 = 1
         _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, socklen_t(MemoryLayout<Int32>.size))

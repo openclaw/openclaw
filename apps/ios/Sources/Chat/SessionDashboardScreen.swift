@@ -22,8 +22,8 @@ struct SessionDashboardScreen: View {
         let url = Self.dashboardURL(config: config, sessionKey: self.sessionKey, agentId: self.agentId)
         let accessCookieAdmission = AuthenticatedControlUI.dashboardAccessCookieAdmission(
             url: url,
-            requiresCookie: authorization != nil,
-            cookieForURL: { authorization?.dashboardCookie($0) })
+            requiresCookie: authorization != nil || config?.openClawIDDashboard != nil,
+            cookieForURL: { authorization?.dashboardCookie($0) ?? config?.openClawIDDashboard?.cookie })
         let authScript: String?
         let authScriptProvider: (@MainActor () async -> String?)?
         if authorization != nil {

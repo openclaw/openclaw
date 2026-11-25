@@ -142,6 +142,9 @@ extension SettingsProTab {
     var gatewayDestination: some View {
         Group {
             self.gatewayStatusCard
+            if IOSOpenClawIDFeature.isEnabled {
+                IOSOpenClawIDSettingsSection()
+            }
 
             Section {
                 Button {

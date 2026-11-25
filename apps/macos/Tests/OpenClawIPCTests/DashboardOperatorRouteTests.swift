@@ -26,7 +26,7 @@ struct DashboardOperatorRouteTests {
         for port in [52811, 52812] {
             let proxyURL = try #require(URL(string: "http://127.0.0.1:\(port)/"))
             let cookie = try #require(HTTPCookie(properties: [
-                .name: MacOpenClawIDDashboardProxy.cookieName,
+                .name: OpenClawIDDashboardProxy.cookieName,
                 .value: "synthetic-\(port)",
                 .domain: "127.0.0.1",
                 .path: "/",

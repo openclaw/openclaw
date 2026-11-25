@@ -1,10 +1,10 @@
+#if os(iOS) || os(macOS)
 import Foundation
-import OpenClawKit
 import Synchronization
 
 /// Cancellation can arrive from either pump or route shutdown. Preserve the first
 /// close's code/reason rather than racing multiple asynchronous adapter cancellations.
-private final class MacNodeOpenClawIDBridgeWebSocketLifetime: Sendable {
+private final class OpenClawIDBridgeWebSocketLifetime: Sendable {
     let upstream: WebSocketTaskBox
     private let canceled = Mutex(false)
 
@@ -24,18 +24,18 @@ private final class MacNodeOpenClawIDBridgeWebSocketLifetime: Sendable {
 
 /// Serializes whole RFC frames from the two pumps. At most one pending write per
 /// pump is retained, and no data/pong can follow an admitted close frame.
-private actor MacNodeOpenClawIDBridgeWebSocketWriter {
-    private let io: MacNodeOpenClawIDBridgeIO
+private actor OpenClawIDBridgeWebSocketWriter {
+    private let io: OpenClawIDBridgeIO
     private var tail: Task<Void, Error>?
     private var closing = false
 
-    init(io: MacNodeOpenClawIDBridgeIO) {
+    init(io: OpenClawIDBridgeIO) {
         self.io = io
     }
 
     func send(opcode: UInt8, payload: Data) async throws {
         guard !self.closing else { return }
-        let bytes = try MacNodeOpenClawIDBridgeWebSocketCodec.frame(opcode: opcode, payload: payload)
+        let bytes = try OpenClawIDBridgeWebSocketCodec.frame(opcode: opcode, payload: payload)
         if opcode == 8 { self.closing = true }
         let previous = self.tail
         let io = self.io
@@ -50,16 +50,16 @@ private actor MacNodeOpenClawIDBridgeWebSocketWriter {
 }
 
 /// Bounded RFC 6455 server for the private worker socket, not a general Gateway proxy.
-enum MacNodeOpenClawIDBridgeWebSocket {
-    typealias Prepare = @Sendable () async throws -> WebSocketTaskBox
-    private typealias Codec = MacNodeOpenClawIDBridgeWebSocketCodec
+public enum OpenClawIDBridgeWebSocket {
+    public typealias Prepare = @Sendable () async throws -> WebSocketTaskBox
+    private typealias Codec = OpenClawIDBridgeWebSocketCodec
 
     /// The upstream owner must return only after validating tunnel HTTP 101. Never
     /// acknowledge a local upgrade while upstream admission is unknown or rejected.
-    static func serve(
-        request: MacNodeOpenClawIDBridgeRequest,
-        reader: MacNodeOpenClawIDBridgeReader,
-        io: MacNodeOpenClawIDBridgeIO,
+    public static func serve(
+        request: OpenClawIDBridgeRequest,
+        reader: OpenClawIDBridgeReader,
+        io: OpenClawIDBridgeIO,
         path: String = "/__openclaw__/worker",
         prepare: Prepare) async throws
     {
@@ -75,12 +75,12 @@ enum MacNodeOpenClawIDBridgeWebSocket {
         }
         // prepare can complete concurrently with route retirement; the task belongs
         // to this handler now, and must be canceled even before the first local write.
-        let lifetime = MacNodeOpenClawIDBridgeWebSocketLifetime(upstream: upstream)
+        let lifetime = OpenClawIDBridgeWebSocketLifetime(upstream: upstream)
         defer { lifetime.cancel() }
         try await withTaskCancellationHandler {
             try Task.checkCancellation()
             try await io.write(response)
-            let writer = MacNodeOpenClawIDBridgeWebSocketWriter(io: io)
+            let writer = OpenClawIDBridgeWebSocketWriter(io: io)
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask {
                     try await Self.fromWorker(reader: reader, writer: writer, lifetime: lifetime)
@@ -103,15 +103,15 @@ enum MacNodeOpenClawIDBridgeWebSocket {
         }
     }
 
-    private static func reject(_ status: Int, io: MacNodeOpenClawIDBridgeIO) async throws {
+    private static func reject(_ status: Int, io: OpenClawIDBridgeIO) async throws {
         try await io
             .write(Data("HTTP/1.1 \(status) Upgrade Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".utf8))
     }
 
     private static func fromWorker(
-        reader: MacNodeOpenClawIDBridgeReader,
-        writer: MacNodeOpenClawIDBridgeWebSocketWriter,
-        lifetime: MacNodeOpenClawIDBridgeWebSocketLifetime) async throws
+        reader: OpenClawIDBridgeReader,
+        writer: OpenClawIDBridgeWebSocketWriter,
+        lifetime: OpenClawIDBridgeWebSocketLifetime) async throws
     {
         let upstream = lifetime.upstream
         var messages = Codec.Messages()
@@ -142,7 +142,7 @@ enum MacNodeOpenClawIDBridgeWebSocket {
                     return
                 }
             }
-        } catch let error as MacNodeOpenClawIDBridgeWebSocketError {
+        } catch let error as OpenClawIDBridgeWebSocketError {
             try? await writer.send(opcode: 8, payload: Data([
                 UInt8(truncatingIfNeeded: error.code >> 8), UInt8(truncatingIfNeeded: error.code),
             ]))
@@ -150,7 +150,7 @@ enum MacNodeOpenClawIDBridgeWebSocket {
         }
     }
 
-    private static func readHeader(_ reader: MacNodeOpenClawIDBridgeReader) async throws -> Codec.Header {
+    private static func readHeader(_ reader: OpenClawIDBridgeReader) async throws -> Codec.Header {
         var bytes = try await reader.exactly(2)
         let tag = bytes[bytes.startIndex + 1] & 0x7F
         if tag == 126 { try await bytes.append(reader.exactly(2)) }
@@ -159,14 +159,14 @@ enum MacNodeOpenClawIDBridgeWebSocket {
     }
 
     private static func toWorker(
-        writer: MacNodeOpenClawIDBridgeWebSocketWriter, upstream: WebSocketTaskBox) async throws
+        writer: OpenClawIDBridgeWebSocketWriter, upstream: WebSocketTaskBox) async throws
     {
         do {
             while true {
                 switch try await upstream.receive() {
                 case let .string(text): try await writer.send(opcode: 1, payload: Data(text.utf8))
                 case let .data(bytes): try await writer.send(opcode: 2, payload: bytes)
-                @unknown default: throw MacNodeOpenClawIDBridgeWebSocketError.framing
+                @unknown default: throw OpenClawIDBridgeWebSocketError.framing
                 }
             }
         } catch let OpenClawIDNodeTransportError.webSocketClosed(code, reason) {
@@ -174,14 +174,15 @@ enum MacNodeOpenClawIDBridgeWebSocket {
             // real remote close, but never synthesize one for other transport errors.
             var payload = Data()
             if let code {
-                guard reason.utf8.count <= 123 else { throw MacNodeOpenClawIDBridgeWebSocketError.tooLarge }
+                guard reason.utf8.count <= 123 else { throw OpenClawIDBridgeWebSocketError.tooLarge }
                 payload.append(contentsOf: [UInt8(truncatingIfNeeded: code >> 8), UInt8(truncatingIfNeeded: code)])
                 payload.append(contentsOf: reason.utf8)
             } else if !reason.isEmpty {
-                throw MacNodeOpenClawIDBridgeWebSocketError.framing
+                throw OpenClawIDBridgeWebSocketError.framing
             }
             // The writer validates RFC close codes and payload size before enqueueing.
             try await writer.send(opcode: 8, payload: payload)
         }
     }
 }
+#endif
