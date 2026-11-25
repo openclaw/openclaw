@@ -1390,12 +1390,21 @@ Release provenance for ${hash} -> #3`
         ),
       ).toThrow("invalid release provenance marker");
     }
-    expect(collectReleaseProvenanceOverrides(commits, [`${releaseCommit} -> #1, #2`])).toEqual(
-      new Map([
-        [releaseCommit, [1, 2]],
-        [otherCommit, [3]],
-      ]),
-    );
+    expect(() =>
+      collectReleaseProvenanceOverrides(commits, [`${releaseCommit} -> #1, #2, #4`]),
+    ).toThrow("invalid release provenance marker");
+    for (const pullRequests of [
+      [1, 2],
+      [2, 1],
+    ]) {
+      const mapping = `${releaseCommit} -> ${pullRequests.map((number) => `#${number}`).join(", ")}`;
+      expect(collectReleaseProvenanceOverrides(commits, [mapping])).toEqual(
+        new Map([
+          [releaseCommit, pullRequests],
+          [otherCommit, [3]],
+        ]),
+      );
+    }
   });
 
   it("requires main provenance PRs to be merged into current main", () => {

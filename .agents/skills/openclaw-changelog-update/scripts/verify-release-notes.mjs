@@ -1091,11 +1091,18 @@ export function collectReleaseProvenanceOverrides(activeCommits, releaseProvenan
       // only when the containing commit's explicit mapping preserves every PR.
       if (
         explicitlyMappedCommits.has(commit.hash) &&
-        CONSOLIDATED_RELEASE_PROVENANCE_PATTERN.test(line) &&
-        [...new Set([...line.matchAll(/#(\d+)/g)].map((match) => Number(match[1])))].join(",") ===
-          overrides.get(commit.hash).join(",")
+        CONSOLIDATED_RELEASE_PROVENANCE_PATTERN.test(line)
       ) {
-        continue;
+        const recordedPullRequests = new Set(
+          [...line.matchAll(/#(\d+)/g)].map((match) => Number(match[1])),
+        );
+        const mappedPullRequests = new Set(overrides.get(commit.hash));
+        if (
+          recordedPullRequests.size === mappedPullRequests.size &&
+          [...recordedPullRequests].every((number) => mappedPullRequests.has(number))
+        ) {
+          continue;
+        }
       }
       addMarker(releaseProvenanceMarker(line));
     }
