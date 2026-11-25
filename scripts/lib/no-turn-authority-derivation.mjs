@@ -48,22 +48,17 @@ const OWNER_FIELDS = new Set(["senderIsOwner", "requesterOwner"]);
 export const OWNER_PRODUCER_FILES = new Set([
   // Principals admission does not see yet: they match their own credential or owner config.
   "extensions/discord/src/monitor/native-command-auth.ts", // native slash command, no turn yet
-  "extensions/discord/src/voice/speaker-context.ts", // voice speaker, `ownerAllowFrom`
-  "extensions/facetime/src/call-events.ts", // allowlisted caller claim, host trust-gated
+  "extensions/discord/src/voice/speaker-context.ts", // realtime voice speaker, `ownerAllowFrom`
+  // FaceTime callers match the plugin's own `ownerHandles`; moving them into
+  // `commands.ownerAllowFrom` is a config migration that waits on an owner decision.
+  "extensions/facetime/src/call-events.ts",
   "extensions/facetime/src/talk-consult-controller.ts", // same caller claim
-  "src/plugins/registry-runtime.ts", // host trust gate for a plugin's ingress owner claim
-  "src/worker/embedded-agent.runtime.ts", // remote worker: its run's grant is not on the protocol
-  // Requests, not turns: owner = the connection's admin scope (OA3 request grant).
-  "src/gateway/openai-compatible-http.ts",
-  "src/gateway/server-methods/conversations.ts",
-  "src/gateway/server-methods/tools-invoke.ts",
-  "src/gateway/session-resource-tool-policy.ts",
-  "src/gateway/talk/client-tool-authority.ts",
   // Channel command owner: the `commands.ownerAllowFrom` config match. Asserted-identity owners
   // and pre-turn senders have no grant yet, so this fact still sets the bit.
   "src/auto-reply/command-auth.ts",
   "src/auto-reply/reply/reply-source-admission.ts",
   "src/gateway/agent-turn/agent-run-user-turn.ts",
+  "src/gateway/talk/client-tool-authority.ts", // Talk caller: admin scope + `ownerAllowFrom` match
   // Scheduled and requester-owner continuations (cron creator authority).
   "src/agents/openclaw-plugin-tools.ts",
   "src/agents/openclaw-tools.ts",
@@ -107,7 +102,6 @@ const PROVENANCE_READS = new Set([
 ]);
 export const CAPABILITY_PROVENANCE_FILES = new Set([
   "src/agents/agent-tools.turn-authority.ts",
-  "src/agents/automations-run-scope.ts",
   "src/gateway/server-methods/cron-creator-authority-admission.ts",
   "src/gateway/skill-library-authoring.ts",
 ]);

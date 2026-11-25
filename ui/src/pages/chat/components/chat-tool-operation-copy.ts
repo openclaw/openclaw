@@ -17,6 +17,62 @@ const catalog: Readonly<Record<string, object>> =
   registerChatToolOperationsEnglish.catalog.chat.toolCards.operationLabels;
 
 const operationIcons = new Map<string, IconName>([
+  ["automations", "calendarClock"],
+  ["openclaw", "settings"],
+  ["structured_output", "braces"],
+  ["dispatch_action", "zap"],
+  ["tool_call", "puzzle"],
+  ["tool_call_update", "puzzle"],
+  ["autoreview", "fileDiff"],
+  ["github_read", "github"],
+  ["github_search", "github"],
+  ["llm-task", "braces"],
+  ["lobster", "workflow"],
+  ["mcp_events", "activity"],
+  ["node_inference", "server"],
+  ["onepassword", "key"],
+  ["visitor_invite", "userPlus"],
+  ["visitor_revoke", "userPlus"],
+  ["visitor_list", "userPlus"],
+  ["workboard_list", "kanban"],
+  ["workboard_create", "kanban"],
+  ["workboard_link", "kanban"],
+  ["workboard_read", "kanban"],
+  ["workboard_claim", "kanban"],
+  ["workboard_heartbeat", "kanban"],
+  ["workboard_complete", "kanban"],
+  ["workboard_attachment_add", "kanban"],
+  ["workboard_attachment_read", "kanban"],
+  ["workboard_attachment_delete", "kanban"],
+  ["workboard_block", "kanban"],
+  ["workboard_boards", "kanban"],
+  ["workboard_board_create", "kanban"],
+  ["workboard_board_archive", "kanban"],
+  ["workboard_board_delete", "kanban"],
+  ["workboard_sessions_board_read", "kanban"],
+  ["workboard_sessions_board_update", "kanban"],
+  ["workboard_sessions_board_move", "kanban"],
+  ["workboard_stats", "kanban"],
+  ["workboard_runs", "kanban"],
+  ["workboard_specify", "kanban"],
+  ["workboard_decompose", "kanban"],
+  ["workboard_notify_subscribe", "kanban"],
+  ["workboard_notify_list", "kanban"],
+  ["workboard_notify_events", "kanban"],
+  ["workboard_notify_advance", "kanban"],
+  ["workboard_notify_unsubscribe", "kanban"],
+  ["workboard_promote", "kanban"],
+  ["workboard_reassign", "kanban"],
+  ["workboard_reclaim", "kanban"],
+  ["workboard_dispatch", "kanban"],
+  ["workboard_release", "kanban"],
+  ["workboard_comment", "kanban"],
+  ["workboard_proof", "kanban"],
+  ["workboard_verify", "kanban"],
+  ["workboard_worker_log", "kanban"],
+  ["workboard_protocol_violation", "kanban"],
+  ["workboard_unblock", "kanban"],
+  ["workboard_move", "kanban"],
   ["memory_search", "brain"],
   ["personal_instructions", "fileText"],
   ["knowledge_annotate", "book"],
@@ -330,6 +386,17 @@ export function catalogToolOperation(
     }
     if (receipt?.changed === false || removed === null || clearCount === 0) {
       return { label: t(`chat.toolCards.operationLabels.message.${action}.unchanged`) };
+    }
+  }
+  if (name === "workboard_board_archive") {
+    action = args?.archived === false ? "restore" : undefined;
+  } else if (name === "workboard_verify") {
+    action = args?.outcome === "confirmed" ? "confirmed" : undefined;
+  } else if (name === "lobster" && action === "resume") {
+    if (args?.cancel === true) {
+      action = "cancel";
+    } else if (args?.approve === false) {
+      action = "decline";
     }
   }
   const key =

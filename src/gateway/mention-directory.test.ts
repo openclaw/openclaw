@@ -302,7 +302,7 @@ it("includes offline people without leaking administrative profile fields or bin
       [offline.id, false],
     ]);
     expect(new Set(users.map((user) => user.displayName)).size).toBe(2);
-    const fields = ["avatarUrl", "displayName", "online", "profileId"];
+    const fields = ["avatarUrl", "displayName", "inviteAccessOptions", "online", "profileId"];
     for (const user of users) {
       expect(Object.keys(user).toSorted()).toEqual(fields);
     }

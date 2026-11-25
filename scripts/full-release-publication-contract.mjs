@@ -20,6 +20,7 @@ import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 export {
   decodePublicationDispatchEnvelope,
+  dispatchEnvelopeFromInputs,
   normalizePublicationIntent,
   normalizePublicationLaneInputs,
   publicationDispatchEnvelope,
@@ -1070,7 +1071,8 @@ if (invokedAsMain) {
       appendFileSync(
         process.env.GITHUB_OUTPUT,
         `qualification_baselines_json=${envelope.laneInputs?.qualification_baselines_json ?? ""}\n` +
-          `publication_artifact_source_json=${envelope.laneInputs?.publication_artifact_source_json ?? ""}\n`,
+          `publication_artifact_source_json=${envelope.laneInputs?.publication_artifact_source_json ?? ""}\n` +
+          `preflight_first=${envelope.laneInputs?.preflight_first ?? "false"}\n`,
       );
     } else if (process.argv[2] === "--request") {
       const request = publicationSourceRequest(process.env);

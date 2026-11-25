@@ -18,7 +18,7 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore } from "../cron/store.js";
-import { testApi as loggingTestApi } from "../logging/logger.test-support.js";
+import { flushLogger } from "../logging/logger.js";
 import { clawHubSecurityResponse } from "../plugins/clawhub.test-fixtures.js";
 import { createClawHubArchiveFactory } from "../plugins/clawhub.test-support.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
@@ -780,7 +780,7 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       expect(finalPolicySources).toHaveLength(1);
       expect(recoveryRestart).not.toHaveBeenCalled();
     } catch (error) {
-      await loggingTestApi.flushFileLogQueueForTests();
+      await flushLogger();
       const log = await fs.readFile(state.path("gateway.log"), "utf8").catch(() => "");
       throw new Error(
         `${String(error)}\n${log

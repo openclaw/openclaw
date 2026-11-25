@@ -15,6 +15,7 @@ import { parse as parseYaml } from "yaml";
 import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import {
   decodePublicationDispatchEnvelope,
+  dispatchEnvelopeFromInputs,
   normalizePublicationIntent,
   normalizePublicationLaneInputs,
   publicationDispatchEnvelope,
@@ -1053,7 +1054,7 @@ function warnCandidateToolingLag(candidateSha: string) {
   }
 }
 
-function assertAdmissionContract(admissionWorkflowSha: string) {
+function assertAdmissionContract(admissionWorkflowSha: string, preflightFirst: boolean) {
   const workflow = parseYaml(
     run("git", ["show", `${admissionWorkflowSha}:.github/workflows/${ADMISSION_WORKFLOW}`]),
   );
@@ -1061,12 +1062,20 @@ function assertAdmissionContract(admissionWorkflowSha: string) {
     workflow?.env?.RELEASE_QUALIFICATION_ADMISSION_CONTRACT === "1",
     "Selected P lacks qualification admission; update P independently without changing C/Q",
   );
+  requireDispatch(
+    !preflightFirst || workflow?.env?.RELEASE_PREFLIGHT_FIRST_CONTRACT === "1",
+    `Admission SHA ${admissionWorkflowSha} does not support preflight_first; select a supporting P before dispatch.`,
+  );
 }
 
 // Main routinely advances between P selection and the admission POST. A newer
 // tip replaces P only when it is trusted main, descends from the selected P,
 // and still declares the admission contract.
-function verifyMainAdmissionAdvance(previousSha: string, currentSha: string) {
+function verifyMainAdmissionAdvance(
+  previousSha: string,
+  currentSha: string,
+  preflightFirst: boolean,
+) {
   requireDispatch(
     resolveTrustedWorkflowSha(currentSha, "main") === currentSha,
     `Main tip ${currentSha} did not resolve to itself`,
@@ -1075,7 +1084,7 @@ function verifyMainAdmissionAdvance(previousSha: string, currentSha: string) {
     runStatus("git", ["merge-base", "--is-ancestor", previousSha, currentSha]).status === 0,
     `Main tip ${currentSha} does not descend from selected P ${previousSha}`,
   );
-  assertAdmissionContract(currentSha);
+  assertAdmissionContract(currentSha, preflightFirst);
 }
 
 function requireDispatch(condition: unknown, message: string): asserts condition {
@@ -1115,13 +1124,15 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     extension_test_exclude_patterns_json,
     qualification_baselines_json,
     publication_artifact_source_json,
+    preflight_first,
     known_flaky_jobs_json,
     ...wireOverrides
   } = overrides;
   const laneInputs =
     extension_test_exclude_patterns_json === undefined &&
     qualification_baselines_json === undefined &&
-    publication_artifact_source_json === undefined
+    publication_artifact_source_json === undefined &&
+    preflight_first !== "true"
       ? undefined
       : {
           ...(extension_test_exclude_patterns_json === undefined
@@ -1131,7 +1142,16 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
           ...(publication_artifact_source_json === undefined
             ? {}
             : { publication_artifact_source_json }),
+          ...(preflight_first === "true" ? { preflight_first } : {}),
         };
+  requireDispatch(
+    preflight_first === undefined || ["true", "false"].includes(preflight_first),
+    "preflight_first must be true or false",
+  );
+  requireDispatch(
+    preflight_first !== "true" || workflow.env.FULL_RELEASE_PREFLIGHT_FIRST_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support preflight_first; no remote refs or run were created.`,
+  );
   requireDispatch(
     laneInputs === undefined || workflow.env.FULL_RELEASE_LANE_INPUTS_CONTRACT === "1",
     `Tooling SHA ${workflowSha} does not support packed lane inputs; no remote refs or run were created. Keep the frozen Tooling SHA.`,
@@ -1190,7 +1210,11 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     inputs[key] = value;
     wireInputs[key] = String(value);
   }
-  decodePublicationDispatchEnvelope(inputs.trusted_workflow_json);
+  if (preflight_first === "true") {
+    dispatchEnvelopeFromInputs(inputs);
+  } else {
+    decodePublicationDispatchEnvelope(inputs.trusted_workflow_json);
+  }
   return {
     inputs,
     wireInputs,
@@ -1649,6 +1673,7 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
     retainedInputs = {
       ...retainedInputs,
       ...envelope.laneInputs,
+      preflight_first: envelope.laneInputs?.preflight_first ?? "false",
       validation_purpose: retainedIntent.validationPurpose,
       publication_selection_json: retainedIntent.publicationSelectionJson,
     };
@@ -2313,7 +2338,7 @@ async function main() {
     ? resolveTrustedWorkflowSha(args.admissionWorkflowSha, args.admissionWorkflowRef)
     : undefined;
   if (admissionWorkflowSha) {
-    assertAdmissionContract(admissionWorkflowSha);
+    assertAdmissionContract(admissionWorkflowSha, args.inputs.preflight_first === "true");
   }
   if (args.inputs.rerun_group !== "build-only") {
     if (args.skipLocalMockPreflight) {

@@ -6,7 +6,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { resolveSessionVisibility, type SessionSharingTarget } from "../session-sharing-policy.js";
+import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import { isSameSessionSharingTarget } from "../session-sharing-target-read.js";
 import { prepareSessionSharingAccess } from "./sessions-sharing-authority.js";
@@ -73,9 +73,11 @@ export async function withSessionReactionAccess(
             errorShape(ErrorCodes.FORBIDDEN, "your operator role permits viewing sessions only"),
           );
         }
-        const denied = sharing.authorizeTarget(target);
-        if (denied && !(resolveSessionVisibility(target.entry) === "suggest" && cap !== "view")) {
-          deny(denied);
+        if (!sharing.accessForTarget(target).canReact) {
+          deny(
+            sharing.authorizeTarget(target) ??
+              errorShape(ErrorCodes.FORBIDDEN, "Your invitation does not permit reactions."),
+          );
         }
       }
       return target;

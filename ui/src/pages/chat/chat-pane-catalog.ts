@@ -84,6 +84,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
         this.retireCatalogRead();
         this.catalogAccess.route = undefined;
         this.history.catalogMessages = [];
+        this.history.catalogPreviewImage = undefined;
         this.history.catalogHost = null;
         this.history.catalogSession = null;
         this.history.catalogCursor = undefined;
@@ -112,6 +113,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
     this.catalogLoadGeneration += 1;
     this.catalogRequestedSessionKey = this.sessionKey;
     this.history.catalogMessages = [];
+    this.history.catalogPreviewImage = undefined;
     this.history.catalogCursor = undefined;
     this.history.catalogSession = null;
     this.history.catalogHost = null;
@@ -249,6 +251,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
         this.catalogAccess.route = undefined;
         this.history.catalogSession = null;
         this.history.catalogMessages = [];
+        this.history.catalogPreviewImage = undefined;
         state.lastError = t("chat.sessionRoute.catalogShareUnavailable");
         return false;
       }
@@ -274,14 +277,22 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
           (!lookup.session || !lookup.host?.connected || lookup.host.error)
         ) {
           this.history.catalogSession = null;
+          this.history.catalogPreviewImage = undefined;
           state.lastError = t("chat.sessionRoute.catalogShareUnavailable");
           return false;
+        }
+        if (lookup.session?.previewImageDigest !== this.history.catalogPreviewImage?.digest) {
+          this.history.catalogPreviewImage = undefined;
         }
         if (metadataOnly) {
           return true;
         }
       }
       const requestedOlderCursor = older ? this.history.catalogCursor : undefined;
+      const wantImage =
+        !older &&
+        Boolean(this.history.catalogSession?.previewImageDigest) &&
+        !this.history.catalogPreviewImage;
       const page = await client.request<SessionsCatalogReadResult>(
         route.methods.read,
         {
@@ -293,6 +304,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
           ...(this.history.catalogSession?.sourceHomeId
             ? { sourceHomeId: this.history.catalogSession.sourceHomeId }
             : {}),
+          ...(wantImage ? { includePreviewImage: true } : {}),
           limit: 50,
           ...(older && this.history.catalogCursor ? { cursor: this.history.catalogCursor } : {}),
         },
@@ -300,6 +312,9 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
       );
       if (!isCurrent()) {
         return false;
+      }
+      if (wantImage) {
+        this.history.catalogPreviewImage = page.previewImage;
       }
       // Only accepted pages advance progress. A cancelled read must leave its
       // cursor reusable instead of falsely exhausting a later retry.
@@ -361,6 +376,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
         if (older) {
           this.history.olderError = formatUiError(error);
         } else {
+          this.history.catalogPreviewImage = undefined;
           state.lastError = formatUiError(error);
         }
       }

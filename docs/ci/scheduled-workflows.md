@@ -548,14 +548,102 @@ runner snapshots the prepared tree. Node is pinned to `24.22.1`; the committed
 public definition also binds its executable hash, the five workload sources and
 twenty expected cases. The observed runtime fingerprint is retained before the
 fixed-runtime comparison, including its executable SHA-256. Preparation has a
-40-minute install timeout, controls have
-one 30-minute deadline, and the job has a 75-minute limit. Controls disable
+40-minute preparation timeout shared by the installer and Kysely generation,
+controls have one 30-minute deadline, and the job has a 75-minute limit. Controls disable
 package downloads and reject persistent changes to prepared inputs.
 
 The `node-cache-workload-<run-id>-<attempt>` artifact retains preparation logs,
 per-control receipts, the sealed seed when available, and terminal evidence on
 failure. It is qualification evidence only; it does not enable timing admission
 or publish a report.
+
+#### Admit prepared workload qualification
+
+The `node-cache-qualification-admission` CLI validates existing disabled, empty
+and seeded receipts against the same committed harness, physical workload,
+runtime and sealed seed. It writes a v2 `manifest.json`, bound provenance in
+`qualification.json` and a terminal manifest to a new physical output directory
+outside both checkouts and the qualification directory.
+
+```bash
+node scripts/vitest-pair-benchmark.mts --mode node-cache-qualification-admission \
+  --definition /work/definition.json --workload /work/prepared \
+  --qualification /work/control-proof --output /work/admission \
+  --harness-sha <exact-harness-commit> --pnpm-bin /tools/pnpm-native \
+  --timeout-ms 600000 --run-attempt 1
+```
+
+Admission has one explicit deadline of at most ten minutes. Success requires
+final revalidation; rejected receipts retain a failure terminal manifest after
+the output directory is admitted. Earlier-harness receipts, including `ff3d6bec`,
+cannot admit the new harness: produce fresh controls at its exact commit.
+This mode does not run controls or measurements, install dependencies, change
+workflows, or grant timing admission. `timingAdmission` remains `false`.
+It binds the recorded prepared-inventory digest; a measurement consumer must
+compare a fresh whole-workload inventory before starting measured calls.
+
+#### Qualified paired measurements
+
+`node-cache-qualified-measurement` admits a completed three-control output and
+uses the existing paired runner. Keep the physical workload directory, harness
+commit, runtime, native pnpm and sealed seed unchanged after qualification.
+Receipts from a different harness commit or workload path do not qualify.
+
+```bash
+node scripts/vitest-pair-benchmark.mts --mode node-cache-qualified-measurement \
+  --definition /work/definition.json --workload /work/prepared \
+  --qualification /work/controls --harness-sha <exact-harness-commit> \
+  --pnpm-bin /tools/pnpm-native --output /work/measurements \
+  --scratch /work/measurement-scratch --timeout-ms 9000000 --run-attempt 1
+```
+
+Output and scratch must be new physical directories, disjoint from the two
+checkouts and qualification output. Admission verifies all control reports,
+logs, source identities and seed files. The runner compares its initial full
+prepared inventory with the control inventory before starting a measured call.
+It rechecks source, receipt and seed identities before success. Failed admission
+produces a failed terminal receipt and starts no measured workload.
+
+The explicit timeout covers admission, all twenty alternating pairs and final
+verification, with a maximum of 150 minutes. GNU `/usr/bin/time` is required.
+Both treatments use the same selected pnpm and Node PATH, fixed offline settings,
+fresh writable cache namespaces and disabled Vitest caches. Native diagnostic
+tracing stays off during measurement. Incomplete pairs admit no comparison.
+The earlier qualification receipt retains `timingAdmission: false`; the new
+measurement output records the verified provenance and resulting analysis.
+This CLI does not add a scheduled workflow, install dependencies or publish data.
+
+The manual `node-cache-qualified-measurement` workflow mode prepares the same
+fixed workload and runs fresh controls followed immediately by measurement at
+the same harness SHA. Use a fresh dispatch with `target_ref` empty or equal to
+that SHA. It does not reuse artifacts from an earlier run. A failed control
+prevents measurement; both modes retain the same shared workload arguments and
+offline cache settings. Release, live-provider and publishing inputs cannot
+select other jobs in this mode.
+
+This mode has a 240-minute job limit. Its first owned validation step records a
+230-minute work deadline to target a ten-minute finalization allowance. This
+anchor is not the runner's job-start time, so the actual finalization allowance
+can be shorter. The preparation admission deadline
+is 40 minutes after that anchor and includes checkout, runtime and pnpm setup
+elapsed time. Checkout and setup actions each have a five-minute timeout;
+runtime verification has two minutes. The admission deadline does not cancel
+an action asynchronously: after these bounded steps, installation is rejected
+if no preparation budget remains. The installer and Kysely generation share
+that remaining budget, with 30 seconds reserved for TERM/KILL settlement.
+Successful preparation is rejected if either absolute deadline has passed before
+controls are admitted. Controls receive at most 30 minutes and measurement
+at most 150 minutes, each capped by the remaining work budget. An exhausted
+budget stops before the next command. These are execution limits, not estimates
+of how long the workload will take.
+
+Measurement uses new physical output and scratch directories outside both
+checkouts and the control output. It finishes before the control artifact is
+finalized. The separate `node-cache-measurement-<run-id>-<attempt>` artifact
+retains admission provenance, paired records, analysis when complete and the
+measurement terminal; the control artifact retains its original qualification
+terminal and the recorded workflow clock. Finalizers create failure terminals
+only when absent, and both uploads run after failure. No report is published.
 
 ## Security Review reconciler
 

@@ -31,6 +31,7 @@ import { defaultSessionCompanionContextReader } from "./session-companion-contex
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import { companionRuntimeConfig } from "./session-companion-runtime.test-support.js";
 import { createSessionCompanion } from "./session-companion.js";
+import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 const runLoop = vi.hoisted(() =>
   vi.fn<
@@ -184,7 +185,7 @@ describe("Side chat with a published Gateway runtime", () => {
           const respond = vi.fn();
           await sessionCompanionHandlers["sessions.companion.ask"]!({
             params: { agentId: "main", sessionKey: selected.sessionKey, question },
-            client: { connId: "test-connection" },
+            client: { ...sharingPolicyClient({ scopes: [] }), connId: "test-connection" },
             context: {
               sessionCompanion: companion,
               getRuntimeConfig: () => cfg,

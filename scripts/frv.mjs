@@ -53,6 +53,8 @@ import {
   inspectActionsArtifactZipWithPolicy,
   sha256Digest,
 } from "./lib/actions-artifact-archive.mjs";
+import { artifactProducerSlots } from "./lib/full-release-publication-artifacts.mjs";
+import { INITIAL_NPM_PREPARATION_JOB } from "./lib/full-release-publication-inputs.mjs";
 import {
   dispatchReceiptRecovery,
   parseReceiptRecoveryArgs,
@@ -679,7 +681,7 @@ async function legacyNpmRecoveryProducers(
   };
 }
 
-function artifactRecoveryJobs(workflow) {
+function artifactRecoveryJobs(workflow, inputs, attemptJobs) {
   let source;
   try {
     source = parseYaml(workflow);
@@ -691,7 +693,7 @@ function artifactRecoveryJobs(workflow) {
     return [];
   }
   const producers = [];
-  for (const job of Object.values(jobs)) {
+  for (const job of artifactProducerSlots(source, inputs, attemptJobs)) {
     if (!job || typeof job !== "object" || Array.isArray(job)) {
       continue;
     }
@@ -765,7 +767,11 @@ async function artifactRecoveryProducers(
   }
   const producers = [];
   let pending = false;
-  for (const { jobName, stage, allowsReuse } of artifactRecoveryJobs(workflow)) {
+  for (const { jobName, stage, allowsReuse } of artifactRecoveryJobs(
+    workflow,
+    plan.qualificationInputs,
+    parentJobs.filter((job) => Number(job.run_attempt) === plan.parentRunAttempt),
+  )) {
     const matches = parentJobs.filter(
       (job) => job.name === jobName && Number(job.run_attempt) === plan.parentRunAttempt,
     );
@@ -3485,6 +3491,7 @@ const DISPATCHED_CHILD_PATTERN =
   /Dispatched ([\w.-]+\.ya?ml): https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)/gu;
 const ARTIFACT_DISPATCH_JOBS = [
   ["Prepare release npm artifacts", "artifact:npm"],
+  [INITIAL_NPM_PREPARATION_JOB, "artifact:npm"],
   ["Prepare release Docker artifacts", "artifact:docker"],
   ["Acquire full release candidate", "artifact:candidate"],
   ["Prepare exact plugin npm artifacts", "artifact:plugin-npm"],

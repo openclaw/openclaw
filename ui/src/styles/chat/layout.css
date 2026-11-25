@@ -177,6 +177,12 @@ openclaw-pending-session-create {
   opacity: 0.1;
 }
 
+/* An iframe swallows the drag events of a file dropped over it, so widgets
+   and previews yield to the chat until the drag ends. */
+.chat[data-attachment-drop-active] iframe {
+  pointer-events: none;
+}
+
 /* Center search in its own pane, including narrow split views. */
 .agent-chat__search-bar {
   display: flex;
@@ -304,22 +310,18 @@ openclaw-pending-session-create {
 /* Composer neighbors share one quiet card frame. Status color belongs to the
    item, never to the surface: only the icon, heading and a low-opacity edge
    carry tone while the card keeps the composer's own surface and geometry. */
-:is(.chat-composer-neighbor-card, .session-suggestion, .chat-pr.chat-pr) {
+:is(.chat-composer-neighbor-card, .chat-pr.chat-pr) {
   border-radius: calc(16px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
 }
 
-.chat-composer-neighbor-card,
-.session-suggestion {
+.chat-composer-neighbor-card {
   display: grid;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
   background: var(--chat-composer-surface, var(--popover));
   color: var(--text);
-}
-
-.chat-composer-neighbor-card {
   grid-template-columns: 18px minmax(0, 1fr) auto;
   width: calc(100% - 36px);
   max-width: var(--chat-thread-max-width, 48rem);
@@ -1642,65 +1644,124 @@ openclaw-chat-video-player {
 }
 
 .session-suggestions {
-  display: grid;
-  gap: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-strong);
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .session-suggestion {
-  grid-template-columns: fit-content(30%) minmax(0, 1fr) auto;
-  min-height: 38px;
-  border: 1px solid var(--border);
-  font-size: 13px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
 
-  > b,
-  > small {
-    font-size: 11px;
-    white-space: nowrap;
-  }
-  > b {
-    border-radius: 999px;
-    padding: 3px 8px;
-    font-weight: 600;
-    color: var(--chat-text-link, var(--link));
-    background: var(--person-reference-bg);
-  }
-  > small {
-    color: var(--muted);
-  }
-  > div {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-  }
-  &.preview > :is(b, span) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  &:not(.preview) {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    background: color-mix(in srgb, var(--panel-strong) 74%, transparent);
-    > b {
-      background: var(--panel-hover);
-      color: var(--text-strong);
-    }
-    > small {
-      padding: 3px 8px;
-      font-weight: 600;
-    }
-    > span {
-      max-height: 12rem;
-      overflow: auto;
-      overflow-wrap: anywhere;
-      white-space: pre-wrap;
-    }
-    @media (max-width: 640px) {
-      grid-template-columns: auto minmax(0, 1fr);
-      > :is(div, small) {
-        grid-column: 1 / -1;
-        justify-self: end;
-      }
-    }
+.session-suggestion + .session-suggestion {
+  border-top: 1px solid var(--border);
+}
+
+.session-suggestion__details {
+  min-width: 0;
+  grid-area: 1 / 1;
+}
+
+.session-suggestion__details[open] {
+  grid-column: 1 / -1;
+}
+
+.session-suggestion__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+
+.session-suggestion__summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-suggestion__author,
+.session-suggestion__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-suggestion__author {
+  flex: none;
+  max-width: 80px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.preview .session-suggestion__author {
+  border-radius: 999px;
+  padding: 0 6px;
+  color: var(--chat-text-link, var(--link));
+  background: var(--person-reference-bg);
+}
+
+.session-suggestion__details[open] .session-suggestion__text {
+  display: none;
+}
+
+.session-suggestion__body {
+  max-height: 12rem;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 0 10px 10px;
+  white-space: pre-wrap;
+}
+
+.session-suggestion__actions {
+  display: flex;
+  grid-area: 1 / 2;
+  align-self: start;
+  gap: 2px;
+  padding: 2px 4px 2px 0;
+}
+
+.session-suggestion__state {
+  padding: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.session-suggestion__action {
+  opacity: 0;
+}
+
+.session-suggestion:hover .session-suggestion__action,
+.session-suggestion:focus-within .session-suggestion__action {
+  opacity: 1;
+}
+
+.session-suggestions__more {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--border);
+  padding: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+}
+
+.session-suggestion__summary:hover,
+.session-suggestions__more:hover {
+  background: var(--panel-hover);
+}
+
+.session-suggestion__summary:focus-visible,
+.session-suggestions__more:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+@media (hover: none) {
+  .session-suggestion__action {
+    opacity: 1;
   }
 }
 
@@ -3349,4 +3410,18 @@ openclaw-chat-ci-details {
 .chat-pane__chat-toggle[aria-pressed="true"] {
   color: var(--text);
   background: var(--bg-hover);
+}
+
+.chat-catalog-image {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  align-self: flex-start;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.chat-catalog-image img {
+  max-width: min(40vw, 12rem);
+  max-height: 6rem;
+  object-fit: contain;
 }

@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isHumanAddressedChatMessage, normalizeChatHumanMentions } from "./chat-human-mentions.js";
+import { isHumanAddressedChatMessage } from "./chat-human-mentions.js";
 
 const cfg = { agents: { entries: { main: { identity: { name: "Robo" } } } } } as OpenClawConfig;
 
@@ -33,9 +33,4 @@ it.each([
       mentions: [{ profileId, start: 0, end }],
     }),
   ).toBe(expected);
-});
-
-it("refuses mention invitation levels until they are enforced", () => {
-  const mentions = [{ profileId: "bob", access: "read" as const, start: 0, end: 4 }];
-  expect(normalizeChatHumanMentions("@Bob hi", mentions, "@Bob hi").ok).toBe(false);
 });

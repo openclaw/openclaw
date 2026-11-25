@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { cancelPendingConversationTurn } from "../../sessions/conversation-turns.js";
 import {
   ConversationInputError,
@@ -151,6 +152,27 @@ it("conversations.send rejects operation-id reuse with different source input", 
   });
   expect(runConversationSend).toHaveBeenCalledOnce();
   expectFailure(mismatchRespond);
+});
+
+// An agent's conversation tool dispatches in process with least-privilege scopes and its run's
+// admitted authority; the run's grant decides the owner, the same as the owner's own socket.
+it.each([
+  { name: "owner socket", scopes: ["operator.admin"], run: undefined, owner: true },
+  { name: "write socket", scopes: ["operator.write"], run: undefined, owner: false },
+  { name: "owner run", scopes: ["operator.write"], run: ["operator.admin"], owner: true },
+  { name: "member run", scopes: ["operator.write"], run: ["operator.write"], owner: false },
+])("conversations.send owner comes from the request grant: $name", async (cell) => {
+  runConversationSend.mockResolvedValue(sendResult);
+  const operatorRunAuthority =
+    cell.run && createTestOperatorAuthority({ profileId: "requester", scopes: cell.run });
+  const client = {
+    connect: { scopes: cell.scopes },
+    ...(operatorRunAuthority ? { internal: { operatorRunAuthority } } : {}),
+  } as never;
+  await caller("conversations.send", sendRequest, client).query();
+  expect(runConversationSend).toHaveBeenCalledWith(
+    expect.objectContaining({ senderIsOwner: cell.owner }),
+  );
 });
 
 describe("conversations.turn Gateway handler", () => {

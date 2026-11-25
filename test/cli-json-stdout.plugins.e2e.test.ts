@@ -8,6 +8,7 @@ import {
   expectCleanOutput,
   expectCliError,
   expectMissing,
+  expectOnlyLoggingState,
   ttySource,
   preloadArgs,
   cliCase,
@@ -194,6 +195,7 @@ it.each([
       await expectMissing(path.dirname(clonePath as string));
     }
 
-    await expectMissing(stateDir, configPath, path.join(tempHome, ".claude"));
+    await expectOnlyLoggingState(stateDir);
+    await expectMissing(configPath, path.join(tempHome, ".claude"));
   });
 });

@@ -27,6 +27,7 @@ export const chatSessionStateSnapshotSchema = json.object({
   archived: json.optional(json.boolean),
   unarchiveAllowed: json.boolean,
   visibility: json.optional(json.enumeration(["read-only", "shared", "suggest", "draft"])),
+  invitedAccess: json.optional(json.enumeration(["read", "suggest", "send"])),
   sharingRole: json.optional(json.enumeration(["owner", "admin", "member", "viewer"])),
   parentSession: json.optional(json.nullable(json.object({ key: json.text, title: json.text }))),
 });
@@ -70,6 +71,7 @@ export function projectChatSessionStateSnapshot(
     ).allowed,
     visibility: session.visibility,
     sharingRole: session.sharingRole,
+    invitedAccess: session.invitedAccess,
     parentSession:
       resolveUiSessionNavigationParentKey(session) === previous?.parentSession?.key
         ? previous?.parentSession

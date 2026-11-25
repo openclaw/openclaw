@@ -128,7 +128,7 @@ describe("existing PR preparation through the registered agent action", () => {
       f.invoke({}, f.sandbox, undefined, { requester: "maintainer" }),
     ).resolves.toMatchObject({ status: "prepared", headCommit: f.headCommit });
     expect(f.readSession().worktree?.githubPullRequest?.origin).toBe("external-pr");
-    await expect(f.invoke()).rejects.toThrow("Link your GitHub account once");
+    await expect(f.invoke()).rejects.toThrow("Your Gateway profile has no linked GitHub account");
     expect(f.writes).toEqual([]);
     expect(f.externalWrites).toEqual([]);
   });
@@ -196,7 +196,7 @@ describe("existing PR preparation through the registered agent action", () => {
         };
       }
       await expect(refresh(condition === "revoked recovery")).rejects.toThrow(
-        /verified|permission|revoked|access|changed|unavailable|link your github/i,
+        /verified|permission|revoked|access|changed|unavailable|linked github/i,
       );
       expect(revoked).toBe(!privatePr);
       expect(await snapshot()).toEqual(before);

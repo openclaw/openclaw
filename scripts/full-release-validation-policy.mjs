@@ -27,6 +27,7 @@ import {
   buildReleaseValidationManifest,
   releaseManifestChildEvidence,
 } from "./lib/full-release-manifest.mjs";
+import { npmPreparationJobName } from "./lib/full-release-publication-inputs.mjs";
 import {
   BETA_FINAL_EVIDENCE_REUSE_POLICY,
   classifyBetaPromotionComparison,
@@ -1125,7 +1126,7 @@ export function buildReleaseExecutionPlan(input) {
       result: stringValue(input.resolveTargetResult, "missing"),
     },
     {
-      name: "Prepare release npm artifacts",
+      name: npmPreparationJobName(input.qualificationInputs),
       required:
         buildOnly || rerunGroup === "all" || (!reused && booleanValue(input.candidateRequired)),
       result: stringValue(input.npmPreparationResult, "skipped"),

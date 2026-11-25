@@ -29,10 +29,7 @@ import {
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
-import {
-  GatewayDispatchUnavailableError,
-  GatewayOperatorRecoveryAuthorizationError,
-} from "../infra/restart-recovery-errors.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -68,15 +65,13 @@ import {
   GatewayOperatorAccessDeniedError,
   resolvePreparedGatewayOperatorAccessAuthority,
 } from "./operator-access-policy.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import {
-  hasAutomationAdminDelegation,
-  type QueuedOperatorRecoverySource,
-} from "./operator-run-recovery-source.codec.js";
+import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
-import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
 
 export type OperatorAdmissionContext = Pick<
@@ -136,13 +131,13 @@ function admissionError(error: unknown, facts: Facts): never {
     ((facts.kind === "gateway" && facts.snapshot.sourceIngress === "principal") ||
       (facts.kind === "live" && facts.authority.ingress?.signal.aborted))
   ) {
-    throw new GatewayOperatorRecoveryAuthorizationError(undefined, { cause: error });
+    throw new OperatorRefusalError("sign-in-ended", { cause: error });
   }
   if (
     error instanceof GatewayOperatorAccessDeniedError ||
     error instanceof UserProfileNotFoundError
   ) {
-    throw new GatewayOperatorRecoveryAuthorizationError(error.message, { cause: error });
+    throw new OperatorRefusalError("access-ended", { cause: error });
   }
   throw error;
 }
@@ -247,6 +242,12 @@ export function decideTurnGrant(scopes: readonly string[]): TurnGrant {
 /** A process the operator runs on this host (CLI, standalone MCP, MCP owner token) is the owner. */
 export const LOCAL_HOST = Object.freeze({ grant: decideTurnGrant(["operator.admin"]) });
 
+/** A request may do what its admitted run may; a bare connection gets what its scopes decide. */
+export const readGatewayRequestAdmission = (client?: GatewayClient | null) => ({
+  grant:
+    client?.internal?.operatorRunAuthority?.grant ?? decideTurnGrant(client?.connect?.scopes ?? []),
+});
+
 /** What channel ingress knows about a sender; admission decides what it may do. */
 export type ChannelSenderFacts = Readonly<
   UserChannelIdentity & { authentication: "verified" | "asserted" }
@@ -289,6 +290,20 @@ export function decideChannelOwnerPrincipal(config: OpenClawConfig, sender: User
     : undefined;
 }
 
+/** A plugin-run ingress turn gets the grant of its sender's channel owner principal, if any. */
+export const readIngressSenderAdmission = (
+  config: OpenClawConfig,
+  opts: { messageChannel?: string; accountId?: string; senderId?: string | null },
+) => ({
+  grant: decideTurnGrant(
+    decideChannelOwnerPrincipal(config, {
+      channelId: opts.messageChannel ?? "",
+      accountId: opts.accountId ?? "",
+      senderId: opts.senderId ?? "",
+    })?.scopes ?? [],
+  ),
+});
+
 function intersectOperatorRunModelPolicy(
   original: PreparedOperatorModelPolicy | undefined,
   current: PreparedOperatorModelPolicy | undefined,
@@ -307,7 +322,6 @@ function intersectOperatorRunModelPolicy(
 type OperatorAdmissionDecision = {
   authority: AdmittedRunOperatorAuthority;
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
-  automationAdmin: boolean;
   release: () => void;
 };
 
@@ -341,21 +355,21 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     }
     if (principal) {
       if (config.gateway?.openclawId?.enabled === false) {
-        throw new GatewayOperatorRecoveryAuthorizationError();
+        throw new OperatorRefusalError("sign-in-ended");
       }
       try {
         if (readOpenClawIdTunnelPrincipal(principal.peerKey) === null) {
           if (config.gateway?.openclawId?.enabled) {
             throw new GatewayOperatorAccessUnavailableError();
           }
-          throw new GatewayOperatorRecoveryAuthorizationError();
+          throw new OperatorRefusalError("sign-in-ended");
         }
         if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
-          throw new GatewayOperatorRecoveryAuthorizationError();
+          throw new OperatorRefusalError("sign-in-ended");
         }
       } catch (error) {
         if (
-          error instanceof GatewayOperatorRecoveryAuthorizationError ||
+          error instanceof OperatorRefusalError ||
           error instanceof GatewayOperatorAccessUnavailableError
         ) {
           throw error;
@@ -368,13 +382,12 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     const profile = identity?.readCurrentFacts(gateway?.aliasBindingIds).profile;
     const profileId = profile?.profileId ?? snapshot.profileId;
     const refuse = () => {
-      throw new GatewayOperatorRecoveryAuthorizationError();
+      throw new OperatorRefusalError("sign-in-ended");
     };
-    if (
-      profileId !== snapshot.profileId ||
-      (binding && binding.profileId !== profileId) ||
-      (live?.channelOwner && !isChannelOwner(config, live.channelOwner))
-    ) {
+    if (live?.channelOwner && !isChannelOwner(config, live.channelOwner)) {
+      throw new OperatorRefusalError("owner-removed");
+    }
+    if (profileId !== snapshot.profileId || (binding && binding.profileId !== profileId)) {
       refuse();
     }
     let scopes =
@@ -396,7 +409,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         channel.operatorProfile.profileId !== snapshot.profileId ||
         !channel.isCurrent(config)
       ) {
-        throw new GatewayOperatorRecoveryAuthorizationError();
+        throw new OperatorRefusalError("access-ended");
       }
       scopes = intersectOperatorScopes(scopes, channel.operatorProfile.scopes);
     }
@@ -508,7 +521,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
       const boundProfileId =
         bound.principal.kind === "owner" ? GATEWAY_OWNER_PROFILE_ID : bound.principal.profileId;
       if (bound.signal.aborted || boundProfileId !== snapshot.profileId) {
-        throw new GatewayOperatorRecoveryAuthorizationError();
+        refuse();
       }
       scopes = intersectOperatorScopes(scopes, bound.scopeCeiling);
     }
@@ -516,17 +529,15 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
       profile &&
       (gateway?.sourceIngress === "principal" || live?.ingress) &&
       !principal &&
-      profileId !== GATEWAY_OWNER_PROFILE_ID
-    ) {
-      const error = gatewayPersonPrincipalAuthError(
+      profileId !== GATEWAY_OWNER_PROFILE_ID &&
+      gatewayPersonPrincipalAuthError(
         prepared.ingressAuth,
         config,
         profile.emails,
         operatorRoleSubject(profile),
-      );
-      if (error) {
-        throw new GatewayOperatorRecoveryAuthorizationError(error);
-      }
+      )
+    ) {
+      throw new OperatorRefusalError("access-ended");
     }
     if (profile && facts.kind !== "channel") {
       const access =
@@ -563,14 +574,12 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     }
     const agents = role?.agents ?? (!identity ? live?.rolePolicy?.agents : undefined);
     if (facts.agentId && agents && agents !== "*" && !agents.includes(facts.agentId)) {
-      throw new GatewayOperatorRecoveryAuthorizationError(
-        `Your operator role cannot create sessions for agent "${facts.agentId}".`,
-      );
+      throw new OperatorRefusalError("role-denies", {
+        action: `start a session for agent "${facts.agentId}"`,
+      });
     }
     if (scopes.length === 0) {
-      throw new GatewayOperatorRecoveryAuthorizationError(
-        "Gateway access is not active for this requester; ask an administrator to restore access.",
-      );
+      throw new OperatorRefusalError("role-denies");
     }
     const originalModels =
       live?.modelPolicy ??
@@ -637,11 +646,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     return {
       authority,
       authenticatedUserProfile,
-      automationAdmin: Boolean(
-        gateway &&
-        hasAutomationAdminDelegation(gateway) &&
-        operatorScopeSatisfied("operator.admin", scopes),
-      ),
       release: () => identity?.release(),
     };
   } catch (error) {

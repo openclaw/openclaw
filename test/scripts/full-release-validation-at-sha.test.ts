@@ -888,6 +888,12 @@ describe("full-release-validation-at-sha", () => {
       input: 'known_flaky_jobs_json=["normalCi:checks-node"]',
       error: "Automatic test retries are disabled",
     },
+    {
+      name: "preflight first",
+      marker: "FULL_RELEASE_PREFLIGHT_FIRST_CONTRACT",
+      input: "preflight_first=true",
+      error: "does not support preflight_first",
+    },
   ])(
     "refuses unsupported $name controls before creating refs or dispatching",
     ({ marker, input, error }) => {
