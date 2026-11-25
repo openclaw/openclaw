@@ -492,8 +492,9 @@ it("admits exact invited publication without adding session-write or owner actio
         () => "admitted",
         (error: unknown) => (error instanceof Error ? error.message : String(error)),
       );
-      expect(outcome).not.toMatch(/missing scope|not authorized|session access denied|not found/iu);
-      expect(outcome).toMatch(/GitHub|publication|workspace/iu);
+      // Admission passes; the shared-publication requester refuses participants until part 5.
+      expect(outcome).not.toMatch(/missing scope|session access denied|not found/iu);
+      expect(outcome).toMatch(/GitHub|publication|publish|workspace/iu);
       for (const action of ["inspect", "merge", "close"]) {
         await expect(
           invited.request(
