@@ -22,7 +22,8 @@ function mockSession() {
 const { connect } = vi.hoisted(() => ({
   connect: vi.fn<(request: { callbacks: Callbacks }) => Promise<ReturnType<typeof mockSession>>>(),
 }));
-vi.mock("./google-genai-runtime.js", () => ({
+vi.mock("./google-genai-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./google-genai-runtime.js")>()),
   createGoogleGenAI: () => ({ live: { connect } }),
 }));
 
