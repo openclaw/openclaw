@@ -31,6 +31,7 @@ import { ExpandedToolCardContent } from "./chat-message-deferred.tsx";
 import { SubagentName } from "./chat-subagent-badge.tsx";
 import { ChatToolIcon, ToolIcon, syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
+import { catalogToolIcon, catalogToolOperation } from "./chat-tool-operation-copy.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
 import {
@@ -58,23 +59,6 @@ function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string | unde
   return typeof card.args === "string"
     ? formatCollapsedToolPreviewText(card.inputText?.trim() ? card.inputText : card.args)
     : undefined;
-}
-
-function resolveToolRowText(
-  card: ToolCard,
-  view: ToolCallView,
-  outcome: ToolCardOutcome,
-  addressed?: { name?: string; names?: string[] },
-): string {
-  const verb = resolveToolRowVerb(view, outcome);
-  return verb && view.target
-    ? `${verb} ${view.target}`
-    : resolveToolOperationLabel(
-        card,
-        outcome,
-        addressed,
-        resolveToolDisplay({ name: card.name, args: card.args, detailMode: "raw" }).detail,
-      );
 }
 
 function ToolRowLink(props: {
@@ -106,6 +90,7 @@ function ToolRowContent(props: {
   view: ToolCallView;
   outcome: ToolCardOutcome;
   running: boolean;
+  label: string;
   addressed?: { name?: string; names?: string[] };
   workspaceFilePath: string | null;
   onOpenWorkspaceFile?: ToolRenderOptions["onOpenWorkspaceFile"];
@@ -125,7 +110,7 @@ function ToolRowContent(props: {
     <Switch
       fallback={
         <span class={["chat-tool-row__title", { "text-shimmer": props.running }]}>
-          {resolveToolRowText(props.card, props.view, props.outcome, props.addressed)}
+          {props.label}
         </span>
       }
     >
@@ -250,6 +235,63 @@ export function ToolCardRow(props: ToolCardProps) {
   const launch = createMemo(() =>
     resolveSessionLaunchPresentation(card(), outcome(), props.options.subagents?.subagentSessions),
   );
+  const addressed = createMemo(
+    () =>
+      addressedSession(
+        card(),
+        props.options.subagents?.subagentSessions,
+        props.options.subagents?.recordedStopNames,
+      ),
+    { lazy: true },
+  );
+  const operation = createMemo(() => catalogToolOperation(card(), outcome(), addressed()), {
+    lazy: true,
+  });
+  const rowLabel = () => {
+    const verb = resolveToolRowVerb(view(), outcome());
+    return verb && view().target
+      ? `${verb} ${view().target}`
+      : (operation()?.label ??
+          resolveToolOperationLabel(
+            card(),
+            outcome(),
+            addressed(),
+            resolveToolDisplay({ name: card().name, args: card().args, detailMode: "raw" }).detail,
+          ));
+  };
+  // A blocked image inspection is not grouped, so its own row shows the block.
+  const blockedImage = () =>
+    outcome() === "blocked" && unwrapToolCallForDisplay(card()).name === "view_image";
+  const statusKey = () => {
+    const state = outcome();
+    if (inline() && state === "succeeded") {
+      return "completed";
+    }
+    if (inline() && state === "running") {
+      return view().command ? undefined : "running";
+    }
+    if (blockedImage()) {
+      return "blocked";
+    }
+    // The open body reports the missing tool result, not the owning run's interruption.
+    if (state === "unrecorded" && props.options.interrupted) {
+      return "interrupted";
+    }
+    if (
+      props.options.expanded ||
+      (state !== "blocked" && state !== "unknown" && state !== "unrecorded")
+    ) {
+      return undefined;
+    }
+    if (!inline() && (view().kind !== "generic" || launch() || !operation()?.showOutcome)) {
+      return undefined;
+    }
+    return state === "unknown"
+      ? "outcomeUnknown"
+      : state === "unrecorded"
+        ? "noResultRecorded"
+        : "blocked";
+  };
   const onOpenSubagent = () =>
     (subagent()?.session?.listed && props.options.subagents?.onOpenSubagent) ||
     props.options.subagents?.onOpenSession;
@@ -278,7 +320,7 @@ export function ToolCardRow(props: ToolCardProps) {
             name={
               readSubagentCancellation(card())
                 ? "bot"
-                : (TOOL_ROW_ICONS[view().kind] ?? display().icon)
+                : (TOOL_ROW_ICONS[view().kind] ?? catalogToolIcon(display().name) ?? display().icon)
             }
             tool={{ toolName: display().name, pluginToolIcons: props.options.pluginToolIcons }}
           />
@@ -293,11 +335,8 @@ export function ToolCardRow(props: ToolCardProps) {
               view={view()}
               outcome={outcome()}
               running={running()}
-              addressed={addressedSession(
-                card(),
-                props.options.subagents?.subagentSessions,
-                props.options.subagents?.recordedStopNames,
-              )}
+              label={rowLabel()}
+              addressed={addressed()}
               workspaceFilePath={workspaceFilePath()}
               onOpenWorkspaceFile={props.options.onOpenWorkspaceFile}
             />
@@ -312,28 +351,19 @@ export function ToolCardRow(props: ToolCardProps) {
           )}
         </Show>
       </span>
-      <Show
-        when={
-          inline() &&
-          outcome() !== "failed" &&
-          outcome() !== "skipped" &&
-          !(view().command && outcome() === "running")
-        }
-      >
-        <span class="chat-command-trail__status" role="status">
-          {t(
-            outcome() === "running"
-              ? "chat.toolCards.running"
-              : outcome() === "succeeded"
-                ? "chat.toolCards.completed"
-                : outcome() === "blocked"
-                  ? "chat.toolCards.blocked"
-                  : "chat.toolCards.outcomeUnknown",
-          )}
-        </span>
-      </Show>
-      <Show when={props.options.interrupted && outcome() === "unrecorded"}>
-        <span class="muted">{t("chat.toolCards.interrupted")}</span>
+      <Show when={statusKey()}>
+        {(key) => (
+          <span
+            class={
+              inline() || blockedImage()
+                ? "chat-command-trail__status"
+                : "chat-activity-group__outcome"
+            }
+            role={inline() || blockedImage() ? "status" : undefined}
+          >
+            {t(`chat.toolCards.${key()}`)}
+          </span>
+        )}
       </Show>
       <Show when={!props.options.expanded && !launch()?.capacity}>
         <ToolOutcomeSummary card={card()} />
@@ -365,7 +395,7 @@ export function ToolCardRow(props: ToolCardProps) {
           class="chat-tool-row__toggle"
           type="button"
           aria-expanded={props.options.expanded ? "true" : "false"}
-          aria-label={resolveToolRowText(card(), view(), outcome())}
+          aria-label={rowLabel()}
           onClick={toggle}
         />
       </Show>
@@ -377,7 +407,6 @@ export function ToolCardRow(props: ToolCardProps) {
 export function ToolMessageSummary(props: {
   state: GroupedMessagePresentation;
   options: GroupedMessageOptions;
-  imageCount?: number;
 }) {
   let disclosureContent: HTMLSpanElement | undefined;
   const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
@@ -394,12 +423,11 @@ export function ToolMessageSummary(props: {
       : null;
     if (singleToolCard && unwrapToolCallForDisplay(singleToolCard).name === "view_image") {
       const outcome = resolveToolCardOutcome(singleToolCard, props.options.runActive);
-      const count = props.imageCount ?? images.length;
       return {
         singleToolDisplay,
         toolMessageLabel:
-          outcome === "succeeded" && count > 1
-            ? t("chat.toolCards.viewedImages", { count: String(count) })
+          outcome === "succeeded" && images.length > 1
+            ? t("chat.toolCards.viewedImages", { count: String(images.length) })
             : resolveToolOperationLabel(singleToolCard, outcome),
         toolSummaryLabel: undefined,
         toolPreview: "",

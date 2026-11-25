@@ -288,6 +288,26 @@ function readStoredDeviceIdentity(storage: Storage | null): StoredIdentity | nul
 }
 
 export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
+  // The asynchronous key generation must not let fresh tabs publish different
+  // identities for the same browser. Storage policy can deny exposed locks too.
+  let started = false;
+  try {
+    const locks = globalThis.navigator?.locks;
+    if (locks) {
+      return await locks.request(DEVICE_IDENTITY_STORAGE_KEY, () => {
+        started = true;
+        return loadOrCreateDeviceIdentityUnlocked();
+      });
+    }
+  } catch (error) {
+    if (started) {
+      throw error;
+    }
+  }
+  return loadOrCreateDeviceIdentityUnlocked();
+}
+
+async function loadOrCreateDeviceIdentityUnlocked(): Promise<DeviceIdentity> {
   const storage = getSafeLocalStorage();
   const parsed = readStoredDeviceIdentity(storage);
   try {

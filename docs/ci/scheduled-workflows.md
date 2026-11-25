@@ -429,6 +429,90 @@ ratio. Otherwise it reports per-lane evidence without a broad improvement
 claim. Artifacts use only the trusted workflow run ID and attempt in their name;
 the exact baseline and candidate commits remain recorded inside the artifact.
 
+For the prepared Node-cache pair mode, the runner snapshots every regular file's
+bytes and permissions and every internal symlink target before and after the
+schedule. Only the workload root's Git metadata is excluded; ignored generated
+files and installed dependencies remain covered. Dangling or escaping symlinks
+and special files are rejected. Both scans use the aggregate deadline and sit
+outside individual pair measurements.
+
+`prepared-inventory.json` retains the initial inventory; `prepared-integrity.json`
+binds its digest and comparison scope and records complete added, removed, and
+changed metadata. Changed or unverified input prevents successful analysis.
+After uncertain child settlement the runner does not inspect the workload.
+This is a pre/post integrity boundary: it cannot detect a mutation that is fully
+reverted between snapshots and does not replace preparation or cache-acceptance
+qualification.
+
+#### Node compile-cache diagnostic qualification
+
+Before using native cache diagnostics to admit a benchmark, qualify their meaning
+on Linux with Node **24.22.1**:
+
+```bash
+node scripts/vitest-pair-benchmark.mts \
+  --mode node-cache-diagnostics \
+  --output /tmp/node-cache-diagnostics \
+  --run-attempt 1
+```
+
+For a hosted check, select the branch containing the helper and bind `target_ref`
+to that branch's exact commit:
+
+```bash
+gh workflow run openclaw-performance.yml --ref <branch> \
+  -f mode=node-cache-diagnostics \
+  -f target_ref=<exact-40-character-sha> \
+  -f publish_reports=false
+```
+
+This starts one five-minute Ubuntu job with the pinned Node runtime. It does not
+install packages, use provider secrets, or start the other performance jobs.
+The workflow uploads the diagnostic output even when qualification fails.
+
+The output directory must not exist. This runs a tiny ESM fixture with caching
+disabled, an empty cache, a restored seed, and changed source at the same path.
+It requires a successful native cache read and explicit V8 acceptance for the
+seeded case. Incomplete, duplicate, interleaved, or contradictory source records
+fail qualification. The grammar follows Node's pinned
+[cache reader and acceptance result](https://github.com/nodejs/node/blob/v24.22.1/src/compile_cache.cc)
+and [ESM cache consumption](https://github.com/nodejs/node/blob/v24.22.1/src/module_wrap.cc).
+
+The result contains runtime identities, source and log digests, four control
+observations, complete logs, and a terminal manifest. Owned scratch is removed
+after child processes settle; uncertain child ownership retains it. This is
+synthetic diagnostic proof. It does not establish cache acceptance for an
+OpenClaw workload, run paired measurements, or change the scheduled workflow.
+
+#### Prepared workload disabled control
+
+The `node-cache-disabled-control` CLI checks one already prepared workload with
+Node compile caching disabled. Supply a reviewed definition containing the exact
+workload commit/tree, five source identities, twenty distinct expected cases,
+and the pinned Linux x64 Node runtime. The harness must be clean and committed.
+
+```bash
+node scripts/vitest-pair-benchmark.mts --mode node-cache-disabled-control \
+  --definition /work/definition.json --workload /work/prepared \
+  --harness-sha <exact-harness-commit> --pnpm-bin /tools/pnpm-native \
+  --output /work/disabled-proof --scratch /work/control-scratch \
+  --timeout-ms 1200000 --run-attempt 1
+```
+
+The selected pnpm must be a preprovisioned physical ELF64 x86_64 executable at
+version 12.15.0. Its bytes are bound; downloads and version switching are disabled.
+Output and scratch must be new physical directories outside both checkouts.
+The control uses the paired runner's arguments and compares the full prepared
+inventory before and after the settled child; this is not continuous monitoring.
+Logs, oracle results, disabled-cache diagnostics and complete input deltas remain
+in the output, including explicit unavailable results after failures. Explicit
+Node flush-call announcements are allowed while caching is disabled; cache files,
+cache reads/writes and unknown native diagnostic events still fail the control.
+Uncertain child settlement retains scratch and prevents inspecting the workload.
+
+The receipt is `disabled-only`, with `timingAdmission: false`. It does not install
+or prepare dependencies, run empty/seeded controls, or admit paired measurements.
+
 ## Security Review reconciler
 
 Every ten minutes, Security Review reconciles CI completions

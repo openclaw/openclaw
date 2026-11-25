@@ -45,7 +45,6 @@ import {
   type NodeTestTargetVolume,
 } from "./ci-node-test-inventory.mts";
 import {
-  UI_REAL_GATEWAY_TEST_CONFIG,
   hasSharedUiE2eInput,
   createSelectedNodeTestShardBundles,
   prepareNodeTestVolumes,
@@ -55,26 +54,29 @@ import {
   resolveCanonicalNodeTestConfig,
   resolveCompleteCanonicalNodeTestConfig,
   isCanonicalNodeTestConfig,
-  isRuntimeTestFileIncluded,
   SOURCE_CHANNEL_TEST_POLICY,
   type NodeTestShard,
-  type RuntimeTestSelection,
   type NodeTestVolumeContext,
 } from "./ci-node-test-plan.mts";
 import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
+import { PR_PROTECTED_RUNTIME_TEST_FILES } from "./ci-proof-test-inventory.mts";
+import {
+  isRuntimeTestFileIncluded,
+  type RuntimeTestSelection,
+} from "./ci-runtime-test-eligibility.mts";
 import {
   isCiProofTestFile,
   isPrExemptRuntimeTestFile,
   isReleaseOnlyRuntimeTestFile,
   listPrExemptRuntimeTestFiles,
-  PR_PROTECTED_RUNTIME_TEST_FILES,
-} from "./ci-proof-test-inventory.mts";
+} from "./ci-test-tier-policy.mts";
 import {
   readCompactGroupTimings,
   readRepoE2eFileTimings,
   readToolingFileTimings,
 } from "./ci-test-timings.mts";
+import { UI_REAL_GATEWAY_TEST_CONFIG } from "./ci-ui-test-plan.mts";
 import {
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,

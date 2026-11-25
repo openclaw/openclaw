@@ -161,8 +161,7 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
   ) {
     return false;
   }
-  const { readConfigSnapshotBeforeEngineSelection } =
-    await import("../commands/config-preflight-snapshot.js");
+  const { readConfigSnapshotBeforeEngineSelection } = await import("../config/io.factory.js");
   const readSnapshot = () =>
     readConfigSnapshotBeforeEngineSelection(process.env, { isolateEnv: false });
   let snapshot = await readSnapshot();

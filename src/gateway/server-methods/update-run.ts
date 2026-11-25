@@ -21,7 +21,6 @@ import type { StartupInstallStatus } from "../../infra/update-install-status.typ
 import { renderUpdateRunNotice } from "../../infra/update-run-notice.js";
 import {
   createUpdateRunAsync,
-  finishUpdateRunAsync,
   recordUpdateRunPhaseAsync,
 } from "../../infra/update-run-write.async.js";
 import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-install-surface.js";
@@ -180,7 +179,7 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
       : { acknowledgement: renderUpdateRunNotice(run, "ack") ?? undefined }),
     result: { status: "ok", mode: "unknown", steps: [], durationMs: 0 },
   });
-  wakeUpdateRunWatcher();
+  wakeUpdateRunWatcher(run.runId);
   void runUpdateInBackground(run.runId, {
     root,
     installKind: installed.status.installKind,
@@ -192,7 +191,8 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     acceptCapabilities: params.acceptCapabilities,
     restartDelayMs: params.restartDelayMs,
     sessionKey: params.sessionKey,
-    warn: (message) => context.logGateway?.warn(message),
+  }).catch((error: unknown) => {
+    context.logGateway?.warn(`update.run ${run.runId} failed: ${String(error)}`);
   });
 };
 
@@ -212,55 +212,35 @@ async function runUpdateInBackground(
     /** The requester's `restartDelayMs`, as the package route honors it. */
     restartDelayMs?: number;
     sessionKey?: string;
-    warn: (message: string) => void;
   },
 ) {
-  try {
-    const channel = resolveEffectiveUpdateChannel({
-      configChannel: options.channel,
-      currentVersion: VERSION,
-      installKind: options.installKind,
-      git: options.git,
-    }).channel;
-    const outcome = await prepareUpdate({
-      runId,
-      runningRoot: options.root,
-      runningVersion: VERSION,
-      channel,
-      sha: options.sha,
-      tag: options.tag,
-      timeoutMs: options.timeoutMs,
-      acceptCapabilities: options.acceptCapabilities,
-    });
-    const restart = {
-      reason: "update.run",
-      sessionKey: options.sessionKey,
-      delayMs: normalizeGatewayRestartDelayMs(options.restartDelayMs),
-    };
-    // Changed plugins of an already-current install load in a new process, as after a core update.
-    if (outcome.status === "current" && outcome.pluginsChanged) {
-      scheduleGatewayRestart(restart);
-    }
+  const channel = resolveEffectiveUpdateChannel({
+    configChannel: options.channel,
+    currentVersion: VERSION,
+    installKind: options.installKind,
+    git: options.git,
+  }).channel;
+  const outcome = await prepareUpdate({
+    runId,
+    runningRoot: options.root,
+    runningVersion: VERSION,
+    channel,
+    sha: options.sha,
+    tag: options.tag,
+    timeoutMs: options.timeoutMs,
+    acceptCapabilities: options.acceptCapabilities,
+  });
+  const restart = {
+    reason: "update.run",
+    sessionKey: options.sessionKey,
+    delayMs: normalizeGatewayRestartDelayMs(options.restartDelayMs),
+  };
+  // Core activation and changed plugins use the same process-replacing restart.
+  if (outcome.status === "pending" || (outcome.status === "current" && outcome.pluginsChanged)) {
+    scheduleGatewayRestart(restart);
     if (outcome.status === "pending") {
       await recordUpdateRunPhaseAsync(runId, "restarting");
-      // A process-replacing reason: the next process starts through the release launcher.
-      scheduleGatewayRestart(restart);
     }
-  } catch (error) {
-    options.warn(`update.run ${runId} failed: ${String(error)}`);
-    // Detached work: a failed record must not become an unhandled rejection.
-    try {
-      await finishUpdateRunAsync(runId, {
-        status: "failed",
-        reason: "update-failed",
-        nextAction: "The update failed before anything changed. Run `openclaw update` to retry.",
-        diagnostics: { failure: { step: "outcome", detail: String(error) } },
-      });
-    } catch (recordError) {
-      options.warn(`update.run ${runId} outcome was not recorded: ${String(recordError)}`);
-    }
-  } finally {
-    wakeUpdateRunWatcher();
   }
 }
 

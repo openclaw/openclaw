@@ -248,6 +248,8 @@ describe("queued chat input withdrawal", () => {
       }
       await fixture.finishDispatch();
       const disposition = "cancelled";
+      // Accepted input stays queued for replay after a graceful restart.
+      const pendingState = stopReason === "restart" ? "queued" : disposition;
       const prefix = "chat pending input aborted:";
       const logs = vi
         .mocked(context.logGateway.info)
@@ -256,12 +258,15 @@ describe("queued chat input withdrawal", () => {
       const details = { runId, sessionKey, sessionId, agentId: "main", disposition, reason };
       expect(logs).toEqual(reason ? [[`${prefix} ${reason} (${disposition})`, details]] : []);
       expect(await listSessionPendingInputs(scope)).toMatchObject(
-        reason ? { items: [{ state: disposition }], total: 1 } : { items: [], total: 0 },
+        reason ? { items: [{ state: pendingState }], total: 1 } : { items: [], total: 0 },
       );
       if (reason) {
         const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 1000 });
         expect(page.items).toHaveLength(1);
         expect(page.items[0]?.endCause).not.toBe("user-stop");
+        if (pendingState === "queued") {
+          expect(page.items[0]?.endCause).toBeUndefined();
+        }
         if (discardPendingInput) {
           expect(page.items[0]?.message).toMatchObject({ display: false, content: [] });
           expect(JSON.stringify(page)).not.toContain(fixture.approvedContent);
@@ -272,7 +277,7 @@ describe("queued chat input withdrawal", () => {
           {
             runId,
             state: "pending",
-            cancelled: true,
+            ...(pendingState === "cancelled" ? { cancelled: true } : {}),
           },
         ]);
         expect(loadTranscriptEventsSync(scope)).toEqual(fixture.activeTranscript);

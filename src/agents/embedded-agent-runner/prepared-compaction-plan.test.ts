@@ -575,9 +575,9 @@ it.each(["active", "empty-tools", "no-tools", "model-change"])(
         array.preparation.summaryTokenBudget,
       );
       if (maxSummaryChars === 20000) {
-        expect(native.plan.requestBudget?.fixedTokens).toBe(variant === "active" ? 10640 : 32);
+        expect(native.plan.requestBudget?.fixedTokens).toBe(variant === "active" ? 7992 : 32);
       } else {
-        expect(native.plan.summaryReplayTokenBudget).toBe(variant === "active" ? 3577 : 12417);
+        expect(native.plan.summaryReplayTokenBudget).toBe(variant === "active" ? 5784 : 12417);
       }
     }
   },

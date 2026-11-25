@@ -129,6 +129,7 @@ export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecor
   delete origin.packageStage;
   delete origin.packageRelease;
   delete origin.gitActivation;
+  delete origin.releaseAdmission;
   // The wire driver is closed: recorded boot namespaces stay local.
   if (origin.driver) {
     origin.driver = toUpdateRunDriver(origin.driver);

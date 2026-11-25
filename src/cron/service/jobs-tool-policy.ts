@@ -145,6 +145,10 @@ export function reconcileCronOperatorSource(params: {
     isCronOperatorSourceParent(job, source.sessionKey)
   ) {
     job.operatorSource = { source, executionRevision };
+  } else if (source?.snapshot.participationCeiling) {
+    throw new TypeError(
+      "Participant automation edits must retain authenticated execution authority.",
+    );
   } else {
     delete job.operatorSource;
   }

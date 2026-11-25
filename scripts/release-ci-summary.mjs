@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { verifyRetainedPublicationArtifacts } from "./full-release-artifacts.mjs";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
@@ -34,12 +35,14 @@ import {
   evidenceReadRetryDelay,
   compareReleaseJobsByName,
   composeReleaseChildAttemptEvidence,
+  matchesReleaseChildAttemptEvidence,
   composeReleaseAttemptJobs,
+  resolveReleaseAttemptJobs,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
   isReleaseGhServerError,
   isSplitChangelogEvidenceDelta,
-  classifyReleaseChangelogEvidenceComparison,
+  classifyReleaseEvidenceComparison,
   SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
   MAX_RELEASE_ARTIFACT_BYTES,
   normalizeReleaseCoveragePolicy,
@@ -76,6 +79,12 @@ import {
   plainGhAuthenticatedEnv,
   resolvePlainGhBin,
 } from "./lib/plain-gh.mjs";
+import {
+  BETA_FINAL_EVIDENCE_REUSE_POLICY,
+  promotionValidationInputs,
+  promotionSourceIdentity,
+  promotionSelection,
+} from "./lib/release-beta-promotion.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import {
   RELEASE_EVIDENCE_FILE,
@@ -90,10 +99,10 @@ import {
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
+  isWaived,
   readReleaseValidationWaivers,
   readReleaseValidationWaiversAsync,
   RELEASE_VALIDATION_WAIVERS_PATH,
-  validateReleaseWaiverAggregates,
 } from "./lib/release-validation-waivers.mjs";
 import {
   resolveQualificationAdmissionDescriptor,
@@ -112,6 +121,7 @@ export { resolveVerifierIdentity } from "./lib/release-evidence-identity.mjs";
 const sortReleaseJsonValueKeys = /** @type {<T>(value: T) => T} */ (sortJsonValueKeys); // Validated release JSON preserves its structural type.
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
 const PHASED_RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v4";
+const BUILD_ONLY_PREPARATION = Symbol("build-only preparation evidence");
 const SHA_PINNED_BRANCH_PATTERN = /^release-ci\/[a-f0-9]{12}-[1-9][0-9]*$/u;
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const MAX_MANIFEST_ENTRY_LIST_BYTES = 8 * 1024;
@@ -147,6 +157,7 @@ const LEGACY_CHILD_DISPATCHES = [
 ].map(childDispatch);
 const PHASED_CHILD_DISPATCHES = [
   "normalCi",
+  "stableClientCompatibility",
   "pluginPrereleaseIndependent",
   "pluginPrereleaseCandidate",
   "releaseChecksIndependent",
@@ -169,6 +180,7 @@ class ReleaseEvidenceRefreshRequiredError extends Error {
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 const EVIDENCE_REUSE_POLICIES = new Set([
+  BETA_FINAL_EVIDENCE_REUSE_POLICY,
   EXACT_TARGET_EVIDENCE_REUSE_POLICY,
   CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY,
   SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
@@ -674,15 +686,15 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
     throw new Error("cached publication plan differs from its authenticated original");
   }
   const source = validatePublicationSourceBinding(plan);
-  // Older Q bound an explicit empty, retired publication-artifact input.
-  // Its signed source bytes stay untouched; only compare the effective operands.
-  const effectiveCoverage = (coverage) => {
-    if (coverage.publication_artifact_source_json !== "") {
-      return coverage;
-    }
-    const { publication_artifact_source_json: _retired, ...current } = coverage;
-    return current;
-  };
+  // Older Q bound explicit empty values for these retired inputs. Its signed
+  // source bytes stay untouched; only compare the effective operands.
+  const effectiveCoverage = (coverage) =>
+    Object.fromEntries(
+      Object.entries(coverage).filter(
+        ([key, value]) =>
+          value !== "" || (key !== "publication_artifact_source_json" && key !== "telegram_waiver"),
+      ),
+    );
   if (
     publicationSourceJson(effectiveCoverage(source.coverage)) !==
       publicationSourceJson(effectiveCoverage(request.coverage)) ||
@@ -762,7 +774,7 @@ export function requiredChildKeysForRerunGroup(
   const childKeys = childDispatchesForPhaseVersion(childPhaseVersion)
     .filter((child) => releaseChildSpec(child.manifestKey).rerunGroups.includes(rerunGroup))
     .map((child) => child.manifestKey);
-  if (childKeys.length === 0) {
+  if (childKeys.length === 0 && rerunGroup !== "build-only") {
     throw new Error(`release validation manifest rerun group is invalid: ${rerunGroup}`);
   }
   const selectedKeys = new Set(childKeys);
@@ -788,6 +800,9 @@ export function requiredChildKeysForRerunGroup(
 
 /** @returns {Set<string>} */
 function requiredChildKeysForManifest(manifest) {
+  if (manifest.rerunGroup === "build-only") {
+    return new Set();
+  }
   if (manifest.qualificationCoverage) {
     return new Set(
       validateQualificationCoverage(manifest.qualificationCoverage).children.map(
@@ -806,6 +821,10 @@ function requiredChildKeysForManifest(manifest) {
     manifest.validationInputs,
     manifest.version === 4 ? 3 : 2,
   );
+  // Receipts written before stable-client coverage keep their original inventory.
+  if (!Object.hasOwn(manifest.childRuns ?? {}, "stableClientCompatibility")) {
+    selectedKeys.delete("stableClientCompatibility");
+  }
   // validateParentManifest authenticates the explicit policy before selection;
   // an older beta receipt without this marker still requires its full child set.
   if (manifest.validationInputs?.coveragePolicy === "npm-beta-v1") {
@@ -1111,11 +1130,17 @@ function normalizeManifestChildEvidence(value) {
             throw new Error(`release validation child job attempt is invalid: ${key}`);
           }
           const name = String(job.name ?? "");
-          if (!name) {
+          const firstIncompleteStep = job.firstIncompleteStep;
+          if (
+            !name ||
+            (firstIncompleteStep !== undefined &&
+              (typeof firstIncompleteStep !== "string" || !firstIncompleteStep))
+          ) {
             throw new Error(`release validation child job identity is invalid: ${key}`);
           }
           return {
             acceptedRunAttempt,
+            ...(firstIncompleteStep === undefined ? {} : { firstIncompleteStep }),
             completedAt: String(job.completedAt ?? ""),
             conclusion: String(job.conclusion ?? ""),
             name,
@@ -1167,9 +1192,11 @@ function normalizeManifestChildEvidence(value) {
   );
 }
 
-function manifestEvidenceIdentity(manifest) {
+function manifestEvidenceIdentity(manifest, promotion = false) {
   return sortReleaseJsonValueKeys({
-    sourceAdmission: publicationSourceReuseIdentity(manifest.sourceAdmission) ?? null,
+    sourceAdmission: promotion
+      ? promotionSourceIdentity(publicationSourceReuseIdentity(manifest.sourceAdmission))
+      : (publicationSourceReuseIdentity(manifest.sourceAdmission) ?? null),
     ...(manifest.qualificationCoverage
       ? { qualificationCoverage: manifest.qualificationCoverage }
       : {}),
@@ -1179,7 +1206,9 @@ function manifestEvidenceIdentity(manifest) {
     releaseProfile: manifest.releaseProfile,
     rerunGroup: manifest.rerunGroup,
     runReleaseSoak: manifest.runReleaseSoak,
-    validationInputs: manifest.validationInputs,
+    validationInputs: promotion
+      ? promotionValidationInputs(manifest.validationInputs)
+      : manifest.validationInputs,
   });
 }
 
@@ -1372,6 +1401,9 @@ export function validateParentManifest(value, expected) {
     : Object.fromEntries(
         [
           ["normalCi", "normal CI"],
+          ...(Object.hasOwn(childRuns, "stableClientCompatibility")
+            ? [["stableClientCompatibility", "stable client compatibility"]]
+            : []),
           ["npmTelegram", "npm Telegram"],
           ...(value.version === 4
             ? [
@@ -1511,6 +1543,8 @@ export function validateEvidenceReuseChain(
   selectedManifest,
   rootManifest,
   compareCommits,
+  readSourceFile,
+  readSourceFiles,
 ) {
   const reuse = currentManifest.evidenceReuse;
   if (!reuse) {
@@ -1552,6 +1586,29 @@ export function validateEvidenceReuseChain(
     if (reuse.changedPaths.length !== 0 || currentManifest.targetSha !== reuse.evidenceSha) {
       throw new Error("exact-target release evidence reuse requires no changed paths");
     }
+  } else if (reuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY) {
+    const version = JSON.parse(readSourceFile(currentManifest.targetSha, "package.json")).version;
+    if (currentManifest.validationInputs.targetVersion !== version) {
+      throw new Error("beta-to-final evidence versions differ from their source packages");
+    }
+    const verified = classifyReleaseEvidenceComparison(
+      compareCommits(reuse.evidenceSha, currentManifest.targetSha),
+      {
+        baseSha: reuse.evidenceSha,
+        targetSha: currentManifest.targetSha,
+        version,
+        readSourceFile,
+        rootManifest,
+        targetCoveragePolicy: currentManifest.validationInputs.coveragePolicy,
+        readSourceFiles,
+      },
+    );
+    if (
+      verified.policy !== reuse.policy ||
+      !isDeepStrictEqual(verified.changedPaths, reuse.changedPaths)
+    ) {
+      throw new Error("beta-to-final changed paths differ from the authenticated comparison");
+    }
   } else if (
     reuse.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY ||
     reuse.policy === SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY
@@ -1572,7 +1629,7 @@ export function validateEvidenceReuseChain(
       throw new Error("changelog-only release evidence reuse requires commit comparison");
     }
     const comparison = compareCommits(reuse.evidenceSha, currentManifest.targetSha);
-    const verified = classifyReleaseChangelogEvidenceComparison(comparison, {
+    const verified = classifyReleaseEvidenceComparison(comparison, {
       baseSha: reuse.evidenceSha,
       version,
     });
@@ -1587,12 +1644,18 @@ export function validateEvidenceReuseChain(
     throw new Error("release validation manifest evidence reuse policy is invalid");
   }
 
-  const rootIdentity = JSON.stringify(manifestEvidenceIdentity(rootManifest));
+  const rootIdentity = JSON.stringify(
+    manifestEvidenceIdentity(rootManifest, reuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY),
+  );
   for (const [label, manifest] of [
     ["selected", selectedManifest],
     ["current", currentManifest],
   ]) {
-    if (JSON.stringify(manifestEvidenceIdentity(manifest)) !== rootIdentity) {
+    if (
+      JSON.stringify(
+        manifestEvidenceIdentity(manifest, reuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY),
+      ) !== rootIdentity
+    ) {
       throw new Error(`evidence reuse ${label} manifest policy differs from the chain root`);
     }
   }
@@ -1612,6 +1675,8 @@ export function validateRequestedEvidenceReuse(
     expectedTargetSha,
   },
   compareCommits,
+  readSourceFile,
+  readSourceFiles,
 ) {
   if (
     !Array.isArray(expectedChangedPaths) ||
@@ -1647,10 +1712,21 @@ export function validateRequestedEvidenceReuse(
         ...currentManifest,
         evidenceReuse: { ...requested, publication: retainedRootPublication(rootManifest) },
         targetSha: expectedTarget,
+        ...(requested.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY
+          ? {
+              validationInputs: {
+                ...currentManifest.validationInputs,
+                targetVersion: JSON.parse(readSourceFile(expectedTarget, "package.json")).version,
+                coveragePolicy: "npm-stable-v1",
+              },
+            }
+          : {}),
       },
       selectedManifest,
       rootManifest,
       compareCommits,
+      readSourceFile,
+      readSourceFiles,
     );
     return;
   }
@@ -2160,13 +2236,14 @@ function validateCompletedParentRun(
   repository,
   runId,
   expectedWorkflowPath,
+  allowIncomplete = false,
 ) {
   validateParentRunBinding(parentView, parentRest, runId, expectedWorkflowPath);
   if (
     parentView.status !== "completed" ||
-    parentView.conclusion !== "success" ||
+    (!allowIncomplete && parentView.conclusion !== "success") ||
     parentRest.status !== "completed" ||
-    parentRest.conclusion !== "success" ||
+    (!allowIncomplete && parentRest.conclusion !== "success") ||
     parentRest.repository?.full_name !== repository
   ) {
     throw new Error(`full release parent run is not completed/success: ${runId}`);
@@ -2183,6 +2260,30 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       ? immutableReads.bytes(route, load)
       : immutableReads.text(route, load);
   };
+  function readImmutableSourceFile(sha, sourceWorkflowPath) {
+    const exactSha = normalizeSha(sha, "source admission workflow SHA");
+    const route = "contents/" + sourceWorkflowPath + "?ref=" + exactSha;
+    const load = () => runReleaseCiGh(githubRestArgs(route, normalizedRepository));
+    const payload = JSON.parse(immutableReads ? immutableReads.text(route, load) : load());
+    if (
+      payload?.type !== "file" ||
+      payload.encoding !== "base64" ||
+      payload.path !== sourceWorkflowPath ||
+      !Number.isSafeInteger(payload.size) ||
+      payload.size < 1 ||
+      payload.size > 1024 * 1024 ||
+      typeof payload.content !== "string" ||
+      payload.content.length > 2 * 1024 * 1024
+    ) {
+      throw new Error("invalid immutable source-admission workflow response");
+    }
+    const bytes = Buffer.from(payload.content, "base64");
+    const blob = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+    if (bytes.length !== payload.size || blob !== payload.sha) {
+      throw new Error("source-admission workflow blob mismatch");
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  }
   return {
     readWorkloadIdentity: readJson,
     validateChildReuse(selection, request, { deadlineMs, waiverPolicy } = {}) {
@@ -2190,8 +2291,53 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         immutableReads,
         deadlineMs,
         waiverPolicy,
-        getJobLog: (id) => parentJobLog(id, normalizedRepository, immutableReads),
       });
+    },
+    getSourceFiles(requests) {
+      const sources = new Map();
+      const [owner, name] = normalizedRepository.split("/");
+      // Bound GraphQL response size and request count for publication recovery:
+      // even 299 changed metadata paths use at most 19 batch requests, not 598.
+      for (let offset = 0; offset < requests.length; offset += 32) {
+        const batch = requests.slice(offset, offset + 32);
+        const fields = batch
+          .map(
+            ({ sha, path }, index) =>
+              `f${index}:object(expression:${JSON.stringify(sha + ":" + path)}){...on Blob{oid byteSize isBinary isTruncated text}}`,
+          )
+          .join(" ");
+        const query = `query{repository(owner:${JSON.stringify(owner)},name:${JSON.stringify(name)}){${fields}}}`;
+        const response = JSON.parse(runReleaseCiGh(["api", "graphql", "-f", "query=" + query]));
+        if (response.errors?.length) {
+          throw new Error("immutable promotion source query failed");
+        }
+        for (const [index, request] of batch.entries()) {
+          const blob = response.data?.repository?.["f" + index];
+          if (
+            typeof blob?.text !== "string" ||
+            blob.isBinary !== false ||
+            blob.isTruncated !== false ||
+            !Number.isSafeInteger(blob.byteSize) ||
+            blob.byteSize < 1 ||
+            blob.byteSize > 1024 * 1024
+          ) {
+            throw new Error("invalid immutable promotion source blob");
+          }
+          const bytes = Buffer.from(blob.text, "utf8");
+          if (
+            bytes.length !== blob.byteSize ||
+            createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex") !==
+              blob.oid
+          ) {
+            throw new Error("immutable promotion source blob mismatch");
+          }
+          sources.set(request.sha + ":" + request.path, blob.text);
+        }
+      }
+      return sources;
+    },
+    getSourceFile(sha, sourceWorkflowPath) {
+      return readImmutableSourceFile(sha, sourceWorkflowPath);
     },
     getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
       if (
@@ -2208,28 +2354,7 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       ) {
         throw new Error("Unsupported immutable release workflow path");
       }
-      const exactSha = normalizeSha(sha, "source admission workflow SHA");
-      const route = "contents/" + sourceWorkflowPath + "?ref=" + exactSha;
-      const load = () => runReleaseCiGh(githubRestArgs(route, normalizedRepository));
-      const payload = JSON.parse(immutableReads ? immutableReads.text(route, load) : load());
-      if (
-        payload?.type !== "file" ||
-        payload.encoding !== "base64" ||
-        payload.path !== sourceWorkflowPath ||
-        !Number.isSafeInteger(payload.size) ||
-        payload.size < 1 ||
-        payload.size > 1024 * 1024 ||
-        typeof payload.content !== "string" ||
-        payload.content.length > 2 * 1024 * 1024
-      ) {
-        throw new Error("invalid immutable source-admission workflow response");
-      }
-      const bytes = Buffer.from(payload.content, "base64");
-      const blob = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
-      if (bytes.length !== payload.size || blob !== payload.sha) {
-        throw new Error("source-admission workflow blob mismatch");
-      }
-      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      return readImmutableSourceFile(sha, sourceWorkflowPath);
     },
     compareCommitLineage(base, head) {
       return readJson(`compare/${base}...${head}?per_page=1&page=2`);
@@ -2466,11 +2591,9 @@ async function recoveryChildProjection(plan, selection, client) {
   };
 }
 
-export async function prepareReleaseRecovery(
-  sourceRunId,
-  client = createReleaseEvidenceClient(),
-  { normalCiSelection } = {},
-) {
+// Sealing reuses this one observation of the original plan and child runs.
+// The full verifier still re-reads them before the manifest is written.
+async function resolveReleaseRecovery(sourceRunId, client, normalCiSelection) {
   const runId = normalizeRequiredRunId(sourceRunId, "original qualification run");
   const run = await client.getRun(runId);
   const original = client.loadExecutionPlanEvidence(runId);
@@ -2479,6 +2602,7 @@ export async function prepareReleaseRecovery(
     client,
   });
   if (
+    String(run.id) !== runId ||
     run.status !== "completed" ||
     plan.evidenceReuse.requested ||
     !plan.sourceAdmission.coverage.publication_artifact_source_json
@@ -2488,6 +2612,7 @@ export async function prepareReleaseRecovery(
     );
   }
   const effective = await recoveryChildProjection(plan, normalCiSelection, client);
+  const childRuns = new Map();
   const childAttempts = {};
   for (const child of effective.plan.children.filter((entry) => entry.selected)) {
     const observed = await client.getRun(child.runId);
@@ -2496,6 +2621,10 @@ export async function prepareReleaseRecovery(
       plannedRunAttempt: child.runAttempt,
       repository: plan.sourceAdmission.repository,
     });
+    if (String(observed.id) !== child.runId || observed.status !== "completed") {
+      throw new Error("Recovery source/child attempt changed or remains active: " + child.runId);
+    }
+    childRuns.set(child.runId, observed);
     childAttempts[child.runId] = observed.run_attempt;
   }
   const request = {
@@ -2506,8 +2635,15 @@ export async function prepareReleaseRecovery(
     ...(normalCiSelection === undefined ? {} : { normalCiSelection }),
     childAttempts,
   };
-  await assertRecoveryAttempts(request, client);
-  return request;
+  return { request, plan, effective, childRuns };
+}
+
+export async function prepareReleaseRecovery(
+  sourceRunId,
+  client = createReleaseEvidenceClient(),
+  { normalCiSelection } = {},
+) {
+  return (await resolveReleaseRecovery(sourceRunId, client, normalCiSelection)).request;
 }
 
 export async function sealReleaseRecovery(
@@ -2515,13 +2651,15 @@ export async function sealReleaseRecovery(
   client = createReleaseEvidenceClient(producer.repository),
 ) {
   client.verifyReleaseRecoveryProducer({ producer, completed: false });
-  const current = await prepareReleaseRecovery(request.sourceRunId, client, {
-    normalCiSelection: request.normalCiSelection,
-  });
-  if (!isDeepStrictEqual(current, request)) {
+  const current = await resolveReleaseRecovery(
+    request.sourceRunId,
+    client,
+    request.normalCiSelection,
+  );
+  if (!isDeepStrictEqual(current.request, request)) {
     throw new Error("Recovery request changed: original plan, artifact or attempts");
   }
-  const { plan } = client.loadExecutionPlanEvidence(request.sourceRunId);
+  const { plan, effective, childRuns } = current;
   const selected = await client.selectPublicationArtifactSource(
     JSON.parse(plan.sourceAdmission.coverage.publication_artifact_source_json),
     {
@@ -2544,7 +2682,6 @@ export async function sealReleaseRecovery(
   ) {
     throw new Error("Recovery publication source or candidate changed");
   }
-  const effective = await recoveryChildProjection(plan, request.normalCiSelection, client);
   const manifest = recoveryManifestFromPlan(
     effective.plan,
     request.sourceRunAttempt,
@@ -2554,7 +2691,7 @@ export async function sealReleaseRecovery(
     client.getWorkflowSource(plan.workflowSha, path),
   );
   for (const child of effective.plan.children.filter((entry) => entry.selected)) {
-    const run = await client.getRun(child.runId);
+    const run = childRuns.get(child.runId);
     const attempts = [];
     for (
       let attempt = child.runAttempt;
@@ -2799,6 +2936,7 @@ async function loadRecoveryEvidence({ verifier, trustedIdentity, ...options }) {
 async function loadValidatedParentEvidence({
   client,
   preloadedRun,
+  allowIncomplete = false,
   expectedRunAttempts,
   manifestPath,
   repository,
@@ -2819,6 +2957,7 @@ async function loadValidatedParentEvidence({
     repository,
     runId,
     recovery ? ".github/workflows/full-release-receipt-recovery.yml" : undefined,
+    allowIncomplete,
   );
 
   const manifestEvidence = client.loadManifest(runId, parentRunAttempt, manifestPath);
@@ -2916,6 +3055,7 @@ async function validateStrictChildRun({
         role: child.manifestKey,
         targetSha: parentEvidence.manifest.targetSha,
         policyTargetVersion: parentEvidence.manifest.validationInputs?.targetVersion,
+        requiredJobs: child.requiredJobs,
         workflowSha: parentEvidence.manifest.workflowSha,
       })
     : undefined;
@@ -2992,7 +3132,8 @@ async function validateStrictChildRun({
   }
   let jobs;
   let composite;
-  let rawJobs;
+  const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
+  const targetSha = parentEvidence.manifest.targetSha;
   if (plannedChild && childEvidence) {
     if (childEvidence.effectiveRunAttempt > effectiveRunAttempt) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
@@ -3023,15 +3164,7 @@ async function validateStrictChildRun({
               triggering_actor: { login: childEvidence.triggeringActor },
             },
     });
-    rawJobs = evidence.jobs.map((job) =>
-      attempts
-        .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
-        .jobs.find((raw) => raw.name === job.name && (raw.html_url ?? raw.url ?? "") === job.url),
-    );
-    if (
-      JSON.stringify(sortReleaseJsonValueKeys(childEvidence)) !==
-      JSON.stringify(sortReleaseJsonValueKeys(evidence))
-    ) {
+    if (!matchesReleaseChildAttemptEvidence(childEvidence, evidence)) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
     }
     if (childEvidence.effectiveRunAttempt < effectiveRunAttempt) {
@@ -3043,12 +3176,13 @@ async function validateStrictChildRun({
       effectiveRunAttempt: evidence.effectiveRunAttempt,
       jobs: evidence.jobs,
       plannedRunAttempt: evidence.plannedRunAttempt,
-      sha256: evidence.compositeJobsSha256,
+      sha256: childEvidence.compositeJobsSha256,
     };
     jobs = evidence.jobs;
   } else {
     jobs =
-      run.conclusion === "success" && child.manifestKey !== "productPerformance"
+      run.conclusion === "success" &&
+      !["productPerformance", "stableClientCompatibility"].includes(child.manifestKey)
         ? []
         : await client.getParentJobs(runId);
   }
@@ -3060,28 +3194,26 @@ async function validateStrictChildRun({
     runAttempt: effectiveRunAttempt,
     status: run.status,
   };
-  const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
-  const targetSha = parentEvidence.manifest.targetSha;
   const policy = evaluateReleaseChildPolicy({
     child: policyChild,
     targetVersion,
     targetSha,
     waiverPolicy,
+    requiredJobs: child.requiredJobs,
   });
   if (
     run.repository?.full_name !== repository ||
-    run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
-    !terminalPolicyPass(policyChild, targetVersion, targetSha, waiverPolicy)
+    run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha)
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
-  await validateReleaseWaiverAggregates({
-    policy,
-    jobs: rawJobs ?? jobs,
-    getJobLog: (id) => client.getJobLog(id),
-  });
   if (child.requiredJobs) {
     validateQualificationJobs(jobs, child.requiredJobs, child.name, policy.waivedJobNames);
+  }
+  if (
+    !terminalPolicyPass(policyChild, targetVersion, targetSha, waiverPolicy, child.requiredJobs)
+  ) {
+    throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
   if (child.manifestKey === "productPerformance") {
     // The authenticated composite selects the newest executed attempt per job,
@@ -3155,10 +3287,16 @@ function qualificationReuseIdentity(admission) {
   };
 }
 
-function qualificationReusePolicyIdentity(admission) {
+function qualificationReusePolicyIdentity(admission, promotion = false) {
   const identity = qualificationReuseIdentity(admission);
   const inputs = { ...identity.inputs };
   const envelope = JSON.parse(inputs.trusted_workflow_json);
+  if (promotion) {
+    // Discovery is dispatch control, not a measured qualification input. The
+    // authenticated source must already be a direct root with all groups.
+    delete inputs.reuse_evidence;
+    envelope.publicationSelection = promotionSelection(envelope.publicationSelection);
+  }
   // Changelog-only C descendants can advance their C-owned Q with C. An
   // independently selected Q is policy, not product identity, and stays exact.
   const qualificationSha =
@@ -3173,6 +3311,15 @@ function qualificationReusePolicyIdentity(admission) {
   );
   return {
     ...identity,
+    ...(promotion
+      ? {
+          baselinePolicy: {
+            ...identity.baselinePolicy,
+            candidateVersion: "<promoted-version>",
+            packageSourceDigest: "<versioned-package>",
+          },
+        }
+      : {}),
     candidateSha: "<candidate>",
     qualificationSha,
     inputs,
@@ -3182,6 +3329,8 @@ function qualificationReusePolicyIdentity(admission) {
 /**
  * @param {{
  *   manifestPath?: string,
+ *   fastTrackRequest?: unknown,
+ *   fastTrackPublication?: import("./lib/release-fast-track-publication.mts").FastTrackPublication,
  *   qualificationReuse?: { candidateSha: string, qualificationSha: string, workflowRef: string, descriptor: object, inputs: Record<string, string> },
  *   repository?: string,
  *   reuseRequest?: { releaseProfile: string, runReleaseSoak: string, targetSha: string, validationInputs: Record<string, unknown> },
@@ -3200,9 +3349,11 @@ function qualificationReusePolicyIdentity(admission) {
  *   verifierSourceSha: string,
  * }} options
  */
-export async function validateReleaseRunEvidence(
+async function validateReleaseEvidenceGraph(
   {
     manifestPath,
+    fastTrackRequest,
+    fastTrackPublication,
     qualificationReuse,
     repository = DEFAULT_REPO,
     reuseRequest,
@@ -3221,8 +3372,18 @@ export async function validateReleaseRunEvidence(
     verifierSourceSha,
   },
   client,
-  recoveryDraft = null,
+  recoveryDraft,
+  preparationMode,
 ) {
+  const buildOnlyPreparation = preparationMode === BUILD_ONLY_PREPARATION;
+  if (
+    buildOnlyPreparation &&
+    (fastTrackRequest || qualificationReuse || reuseRequest || recoveryDraft)
+  ) {
+    throw new Error(
+      "Build-only preparation cannot approve, recover, or reuse release qualification.",
+    );
+  }
   const normalizedRepository = normalizeRepository(repository);
   const normalizedRunId = normalizeRequiredRunId(runId, "full release run ID");
   const remainingExpectedRunAttempts = normalizeExpectedRunAttempts(expectedRunAttempts);
@@ -3291,7 +3452,15 @@ export async function validateReleaseRunEvidence(
       verifier,
       expectedRunAttempts: remainingExpectedRunAttempts,
     });
-    return { ...evidence, qualification: qualificationFacts(evidence) };
+    return { ...evidence, fastTrack: undefined, qualification: qualificationFacts(evidence) };
+  }
+  if (
+    fastTrackRequest &&
+    workflowPath(selectedRun) !== ".github/workflows/full-release-validation.yml"
+  ) {
+    throw new Error(
+      "Fast-track requires the original admitted FRV, not a replacement recovery aggregate.",
+    );
   }
   const recovery = workflowPath(selectedRun) === ".github/workflows/openclaw-release-prepare.yml";
   const currentEvidence = recovery
@@ -3309,11 +3478,21 @@ export async function validateReleaseRunEvidence(
     : await loadValidatedParentEvidence({
         client: evidenceClient,
         preloadedRun: selectedRun,
+        allowIncomplete: Boolean(fastTrackRequest),
         expectedRunAttempts: remainingExpectedRunAttempts,
         manifestPath,
         repository: normalizedRepository,
         runId: normalizedRunId,
       });
+  if (
+    currentEvidence.manifest.rerunGroup === "build-only" &&
+    !fastTrackRequest &&
+    !buildOnlyPreparation
+  ) {
+    throw new Error(
+      "Build-only artifacts require a fast-track request and npm-release environment approval; they are not validated release evidence.",
+    );
+  }
   if (
     recovery &&
     (qualificationReuse ||
@@ -3343,7 +3522,7 @@ export async function validateReleaseRunEvidence(
     expectedEvidenceSha,
     expectedRootRunId,
     expectedSelectedRunId,
-    expectedTargetSha: recovery ? undefined : expectedTargetSha,
+    expectedTargetSha: recovery || buildOnlyPreparation ? undefined : expectedTargetSha,
   };
   let requestedReuseDelta;
   if (reuseRequest !== undefined) {
@@ -3355,9 +3534,7 @@ export async function validateReleaseRunEvidence(
       manifest.evidenceReuse ||
       manifest.rerunGroup !== "all" ||
       manifest.releaseProfile !== reuseRequest.releaseProfile ||
-      manifest.runReleaseSoak !== reuseRequest.runReleaseSoak ||
-      JSON.stringify(sortReleaseJsonValueKeys(manifest.validationInputs)) !==
-        JSON.stringify(sortReleaseJsonValueKeys(reuseRequest.validationInputs))
+      manifest.runReleaseSoak !== reuseRequest.runReleaseSoak
     ) {
       throw new Error(
         "ineligible reuse candidate: requires a direct full run with matching profile, soak, and inputs",
@@ -3369,26 +3546,31 @@ export async function validateReleaseRunEvidence(
       : evidenceClient.compareCommits(manifest.targetSha, reuseRequest.targetSha);
     const delta = exactTarget
       ? { changedPaths: [], policy: EXACT_TARGET_EVIDENCE_REUSE_POLICY }
-      : classifyReleaseChangelogEvidenceComparison(comparison, {
+      : classifyReleaseEvidenceComparison(comparison, {
           baseSha: manifest.targetSha,
+          rootManifest: manifest,
+          targetCoveragePolicy: reuseRequest.validationInputs?.coveragePolicy,
+          readSourceFiles: (requests) => evidenceClient.getSourceFiles(requests),
+          targetSha: reuseRequest.targetSha,
+          readSourceFile: (sha, path) => evidenceClient.getSourceFile(sha, path),
           version:
-            manifest.candidateBinding?.package?.version ?? manifest.validationInputs?.targetVersion,
+            reuseRequest.validationInputs?.targetVersion ??
+            manifest.validationInputs?.targetVersion,
         });
+    const promotion = delta.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY;
+    if (
+      !isDeepStrictEqual(
+        promotion
+          ? promotionValidationInputs(manifest.validationInputs)
+          : manifest.validationInputs,
+        promotion
+          ? promotionValidationInputs(reuseRequest.validationInputs)
+          : reuseRequest.validationInputs,
+      )
+    ) {
+      throw new Error("ineligible reuse candidate: requires matching validation inputs");
+    }
     requestedReuseDelta = delta;
-    validateRequestedEvidenceReuse(
-      manifest,
-      manifest,
-      manifest,
-      {
-        expectedChangedPaths: delta.changedPaths,
-        expectedEvidencePolicy: delta.policy,
-        expectedEvidenceSha: manifest.targetSha,
-        expectedRootRunId: manifest.runId,
-        expectedSelectedRunId: manifest.runId,
-        expectedTargetSha: reuseRequest.targetSha,
-      },
-      () => comparison,
-    );
   }
   let validatedDirectRequestedReuse = false;
   let expectedReuseDescendant = false;
@@ -3403,6 +3585,8 @@ export async function validateReleaseRunEvidence(
       currentEvidence.manifest,
       requestedReuse,
       (base, head) => evidenceClient.compareCommits(base, head),
+      (sha, path) => evidenceClient.getSourceFile(sha, path),
+      (requests) => evidenceClient.getSourceFiles(requests),
     );
     validatedDirectRequestedReuse = true;
     expectedReuseDescendant =
@@ -3511,8 +3695,16 @@ export async function validateReleaseRunEvidence(
           expectedTargetSha === requestedAdmission.request.candidateSha)) &&
       currentEvidence.manifest.targetSha === selectedAdmission.request.candidateSha &&
       isDeepStrictEqual(
-        qualificationReusePolicyIdentity(selectedAdmission),
-        qualificationReusePolicyIdentity(requestedAdmission),
+        qualificationReusePolicyIdentity(
+          selectedAdmission,
+          (requestedReuseDelta?.policy ?? expectedEvidencePolicy) ===
+            BETA_FINAL_EVIDENCE_REUSE_POLICY,
+        ),
+        qualificationReusePolicyIdentity(
+          requestedAdmission,
+          (requestedReuseDelta?.policy ?? expectedEvidencePolicy) ===
+            BETA_FINAL_EVIDENCE_REUSE_POLICY,
+        ),
       );
     if (
       (reuseRequest !== undefined &&
@@ -3552,6 +3744,8 @@ export async function validateReleaseRunEvidence(
       selectedEvidence.manifest,
       rootEvidence.manifest,
       (base, head) => evidenceClient.compareCommits(base, head),
+      (sha, path) => evidenceClient.getSourceFile(sha, path),
+      (requests) => evidenceClient.getSourceFiles(requests),
     );
   }
   if (hasRequestedEvidenceReuse(requestedReuse) && !validatedDirectRequestedReuse) {
@@ -3561,6 +3755,8 @@ export async function validateReleaseRunEvidence(
       rootEvidence.manifest,
       requestedReuse,
       (base, head) => evidenceClient.compareCommits(base, head),
+      (sha, path) => evidenceClient.getSourceFile(sha, path),
+      (requests) => evidenceClient.getSourceFiles(requests),
     );
   }
 
@@ -3670,6 +3866,15 @@ export async function validateReleaseRunEvidence(
   }
   const qualification = qualificationAdmissions.get(rootEvidence.manifest.runId);
   const currentQualification = qualificationAdmissions.get(currentEvidence.manifest.runId);
+  if (
+    reuse?.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY &&
+    !isDeepStrictEqual(
+      qualificationReusePolicyIdentity(currentQualification, true),
+      qualificationReusePolicyIdentity(qualification, true),
+    )
+  ) {
+    throw new Error("Beta promotion changed admitted qualification policy or lane inputs");
+  }
   if (reuse?.policy === EXACT_TARGET_EVIDENCE_REUSE_POLICY) {
     if (
       !qualification ||
@@ -3702,6 +3907,265 @@ export async function validateReleaseRunEvidence(
     ) {
       throw new Error("Reused publication artifacts differ from their authenticated root");
     }
+  }
+  if (buildOnlyPreparation || currentEvidence.manifest.rerunGroup === "build-only") {
+    const plan = sourcePlans.get(currentEvidence.manifest.runId);
+    if (
+      recovery ||
+      reuse ||
+      !plan ||
+      plan.rerunGroup !== "build-only" ||
+      (expectedTargetSha !== undefined &&
+        currentEvidence.manifest.targetSha !== expectedTargetSha) ||
+      plan.children.some(
+        (child) => child.selected || child.required || child.runId || child.runAttempt,
+      ) ||
+      !isDeepStrictEqual(plan.candidate, currentEvidence.manifest.candidateBinding) ||
+      !plan.candidate ||
+      Object.values(currentEvidence.manifest.childRunIds).some(Boolean) ||
+      Object.keys(currentEvidence.manifest.childEvidence ?? {}).length > 0 ||
+      currentEvidence.manifest.publicationArtifacts?.npmPreflight?.schema !==
+        "openclaw.sealed-npm-preflight/v1" ||
+      !currentEvidence.manifest.publicationArtifacts?.docker
+    ) {
+      throw new Error(
+        "Build-only preparation requires its direct admitted artifact plan and sealed descriptors.",
+      );
+    }
+    validateReleaseCoveragePolicyBinding(plan, currentEvidence.manifest.validationInputs);
+    const mandatoryGates = [
+      "Resolve target ref",
+      "Acquire full release candidate",
+      "Prepare release npm artifacts",
+      "Qualify release npm artifacts",
+      "Prepare release Docker artifacts",
+      ...(currentEvidence.manifest.publicationArtifacts?.pluginNpm
+        ? ["Prepare exact plugin npm artifacts"]
+        : []),
+    ];
+    if (
+      mandatoryGates.some((name) => !plan.gates.some((gate) => gate.name === name && gate.required))
+    ) {
+      throw new Error("Build-only execution plan omitted a mandatory artifact gate.");
+    }
+    const attempts = [];
+    for (
+      let attempt = plan.parentRunAttempt;
+      attempt <= currentEvidence.manifest.runAttempt;
+      attempt++
+    ) {
+      attempts.push({
+        runAttempt: attempt,
+        jobs: await evidenceClient.getRunAttemptJobs(normalizedRunId, attempt, {
+          requireComplete: true,
+        }),
+      });
+    }
+    const composite = composeReleaseAttemptJobs(attempts, {
+      plannedRunAttempt: plan.parentRunAttempt,
+      effectiveRunAttempt: currentEvidence.manifest.runAttempt,
+      effectiveRunStatus: selectedRun.status,
+    });
+    validateQualificationJobs(
+      composite.jobs,
+      [
+        ...new Set([
+          ...mandatoryGates,
+          ...plan.gates.filter((gate) => gate.required).map((gate) => gate.name),
+        ]),
+      ],
+      "Build-only artifact preparation",
+    );
+    if (buildOnlyPreparation) {
+      if (remainingExpectedRunAttempts?.size) {
+        throw new Error("Build-only preparation contains unvalidated expected run attempts.");
+      }
+      return {
+        schema: "openclaw.release-build-only-evidence/v1",
+        prepared: true,
+        valid: false,
+        publicationAuthorized: false,
+        repository: normalizedRepository,
+        current: normalizedParentTuple(
+          currentEvidence,
+          producerIdentities.get(currentEvidence.manifest.runId),
+        ),
+        executionPlan: { parentRunAttempt: plan.parentRunAttempt, sha256: plan.sha256 },
+        validation: {
+          mode: "build-only",
+          skipped: currentQualification.coverage.children.map((child) => child.key),
+        },
+        verifier,
+      };
+    }
+  }
+  if (fastTrackRequest) {
+    if (reuse || qualificationReuse || reuseRequest) {
+      throw new Error("Fast-track binds the original direct FRV, not reused qualification.");
+    }
+    const { authenticateFastTrackPolicy, parseFastTrackPacket } =
+      await import("./lib/release-fast-track-publication.mts");
+    const executionPlan = sourcePlans.get(currentEvidence.manifest.runId);
+    const jobs = [];
+    const collect = async (run, selectedId, attempt, firstAttempt) => {
+      if (String(run.id) !== String(selectedId) || Number(run.run_attempt) !== Number(attempt)) {
+        throw new Error("Fast-track job attempt changed.");
+      }
+      const attempts = [];
+      for (let current = firstAttempt; current <= attempt; current++) {
+        attempts.push({
+          runAttempt: current,
+          jobs: await evidenceClient.getRunAttemptJobs(selectedId, current, {
+            requireComplete: true,
+          }),
+        });
+      }
+      const composite = composeReleaseAttemptJobs(attempts, {
+        plannedRunAttempt: firstAttempt,
+        effectiveRunAttempt: attempt,
+        effectiveRunStatus: run.status,
+      });
+      const observed = new Map();
+      for (const accepted of composite.jobs) {
+        const original = attempts.find((entry) => entry.runAttempt === accepted.acceptedRunAttempt);
+        const job = resolveReleaseAttemptJobs(original.jobs, original.runAttempt, {
+          allowRunning: true,
+        }).find((entry) => entry.name === accepted.name);
+        observed.set(job.name, { ...job, acceptedRunAttempt: original.runAttempt });
+      }
+      // Composition carries earlier executions over skipped rerun projections.
+      // Still enumerate checks that never executed in any bound attempt.
+      for (const entry of attempts) {
+        for (const job of entry.jobs) {
+          if (!observed.has(job.name)) {
+            observed.set(job.name, { ...job, acceptedRunAttempt: entry.runAttempt });
+          }
+        }
+      }
+      for (const job of observed.values()) {
+        const status =
+          job.status !== "completed"
+            ? "unfinished"
+            : job.conclusion === "success" || job.conclusion === "neutral"
+              ? "passed"
+              : job.conclusion === "skipped"
+                ? "skipped"
+                : job.conclusion === "cancelled"
+                  ? "cancelled"
+                  : "failed";
+        jobs.push({
+          name: job.name,
+          jobId: String(job.id),
+          runId: String(selectedId),
+          runAttempt: String(job.acceptedRunAttempt),
+          status,
+        });
+      }
+    };
+    await collect(
+      selectedRun,
+      normalizedRunId,
+      selectedRun.run_attempt,
+      executionPlan.parentRunAttempt,
+    );
+    for (const child of executionPlan.children.filter((entry) => entry.selected && !entry.runId)) {
+      const { parentJobName } = releaseChildSpec(child.key);
+      if (!jobs.some((job) => job.name === parentJobName && job.status !== "passed")) {
+        throw new Error(
+          "Fast-track is missing the original unsuccessful dispatch job for " + child.key,
+        );
+      }
+    }
+    validateReleaseCoveragePolicyBinding(executionPlan, currentEvidence.manifest.validationInputs);
+    if (!isDeepStrictEqual(executionPlan.candidate, currentEvidence.manifest.candidateBinding)) {
+      throw new Error("Fast-track candidate differs from the original admitted artifact plan.");
+    }
+    for (const child of executionPlan.children.filter((entry) => entry.selected && entry.runId)) {
+      const boundAttempt =
+        currentEvidence.manifest.childEvidence?.[child.key]?.effectiveRunAttempt ??
+        child.runAttempt;
+      const run = await evidenceClient.getRunAttempt(child.runId, boundAttempt);
+      validateReleaseChildRunProvenance(run, {
+        ...child,
+        plannedRunAttempt: child.runAttempt,
+        repository: normalizedRepository,
+      });
+      await collect(run, child.runId, boundAttempt, child.runAttempt);
+    }
+    const packet = parseFastTrackPacket(fastTrackRequest);
+    const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
+    if (packet.request.policy === "approved-fast-track-v1") {
+      if (
+        execFileSync("git", ["-C", repositoryRoot, "rev-parse", "--is-shallow-repository"], {
+          encoding: "utf8",
+        }).trim() === "true"
+      ) {
+        execFileSync("git", ["-C", repositoryRoot, "fetch", "--unshallow", "--no-tags", "origin"], {
+          stdio: "pipe",
+        });
+      }
+      for (const commit of [packet.request.candidateSha, packet.request.reference.targetSha]) {
+        try {
+          execFileSync("git", ["-C", repositoryRoot, "cat-file", "-e", commit + "^{commit}"], {
+            stdio: "ignore",
+          });
+        } catch {
+          execFileSync("git", ["-C", repositoryRoot, "fetch", "--no-tags", "origin", commit], {
+            stdio: "pipe",
+          });
+        }
+      }
+    }
+    const fastTrack = await authenticateFastTrackPolicy({
+      packet: fastTrackRequest,
+      publication: fastTrackPublication,
+      manifest: currentEvidence.manifestJson,
+      jobs,
+      repositoryRoot,
+      readPublishedRelease: (tag) => {
+        const release = evidenceClient.readWorkloadIdentity(
+          "releases/tags/" + encodeURIComponent(tag),
+        );
+        const ref = evidenceClient.getRef("refs/tags/" + tag);
+        const target =
+          ref.object.type === "tag"
+            ? evidenceClient.readWorkloadIdentity("git/tags/" + ref.object.sha).object
+            : ref.object;
+        return {
+          ...release,
+          targetSha: target.type === "commit" ? target.sha : undefined,
+          fastTracked: release.assets?.some(
+            (asset) =>
+              asset.name.endsWith("-fast-track-request.json") ||
+              asset.name.endsWith("-fast-track-approval.json"),
+          ),
+        };
+      },
+    });
+    const current = normalizedParentTuple(
+      currentEvidence,
+      producerIdentities.get(currentEvidence.manifest.runId),
+    );
+    const evidence = {
+      current,
+      root: current,
+      manifest: currentEvidence.manifestJson,
+      repository: normalizedRepository,
+      qualificationAdmission: currentQualification,
+      fastTrack,
+      executionPlan: {
+        parentRunAttempt: executionPlan.parentRunAttempt,
+        sha256: executionPlan.sha256,
+      },
+      children: [],
+      waivers: [],
+      valid: true,
+      verifier,
+      directRoot: true,
+      trustedWorkflowFullRef: trustedIdentity.fullRef,
+      trustedWorkflowRef: normalizedTrustedWorkflowRef,
+    };
+    return { ...evidence, qualification: qualificationFacts(evidence) };
   }
   const selectedKeys = new Set(qualification.coverage.children.map((child) => child.key));
   const executionPlan = sourcePlans.get(rootEvidence.manifest.runId);
@@ -3745,12 +4209,7 @@ export async function validateReleaseRunEvidence(
   }
   const expectedChildren = qualification.coverage.children.map((child) => {
     const plannedChild = plannedByKey.get(child.key);
-    if (
-      !plannedChild?.selected ||
-      !plannedChild.required ||
-      !plannedChild.runId ||
-      !plannedChild.runAttempt
-    ) {
+    if (!plannedChild?.selected || !plannedChild.required) {
       throw new Error("execution plan omits required child: " + child.name);
     }
     return Object.assign({}, child, {
@@ -3761,13 +4220,6 @@ export async function validateReleaseRunEvidence(
       plannedChild,
     });
   });
-  if (
-    executionPlan?.attemptEvidenceVersion !== undefined &&
-    JSON.stringify(Object.keys(rootEvidence.manifest.childEvidence).toSorted()) !==
-      JSON.stringify([...selectedKeys].toSorted(compareAscii))
-  ) {
-    throw new Error("release validation manifest composite child set is invalid");
-  }
   const dispatchEvidence = rootEvidence;
   const parentJobs = await evidenceClient.getParentJobs(dispatchEvidence.manifest.runId);
   const attempts = [];
@@ -3807,25 +4259,65 @@ export async function validateReleaseRunEvidence(
       sourcePath,
     ),
   );
+  const missingChildren = new Map();
+  for (const { child, runId: childRunId } of childEntries) {
+    const scope = {
+      childRole: child.manifestKey,
+      targetVersion: executionPlan.targetVersion,
+      targetSha: executionPlan.targetSha,
+    };
+    if (!isWaived(scope, waiverPolicy)) {
+      if (childRunId && child.plannedChild.runAttempt) {
+        continue;
+      }
+      throw new Error("execution plan omits required child: " + child.name);
+    }
+    if (
+      childRunId ||
+      child.plannedChild.runAttempt ||
+      executionPlan.childReuse?.[child.manifestKey] ||
+      rootEvidence.manifest.childEvidence?.[child.manifestKey] !== undefined
+    ) {
+      throw new Error("execution plan includes evidence for waived child: " + child.name);
+    }
+    missingChildren.set(child.manifestKey, {
+      conclusion: "missing",
+      role: child.manifestKey,
+      runId: "",
+      runAttempt: null,
+      waivers: waiverPolicy.filter((grant) => isWaived(scope, [grant])),
+    });
+  }
+  if (
+    executionPlan?.attemptEvidenceVersion !== undefined &&
+    JSON.stringify(Object.keys(rootEvidence.manifest.childEvidence).toSorted()) !==
+      JSON.stringify(
+        [...selectedKeys].filter((key) => !missingChildren.has(key)).toSorted(compareAscii),
+      )
+  ) {
+    throw new Error("release validation manifest composite child set is invalid");
+  }
   const childResults = await Promise.allSettled(
-    childEntries.map(({ child, runId: childRunId }) =>
-      validateStrictChildRun({
-        child,
-        childEvidence: rootEvidence.manifest.childEvidence?.[child.manifestKey],
-        childReuse: childPlan?.childReuse?.[child.manifestKey],
-        recoveryNormalCiOrigin:
-          child.manifestKey === "normalCi" ? rootEvidence.recoveryNormalCiOrigin : undefined,
-        client: evidenceClient,
-        executionPlan,
-        parentEvidence: dispatchEvidence,
-        parentJobs,
-        plannedChild: child.plannedChild,
-        releaseProfile: rootEvidence.manifest.releaseProfile,
-        repository: normalizedRepository,
-        runId: childRunId,
-        expectedRunAttempts: remainingExpectedRunAttempts,
-        waiverPolicy,
-      }),
+    childEntries.map(
+      ({ child, runId: childRunId }) =>
+        missingChildren.get(child.manifestKey) ??
+        validateStrictChildRun({
+          child,
+          childEvidence: rootEvidence.manifest.childEvidence?.[child.manifestKey],
+          childReuse: childPlan?.childReuse?.[child.manifestKey],
+          recoveryNormalCiOrigin:
+            child.manifestKey === "normalCi" ? rootEvidence.recoveryNormalCiOrigin : undefined,
+          client: evidenceClient,
+          executionPlan,
+          parentEvidence: dispatchEvidence,
+          parentJobs,
+          plannedChild: child.plannedChild,
+          releaseProfile: rootEvidence.manifest.releaseProfile,
+          repository: normalizedRepository,
+          runId: childRunId,
+          expectedRunAttempts: remainingExpectedRunAttempts,
+          waiverPolicy,
+        }),
     ),
   );
   const children = childResults.map((result) => {
@@ -3853,6 +4345,14 @@ export async function validateReleaseRunEvidence(
   if (waivers.some((waiver) => waiver.targetSha && waiver.targetSha !== destinationTargetSha)) {
     throw new Error("candidate-bound release waiver cannot qualify a different target SHA");
   }
+  const destinationVersion =
+    reuseRequest?.validationInputs?.targetVersion ??
+    (expectedEvidencePolicy === BETA_FINAL_EVIDENCE_REUSE_POLICY
+      ? JSON.parse(evidenceClient.getSourceFile(expectedTargetSha, "package.json")).version
+      : currentEvidence.manifest.validationInputs?.targetVersion);
+  if (waivers.some((waiver) => waiver.targetVersion !== destinationVersion)) {
+    throw new Error("version-bound release waiver cannot qualify a different target version");
+  }
   if (remainingExpectedRunAttempts?.size) {
     throw new Error(
       `expected run attempts contain unvalidated run IDs: ${[...remainingExpectedRunAttempts.keys()].join(", ")}`,
@@ -3874,7 +4374,7 @@ export async function validateReleaseRunEvidence(
     children.map((child) => [child.role, child.conclusion]),
   );
   const evidence = sortReleaseJsonValueKeys({
-    children,
+    children: children.filter((child) => !missingChildren.has(child.role)),
     waivers,
     conclusions: {
       children: childConclusions,
@@ -3884,6 +4384,9 @@ export async function validateReleaseRunEvidence(
     controls: rootEvidence.manifest.controls,
     current,
     directRoot: !reuse,
+    ...(requestedReuseDelta
+      ? { reuseSelection: { ...requestedReuseDelta, targetSha: reuseRequest.targetSha } }
+      : {}),
     evidenceReuse: reuse
       ? {
           changedPaths: reuse.changedPaths,
@@ -3914,7 +4417,31 @@ export async function validateReleaseRunEvidence(
     validationInputs: rootEvidence.manifest.validationInputs ?? null,
     verifier,
   });
-  return { ...evidence, qualification: qualificationFacts(evidence) };
+  return { ...evidence, fastTrack: undefined, qualification: qualificationFacts(evidence) };
+}
+
+/** @param {Parameters<typeof validateReleaseEvidenceGraph>[0]} options */
+export async function validateReleaseRunEvidence(options, client, recoveryDraft = null) {
+  const evidence = await validateReleaseEvidenceGraph(options, client, recoveryDraft);
+  if ("prepared" in evidence) {
+    throw new Error("Preparation is not validated release evidence.");
+  }
+  return evidence;
+}
+
+// This read-only result proves preparation, never qualification or publication authority.
+// Publishers must authenticate a fast-track request and npm-release environment approval and verify the sealed bytes.
+export async function validateReleaseBuildOnlyEvidence(options, client) {
+  const evidence = await validateReleaseEvidenceGraph(
+    options,
+    client,
+    null,
+    BUILD_ONLY_PREPARATION,
+  );
+  if (!("prepared" in evidence)) {
+    throw new Error("Expected build-only preparation evidence.");
+  }
+  return evidence;
 }
 
 // Normalize only after the owner has authenticated the complete evidence graph.
@@ -3934,7 +4461,7 @@ function qualificationFacts(evidence) {
   };
 }
 
-function parseReleaseCiSummaryArgs(argv) {
+export function parseReleaseCiSummaryArgs(argv) {
   const stringFlags = {
     "--repo": "repository",
     "--manifest": "manifestPath",
@@ -3968,6 +4495,7 @@ function parseReleaseCiSummaryArgs(argv) {
     trustedWorkflowRef: "main",
     trustedWorkflowSha: undefined,
     validate: false,
+    buildOnlyPreparation: false,
     acquirePublicationManifest: false,
     verifierSourceFile: undefined,
     verifierSourceSha: undefined,
@@ -3979,6 +4507,10 @@ function parseReleaseCiSummaryArgs(argv) {
       options[stringFlags[argument]] = argv[++index];
     } else if (argument === "--acquire-publication-manifest") {
       options.acquirePublicationManifest = true;
+      options.runId = argv[++index];
+    } else if (argument === "--verify-build-only") {
+      options.validate = true;
+      options.buildOnlyPreparation = true;
       options.runId = argv[++index];
     } else if (argument === "--validate-run") {
       options.validate = true;
@@ -4070,6 +4602,7 @@ function printUsage() {
       "usage: release-ci-summary.mjs <full-release-run-id>",
       "       release-ci-summary.mjs <full-release-run-id> --watch [--interval seconds]",
       "       release-ci-summary.mjs --acquire-publication-manifest <id> [--repo owner/name] [--expected-run-attempts-json json]",
+      "       release-ci-summary.mjs --verify-build-only <id> [same identity/verifier options as --validate-run] --json",
       "       release-ci-summary.mjs --validate-run <id> [--repo owner/name] [--trusted-workflow-ref main --trusted-workflow-full-ref refs/heads/main] [--trusted-workflow-sha sha] [--manifest path] [--verifier-source-sha sha --verifier-source-file path] [--expected-target-sha sha --expected-evidence-sha sha --expected-evidence-policy policy --expected-root-run-id id --expected-selected-run-id id --expected-changed-paths-json json] [--expected-run-attempts-json json] [--reuse-request-json json] --json",
     ].join("\n"),
   );
@@ -4355,6 +4888,7 @@ export async function acquirePublicationManifest(
   const evidence = await loadValidatedParentEvidence({
     client: evidenceClient,
     preloadedRun: selectedRun,
+    allowIncomplete: Boolean(process.env.FAST_TRACK_REQUEST_JSON),
     repository,
     runId,
     expectedRunAttempts: attempts,
@@ -4383,7 +4917,10 @@ async function main() {
 
   if (options.validate) {
     try {
-      const evidence = await validateReleaseRunEvidence({
+      const verify = options.buildOnlyPreparation
+        ? validateReleaseBuildOnlyEvidence
+        : validateReleaseRunEvidence;
+      const evidence = await verify({
         ...options,
         verifierSourceContent: options.verifierSourceFile
           ? readFileSync(options.verifierSourceFile)

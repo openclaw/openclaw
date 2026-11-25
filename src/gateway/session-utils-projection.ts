@@ -114,22 +114,49 @@ export function projectSessionRowChildLinks(links: readonly SessionChildLink[] |
     agentId,
     storePath,
     parsedKey: parseAgentSessionKey(key),
-    entry: {
-      sessionId: entry.sessionId,
-      lifecycleRevision: entry.lifecycleRevision,
-      updatedAt: entry.updatedAt,
-      archivedAt: entry.archivedAt,
-      status: entry.status,
-      startedAt: entry.startedAt,
-      endedAt: entry.endedAt,
-      spawnedBy: entry.spawnedBy,
-      parentSessionKey: entry.parentSessionKey,
-      sidebarRoot: entry.sidebarRoot,
-      createdActor: entry.createdActor,
-      visibility: entry.visibility,
-      incognito: entry.incognito,
-    },
+    entry: projectChildLinkEntry(entry),
   }));
+}
+
+function projectChildLinkEntry(entry: SessionEntry) {
+  return {
+    sessionId: entry.sessionId,
+    lifecycleRevision: entry.lifecycleRevision,
+    updatedAt: entry.updatedAt,
+    archivedAt: entry.archivedAt,
+    status: entry.status,
+    startedAt: entry.startedAt,
+    endedAt: entry.endedAt,
+    spawnedBy: entry.spawnedBy,
+    parentSessionKey: entry.parentSessionKey,
+    sidebarRoot: entry.sidebarRoot,
+    createdActor: entry.createdActor,
+    visibility: entry.visibility,
+    incognito: entry.incognito,
+  };
+}
+
+type ChildLinkEntry = ReturnType<typeof projectChildLinkEntry>;
+const emptyChildLink = projectChildLinkEntry({ sessionId: "", updatedAt: 0 });
+// SAFETY: The compact producer emits the same keys even for absent facts.
+const childLinkFields = Object.keys(emptyChildLink) as (keyof ChildLinkEntry)[];
+
+export function sameSessionRowChildLinkEntry(
+  before: ChildLinkEntry | SessionEntry,
+  after: ChildLinkEntry | SessionEntry,
+) {
+  if (before === after) {
+    return true;
+  }
+  for (const field of childLinkFields) {
+    if (
+      !Object.is(before[field], after[field]) &&
+      (field !== "createdActor" || !isDeepStrictEqual(before[field], after[field]))
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** The compact producer includes absent fields; compare its whole shape without retaining child entries. */
@@ -140,22 +167,15 @@ export function reuseSessionRowChildLinks(
   if (!previous || previous.length !== links.length) {
     return links;
   }
-  // SAFETY: The producer gives every compact entry the same set of SessionEntry keys.
-  const fields = Object.keys(previous[0]?.entry ?? {}) as (keyof NonNullable<
-    typeof previous
-  >[number]["entry"])[];
   for (const [index, { key, entry, agentId, storePath }] of links.entries()) {
     const before = previous[index]!;
-    if (key !== before.key || agentId !== before.agentId || storePath !== before.storePath) {
+    if (
+      key !== before.key ||
+      agentId !== before.agentId ||
+      storePath !== before.storePath ||
+      !sameSessionRowChildLinkEntry(entry, before.entry)
+    ) {
       return links;
-    }
-    for (const field of fields) {
-      if (
-        entry[field] !== before.entry[field] &&
-        !isDeepStrictEqual(entry[field], before.entry[field])
-      ) {
-        return links;
-      }
     }
   }
   return previous;

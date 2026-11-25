@@ -140,7 +140,9 @@ it.each(["allowed", "assigned-noncreator", "reassigned", "profile-revoked", "rep
           }
           releaseWriter.resolve();
           const response = await pending;
-          const archiveAllowed = scenario === "allowed" || scenario === "reassigned";
+          // The turn keeps the role it was admitted with; a revoked profile applies to its next turn.
+          const archiveAllowed =
+            scenario === "allowed" || scenario === "reassigned" || scenario === "profile-revoked";
           expect(response, JSON.stringify(response)).toMatchObject({
             result: { isError: !archiveAllowed },
           });
