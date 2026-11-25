@@ -6,6 +6,7 @@ import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
 import {
+  resolveGitReleaseEntrypointForLauncher,
   resolveGitReleaseLauncherForEntrypoint,
   resolveGitReleasePrefix,
   servingGitReleaseSlot,
@@ -268,11 +269,19 @@ async function resolveCliProgramArguments(params: {
 
   // The selected state's launcher owns ordinary installs; retained recovery entries stay explicit.
   const launcher =
-    params.service !== "node" && typeof params.cliEntrypoint !== "string"
-      ? resolveGitReleaseLauncherForEntrypoint(
-          path.join(servingGitReleaseSlot(resolveGitReleasePrefix(params.env)), "dist", "index.js"),
-        )
-      : null;
+    params.service === "node"
+      ? null
+      : typeof params.cliEntrypoint === "string"
+        ? resolveGitReleaseEntrypointForLauncher(params.cliEntrypoint)
+          ? params.cliEntrypoint
+          : null
+        : resolveGitReleaseLauncherForEntrypoint(
+            path.join(
+              servingGitReleaseSlot(resolveGitReleasePrefix(params.env)),
+              "dist",
+              "index.js",
+            ),
+          );
   const cliEntrypointPath =
     launcher && (await canAccessEntrypoint(launcher))
       ? launcher
