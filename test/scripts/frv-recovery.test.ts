@@ -232,7 +232,7 @@ describe("retained receipt recovery operator", () => {
           ["npm", "Prepare initial release npm artifacts"],
           ["candidate", "Acquire full release candidate"],
           ["docker", "Prepare release Docker artifacts"],
-        ]) {
+        ] as const) {
           f.jobs.find((job) => job.name === stage)!.name = name;
         }
       }
@@ -481,6 +481,7 @@ describe("retained receipt recovery operator", () => {
     const f = fixture();
     f.client.verifyQualificationAdmission
       .mockImplementationOnce(async () => ({
+        request: { inputs: {} },
         baselinePolicy: { candidateVersion: "2026.11.1" },
         coverage: { children: roles.map((key) => ({ key, parentJobName: key })) },
       }))
