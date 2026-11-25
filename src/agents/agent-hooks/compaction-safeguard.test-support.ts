@@ -152,7 +152,9 @@ type CompactionResult = {
 
 export async function runCompactionScenario(
   sessionManager: ExtensionContext["sessionManager"],
-  event: CompactionEvent,
+  event: CompactionEvent & {
+    warmSummary?: (instructions: string, signal: AbortSignal) => Promise<string>;
+  },
   {
     apiKey = "test-key",
     auth,

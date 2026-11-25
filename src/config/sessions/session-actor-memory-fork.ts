@@ -3,6 +3,7 @@ import {
   assertModelSelectionUnlocked,
   MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
 } from "../../sessions/model-overrides.js";
+import { forkCliHistoryBoundary } from "./cli-history-boundary.js";
 import { forkCliSessionBindings } from "./cli-session-binding.js";
 import { formatSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import {
@@ -113,6 +114,7 @@ function commitParentFork(
       cliSessionIds: undefined,
       claudeCliSessionId: undefined,
     }),
+    cliHistoryBoundary: forkCliHistoryBoundary(parentEntry, sessionId),
     lifecycleRunId: undefined,
     lastRunId: undefined,
   };

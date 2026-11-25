@@ -33,6 +33,51 @@ const ROLES = [
 ] as const;
 
 suite.define(() => {
+  it("keeps project search text on the section-heading guide when focused on a phone", async () => {
+    const page = await openPage({ viewport: { width: 390, height: 844 }, hasTouch: true });
+    await installMockGateway(page, {
+      workspace: WORKSPACE,
+      featureMethods: ["projects.list"],
+      methodResponses: { "projects.list": { projects: [PUBLIC_PROJECT], recents: [] } },
+    });
+    await page.goto(`${suite.server.baseUrl}new?onboarding=1`);
+    await page.locator("#new-session-project-trigger").tap();
+    const picker = page.locator("#new-session-project-popover");
+    const search = picker.getByRole("searchbox");
+    await search.tap();
+    for (const query of ["", "site"]) {
+      await search.fill(query);
+      await picker.getByRole("button", { name: /site/ }).first().waitFor();
+      const heading = await picker.locator(".oc-menu-heading__label").first().boundingBox();
+      const textStart = await search.evaluate((input) => {
+        const style = getComputedStyle(input);
+        return input.getBoundingClientRect().left + Number.parseFloat(style.paddingInlineStart);
+      });
+      expect(heading).not.toBeNull();
+      expect(Math.abs(textStart - heading!.x)).toBeLessThanOrEqual(1);
+      expect((await search.boundingBox())?.height).toBeGreaterThanOrEqual(40);
+    }
+  });
+
+  it("tells a restricted role that no projects are shared with it", async () => {
+    const page = await openPage();
+    await installMockGateway(page, {
+      workspace: WORKSPACE,
+      operatorScopes: ["operator.sessions.write"],
+      featureMethods: ["projects.list", "sessions.create"],
+      methodResponses: { "projects.list": { projects: [], recents: [] } },
+    });
+    await page.goto(`${suite.server.baseUrl}new`);
+    await page.locator("#new-session-project-trigger").click();
+    const picker = page.locator("#new-session-project-popover");
+    await pollLocatorText(picker).toContain(
+      "No projects are shared with your role. Ask an admin to share one.",
+    );
+    expect(await picker.getByRole("link", { name: "Manage projects" }).count()).toBe(0);
+    expect(await picker.getByRole("button", { name: "Browse folders" }).count()).toBe(0);
+    await captureProjectUiProof(suite, page, "project-access-restricted-empty.png");
+  });
+
   it.each(ROLES)(
     "restores and offers repositories the $role may open",
     async ({ role, scopes, projects }) => {

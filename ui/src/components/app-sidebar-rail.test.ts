@@ -1,9 +1,13 @@
 /* @vitest-environment jsdom */
+import { createRouter, definePage } from "@openclaw/uirouter";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
+import { isRouteId, locationForRoute, routePageSpec, type RouteId } from "../app-route-paths.ts";
+import { selectShellRouteState } from "../app/app-host-route-state.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import * as toast from "../lib/toast.ts";
 import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
@@ -12,6 +16,7 @@ import {
   createGatewayHarness,
   createSessionsHarness,
   mountSidebar,
+  mountSidebarContext,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
 import "../test-helpers/app-sidebar-suite.ts";
@@ -162,10 +167,11 @@ describe("personal navigation rail", () => {
     expect(dom.present(".nav-item--home", ".sidebar-shell__footer .sidebar-identity-card")).toEqual(
       [false, false],
     );
-    // "More" opens the page menu and leaves the open Sessions sidebar alone.
+    // "More" opens with usable links on its first update, without replacing the Sessions sidebar.
+    expect(dom.query(".sidebar-pages-menu")).toBeNull();
     await click(sidebar, "[data-rail-more]");
-    await vi.dynamicImportSettled();
-    await waitForSolid(() => expect(dom.query(".sidebar-pages-menu")).not.toBeNull());
+    expect(dom.query('.sidebar-pages-menu [data-sidebar-entry="route:usage"] a')).not.toBeNull();
+    expect(dom.query(".sidebar-pages-menu-popover .sidebar-view-loading")).toBeNull();
     expect(dom.query(".sidebar-session-content")).not.toBeNull();
     expect(dom.query("aside.sidebar")).toBe(frame);
     expect(dom.query(".sidebar-rail__bottom")).toBe(bottom);
@@ -459,6 +465,59 @@ describe("personal navigation rail", () => {
     expect(sidebar.activeNavigationViewElement()).toBeUndefined();
   });
 
+  it("returns to Chat when Sessions is clicked while Activity is still loading", async () => {
+    const page = { renderSolid: () => null };
+    const activity = createDeferred<typeof page>();
+    const router = createRouter<RouteId, ApplicationContext, typeof page>({
+      routes: [
+        definePage({ ...routePageSpec("chat"), component: () => page }),
+        definePage({ ...routePageSpec("activity"), component: () => activity.promise }),
+      ],
+    });
+    onTestFinished(() => {
+      router.stop();
+      activity.resolve(page);
+    });
+    const sessionKey = "agent:main:main";
+    const { gateway } = createGatewayHarness({} as GatewayBrowserClient);
+    const { sessions } = createSessionsHarness("main", [sessionKey]);
+    const context = { ...createContext(gateway, sessions), router };
+    await router.navigate("chat", context);
+    const { sidebar } = await mountSidebarContext(context, "panel", "chat");
+    let navigation: Promise<void> | undefined;
+    sidebar.router = router;
+    sidebar.sessionKey = sessionKey;
+    sidebar.onNavigate = (route, options) => {
+      if (isRouteId(route)) {
+        navigation = router.navigate(route, context, undefined, {
+          ...locationForRoute(route, context.basePath),
+          ...options,
+        });
+      }
+    };
+    const unsubscribe = router.subscribe((state) => {
+      sidebar.activeRouteId = selectShellRouteState(state).routeId;
+    });
+    onTestFinished(() => {
+      unsubscribe();
+    });
+    await sidebar.updateComplete;
+
+    await click(sidebar, '[data-navigation-view="online"]');
+    const activityNavigation = navigation;
+    expect(router.getState().pendingMatches[0]?.routeId).toBe("activity");
+    expect(sidebar.activeRouteId).toBe("chat");
+    await click(sidebar, '[data-navigation-view="sessions"]');
+    activity.resolve(page);
+    await activityNavigation;
+    await navigation;
+    expect(router.getState()).toMatchObject({
+      status: "success",
+      matches: [{ routeId: "chat" }],
+      pendingMatches: [],
+    });
+  });
+
   it("preserves a mobile drawer when a stored desktop preference is collapsed", async () => {
     const { sidebar } = await fixture();
     mockMobile(() => true);
@@ -473,7 +532,7 @@ describe("personal navigation rail", () => {
   });
 
   it.each([false, true])(
-    "collapses shortcut navigation only on desktop (mobile: %s)",
+    "leaves shortcut pages their own sidebar and collapses only for Home on desktop (mobile: %s)",
     async (mobile) => {
       mockMobile((query) => query.includes("max-width") && mobile);
       const { sidebar, gateway, dom } = await fixture();
@@ -513,9 +572,11 @@ describe("personal navigation rail", () => {
         expect(shortcut).not.toBeNull();
         shortcut!.click();
         await sidebar.updateComplete;
-        expect(sidebar.navigationCollapsed, selector).toBe(!mobile);
+        // The opened page decides whether a sidebar shows; only Home's panel collapses it.
+        const home = selector === ".sidebar-footer-bar__home";
+        expect(sidebar.navigationCollapsed, selector).toBe(home && !mobile);
       }
-      expect(toggle).toHaveBeenCalledTimes(mobile ? 0 : 5);
+      expect(toggle).toHaveBeenCalledTimes(mobile ? 0 : 1);
     },
   );
 
@@ -689,7 +750,8 @@ describe("personal navigation rail", () => {
   });
 
   it("reorders a descriptor-only personal pin without requiring a loaded roster row", async () => {
-    const { sidebar, gateway, sessions, result, key, pending, read, dom } = await pinLookup();
+    const { sidebar, gateway, sessions, result, key, pending, read, dom } =
+      await pinLookup("agent:main:unloaded");
     gateway.publish({
       hello: gatewayHelloForMethods(["sessions.describe"], ["operator.sessions.read"]),
     });

@@ -20,6 +20,7 @@ export function PluginsHubHeader(props: {
   subtitle?: JSX.Element;
   wide?: boolean;
   class?: string;
+  actions?: JSX.Element;
   secondaryAction?: {
     label: string;
     icon?: JSX.Element;
@@ -27,7 +28,7 @@ export function PluginsHubHeader(props: {
   };
 }) {
   const runtimeConfig = projectRuntimeConfig(useApplication().runtimeConfig);
-  // Templates is experimental; its tab follows the same flag as its route.
+  // The advanced Templates opt-out controls this tab and its route.
   const templates = () => isTemplatesAvailable(runtimeConfig.read().state) === true;
   return (
     <HubPageHeader<PluginsHubTab>
@@ -58,7 +59,8 @@ export function PluginsHubHeader(props: {
       docsUrl={PLUGINS_HUB_DOCS_URLS[props.active]}
       class={props.class ? `plugins-hub-header ${props.class}` : "plugins-hub-header"}
       actions={
-        props.secondaryAction && (
+        props.actions ??
+        (props.secondaryAction && (
           <button
             type="button"
             class={[
@@ -71,7 +73,7 @@ export function PluginsHubHeader(props: {
           >
             {props.secondaryAction.icon ?? props.secondaryAction.label}
           </button>
-        )
+        ))
       }
     />
   );

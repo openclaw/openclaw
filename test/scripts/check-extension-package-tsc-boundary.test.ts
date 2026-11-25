@@ -270,6 +270,48 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
   );
   expect(receipt.inputs.some((file: string) => file.endsWith("/demo/src/worker.ts"))).toBe(true);
   expectCompile(run(), 0, "compiled plugins: 0", "skipped plugins: 2");
+  const originalIndex = fs.readFileSync(path.join(root, "extensions/demo/index.ts"), "utf8");
+  const external = tempRoots.make("openclaw-boundary-external-");
+  // Reading this file would fail diagnostics before the worker's final input admission.
+  fs.writeFileSync(
+    path.join(external, "outside.d.ts"),
+    "export type Escaped = MissingBoundaryType;\n",
+  );
+  const alias = path.join(root, "extensions/demo/escaped");
+  fs.symlinkSync(external, alias, "junction");
+  for (const emit of [false, true]) {
+    const inputReceipt = path.join(root, `.artifacts/worker-${emit}.inputs.json`);
+    const outDir = path.join(root, `.artifacts/worker-${emit}`);
+    const request = {
+      configFile: path.join(
+        root,
+        ".artifacts/extension-package-boundary/compile/demo.tsconfig.json",
+      ),
+      inputReceipt,
+      compilerOptions: { outDir, skipLibCheck: false },
+      emit,
+    };
+    const worker = () =>
+      spawnSync(
+        process.execPath,
+        ["scripts/compile-extension-boundary.mts", JSON.stringify(request)],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 20_000,
+        },
+      );
+    expectCompile(worker(), 0);
+    expect(JSON.parse(fs.readFileSync(inputReceipt, "utf8")).inputs).toContain(
+      "extensions/demo/index.ts",
+    );
+    write("extensions/demo/index.ts", 'export type { Escaped } from "./escaped/outside.js";\n');
+    // The real worker must remove its prior success receipt and refuse publication.
+    expectCompile(worker(), 1, "Declaration input escapes checkout");
+    expect(fs.existsSync(inputReceipt)).toBe(false);
+    write("extensions/demo/index.ts", originalIndex);
+  }
+  fs.unlinkSync(alias);
   write("test/new-unrelated.test.ts", 'export const unrelated: number = "invalid";\n');
   expectCompile(run(), 0, "compiled plugins: 0", "skipped plugins: 2");
   write(

@@ -14,8 +14,13 @@ import { logCodeModeFailure } from "./code-mode-diagnostic.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { applyLoggingConfig, getLogger, resetLogger, setLoggerOverride } from "./logger.js";
-import { testApi } from "./logger.test-support.js";
+import {
+  applyLoggingConfig,
+  flushLogger,
+  getLogger,
+  resetLogger,
+  setLoggerOverride,
+} from "./logger.js";
 import { getDefaultRedactPatterns } from "./redact.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger, runtimeForLogger } from "./subsystem.js";
@@ -29,7 +34,7 @@ function fileLogging(level: "info" | "warn" | "error" | "trace") {
 }
 
 async function readRecords(file: string) {
-  await testApi.flushFileLogQueueForTests();
+  await flushLogger();
   return fs
     .readFileSync(file, "utf8")
     .trim()
@@ -62,7 +67,7 @@ beforeAll(() => logPathTracker.setup());
 
 afterEach(async () => {
   // Settle owned file writes before resetting logging state or removing the suite directory.
-  await testApi.flushFileLogQueueForTests();
+  await flushLogger();
   setConsoleSubsystemFilter(null);
   setLoggerOverride(null);
   loggingState.rawConsole = null;
@@ -115,7 +120,7 @@ it("keeps Template Add timings out of info logs while retaining debug diagnostic
   for (const level of ["info", "trace"] as const) {
     const file = fileLogging(level);
     await withTemplateAddTimings("synthetic-add", async () => undefined);
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     const records = fs.existsSync(file) ? await readRecords(file) : [];
     expect(records).toHaveLength(level === "info" ? 0 : 2);
     expect(records.every((record) => record._meta.logLevelName === "DEBUG")).toBe(true);
@@ -163,6 +168,9 @@ describe("createSubsystemLogger().isEnabled", () => {
     const records = await readRecords(file);
     expect(records).toHaveLength(1);
     expect(records[0]._meta.logLevelName).toBe(level);
+    expect(records[0].message).toBe(
+      failurePhase === "bridge" ? "Code Mode bridge request failed" : "Code Mode execution failed",
+    );
   });
   it("records content-free Code Mode failure categories and correlation ids without a debug flag", async () => {
     const file = fileLogging("error");
@@ -353,7 +361,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       });
     }
     expect(warn).not.toHaveBeenCalled();
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     const fileLog = fs.readFileSync(file, "utf8");
     expectText(fileLog, [...messages, '"provider":"openai"']);
   });
@@ -363,7 +371,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       const secret = prefix === "1234/" ? `${"Ab9Q".repeat(8)}Ab9` : "Ab9Q".repeat(10);
       const file = fileLogging("info");
       getLogger().info(`s3://user:${prefix}${secret}@bucket`);
-      await testApi.flushFileLogQueueForTests();
+      await flushLogger();
       const written = fs.readFileSync(file, "utf8");
       expect(written).toContain(secret);
       const tail = await readConfiguredLogTail();
@@ -481,7 +489,7 @@ describe("createSubsystemLogger().isEnabled", () => {
       err: failure,
       runId: "synthetic-child",
     });
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     const record = JSON.parse(fs.readFileSync(file, "utf8").trim());
     expect(record["1"]).toEqual({
       err: { ...expectedError, stack: failure.stack },

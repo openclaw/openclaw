@@ -18,8 +18,10 @@ export async function expectNonAdminMemberProfileActions(
         items: [],
         revision: 0,
       });
+    } else if (method === "users.listChannelIdentities") {
+      await expect(client.request(method, params), method).rejects.toThrow("operator.admin");
     } else {
-      await expect(client.request(method, params), method).rejects.toThrow();
+      await expect(client.request(method, params), method).resolves.toBeDefined();
     }
   }
 }

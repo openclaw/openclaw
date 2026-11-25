@@ -17,10 +17,11 @@ import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { ImageContent } from "../../llm/types.js";
-import type { MediaFact } from "../../media/media-facts.js";
+import { isMeaningfulMediaFact, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
 import { formatCliImageTurnContext } from "../cli-image-turn-correlation.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
@@ -82,6 +83,7 @@ export function resolveCliRunQueueKey(params: {
 export function buildCliAgentSystemPrompt(params: {
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   requesterProfileId?: string;
+  prepareSessionProjectGuidance?: () => Promise<string | undefined>;
   workspaceDir: string;
   cwd?: string;
   config?: OpenClawConfig;
@@ -118,7 +120,8 @@ export function buildCliAgentSystemPrompt(params: {
     cfg: params.config ?? {},
     agentId: params.agentId,
   });
-  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+  const defaultModelLabel =
+    defaultModelRef && `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const { runtimeInfo } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
@@ -147,6 +150,7 @@ export function buildCliAgentSystemPrompt(params: {
   });
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
+    prepareSessionProjectGuidance: params.prepareSessionProjectGuidance,
     preparedModelRuntime: params.preparedModelRuntime,
     preparedTtsPreferences: params.preparedTtsPreferences,
     agentId: params.agentId,
@@ -318,12 +322,15 @@ type CliPromptImageInput = {
   imageOrder?: PromptImageOrderEntry[];
   mediaImageLayout?: MediaImageLayout;
   media?: MediaFact[];
+  /** Steered input: its recorded media facts own image hydration. */
+  userTurnTranscriptRecorder?: Pick<UserTurnTranscriptRecorder, "resolveMessage">;
 };
 
 export async function loadCliPromptImages(params: CliPromptImageInput): Promise<ImageContent[]> {
   const imagePrompt = params.imagePrompt ?? params.prompt;
   const needsHydration =
     params.imagePrompt !== undefined ||
+    params.userTurnTranscriptRecorder !== undefined ||
     Boolean(params.media?.length) ||
     Boolean(params.mediaImageLayout) ||
     (!params.images?.length && detectImageReferences(imagePrompt).length > 0);
@@ -336,6 +343,7 @@ export async function loadCliPromptImages(params: CliPromptImageInput): Promise<
         existingImages: params.images,
         imageOrder: params.imageOrder,
         mediaImageLayout: params.mediaImageLayout,
+        userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         maxBytes: MAX_IMAGE_BYTES,
         localRoots: params.localRoots,
       })
@@ -361,6 +369,16 @@ export async function prepareCliPromptImagePayload(
 }> {
   let prompt = params.prompt;
   const resolvedImages = params.preparedImages ?? (await loadCliPromptImages(params));
+  const inlinePaths =
+    !params.backend.imageArg || params.backend.input === "stdin" || params.backend.imageArg === "@";
+  // Documents expand into model-facing text without an @image path. Correlate
+  // that native prompt with its persisted attachment turn just as for images.
+  if (
+    params.imageTurnKey &&
+    (params.media?.some(isMeaningfulMediaFact) || (resolvedImages.length && inlinePaths))
+  ) {
+    prompt = `${prompt.trimEnd()}\n\n${formatCliImageTurnContext(params.imageTurnKey)}`;
+  }
   if (resolvedImages.length === 0) {
     return { prompt };
   }
@@ -369,14 +387,7 @@ export async function prepareCliPromptImagePayload(
     workspaceDir: params.workspaceDir,
     images: resolvedImages,
   });
-  if (
-    !params.backend.imageArg ||
-    params.backend.input === "stdin" ||
-    params.backend.imageArg === "@"
-  ) {
-    if (params.imageTurnKey) {
-      prompt = `${prompt.trimEnd()}\n\n${formatCliImageTurnContext(params.imageTurnKey)}`;
-    }
+  if (inlinePaths) {
     prompt = appendImagePathsToPrompt(
       prompt,
       imagePaths,

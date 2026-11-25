@@ -41,7 +41,6 @@ export function createUsagePage(context: ApplicationContext) {
     result: SessionsUsageResult | null;
   } | null = null;
   let usageError: string | null = null;
-  let sessionLoadedAtMs: number | null = null;
   let filters: Omit<UsageFilterState, "selectedSessions"> = {
     ...createDefaultUsageDateRange(),
     scope: "family",
@@ -90,21 +89,19 @@ export function createUsagePage(context: ApplicationContext) {
   const routeRead = Promise.withResolvers<PageReadResult>();
   let dateRead: PromiseWithResolvers<PageReadResult> | null = null;
   const refreshPolicy = new UsageRefreshPolicy({
-    isLoading: usageLoading,
-    reload: (reason) => {
-      // Retries exist for incomplete provider plans; they never re-read session usage.
-      if (reason === "poll") {
-        return providerUsage.load();
-      }
-      if (reason === "manual") {
+    isSessionLoading: usageLoading,
+    isProviderLoading: () => providerUsage.pending,
+    reload: ({ sessions, provider, manual }) => {
+      if (manual) {
         usageUpdatedAt = usagePublication().updatedAt;
+        clearDebounce("dateDebounceTimer");
       }
-      clearDebounce("dateDebounceTimer");
       const sessionKey =
-        reason === "manual" && usageSelectedSessions.length === 1
-          ? usageSelectedSessions[0]
-          : undefined;
-      return loadAll(sessionKey);
+        manual && usageSelectedSessions.length === 1 ? usageSelectedSessions[0] : undefined;
+      return Promise.all([
+        sessions && loadUsage(sessionKey),
+        provider && providerUsage.load(),
+      ]).then(() => undefined);
     },
     onIncompleteUsageExhausted: notify,
   });
@@ -138,11 +135,9 @@ export function createUsagePage(context: ApplicationContext) {
       [client, refreshSessionKey]: readonly [GatewayBrowserClient, string | undefined],
       { signal },
     ) => {
-      refreshPolicy.beginLoad();
-      const epoch = connectionEpoch;
+      refreshPolicy.beginSessionsLoad();
       const query = currentQuery();
       return {
-        epoch,
         query,
         refreshSessionKey,
         snapshot: await requestUsageSnapshot(client, query, signal),
@@ -169,13 +164,15 @@ export function createUsagePage(context: ApplicationContext) {
       } else if (current && !snapshot.ok) {
         applyUsageError(snapshot.error.cause);
       }
-      markUsageLoaded(value.epoch, current && snapshot.ok ? Date.now() : null);
-      refreshPolicy.flushPending();
+      refreshPolicy.markSessionsLoaded(
+        current && snapshot.ok && !usageCacheIncomplete() ? Date.now() : null,
+      );
+      void refreshPolicy.flushPending();
     },
     onError: (error) => {
       applyUsageError(error);
-      markUsageLoaded(connectionEpoch, null);
-      refreshPolicy.flushPending();
+      refreshPolicy.markSessionsLoaded(null);
+      void refreshPolicy.flushPending();
     },
   });
 
@@ -206,7 +203,8 @@ export function createUsagePage(context: ApplicationContext) {
       gateway.connected &&
       !usageLoading()
     ) {
-      void loadAll();
+      void loadUsage();
+      void providerUsage.load();
     }
     notify();
   }
@@ -240,7 +238,7 @@ export function createUsagePage(context: ApplicationContext) {
       query: currentQuery(),
       result: data.result,
     };
-    markUsageLoaded(connectionEpoch, data.loadedAtMs);
+    refreshPolicy.markSessionsLoaded(usageCacheIncomplete() ? null : data.loadedAtMs);
     void providerUsage.load();
     usageError = data.error;
     const preloadUpdatedAt = resolveUsagePublication(
@@ -250,7 +248,7 @@ export function createUsagePage(context: ApplicationContext) {
     if (usagePublication().committedAt > preloadUpdatedAt) {
       void refreshPolicy.request("publication");
     }
-    refreshPolicy.flushPending();
+    void refreshPolicy.flushPending();
   }
 
   function resetForClientChange() {
@@ -269,29 +267,17 @@ export function createUsagePage(context: ApplicationContext) {
   }
 
   function resetProviderUsage() {
-    sessionLoadedAtMs = null;
     providerUsage.reset();
     refreshPolicy.resetPayload();
-  }
-
-  // Only the session read owns freshness: a provider result reuses the last session timestamp,
-  // so provider plans add their retry state and never make a failed session read look fresh.
-  // Session rollups converge on publication; only provider usage needs timed retries.
-  function markUsageLoaded(connection: unknown, loadedAtMs = sessionLoadedAtMs): void {
-    sessionLoadedAtMs = loadedAtMs;
-    refreshPolicy.setLastLoadedAtMs(usageCacheIncomplete() ? null : loadedAtMs, {
-      incomplete: providerUsage.incomplete,
-      connection,
-    });
   }
 
   const providerUsage = createProviderUsageLoader({
     client: () => (gateway.connected && canReadUsage() ? gateway.client : null),
     epoch: () => connectionEpoch,
     isCurrent: (epoch) => epoch === connectionEpoch,
-    onResult: (epoch) => markUsageLoaded(epoch),
+    onResult: () => refreshPolicy.markProviderLoaded(providerUsage.incomplete ? null : Date.now()),
     onSettled: () => {
-      refreshPolicy.flushPending();
+      void refreshPolicy.flushPending();
       notify();
     },
   });
@@ -387,10 +373,6 @@ export function createUsagePage(context: ApplicationContext) {
     return !routeDataInitialized || timers.dateDebounceTimer !== null || usageRequest.pending;
   }
 
-  function loadAll(refreshSessionKey?: string): Promise<void> {
-    return Promise.all([loadUsage(refreshSessionKey), providerUsage.load()]).then(() => undefined);
-  }
-
   const canReadUsage = () => hasOperatorReadAccess(gateway.snapshot?.hello?.auth ?? null);
 
   function loadUsage(refreshSessionKey?: string): Promise<void> {
@@ -429,14 +411,18 @@ export function createUsagePage(context: ApplicationContext) {
     }
   }
 
-  function scheduleUsageLoad() {
+  function changeDates(dates: Partial<Pick<UsageFilterState, "startDate" | "endDate">>) {
+    usageError = null;
+    setFilters(dates);
     clearSelectionsAndDetails();
     clearDebounce("dateDebounceTimer");
-    usageRequest.reset();
-    usageError = null;
-    // Cancel the old query's poll before it can consume this debounce and retry budget.
-    refreshPolicy.resetPayload();
     routeDataEnabled = false;
+    if (dates.startDate !== undefined && dates.endDate !== undefined) {
+      // A preset supplies the complete range. Only individual date edits need to settle.
+      void loadUsage();
+      return;
+    }
+    usageRequest.reset();
     dateRead = Promise.withResolvers<PageReadResult>();
     timers.dateDebounceTimer = window.setTimeout(() => {
       clearDebounce("dateDebounceTimer");
@@ -561,10 +547,7 @@ export function createUsagePage(context: ApplicationContext) {
       },
       callbacks: {
         filters: {
-          onDatesChange: (dates: Partial<Pick<UsageFilterState, "startDate" | "endDate">>) => {
-            setFilters(dates);
-            scheduleUsageLoad();
-          },
+          onDatesChange: changeDates,
           onScopeChange: (
             scope: Partial<Pick<UsageFilterState, "scope" | "creatorKey" | "timeZone">>,
           ) => {

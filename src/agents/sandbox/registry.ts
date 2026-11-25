@@ -132,7 +132,7 @@ export async function readRegisteredSandboxRuntimeIds(params: {
 }): Promise<string[]> {
   const reply = await executeExistingOpenClawStateRead(
     {},
-    { type: "sandboxRegistry.runtimeIds", input: params },
+    { type: "sandboxRegistry.runtimeIds", input: { ...params } },
   );
   if (!reply) {
     return [];

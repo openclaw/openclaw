@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
@@ -99,9 +98,11 @@ export async function readSessionPrAutoFixObservation(params: {
       "Auto-fix target is not this session's selected or published PR. Restore its workspace association; no other PR was adopted.",
     );
   }
-  const assertCaller = captureGatewayToolCallerAssertion();
-  const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
-  if (!assertCaller || !resolveGatewayContext) {
+  const caller = getGatewayToolCallerIdentity();
+  const resolveGatewayContext = caller?.operationalRunInstance
+    ? caller.gatewayContextResolver
+    : undefined;
+  if (!resolveGatewayContext) {
     throw new Error("Auto-fix requires an admitted Gateway caller.");
   }
   const method = "sessions.github.action";
@@ -120,7 +121,6 @@ export async function readSessionPrAutoFixObservation(params: {
       const assertRequest = () => {
         assertCurrent();
         selected.readCurrent();
-        assertCaller();
         resolved.assertContextCurrent();
         resolved.assertInvocationCurrent();
       };

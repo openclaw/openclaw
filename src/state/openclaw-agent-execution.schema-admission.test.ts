@@ -127,7 +127,7 @@ it("rejects malformed native schema receipts without replaying caller work", asy
 it("admits schema and integrity once, then warm turns request only their writes", async () => {
   const { path, generation: createGeneration } = fixture();
   // Force cold verification; warm turns must reuse it (#166253).
-  invalidateOpenClawAgentDatabaseValidation(path);
+  invalidateOpenClawAgentDatabaseValidation(path, "a maintenance write");
   await using generation = createGeneration();
   const requests: string[] = [];
   const source = createSource((request) => {

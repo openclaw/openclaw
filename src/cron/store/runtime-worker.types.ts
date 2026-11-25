@@ -1,5 +1,6 @@
 import type { SessionEntryCurrentSource } from "../../config/sessions/session-entry-current.types.js";
 import type { CronConfig } from "../../config/types.cron.js";
+import type { LegacyOpenClawIdMemberRoleImport } from "../../gateway/openclaw-id/member-source-role-import.js";
 import type {
   OperatorApprovalConsumptionInput,
   OperatorApprovalRecord,
@@ -83,6 +84,7 @@ export type CronExternalStateChange =
     };
 
 export type CronRuntimeMutationInputs = {
+  "cron.importLegacyMemberSources": LegacyOpenClawIdMemberRoleImport;
   "cron.provisionDefaultProactive": {
     storeKey: string;
     agentId: string;
@@ -170,6 +172,11 @@ type CronScheduleOwnershipFacts = {
 };
 
 export type CronRuntimeMutationContracts = {
+  "cron.importLegacyMemberSources": {
+    input: LegacyOpenClawIdMemberRoleImport;
+    snapshot: Record<string, never>;
+    outcome: { storeKeys: string[] };
+  };
   "cron.provisionDefaultProactive": {
     input: CronRuntimeMutationInputs["cron.provisionDefaultProactive"];
     snapshot: Record<string, never>;

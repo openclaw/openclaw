@@ -1,4 +1,3 @@
-import { assertPluginToolInvocationSourceCurrent } from "../agents/agent-tool-source-execution-guard.js";
 import type { PluginToolExecutionCapabilities } from "../agents/plugin-tool-execution.js";
 import { assertMemoryAudienceSession } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
@@ -51,8 +50,6 @@ export function createPluginToolFactoryContext(params: {
       );
     }
     params.assertInvocationCurrent?.();
-    // The caller that invoked this tool call, captured when the call began.
-    assertPluginToolInvocationSourceCurrent();
     continuation?.assertCurrent();
     assertMemoryAudienceCurrent?.();
   };

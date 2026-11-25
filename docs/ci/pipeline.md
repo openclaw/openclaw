@@ -669,11 +669,11 @@ All four scans use `scripts/install-periphery.sh` to install the checksum-pinned
 Security review separates product changes that maintainers can approve from the
 small set of security policy and enforcement files that require SecOps approval.
 
-| Change                                     | User account with `maintain` or `admin` access       | Other authors                                                                                       |
-| ------------------------------------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Sensitive product code                     | Informational notice; no extra security approval     | `/allow-security-sensitive-change` from a user with `maintain` or `admin` access                    |
-| Dependency changes requiring review        | Admin authors exempt; Maintain alone is insufficient | `/allow-dependencies-change` from a repository admin or active SecOps member; SecOps authors exempt |
-| SecOps-owned files in `.github/CODEOWNERS` | Independent SecOps code-owner approval               | Independent SecOps code-owner approval                                                              |
+| Change                                     | User account with `maintain` or `admin` access                             | Other authors                                                                                       |
+| ------------------------------------------ | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Sensitive product code                     | Informational notice; no extra security approval                           | `/allow-security-sensitive-change` from a user with `maintain` or `admin` access                    |
+| Dependency changes requiring review        | Admin authors exempt; Maintain authors qualify for release alignment below | `/allow-dependencies-change` from a repository admin or active SecOps member; SecOps authors exempt |
+| SecOps-owned files in `.github/CODEOWNERS` | Independent SecOps code-owner approval                                     | Independent SecOps code-owner approval                                                              |
 
 The **Security Review** workflow runs both guards from trusted repository code.
 It publishes a commit status named `openclaw/ci-gate` that requires both the
@@ -839,6 +839,24 @@ remove its review requirement.
 The **Dependency Guard** publishes `openclaw/dependency-review` and retains its
 dependency classification and lockfile autoscrub behavior. Dependency removals
 that already qualify as informational remain informational.
+Maintain authors need no additional dependency approval when every dependency-sensitive
+edit qualifies as release-version alignment:
+
+- Top-level `version` changes in existing `package.json`,
+  `packages/{ai,gateway-client,gateway-protocol}/package.json`, or
+  `extensions/*/package.json` files. The extension glob matches exactly one directory.
+- In those extension manifests only, changes to existing
+  `devDependencies.openclaw` or `peerDependencies.openclaw` values, with both
+  values remaining `>=<OpenClaw release version>` and other entries unchanged.
+
+Old and new versions must satisfy the shared OpenClaw release-version parser,
+including its alpha, beta, and correction forms. Versions may decrease or differ
+from the root version. Unrelated source and unprotected metadata edits may coexist.
+Added, removed, or renamed manifests, lockfiles, patches, workspace policy, and
+other dependency edits do not qualify for this exemption. Existing removal-only
+behavior remains unchanged. The workflow and native merge admission share this
+classification against the PR merge base.
+
 Automatic lockfile cleanup is best effort. If neither cleanup App can provide a
 write token, or GitHub explicitly denies the cleanup mutation's permissions, the
 dependency notice explains how to remove the remaining changes or request
@@ -848,7 +866,7 @@ job or satisfy dependency review. Unexpected cleanup errors remain failures.
 Edit `.github/security-review-policy.yml` to change path classification. Its
 `categories` group product paths with descriptions and review guidance;
 `exclude` names the product-only exclusions; and `dependencies` lists manifests,
-lockfiles, and other dependency files. Paths are quoted, repository-relative
+release manifests, lockfiles, and other dependency files. Paths are quoted, repository-relative
 globs: `*` stays within a path segment, `**` crosses directories, and `{a,b}`
 matches either alternative. Hidden paths are included. Matching is
 case-sensitive unless an exclusion explicitly sets `case-insensitive: true`.
@@ -866,8 +884,10 @@ change. Approval decisions and dependency graph analysis remain in JavaScript.
 
 Both guards use current GitHub authority. Sensitive product changes retain the
 `maintain` or `admin` author exemption and command approval. Dependency changes
-require repository `admin` access or active membership in `@openclaw/openclaw-secops`
-for either path; Maintain access and organization membership alone are insufficient.
+require repository `admin` access or active membership in `@openclaw/openclaw-secops`,
+except for the Maintain-author release-alignment exemption above. Maintain commenters
+cannot approve another author's dependency changes; organization membership alone
+is insufficient.
 SecOps membership reads use a separate organization Members-read App token from
 the existing primary/fallback GitHub Apps; repository statuses and notices keep
 using the workflow token. Missing membership credentials or failed reads never

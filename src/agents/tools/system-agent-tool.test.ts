@@ -67,6 +67,25 @@ const proposalTransition = (args: Record<string, unknown>, resultText: string) =
 
 describe("openclaw tool", () => {
   it.each(["template_review", "template_install"])(
+    "keeps %s registry-only when the Gateway supports local import",
+    async (action) => {
+      for (const source of [
+        { kind: "local", path: "/tmp/project" },
+        { kind: "upload", archiveBase64: "YQ==" },
+      ]) {
+        await expect(
+          makeTool({ operatorApprovalOnly: true }).execute("local", {
+            action,
+            source,
+            agentId: "research",
+            planIntegrity: "exact-plan",
+          }),
+        ).rejects.toThrow();
+      }
+      expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["template_review", "template_install"])(
     "mirrors %s through native MCP without transferring host authority",
     async (action) => {
       const args = {

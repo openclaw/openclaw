@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { UpdateRunRecordSchema as WireRunSchema } from "../../packages/gateway-protocol/src/schema/update-runs.js";
 import { UPDATE_RUN_DRIVER_LIMIT } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
@@ -6,7 +9,9 @@ import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js
 import { createDeferredCore } from "../shared/deferred.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { captureNamespacedStateLeaseProcessOwner } from "./state-lease-process-owner.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
+import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import {
   adoptUpdateRun,
@@ -17,6 +22,7 @@ import {
   recordUpdateRunStep,
 } from "./update-run-ledger.js";
 import { reconcileUpdateRunsInNativeKernelForTest } from "./update-run-reconciliation.test-support.js";
+import { toPublicUpdateRun } from "./update-run-record.js";
 import { loadUpdateRecovery } from "./update-run-recovery.js";
 import { ABANDONED_UPDATE_RUN_MS, UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
 import { runStep } from "./update-runner-command.js";
@@ -61,6 +67,13 @@ function currentDriver(): UpdateRunDriver {
     throw new Error("Test process identity is unavailable");
   }
   return driver;
+}
+
+/** What adoption records for this process: on Linux and macOS, also the boot it runs in. */
+function recordedCurrentDriver() {
+  return process.platform === "linux" || process.platform === "darwin"
+    ? { ...currentDriver(), namespace: captureNamespacedStateLeaseProcessOwner().namespace }
+    : currentDriver();
 }
 
 function exitedDriver(): UpdateRunDriver {
@@ -331,7 +344,7 @@ it.each([false, true])("adoption keeps only live parent heartbeats (live=%s)", (
   }
   const created = create({ origin: { driver: prior } });
   const adopted = adopt(created);
-  expect(adopted.origin.driver).toEqual(currentDriver());
+  expect(adopted.origin.driver).toEqual(recordedCurrentDriver());
   expect(adopted.origin.previousDrivers).toEqual(live ? [prior] : undefined);
   vi.advanceTimersByTime(UPDATE_RUN_HEARTBEAT_MS);
   heartbeatUpdateRun(created.runId, prior, options);
@@ -388,6 +401,29 @@ it("adoption deduplicates drivers and removes only dead identities", () => {
   expect(adopted.origin).toMatchObject({ driver: currentDriver(), previousDrivers: [retained] });
   vi.advanceTimersByTime(100);
   expect(adopt(run)).toEqual(adopted);
+});
+
+it("keeps each driver's recorded boot in the run, never in leases or on the wire", () => {
+  const namespace = JSON.stringify(["linux", randomUUID(), "pid:[4026531836]", "a".repeat(64)]);
+  const earlier = { ...currentDriver(), host: "other-host.invalid", namespace };
+  const run = create({ origin: { driver: earlier } });
+
+  const adopted = adopt(run);
+
+  expect(adopted.origin).toMatchObject({
+    driver: recordedCurrentDriver(),
+    previousDrivers: [earlier],
+  });
+  expect(read(run)?.origin).toEqual(adopted.origin);
+  // Lease and recovery callers copy these into strict records older readers refuse to extend.
+  expect(recordedUpdateRunDrivers(adopted)).toEqual([
+    currentDriver(),
+    { host: earlier.host, pid: earlier.pid, startIdentity: earlier.startIdentity },
+  ]);
+  const published = toPublicUpdateRun(adopted);
+  expect(Value.Check(WireRunSchema, published)).toBe(true);
+  expect(published.origin).toMatchObject({ driver: currentDriver() });
+  expect(JSON.stringify(published)).not.toContain("namespace");
 });
 
 it("refuses adoption at capacity without evicting unknown drivers", () => {

@@ -13,6 +13,8 @@ export type UpdateDoctorMigrationCapture = {
   /** Captured SQLite sources admitted by this Doctor session. */
   openedSqlitePaths?: Set<string>;
   expected(pathname: string): string | null | undefined;
+  /** The generation an index rebuilt over the expected WAL frames binds without a commit. */
+  rebuiltIndex(pathname: string): string | undefined;
   assertCurrent(): void;
   accept(pathname: string, before: string | null, after: string | null): void;
   refuse(message: string): void;
@@ -35,6 +37,8 @@ export const updateDoctorMigrationContext = new AsyncLocalStorage<{
   assertMigrationCurrent?: () => void;
   backup?: DoctorMigrationBackup;
   fullBackups?: Map<string, DoctorMigrationFullBackup>;
+  /** The startup owner already retained the originals before this private Doctor pass. */
+  stateUpgradeLiveStateDir?: string;
 }>();
 
 export function hasUpdateDoctorMigrationCapture(): boolean {
@@ -78,6 +82,8 @@ export function getDoctorMigrationBackup(
 }
 
 export type UpdateSqliteMigrationOptions = {
+  /** Prepare the admitted connection after verifying its preimage, before native exclusion. */
+  beforeExclusive?: () => void;
   /** Close a one-shot native owner before publishing its final generation. */
   close?: () => void;
   retainExclusive?: boolean;

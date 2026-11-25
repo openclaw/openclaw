@@ -210,7 +210,11 @@ describe("Pages navigation identity", () => {
       expect(entry.link.getAttribute("href")).toBe(`/${route}`);
       expect(entry.label.textContent).toBe(label);
       entry.link.click();
-      expect(navigate).toHaveBeenLastCalledWith(route, undefined);
+      if (route === "workboard") {
+        expect(navigate).toHaveBeenLastCalledWith(route, undefined, "sidebar-section");
+      } else {
+        expect(navigate).toHaveBeenLastCalledWith(route, undefined);
+      }
     }
   });
 

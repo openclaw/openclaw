@@ -56,32 +56,44 @@ export class TranscriptPrependAnchor {
     if (commanded) {
       this.pending = null;
     }
+    if (!commanded && (this.hasPrepend || readingProjectionChanged)) {
+      this.retainReader(element);
+    }
+    this.firstMessageKey = this.messageKeys.keys().next().value;
+  }
+
+  /** Retain current geometry without admitting a candidate message projection. */
+  retainReader(element: HTMLDivElement | null): boolean {
     // A second projection may commit before measurement settles. Keep the
     // original reader target rather than recapturing an already shifted bubble.
     const retained =
       this.pending && this.messageKeys.has(this.pending.messageKey) ? this.pending : null;
     const anchor =
-      !commanded && (this.hasPrepend || readingProjectionChanged)
-        ? (retained ??
-          captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values()))
-        : null;
+      retained ??
+      captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values());
     if (anchor) {
       this.pending = {
         ...anchor,
         measured: false,
         prepended: this.hasPrepend || retained?.prepended === true,
       };
+      return true;
     }
-    this.firstMessageKey = this.messageKeys.keys().next().value;
+    return false;
   }
 
   /** Prefix insertion must land before paint; warm replacement joins the native batch. */
   update(
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
     rowsMeasured: () => boolean,
+    committed = false,
   ): boolean {
     const anchor = this.pending;
-    if (!anchor || (!anchor.prepended && !rowsMeasured())) {
+    if (!anchor) {
+      return false;
+    }
+    const ready = anchor.prepended || rowsMeasured();
+    if (!ready && !committed) {
       return false;
     }
     const changed = anchor.prepended && this.measurePrependedRows();
@@ -92,6 +104,10 @@ export class TranscriptPrependAnchor {
       this.messageElements.values(),
       this.onLayoutCorrection,
     );
+    // Committed geometry can move before all row receipts arrive; retain its target meanwhile.
+    if (!ready) {
+      return moved;
+    }
     if (anchor.measured && !changed && !moved) {
       this.pending = null;
     }

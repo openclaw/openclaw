@@ -159,7 +159,7 @@ installation, and hold identities before releasing that anchor's holds in SQLite
 The installation becomes settled only when no holds remain. Failed settlement
 retains the recorded holds even if the anchor is already absent.
 
-Each ordinary invocation collects before acquiring dependencies, including when
+By default, each ordinary invocation collects before acquiring dependencies, including when
 an installed checkout can supply them. Discovery and explicit recovery commands
 retain their independent bootstrap behavior. Collection keeps the four most recently used
 settled installations with no holds. Reuse order comes from the ledger's
@@ -183,6 +183,24 @@ The canonical and explicit tooling roots are never fetched, fast-forwarded, or
 reinstalled by this path. Explicit-root identity checks remain unchanged, and
 matching installed packages still take the direct path. Keep any externally
 managed installation intact until its consumers finish.
+
+### Defer shared cache collection
+
+For one command, `OPENCLAW_PR_DEFER_CACHE_COLLECTION=1` skips opportunistic shared
+cache discovery, candidate enumeration, process inspection, and collection. It
+also covers retained workflows that call the exported collector directly. Unset
+the variable to keep normal collection; any other value, including an empty
+string, is rejected.
+
+```bash
+OPENCLAW_PR_DEFER_CACHE_COLLECTION=1 scripts/pr review-guard <PR>
+```
+
+Deferral changes no authentication, workflow binding, dependency qualification,
+lock validation, anchor claims, lifetime registration, or task-owned retirement.
+Active FD7 lifetimes still retain their anchors. It grants no installation,
+refresh, recovery, or cleanup authority. Scope the variable to the command;
+later invocations without it collect normally. No persistent setting is written.
 
 ## Qualify the workspace before review
 
@@ -721,16 +739,16 @@ ambiguous directories remain preserved; recovery never deletes their seed branch
 ## Captured baseline evidence hashes
 
 Baseline evidence hashes and reconstructed blobs pass the already-captured bytes
-to the selected Git executable through a complete, private temporary file. The
-writer closes before a fresh read-only descriptor is opened at offset zero; on
-the supported POSIX host the pathname and directory are removed before Git starts.
-Reconstructed blobs still use Git's `-w` object write; signatures, authority checks,
-and operation supervision are unchanged.
-
-Temporary storage must accommodate the largest individual captured file. Ordinary
-write, spawn, and Git failures fail closed and clean up owned resources. Unlinking
-is not secure erasure, and abrupt termination before unlink can retain a private
-snapshot under `TMPDIR`; no automatic sweep of another operation's files occurs.
+through a pipe to the selected Git executable's `hash-object --no-filters --stdin`.
+Git never reopens the authority pathname, and hashing does not spool captured bytes
+to temporary storage. Reconstructed blobs still use Git's `-w` object write;
+signatures, authority checks, and operation supervision are unchanged. Pipe, spawn,
+and Git failures fail closed.
+Within one invocation, repeated non-writing hashes reuse a successful native Git
+result only after the captured bytes compare equal. Reuse retains at most 1,024
+payloads and 8 MiB; larger or excess payloads still use Git. Every authority file
+is reread and every signature and tree check still runs. Object writes always
+invoke Git, including after a read hash of identical bytes.
 
 ## Rerun failed CI tests
 

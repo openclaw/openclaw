@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
@@ -151,6 +152,36 @@ describe("diagnostic memory", () => {
       expect(sample).toBeDefined();
       expect(sample?.memory).not.toHaveProperty("anonymousRssBytes");
       expect(sample?.memory).not.toHaveProperty("anonymousSwapBytes");
+    }
+  });
+
+  it("publishes a clone-free memory snapshot isolated across listeners", () => {
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const mutate = vi.fn((event: DiagnosticEventPayload) => {
+      if (event.type === "diagnostic.memory.sample") {
+        return Reflect.set(event.memory.workerLifecycle![0]!.retired[0]!, "count", 0);
+      }
+      return undefined;
+    });
+    const read = vi.fn();
+    const filter = { include: ["diagnostic.memory.sample"] } as const;
+    const stopMutation = onInternalDiagnosticEvent(mutate, filter);
+    const stopRead = onTrustedInternalDiagnosticEvent(read, filter, { includePrivateData: false });
+    try {
+      emitDiagnosticMemorySample({ memoryUsage: memoryUsage({}) });
+      expect(mutate).toHaveReturnedWith(false);
+      expect(read).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          type: "diagnostic.memory.sample",
+          memory: expect.objectContaining({ workerLifecycle }),
+        }),
+        { internal: true, trusted: false },
+        {},
+      );
+      expect(clone).not.toHaveBeenCalled();
+    } finally {
+      stopRead();
+      stopMutation();
     }
   });
 

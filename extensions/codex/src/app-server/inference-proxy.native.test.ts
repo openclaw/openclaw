@@ -239,6 +239,84 @@ const nativeInput = (text: string): CodexUserInput[] => [{ type: "text", text, t
 // It never reaches a provider or the operator's HOME.
 describe.skipIf(process.platform === "win32")("native inference admission", () => {
   it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE === "1")(
+    "loads a remote model catalog through the relay with native client version and auth",
+    async (context) => {
+      const native = await prepareNative(context, "codex-catalog-relay-");
+      // Synthetic external ChatGPT auth: no real credentials or provider calls.
+      const accessToken =
+        [
+          { alg: "none", typ: "JWT" },
+          { "https://api.openai.com/auth": { chatgpt_account_id: "catalog-account" } },
+        ]
+          .map((part) => Buffer.from(JSON.stringify(part)).toString("base64url"))
+          .join(".") + ".signature";
+      const seen: string[] = [];
+      transport.fetch.mockReset().mockImplementation(async (args) => {
+        seen.push(args.url);
+        expect(args.init).toMatchObject({
+          method: "GET",
+          headers: {
+            authorization: `Bearer ${accessToken}`,
+            "chatgpt-account-id": "catalog-account",
+          },
+        });
+        return {
+          response: Response.json({
+            models: [
+              {
+                slug: "relay-catalog-only",
+                display_name: "Relay catalog fixture",
+                description: "Only available from the test upstream",
+                model_messages: { instructions_template: "Synthetic catalog fixture." },
+                default_reasoning_level: "medium",
+                supported_reasoning_levels: [{ effort: "medium", description: "Medium" }],
+                shell_type: "shell_command",
+                visibility: "list",
+                supported_in_api: true,
+                priority: 1,
+                upgrade: null,
+                support_verbosity: false,
+                default_verbosity: null,
+                apply_patch_tool_type: null,
+                truncation_policy: { mode: "bytes", limit: 10000 },
+                context_window: 1050000,
+                experimental_supported_tools: [],
+              },
+            ],
+          }),
+          release: async () => {},
+        };
+      });
+      const proxy = await createCodexInferenceProxy({
+        upstream: new URL("https://chatgpt.com/backend-api/codex"),
+        assertCurrent: () => {},
+      });
+      context.onTestFinished(() => proxy.close());
+      await fs.writeFile(
+        path.join(native.codexHome, "config.toml"),
+        [
+          "openai_base_url=" + JSON.stringify(proxy.baseUrl),
+          ...nativeConfig("relay-catalog-only", "openai"),
+        ].join("\n"),
+      );
+      const client = await startNative(context, native);
+      await client.request("account/login/start", {
+        type: "chatgptAuthTokens",
+        accessToken,
+        chatgptAccountId: "catalog-account",
+        chatgptPlanType: "plus",
+      });
+      const result = await client.request("model/list", {});
+      expect(seen, client.getStderrDiagnostic()).toContain(
+        "https://chatgpt.com/backend-api/codex/models?client_version=" + CODEX_APP_SERVER_VERSION,
+      );
+      expect(
+        result.data.map((model) => model.id),
+        client.getStderrDiagnostic(),
+      ).toContain("relay-catalog-only");
+    },
+  );
+  it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE === "1")(
     "starts native roots and delegated work beyond 16 active responses",
     { timeout: 90_000 },
     async (context) => {

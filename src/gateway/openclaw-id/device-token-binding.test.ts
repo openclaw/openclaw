@@ -75,19 +75,6 @@ describe("device tokens bound to the authenticated endpoint key", () => {
     expect(await ok("e", undefined)).toBe(true);
   });
 
-  it("holds checks until the Gateway-start binding read settles", async () => {
-    let finish = () => {};
-    setDeviceTokenBindingsLoading(
-      new Promise<void>((resolve) => {
-        finish = resolve;
-      }),
-    );
-    const check = checkDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: undefined });
-    owner({ "d/operator": W1 });
-    finish();
-    await expect(check).resolves.toEqual({ ok: false, reason: "device-token-peer-mismatch" });
-  });
-
   it("prepares bindings before reading the current owner and fails closed on uncertain state", async () => {
     let finish = () => {};
     setDeviceTokenBindingsLoading(

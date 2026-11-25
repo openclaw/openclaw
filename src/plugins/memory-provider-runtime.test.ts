@@ -24,9 +24,11 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
   const { fakeSessionEntryReadModule } = await import("./memory-audience.test-support.js");
   return fakeSessionEntryReadModule;
 });
+// mock-isolation: each test swaps the selected memory capability without touching the shared registry.
 vi.mock("./memory-state.js", () => ({
   getMemoryRuntime: () => state.capability.runtime,
   getMemoryProviderRuntime: () => state.capability.providerRuntime,
+  listMemoryBackendRegistrations: () => [],
   getMemoryCapabilityRegistration: () => ({
     pluginId: "test-memory",
     capability: state.capability,

@@ -414,6 +414,51 @@ describe("Search settings", () => {
     expect(page.input("Independent request key")).toBeNull();
   });
 
+  it("offers configured secret providers through Search's credential writer", async () => {
+    const credentialPath = [...providerPath, "apiKey"];
+    const page = await mount({
+      config: {
+        ...atPath(providerPath, {}),
+        secrets: {
+          defaults: { env: "shell-env" },
+          providers: { shell: { source: "env", allowlist: ["SEARCH_API_KEY"] } },
+        },
+      },
+      result: searchStatus("searxng", "SearXNG", {
+        configPath: providerPath,
+        credential: { path: credentialPath, label: "Provider credential", envVars: [] },
+      }),
+    });
+    page.click("SearXNG");
+    await page.settle();
+    page.click("Use a secret reference: Provider credential");
+    await waitForSolid(() =>
+      expect(page.element.querySelector('button[aria-label="Provider: shell-env"]')).not.toBeNull(),
+    );
+    page.element
+      .querySelector<HTMLButtonElement>('button[aria-label="Provider: shell-env"]')!
+      .click();
+    await waitForSolid(() =>
+      expect(document.querySelector('[role="option"][data-value="shell"]')).not.toBeNull(),
+    );
+    document.querySelector<HTMLElement>('[role="option"][data-value="shell"]')!.click();
+    flush();
+    editInput(
+      page.element.querySelector<HTMLInputElement>('input[aria-label="Identifier"]')!,
+      "SEARCH_API_KEY",
+      false,
+    );
+    flush();
+    expect(page.runtime.patchForm).not.toHaveBeenCalled();
+    page.click("Save");
+    await waitForSolid(() => expect(page.runtime.flushFormChanges).toHaveBeenCalledOnce());
+    expect(page.runtime.patchForm).toHaveBeenCalledWith(credentialPath, {
+      source: "env",
+      provider: "shell",
+      id: "SEARCH_API_KEY",
+    });
+  });
+
   it.each(["success", "provider error", "request error"] as const)(
     "locks the query through %s and clears health on editing",
     async (outcome) => {

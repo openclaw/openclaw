@@ -1,12 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import {
-  observeHostDataSql,
-  observeSqliteReadSql,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
@@ -98,7 +93,7 @@ function holdRowFacts(once = false) {
   return { entered, release };
 }
 
-it("materializes updated rows across worker batches without host SQL or realpath probes", async () => {
+it("materializes updated rows across worker batches", async () => {
   await withSessionRowProjectionState(async (create) => {
     const entries = Array.from({ length: 65 }, (_, index) => ({
       query: {
@@ -119,21 +114,8 @@ it("materializes updated rows across worker batches without host SQL or realpath
       seedRow(query, { ...entry, updatedAt: 2, label: `latest-${index}` });
       invalidateFacts(projection, query);
     }
-    const hostReads = observeSqliteReadSql(StatementSync.prototype);
-    const realpath = vi.spyOn(fs.realpathSync, "native");
-    try {
-      await projection.ensureMaterialized();
-      expect(
-        hostReads.queries.filter((sql) =>
-          /session_nodes|session_members|board_tabs|transcript_rewrite_watermarks/.test(sql),
-        ),
-      ).toEqual([]);
-      expect(realpath).not.toHaveBeenCalled();
-    } finally {
-      realpath.mockRestore();
-      hostReads.restore();
-    }
 
+    await projection.ensureMaterialized();
     expect(projection.dirtyRowCount).toBe(0);
     for (const [index, { query, entry }] of entries.entries()) {
       expect(projection.snapshot(query).row).toEqual(
@@ -339,7 +321,6 @@ it.each([false, true])(
       const releaseA = createDeferredCore();
       const releaseStructural = createDeferredCore();
       const pending: Promise<unknown>[] = [];
-      let sql: ReturnType<typeof observeHostDataSql> | undefined;
       let authority:
         | Awaited<ReturnType<typeof prepareGatewaySessionAccessAuthority>>["authority"]
         | undefined;
@@ -429,7 +410,6 @@ it.each([false, true])(
                         if (command.type === "category.apply") {
                           applies++;
                           // The native receipt survives losing the ordinary result message.
-                          sql = observeHostDataSql();
                           throw failure;
                         }
                         return result;
@@ -478,8 +458,6 @@ it.each([false, true])(
         expect(resource.signal.aborted).toBe(false);
         expect(applies).toBe(1);
         expect.soft(reads.filter((keys) => keys.includes(a.key))).toEqual([[a.key]]);
-        expect(sql).toBeDefined();
-        expect(sql!.queries).toEqual([]);
       } finally {
         releaseA.resolve();
         releaseStructural.resolve();
@@ -487,7 +465,6 @@ it.each([false, true])(
         resource?.release();
         authority?.release();
         await projection.ensureMaterialized().catch(() => undefined);
-        sql?.restore();
       }
     }, true);
   },

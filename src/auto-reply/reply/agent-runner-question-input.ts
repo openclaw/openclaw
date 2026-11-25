@@ -73,7 +73,6 @@ export async function runReplyQuestionInput(
     followupRun.controllerInput?.abortSignal.throwIfAborted();
     sourceAbort?.throwIfAborted();
     queuedAbort?.throwIfAborted();
-    followupRun.operatorAuthority?.assertCurrent();
   };
   const state = resolveReplyOperationRunState(opts);
   const injection =

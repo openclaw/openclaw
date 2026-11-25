@@ -132,11 +132,12 @@ it("strips undeclared provider diagnostics and does not mutate the descriptor", 
     decision: { ...decision, privateDiagnostic: "synthetic-only" },
     privateEndpoint: "https://fixture.invalid",
   };
+  const original = structuredClone(supplied);
   expect(catalog(supplied)?.providers?.fixture?.models[0]?.inference).toEqual({
     chat: false,
     decision,
   });
-  expect(supplied).toHaveProperty("privateEndpoint");
+  expect(supplied).toEqual(original);
 });
 
 it("keeps the unlikely-chat marker, which readers that predate it drop to plain chat", () => {

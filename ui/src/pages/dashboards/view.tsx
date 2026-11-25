@@ -18,6 +18,7 @@ import {
   latest,
   onSettled,
 } from "solid-js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -54,7 +55,7 @@ registerDashboardsEnglish();
 function dashboardAuthors(data: DashboardsRouteData): DashboardAuthorOption[] {
   const authors = new Map<string, DashboardAuthorOption>();
   for (const row of data.result?.sessions ?? []) {
-    const author = dashboardAuthor(row, data.fallbackAgentId);
+    const author = dashboardAuthor(row, data.fallbackAgentId, data.agents);
     const known = authors.get(author.id);
     authors.set(author.id, known ? { ...known, count: known.count + 1 } : { ...author, count: 1 });
   }
@@ -62,10 +63,10 @@ function dashboardAuthors(data: DashboardsRouteData): DashboardAuthorOption[] {
 }
 
 function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalleryFilters) {
-  const query = filters.query.trim().toLocaleLowerCase().normalize("NFC");
+  const query = foldSearchCase(filters.query.trim().toLocaleLowerCase()).normalize("NFC");
   return (data.result?.sessions ?? [])
     .filter((row) => {
-      const author = dashboardAuthor(row, data.fallbackAgentId);
+      const author = dashboardAuthor(row, data.fallbackAgentId, data.agents);
       if (filters.ownerIds.length > 0 && !filters.ownerIds.includes(author.id)) {
         return false;
       }
@@ -76,7 +77,11 @@ function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalle
           author.label,
           row.lastMessagePreview,
           row.key,
-        ].some((value) => value?.toLocaleLowerCase().normalize("NFC").includes(query))
+        ].some((value) =>
+          foldSearchCase(value?.toLocaleLowerCase() ?? "")
+            .normalize("NFC")
+            .includes(query),
+        )
       );
     })
     .toSorted((left, right) =>

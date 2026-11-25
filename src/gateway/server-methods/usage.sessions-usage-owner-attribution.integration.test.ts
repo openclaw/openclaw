@@ -26,6 +26,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
 import { prepareCronSession } from "../../cron/isolated-agent/session.js";
 import { refreshCostUsageCacheForAgent } from "../../infra/session-cost-usage-aggregation.js";
+import * as usageWorkerRuntime from "../../infra/session-cost-usage-worker-runtime.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import { buildUsageOverview } from "../../shared/usage-overview.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
@@ -325,6 +326,18 @@ it("uses committed metadata for selected usage and families with an empty curren
     expect((await readUsage(params)).sessions).toMatchObject([
       { key, sessionId: firstId, label: "Before rename", usage: { totalTokens: 17 } },
     ]);
+
+    const before = await readUsage(params);
+    const worker = vi.spyOn(usageWorkerRuntime, "runUsageCostWorker");
+    const now = performance.now.bind(performance);
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now() + 31_000);
+    try {
+      expect(await readUsage(params)).toEqual(before);
+      expect(worker).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+      worker.mockRestore();
+    }
 
     await patchSessionEntryCore(scope, () => ({ label: "After rename" }));
     expect((await readUsage(params)).sessions).toMatchObject([

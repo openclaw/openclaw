@@ -23,7 +23,7 @@ import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 it(
-  "rechecks standing delegation authority at the real config writer during delegated-change preparation",
+  "finishes an approved config write after later standing-grant revocation",
   { timeout: 90_000 },
   async () => {
     const state = await createProductState("delegation-persistent-revocation");
@@ -106,8 +106,8 @@ it(
 
     // Hold only the handoff from parsed CLI input to asynchronous write
     // preparation. Both cases run the unchanged engine, policy owner, and writer.
-    // Revoke before the writer reads its base so a stale hash cannot mask a
-    // missing authority check.
+    // Revoke after automatic approval but before the writer reads its base.
+    // The approved apply finishes; the changed grant governs new requests.
     const runConfigOperations = configRunner.runConfigOperations;
     for (const revoke of [false, true]) {
       const entered = createDeferred();
@@ -159,16 +159,16 @@ it(
           );
           expect((await readConfig()).logging?.level).toBe("warn");
         }
-        const beforeResume = await fs.readFile(state.configPath, "utf8");
+        const beforeResume = await readConfig();
         resume.resolve();
         expect(await terminal).toMatchObject({ status: "ok" });
         expect(hotReloadRecovery).not.toHaveBeenCalled();
         expect(errors).toEqual([]);
         if (revoke) {
-          expect((await readConfig()).logging?.level).toBe("warn");
-          expect(replies.at(-1)).toContain("effective autoApproveChanges policy is false");
-          expect(replies.at(-1)).not.toContain("Updated logging.level");
-          expect(await fs.readFile(state.configPath, "utf8")).toBe(beforeResume);
+          expect(await readConfig()).toEqual({
+            ...beforeResume,
+            logging: { ...beforeResume.logging, level: value },
+          });
         } else {
           expect(replies.at(-1)).toContain("Updated logging.level");
           expect((await readConfig()).logging?.level).toBe("warn");

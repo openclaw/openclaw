@@ -6,6 +6,7 @@ import {
   shouldUseRuntimeOnlyVitestWorkers,
   shouldUseToolingOnlyVitestWorkers,
 } from "../../scripts/lib/vitest-runtime-selection.mts";
+import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import { boundaryTestFiles } from "../vitest/vitest.unit-paths.mjs";
 
 const e2e = "test/vitest/vitest.e2e.config.ts";
@@ -21,6 +22,9 @@ const reply = "test/vitest/vitest.auto-reply.config.ts";
 const delivery = "src/auto-reply/reply/dispatch-from-config.delivery.test.ts";
 const gatewayServer = "test/vitest/vitest.gateway-server.config.ts";
 const gatewayDatabase = "test/vitest/vitest.gateway-database-workers.config.ts";
+const gatewayMethods = "test/vitest/vitest.gateway-methods.config.ts";
+const gatewayAggregate = "test/vitest/vitest.gateway.config.ts";
+const githubReadTarget = "src/gateway/server-methods/sessions-github-read.target.test.ts";
 const gatewayLifecycle = [
   "src/gateway/server.sessions.fixture-lifecycle.test.ts",
   "src/gateway/server.startup-fixture-lifetime.test.ts",
@@ -35,6 +39,31 @@ const doctorCommandFiles = [
 ];
 
 it.each([
+  {
+    name: "GitHub publication target reads",
+    config: gatewayMethods,
+    files: [githubReadTarget],
+    runtime: true,
+  },
+  {
+    name: "mixed GitHub publication target reads",
+    config: gatewayMethods,
+    files: [githubReadTarget, "src/gateway/server-methods/unknown.test.ts"],
+    runtime: false,
+  },
+  { name: "broad Gateway aggregate", config: gatewayAggregate, files: [], runtime: false },
+  {
+    name: "mixed Gateway aggregate",
+    config: gatewayAggregate,
+    files: [githubReadTarget, "src/gateway/server-methods/unknown.test.ts"],
+    runtime: false,
+  },
+  {
+    name: "custom GitHub publication config",
+    config: "custom.config.ts",
+    files: [githubReadTarget],
+    runtime: false,
+  },
   { name: "Gateway lifecycle", config: gatewayServer, files: gatewayLifecycle, runtime: true },
   {
     name: "Gateway acquisition",
@@ -214,7 +243,25 @@ it.each([
   expect(shouldUseRuntimeOnlyVitestWorkers(config, ["run", ...files], env, pattern)).toBe(runtime);
 });
 
+it("uses runtime workers for the planned GitHub publication target", () => {
+  const plans = buildVitestRunPlans([githubReadTarget]);
+  expect(plans).toHaveLength(1);
+  const plan = plans[0]!;
+  expect(plan.config).toBe(gatewayAggregate);
+  expect(
+    shouldUseRuntimeOnlyVitestWorkers(
+      plan.config,
+      ["run", ...plan.forwardedArgs],
+      {},
+      undefined,
+      plan.includePatterns ?? undefined,
+    ),
+  ).toBe(true);
+});
+
 it.each([
+  { targets: [githubReadTarget], extraArgs: false, preset: "runtime" },
+  { targets: [githubReadTarget, "unknown.test.ts"], extraArgs: false, preset: "full" },
   { targets: [...gatewayLifecycle, gatewayAcquisition], extraArgs: false, preset: "runtime" },
   { targets: [execApproval, delivery], extraArgs: false, preset: "runtime" },
   { targets: [execApproval, "unknown.test.ts"], extraArgs: false, preset: "full" },

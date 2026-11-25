@@ -11,7 +11,9 @@ import {
   onSettled,
   Show,
 } from "solid-js";
-import { sidebarSectionForRoute } from "../app-navigation.ts";
+import { sidebarViewForPage } from "../app-navigation.ts";
+import { pluginTabKey, pluginTabRefFromSearch } from "../app-route-paths.ts";
+import { selectShellRouteState } from "../app/app-host-route-state.ts";
 import { projectApplicationConfig } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
@@ -22,6 +24,7 @@ import { createTimeout } from "../lib/reactive/timers.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
+import { navigationSectionForPage, pluginPageKeyForRoute } from "../plugins/navigation-sections.ts";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
@@ -85,6 +88,56 @@ function AppSidebarContent(
   const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(context, host);
   sidebarOwners.set(host, owner);
   owner.bindContext(context);
+  onSettled(() => {
+    let previousSelection = "";
+    const synchronizePage = () => {
+      const state = context.router.getState();
+      const destination = state.pendingMatches[0] ?? state.matches[0];
+      const presented = selectShellRouteState(state);
+      const route = presented.routeId;
+      if (!route) {
+        return;
+      }
+      const pluginRef =
+        route === "plugin"
+          ? pluginTabRefFromSearch(
+              presented.location?.search ?? "",
+              presented.location?.pathname,
+              context.basePath,
+            )
+          : undefined;
+      const pluginKey = pluginPageKeyForRoute(
+        route,
+        pluginRef && pluginTabKey(pluginRef),
+        context.gateway.snapshot.hello?.controlUiTabs ?? [],
+      );
+      const section = Boolean(
+        navigationSectionForPage(context.plugins.registrations("navigation"), pluginKey),
+      );
+      const navigationInFlight =
+        destination?.cause === "navigation" &&
+        (destination.isFetching !== false || destination.preload);
+      const selection = `${destination?.id}\n${state.pendingMatches.length > 0}\n${navigationInFlight}\n${route}\n${pluginKey}\n${section}`;
+      if (selection === previousSelection) {
+        return;
+      }
+      previousSelection = selection;
+      const view = sidebarViewForPage(route, pluginKey, section);
+      if (view && owner.navigationView !== view) {
+        owner.navigationView = view;
+        owner.invalidate();
+      }
+    };
+    // Observe each logical transition even when a cold destination keeps the current page.
+    // Navigation settlement repairs preview restoration; background revalidation keeps manual views.
+    synchronizePage();
+    const stops = [
+      context.router.subscribe(synchronizePage),
+      context.plugins.subscribe(synchronizePage),
+      context.gateway.subscribe(synchronizePage),
+    ];
+    return () => stops.forEach((stop) => stop());
+  });
   owner.attention = createSessionAttention(
     context,
     owner.attentionQuestions,
@@ -326,15 +379,8 @@ function AppSidebarContent(
       narration()?.();
       narrationState();
       scroll.capture();
-      return props.activeRouteId;
     },
-    (route, previous) => {
-      // A section page shows its own sidebar however it was reached: rail, link or history.
-      const section = route ? sidebarSectionForRoute(route) : undefined;
-      if (section && route !== previous && owner.navigationView !== section) {
-        owner.navigationView = section;
-        owner.invalidate();
-      }
+    () => {
       owner.sessionData.refreshPresentation();
       owner.commitRender();
       if (owner.isConnected) {

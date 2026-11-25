@@ -18,8 +18,8 @@ import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileDisplayName,
@@ -65,6 +65,7 @@ function makeTurnParams(
     offloadedRefs: [],
     runId,
     client: null,
+    senderIsOwner: false,
     context: createAgentTurnTestContext(),
     ...overrides,
     request: { message, idempotencyKey: runId, ...overrides.request },

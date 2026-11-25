@@ -438,6 +438,13 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: var(--muted);
 }
 
+/* Keep the language and font pickers on one column as their selections change. */
+@media not all and (max-width: 640px) {
+  #settings-appearance-typography .settings-row__control:has(> .settings-select) {
+    width: 220px;
+  }
+}
+
 .settings-typography-preview {
   width: 100%;
 }
@@ -557,6 +564,22 @@ openclaw-appearance-background .settings-background-preview .session-background_
   align-items: center;
   gap: var(--space-2);
   flex: 0 0 auto;
+}
+
+/* Schema section help is a row action: keep its touch box inside the scrolling panel. */
+@media (pointer: coarse), (max-width: 640px) {
+  #config-section-panel
+    .settings-section__header:has(
+      > .settings-section__actions > .settings-section__docs:only-child
+    ) {
+    > .settings-section__copy {
+      align-self: center;
+    }
+
+    > .settings-section__copy + .settings-section__actions .settings-section__help-button {
+      margin-block: 0;
+    }
+  }
 }
 
 .settings-section__docs {
@@ -912,6 +935,13 @@ openclaw-appearance-background .settings-background-preview .session-background_
   min-width: min(220px, 100%);
 }
 
+/* Keep the prediction model and its explanation in place when the selected label changes. */
+@media not all and (max-width: 640px) {
+  openclaw-labs-page .settings-row.settings-row--nested .settings-row__control > .settings-select {
+    inline-size: 18em;
+  }
+}
+
 /* Permission can replace System default with long hardware labels; keep the
    paired media pickers aligned instead of letting native intrinsic width win. */
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select--media-device {
@@ -1079,34 +1109,12 @@ openclaw-appearance-background .settings-background-preview .session-background_
 /* Saving and Saved keep the buttons' footprint, so the field changes width only when the edit
    starts and when it ends. */
 .cfg-secret-actions {
-  display: grid;
   flex: none;
-}
-
-.cfg-secret-actions > * {
-  grid-area: 1 / 1;
 }
 
 .cfg-secret-actions__buttons {
   display: flex;
   gap: var(--space-2);
-}
-
-.cfg-secret-actions[data-saved] > .cfg-secret-actions__buttons {
-  visibility: hidden;
-}
-
-.cfg-secret-actions .btn {
-  display: inline-grid;
-  place-items: center;
-}
-
-.cfg-secret-actions__label {
-  grid-area: 1 / 1;
-}
-
-.cfg-secret-actions__label:not([data-shown]) {
-  visibility: hidden;
 }
 
 .cfg-secret-actions__saved {
@@ -1959,9 +1967,22 @@ openclaw-approvals-page .data-table-pagination__info {
   color: var(--muted);
 }
 
+/* The translated pending label must not narrow the command or move the history below it. */
 .standing-grants__revoke {
+  display: inline-grid;
   grid-area: 1 / 2 / span 3;
   align-self: start;
+  place-items: center;
+}
+
+.standing-grants__revoke::before,
+.standing-grants__revoke > span {
+  grid-area: 1 / 1;
+}
+
+.standing-grants__revoke::before {
+  content: attr(data-alternate-label);
+  visibility: hidden;
 }
 
 /* Quiet-hours details stay connected to their toggle without changing row controls. */
@@ -1970,25 +1991,6 @@ openclaw-approvals-page .data-table-pagination__info {
 }
 
 /* Full Settings navigation loads with the sidebar; fallback geometry stays in layout.css. */
-.settings-sidebar__esc {
-  margin-left: auto;
-  padding: 2px 6px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--card) 70%, transparent);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: calc(10px * var(--control-ui-text-scale));
-  font-weight: 550;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-/* Inside the drawer there is no Escape key to hint at. */
-.shell--mobile-nav .settings-sidebar__esc {
-  display: none;
-}
-
 .settings-sidebar__agent openclaw-agent-select {
   display: block;
   min-width: 0;
@@ -2019,6 +2021,31 @@ openclaw-approvals-page .data-table-pagination__info {
   .settings-sidebar__agent
   .agent-select__trigger[aria-expanded="true"] {
   background: var(--bg-hover);
+}
+
+/* In the header the picker is the agent's avatar alone; the trigger keeps the name
+   in its accessible label and the menu lists every agent by name. */
+.settings-sidebar__agent--header .agent-select__trigger {
+  gap: 4px;
+  width: auto;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 6px 0 4px;
+  border-radius: var(--radius-full);
+}
+
+.settings-sidebar__agent--header .agent-select__trigger .agent-select__avatar {
+  width: 24px;
+  height: 24px;
+}
+
+.settings-sidebar__agent--header .agent-select__trigger .agent-select__label {
+  display: none;
+}
+
+.settings-sidebar__agent--header .agent-select__trigger .agent-select__chevron {
+  margin-inline-start: 0;
+  color: var(--muted);
 }
 
 .settings-sidebar__search::after {

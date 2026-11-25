@@ -85,3 +85,28 @@ export {
 } from "../gateway/channel-status-patches.js";
 
 export { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
+
+export type { GatewayPublicationReaderV1 } from "../gateway/publication-reader.js";
+
+/** Attest a closed publication-reader device without impersonating a human profile. */
+export async function prepareGatewayPublicationReaderV1(
+  ...args: Parameters<
+    typeof import("../gateway/publication-reader.js").prepareGatewayPublicationReaderV1
+  >
+): Promise<import("../gateway/publication-reader.js").GatewayPublicationReaderV1> {
+  const runtime = await import("../gateway/publication-reader.js");
+  return runtime.prepareGatewayPublicationReaderV1(...args);
+}
+
+/** Read an already provisioned non-primary machine identity; never creates credentials. */
+export async function loadGatewayReaderIdentityV1(identityKey: string) {
+  if (!identityKey || identityKey !== identityKey.trim() || identityKey === "primary") {
+    throw new Error("A named non-primary Gateway reader identity is required");
+  }
+  const { loadDeviceIdentityIfPresentAsync } = await import("../infra/device-identity-async.js");
+  const identity = await loadDeviceIdentityIfPresentAsync({ identityKey });
+  if (!identity) {
+    throw new Error("Gateway reader identity is not provisioned");
+  }
+  return identity;
+}

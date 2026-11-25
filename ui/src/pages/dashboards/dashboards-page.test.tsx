@@ -85,6 +85,7 @@ function routeData(...rows: GatewaySessionRow[]): DashboardsRouteData {
     error: null,
     basePath: "",
     fallbackAgentId: "main",
+    agents: [],
     mainKey: "main",
     globalScope: false,
   };
@@ -299,6 +300,40 @@ it.each([false, true])("keeps pages across row events; retires late pages: %s", 
   const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
   changeValue(search, "old");
   expect(cardTitles(element)).toEqual(["Old"]);
+});
+
+it("matches all sigma forms in the gallery and its author picker", async () => {
+  const rows = Array.from({ length: 9 }, (_, index) =>
+    row(`agent:main:dashboard:board-${index}`, `Board ${index}`, {
+      createdActor: {
+        type: "human",
+        id: `user-${index}`,
+        label: index === 0 ? "ΝΙΚΟΣ" : `User ${index}`,
+      },
+    }),
+  );
+  const { container } = await mountDashboard(undefined, routeData(...rows));
+  flush();
+  container.querySelector<HTMLButtonElement>('button[aria-label="Search dashboards"]')!.click();
+  flush();
+  const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  for (const query of ["Σ", "σ", "ς"]) {
+    changeValue(search, query);
+    expect(cardTitles(container)).toEqual(["Board 0"]);
+  }
+  changeValue(search, "");
+  container.querySelector<HTMLButtonElement>('button[aria-label="Filter by author"]')!.click();
+  const picker = await waitForSolid(() => {
+    const input = document.querySelector<HTMLInputElement>(".dashboards-authors__search input");
+    expect(input).not.toBeNull();
+    return input!;
+  });
+  for (const query of ["Σ", "σ", "ς"]) {
+    changeValue(picker, query);
+    const choices = document.querySelectorAll(".dashboards-authors__row");
+    expect(choices).toHaveLength(1);
+    expect(choices[0]?.textContent).toContain("ΝΙΚΟΣ");
+  }
 });
 
 it("renders the route host and filters by search and author and sorts cards by title", async () => {

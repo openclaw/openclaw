@@ -12,6 +12,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleDirFetch } from "../node-host/dir-fetch.js";
 import { appendFileTransferAudit } from "./audit.js";
+import { BOUNDED_DIRECTORY_PAGE_SIZE, BOUNDED_UNARY_FILE_BYTES } from "./bounded-replies.js";
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
 import {
   EXISTING_BINDING,
@@ -27,6 +28,7 @@ import {
 } from "./node-invoke-policy.test-support.js";
 import * as filePolicy from "./policy.js";
 import { persistLiteralGrant } from "./policy.js";
+import { handleWorkspaceWorkerPolicy } from "./workspace-memory-policy.js";
 const policy = createFileTransferNodeInvokePolicy();
 
 function approval(decision: "allow-once" | "allow-always", id = "approval-1") {
@@ -79,6 +81,139 @@ describe("file-transfer node invoke policy", () => {
     expectResultFields(await policy.handle(ctx), { ok: false, code: "NO_POLICY" });
     expect(invokeNode).not.toHaveBeenCalled();
   });
+
+  it("bounds direct unary reads only on the selected node", async () => {
+    for (const boundedReplies of [false, true]) {
+      const requested = 16 * 1024 * 1024;
+      const { ctx, invokeNode } = createCtx({
+        params: { path: "/tmp/file.txt", maxBytes: requested, boundedReplies: false },
+        pluginConfig: nodeConfig({ allowReadPaths: ["/tmp/**"], boundedReplies }),
+      });
+      const result = await policy.handle({ ...ctx, node: { ...ctx.node, platform: "linux" } });
+      expect(result.ok).toBe(true);
+      expect(invokeNode).toHaveBeenCalledTimes(2);
+      for (const index of [0, 1]) {
+        expect(requireInvokeParams(invokeNode, index).maxBytes).toBe(
+          boundedReplies ? BOUNDED_UNARY_FILE_BYTES : requested,
+        );
+        if (boundedReplies) {
+          expect(requireInvokeParams(invokeNode, index)).not.toHaveProperty("boundedReplies");
+        }
+      }
+    }
+  });
+
+  it("denies raw binary file.fetch on a selected node before preflight", async () => {
+    const { ctx, invokeNode } = createCtx({
+      params: { path: "/tmp/file.txt", maxBytes: 16 * 1024 * 1024, transport: "binary" },
+      pluginConfig: nodeConfig({ allowReadPaths: ["/tmp/**"], boundedReplies: true }),
+    });
+    const result = await policy.handle({ ...ctx, node: { ...ctx.node, platform: "linux" } });
+    expectResultFields(result, { ok: false, code: "INVALID_PARAMS" });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("refuses malformed selected directory continuations before dispatch", async () => {
+    const { ctx, invokeNode } = createCtx({
+      command: "dir.list",
+      params: { path: "/tmp/dir", pageToken: "0".repeat(17) },
+      pluginConfig: nodeConfig({ allowReadPaths: ["/tmp/**"], boundedReplies: true }),
+    });
+    const result = await policy.handle({ ...ctx, node: { ...ctx.node, platform: "linux" } });
+    expectResultFields(result, { ok: false, code: "INVALID_PARAMS" });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [undefined, BOUNDED_DIRECTORY_PAGE_SIZE],
+    [5000, BOUNDED_DIRECTORY_PAGE_SIZE],
+    [0.25, 1],
+    [20, 20],
+  ])("bounds direct directory page size %s to %s", async (requested, expected) => {
+    const { ctx, invokeNode } = createCtx({
+      command: "dir.list",
+      params: { path: "/tmp/dir", maxEntries: requested, pageToken: "1000" },
+      pluginConfig: nodeConfig({ allowReadPaths: ["/tmp/**"], boundedReplies: true }),
+    });
+    const result = await policy.handle({ ...ctx, node: { ...ctx.node, platform: "linux" } });
+    expect(result.ok).toBe(true);
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+    expectRecordFields(requireInvokeParams(invokeNode, 1), {
+      maxEntries: expected,
+      pageToken: "1000",
+    });
+  });
+
+  it.each([
+    ["oversized", "fixture-marker".repeat(400_000)],
+    ["non-hex", "z".repeat(64)],
+    ["non-string", null],
+  ])(
+    "refuses a %s selected write digest without forwarding or echoing it",
+    async (_name, digest) => {
+      const { ctx, invokeNode } = createCtx({
+        command: "file.write",
+        params: { path: "/tmp/file.txt", expectedSha256: digest },
+        pluginConfig: nodeConfig({ allowWritePaths: ["/tmp/**"], boundedReplies: true }),
+      });
+      const result = await policy.handle({ ...ctx, node: { ...ctx.node, platform: "linux" } });
+      expectResultFields(result, { ok: false, code: "INVALID_PARAMS" });
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(256);
+      expect(invokeNode).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, "aB".repeat(32)])(
+    "preserves the selected write digest %s",
+    async (digest) => {
+      const { ctx, invokeNode } = createCtx({
+        command: "file.write",
+        params: {
+          path: "/tmp/file.txt",
+          ...(digest !== undefined ? { expectedSha256: digest } : {}),
+        },
+        pluginConfig: nodeConfig({ allowWritePaths: ["/tmp/**"], boundedReplies: true }),
+      });
+      expect((await policy.handle({ ...ctx, node: { ...ctx.node, platform: "linux" } })).ok).toBe(
+        true,
+      );
+      expect(invokeNode).toHaveBeenCalledTimes(2);
+      for (const index of [0, 1]) {
+        const params = requireInvokeParams(invokeNode, index);
+        expect(params.expectedSha256).toBe(digest);
+        expect(Object.hasOwn(params, "expectedSha256")).toBe(digest !== undefined);
+      }
+    },
+  );
+
+  it.each(["memory", "skills"] as const)(
+    "refuses an overlong selected workspace.%s path before the node",
+    async (kind) => {
+      const workspaceDir = "/tmp/workspace";
+      const filePath = workspaceDir + "/" + "f".repeat(4096);
+      const operation = kind === "memory" ? "inspect" : "readInstructions";
+      const { ctx, invokeNode } = createCtx({
+        command: `workspace.${kind}`,
+        params: {
+          workspaceDir,
+          operation,
+          request: JSON.stringify({ operation, filePath }),
+          watch: false,
+        },
+        pluginConfig: {
+          ...nodeConfig({ allowReadPaths: [workspaceDir + "/**"], boundedReplies: true }),
+          workspaces: { main: { nodeId: "node-1", remoteRoot: workspaceDir } },
+        },
+      });
+      const result = await handleWorkspaceWorkerPolicy(kind, ctx);
+      expect(result).toEqual({
+        ok: false,
+        code: "INVALID_PARAMS",
+        message: "workspace worker path exceeds the bounded Linux path limit",
+      });
+      expect(invokeNode).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses exact allow-once plugin approval once across preflight and final invoke", async () => {
     const approvals = approval("allow-once");

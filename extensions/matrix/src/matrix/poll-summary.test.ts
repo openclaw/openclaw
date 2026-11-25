@@ -2,16 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import { fetchMatrixPollSnapshot } from "./poll-summary.js";
 import type { MatrixClient, MatrixRawEvent } from "./sdk.js";
 
-function createPollStartEvent(): MatrixRawEvent {
+function createPollStartEvent(namespace = "m.poll"): MatrixRawEvent {
+  const type = `${namespace}.start`;
   return {
     event_id: "$poll",
     sender: "@alice:example.org",
-    type: "m.poll.start",
+    type,
     origin_server_ts: 1,
     content: {
-      "m.poll.start": {
+      [type]: {
         question: { "m.text": "Lunch?" },
-        answers: [{ id: "pizza", "m.text": "Pizza" }],
+        answers: [
+          { id: "a", "m.text": "Pizza" },
+          { id: "a ", "m.text": "Sushi" },
+        ],
       },
     },
   } as MatrixRawEvent;
@@ -41,7 +45,8 @@ describe("Matrix poll snapshot pagination", () => {
     expect(getRelations).toHaveBeenCalledTimes(cursors.length);
   });
 
-  it("follows valid empty pages before collecting later poll votes", async () => {
+  it.each(["m.poll", "org.matrix.msc3381.poll"])("tallies exact %s IDs", async (namespace) => {
+    const responseType = `${namespace}.response`;
     const getRelations = vi
       .fn()
       .mockResolvedValueOnce({ events: [], nextBatch: "next-page", prevBatch: null })
@@ -50,10 +55,10 @@ describe("Matrix poll snapshot pagination", () => {
           {
             event_id: "$vote",
             sender: "@bob:example.org",
-            type: "m.poll.response",
+            type: responseType,
             origin_server_ts: 2,
             content: {
-              "m.poll.response": { answers: ["pizza"] },
+              [responseType]: { answers: ["a "] },
               "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
             },
           },
@@ -65,7 +70,7 @@ describe("Matrix poll snapshot pagination", () => {
     const snapshot = await fetchMatrixPollSnapshot(
       { getRelations } as unknown as MatrixClient,
       "!room:example.org",
-      createPollStartEvent(),
+      createPollStartEvent(namespace),
     );
 
     expect(getRelations).toHaveBeenNthCalledWith(
@@ -76,6 +81,7 @@ describe("Matrix poll snapshot pagination", () => {
       undefined,
       { from: "next-page" },
     );
-    expect(snapshot?.text).toContain("1. Pizza (1 vote)");
+    expect(snapshot?.text).toContain("1. Pizza (0 votes)\n2. Sushi (1 vote)");
+    expect(snapshot?.text).toContain("Total voters: 1");
   });
 });

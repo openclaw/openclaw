@@ -735,7 +735,7 @@ describe("Access page", () => {
     const harness = await mountPage([linked()]);
     expect(harness.registerNavigation).toHaveBeenCalledWith({
       id: "access",
-      label: "Access",
+      label: "Remote access",
       page: { id: "access" },
       icon: "access",
       defaultVisible: false,

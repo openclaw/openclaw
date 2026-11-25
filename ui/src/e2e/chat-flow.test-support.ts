@@ -19,6 +19,8 @@ export {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 
+export const openAiAuthor = { provider: "openai", model: "gpt-4.1" } as const;
+
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 // These suites track contexts and close them in their existing afterEach hook.

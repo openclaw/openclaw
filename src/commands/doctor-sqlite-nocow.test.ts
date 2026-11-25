@@ -564,6 +564,8 @@ describe("Doctor NOCOW recovery identities", () => {
       latestCompletedStartedAt: Date.now() + 86_400_000,
       latestVerifiedStartedAt: 0,
       latestVerifiedFinishedAt: 0,
+      latestVerifiedSuccessStartedAt: 0,
+      hasUnfinishedRun: false,
       hasPendingRecovery: false,
     });
   });

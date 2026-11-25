@@ -11,6 +11,7 @@ import {
 } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import type { NormalizedUsage } from "../agents/usage.js";
@@ -223,13 +224,19 @@ export function createGatewaySubagentRuntime(
       throw new Error("Plugin session fork requires an active Gateway binding.");
     }
     const assertConversationAccess = (cfg: OpenClawConfig) => {
-      const origin =
-        scope?.pluginOrigin ??
-        getActivePluginRegistry()?.plugins.find((plugin) => plugin.id === pluginId)?.origin ??
-        "config";
-      if (!resolveConversationAccessAllowed(origin, cfg.plugins?.entries?.[pluginId]?.hooks)) {
+      const loaded = getActivePluginRegistry()?.plugins.find((plugin) => plugin.id === pluginId);
+      const origin = scope?.pluginOrigin ?? loaded?.origin ?? "config";
+      if (
+        !resolveConversationAccessAllowed(
+          origin,
+          cfg.plugins?.entries?.[pluginId]?.hooks,
+          loaded?.trust?.conversationAccessAccepted,
+        )
+      ) {
         throw new Error(
-          `Plugin session fork requires plugins.entries.${pluginId}.hooks.allowConversationAccess.`,
+          `Plugin session fork requires conversation access: declare contracts.conversationAccess ` +
+            `["read"] and approve the plugin's capabilities, or set ` +
+            `plugins.entries.${pluginId}.hooks.allowConversationAccess.`,
         );
       }
     };
@@ -300,6 +307,9 @@ export function createGatewaySubagentRuntime(
                   throw new Error(`No active session context for "${params.sessionKey}".`);
                 }
                 const model = resolveSessionModelRef(cfg, target.entry, agentId);
+                if (!model) {
+                  throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+                }
                 assertOperatorModelAllowed(execution.operatorAuthority, model);
                 const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000);
                 const runSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);

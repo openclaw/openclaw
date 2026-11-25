@@ -288,7 +288,7 @@ function fixtureFiles(fixture) {
 }
 
 async function buildNpmPackArtifact(fixture) {
-  const tar = requireFromApp("tar");
+  const tar = requireFromApp("tar/raw");
   const packRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-fixture-"));
   try {
     const packageDir = path.join(packRoot, "package");

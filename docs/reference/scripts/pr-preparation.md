@@ -21,7 +21,7 @@ For blobless partial clones, checkout first resolves its target without lazy fet
 - The default agent handoff leaves `OPENCLAW_PR_GATES_REMOTE` unset and uses `merge-run --auto-merge`; explicitly setting `OPENCLAW_PR_GATES_REMOTE=github` selects the same mode. Preparation records `github_pending` bound to the published head without successful-proof stamps. Merge requires completed local review, the exact prepared head, and the enforced `openclaw/ci-gate`; it rejects known failed required checks, accepts pending checks, and skips separate hosted workflow verification and its synchronous CI watcher. GitHub enforces required CI/security checks and reviews; the agent retains responsibility for follow-through. This mode replaces separate scheduled Testbox evidence with the PR's enforced gate; existing completed-evidence modes remain available. Accepted requests return pending, not completion. Follow the maintainer skill's polling cadence, investigate failures and conflicts, and reconcile through native recovery until merge and cleanup are verified. Preserve accepted or uncertain outcome records; never blindly re-arm a request. No implicit admin or REST fallback applies to pending-gate admission; explicitly authorized [prior-CI admin admission](/reference/scripts/prior-ci) is a separate mode.
 - Gate-mode validation for `prepare-run`, `prepare-gates`, and `prepare-push` happens before PR reads, lock acquisition, or preparation evidence retirement. Select one mode: the GitHub-pending invocation clears `OPENCLAW_TESTBOX`; completed hosted proof clears `OPENCLAW_PR_GATES_REMOTE`. Unknown or contradictory selectors must fail without replacing saved evidence. This validation does not block merge-outcome reconciliation, whose retained intent owns recovery.
 - Set `OPENCLAW_PR_GATES_REMOTE=local` only when the old full local gates are explicitly needed. `OPENCLAW_TESTBOX=1` with an unset remote selector retains completed hosted mode; combining it with explicit `OPENCLAW_PR_GATES_REMOTE=github` remains a conflict.
-- Normal `prepare-init` requires incoming-head READY. To resolve a validated incoming NEEDS WORK review with BLOCKER/IMPORTANT findings, explicitly use `scripts/pr prepare-correction-init <PR>`. This initializes correction preparation only, preserving the incoming review and contributor ancestry. Commit the fixes, then use `prepare-correction-review-init` to create a separate exact-candidate JSON review template. JSON alone is authoritative; validation renders its summary. Independently review the full corrected candidate and explain resolution of every required incoming finding. Gates, push, sync and merge require that candidate's READY review; changing the candidate or incoming review invalidates it. Discussion/rejection verdicts cannot use this route. This does not change canonical-wrapper trust or permit use of an unlanded wrapper on another PR. Correction publication accepts exact-candidate `github_pending` as a pending disposition, never successful proof. Publication rebinds its target only through the verified identical-tree local/hosted receipt; sync and merge preserve that binding. Merge still requires exact prepared-head auto-merge admission, the enforced `openclaw/ci-gate`, and no known failed required checks; live review/security rules remain enforced. Completed gate modes and the separately authorized protected Crabbox pending route remain available.
+- Normal `prepare-init` requires incoming-head READY. To resolve a validated incoming NEEDS WORK review with BLOCKER/IMPORTANT findings, explicitly use `scripts/pr prepare-correction-init <PR>`. This initializes correction preparation only, preserving the incoming review and contributor ancestry. Commit the fixes, then use `prepare-correction-review-init` to create a separate exact-candidate JSON review template. JSON alone is authoritative; validation renders its summary. Independently review the full corrected candidate and explain resolution of every required incoming finding. Gates, push, sync and merge require that candidate's READY review unless the maintainer records [exact-head acceptance of pending proof](#accept-pending-proof-at-an-exact-published-head); changing the candidate or incoming review invalidates either decision. Discussion/rejection verdicts cannot use this route. This does not change canonical-wrapper trust or permit use of an unlanded wrapper on another PR. Correction publication accepts exact-candidate `github_pending` as a pending disposition, never successful proof. Publication rebinds its target only through the verified identical-tree local/hosted receipt; sync and merge preserve that binding. Merge still requires exact prepared-head auto-merge admission, the enforced `openclaw/ci-gate`, and no known failed required checks; live review/security rules remain enforced. Completed gate modes and the separately authorized protected Crabbox pending route remain available.
 - After a native correction publication, a fresh incoming NEEDS WORK review can continue on the existing clean, signed preparation branch with `scripts/pr prepare-correction-continue <PR> --expected-head <retained SHA> --expected-tree <tree OID> --incoming-head <hosted SHA> --incoming-review <review JSON OID> --publication-receipt <push|sync> --publication-oid <receipt OID>`. Select the exact current `.local/review.json` and native `prepare-push-result.env` or `prepare-sync-result.env` bytes with `git hash-object --no-filters`. The publication receipt must connect the old incoming preparation to the new hosted head with identical local/hosted trees and preserved ancestry; the hosted head must be an ancestor of the retained candidate. The owner rechecks live PR identity, signed descendants, clean branch, exact metadata and operation custody before replacing authority. It copies and verifies prior preparation, correction, publication, baseline and gate evidence into `.local/prep-evidence.*`, then retires their active authority without changing HEAD, the index or source files. The fresh incoming review and metadata remain unchanged. Interrupted metadata installation stays in the existing transition journal and can resume only with the same retained identities and evidence; rerun the exact continuation after resolving its reported obstruction. Do not reset the preparation branch or delete retained transition evidence. After continuation, initialize and complete a fresh exact-candidate correction review and run native gates; prior READY reviews and gate stamps remain historical.
 - A reviewed, signed correction blocked by its old baseline can use `scripts/pr prepare-baseline-refresh <PR> --expected-head <candidate SHA> --baseline <main SHA> [--resolutions <file>]`. First integration also accepts the unchanged, signed incoming head after `prepare-correction-init` when its exact current review is NEEDS WORK with actionable findings. This admission creates a candidate for review; it does not approve or resolve those findings. Its signed binding records `incomingSource: true`, retains the incoming review bytes, and preserves existing preparation evidence as history. A changed source or an existing baseline binding still requires the corrected-source or successor review contract. The selected baseline must belong to the invocation's privately captured main ancestry. The native owner rechecks the live incoming PR identity, exact preparation branch, clean source, review bytes and operation lock. It derives the complete product delta from the unique source/baseline fork, applies only those paths to the selected baseline, and signs a candidate with the preparation source as first parent and baseline as second parent. It preserves the source commit's Git-parsed `Co-authored-by` trailers in the generated commit message, including signing requests; it never copies other source trailers or binding markers. Source credit containing control or line-separator characters refuses before a candidate or request is created. It does not perform an unrestricted merge or accept a caller scope list. Content replay uses built-in Git text merging over exact private blob files, independent of worktree attributes or configured merge drivers. Competing add/add, deletion/type changes and NUL-containing binary edits require explicit resolutions.
   Conflicts require a regular JSON manifest with `version: 1`, `pr`, `sourceHead`, `baselineHead`, `forkBase` and `resolutions`. Each resolution names one computed conflict `path` and exact `base`, `source` and `baseline` entries (`{mode, oid}` or `null` for absence). Its `resolved` value is either `null` for deletion or `{mode, file, sha256}`; `file` is a regular file relative to the manifest directory, and its exact bytes must match the SHA-256. Missing, extra, stale or duplicate entries refuse. Gitlinks, directory/file collisions and native artifact paths refuse. The command reports resolved Git blob IDs for independent review; it retains those IDs and modes, never mutable resolution filenames.
@@ -116,9 +116,62 @@ can record an already-published exact candidate without another push.
 
 The existing `prepare-push-result.env` records `PUSH_PURPOSE=proof`, the exact
 review OID, and pending finding IDs alongside publication identity. It is not a
-qualified `prep.env`. Normal gates, push, sync, and merge still require a genuine
-READY correction review. After obtaining the enumerated proof, independently
-resolve those findings for the exact candidate and run ordinary qualification.
+qualified `prep.env`. After obtaining the enumerated proof, independently resolve
+those findings for the exact candidate and run ordinary qualification. If only
+the enumerated proof remains unavailable, the maintainer can instead accept that
+specific risk as described below.
+
+### Accept pending proof at an exact published head
+
+Use this route only after an authorized maintainer explicitly accepts the risk
+of landing without the enumerated proof. Leave `.local/correction-review.json`
+unchanged: its recommendation stays `NEEDS WORK`, its findings remain open,
+and the native proof-publication receipt binds its exact bytes. Add a separate
+regular JSON file at `.local/pending-proof-acceptance.json` in the PR worktree:
+
+```json
+{
+  "version": 1,
+  "kind": "maintainer-accepted-pending-proof",
+  "headSha": "<exact published commit SHA>",
+  "treeOid": "<exact published tree OID>",
+  "reviewOid": "<PUSH_REVIEW_OID from the native proof receipt>",
+  "findings": [
+    {
+      "id": "R2",
+      "reason": "The maintainer accepted the risk of the missing exact-package proof because no runner was available."
+    }
+  ]
+}
+```
+
+This route is meant for findings whose remaining requirement is proof. Include
+exactly the proof publication's pending IMPORTANT IDs, with the maintainer's
+nonblank, single-line reason for each. The file records acceptance, not new
+review or completed proof. It cannot cover a BLOCKER, an unvalidated issue, a
+different head, tree or review, or any failed CI, security or enforced GitHub
+review gate.
+
+The candidate must have been published for proof under a trusted workflow that
+already includes this capability. Its retained workflow binding stays in use
+when canonical `main` advances. Corrections published for proof under an older
+workflow cannot use this route.
+
+For the default GitHub-pending route, run the ordinary commands:
+
+```bash
+scripts/pr prepare-gates <PR>
+scripts/pr prepare-push <PR>
+scripts/pr merge-run <PR> --auto-merge
+```
+
+The exact hosted head needs no second push. The retained merge outcome records
+the accepted IDs and reasons in `pendingProofAcceptance`, separately from the
+actual gate results. Moving the head or changing the review invalidates the
+record. Native correction continuation and baseline refresh archive it with the
+old review and remove it from active preparation. If qualifying a fresh review
+without either transition, set the old record aside first. Repeated `merge-run`
+still reconciles rather than replaying an accepted or uncertain request.
 
 ## Refresh a retained candidate for pending proof
 
@@ -211,7 +264,8 @@ use the existing exact-identity `prepare-workflow-successor --for-proof` operati
 to advance it to the authenticated current-main workflow named by that new review.
 Only that new exact-candidate typed NEEDS WORK authorization can use `prepare-publish-for-proof`. No successful gate
 or qualified preparation is created. Ordinary gates, push, sync, and merge still
-require READY. `--for-proof` remains exclusive to `prepare-baseline-refresh`;
+require READY unless the published candidate qualifies for the explicit
+maintainer acceptance above. `--for-proof` remains exclusive to `prepare-baseline-refresh`;
 using it with `prepare-baseline-successor` or remote signing, incomplete predecessor
 pairs, mixed continuation options, duplicate options, and unknown options refuses before locking.
 Qualified version-1 refresh, successor, and signing contracts are unchanged.

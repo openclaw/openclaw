@@ -367,10 +367,11 @@ syncBuiltinESMExports();
     }
   });
 
-  it("explains how to recover when a shallow checkout cannot resolve the beta merge base", () => {
+  it.each([false, true])("explains shallow history recovery (%s)", (canonicalMain) => {
     const origin = tempDirs.make("openclaw-shallow-release-origin-");
     git(origin, ["init", "-q", "-b", "main"]);
     git(origin, ["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(origin, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
     commitAll(origin, "chore: baseline");
     git(origin, ["tag", "--no-sign", "v2026.7.1"]);
     commitAll(origin, "chore: candidate");
@@ -381,10 +382,10 @@ syncBuiltinESMExports();
     git(cwd, ["fetch", "-q", "--depth=1", "origin", "tag", "v2026.7.1"]);
 
     const result = runVerifier(cwd, {
-      base: "v2026.7.1",
+      base: canonicalMain ? "HEAD" : "v2026.7.1",
       target: "HEAD",
-      version: "2026.7.2-beta.1",
-      mainRef: null,
+      version: canonicalMain ? "2026.7.1" : "2026.7.2-beta.1",
+      mainRef: canonicalMain ? "v2026.7.1" : null,
       write: false,
     });
 
