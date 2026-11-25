@@ -1,10 +1,17 @@
+import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   predictGatewayResourceProfile,
+  prepareGatewayResourceProfile,
   type GatewayResourceProfile,
   type ResourceProfile,
 } from "../infra/gateway-resource-profile.js";
 import type { GatewayServerOptions } from "./server-public.js";
+
+/** Use only guarded source facts, including the same runtime overrides as bootstrap. */
+export function prepareGatewayStartupResourcePolicy(config: OpenClawConfig): void {
+  prepareGatewayResourceProfile(captureConfigOverrideApplier()(config).gateway?.resources);
+}
 
 function isConfiguredProfile(value: unknown): value is GatewayResourceProfile["configured"] {
   return value === "auto" || value === "standard" || value === "lean";

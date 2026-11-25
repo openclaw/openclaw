@@ -77,10 +77,15 @@ function cliEnv(root: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 // Keep parsing, environment selection, preaction, and config admission real.
 // Replace only the final Gateway action; the built rig proves listener startup.
-function gatewayRunCliScript(args: string[]): string {
+function gatewayRunCliScript(args: string[], inspectResources = false): string {
   return `
       import { registerHooks } from "node:module";
       const calls = globalThis[Symbol.for("openclaw.test.startupAllowanceCalls")] = [];
+      globalThis[Symbol.for("openclaw.test.startupResources")] = async () => {
+        if (!${inspectResources}) return {};
+        const { getTrackedWorkerPoolSnapshot } = await import("./src/infra/worker-cpu.ts");
+        return { workers: getTrackedWorkerPoolSnapshot().workerCensus.map(({ kind, count, hostedEndpoints }) => ({ kind, count, hostedEndpoints })) };
+      };
       registerHooks({
         resolve(specifier, context, nextResolve) {
           if (specifier === "./run.js" && /\\/cli\\/gateway-cli\\/run-command\\.(?:ts|js)$/.test(context.parentURL ?? "")) {
@@ -89,7 +94,8 @@ function gatewayRunCliScript(args: string[]): string {
               url: "data:text/javascript," + encodeURIComponent(
                 'export async function runGatewayCommand(opts) {' +
                 'globalThis[Symbol.for("openclaw.test.startupAllowanceCalls")].push({' +
-                'dev: opts.dev === true, allowUnconfigured: opts.allowUnconfigured === true }); }'
+                'dev: opts.dev === true, allowUnconfigured: opts.allowUnconfigured === true,' +
+                '...await globalThis[Symbol.for("openclaw.test.startupResources")]() }); }'
               ),
             };
           }
@@ -118,6 +124,38 @@ function readResult(result: Awaited<ReturnType<typeof runIsolatedModuleScript>>)
 }
 
 describe("Gateway config selection before migration admission", () => {
+  it.each(["lean", "standard"] as const)(
+    "routes the real CLI's pre-action SQLite writer with configured %s policy",
+    async (profile) => {
+      const { root, configPath, env, options } = createFixture("openclaw-startup-resources-");
+      writeJson(configPath, {
+        gateway: { mode: "local", resources: { profile } },
+        plugins: { enabled: false },
+      });
+      const result = await runIsolatedModuleScript(
+        cliEnv(root, env),
+        gatewayRunCliScript([], true),
+        options,
+      );
+      const [call] = readResult(result);
+      expect(call).toMatchObject({ dev: false, allowUnconfigured: false });
+      const dedicated = call.workers.filter(
+        (row: { kind: string }) => row.kind === "sqlite-store.worker.js",
+      );
+      const shared = call.workers.filter(
+        (row: { kind: string }) => row.kind === "shared-worker-host.worker.js",
+      );
+      if (profile === "lean") {
+        expect(dedicated).toEqual([]);
+        expect(shared).toMatchObject([{ count: 1 }]);
+      } else {
+        expect(dedicated).toMatchObject([{ count: 1 }]);
+        expect(shared).toEqual([]);
+      }
+    },
+    75_000,
+  );
+
   it("accepts a Doctor-repaired escaped reference and refuses later config drift", async () => {
     const { configPath, env, options } = createFixture("openclaw-startup-reference-repair-");
     const apiKey = "$${STARTUP_MEMORY_KEY}";

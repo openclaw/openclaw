@@ -15,7 +15,10 @@ import {
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { getDatabaseEngineSelection } from "./database-engine/context.js";
-import { getGatewayResourceProfile } from "./gateway-resource-profile.js";
+import {
+  getGatewayResourceProfile,
+  captureGatewayStartupWorkerPlacement,
+} from "./gateway-resource-profile.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
@@ -77,8 +80,12 @@ function hostedKind(url: URL): SharedWorkerHostKind | undefined {
  * at most one live endpoint per slot key, and never while a failed host is still exiting,
  * so at most one host isolate exists at a time.
  */
-export function claimsSharedHostSlot(url: URL, key?: string): boolean {
-  if (getGatewayResourceProfile()?.profile !== "lean") {
+export function claimsSharedHostSlot(
+  url: URL,
+  key?: string,
+  placement = captureGatewayStartupWorkerPlacement(),
+): boolean {
+  if ((placement ? placement.profile : getGatewayResourceProfile()?.profile) !== "lean") {
     return false;
   }
   const kind = hostedKind(url);
@@ -92,7 +99,8 @@ export function claimsSharedHostSlot(url: URL, key?: string): boolean {
   }
   // The Postgres bridge binds one pool per isolate; hosted endpoints cannot share it.
   const engines = getDatabaseEngineSelection()?.effectiveEngines;
-  if (engines && Object.values(engines).includes("postgres")) {
+  // Early policy precedes engine admission; the physical host captures engines only once.
+  if ((!engines && placement) || (engines && Object.values(engines).includes("postgres"))) {
     return false;
   }
   const host = state.host;

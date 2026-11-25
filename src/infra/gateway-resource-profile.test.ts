@@ -9,6 +9,8 @@ import {
   getGatewayResourceProfile,
   initializeGatewayResourceProfile,
   predictGatewayResourceProfile,
+  prepareGatewayResourceProfile,
+  withGatewayStartupResourceProfile,
 } from "./gateway-resource-profile.js";
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -63,6 +65,66 @@ it("publishes the owner's profile through the SDK and releases listeners", async
   expect(getResourceProfile()).toBe("standard");
   initializeGatewayResourceProfile({ profile: "lean" });
   expect(disposed).not.toHaveBeenCalled();
+});
+
+it.each(["lean", "standard"] as const)(
+  "isolates a new start from the published %s policy and rolls back failed preparation",
+  async (previous) => {
+    initializeGatewayResourceProfile({ profile: previous });
+    const next = previous === "lean" ? "standard" : "lean";
+    const changed = vi.fn();
+    onResourceProfileChange(changed);
+    const failed = withGatewayStartupResourceProfile(async () => {
+      expect(getGatewayResourceProfile()).toBeUndefined();
+      expect(getResourceProfile()).toBe("standard");
+      prepareGatewayResourceProfile({ profile: next });
+      expect(getResourceProfile()).toBe(next);
+      await withGatewayStartupResourceProfile(async () => {
+        expect(getResourceProfile()).toBe(next);
+      }, true);
+      throw new Error("startup refused");
+    });
+    expect(getResourceProfile()).toBe(previous);
+    await expect(failed).rejects.toThrow("startup refused");
+    expect(getResourceProfile()).toBe(previous);
+    expect(changed).not.toHaveBeenCalled();
+    await withGatewayStartupResourceProfile(async () => {
+      prepareGatewayResourceProfile({ profile: next });
+      initializeGatewayResourceProfile({ profile: next });
+    });
+    expect(getResourceProfile()).toBe(next);
+    expect(changed).toHaveBeenCalledExactlyOnceWith(next);
+  },
+);
+
+it("releases startup policy from surviving async descendants", async () => {
+  let resume!: () => void;
+  let descendant!: Promise<string>;
+  const gate = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  await withGatewayStartupResourceProfile(async () => {
+    prepareGatewayResourceProfile({ profile: "lean" });
+    descendant = gate.then(() => getResourceProfile());
+  });
+  resume();
+  await expect(descendant).resolves.toBe("standard");
+  expect(getGatewayResourceProfile()).toBeUndefined();
+});
+
+it("reuses prepared host facts until the configured profile changes", async () => {
+  await withGatewayStartupResourceProfile(async () => {
+    prepareGatewayResourceProfile(undefined);
+    const prepared = getGatewayResourceProfile();
+    const reads = vi.mocked(fs.readFileSync).mock.calls.length;
+    await withGatewayStartupResourceProfile(async () => {
+      prepareGatewayResourceProfile({ profile: "auto" });
+      expect(getGatewayResourceProfile()).toBe(prepared);
+      expect(fs.readFileSync).toHaveBeenCalledTimes(reads);
+      prepareGatewayResourceProfile({ profile: "lean" });
+      expect(getGatewayResourceProfile()?.profile).toBe("lean");
+    }, true);
+  });
 });
 
 it.each([

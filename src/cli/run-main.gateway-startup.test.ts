@@ -29,6 +29,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { describe, expect, it, vi } from "vitest";
+import { getGatewayResourceProfile } from "../infra/gateway-resource-profile.js";
 import { createNewerSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -63,6 +64,23 @@ async function withGatewayHome(
 
 describe("runCli exit behavior", () => {
   installRunMainTestHooks();
+
+  it.each(["lean", "standard"] as const)(
+    "selects guarded %s resources before CLI config readiness, without publishing them",
+    async (profile) => {
+      readConfigFileSnapshotMock.mockResolvedValue(
+        validConfig({ gateway: { mode: "local", resources: { profile } } }),
+      );
+      const previous = getGatewayResourceProfile();
+      ensureCliExecutionBootstrapMock.mockImplementationOnce(async () => {
+        expect(getGatewayResourceProfile()).toMatchObject({ configured: profile, profile });
+      });
+      await runCli(cliArgs("gateway"));
+      await runGatewayBeforeHook();
+      expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledOnce();
+      expect(getGatewayResourceProfile()).toBe(previous);
+    },
+  );
 
   it.each(["environment selection", "full Commander preaction"])(
     "parks the managed Gateway when a newer schema blocks %s",

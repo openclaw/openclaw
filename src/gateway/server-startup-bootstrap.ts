@@ -29,7 +29,10 @@ import {
 import { isTruthyEnvValue, isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
-import { initializeGatewayResourceProfile } from "../infra/gateway-resource-profile.js";
+import {
+  initializeGatewayResourceProfile,
+  withGatewayStartupResourceProfile,
+} from "../infra/gateway-resource-profile.js";
 import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { readGatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { setGatewayRestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
@@ -66,6 +69,7 @@ import {
 } from "./restart-trace.js";
 import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import type { GatewayServerOptions } from "./server-public.js";
+import { prepareGatewayStartupResourcePolicy } from "./server-startup-resource-profile.js";
 import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
@@ -78,12 +82,14 @@ type WorkerEnvironmentStartupLoader = () => Promise<
 export async function prepareGatewayServerBootstrap(
   input: Parameters<typeof prepareGatewayServerBootstrapSelected>[0],
 ) {
-  process.env.OPENCLAW_GATEWAY_PORT = String(input.port);
-  await installGatewayDatabaseEngine(
-    input.opts.startupConfigSnapshotRead?.snapshot,
-    input.opts.startupConfigSnapshotRead?.databaseEngineSelection,
-  );
-  return prepareGatewayServerBootstrapSelected(input);
+  return await withGatewayStartupResourceProfile(async () => {
+    process.env.OPENCLAW_GATEWAY_PORT = String(input.port);
+    await installGatewayDatabaseEngine(
+      input.opts.startupConfigSnapshotRead?.snapshot,
+      input.opts.startupConfigSnapshotRead?.databaseEngineSelection,
+    );
+    return await prepareGatewayServerBootstrapSelected(input);
+  }, true);
 }
 
 async function prepareGatewayServerBootstrapSelected(input: {
@@ -140,6 +146,9 @@ async function prepareGatewayServerBootstrapSelected(input: {
             measure: (name, run) => startupTrace.measure(name, run),
           }),
         ));
+      if (read.snapshot.valid) {
+        prepareGatewayStartupResourcePolicy(read.snapshot.config);
+      }
       await assertConfiguredWorkspaceStateReady({
         cfg: captureConfigOverrideApplier()(read.snapshot.config),
       });

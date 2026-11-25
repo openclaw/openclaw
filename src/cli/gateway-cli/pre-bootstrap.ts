@@ -715,10 +715,31 @@ export async function recheckGatewayRunBootstrap(
     currentValidatesPlugins: params.snapshot !== undefined,
   });
   if (!change) {
+    if (current.valid) {
+      const { prepareGatewayStartupResourcePolicy } =
+        await import("../../gateway/server-startup-resource-profile.js");
+      prepareGatewayStartupResourcePolicy(current.sourceConfig);
+    }
     return true;
   }
   params.runtime.error(
     `Refusing to run gateway state preparation because the selected config changed during startup (${change}). Retry startup so the new config can be validated.`,
   );
   throw new ExitError(1);
+}
+
+/** Reuse the selected source before CLI config readiness can create state workers. */
+export async function withPreparedGatewayRunResourceProfile<T>(run: () => Promise<T>): Promise<T> {
+  const [{ withGatewayStartupResourceProfile }, { prepareGatewayStartupResourcePolicy }] =
+    await Promise.all([
+      import("../../infra/gateway-resource-profile.js"),
+      import("../../gateway/server-startup-resource-profile.js"),
+    ]);
+  return await withGatewayStartupResourceProfile(async () => {
+    const snapshot = preparedGatewayRunBootstrap?.snapshot;
+    if (snapshot?.valid) {
+      prepareGatewayStartupResourcePolicy(snapshot.sourceConfig);
+    }
+    return await run();
+  });
 }
