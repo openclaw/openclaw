@@ -258,6 +258,7 @@ describe("workboard gateway methods", () => {
       using readSpy = vi.spyOn(sessionsBoard, "read");
       for (const view of [
         {},
+        { agentId: "writer", includePeople: true },
         { involvingMe: true, includePeople: true },
         { involvingProfileId: "profile-one", includePeople: true },
         { involvingMe: false, includePeople: false },
@@ -301,6 +302,8 @@ describe("workboard gateway methods", () => {
         ),
         ...(
           [
+            [{ agentId: "" }, /view.agentId must be a non-empty string/],
+            [{ agentId: 123 }, /view.agentId must be a non-empty string/],
             [{ involvingMe: "true" }, /view.involvingMe must be a boolean/],
             [{ includePeople: 1 }, /view.includePeople must be a boolean/],
             [{ involvingProfileId: false }, /view.involvingProfileId must be a string/],

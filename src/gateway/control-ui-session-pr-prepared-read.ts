@@ -1,5 +1,8 @@
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import {
+  sessionChanges,
+  sessionChangeScopeAffectsStoredRows,
+} from "../sessions/session-row-changes.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import type {
@@ -374,12 +377,25 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
   };
 
   const unsubscribeFacts = sessionChanges.subscribeFacts((change) => {
-    if (
-      "sessionKey" in change &&
-      (change.facts?.kind === "unchanged" ||
-        (change.scope === "runtime" && !change.facts && !change.factsInvalidated))
-    ) {
-      return;
+    if ("all" in change) {
+      if (change.scope !== "config" && !sessionChangeScopeAffectsStoredRows(change)) {
+        return;
+      }
+    } else {
+      const factsKind = change.facts?.kind;
+      if (
+        change.scope === "transcript" ||
+        change.factsInvalidated === "category" ||
+        factsKind === "unchanged" ||
+        factsKind === "category" ||
+        factsKind === "participants" ||
+        factsKind === "owner" ||
+        factsKind === "member" ||
+        factsKind === "acp" ||
+        (!sessionChangeScopeAffectsStoredRows(change) && !change.facts && !change.factsInvalidated)
+      ) {
+        return;
+      }
     }
     const affected =
       "sessionKey" in change

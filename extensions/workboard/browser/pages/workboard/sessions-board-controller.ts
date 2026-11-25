@@ -39,6 +39,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
   let draggedKey: string | undefined;
   let dropColumn: string | undefined;
   let peopleFilter = "everyone";
+  let agentFilter: string | undefined;
   let viewerProfileId: string | undefined;
   let gatewayId: string | undefined;
   let identityLoad: Promise<{ gatewayId?: string; viewerProfileId?: string }> | undefined;
@@ -120,6 +121,7 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
         restoreFilter(id);
         const view: WorkboardSessionsBoardView = {
           includePeople: true,
+          ...(agentFilter ? { agentId: agentFilter } : {}),
           ...(peopleFilter === "me" ? { involvingMe: true } : {}),
           ...(peopleFilter.startsWith("profile:")
             ? { involvingProfileId: peopleFilter.slice(8) }
@@ -278,6 +280,13 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     },
     sync(board: WorkboardBoardSummary | undefined | null, enabled: boolean) {
       const nextId = board?.kind === "sessions" ? board.id : undefined;
+      const nextAgent = host.agents.scopeId || undefined;
+      const agentChanged = agentFilter !== nextAgent;
+      const clearSessions = () => {
+        snapshot = snapshot ? { ...snapshot, sessions: [], nextCursor: undefined } : undefined;
+        sessionsLoaded = false;
+        error = undefined;
+      };
       if (boardId !== nextId || active !== enabled) {
         invalidate();
         attempted = false;
@@ -290,6 +299,8 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
           snapshot = undefined;
           sessionsLoaded = false;
           error = undefined;
+        } else if (agentChanged) {
+          clearSessions();
         }
         if (enabled && !active) {
           resetIdentity();
@@ -297,6 +308,12 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
         }
         boardId = nextId;
         active = enabled;
+        agentFilter = nextAgent;
+      } else if (agentChanged) {
+        agentFilter = nextAgent;
+        invalidate();
+        attempted = false;
+        clearSessions();
       }
       if (active && boardId && !attempted) {
         void read();

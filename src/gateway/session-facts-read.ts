@@ -24,6 +24,7 @@ import { projectGatewaySessionRunState } from "./session-utils-display.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 const SESSION_FACTS_PR_LOAD_LIMIT = 8;
+const PR_DEFERRED_RETRY_MS = 2_000;
 const PR_RETRY_MS = 60_000;
 const PR_RETRY_MAX_MS = 15 * 60_000;
 export type SelectedFacts = RuntimeSessionFactsSelectionResult["sessions"][number];
@@ -93,7 +94,11 @@ export function prepareFactsRead(
   const prOwner = resolved.context.controlUiSessionPullRequests;
   let prLoads = 0;
   const admitPrLoad = () => prLoads++ < SESSION_FACTS_PR_LOAD_LIMIT;
-  const prRetries: ControlUiSessionPrTarget[] = [];
+  const prRetries: Array<{
+    target: ControlUiSessionPrTarget;
+    entry?: SelectedPrFacts;
+    previousDelayMs: number;
+  }> = [];
   return {
     read(record: MaterializedRow) {
       if (
@@ -159,15 +164,27 @@ export function prepareFactsRead(
         previous.retry.at <= now ||
         previous.databaseFactsRevision !== record.databaseFactsRevision ||
         previous.facts.run !== run;
-      const admitSelectedLoad = () => retryDue && admitPrLoad();
+      let prLoadDeferred = false;
+      const admitSelectedLoad = () => {
+        if (!retryDue) {
+          return false;
+        }
+        if (admitPrLoad()) {
+          return true;
+        }
+        prLoadDeferred = true;
+        return false;
+      };
       const prs =
         cachedPrs ??
         (target
           ? prOwner?.readPrepared(target, prFacts ? admitSelectedLoad : admitPrLoad)
           : undefined);
       const prUnavailable = prEligible && (!prs || prs.status !== "ready" || prs.rateLimited);
+      let retrySlot: (typeof prRetries)[number] | undefined;
       if (target && cachedPrs && prUnavailable && (!prFacts || retryDue)) {
-        prRetries.push(target);
+        retrySlot = { target, previousDelayMs: previous?.retry?.delayMs ?? 0 };
+        prRetries.push(retrySlot);
       }
       const previousFacts = rowFacts.get(row);
       const cached =
@@ -237,13 +254,15 @@ export function prepareFactsRead(
           previous &&
           (previous.selected.pullRequestsStale ||
             (!previous.facts.pullRequestsUnavailable && !previous.facts.pullRequestsRateLimited));
-        const delayMs = previous?.retry
+        const delayMs = previous?.retry?.delayMs
           ? Math.min(previous.retry.delayMs * 2, PR_RETRY_MAX_MS)
           : PR_RETRY_MS;
         const retry = prUnavailable
-          ? previous?.retry && previous.retry.at > now
-            ? previous.retry
-            : { at: now + delayMs, delayMs }
+          ? prLoadDeferred
+            ? { at: now + PR_DEFERRED_RETRY_MS, delayMs: previous?.retry?.delayMs ?? 0 }
+            : previous?.retry && previous.retry.at > now
+              ? previous.retry
+              : { at: now + delayMs, delayMs }
           : undefined;
         const selected = !stale
           ? result.selected
@@ -255,22 +274,36 @@ export function prepareFactsRead(
                 pullRequests: previous.selected.pullRequests,
                 pullRequestsStale: true as const,
               });
-        prFacts.set(record.key, {
+        const entry: SelectedPrFacts = {
           generation: record.generation,
           databaseFactsRevision: record.databaseFactsRevision,
           owner: prOwner,
           facts,
           selected,
           retry,
-        });
+        };
+        if (retrySlot) {
+          retrySlot.entry = entry;
+        }
+        prFacts.set(record.key, entry);
         return { ...result, selected };
       }
       return result;
     },
     finish() {
       // Cold keys precede retries within each bounded batch.
-      for (const target of prRetries) {
-        prOwner?.readPrepared(target, admitPrLoad);
+      for (const { target, entry, previousDelayMs } of prRetries) {
+        let deferred = false;
+        prOwner?.readPrepared(target, () => {
+          if (admitPrLoad()) {
+            return true;
+          }
+          deferred = true;
+          return false;
+        });
+        if (deferred && entry) {
+          entry.retry = { at: now + PR_DEFERRED_RETRY_MS, delayMs: previousDelayMs };
+        }
       }
     },
   };

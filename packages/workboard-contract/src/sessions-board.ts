@@ -73,7 +73,7 @@ export type WorkboardSessionPlacement = {
 };
 export type WorkboardSessionsBoardView = Pick<
   SessionsListParams,
-  "involvingMe" | "involvingProfileId" | "includePeople"
+  "agentId" | "involvingMe" | "involvingProfileId" | "includePeople"
 >;
 export type WorkboardSessionsBoardRevision = WorkboardChange & { boardId: string; scope: string };
 export type WorkboardSessionsBoardRead = {

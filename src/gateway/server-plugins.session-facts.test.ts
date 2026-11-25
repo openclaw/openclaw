@@ -464,6 +464,74 @@ describe("trusted plugin selected session facts", () => {
       expect(replaced.pullRequestsStale).toBeUndefined();
       expect(replaced.pullRequests).toEqual([]);
     }));
+
+  it("retains prepared PR snapshots across unrelated run, catalog, and transcript events", () =>
+    withFixture(async (fixture, { selected }) => {
+      using _ = holdForeground();
+      fixture.load.mockResolvedValue({ pullRequests: [pullRequest()], rateLimited: false });
+
+      await selected();
+      await fixture.subscriptions.pollNow();
+      const ready = await selected();
+      expect(fact(ready)).toMatchObject({ pullRequests: [{ number: 12, state: "open" }] });
+      expect(fact(ready)?.pullRequestsUnavailable).toBeUndefined();
+      expect(fact(ready)?.pullRequestsStale).toBeUndefined();
+      const loads = fixture.load.mock.calls.length;
+
+      for (const change of [
+        { all: true as const, scope: "agent-runs" },
+        { all: true as const, scope: "subagent-runs" },
+        { all: true as const, scope: "worker-placements" },
+        { all: true as const, scope: "catalog" },
+        { all: true as const, scope: "profiles" },
+        { sessionKey, agentId: "main", scope: "transcript" as const },
+        { sessionKey, agentId: "main", factsInvalidated: "category" as const },
+      ]) {
+        sessionChanges.emit(change);
+      }
+
+      const after = await selected();
+      expect(fact(after)).toMatchObject({ pullRequests: [{ number: 12, state: "open" }] });
+      expect(fact(after)?.pullRequestsUnavailable).toBeUndefined();
+      expect(fact(after)?.pullRequestsStale).toBeUndefined();
+      expect(fixture.load).toHaveBeenCalledTimes(loads);
+    }));
+
+  it("retries budget-deferred cold PR loads promptly without failure backoff", () =>
+    withFixture(async (fixture, { selected }) => {
+      let now = Date.now();
+      using clock = vi.spyOn(Date, "now");
+      clock.mockImplementation(() => now);
+      using _ = holdForeground();
+      const extraKeys = Array.from({ length: 9 }, (unused, index) => {
+        void unused;
+        return `agent:main:wave-${index}`;
+      });
+      for (const key of extraKeys) {
+        await fixture.seed(key, fixture.profile.id, { worktree: worktree(key) });
+      }
+      fixture.load.mockResolvedValue({ pullRequests: [pullRequest()], rateLimited: false });
+
+      const first = await selected();
+      expect(first.retryAt).toBe(now + 2_000);
+      await fixture.subscriptions.pollNow();
+      expect(fixture.load).toHaveBeenCalledTimes(8);
+
+      // Before the short deferred retry window, the remaining two sessions are still queued.
+      const beforeDue = await selected();
+      expect(beforeDue.sessions.filter((row) => row.pullRequestsUnavailable)).toHaveLength(2);
+      expect(beforeDue.retryAt).toBe(now + 2_000);
+
+      // At the short wave deadline (well before 60s failure backoff), the remaining sessions load.
+      now += 2_000;
+      await selected();
+      await fixture.subscriptions.pollNow();
+      expect(fixture.load).toHaveBeenCalledTimes(10);
+
+      const drained = await selected();
+      expect(drained.retryAt).toBeUndefined();
+      expect(drained.sessions.every((row) => !row.pullRequestsUnavailable)).toBe(true);
+    }));
 });
 
 describe("trusted plugin session facts", () => {
@@ -594,7 +662,7 @@ describe("trusted plugin session facts", () => {
       expect((await read()).sessions[0]?.pullRequests).toEqual([]);
       expect(listener).toHaveBeenCalledWith({ agentId: "main", sessionKey });
       listener.mockClear();
-      sessionChanges.emit({ all: true, scope: "catalog" });
+      sessionChanges.emit({ all: true, scope: "stores" });
       expect(listener).toHaveBeenCalledWith({ agentId: "main", sessionKey });
       expect(listener).toHaveBeenCalledWith({ agentId: "main", sessionKey: queuedKey });
     }));
