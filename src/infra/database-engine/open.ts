@@ -271,6 +271,7 @@ export function openEngineStore(ref: {
           admit(!meta);
         },
         {
+          maintenance: true,
           withCommit(commit) {
             assertMigrationCurrent?.();
             migration?.beforeCommit();

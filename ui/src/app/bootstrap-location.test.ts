@@ -120,6 +120,21 @@ describe("isResolvedDefaultLanding", () => {
 });
 
 describe("resolveInitialApplicationLocation", () => {
+  it.each(["", "/ui", "/portable/control"])(
+    "restores the saved session from the index document at %s",
+    async (basePath) => {
+      const ready = gateway({ hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } } });
+      await expect(
+        resolveLocation({
+          location: makeLocation(`${basePath}/index.html`, "?draft=hello", "#anchor"),
+          basePath,
+          sessionKey: "agent:research:workspace",
+          gateway: ready,
+        }),
+      ).resolves.toEqual(makeLocation(`${basePath}/chat/research`, "?draft=hello", "#anchor"));
+    },
+  );
+
   it("resolves a malformed persisted session without aborting bootstrap", async () => {
     const location = makeLocation("/", "?draft=hello");
     const resolved = await resolveLocation({ location, sessionKey: "agent::broken" });

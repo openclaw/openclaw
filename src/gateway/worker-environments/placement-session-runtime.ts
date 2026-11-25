@@ -1,12 +1,16 @@
 import { resolveEffectiveAgentDir } from "../../agents/agent-scope-config.js";
 import { resolveSharedAuthStoreOwnershipAsync } from "../../agents/auth-profiles/path-resolve.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import { resolveLegacyInheritedAuthAgentId } from "../../agents/legacy-inherited-auth-dir.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
+import {
+  NO_MODEL_CONFIGURED_MESSAGE,
+  resolveDefaultModelForAgent,
+} from "../../agents/model-selection-config.js";
 import { resolveSessionConfiguredDefault } from "../../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -42,7 +46,7 @@ export function resolveWorkerPlacementSessionRuntime(params: {
   preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
   readSourceEntry: (key: string) => SessionEntry | undefined;
 }): string {
-  const { provider, model } = resolveSessionSelectedModelRef({
+  const selected = resolveSessionSelectedModelRef({
     ...params,
     preparedRuntimeOwnership: params.preparedRuntimeOwnership,
     source: {
@@ -50,7 +54,14 @@ export function resolveWorkerPlacementSessionRuntime(params: {
       readSourceEntry: params.readSourceEntry,
     },
   });
-  return resolveWorkerPlacementModelRuntime({ ...params, provider, model });
+  if (!selected) {
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
+  return resolveWorkerPlacementModelRuntime({
+    ...params,
+    provider: selected.provider,
+    model: selected.model,
+  });
 }
 
 export async function resolveWorkerPlacementSessionRuntimeAsync(
@@ -98,15 +109,24 @@ export async function resolveWorkerPlacementSessionRuntimeAsync(
             sessionEntry: params.entry,
             sessionKey: params.sessionKey,
             parentSessionKey: params.entry.parentSessionKey,
-            defaultProvider: configured.provider,
+            defaultProvider: configured?.provider ?? DEFAULT_PROVIDER,
             loadSessionEntry:
               params.readSourceEntry ?? ((key) => readWorkerPlacementModelSource(params, key)),
           });
       params.assertCurrent?.();
+      const selected = storedOverride
+        ? {
+            provider: storedOverride.provider ?? configured?.provider ?? DEFAULT_PROVIDER,
+            model: storedOverride.model,
+          }
+        : configured;
+      if (!selected) {
+        throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+      }
       return resolveWorkerPlacementModelRuntime({
         ...params,
-        provider: storedOverride?.provider ?? configured.provider,
-        model: storedOverride?.model ?? configured.model,
+        provider: selected.provider,
+        model: selected.model,
         preparedRuntimeOwnership: ownership ?? null,
         preparedEnvironment,
         metadataSnapshot,
@@ -272,11 +292,14 @@ export function resolveDefaultWorkerPlacementExecutionMode(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): WorkerPlacementExecutionMode | undefined {
-  const { provider, model } = resolveDefaultModelForAgent(params);
+  const defaultModel = resolveDefaultModelForAgent(params);
+  if (!defaultModel) {
+    return undefined;
+  }
   const runtime = resolveWorkerPlacementModelRuntime({
     ...params,
-    provider,
-    model,
+    provider: defaultModel.provider,
+    model: defaultModel.model,
     entry: { sessionId: "prepared-pool-presence", updatedAt: 0 },
     sessionKey: `agent:${params.agentId}:dashboard:prepared-pool-presence`,
   });

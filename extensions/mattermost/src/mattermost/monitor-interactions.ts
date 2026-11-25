@@ -137,19 +137,6 @@ export function registerMattermostInteractions(params: {
           },
         };
       },
-      resolveSessionKey: async ({ channelId, userId, post }) => {
-        const eventPlan = await buildMattermostEventPlan(monitor, {
-          channelId,
-          senderId: userId,
-          postId: post.id,
-          threadRootId: post.root_id,
-          dropLabel: "interaction session event",
-        });
-        if (!eventPlan) {
-          throw new Error("Mattermost channel type could not be resolved");
-        }
-        return eventPlan.thread.sessionKey;
-      },
       dispatchButtonClick: async (button) => {
         const sourcePostId = button.post.id || button.postId;
         const interactionMessageSid = buildMattermostButtonInteractionMessageSid({

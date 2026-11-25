@@ -699,6 +699,7 @@ it("retains rejected advisory step coordinates through bounded diagnostic public
         doctorLintFindings: Array.from({ length: 10 }, (_, index) => ({
           checkId: `core/doctor/check-${index}`,
           severity: "warning",
+          target: index === 0 ? `token=${secret}` : `survivor/${"x".repeat(200)}`,
           message: "private Doctor finding detail",
         })),
       },
@@ -732,6 +733,9 @@ it("retains rejected advisory step coordinates through bounded diagnostic public
   expect(report.successfulUpdateCheck.message).toContain('"doctorFindingsCount":10');
   expect(report.successfulUpdateCheck.message).toContain('"checkId":"core/doctor/check-7"');
   expect(report.successfulUpdateCheck.message).toContain('"severity":"warning"');
+  expect(report.successfulUpdateCheck.message).toContain(`"target":"survivor/${"x".repeat(151)}"`);
+  expect(report.successfulUpdateCheck.message).not.toContain(`survivor/${"x".repeat(152)}`);
+  expect(report.successfulUpdateCheck.message).not.toContain(secret);
   expect(report.successfulUpdateCheck.message).not.toContain("core/doctor/check-8");
   expect(report.successfulUpdateCheck.message).not.toContain("private failure detail");
   expect(report.successfulUpdateCheck.message).not.toContain("private Doctor finding detail");

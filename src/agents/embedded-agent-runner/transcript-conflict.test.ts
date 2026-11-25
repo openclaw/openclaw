@@ -1,11 +1,6 @@
 import { expect, it } from "vitest";
-import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
-import {
-  isReplaySafeTranscriptConflict,
-  isEmbeddedRunReplaySafe,
-  ReplaySafeTranscriptConflictError,
-} from "./transcript-conflict.js";
+import { isEmbeddedRunReplaySafe } from "./transcript-conflict.js";
 
 const safe = { replayMetadata: { replaySafe: true, hadPotentialSideEffects: false } };
 it("requires positive whole-run replay evidence and refuses already started effects", () => {
@@ -37,14 +32,4 @@ it("requires positive whole-run replay evidence and refuses already started effe
   expect(
     isEmbeddedRunReplaySafe(createEmbeddedRunReplayState({ hadPotentialSideEffects: true }), safe),
   ).toBe(false);
-});
-it("recognizes only the live typed safety proof, including wrapped failures", () => {
-  const conflict = new SqliteTranscriptMutationConflictError("fixture");
-  const safeConflict = new ReplaySafeTranscriptConflictError(conflict);
-  expect(
-    isReplaySafeTranscriptConflict(new Error("dispatch failed", { cause: safeConflict })),
-  ).toBe(true);
-  expect(isReplaySafeTranscriptConflict(conflict)).toBe(false);
-  expect(isReplaySafeTranscriptConflict(new Error(conflict.message))).toBe(false);
-  expect(isReplaySafeTranscriptConflict({ name: "ReplaySafeTranscriptConflictError" })).toBe(false);
 });

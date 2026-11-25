@@ -49,7 +49,9 @@ export async function recordRoleAssignmentChange(
   log: Pick<SubsystemLogger, "warn">,
 ): Promise<void> {
   // Keep only the most specific requester identifier; never link profile and device.
-  const profileId = client?.authenticatedUserProfile?.profileId;
+  const profileId =
+    client?.internal?.operatorRunAuthority?.profileId ??
+    client?.authenticatedUserProfile?.profileId;
   const deviceId = client?.connect?.device?.id;
   const actor = profileId
     ? { kind: "profile", id: profileId }

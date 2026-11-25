@@ -23,7 +23,7 @@ type SidebarInboxEntryBase<
 
 export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system"> & {
   type: "attention";
-  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable" | "outbox">;
+  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "outbox">;
   icon: IconName;
   label: string;
   detail: string;

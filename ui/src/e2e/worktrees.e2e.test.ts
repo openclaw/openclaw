@@ -40,7 +40,24 @@ suite.define(() => {
       expect(title).not.toBeNull();
       expect(tabs).not.toBeNull();
       expect(tabs!.y).toBeGreaterThan(title!.y + title!.height);
-      expect(Math.abs(tabs!.x - title!.x)).toBeLessThan(12);
+      const firstTab = await page
+        .getByRole("tab", { name: "Sessions", exact: true })
+        .evaluate((tab) => {
+          const label = document.createRange();
+          label.selectNodeContents(tab);
+          const box = tab.getBoundingClientRect();
+          return {
+            labelLeft: label.getBoundingClientRect().left,
+            leadingEdgeClickable: tab.contains(
+              document.elementFromPoint(box.left + 1, box.top + box.height / 2),
+            ),
+          };
+        });
+      const readingEdge = await page
+        .locator(".page-subtitle")
+        .evaluate((text) => text.getBoundingClientRect().left);
+      expect(Math.abs(firstTab.labelLeft - readingEdge)).toBeLessThanOrEqual(1);
+      expect(firstTab.leadingEdgeClickable).toBe(true);
       for (const [name, subtitle] of [
         ["Sessions", "Active sessions and defaults."],
         ["Worktrees", "Isolated agent task checkouts and recovery snapshots."],

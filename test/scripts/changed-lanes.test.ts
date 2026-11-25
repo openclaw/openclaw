@@ -42,6 +42,11 @@ import { captureEnv } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
+import {
+  readCiWorkflow,
+  runWorkflowShellScript,
+  type WorkflowStep,
+} from "./ci-workflow.test-support.js";
 import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 import { copyOxlintConfigFixture } from "./test-helpers.js";
 
@@ -226,6 +231,9 @@ function createRootTestLintFixture() {
   symlinkSync(path.join(repoRoot, "apps"), path.join(dir, "apps"), "junction");
   for (const script of [
     "run-oxlint.mjs",
+    "tsx.mjs",
+    "changed-lanes.mts",
+    "check-changed.mts",
     "report-test-temp-creations.mjs",
     "check-protocol-event-coverage.mjs",
   ]) {
@@ -251,6 +259,15 @@ function createRootTestLintFixture() {
   return {
     dir,
     run: (script: string, args: string[]) => runRepoScript(script, args, env, dir),
+    runRootTestLint: (paths: string[]) => {
+      const step = readCiWorkflow().jobs["check-shard"].steps.find(
+        (candidate: WorkflowStep) => candidate.name === "Run fallback root-test lint",
+      );
+      return runWorkflowShellScript(step.run!, {
+        cwd: dir,
+        env: { ...env, ROOT_TEST_PATHS_JSON: JSON.stringify(paths) },
+      });
+    },
   };
 }
 
@@ -730,12 +747,20 @@ describe("scripts/changed-lanes", () => {
       count: 1,
       extension: "tsx",
       otherPaths: ["vitest.config.ts"],
+      fallback: false,
     },
-    { name: "the ninth root test", count: 9, extension: "ts", otherPaths: [] },
+    { name: "the ninth root test", count: 9, extension: "ts", otherPaths: [], fallback: false },
+    {
+      name: "the fallback CI root-test step",
+      count: 1,
+      extension: "tsx",
+      otherPaths: [],
+      fallback: true,
+    },
   ])(
     "fails real changed-check lint for $name and passes after repair",
-    ({ count, extension, otherPaths }) => {
-      const { dir, run } = createRootTestLintFixture();
+    ({ count, extension, otherPaths, fallback }) => {
+      const { dir, run, runRootTestLint } = createRootTestLintFixture();
       const targets = Array.from(
         { length: count },
         (_, index) => `test/root-lint-${index}.test.${extension}`,
@@ -758,7 +783,11 @@ describe("scripts/changed-lanes", () => {
       writeRepoFile(dir, "test/fixtures/invalid.ts", violation);
       writeRepoFile(dir, "test/unchanged.test.ts", violation);
       const paths = [...targets, "test/fixtures/invalid.ts", "test/deleted.test.ts", ...otherPaths];
-      const failed = run("scripts/check-changed.mjs", ["--base", "HEAD", "--", ...paths]);
+      const runLint = () =>
+        fallback
+          ? runRootTestLint(paths)
+          : run("scripts/check-changed.mjs", ["--base", "HEAD", "--", ...paths]);
+      const failed = runLint();
       const diagnostics = failed.stdout + failed.stderr;
       expect(failed.error, diagnostics).toBeUndefined();
       expect(failed.status, diagnostics).toBe(1);
@@ -770,7 +799,9 @@ describe("scripts/changed-lanes", () => {
         diagnostics,
       ).toHaveLength(4);
       expect(diagnostics).toContain(broken);
-      expect(failed.stderr.trim().split("\n").at(-1)).toBe("[check:changed] FAILED (exit 1)");
+      if (!fallback) {
+        expect(failed.stderr.trim().split("\n").at(-1)).toBe("[check:changed] FAILED (exit 1)");
+      }
 
       writeRepoFile(
         dir,
@@ -782,7 +813,7 @@ describe("scripts/changed-lanes", () => {
             "void work(); void fromCore(); void fromUi(); void fromPackage();",
           ),
       );
-      const passed = run("scripts/check-changed.mjs", ["--base", "HEAD", "--", ...paths]);
+      const passed = runLint();
       expect(passed.error, passed.stdout + passed.stderr).toBeUndefined();
       expect(passed.status, passed.stdout + passed.stderr).toBe(0);
       const planned = run("scripts/check-changed.mjs", [
@@ -894,6 +925,34 @@ describe("scripts/changed-lanes", () => {
     ).toMatchObject({
       bin: "node",
       args: ["--import", "tsx", "scripts/run-stylelint.mts", style],
+    });
+  });
+
+  it("keeps explicit fallback root-test lint on its own command owner", () => {
+    const roots = ["test/scripts/changed-lanes.test.ts", "test/helpers/temp-dir.ts"];
+    const paths = [...roots, "test/fixtures/invalid.ts", "test/deleted.test.ts"];
+    const plan = createChangedCheckPlan(detectChangedLanes(paths), {
+      lintOnly: true,
+      lintThreads: 1,
+      lintSelection: {
+        files: [],
+        rootTestFiles: paths,
+        coreStripes: [],
+        extensionStripes: [],
+        groups: [],
+        central: false,
+      },
+    });
+    expect(plan.commands).toHaveLength(1);
+    expect(plan.commands[0]).toMatchObject({
+      bin: "node",
+      args: [
+        "scripts/run-oxlint.mjs",
+        "--tsconfig",
+        "test/tsconfig/tsconfig.test.root.json",
+        ...roots,
+        "--threads=1",
+      ],
     });
   });
 

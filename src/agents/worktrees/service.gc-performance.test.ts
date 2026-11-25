@@ -464,7 +464,7 @@ describe("worktree Git maintenance", () => {
     const commands = vi
       .spyOn(gitExec, "executeGitCommand")
       .mockImplementation(async (cwd, args, options) => {
-        if (args.at(-1) === "openclaw-consolidate") {
+        if (args.includes("openclaw-consolidate")) {
           throw new Error("pack publication failed");
         }
         return execute(cwd, args, options);
@@ -578,7 +578,7 @@ describe("worktree Git maintenance", () => {
     let stalled = false;
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
       const result = await execute(cwd, args, options);
-      if (args.at(-1) === "openclaw-consolidate" && !stalled) {
+      if (args.includes("openclaw-consolidate") && !stalled) {
         stalled = true;
         // The host misses every renewal while Git rewrites packs, as in production.
         now = real + 60_000;
@@ -608,7 +608,7 @@ describe("worktree Git maintenance", () => {
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
       // A base-ref fetch must not wait for the whole verification and rewrite.
       const signal = AbortSignal.timeout(5_000);
-      if (args.at(-1) === "openclaw-consolidate") {
+      if (args.includes("openclaw-consolidate")) {
         const peer = new WorktreeGcProgress();
         await createWorktreeGitMaintenance(env)({ progress: peer });
         expect(peer.result.issues).toEqual([
@@ -653,7 +653,7 @@ describe("worktree Git maintenance", () => {
       .spyOn(gitExec, "executeGitCommand")
       .mockImplementation(async (cwd, args, options) => {
         const result = await execute(cwd, args, options);
-        if (args.at(-1) === "openclaw-consolidate") {
+        if (args.includes("openclaw-consolidate")) {
           foreground = withProjectCheckoutLifecycle(
             repo,
             { context: captureOpenClawStateWorkerContext({ env }), waitMs: 0 },
@@ -788,7 +788,7 @@ describe("worktree Git maintenance", () => {
     const execute = gitExec.executeGitCommand;
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
       const result = await execute(cwd, args, options);
-      if (args.at(-1) === "openclaw-consolidate") {
+      if (args.includes("openclaw-consolidate")) {
         expect(result.stdout.trim()).toBe(`pack\t${union.slice(5)}`);
         await fs.writeFile(
           path.join(directory, `${inputs[0]}.keep`),

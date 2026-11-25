@@ -12,7 +12,7 @@ Everything under Settings, plus the settings-owned pages the sidebar links to.
 
 Browser-settings upgrades support shapes written by releases shipped on or after July 1, 2026. Older top-level session selections are ignored; select a session again in the sidebar. Saved conversations remain on the Gateway.
 
-**Back to app** returns to the workspace page you were using before opening Settings, including its selected session and URL filters. Escape does the same when an editor or dialog is not using that key. Moving between Settings pages does not change the return destination.
+**Back to app**, beside the **Settings** title, returns to the workspace page you were using before opening Settings, including its selected session and URL filters. On macOS, Settings leaves navigation to the title bar when its **Back** button is available. Escape does the same when an editor or dialog is not using that key. Moving between Settings pages does not change the return destination.
 
 In **Search settings**, Escape clears the search before leaving Settings. While an input method is composing text, Escape stays with that input method instead of clearing the search or navigating away.
 
@@ -59,7 +59,13 @@ In **Models**, **Add account** offers the credential-only sign-in methods declar
 
 Model pickers show the authentication methods available to the selected agent. In **Models** settings, this muted information appears on the right of each open option row; the closed control shows only the model name and icon. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs; **Utility Model** lists the agents with their own utility settings and links to each one.
 
-To set one agent's utility model, open **Settings → Agents → Overview → Utility model**. **Inherit default** removes the agent's own primary, **Disabled for this agent** saves an empty primary, and a model choice saves that model. The agent's own utility fallbacks are kept, in order, for every choice. A configured model that is currently unavailable stays shown and selected.
+**Settings → Agents → Overview → Model selection** uses the same **Model**, **Effort**, and **Speed** rows as **Models**. Each choice applies only to the selected agent, including the default agent. **Inherit default** removes an override; selecting the same value as the shared default pins that value. **Off** is an explicit speed preference, not inheritance.
+
+Expand **More settings** for the fallback model, subagent model, utility model, utility fallback model, and decision model. On either fallback row, the picker changes the first fallback and keeps the rest in order. **Edit fallback chain** opens the full ordered list. **No fallback model** sets an empty chain; restoring the default removes the chain override. An agent with its own primary model and no configured fallbacks uses no fallbacks for that model.
+
+To set one agent's utility model, open **Settings → Agents → Overview → More settings → Utility model**. **Inherit default** removes the agent's own primary, **Disabled for this agent** saves an empty primary, and a model choice saves that model. The agent's own utility fallbacks are kept, in order, for every choice. A configured model that is currently unavailable stays shown and selected.
+
+**Models → More settings → Subagent model** sets `agents.defaults.subagents.model`, the model for subagents and for sessions that agents start. **Not set** clears it: a child of the same agent then keeps the model of the session that started it, and a child started under another agent uses that agent's own model. To set it for one agent, open **Settings → Agents → Overview → More settings → Subagent model**. That choice applies to children that run as that agent, and **Inherit default** removes it. A saved fallback chain is kept as written for every choice. A model named in the request still takes priority, and ACP runtime spawns follow their own rule; see [sub-agent defaults](/tools/subagents/tool-reference).
 
 Inbox account alerts distinguish **Sign in** from **Update API key**. Accounts without a known recovery method show **Review account**. These actions open **Models** so you can repair the saved account.
 
@@ -104,6 +110,8 @@ The choice is saved to your authenticated profile on the connected Gateway and h
 ## Community invitation
 
 The **Community** card at the bottom of the expanded sidebar links to Discord, Reddit, and X in new tabs. On phones, a compact card sits at the bottom of the navigation drawer without covering the session list.
+
+The card stays hidden during setup and throughout the first visit, including after a reload. It can appear on a later visit in a new tab or window.
 
 Select **Dismiss and don't show again** to hide the card in that browser. Existing saved dismissals continue to apply across navigation, reloads, and interface updates. Dismissal is browser-local and does not sync to other browsers. If a dismissal cannot be saved, the card stays hidden for the current page and a message explains that the preference could not be saved.
 
@@ -240,7 +248,7 @@ Theme cards preview each theme’s own background and accent colors in the curre
 
 Plugin themes can also bring their own SVG hats and composer visitors through [declared artwork](/plugins/manifest/surfaces#themes).
 
-Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images follow the selected mode, including System. Plugin themes can [declare their own light and dark backgrounds](/plugins/manifest/surfaces#themes), which are dimmed like a custom image; personal and imported palettes, and plugin themes without one for the current mode, use neutral artwork. Existing users keep this theme artwork until they change their background preference.
+Background artwork defaults to **None**: changing themes applies the palette without adding decoration. Choose **Theme** under **Appearance → Background → Artwork** to show the theme’s artwork on the enabled surfaces. Every built-in theme includes matching light and dark artwork, which follows the selected mode, including System. Plugin themes can [declare their own light and dark backgrounds](/plugins/manifest/surfaces#themes), which are dimmed like a custom image; personal and imported palettes, and plugin themes without artwork for the current mode, use neutral artwork. Saved artwork choices are preserved when you switch themes.
 
 In **Appearance → Background**, choose **None**, **Theme artwork**, or **Custom image**. **New session page** and **Sessions** are independent: hiding a background does not delete your image. Choosing a custom image for the first time starts with **Sessions** turned off. Later edits preserve your placement choices. Changing themes, fonts, accent, or color mode does not replace an explicit image or re-enable **None**. Without a personal profile, None, theme artwork, placement, presentation, and visibility are saved only in this browser for the selected Gateway. You can opt out without signing in; private uploads still require a profile.
 
@@ -325,6 +333,8 @@ Workshop at `/skills/workshop`. **Settings → Plugins** at `/settings/plugins`
 shows the searchable local inventory. Select a plugin to open its overview.
 Catalog browsing and search load independently of that inventory. Installation
 stays disabled until the Gateway confirms the current inventory and permissions.
+If the Gateway disconnects while the catalog is open, search and filter choices
+are kept and results reload when it reconnects.
 
 Opening a plugin shows its description, publisher when available, skills, tools,
 MCP servers, and full README on one overview. Select a tool to read its full
@@ -350,7 +360,9 @@ editor with plugin configuration and editable **Permissions** controls; Back ret
 to the overview.
 Existing `#configuration` links still open the editor. Local controls and the
 installed README remain available when optional ClawHub metadata cannot load.
-The catalog shows featured plugins and category shelves. Within each category,
+The **Featured** shelf and its **View all** list keep ClawHub’s curated order.
+Plugins already on this Gateway show **Installed** instead of **Install**, even
+when disabled. Within each category,
 ClawHub's selected priorities appear first, followed by remaining plugins in
 download order. **View all** preserves that order. Computer use groups interactive
 desktop and browser control. Other and uncategorized plugins remain available
@@ -359,14 +371,14 @@ Search queries
 [ClawHub](https://clawhub.ai/plugins) without leaving the page. Catalog detail
 links use `/plugins/<catalog-id>`; installed-only links use
 `/settings/plugins/<plugin-id>`. Both show the same overview and actions.
+When you open an entry from browse or search, the overview shows the artwork,
+name, description, and publisher already available in the catalog while the
+remaining details load.
 
-Open a skill on a plugin detail page to browse its complete declared folder. The
-viewer starts with `SKILL.md`, includes unlinked files and nested folders, and
-renders full Markdown documents. Files that cannot render, exceed the read
-limits, or are unavailable remain visible with an explanation. Installed and
-catalog plugins use the same viewer; catalog reads stay pinned to the selected
-release and do not install or execute the plugin. This viewer has no search or
-Copy controls. Reading a bundle requires `operator.read`.
+Open a skill on a plugin detail page to read its `SKILL.md` in a dialog without
+leaving the page. Installed and catalog plugins use the same read-only viewer.
+Catalog previews stay pinned to the selected release and do not install or
+execute the plugin. Reading a preview requires `operator.read`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
@@ -443,6 +455,8 @@ version and restart the Gateway.
 New-update notifications in the Inbox and account menu appear only for the
 `stable` and `beta` channels. The `dev` channel can still check and start updates
 here manually, and active update progress and recovery messages remain visible.
+Expand a recorded update in **Inbox → System** and choose **View update details**
+to open its report without starting another update.
 
 For `dev` git updates, the confirmation, run report, and available-update status
 show the installed → target short commit SHAs on a separate line below the commit
@@ -492,7 +506,7 @@ creation. Keeping the app open lets creation finish when the agent is ready.
 
 ## Settings
 
-Inside **Settings**, the dedicated sidebar includes **Ask OpenClaw** and starts with a **Search settings** field for quickly finding settings sections.
+Inside **Settings**, the dedicated sidebar puts the **Settings** title, agent picker, and any back arrow on one row, followed by a **Search settings** field for quickly finding settings sections. **Ask OpenClaw** sits above the **Preferences** group.
 
 Form edits save automatically. If the connection changes while edits are pending,
 autosave pauses until you choose **Save** to keep them or **Reload Config** to
@@ -671,9 +685,11 @@ including limited access to contacts or photos. Precise location is read-only
 on iOS; **Open Settings** opens the system setting. Talk shows the device's
 Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
-## Templates (Labs)
+<a id="templates-labs" />
 
-Enable **Settings → Labs → Templates** to browse official Template packages from
+## Templates
+
+Open **Customize → Templates** to browse official Template packages from
 ClawHub on the **Templates** page. Search the catalog, review the files and
 capabilities a Template will install, then select **Add** to create its agent.
 Opening a catalog entry keeps the selected published version in its detail link,
@@ -684,8 +700,10 @@ installed Template to update or remove. Delete the agent through normal agent
 controls; shared plugins and MCP servers remain installed. See
 [Templates](/cli/templates) for the package contract and local-source CLI commands.
 
-Turning the Labs switch off hides Template discovery and Add. Existing agents keep
-running.
+Templates are available by default without a settings switch. An existing
+`gateway.controlUi.experimental.templates: false` remains an advanced opt-out
+that hides discovery and blocks new Add operations. Set it to `true` or remove it
+to restore availability. Existing agents keep running.
 
 ## Speech bubbles
 
@@ -786,7 +804,7 @@ The page redacts credential-bearing URL-like values before rendering and quotes 
 
 Open **Activity** from the sidebar’s **Pages** view, or visit `/activity` under the Control UI's base path. It has two tabs plus a deep-link inspector:
 
-- **Sessions** shows recent session activity grouped by day, with search, time, and people filters. Sessions sort newest first by their latest input or completed run, using the same time as the row's age and day group. Internal completion-delivery attempts do not advance the latest-input time. Pins do not affect this order. Each row shows the human attribution and configured agent avatar/name. Subagent sessions are excluded from the feed, search results, and people counts. Active rows offer **Inspect run** when the Gateway has recorded a run reference.
+- **Sessions** shows recent session activity grouped by day, with search, time, and people filters. Sessions sort newest first by their latest input or completed run, using the same time as the row's age and day group. Internal completion-delivery attempts do not advance the latest-input time. Pins do not affect this order. While you read farther down the feed, session details still update without reordering the list. The feed catches up automatically when you return to the top and stop scrolling. Each row shows the human attribution and configured agent avatar/name. The feed, search results, and counts exclude subagent runs and internal system sessions, such as the records used to publish GitHub pull requests. Active rows offer **Inspect run** when the Gateway has recorded a run reference.
 - The pulse card above the list describes the selected time window: hourly bars for **Last 24 hours**, daily bars for **Last 7 days** and **Last 30 days**, and monthly bars for the last 12 months under **All time**, using local time. Its counts of active sessions, sessions started in the window (omitted for All time), associated people, and sessions running now follow the current filters and include matches beyond the 100-row window; All time counts every match even though its bars cover 12 months. Each session contributes once, to the bar of its latest activity; the chart is labeled **Sessions by last activity**, not a count of messages or completed tasks. Peak bars show their session count. **All time** keeps all matching sessions in its summary but labels the chart **Last 12 months**; the chart’s accessible description counts only the sessions in those bars. An empty chart says that no activity was recorded in the period.
 - Each session can show a rolling recap in one to three sentences: what was done and where the work stands. Recaps use the agent's [utility model](/gateway/config-agents/models#agents-defaults-model) and are shared across clients and Gateway restarts. Initial loading uses shimmer placeholders; an existing recap shimmers while refreshing. A failed refresh keeps the last recap and identifies the refresh failure. **Retry recap** requests another attempt after the Gateway's cooldown. Read-only viewers can read cached recaps but cannot request generation. On a page with mixed permissions, view-only sessions do not block recap generation for writable sessions.
 - Sessions with a GitHub checkout show associated branch PRs and their added/removed line counts. Hover or keyboard-focus a PR to preview its details, or select it to open GitHub. Before an open PR exists, the branch shows its diff against the default branch, including uncommitted work. These are checkout/PR statistics, not cumulative session edit counts; unavailable counts stay hidden, and retained stale data carries a warning.

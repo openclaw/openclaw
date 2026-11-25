@@ -33,7 +33,7 @@ const member: OpenClawIdTunnelPrincipal = {
   kind: "member",
   peerKey: `iroh:${"ab".repeat(32)}`,
   accountId: "history-member",
-  role: "viewer",
+  role: "staff",
 };
 const owner: OpenClawIdTunnelPrincipal = { kind: "owner", peerKey: `iroh:${"cd".repeat(32)}` };
 const principals = new Map([member, owner].map((principal) => [principal.peerKey, principal]));
@@ -76,7 +76,9 @@ beforeAll(async () => {
   };
   setRuntimeConfigSnapshot(cfg);
   memberId = (await ensureCanonicalUserProfileForEmail(email)).id;
-  await setCanonicalUserProfileRole(memberId, "staff");
+  await setCanonicalUserProfileRole(memberId, "viewer");
+  const admin = await ensureCanonicalUserProfileForEmail("history-admin@example.test");
+  await setCanonicalUserProfileRole(admin.id, "staff");
   expect(
     await linkCanonicalOpenClawIdUserProfile({
       profileId: memberId,
@@ -183,37 +185,42 @@ function setMemberAccess(others: "none" | "view") {
   setRuntimeConfigSnapshot(cfg);
 }
 
-it.each([false, true])("keeps the membership ceiling for HTTP history (SSE: %s)", async (sse) => {
-  setMemberAccess("none");
-  const sessionId = `history-membership-${++sequence}`;
-  const scope = { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}` };
-  await upsertSessionEntryCore(scope, {
-    sessionId,
-    updatedAt: sequence,
-    visibility: "shared",
-    createdActor: { type: "human", source: "profile", id: foreignId },
-  });
-  await appendTranscriptMessage(scope, {
-    eventId: `${sessionId}-message`,
-    message: { role: "user", content: text },
-  });
-  const readable = { status: 200, body: { messages: [{ role: "user", content: text }] } };
-  expect(await tunnelHistory(owner.peerKey, scope.sessionKey, sse)).toMatchObject(readable);
-  const local = await fetch(`${url}/sessions/${encodeURIComponent(scope.sessionKey)}/history`, {
-    headers: {
-      "x-forwarded-for": "192.0.2.10",
-      "x-forwarded-proto": "https",
-      "x-forwarded-user": email,
-    },
-  });
-  expect(local.status).toBe(200);
-  expect(await local.json()).toMatchObject(readable.body);
-  expect(await tunnelHistory(member.peerKey, scope.sessionKey, sse)).toMatchObject({
-    status: 404,
-    body: { error: { type: "not_found" } },
-  });
-  await addSessionMember(scope, { identityId: memberId, addedBy: foreignId });
-  expect(await tunnelHistory(member.peerKey, scope.sessionKey, sse)).toMatchObject({ status: 404 });
-  setMemberAccess("view");
-  expect(await tunnelHistory(member.peerKey, scope.sessionKey, sse)).toMatchObject(readable);
-});
+it.each([false, true])(
+  "keeps the canonical profile ceiling for HTTP history (SSE: %s)",
+  async (sse) => {
+    setMemberAccess("none");
+    const sessionId = `history-membership-${++sequence}`;
+    const scope = { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}` };
+    await upsertSessionEntryCore(scope, {
+      sessionId,
+      updatedAt: sequence,
+      visibility: "shared",
+      createdActor: { type: "human", source: "profile", id: foreignId },
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: `${sessionId}-message`,
+      message: { role: "user", content: text },
+    });
+    const readable = { status: 200, body: { messages: [{ role: "user", content: text }] } };
+    expect(await tunnelHistory(owner.peerKey, scope.sessionKey, sse)).toMatchObject(readable);
+    const local = await fetch(`${url}/sessions/${encodeURIComponent(scope.sessionKey)}/history`, {
+      headers: {
+        "x-forwarded-for": "192.0.2.10",
+        "x-forwarded-proto": "https",
+        "x-forwarded-user": "history-admin@example.test",
+      },
+    });
+    expect(local.status).toBe(200);
+    expect(await local.json()).toMatchObject(readable.body);
+    expect(await tunnelHistory(member.peerKey, scope.sessionKey, sse)).toMatchObject({
+      status: 404,
+      body: { error: { type: "not_found" } },
+    });
+    await addSessionMember(scope, { identityId: memberId, addedBy: foreignId });
+    expect(await tunnelHistory(member.peerKey, scope.sessionKey, sse)).toMatchObject({
+      status: 404,
+    });
+    setMemberAccess("view");
+    expect(await tunnelHistory(member.peerKey, scope.sessionKey, sse)).toMatchObject(readable);
+  },
+);

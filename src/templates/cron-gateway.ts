@@ -14,7 +14,6 @@ import type { TemplateCronGateway } from "./cron.js";
 
 type TemplateCronCreatorCapture = CronAddOptions & {
   assertInferenceSelectionCurrent?: () => void;
-  assertOperatorSourceCurrent?: () => void;
   disposeOperatorSource?: () => void;
   disposeInferenceAuthorization?: () => void;
 };
@@ -44,7 +43,6 @@ export function createTemplateCronGateway(
         assertCurrent();
         options?.commitGuard?.();
         creator?.assertInferenceSelectionCurrent?.();
-        creator?.assertOperatorSourceCurrent?.();
       };
       guard();
       const normalized = normalizeCronJobCreate(input);

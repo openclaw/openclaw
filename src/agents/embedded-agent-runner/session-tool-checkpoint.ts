@@ -1,5 +1,13 @@
+import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AnyAgentTool } from "../agent-tools.types.js";
+import { readGitHubPublicationToolSelection } from "../github-tool-identity-config.js";
+import {
+  participationToolConstraints,
+  type ParticipationCeiling,
+} from "../participation-ceiling.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import type { describeSessionToolDefinition } from "./session-tool-definition.js";
 
@@ -10,9 +18,10 @@ type PublicationListing = ToolDefinition &
 export type ToolSurface = {
   routeKey: string;
   historyId: string | null;
-  /** Digest of the tool policy config; a policy change starts a new pin. */
+  /** Digest of tool policy and participation scope; a change starts a new pin. */
   toolPolicy: string;
-  tools: ToolDefinition[];
+  /** Absent until the series' first request pins its tools; a listing can precede it. */
+  tools?: ToolDefinition[];
   publicationListing?: PublicationListing;
 };
 
@@ -51,4 +60,33 @@ export function selectToolSurfaceCheckpoint<T extends { type: string }>(
     }
   }
   return undefined;
+}
+
+/** Configuration and admitted participation scope a pin depends on. */
+export function resolveSessionToolPolicyDigest(
+  config: OpenClawConfig | undefined,
+  agentId: string,
+  participationCeiling?: ParticipationCeiling,
+) {
+  return sha256Hex(
+    stableStringify([
+      config?.tools,
+      config?.agents?.entries?.[agentId]?.tools,
+      config?.plugins,
+      config?.mcp,
+      config?.desktop,
+      readGitHubPublicationToolSelection(config ?? {}),
+      // Hard participation ceilings must not revive the creator's pinned tools or
+      // leave the next creator turn pinned to a participant's narrower inventory.
+      ...(participationCeiling
+        ? [
+            {
+              participation: participationToolConstraints(participationCeiling).map((allow) =>
+                [...new Set(allow)].toSorted(),
+              ),
+            },
+          ]
+        : []),
+    ]),
+  );
 }

@@ -28,9 +28,9 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
 import { collectOption } from "../program/helpers.js";
-import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
+import type { CapabilityEnvelope } from "./result-types.js";
 
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
 const HEIC_MODEL_RUN_MIMES = new Set([

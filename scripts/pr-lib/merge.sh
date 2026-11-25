@@ -615,7 +615,7 @@ verify_merge_recovery_artifacts() (
   fi
   [ "$LAST_VERIFIED_HEAD_SHA" = "$LOCAL_PREP_HEAD_SHA" ] || return 1
   case "$GATES_MODE" in
-    full|docs_only|reused_docs_only|remote_testbox|remote_crabbox_aws|hosted_exact_or_recent_parent) ;;
+    full|docs_only|reused_docs_only|remote_boat|remote_testbox|remote_crabbox_aws|hosted_exact_or_recent_parent) ;;
     *) return 1 ;;
   esac
 )
@@ -633,6 +633,7 @@ merge_run() {
   local provider_rejection="" stale_head_retirement="" async_failure="" qualified_pending_recovery=false
   local retired_auto_admin=false stale_admin_head=false qualified_immediate_recovery=false
   local MERGE_REQUIRED_CHECKS_PASSED=false
+  local retain_resources="${13:-false}" retention_resources=""
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
   local MERGE_USE_PRIOR_CI_ADMIN=false
@@ -668,6 +669,21 @@ merge_run() {
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_ENTRY_OBSERVATION MERGE_TRANSPORT=rest
   merge_outcome_init "$pr" || return 1
+  if [ -n "$MERGE_OUTCOME_OID" ]; then
+    if [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .version)" = 2 ]; then
+      retain_resources=true
+      retention_resources=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c .retention) || return 1
+    elif [ "$retain_resources" = true ]; then
+      merge_outcome_stop "retention conflicts with the original cleanup intent"; return 1
+    fi
+  fi
+  if [ "$retain_resources" = true ]; then
+    [ "$auto_merge_requested" = false ] && [ "$MERGE_USE_PRIOR_CI_ADMIN" = false ] &&
+      [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" = squash ] &&
+      [ -z "$replacement_head$merged_head$observed_head$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] || {
+        merge_outcome_stop "retention requires ordinary immediate exact-head squash"; return 1;
+      }
+  fi
   if [ -n "${PR_WORKFLOW_ADMISSION_PROVENANCE:-}" ]; then
     [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] && [ -z "$recovery_oid$MERGE_OUTCOME_OID" ] || {
       merge_outcome_stop "current workflow first admission requires confirmed admin evidence and no retained outcome"
@@ -692,6 +708,14 @@ merge_run() {
         merge_outcome_stop "current workflow recovery requires selected auto retirement, a cancelled auto replacement, or confirmed same-head REST admin recovery"
         return 1
       }
+  fi
+  if [ "$retain_resources" = true ] && [ -n "$recovery_oid" ]; then
+    [ "$recovery_oid" = "$MERGE_OUTCOME_OID" ] || {
+      merge_outcome_stop "retention recovery requires the exact current outcome"; return 1;
+    }
+    # Retention recovery reconciles the existing request; it cannot dispatch a successor.
+    merge_outcome_resume "$pr"
+    return
   fi
   if [ "$cancel_auto" = true ]; then
     [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] && [ "$auto_merge_requested" = false ] || return 2
@@ -1296,6 +1320,14 @@ merge_run() {
     return 1
   fi
   local intent attempt
+  if [ "$retain_resources" = true ]; then
+    [ "$route" = immediate ] || { merge_outcome_stop "retention requires ordinary immediate routing; admin, auto-merge and queues are unsupported"; return 1; }
+    if [ -n "$retention_resources" ]; then
+      merge_retention_verify "$pr" "$retention_resources" "$PREP_HEAD_SHA" || return 1
+    else
+      retention_resources=$(merge_retention_resources "$pr" "$PREP_HEAD_SHA") || return 1
+    fi
+  fi
   attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1
   intent=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c --argjson repo "$MERGE_REPO" \
     --arg method "$merge_method" --arg route "$route" --arg attempt "$attempt" \
@@ -1305,6 +1337,9 @@ merge_run() {
      main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null}
      + (if $transport == "rest" then {transport:"rest"} else {} end)
   ') || return 1
+  if [ "$retain_resources" = true ]; then
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson retention "$retention_resources" '.version=2 | .retention=$retention | .previous=null') || return 1
+  fi
   local acceptance_oid acceptance_bytes
   acceptance_oid=$(awk '$1 == ".local/pending-proof-acceptance.json" { print $2 }' <<< "$correction_authority") || return 1
   if [ -n "$acceptance_oid" ]; then
@@ -1375,6 +1410,9 @@ merge_run() {
     merge_outcome_write "$intent" ${recovery_captures[@]+"${recovery_captures[@]}"} || return 1
   fi
   local merge_output=".local/merge-output.$attempt.log"
+  if [ "$retain_resources" = true ]; then
+    merge_retention_verify "$pr" "$retention_resources" "$PREP_HEAD_SHA" || return 1
+  fi
   # Both success and failure are reconciled. A killed process leaves intent for
   # the next invocation; an OPEN read can never authorize another dispatch. Each
   # attempt owns an exclusive capture, so recovery cannot overwrite earlier evidence.
@@ -1409,6 +1447,10 @@ merge_run() {
   [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .phase)" != intent ] || return 0
   local landed_sha
   landed_sha=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .landed)
+  if [ "$retain_resources" = true ]; then
+    merge_retention_complete "$pr"
+    return
+  fi
   if [ "$route" = admin ]; then
     record_crabbox_landing_parent_audit "$landed_sha" "$crabbox_final_main_sha" || return 1
   fi

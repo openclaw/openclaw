@@ -463,8 +463,7 @@ it.for([
           };
         }
         const isOwner = scenario !== "system" && scenario !== "non-owner";
-        const invalidated =
-          scenario === "revoked" || scenario === "cancelled" || scenario === "replaced";
+        const invalidated = scenario === "cancelled" || scenario === "replaced";
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
           const admittedRunContext = await startEmbeddedTurn(params, "resumed owner admission");
           expect(readAdmittedRunOperatorAuthority(admittedRunContext)?.profileId).toBe(

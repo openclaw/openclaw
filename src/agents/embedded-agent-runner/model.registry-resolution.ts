@@ -10,7 +10,7 @@ import { loadAuthProfileStoreForRuntimeAsync } from "../auth-profiles/store-runt
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
-import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
+import { normalizeStaticProviderModelId } from "../model-selection-normalize.js";
 import {
   buildSuppressedBuiltInModelError,
   shouldUnconditionallySuppress,

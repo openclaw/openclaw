@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createReport, createSkill } from "../pages/skills/view.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -45,6 +46,106 @@ async function readTopTranscriptAnchor(thread: import("playwright").Locator) {
 }
 
 suite.define(() => {
+  it("follows a profile link from a reply without restarting the dashboard", async () => {
+    const { page } = await newChatPage(suite, { viewport: { height: 820, width: 1280 } });
+    await installMockGateway(page, {
+      historyMessages: [
+        timedText(
+          "assistant",
+          "Open [GitHub accounts](/settings/profile#settings-profile-github-connections).",
+        ),
+      ],
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const link = page.getByRole("link", { name: "GitHub accounts", exact: true });
+    await link.waitFor();
+    const documentStart = await page.evaluate(() => performance.timeOrigin);
+    const chat = page.url();
+    await link.click();
+    await page.waitForURL(
+      (url) =>
+        url.pathname === "/settings/profile" && url.hash === "#settings-profile-github-connections",
+    );
+    await page.locator("openclaw-profile-page").waitFor();
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStart);
+    await page.goBack();
+    await link.waitFor();
+    expect(page.url()).toBe(chat);
+    await link.focus();
+    await page.keyboard.press("Enter");
+    await page.locator("openclaw-profile-page").waitFor();
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStart);
+    expect(await page.evaluate(() => document.activeElement?.closest(".chat-thread") == null)).toBe(
+      true,
+    );
+  });
+
+  it("opens the conversation named by a released session link in a reply", async () => {
+    const origin = "agent:main:session-a";
+    const destination = "agent:main:session-b";
+    const { page } = await chatFixture(suite, {
+      sessionKey: origin,
+      sessions: [
+        sessionRow(origin, "Original conversation", 2),
+        sessionRow(destination, "Research", 1),
+      ],
+      sessionTranscripts: {
+        [origin]: {
+          messages: [
+            timedText(
+              "assistant",
+              `[Research conversation](/chat?session=${encodeURIComponent(destination)})`,
+            ),
+          ],
+        },
+        [destination]: { messages: [timedText("assistant", "Notes from research.")] },
+      },
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, origin));
+    await page.getByRole("link", { name: "Research conversation", exact: true }).click();
+    await page
+      .locator(".chat-pane-cache__pane--active .chat-thread")
+      .getByText("Notes from research.", { exact: true })
+      .waitFor({ timeout: 10_000 });
+    expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(destination));
+  });
+
+  it("lets startup resolve an unqualified session link from a skill card", async () => {
+    const destination = "agent:main:workspace";
+    const content = "[Open conversation](/chat?session=workspace&view=compact#notes)";
+    const skill = createSkill({
+      skillCard: {
+        present: true,
+        path: "/tmp/repo-skill/skill-card.md",
+        sizeBytes: content.length,
+      },
+    });
+    const { page } = await chatFixture(suite, {
+      sessionKey: "agent:main:main",
+      sessions: [sessionRow(destination, "Workspace", 1)],
+      sessionTranscripts: {
+        [destination]: { messages: [timedText("assistant", "Workspace conversation.")] },
+      },
+      methodResponses: {
+        "skills.status": createReport([skill]),
+        "skills.skillCard": { skillKey: skill.skillKey, content },
+      },
+    });
+    await page.goto(`${suite.server.baseUrl}skills/installed/${skill.skillKey}`);
+    const link = page.getByRole("link", { name: "Open conversation", exact: true });
+    await link.waitFor();
+    const documentStart = await page.evaluate(() => performance.timeOrigin);
+    await link.click();
+    await page.waitForURL((url) => url.pathname.startsWith("/chat"));
+    expect(await page.evaluate(() => performance.timeOrigin)).not.toBe(documentStart);
+    await page.getByText("Workspace conversation.", { exact: true }).waitFor();
+    expect(new URL(page.url())).toMatchObject({
+      pathname: controlUiSessionPath(destination),
+      search: "?view=compact",
+      hash: "#notes",
+    });
+  });
+
   it("coalesces persisted same-session split panes during cold startup", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",

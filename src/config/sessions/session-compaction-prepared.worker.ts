@@ -72,10 +72,10 @@ export async function readPreparedSessionCompaction(
     const { value: finalizedSource, reads } = await withCompactionSourceRows(
       request,
       control,
-      ({ database, readEntry, readEntriesAfter }) => ({
+      ({ database, readEntries, readEntriesAfter }) => ({
         // Prefix validation admits only an active-path suffix; planned dependencies remain retained.
         retained: [
-          ...operation.retainedSequences.map(readEntry),
+          ...readEntries(operation.retainedSequences),
           ...readEntriesAfter(operation.version.rawSeq ?? 0),
         ],
         transcriptMutationAt: readTranscriptContextVersionInTransaction(

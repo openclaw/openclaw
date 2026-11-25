@@ -16,6 +16,7 @@ import {
 } from "./eviction.test-support.js";
 import { requireGit } from "./git.js";
 import { deferWorktreeCleanup } from "./registry-retirement.js";
+import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { isWorktreeRepositoryCorruptionError } from "./removal-errors.js";
 import { resolveRepository } from "./repository-paths.js";
@@ -309,9 +310,9 @@ it("re-arms stopped scratch clones without an explicit retry and preserves live 
   } finally {
     await lease.release();
   }
-  expect((await makeService(env).gc({ readOwnerState: () => "idle" })).removed).toEqual([
-    records[1]!.id,
-  ]);
+  expect((await makeService(env).gc({ readOwnerState: () => "idle" })).removed).toEqual([]);
+  await updateRegistryWorktree(env, records[1]!.id, { lastActiveAt: 1 });
+  expect((await makeService(env).gc()).removed).toEqual([records[1]!.id]);
   expect((await fs.stat(pack)).nlink).toBe(1);
 });
 

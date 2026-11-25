@@ -17,6 +17,7 @@ import {
   fetchClawHubTemplatesOverview,
   listClawHubPackages,
   searchClawHubPackages,
+  type ClawHubTemplatesOverviewOptions,
 } from "../infra/clawhub-packages.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { projectTemplateCatalogDependencies } from "./catalog-dependencies.js";
@@ -126,7 +127,7 @@ export async function listClawHubTemplates(
 
 /** Only an unavailable endpoint or an explicitly incomplete overview uses legacy shelves. */
 export async function readClawHubTemplatesOverview(
-  params: ClawHubFetchOptions & { limit?: number } = {},
+  params: ClawHubTemplatesOverviewOptions = {},
 ): Promise<ClawHubTemplateCatalogOverview | undefined> {
   const result = await fetchClawHubTemplatesOverview(params);
   if (isJsonObject(result) && result.complete === false) {
@@ -149,15 +150,19 @@ export async function readClawHubTemplatesOverview(
       "ClawHub returned a malformed Template overview.",
     );
   }
-  const limit = params.limit ?? 8;
+  const { limit = 8, includeCategoryEntries } = params;
   return {
     featured: projectPublicEntries(result.featured, params.baseUrl).slice(0, limit),
-    sections: result.sections.map((section) => ({
-      category: section.category,
-      entries: projectPublicEntries(section.items, params.baseUrl)
-        .toSorted(rankByInstalls)
-        .slice(0, limit),
-    })),
+    sections: result.sections.map(({ category, items }) => {
+      const projected = projectPublicEntries(items, params.baseUrl);
+      if (includeCategoryEntries !== true || result.completeCategoryEntries !== true) {
+        return { category, entries: projected.toSorted(rankByInstalls).slice(0, limit) };
+      }
+      // Match the paginated category list: the last valid row for a package wins before ranking.
+      const unique = new Map(projected.map((entry) => [entry.packageName, entry]));
+      const ranked = [...unique.values()].toSorted(rankByInstalls);
+      return { category, entries: ranked.slice(0, limit), additionalEntries: ranked.slice(limit) };
+    }),
   };
 }
 

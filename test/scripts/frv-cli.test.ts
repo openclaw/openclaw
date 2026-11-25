@@ -24,7 +24,21 @@ describe("frv CLI", () => {
       const selected = child("normalCi", "101");
       const workflow = "name: Full Release Validation\n";
       const sourcePath = ".github/workflows/full-release-validation.yml";
+      const waiverSource = JSON.stringify({
+        schema: "openclaw.release-validation-waivers/v1",
+        waivers: [],
+      });
       const fixture = {
+        waiverSource: {
+          type: "file",
+          path: "scripts/lib/release-validation-waivers.json",
+          encoding: "base64",
+          size: Buffer.byteLength(waiverSource),
+          content: Buffer.from(waiverSource).toString("base64"),
+          sha: createHash("sha1")
+            .update("blob " + Buffer.byteLength(waiverSource) + "\0" + waiverSource)
+            .digest("hex"),
+        },
         plan: executionPlanArtifact({ children: [selected] }),
         parent: rootRun(),
         runs: [runFor(selected, 1, "failure"), runFor(selected, 2, "failure")],
@@ -32,7 +46,16 @@ describe("frv CLI", () => {
           ["selected", "untouched"].map((name, index) =>
             Object.assign(job(name, "failure"), { id: 10 + index, run_id: 101, run_attempt: 1 }),
           ),
-          [{ ...job("selected", conclusion), id: 20, run_id: 101, run_attempt: 2 }],
+          [
+            {
+              ...job("selected", conclusion),
+              id: 20,
+              run_id: 101,
+              run_attempt: 2,
+              started_at: "2026-08-22T00:02:00Z",
+              completed_at: "2026-08-22T00:03:00Z",
+            },
+          ],
         ],
         workflow: {
           type: "file",
@@ -81,7 +104,7 @@ if (args[0] === "run" && args[1] === "download" && args[2] === "77") {
   process.stdout.write("TARGET_SHA: ${TARGET_SHA}\nDispatched ci.yml: https://github.com/openclaw/openclaw/actions/runs/101 (attempt 1)\n");
   process.exit(0);
 } else if (route?.startsWith("contents/")) {
-  value = fixture.workflow;
+  value = route.includes("release-validation-waivers.json") ? fixture.waiverSource : fixture.workflow;
 } else if (/^actions\/runs\/101\/attempts\/[12]\/jobs\?per_page=100$/.test(route ?? "")) {
   value = fixture.jobs[route.includes("/attempts/2/") ? 1 : 0];
 } else {

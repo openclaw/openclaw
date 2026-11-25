@@ -177,7 +177,7 @@ describe("agent loop repeat guard", () => {
     await agent.prompt("second");
 
     const results = agent.state.messages.filter((message) => message.role === "toolResult");
-    expect(results.every((message) => message.content.length === 1)).toBe(true);
+    expect(results.map((message) => message.content.length)).toEqual([1, 1, 1, 1]);
   });
 });
 

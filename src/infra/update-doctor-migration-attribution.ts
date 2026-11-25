@@ -3,10 +3,13 @@ import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { formatErrorMessage } from "./errors.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import type { PostgresSyncConnection } from "./postgres-sync/connection.js";
+import { readSqliteBusyTimeout, runWithSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { parseSqliteFileGeneration } from "./sqlite-file-generation.js";
 import {
   createSqliteLifecycleAggregateError,
@@ -47,8 +50,12 @@ export function runWithUpdateDoctorMigrationCapture<T>(
 export function runWithDoctorMigrationBackup<T>(
   backup: DoctorMigrationBackup,
   operation: () => T,
+  stateUpgradeLiveStateDir?: string,
 ): T {
-  return captures.run({ ...captures.getStore(), backup, fullBackups: new Map() }, operation);
+  return captures.run(
+    { ...captures.getStore(), backup, fullBackups: new Map(), stateUpgradeLiveStateDir },
+    operation,
+  );
 }
 
 /** Only the general Doctor backup owner admits full images for this maintenance run. */
@@ -248,11 +255,28 @@ function* updateSqliteMigrationSteps<T>(
       if (before !== expected) {
         capture.accept(key, expected, before);
       }
+      options?.beforeExclusive?.();
       if (mode !== "exclusive") {
         // Start WAL in normal mode before retaining exclusion so it can be released.
         db.prepare("PRAGMA schema_version").get(); // sqlite-allow-raw -- Attach native WAL coordination before retaining exclusion.
       }
-      db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;"); // sqlite-allow-raw -- Bound the migration's native exclusion.
+      // Exclusion needs every other connection closed. Wait out short-lived outside
+      // readers and probes instead of failing on the caller's zero busy timeout.
+      try {
+        runWithSqliteBusyTimeout(
+          db,
+          Math.max(readSqliteBusyTimeout(db), OPENCLAW_SQLITE_BUSY_TIMEOUT_MS),
+          () => db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;"), // sqlite-allow-raw -- Bound the migration's native exclusion.
+        );
+      } catch (error) {
+        if (!isSqliteLockError(error)) {
+          throw error;
+        }
+        throw new Error(
+          `Update migration could not take exclusive access to ${pathname}: another connection still has it open.`,
+          { cause: error },
+        );
+      }
       assertCurrent();
       const source: MigrationSource | undefined =
         before === null ? undefined : { path: key, generation: before, assertCurrent };

@@ -20,7 +20,10 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { getHeapSpaceStatistics } from "node:v8";
 import { createAiTransportHost, runWithAiTransportHost } from "../../packages/ai/src/host.js";
-import { cleanupSessionResources } from "../../packages/ai/src/session-resources.js";
+import {
+  claimConversationProviderState,
+  cleanupSessionResources,
+} from "../../packages/ai/src/session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
   responsesContinuationPrefixFingerprint,
@@ -148,7 +151,7 @@ function runTurn(session: number) {
   const request = sanitizeResponsesImagePayload(params);
   lastFingerprint = responsesContinuationPrefixFingerprint(request.input ?? []);
   const claim = claimOpenAIResponsesHttpContinuation({
-    sessionId: `retention-${session}`,
+    scope: claimConversationProviderState(`retention-${session}`),
     apiKey: "synthetic-not-a-credential",
     baseUrl: model.baseUrl,
     headers: {},

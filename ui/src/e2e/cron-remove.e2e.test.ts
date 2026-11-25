@@ -81,7 +81,7 @@ suite.define(() => {
       expect((await gateway.getRequests("cron.remove"))[0]?.params).toEqual({ id: job.id });
       await detail.waitFor({ state: "detached" });
       // The Gateway announces the removal; the sidebar list follows it.
-      await gateway.emitGatewayEvent("cron", { jobId: job.id, action: "removed" });
+      await gateway.emitGatewayEvent("cron.inventory.changed", undefined);
       await expect.poll(() => row.count()).toBe(0);
     });
   });

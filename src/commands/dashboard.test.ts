@@ -331,9 +331,6 @@ describe("verified custom-bind handoff", () => {
 
     await dashboardCommand(runtime, { noOpen: true });
 
-    expect(gatherStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ rpc: { url: "ws://10.0.0.5:18789" } }),
-    );
     expect(gatherStatus.mock.invocationCallOrder[0]).toBeLessThan(
       inspectPortUsage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
@@ -395,10 +392,10 @@ describe("verified custom-bind handoff", () => {
 
     await dashboardCommand(runtime, { noOpen: true, yes: true });
 
-    expect(gatherStatus.mock.calls.map(([options]) => options.rpc)).toEqual([
-      { url: "ws://10.0.0.5:18789" },
-      { url: "ws://10.0.0.5:18789" },
-      { url: "ws://10.0.0.6:18789" },
+    expect(gatherStatus.mock.calls.map(([options]) => options.dashboardTarget.probeUrl)).toEqual([
+      "ws://10.0.0.5:18789",
+      "ws://10.0.0.5:18789",
+      "ws://10.0.0.6:18789",
     ]);
     expect(startGateway).toHaveBeenCalledExactlyOnceWith({ json: false });
     expectHandoffFailure(copyToClipboard, issueDeviceBootstrapToken, inspectPortUsage);

@@ -28,7 +28,11 @@ import {
   refreshProjectClone,
 } from "../../projects/project-clone.js";
 import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
-import { resolveProjectDirectory } from "../../projects/project-registry.js";
+import {
+  resolveProjectDirectory,
+  resolveProjectRegistry,
+  resolveRecordedProjectByRoot,
+} from "../../projects/project-registry.js";
 import {
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
@@ -40,7 +44,7 @@ import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.
 import { createDeferredCore } from "../../shared/deferred.js";
 import { githubApiToken } from "../github-public-api.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { projectRequesterForClient, resolveRequesterProject } from "../project-access.js";
+import { projectRequesterForClient, resolveProjectAccess } from "../project-access.js";
 import { prepareGatewayProjectGitHubIdentity } from "../project-github-identity.js";
 import { commitPreparedSessionWorkspace } from "../session-lifecycle-preparation.js";
 import { resolveSessionProjectRootForRecord } from "../session-project-source.js";
@@ -67,20 +71,42 @@ export async function resolveRequestedSessionProject(
   cfg: OpenClawConfig,
   params: Pick<SessionsCreateParams, "projectId" | "worktree">,
   client: GatewayClient | null,
-): Promise<Result<{ root?: string; worktree: boolean }, ErrorShape>> {
+  {
+    cwd,
+    existingTargetEntry,
+  }: {
+    cwd?: string;
+    existingTargetEntry?: Pick<InternalSessionEntry, "projectId">;
+  } = {},
+): Promise<Result<{ projectId?: string; root?: string; worktree: boolean }, ErrorShape>> {
   const projectId = normalizeOptionalString(params.projectId);
-  if (!projectId) {
-    return ok({ worktree: params.worktree === true });
-  }
-  const requester = projectRequesterForClient(client);
-  const project = await resolveRequesterProject(cfg, projectId, requester, { fresh: true });
-  if (!project) {
+  const requester = projectRequesterForClient(client, cfg);
+  // A saved folder selection can still name the shared clone's root. Reuse its project binding.
+  // Do not reinterpret the source of a previously accepted direct checkout.
+  const clone =
+    !projectId &&
+    cwd &&
+    (!existingTargetEntry || existingTargetEntry.projectId || params.worktree === true)
+      ? await resolveRecordedProjectByRoot(cwd, { source: "cloned" })
+      : undefined;
+  const project = projectId ? await resolveProjectRegistry(cfg, projectId) : clone;
+  const access = project
+    ? await resolveProjectAccess(cfg, project, requester, { fresh: true })
+    : undefined;
+  if (projectId && !access) {
     return invalidSessionRequest(`unknown project id: ${projectId}`);
   }
-  // Product-owned clones are maintenance sources, never session checkouts.
-  const worktree = project.source === "cloned" || params.worktree === true;
+  if (!project) {
+    return ok({ worktree: params.worktree === true });
+  }
+  if (!access) {
+    return invalidSessionRequest("requested working directory is unavailable");
+  }
+  // Product-owned clones are maintenance sources, never session checkouts. A role
+  // grant alone admits a private project only as an isolated checkout.
+  const worktree = project.source === "cloned" || access === "granted" || params.worktree === true;
   const root = await resolveSessionProjectRootForRecord(project, worktree);
-  return root.ok ? ok({ root: root.value, worktree }) : root;
+  return root.ok ? ok({ projectId: project.id, root: root.value, worktree }) : root;
 }
 
 export function resolveSessionRepositoryCreation(

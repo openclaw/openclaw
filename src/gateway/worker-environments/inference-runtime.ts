@@ -1,3 +1,4 @@
+import { PROVIDER_STATE_SCOPE } from "@openclaw/ai/provider-types";
 import { normalizeCodexResponsesBaseUrlForOpenAISdk } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
@@ -39,8 +40,9 @@ import type {
   Tool,
   Usage,
 } from "../../llm/types.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateUsageCost } from "../../utils/usage-format.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import type { WorkerInferenceExecutor } from "./connection-identity.js";
 import type { PreparedWorkerInference } from "./inference-model.js";
@@ -276,6 +278,7 @@ export const executePreparedWorkerInference = async (
           {
             runId: request.runId,
             sessionId: request.sessionId,
+            authScope: agentDir,
             accountRoute: prepared.auth.profileId
               ? `profile:${prepared.auth.profileId}`
               : "direct:openai",
@@ -367,6 +370,9 @@ export const executePreparedWorkerInference = async (
         ...(reasoning !== undefined ? { reasoning: mapThinkingLevel(reasoning) } : {}),
         signal: providerSignal,
         sessionId: request.sessionId,
+        ...(promptCacheContext.providerStateScope
+          ? { [PROVIDER_STATE_SCOPE]: promptCacheContext.providerStateScope }
+          : {}),
         ...(authValue ? { apiKey: authValue } : {}),
         promptCacheKey: resolveSessionBoundaryPromptCacheKey({
           ...promptCacheContext,

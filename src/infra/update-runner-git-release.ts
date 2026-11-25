@@ -17,9 +17,17 @@ import {
 } from "./git-release.js";
 import { readPackageVersion } from "./package-json.js";
 import {
+  PACKAGE_RELEASES_DIR,
+  packageReleaseGlobalRoot,
   packageReleasePrefixOfRoot,
   readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
+import {
+  capturePackageReleaseSlot,
+  packageReleaseLinkTarget,
+  switchPackageReleaseLink,
+} from "./package-release-slot.js";
+import { isPathStrictlyInside } from "./path-guards.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import {
   readBuiltGatewayBuildId,
@@ -52,12 +60,14 @@ class PlacedReleaseMatch extends Error {}
  * Update a Git checkout install by building the target as a new release (a
  * detached worktree of the checkout) and switching the release link to it. The
  * checkout and the running release are never written; the Gateway that starts
- * from the new release upgrades state at boot. The first update also builds the
- * current HEAD as the first release, so a failed trial has somewhere to go back to.
+ * from the new release upgrades state at boot. A package switch keeps the serving
+ * package as fallback; a checkout conversion builds its serving commit as the first release.
  */
 export async function updateGitRelease(params: {
   opts: UpdateRunnerOptions;
   gitRoot: string;
+  /** The package that serves before a package-to-Git switch; kept intact as the trial fallback. */
+  previousPackageRoot?: string;
   runCommand: CommandRunner;
   defaultCommandEnv: NodeJS.ProcessEnv | undefined;
   timeoutMs: number;
@@ -80,6 +90,13 @@ export async function updateGitRelease(params: {
     placement = { serving: selected.releaseRoot, fallback: selected.releaseRoot };
   }
   const unserved = opts.deferReleaseActivation ? undefined : placement?.unserved;
+  const packageFallback =
+    params.previousPackageRoot ??
+    (placement &&
+    !placement.unsafeFallback &&
+    !isPathStrictlyInside(path.join(prefix, PACKAGE_RELEASES_DIR), placement.serving)
+      ? placement.serving
+      : undefined);
   let stepIndex = 0;
   const forRunner =
     (deadline: number | undefined) =>
@@ -103,18 +120,22 @@ export async function updateGitRelease(params: {
   // A link at the earlier `lib/node_modules` path serves until this update replaces it.
   const serving = servingGitReleaseSlot(prefix);
   const running =
-    placement?.serving ?? (readPackageReleaseSlotSync(serving) ? serving : params.gitRoot);
+    packageFallback ??
+    placement?.serving ??
+    (readPackageReleaseSlotSync(serving) ? serving : params.gitRoot);
   const git = (root: string, ...args: string[]) =>
     runCommand(["git", "-C", root, ...args], { cwd: root, timeoutMs });
+  // npm's serving package is not a checkout; Git inspection still belongs to the clone.
+  const runningGit = packageFallback ? params.gitRoot : running;
   const commonDir = (
-    await git(running, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    await git(runningGit, "rev-parse", "--path-format=absolute", "--git-common-dir")
   ).stdout.trim();
   const gitRoot = path.basename(commonDir) === ".git" ? path.dirname(commonDir) : params.gitRoot;
   // A checkout serves what its dist was built from, which can trail a pulled HEAD; the
   // first release, the trial's fallback, must be that serving commit.
-  const builtCommit = converting ? await readBuiltRuntimeCommit(running) : null;
+  const builtCommit = converting && !packageFallback ? await readBuiltRuntimeCommit(running) : null;
   const runningHead = await git(
-    running,
+    runningGit,
     "rev-parse",
     "--verify",
     `${builtCommit ?? "HEAD"}^{commit}`,
@@ -199,7 +220,6 @@ export async function updateGitRelease(params: {
       refreshedRemotes: fetched.refreshedRemotes,
       devSource: fetched.devSource,
       beforeSha,
-      sourceRuntimePrepared: opts.sourceRuntimePrepared,
       needsCheckoutMain: false,
       runCommand,
       timeoutMs,
@@ -247,6 +267,7 @@ export async function updateGitRelease(params: {
     }
     if (
       !converting &&
+      !packageFallback &&
       recovery.serviceRestartSafe &&
       (await treeOf(built.candidateSha)) === (await treeOf(runningSha))
     ) {
@@ -378,8 +399,8 @@ export async function updateGitRelease(params: {
   placedTree = placedSha ? await treeOf(placedSha) : null;
 
   // The first release is the code that runs now. It is not a candidate: it runs already.
-  let previousRelease: string | undefined;
-  if (converting) {
+  let previousRelease = converting ? packageFallback : undefined;
+  if (converting && !previousRelease) {
     const current = await buildRelease((release, common, retainCleanup) =>
       runGitCandidatePreflight({
         ...common,
@@ -395,7 +416,6 @@ export async function updateGitRelease(params: {
     if (current.status !== "ok") {
       return result("error", `git-release-current-failed: ${current.reason}`);
     }
-    await publishGitRelease({ prefix, releaseRoot: current.releaseRoot, trial: false });
     previousRelease = current.releaseRoot;
   }
 
@@ -409,8 +429,8 @@ export async function updateGitRelease(params: {
       devTarget: opts.devTarget,
       // Same source is current only when the running release's artifacts verify (#158931).
       // A conversion from a linked worktree can serve a different commit than the checkout.
-      beforeRuntimeVerified: recovery.serviceRestartSafe && beforeSha === runningSha,
-      beforeGitStaging: opts.beforeGitStaging,
+      beforeRuntimeVerified:
+        !packageFallback && recovery.serviceRestartSafe && beforeSha === runningSha,
       validateCandidate: opts.validateCandidate,
       needsCheckoutMain: channel === "dev" && !opts.devTarget && branch !== DEV_BRANCH,
       beforeCandidate: async (revision) => {
@@ -490,6 +510,11 @@ export async function updateGitRelease(params: {
     timeoutMs,
     beforeGitMutation: opts.beforeGitMutation,
   });
+  // Publishing even the fallback changes what the unchanged launcher resolves to.
+  // Keep the serving slot intact through admission, validation and ownership revalidation.
+  if (previousRelease) {
+    await publishGitRelease({ prefix, releaseRoot: previousRelease, trial: false });
+  }
   if (target.status === "ok") {
     if (releaseRoot !== unserved?.root) {
       await supersedeUnserved();
@@ -515,10 +540,23 @@ export async function updateGitRelease(params: {
       pending: opts.deferReleaseActivation,
     });
   }
-  if (serving !== slot && !opts.deferReleaseActivation) {
-    // The old link under lib/node_modules goes; its Gateway sees its installation replaced
-    // and restarts through the launcher, which now starts the link above.
-    await fs.rm(serving, { force: true });
+  // The 7db69bedeab6-era launcher and CLI enter through lib/node_modules: keep that path, but
+  // make it follow the new link, so there is one selection. A --no-restart update leaves it (the
+  // running Gateway reads its build through it, and a changed build would restart it); the
+  // launcher redirects it when that deferred release starts, and any later update repairs it.
+  const legacySlot = path.join(packageReleaseGlobalRoot(prefix), "openclaw");
+  const legacyTarget = packageReleaseLinkTarget(legacySlot, slot);
+  const legacyEntry = await fs.lstat(legacySlot).catch(() => null);
+  if (!opts.deferReleaseActivation && legacyEntry?.isSymbolicLink()) {
+    const legacy = await capturePackageReleaseSlot(legacySlot);
+    if (legacy.kind === "link" && legacy.target !== legacyTarget) {
+      await switchPackageReleaseLink({
+        slot: legacySlot,
+        expected: { identity: legacy.identity, target: legacy.target },
+        target: legacyTarget,
+        assertCurrent: () => {},
+      });
+    }
   }
   const collected = await collectGitReleases({
     prefix,

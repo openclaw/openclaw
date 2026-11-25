@@ -5,6 +5,7 @@ import {
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -16,7 +17,6 @@ import { composeSessionSourceAssertion } from "../config/sessions/session-source
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { captureCronJobSourceAuthority } from "../cron/active-jobs.js";
 import type { CronInferenceBinding } from "../cron/inference-binding.js";
 import {
   acquireCronInferenceAuthorization,
@@ -36,6 +36,7 @@ import type { CronServiceDeps } from "../cron/service/state.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { isAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { getPluginInstanceCodeIdentity } from "../plugins/plugin-code-identity.js";
 import { pluginCommandSupportsChannel } from "../plugins/plugin-command-metadata.js";
 import { listRegisteredPluginCommands } from "../plugins/plugin-command-registry.js";
@@ -49,7 +50,10 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
-import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
+import {
+  restoreScheduledAutomationOperator,
+  type RestoredGatewayOperatorAuthority,
+} from "./operator-run-recovery.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type ScheduledRequest = Parameters<CronServiceDeps["runIsolatedAgentJob"]>[0];
@@ -187,15 +191,8 @@ export async function runPluginCommandScheduledTurn(params: {
     const binding = resolvePluginCommandScheduleBinding(job, schedule);
     const context = params.resolveGatewayContext?.();
     const registry = params.resolvePluginRegistry?.();
-    const assertOccurrence = captureCronJobSourceAuthority(job.id);
     const fence = request.deliveryAttemptFence;
-    if (
-      !context ||
-      !registry ||
-      !assertOccurrence ||
-      !fence ||
-      params.agentId !== schedule.parent.agentId
-    ) {
+    if (!context || !registry || !fence || params.agentId !== schedule.parent.agentId) {
       throw new Error(
         "Scheduled plugin command requires its live Gateway occurrence and plugin registry.",
       );
@@ -212,14 +209,12 @@ export async function runPluginCommandScheduledTurn(params: {
         throw new Error("Scheduled plugin command occurrence closed.");
       }
       request.abortSignal?.throwIfAborted();
-      assertOccurrence();
       fence.assertCurrent();
       const current: CronStoredJob | undefined = context.cron.getJob(job.id);
       if (
         params.resolveGatewayContext?.() !== context ||
         context.resolveGatewayContext?.() !== context ||
         params.resolvePluginRegistry?.() !== registry ||
-        getConfig() !== configAtAdmission ||
         !current ||
         resolveCronRequesterExecutionRevision(current) !== revision ||
         !isDeepStrictEqual(current.pluginCommand, schedule) ||
@@ -260,7 +255,7 @@ export async function runPluginCommandScheduledTurn(params: {
       ],
       isActive: () => active && !request.abortSignal?.aborted,
     });
-    let restored: Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>> | undefined;
+    let restored: RestoredGatewayOperatorAuthority | undefined;
     let inference: Awaited<ReturnType<typeof acquireCronInferenceAuthorization>> | undefined;
     let modelLease: ReturnType<typeof bindOperatorModelExecution>;
     let admission: ReturnType<typeof prepareCronRunAdmission> | undefined;
@@ -288,7 +283,8 @@ export async function runPluginCommandScheduledTurn(params: {
       // Restoration owns the original operator source, not the invocation lifetime.
       // Every scheduled effect separately composes assertParent below; accepted children
       // retain the native operator lease without inheriting a closed occurrence callback.
-      restored = await restoreGatewayQueuedOperatorRecovery({
+      restored = await restoreScheduledAutomationOperator({
+        agentId: params.agentId,
         source: schedule.operatorSource,
         context,
         assertCurrent: () => {
@@ -302,19 +298,19 @@ export async function runPluginCommandScheduledTurn(params: {
       });
       assertParent();
       const operatorAuthority = restored.authority;
-      const assertCurrent = composeSessionSourceAssertion(
-        [assertParent, operatorAuthority.assertCurrent],
-        (assertSources) => {
-          assertSources();
-          inference?.assertCurrent();
-          modelLease?.assertCurrent();
-        },
-      );
+      const assertCurrent = composeSessionSourceAssertion([assertParent], (assertSources) => {
+        assertSources();
+        inference?.assertCurrent();
+        modelLease?.assertCurrent();
+      });
       assertCurrent();
       const model = resolveSessionModelRef(cfg, entry, schedule.parent.agentId);
       modelLease = bindOperatorModelExecution(operatorAuthority, model);
       assertCurrent();
       if (job.inferenceBinding) {
+        if (!model) {
+          throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+        }
         if (job.inferenceBinding.provider !== model.provider) {
           throw new Error("Scheduled plugin command provider route changed.");
         }
@@ -413,7 +409,7 @@ export async function runPluginCommandScheduledTurn(params: {
           assertTurn();
           admission = prepareCronRunAdmission({
             // The operator source was restored above, so its requester is current.
-            scheduledExecution: request.occurrence.mint({
+            scheduledExecution: await request.occurrence.mint({
               cfg,
               agentId: schedule.parent.agentId,
               runId,
@@ -598,10 +594,12 @@ export async function runPluginCommandScheduledTurn(params: {
       error: formatErrorMessage(error),
       ...(turnSignal?.aborted || params.request.abortSignal?.aborted || isAbortError(error)
         ? { errorClassification: { kind: "aborted" as const } }
-        : error instanceof PluginCommandScheduleInstanceReplacedError
-          ? // Settlement retires the schedule on this first refusal.
-            { errorClassification: { kind: "permanent" as const } }
-          : {}),
+        : isOperatorAuthorityUnavailable(error)
+          ? { errorClassification: { kind: "reason" as const, reason: "server_error" as const } }
+          : error instanceof PluginCommandScheduleInstanceReplacedError
+            ? // Settlement retires the schedule on this first refusal.
+              { errorClassification: { kind: "permanent" as const } }
+            : {}),
       executionStarted,
       delivered: false,
       deliveryAttempted: false,

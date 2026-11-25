@@ -305,6 +305,47 @@ suite.define(() => {
     },
   );
 
+  it("renders references the Gateway cannot open as plain text", async () => {
+    await withPage(async (page) => {
+      const remote = "~/crabbox-work/ocid-hidden/reset-profile.sh";
+      const local = "src/file.ts";
+      const gateway = await installMockGateway(page, {
+        workspace: "/workspace",
+        historyMessages: [
+          chatMessage("assistant", `Run \`${remote}\`, then edit \`${local}\`.`, { timestamp: 1 }),
+        ],
+        methodResponses: {
+          "sessions.files.stat": {
+            sessionKey,
+            files: [
+              { path: remote, status: "missing" },
+              { path: local, status: "file" },
+            ],
+          },
+          "sessions.files.get": textPreview(local, "export const local = true;\n"),
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const remoteText = page.locator(`.chat-thread span[data-file-path="${remote}"]`);
+      const localLink = page.locator(`.chat-thread a[data-file-path="${local}"]`);
+      await remoteText.waitFor({ state: "visible" });
+      await polledCount(page.locator(`.chat-thread a[data-file-path="${remote}"]`)).toBe(0);
+      const [stat] = await gateway.getRequests("sessions.files.stat");
+      expect(stat?.params).toMatchObject({
+        sessionKey,
+        files: [{ path: remote }, { path: local }],
+      });
+
+      await remoteText.click();
+      await localLink.click();
+      await gateway.waitForRequest("sessions.files.get");
+      await page.locator(".sidebar-file-view").waitFor({ state: "visible" });
+      expect((await gateway.getRequests("sessions.files.get")).map((r) => r.params)).toEqual([
+        fileRequest(local),
+      ]);
+    });
+  });
+
   it("preserves domain text and root-distinct file targets through click and keyboard", async () => {
     const files = [
       {

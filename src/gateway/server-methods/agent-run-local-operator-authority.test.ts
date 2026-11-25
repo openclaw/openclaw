@@ -14,10 +14,10 @@ import {
   consumeCronCreatorAuthorityGrant,
   mintCronCreatorAuthorityGrant,
 } from "../cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
-  retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
@@ -102,7 +102,6 @@ function createChatParams(overrides: Partial<ChatParams> = {}): ChatParams {
     hasExplicitOrigin: false,
     hasRestoredCronContinuation: false,
     isIncognito: false,
-    isReconnectResume: false,
     isSystemGenerated: false,
     turnKind: "main",
     isDirectExternalUser: true,
@@ -122,7 +121,7 @@ it.each([
 });
 
 it.each(["agent", "chat"] as const)(
-  "keeps %s creator grants bound to the original caller after request completion",
+  "keeps %s creator grants after the issuing device is revoked mid-run, until the run closes",
   async (entry) => {
     const context = {};
     const caller = captureGatewayDeviceRevocation(
@@ -131,44 +130,36 @@ it.each(["agent", "chat"] as const)(
       () => true,
     );
     const admission = expectDefined(
-      entry === "agent"
-        ? admitAgent({ isCurrent: caller.isCurrent })
-        : admitChat({ isCurrent: caller.isCurrent }),
+      entry === "agent" ? admitAgent() : admitChat(),
       "expected direct operator admission",
     );
-    const release = retainGatewayDeviceRevocation(admission.isCurrent);
-    caller.release();
     const capability = expectDefined(
       createCronCreatorAuthorityCapability(
         admission.runId,
         admission.callerOrigin,
         admission.managementEntitlement,
-        admission.isCurrent,
       ),
       "expected creator capability",
     );
+    let unspent: CronCreatorAuthorityGrant | undefined;
     try {
       await runWithCronCreatorAuthorityCapability(capability, async () => {
         const grant = mintCronCreatorAuthorityGrant(capability);
         invalidateGatewayDeviceRevocation(context, "original-device", "operator");
-        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
-          "cron authority is no longer active",
-        );
+        expect(consumeCronCreatorAuthorityGrant(grant).assertCurrent).not.toThrow();
+        unspent = mintCronCreatorAuthorityGrant(capability);
       });
     } finally {
       caller.release();
-      release?.();
     }
+    expect(() => consumeCronCreatorAuthorityGrant(unspent!)).toThrow("cron access has ended");
   },
 );
 
-it.each([
-  ["Incognito", { isIncognito: true }],
-  ["fresh message after reconnect", { isReconnectResume: true }],
-] as const)("keeps %s dashboard input separate from cron authority", (_label, mode) => {
+it("keeps Incognito dashboard input separate from cron authority", () => {
   const params = createChatParams({
     client: createClient({ isLocalClient: undefined, controlUiAdmin: true }),
-    ...mode,
+    isIncognito: true,
   });
   expect(isDirectGatewayChatUserTurn(params)).toBe(true);
   expect(resolveGatewayChatCronCreatorAuthorityAdmission(params)).toBeUndefined();
@@ -181,7 +172,6 @@ it.each([
   ["non-WebChat client", { client: createClient() }],
   ["supervised child", { isUncontrolledDashboardChild: false }],
   ["internal input", { isSystemGenerated: true }],
-  ["resumed input", { isReconnectResume: true }],
   ["incognito", { isIncognito: true }],
 ] as const)("keeps %s outside the dashboard handoff exception", (_label, overrides) => {
   const params = createChatParams({
@@ -224,7 +214,6 @@ it.each([true, undefined] as const)(
     client.internal!.authenticatedOperator = undefined;
     expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
     client.internal!.authenticatedOperator = true;
-    expect(admitChat({ client, isReconnectResume: true })).toBeUndefined();
     expect(admitChat({ client, isSystemGenerated: true })).toBeUndefined();
     client.connect.client.mode = "node";
     expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
@@ -255,7 +244,6 @@ it.each(["operator.read", "operator.sessions.write"])(
 
 it.each([
   ["channel-origin turn", { hasExplicitOrigin: true }],
-  ["reconnect", { isReconnectResume: true }],
   ["spawned turn", { spawnedBy: "agent:main:parent" }],
   ["cron continuation", { hasRestoredCronContinuation: true }],
   ["internal entry", { isDirectExternalUser: false }],
@@ -268,7 +256,6 @@ it.each([
 it.each([
   ["internal re-entry", { isDirectExternalUser: false }],
   ["explicit origin", { hasExplicitOrigin: true }],
-  ["reconnect", { isReconnectResume: true }],
   ["system-generated", { isSystemGenerated: true }],
   ["BTW turn", { turnKind: "btw" }],
   ["incognito", { isIncognito: true }],

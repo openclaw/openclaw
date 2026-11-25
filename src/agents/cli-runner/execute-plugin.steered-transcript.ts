@@ -2,9 +2,11 @@ import {
   MessageInjectionAcceptedUnconfirmedError,
   withMessageInjectionAdmission,
 } from "../../auto-reply/reply/message-injection-authority.js";
-import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { labelRuntimeContextText } from "../../llm/types.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../../media/media-facts.js";
+import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import type {
   CliBackendMessageInjection,
   CliBackendPromptContext,
@@ -15,8 +17,8 @@ import type {
   ReplyBackendQueueMessageOptions,
   ReplyBackendQueueMessageResult,
 } from "../../sessions/session-controller.contracts.js";
-import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
+import { loadCliPromptImages } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import { readCliPromptContext, toCliModelRequestPayload } from "./model-request-hook.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -25,10 +27,10 @@ import type { PreparedCliRunContext } from "./types.js";
 export function createSteeredCliMessageInjection(params: {
   getInjection: () => CliBackendMessageInjection | undefined;
   signal: AbortSignal;
-  assertCurrent: SessionSourceAssertion;
-  /** Owning run: its working directory and before_model_request gate. */
+  /** Owning run: its working directory, media roots, and before_model_request gate. */
   context: {
-    params: Pick<PreparedCliRunContext["params"], "cwd" | "workspaceDir">;
+    params: Pick<PreparedCliRunContext["params"], "cwd" | "workspaceDir" | "config" | "agentId">;
+    backendResolved: Pick<PreparedCliRunContext["backendResolved"], "id">;
     beforeModelRequest?: PreparedCliRunContext["beforeModelRequest"];
   };
   /** Native owns the steered input; tool tracking starts a new input's reply state. */
@@ -52,6 +54,21 @@ export function createSteeredCliMessageInjection(params: {
     const recorder = options?.userTurnTranscriptRecorder;
     try {
       const message = await recorder?.resolveMessage();
+      // Same hydration as the turn's first prompt; admission already required acceptsImages.
+      const images = hasPromptImageInput(options)
+        ? await loadCliPromptImages({
+            prompt: text,
+            workspaceDir: params.context.params.workspaceDir,
+            localRoots: getAgentScopedMediaLocalRoots(
+              params.context.params.config ?? {},
+              params.context.params.agentId,
+            ),
+            images: options?.images,
+            imageOrder: options?.imageOrder,
+            media: options?.media,
+            userTurnTranscriptRecorder: recorder,
+          })
+        : [];
       const context = options?.currentInboundContext;
       let steeredText = text;
       let promptContext: CliBackendPromptContext | undefined = context
@@ -72,20 +89,17 @@ export function createSteeredCliMessageInjection(params: {
         steeredText = request.prompt;
         promptContext = readCliPromptContext(request);
       }
-      await injection.queueMessage(
+      const nativeInput = await injection.queueMessage(
         steeredText,
         async (submit) => {
           let submitted = false;
           try {
-            await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
-              await withMessageInjectionAdmission(prepareCurrent, () => {
-                // The same worker-backed admission owns source checks and native stdin.
-                assertInjectionCurrent();
-                params.assertCurrent();
-                submit();
-                submitted = true;
-                params.onInputSubmitted?.();
-              });
+            await withMessageInjectionAdmission(prepareCurrent, () => {
+              // The same worker-backed admission owns source checks and native stdin.
+              assertInjectionCurrent();
+              submit();
+              submitted = true;
+              params.onInputSubmitted?.();
             });
           } catch (cause) {
             // Outer source cleanup can fail after native owns input, just like admission cleanup.
@@ -100,6 +114,7 @@ export function createSteeredCliMessageInjection(params: {
             ? { promptOrigin: "host" as const }
             : {}),
           ...(promptContext ? { promptContext } : {}),
+          ...(images.length > 0 ? { images } : {}),
         },
       );
       accepted = true;
@@ -115,6 +130,18 @@ export function createSteeredCliMessageInjection(params: {
             errorMessage: "steered CLI user turn transcript commitment could not be confirmed",
           };
         }
+      }
+      if (
+        nativeInput &&
+        recorder?.hasPersisted() &&
+        message &&
+        readPersistedMediaFacts(message)?.some(isMeaningfulMediaFact)
+      ) {
+        options?.onNativeInputCommitted?.({
+          importedFrom: params.context.backendResolved.id,
+          cliSessionId: nativeInput.cliSessionId,
+          externalId: nativeInput.externalId,
+        });
       }
     } catch (error) {
       failure = toErrorObject(error, "CLI steering failed.");

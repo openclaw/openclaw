@@ -256,6 +256,130 @@ exit 0
     return result;
   }
 
+  // 2026.11.10-beta.1 shipped whitespace-minified chunks; the declaration-at-line-start
+  // search found no refresh there and failed every publish from 2026-11-19.
+  const V3_READER = "function validateAndSanitizeRemoteModelCatalogBundleV3(e){return e}";
+  const MINIFIED_CHUNK = `const t=1;${V3_READER}async function refreshRemoteModelCatalog(e){return{status:\`updated\`,models:1}}function captureRuntimeConfigAsyncReader(){return async()=>({})}export{refreshRemoteModelCatalog as n,captureRuntimeConfigAsyncReader as r,t};`;
+  const CONFIG_ENTRY = "export function captureRuntimeConfigAsyncReader(){return async()=>({})}";
+  // Plugin loading dials the release's native resource broker at /tmp/oc-br-*/resource.sock;
+  // redirected to the fake upstream, it read HTTP bytes as a frame length and no plugin loaded.
+  const BROKER_SOCKET_REFRESH = `import fs from "node:fs"; import net from "node:net";
+export async function refreshRemoteModelCatalog() {
+  const dir = fs.mkdtempSync("/tmp/oc-br-");
+  const endpoint = dir + "/resource.sock";
+  const broker = net.createServer((socket) => socket.on("data", (data) => socket.end("echo " + data)));
+  await new Promise((resolve) => broker.listen(endpoint, resolve));
+  const reply = await new Promise((resolve, reject) => {
+    let text = "";
+    net.connect(endpoint).on("data", (chunk) => (text += chunk)).on("end", () => resolve(text)).on("error", reject).end("ping");
+  });
+  broker.close();
+  fs.rmSync(dir, { recursive: true });
+  if (reply !== "echo ping") throw new Error("broker socket reply: " + reply);
+  return { status: "updated", models: 1 };
+}`;
+  // A released PluginLoadFailureError carries its plugin registry; Node's dump of it filled
+  // the reported log tail and hid the message.
+  const REGISTRY_ERROR_REFRESH = `export async function refreshRemoteModelCatalog() {
+  const plugins = Array.from({ length: 40 }, (_, index) => ({ id: "plugin-" + index, status: "error", error: "AggregateError: Native resource creation cleanup failed" }));
+  throw Object.assign(new Error("plugin load failed", { cause: new Error("first real error") }), { registry: { plugins } });
+}`;
+  it.each([
+    ["runs a whitespace-minified release's refresh", { "chunk-a1.mjs": MINIFIED_CHUNK }, undefined],
+    [
+      "runs the refresh from its stable entry",
+      {
+        "chunk-a1.mjs": V3_READER,
+        "model-catalog/remote-refresh.js":
+          "export async function refreshRemoteModelCatalog(){return{status:'updated',models:1}}",
+        "config/config.js": CONFIG_ENTRY,
+      },
+      undefined,
+    ],
+    [
+      "lets the release reach its own native resource broker socket",
+      {
+        "chunk-a1.mjs": V3_READER,
+        "model-catalog/remote-refresh.js": BROKER_SOCKET_REFRESH,
+        "config/config.js": CONFIG_ENTRY,
+      },
+      undefined,
+    ],
+    [
+      "reports a reader failure by its message and causes, not its properties",
+      {
+        "chunk-a1.mjs": V3_READER,
+        "model-catalog/remote-refresh.js": REGISTRY_ERROR_REFRESH,
+        "config/config.js": CONFIG_ENTRY,
+      },
+      /Error: plugin load failed\n[\s\S]*\[cause\] Error: first real error/,
+    ],
+    [
+      "fails a v3 reader whose stable entry lost the refresh",
+      { "chunk-a1.mjs": MINIFIED_CHUNK, "model-catalog/remote-refresh.js": "export {}" },
+      "remote-refresh.js does not export refreshRemoteModelCatalog",
+    ],
+    [
+      "fails a v3 reader without a runnable refresh",
+      { "chunk-a1.mjs": V3_READER },
+      "released reader entry point not found",
+    ],
+  ])("%s", (_name, files: Record<string, string>, expectedError) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "catalog-reader-test-")));
+    try {
+      const release = path.join(root, "release");
+      for (const [file, source] of Object.entries({
+        "package.json": '{"version":"2099.1.1"}',
+        "dist/listing.mjs": '"official-external-provider-catalog.json"',
+        "dist/plugin-sdk/llm.js": "export function streamSimple(){}",
+        ...Object.fromEntries(Object.entries(files).map(([name, text]) => [`dist/${name}`, text])),
+      })) {
+        fs.mkdirSync(path.dirname(path.join(release, file)), { recursive: true });
+        fs.writeFileSync(path.join(release, file), source);
+      }
+      const bin = path.join(root, "bin");
+      fs.mkdirSync(bin);
+      fs.mkdirSync(path.join(root, "tmp"));
+      fs.writeFileSync(
+        path.join(bin, "npm"),
+        `#!/bin/sh\n[ "$1" = install ] && mkdir -p node_modules/openclaw && cp -R '${release}/.' node_modules/openclaw/\nexit 0\n`,
+        { mode: 0o755 },
+      );
+      const bundle = path.join(root, "bundle.json");
+      fs.writeFileSync(bundle, JSON.stringify({ schemaVersion: 3, models: [{}] }));
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/catalog-compare-released.mts",
+          "--check",
+          "--candidate",
+          bundle,
+          "--releases",
+          "2099.1.1",
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: `${bin}:${process.env.PATH ?? ""}`,
+            HOME: root,
+            OPENCLAW_HOME: root,
+            OPENCLAW_STATE_DIR: path.join(root, "state"),
+            TMPDIR: path.join(root, "tmp"),
+          },
+        },
+      );
+      if (expectedError) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toMatch(expectedError);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout.trim()).toBe("v3 on openclaw@2099.1.1: updated, 1/1 rows");
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("skips releases without a reader for the candidate's wire version, by name", () => {
     const result = runCheck(3, ["--releases", "2099.1.1"]);
     expect(result.status, result.stderr).toBe(0);

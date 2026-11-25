@@ -357,7 +357,7 @@ it.each(process.platform === "win32" ? [true] : [false, true])(
       approvalReviews: [
         { id: "guardian:tool-guardian-script", label: "Guardian", status: "approved" },
       ],
-      aggregated: mutate ? expect.stringContaining(output) : "approved\nscript.sh",
+      aggregated: mutate ? expect.stringContaining(output) : "approved\nscript.sh\n",
     });
   },
 );

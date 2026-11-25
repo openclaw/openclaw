@@ -348,13 +348,10 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   margin: 16px auto;
 }
 
-.template-publish-card,
-.agents-home__template-card {
+.template-publish-card {
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-}
-.template-publish-card {
   display: grid;
   gap: 14px;
   width: 600px;
@@ -412,13 +409,14 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
 .template-package-row small,
 .template-preview header h2,
 .template-preview .settings-row__desc,
-.template-creator--detail h2,
-.agents-home__template-identity h3 {
+.template-plugin-name,
+.template-creator--detail h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.template-preview .settings-row__desc {
+.template-preview .settings-row__desc,
+.template-plugin-name {
   display: block;
 }
 
@@ -519,72 +517,101 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   }
 }
 
-.agents-home__template-card {
-  position: relative;
-  padding: 12px;
-  background: var(--bg-elevated);
+/* Catalog rows share the Plugins row; the Template's artwork fills its tile. */
+.agents-home__template-card-link:disabled {
+  cursor: default;
+}
+/* Keep the publisher visible beside Add. Move it below the name when the two don't fit. */
+.agents-home__explore.plugin-catalog-results--rows .agents-home__template-identity {
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  line-height: calc(20px * var(--control-ui-text-scale));
+
+  .agents-home__template-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+  }
+
+  h3,
+  .plugin-card-author {
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .plugin-card-author {
+    flex: none;
+    max-width: 100%;
+    margin-left: 0;
+    font-size: calc(12.5px * var(--control-ui-text-scale));
+  }
+}
+
+.agents-home__template-art {
+  --glyph-size: 22px;
+}
+
+/* Template page: the artwork sits on a tonal tile, the soul reads as its personality. */
+openclaw-templates-detail-view .plugin-catalog-detail--rail .plugin-catalog-detail__icon {
+  padding: 5px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  box-shadow: none;
+  color: var(--accent);
+  & > svg {
+    width: 60%;
+    height: 60%;
+    margin: auto;
+  }
+}
+
+/* The Add action stays beside the name, as on wide screens. */
+openclaw-templates-detail-view .plugin-catalog-detail--rail .plugin-catalog-detail__actions {
+  flex: none;
+}
+/* Rows that only have a name sit centred on their tile. */
+openclaw-templates-detail-view .plugin-capabilities .settings-row__text {
+  align-self: center;
+}
+
+/* The excerpt is plain text without its headings: a short preview reads better than a long one. */
+.templates-personality {
+  --plugin-readme-clamp: 96px;
+}
+
+.templates-personality__label {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-
-  & > button {
-    z-index: 1;
-    &:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: -3px;
-    }
-    &:disabled {
-      cursor: default;
-    }
-  }
-  & > header {
-    position: relative;
-    z-index: 2;
-    grid-template-columns: 64px minmax(0, 1fr) 60px;
-    pointer-events: none;
-    & .btn {
-      justify-self: end;
-      pointer-events: auto;
-    }
-    & > span {
-      --art-size: 64px;
-    }
-    & > div {
-      gap: 6px;
-    }
-  }
-  & h3 {
-    min-width: 0;
-    margin: 0;
-    font-size: 15px;
-  }
-  & h3 + span {
-    max-width: 40%;
-    font-size: 12px;
-    line-height: inherit;
-  }
-}
-.agents-home__template-card .plugin-card-title-row {
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  height: 20px;
-  line-height: 20px;
+  margin-bottom: 10px;
 }
-
-.agents-home__template-card .installed-plugins-card__summary {
-  font-size: 13px;
-}
-
-.agents-home__explore .plugin-catalog-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  @media (max-width: 900px) {
-    grid-template-columns: minmax(0, 1fr);
+.templates-personality__file {
+  position: relative;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: calc(7px * var(--openclaw-corner-radius-scale));
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  color: var(--muted-strong);
+  font: 11.5px/1.4 var(--mono);
+  cursor: var(--cursor-action);
+  &:hover {
+    background: color-mix(in srgb, var(--text) 9%, transparent);
+    color: var(--text);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 }
-
-openclaw-templates-detail-view .plugin-catalog-detail__icon {
-  background: transparent;
-  border-radius: 0;
+.templates-personality__text {
+  margin: 0;
+  max-width: 680px;
+  color: var(--text);
+  font-size: 14.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 /* Featured, search results and loading placeholders have no "View all" action;
@@ -596,7 +623,7 @@ openclaw-templates-detail-view .plugin-catalog-detail__icon {
 .agents-home__template-error {
   position: relative;
   z-index: 2;
-  margin: 0;
+  margin: 0 0 0 54px;
   overflow-wrap: anywhere;
   color: var(--danger);
   font-size: 13px;
@@ -647,5 +674,80 @@ openclaw-templates-detail-view .plugin-catalog-detail__icon {
     margin: 16px 0;
     font-size: 14px;
     line-height: 1.6;
+  }
+}
+
+/* Phone: five lines of the personality preview; small text controls keep a finger-sized target. */
+@container (max-width: 560px) {
+  .templates-personality {
+    --plugin-readme-clamp: 120px;
+  }
+
+  .templates-personality__file::after {
+    position: absolute;
+    inset: -7px -4px;
+    content: "";
+  }
+
+  .plugin-catalog-detail--rail .templates-trust-warning a {
+    display: inline-block;
+    margin-block: -7px;
+    padding-block: 7px;
+  }
+}
+
+/* An automation's prompt opens under its row: the row's text column and description type. */
+openclaw-templates-detail-view .plugin-capability__details > .template-automation-message {
+  margin: -6px 28px 0 46px;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* The whole soul reads as the plugin page's Readme does; status lines sit under the excerpt. */
+.templates-personality__markdown {
+  max-width: 680px;
+  font-size: 14.5px;
+  line-height: 1.65;
+  & > :first-child {
+    margin-top: 0;
+  }
+}
+/* Headings inside the soul stay at reading size: no page-title type, no rules. */
+.templates-personality__markdown.sidebar-markdown h1,
+.templates-personality__markdown.sidebar-markdown h2,
+.templates-personality__markdown.sidebar-markdown h3,
+.templates-personality__markdown.sidebar-markdown h4,
+.templates-personality__markdown.sidebar-markdown h5,
+.templates-personality__markdown.sidebar-markdown h6 {
+  margin: 18px 0 6px;
+  padding: 0;
+  border: 0;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.templates-personality__markdown.sidebar-markdown h1 {
+  font-size: 16px;
+}
+.templates-personality__markdown.sidebar-markdown .lit-content > :first-child {
+  margin-top: 0;
+}
+.templates-personality__markdown.sidebar-markdown li {
+  font-size: inherit;
+  line-height: inherit;
+}
+.templates-personality__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@container (max-width: 560px) {
+  openclaw-templates-detail-view .plugin-capability__details > .template-automation-message {
+    margin: -6px 26px 0 42px;
   }
 }

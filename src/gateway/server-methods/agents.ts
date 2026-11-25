@@ -50,7 +50,7 @@ import {
   authorizeCurrentOperatorRoleScopes,
   resolveOperatorRolePolicy,
 } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { PreparedGatewayModelCatalog } from "../server-model-catalog.types.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "../server-reload-agent-databases.js";
 import { resolveAttendedSessionPermissionDefault } from "../session-create-permission-default.js";
@@ -81,6 +81,7 @@ import {
   startAgentOnboardingConversation,
   type PreparedAgentOnboarding,
 } from "./agents-onboarding.js";
+import { dispatchableWorkerProfileIds, listWorkerProfiles } from "./environments.profiles.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
@@ -220,29 +221,37 @@ export const agentsHandlers: GatewayRequestHandlers = {
         params.includeSessionPlacement === true
           ? {
               ...result,
-              sessionPlacement: required
-                ? {
-                    requiredProfile: {
-                      id: required,
-                      ...(profile
-                        ? {
-                            providerId: profile.provider,
-                            executionModes:
-                              context.workerEnvironmentService?.supportsExecutionMode(
-                                required,
-                                "worker-turn",
-                              ) === true
-                                ? ["worker-turn" as const]
-                                : [],
-                            ...workerInferenceMetadata({
+              sessionPlacement: {
+                ...(dispatchableWorkerProfileIds(listWorkerProfiles(context), {
+                  context,
+                  client,
+                }).some((id) => !required || id === required)
+                  ? { hasDispatchableCloudProfile: true as const }
+                  : {}),
+                ...(required
+                  ? {
+                      requiredProfile: {
+                        id: required,
+                        ...(profile
+                          ? {
                               providerId: profile.provider,
-                              profileSnapshot: profile,
-                            }),
-                          }
-                        : {}),
-                    },
-                  }
-                : {},
+                              executionModes:
+                                context.workerEnvironmentService?.supportsExecutionMode(
+                                  required,
+                                  "worker-turn",
+                                ) === true
+                                  ? ["worker-turn" as const]
+                                  : [],
+                              ...workerInferenceMetadata({
+                                providerId: profile.provider,
+                                profileSnapshot: profile,
+                              }),
+                            }
+                          : {}),
+                      },
+                    }
+                  : {}),
+              },
             }
           : result;
       respond(
@@ -368,11 +377,11 @@ export const agentsHandlers: GatewayRequestHandlers = {
           : await completeAgentOnboarding(options, result.agentId)
         : undefined;
       let onboardingOperatorAuthority:
-        | Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
+        | Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>
         | undefined;
       if (onboarding?.status === "completed" && client) {
         try {
-          onboardingOperatorAuthority = await captureGatewayOperatorRunAuthority({
+          onboardingOperatorAuthority = await prepareGatewayOperatorRunAuthority({
             client,
             context,
             hasCurrentClientAuthority: options.hasCurrentClientAuthority,

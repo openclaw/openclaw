@@ -9,7 +9,7 @@ import {
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
-import { captureGatewayToolCallerAssertion } from "../../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -48,7 +48,7 @@ import { isGatewayAdmin, SessionMutationAuthorizationChangedError } from "../ses
 import type { SessionSubscribePhase } from "../slow-request-diagnostics.js";
 import { gatewayRouterUploadPolicyError } from "./core-handlers.js";
 import { authorizeAuthenticatedProfileForMethod } from "./gateway-client-identity.js";
-import { authorizeGatewayMethod, authorizeGatewayMethodScopes } from "./method-authorization.js";
+import { authorizeGatewayMethod } from "./method-authorization.js";
 import {
   prepareStartupReadAgents,
   prepareStartupStoreAgents,
@@ -144,14 +144,8 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       return null;
     }
     // Admitted runs can use their tools while startup retains external input admission.
-    try {
-      const assertCallerCurrent = captureGatewayToolCallerAssertion(params.method);
-      if (assertCallerCurrent) {
-        assertCallerCurrent();
-        return null;
-      }
-    } catch {
-      return errorShape(ErrorCodes.FORBIDDEN, "agent tool caller authority is no longer active");
+    if (getGatewayToolCallerIdentity()?.operationalRunInstance) {
+      return null;
     }
     return !(
       params.method === "chat.send" &&
@@ -180,9 +174,13 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
         resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0 ||
         (sessionMutationTargetFields(params.method).length > 0 &&
-          isNamedOperatorRoleEnforcementEnabled(
+          (isNamedOperatorRoleEnforcementEnabled(
             (params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig)(),
-          )),
+          ) ||
+            Boolean(
+              params.context.getRuntimeConfig().gateway?.openclawId?.enabled &&
+              params.context.getRuntimeConfig().gateway?.roles,
+            ))),
     });
     if (profileError) {
       return { error: profileError };
@@ -399,22 +397,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       if (authorizationError) {
         release?.();
         return authorizationError;
-      }
-      // Profile/catalog preparation must not switch the admitted dispatch ceiling.
-      const client = params.client;
-      if (client) {
-        const currentScope = withPluginRuntimeRegistryScope(pluginRegistry, () =>
-          authorizeGatewayMethodScopes(
-            params.method,
-            client.connect.scopes ?? [],
-            params.requestParams,
-            params.methodRegistry,
-          ),
-        );
-        if (currentScope.allowed && currentScope.sessionScope !== scopeAuthorization.sessionScope) {
-          release?.();
-          return errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed");
-        }
       }
       try {
         params.expectedProfileBinding?.assertCurrent();

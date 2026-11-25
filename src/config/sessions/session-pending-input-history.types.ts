@@ -10,6 +10,7 @@ export type PendingInputHistoryQuery = {
   /** Replay only durable queued inputs that have no current process scheduler. */
   queuedOnly?: true;
   liveInputIds?: readonly string[];
+  audience?: import("./session-pending-input-audience.js").PendingInputAudience;
 };
 export type PendingInputHistorySnapshot = {
   rows: SessionPendingInputRow[];
