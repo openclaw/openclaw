@@ -241,7 +241,8 @@ enum ChatComposerPasteSupport {
                       !data.isEmpty
                 else { continue }
                 let fileExtension = type.preferredFilenameExtension ?? "img"
-                return (data: data, fileName: "pasted-image-\(index + 1).\(fileExtension)", mimeType: mimeType)
+                let fileName = "\(OpenClawChatGeneratedAttachmentName.pasted(index: index)).\(fileExtension)"
+                return (data: data, fileName: fileName, mimeType: mimeType)
             }
             return nil
         }

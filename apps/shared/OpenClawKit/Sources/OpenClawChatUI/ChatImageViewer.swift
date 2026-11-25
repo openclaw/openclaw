@@ -13,7 +13,7 @@ struct ChatImageViewerItem: Equatable {
     let artifactId: String
     /// VoiceOver label: the alt text, else the file name.
     let label: String
-    /// Shown in the viewer's bar: the file name, when the message has one.
+    /// Shown in the viewer's bar: the file name, when the message has one the person chose.
     let title: String?
     /// The original's pixel size from the message, when the Gateway sent it.
     let pixelSize: CGSize?
@@ -44,7 +44,9 @@ struct ChatImageViewerItem: Equatable {
                 // A sent photo's name is the picker's ("photo-1A2B.jpg"), not something to read aloud.
                 label: alt ?? (isSentPhoto ? String(localized: "Photo") : fileName ?? String(localized: "Attachment")),
                 // Agent replies carry the file name as alt text ("chart.png"); a description is not a name.
-                title: fileName ?? alt.flatMap { Self.looksLikeFileName($0) ? $0 : nil },
+                // A name the app made up for a sent photo names nothing, so the bar shows none.
+                title: (fileName ?? alt.flatMap { Self.looksLikeFileName($0) ? $0 : nil })
+                    .flatMap { isSentPhoto && OpenClawChatGeneratedAttachmentName.isGenerated($0) ? nil : $0 },
                 pixelSize: pixelSize)
         }
     }

@@ -1507,7 +1507,7 @@ extension OpenClawChatComposer {
         else { return }
         self.cancelActiveCameraEncoding()
         let sendableImage = OpenClawSendableCameraImage(value: image)
-        let fileName = "camera-\(UUID().uuidString.prefix(8)).jpg"
+        let fileName = "\(OpenClawChatGeneratedAttachmentName.picked(.camera)).jpg"
         let viewModel = owner.viewModel
         let session = owner.session
         // The photo is already in hand, so its tile shows it dimmed under the spinner while it encodes.
@@ -1580,7 +1580,7 @@ extension OpenClawChatComposer {
                 $0.conforms(to: .movie) || $0.conforms(to: .image)
             }) ?? item.supportedContentTypes.first ?? .image
             let metadata = OpenClawChatPickerAttachmentMetadata.resolve(contentType: type)
-            let baseName = "\(type.conforms(to: .movie) ? "video" : "photo")-\(UUID().uuidString.prefix(8))"
+            let baseName = OpenClawChatGeneratedAttachmentName.picked(type.conforms(to: .movie) ? .video : .photo)
             let preparation = viewModel.beginAttachmentPreparation(
                 fileName: "\(baseName).\(metadata.fileExtension)",
                 mimeType: metadata.mimeType)

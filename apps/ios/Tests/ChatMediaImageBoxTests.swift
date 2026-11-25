@@ -57,17 +57,27 @@ struct ChatMediaImageBoxTests {
     }
 
     @Test func `a user's sent photos page together in the viewer and read as Photo`() {
-        let photos = (1...3).map { index in
+        // Two names the app made up at pick time, and one the person chose.
+        let names = [
+            OpenClawChatGeneratedAttachmentName.picked(.photo) + ".jpg",
+            OpenClawChatGeneratedAttachmentName.pasted(index: 0) + ".png",
+            "photo-beach.jpg",
+        ]
+        let photos = names.enumerated().map { index, name in
             OpenClawChatMessageContent(
                 type: "image",
                 mimeType: "image/jpeg",
-                fileName: "photo-\(index).jpg",
-                url: "media://inbound/photo-\(index)---a1.jpg")
+                fileName: name,
+                url: "media://inbound/photo-\(index + 1)---a1.jpg")
         }
         let file = OpenClawChatMessageContent(type: "file", mimeType: "application/pdf", fileName: "notes.pdf")
         let gallery = ChatImageViewerItem.gallery(in: photos + [file], sentPhotos: true)
         #expect(gallery.map(\.artifactId) == photos.compactMap(\.url))
         #expect(gallery.allSatisfy { $0.label == "Photo" })
+        #expect(gallery.map(\.title) == [nil, nil, "photo-beach.jpg"])
+        // Processing sends a HEIC pick as JPEG; the made-up base name still counts.
+        #expect(OpenClawChatGeneratedAttachmentName.isGenerated("photo-1A2B3C4D.heic"))
+        #expect(!OpenClawChatGeneratedAttachmentName.isGenerated("photo-1a2b3c4d.jpg"))
         #expect(ChatImageViewerItem.viewerItems(gallery, opening: "media://inbound/photo-2---a1.jpg", label: "x")
             .count == 3)
         // An agent's message keeps the managed-artifact rule.
