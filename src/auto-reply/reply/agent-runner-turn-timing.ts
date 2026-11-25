@@ -1,6 +1,6 @@
 import type { EmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { createReplyTimingTracker } from "./reply-timing-tracker.js";
+import { createReplyTimingTracker, REPLY_PROFILER_STAGE_WARN_MS } from "./reply-timing-tracker.js";
 
 type AgentTurnLogContext = {
   runId: string;
@@ -16,6 +16,21 @@ type AgentTurnLogParams = AgentTurnTerminalLogParams | AgentTurnMilestoneLogPara
 
 const agentTurnTimingLog = createSubsystemLogger("auto-reply/agent-turn-timing");
 
+function hasSlowProfilingStage(details: Record<string, unknown> | undefined): boolean {
+  const spans = details?.spans;
+  return (
+    Array.isArray(spans) &&
+    spans.some(
+      (stage) =>
+        typeof stage === "object" &&
+        stage !== null &&
+        "durationMs" in stage &&
+        typeof stage.durationMs === "number" &&
+        stage.durationMs >= REPLY_PROFILER_STAGE_WARN_MS,
+    )
+  );
+}
+
 export function createAgentTurnTimingTracker(options: { profilerEnabled?: boolean } = {}) {
   const observedExecutionPhases = new Set<EmbeddedAgentExecutionPhase>();
   const timing = createReplyTimingTracker<AgentTurnLogParams>({
@@ -24,8 +39,14 @@ export function createAgentTurnTimingTracker(options: { profilerEnabled?: boolea
         const isOutputMilestone =
           details?.milestone === "assistant_output_started" ||
           details?.milestone === "tool_execution_started";
-        // Provider and tool latency is useful context, not a startup warning.
-        if (isOutputMilestone && !options.profilerEnabled) {
+        // Completed turns and provider/tool latency are context, not warnings;
+        // a completed turn still warns when one stage crosses the profiling threshold.
+        const isQuietCompletedTurn =
+          details !== undefined &&
+          details.outcome === "completed" &&
+          !details.error &&
+          !hasSlowProfilingStage(details);
+        if (isQuietCompletedTurn || (isOutputMilestone && !options.profilerEnabled)) {
           agentTurnTimingLog.info(message, details);
         } else {
           agentTurnTimingLog.warn(message, details);
@@ -66,8 +87,8 @@ export function createAgentTurnTimingTracker(options: { profilerEnabled?: boolea
     measure: timing.measure,
     measureSync: timing.measureSync,
     logIfSlow(params: AgentTurnTerminalLogParams) {
-      // The terminal duration includes inference and tools; default warnings
-      // belong to the preparation and first-activity milestones below.
+      // The terminal duration includes inference and tools; only failed turns
+      // warn, while completed timings stay informational.
       if (!options.profilerEnabled) {
         return;
       }

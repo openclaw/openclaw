@@ -50,6 +50,67 @@ it.each([
   );
 });
 
+it.each([
+  {
+    label: "completed",
+    outcome: "completed" as const,
+    error: undefined,
+    stageMs: undefined,
+    level: "info" as const,
+  },
+  {
+    label: "completed with error",
+    outcome: "completed" as const,
+    error: "degraded",
+    stageMs: undefined,
+    level: "warn" as const,
+  },
+  {
+    label: "completed with slow stage",
+    outcome: "completed" as const,
+    error: undefined,
+    stageMs: 600,
+    level: "warn" as const,
+  },
+  {
+    label: "failed",
+    outcome: "error" as const,
+    error: "boom",
+    stageMs: undefined,
+    level: "warn" as const,
+  },
+])("logs profiling $label turn timings at $level", ({ outcome, error, stageMs, level }) => {
+  const tracker = createAgentTurnTimingTracker({ profilerEnabled: true });
+  if (stageMs === undefined) {
+    advance(1_500);
+  } else {
+    tracker.measureSync("prepare", () => advance(stageMs));
+  }
+  tracker.logIfSlow({
+    ...identity,
+    outcome,
+    ...(error ? { error } : {}),
+  });
+
+  const expected = {
+    message: expect.stringContaining(`outcome=${outcome}`),
+    details: {
+      ...identity,
+      outcome,
+      ...(error ? { error } : {}),
+      totalMs: stageMs ?? 1_500,
+      spans: stageMs === undefined ? [] : [span("prepare", stageMs)],
+    },
+  };
+  if (level === "info") {
+    expect(subsystemInfo).toHaveBeenCalledExactlyOnceWith(expected.message, expected.details);
+    expect(subsystemWarn).not.toHaveBeenCalled();
+  } else {
+    expect(subsystemWarn).toHaveBeenCalledExactlyOnceWith(expected.message, expected.details);
+    expect(subsystemInfo).not.toHaveBeenCalled();
+  }
+});
+
 it("keeps agent milestones repeatable without reopening the terminal log", () => {
   vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(1_500);
   const tracker = createAgentTurnTimingTracker({ profilerEnabled: true });
