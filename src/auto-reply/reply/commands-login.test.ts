@@ -445,7 +445,7 @@ it("cancels an expired flow before replacing its reservation", async () => {
         });
       });
     })
-    .mockResolvedValueOnce({ ...loginResult(), profiles: [] });
+    .mockResolvedValueOnce({ ...loginResult(), profiles: [], stagedRuntimePolicy: true });
 
   const first = runLogin();
   await vi.waitFor(() => expect(firstSignal).toBeDefined());
@@ -457,8 +457,8 @@ it("cancels an expired flow before replacing its reservation", async () => {
   expect(await first).toEqual(
     stoppedReply("OpenAI login did not complete. Send `/login openai/openai` to try again."),
   );
-  expect(second?.reply?.text).toBe(
-    "OpenAI login complete. This chat kept its previous account. Send /models to review the available models.",
-  );
+  // The replacement flow returns no profiles (harness-owned sign-in), so the
+  // completion must not claim an account switch failed.
+  expect(second?.reply?.text).toBe("OpenAI login complete. Try your request again now.");
   now.mockRestore();
 });

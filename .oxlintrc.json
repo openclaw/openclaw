@@ -512,6 +512,13 @@
       }
     },
     {
+      "files": ["src/commands/models/auth.test.ts"],
+      "rules": {
+        // Harness runtime-staging regressions share this file's login fixture and module mocks.
+        "max-lines": ["error", { "max": 1016, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
       "files": ["src/gateway/operator-run-recovery.test.ts"],
       "rules": {
         // Keep recovery-reason and legacy-refusal regressions with the existing authority fixtures.

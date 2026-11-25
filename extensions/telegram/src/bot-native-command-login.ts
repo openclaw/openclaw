@@ -177,7 +177,10 @@ export async function executeTelegramLoginCommand(params: {
           normalizeLowercaseStringOrEmpty(profile.provider) ===
           normalizeLowercaseStringOrEmpty(loginChoice.providerId),
       )?.profileId;
-      let sessionSwitchFailed = !nextProfileId;
+      // Harness-owned sign-ins (Muse) save no credential profile, so there is
+      // no account switch to fail; only a profiled result without a matching
+      // profile is one. Same rule as the chat /login handler.
+      let sessionSwitchFailed = !nextProfileId && loginResult.profiles.length > 0;
       if (
         nextProfileId &&
         normalizeLowercaseStringOrEmpty(params.currentProvider) ===
@@ -234,19 +237,24 @@ export async function executeTelegramLoginCommand(params: {
       }
       const sessionModel =
         targetSessionEntryAtStart?.modelOverride ?? targetSessionEntryAtStart?.model;
-      terminalMessage = [
-        formatProviderLoginCompletion(
-          loginChoice,
-          loginResult.authRefresh,
-          sessionSwitchFailed,
-          nextProfileId && sessionModel
-            ? { model: sessionModel, profileId: nextProfileId }
-            : undefined,
-        ),
-        loginResult.modelAccess?.message,
-      ]
-        .filter(Boolean)
-        .join(" ");
+      // A profileless result that also staged no runtime saved nothing chat can
+      // use; mirror the chat /login handler's setup handoff instead of success.
+      terminalMessage =
+        loginResult.profiles.length === 0 && !loginResult.stagedRuntimePolicy
+          ? `${loginChoice.providerLabel} sign-in finished without saving a login. Open Control UI → Models → Configure Models, then choose “${loginChoice.label}”.`
+          : [
+              formatProviderLoginCompletion(
+                loginChoice,
+                loginResult.authRefresh,
+                sessionSwitchFailed,
+                nextProfileId && sessionModel
+                  ? { model: sessionModel, profileId: nextProfileId }
+                  : undefined,
+              ),
+              loginResult.modelAccess?.message,
+            ]
+              .filter(Boolean)
+              .join(" ");
     } catch (error) {
       if (flowSignal.aborted) {
         return;

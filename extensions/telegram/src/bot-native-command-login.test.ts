@@ -311,6 +311,42 @@ describe("registerTelegramNativeCommands /login", () => {
     );
   });
 
+  it("reports a harness-owned sign-in that saves no credential profile as complete", async () => {
+    // Native runtimes such as Muse keep the credential in their own store and
+    // stage runtime routing instead of saving an account profile.
+    const loginFlow = vi.fn<TelegramLoginFlow>(async () => ({
+      ...createLoginResult("unused"),
+      profiles: [],
+      stagedRuntimePolicy: true as const,
+    }));
+    const { handler, sendMessage } = await registerOwnedLogin(loginFlow);
+
+    await handler(ownerContext());
+
+    await vi.waitFor(() => expect(messages(sendMessage)).toContain(completed));
+    expect(messages(sendMessage)).not.toContain(kept);
+  });
+
+  it("hands a profileless sign-in that saved nothing usable to setup", async () => {
+    const loginFlow = vi.fn<TelegramLoginFlow>(async () => ({
+      ...createLoginResult("unused"),
+      profiles: [],
+    }));
+    const { handler, sendMessage } = await registerOwnedLogin(loginFlow);
+
+    await handler(ownerContext());
+
+    await vi.waitFor(() =>
+      expect(
+        messages(sendMessage).some((text) =>
+          text.startsWith("OpenAI sign-in finished without saving a login."),
+        ),
+      ).toBe(true),
+    );
+    expect(messages(sendMessage)).not.toContain(completed);
+    expect(messages(sendMessage)).not.toContain(kept);
+  });
+
   it("names the active provider when another provider is requested in the same Telegram thread", async () => {
     const { finish, loginFlow } = pendingLogin("FIRST-CODE");
     const { handler, sendMessage } = await registerOwnedLogin(loginFlow);

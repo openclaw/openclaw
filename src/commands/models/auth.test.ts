@@ -11,6 +11,7 @@ import type {
 import type { RuntimeEnv } from "../../runtime.js";
 import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
 import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
+import { registerModelsAuthRuntimeStagingTests } from "./auth-runtime-staging.test-support.js";
 
 type AuthRunCall = { signal?: AbortSignal };
 type ResolvePluginProvidersCall = { providerRefs?: string[] };
@@ -49,7 +50,22 @@ const mocks = vi.hoisted(() => ({
   isImplicitLocalGatewayTarget: vi.fn(() => Promise.resolve(true)),
   resolvePluginSetupProviderCore: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
+  // Returns undefined unless a test installs an implementation, so the real
+  // repair keeps running for every other test.
+  repairModelSelectionRuntimePlugins: vi.fn(),
 }));
+
+vi.mock("../runtime-plugin-install.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-plugin-install.js")>();
+  return {
+    ...actual,
+    repairModelSelectionRuntimePlugins: (
+      params: Parameters<typeof actual.repairModelSelectionRuntimePlugins>[0],
+    ) =>
+      mocks.repairModelSelectionRuntimePlugins(params) ??
+      actual.repairModelSelectionRuntimePlugins(params),
+  };
+});
 
 vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
@@ -462,6 +478,14 @@ describe("model auth effect authority", () => {
       }
     },
   );
+});
+
+registerModelsAuthRuntimeStagingTests({
+  loginFlow,
+  setProviderAuthResult: (result) => runProviderAuth.mockResolvedValueOnce(result),
+  getConfig: () => currentConfig,
+  setConfig: (config) => void (currentConfig = config),
+  repairModelSelectionRuntimePlugins: mocks.repairModelSelectionRuntimePlugins,
 });
 
 function pipeInput(input: string | Buffer) {
