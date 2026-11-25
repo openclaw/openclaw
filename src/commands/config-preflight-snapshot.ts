@@ -17,6 +17,7 @@ import { describeConfigSnapshotInputChange } from "../config/snapshot-inputs.js"
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import {
   getDatabaseEngineSelection,
@@ -214,15 +215,17 @@ async function readConfigPreflightSnapshot(
                   }
                 : undefined);
             if (projected) {
-              const pluginMetadataSnapshot = completePluginMetadataSnapshot({
-                snapshot: loadPluginMetadataSnapshot({
+              const pluginMetadataSnapshot = withEngineStoreAdmission(() =>
+                completePluginMetadataSnapshot({
+                  snapshot: loadPluginMetadataSnapshot({
+                    config: projected.config,
+                    env,
+                    allowCurrent: false,
+                  }),
                   config: projected.config,
                   env,
-                  allowCurrent: false,
                 }),
-                config: projected.config,
-                env,
-              });
+              );
               const validation = validateConfigObjectWithPlugins(projected.sourceConfig, {
                 env,
                 pluginMetadataSnapshot,

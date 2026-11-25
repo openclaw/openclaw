@@ -33,6 +33,7 @@ import {
   inspectAgentDatabaseAdmission,
 } from "../state/agent-database-admission.js";
 import * as databasePreflight from "../state/openclaw-database-preflight.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   getActiveOpenClawStateDatabaseReadSnapshot,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -489,6 +490,7 @@ it.each([
       resolvedPluginIds: [],
     });
     expect((await readConfigFileSnapshot({ observe: false })).valid).toBe(legacyIdentity);
+    const pendingBefore = legacyIdentity ? await readDeferredPluginMigrationsAsync() : undefined;
     await closeOpenClawStateDatabaseAsync();
     const identityPath = path.join(stateDir, "identity", "device.json");
     const identityRaw = '{"retiredIdentity":"leave for Doctor"}\n';
@@ -527,11 +529,18 @@ it.each([
     expect(fs.readFileSync(configPath, "utf8")).toBe(activeRaw);
     expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backupRaw);
     if (legacyIdentity) {
-      // Live startup may create WAL/SHM; refusal must leave stored data unchanged.
-      expectBytesEqual(
-        fs.readFileSync(databasePath),
-        expectDefined(before[0], "Expected the original database file").bytes,
-        databasePath,
+      // No schema step ran for this current store, so refusal needs no recovery image.
+      using database = new DatabaseSync(databasePath, { readOnly: true });
+      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+      expect(
+        fs
+          .readdirSync(path.dirname(databasePath))
+          .filter((name) => name.startsWith("openclaw.sqlite.pre-startup-migration-")),
+      ).toEqual([]);
+      expect(await readDeferredPluginMigrationsAsync()).toEqual(
+        expectDefined(pendingBefore, "Expected the original pending user obligations"),
       );
     } else {
       expectFilesEqual(databaseFamily(databasePath), before);
