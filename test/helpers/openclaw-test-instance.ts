@@ -122,8 +122,19 @@ type ReadinessProbe = {
   omittedFailing?: number;
   /** Responder's reported server uptime; binds the answer to a process started after spawn. */
   uptimeMs?: number;
-  error?: "timeout" | "child-exit" | "fetch-failed" | "invalid-json" | "body-failed" | "aborted";
+  error?:
+    | "timeout"
+    | "child-exit"
+    | "fetch-failed"
+    | "invalid-json"
+    | "body-failed"
+    | "foreign-responder"
+    | "aborted";
 };
+
+// Parent and child clocks share the host. Allow spawn/measurement skew while
+// rejecting a ready listener that was already alive before this child existed.
+const GATEWAY_READINESS_UPTIME_SKEW_MS = 1_000;
 
 export type GatewayReadinessDiagnostic = {
   probe: "GET /readyz";
@@ -490,6 +501,13 @@ async function waitForGatewayReady(
               readiness.ready !== true ||
               agentDatabases.length > 0
             ) {
+              return false;
+            }
+            if (
+              probe.uptimeMs !== undefined &&
+              probe.uptimeMs > Date.now() - startedAt + GATEWAY_READINESS_UPTIME_SKEW_MS
+            ) {
+              probe.error = "foreign-responder";
               return false;
             }
             // All configured agents are admitted; also join the startup sidecars.

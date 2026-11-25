@@ -1997,7 +1997,12 @@ describe("openclaw test instance", () => {
           { status: 200 },
         ),
       )
-      .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response('{"ready":true,"failing":[],"uptimeMs":60000}', { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response('{"ready":true,"failing":[],"uptimeMs":0}', { status: 200 }),
+      )
       .mockResolvedValueOnce(new Response('{"ok":false,"status":"starting"}', { status: 503 }))
       .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }))
       .mockResolvedValueOnce(new Response('{"ok":true,"status":"started"}', { status: 200 }));
@@ -2010,14 +2015,14 @@ describe("openclaw test instance", () => {
         probe: "GET /readyz",
         settlementProbe: "GET /startupz",
         lastProbe: expect.objectContaining({
-          attempt: 4,
+          attempt: 5,
           status: 200,
           ready: true,
           endpoint: "/startupz",
           startupStatus: "started",
         }),
         lastFailedResponse: expect.objectContaining({
-          attempt: 3,
+          attempt: 4,
           status: 503,
           ready: true,
           endpoint: "/startupz",
@@ -2027,6 +2032,7 @@ describe("openclaw test instance", () => {
     );
 
     expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      "http://127.0.0.1:12345/readyz",
       "http://127.0.0.1:12345/readyz",
       "http://127.0.0.1:12345/readyz",
       "http://127.0.0.1:12345/readyz",
