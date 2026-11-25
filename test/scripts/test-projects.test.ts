@@ -3663,10 +3663,21 @@ describe("scripts/test-projects full-suite sharding", () => {
           baseEnv: { OPENCLAW_VITEST_INCLUDE_FILE: input },
           ...runtime,
         });
-        expect(specs.length).toBeGreaterThan(1);
-        expect(specs.flatMap((spec) => spec.timingTargets ?? []).toSorted()).toEqual(
-          selected.toSorted(),
-        );
+        if (target === configFile("gateway-server")) {
+          expect(specs.length).toBeGreaterThan(1);
+          expect(specs.flatMap((spec) => spec.timingTargets ?? []).toSorted()).toEqual(
+            selected.toSorted(),
+          );
+        } else {
+          expect(specs).toHaveLength(1);
+          expect(specs[0]?.config).toBe(configFile("gateway"));
+          const includePatterns = specs.flatMap((spec) => spec.includePatterns ?? []);
+          expect(includePatterns.toSorted()).toEqual(selected.map(convertPathToPattern).toSorted());
+          writeVitestIncludeFile(output, includePatterns, { cwd, ...runtime });
+          expect(JSON.parse(fs.readFileSync(output, "utf8")).toSorted()).toEqual(
+            selected.map(convertPathToPattern).toSorted(),
+          );
+        }
       }
       writeVitestIncludeFile(output, patterns, { cwd, ...runtime });
       expect(JSON.parse(fs.readFileSync(output, "utf8")).toSorted()).toEqual(

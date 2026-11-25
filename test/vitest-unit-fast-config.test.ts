@@ -298,6 +298,7 @@ describe("unit-fast vitest lane", () => {
       `
         import assert from "node:assert/strict";
         import { resolveConfig } from "vitest/node";
+        import { convertPathToPattern } from "tinyglobby";
         import { spawnSync } from "node:child_process";
         import fs from "node:fs";
         import path from "node:path";
@@ -343,7 +344,7 @@ describe("unit-fast vitest lane", () => {
           ]);
           assert.deepEqual((await resolveConfig({ config: false, root: process.cwd(), dir: process.cwd() },
             createScopedVitestConfig(["src/hooks/**/*.test.ts"], { env: {} }))).test.exclude
-            .filter((file) => file.startsWith("src/hooks/")), [e2eMockHelper, harness, mockHelper, pure, quoted, stateful]);
+            .filter((file) => file.startsWith("src/hooks/")), [e2eMockHelper, harness, mockHelper, pure, quoted, stateful].map(convertPathToPattern));
           assert.equal(paths.resolveUnitFastTestIncludePattern(ignored), null);
           assert.equal(paths.isUnitFastTestFile(quoted), true);
         } finally {
