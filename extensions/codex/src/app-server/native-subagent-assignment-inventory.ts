@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -19,6 +20,53 @@ import {
 import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
 import type { CodexTurn } from "./protocol.js";
 
+// Only the read can be cancelled across monitors. Each keeps its own completion authority.
+const detachedReads = new Map<
+  AbortController,
+  { state: ParentState; receipt: CodexNativeSubagentSubmission }
+>();
+
+export function watchDetachedSubmission(
+  state: ParentState,
+  receipt: CodexNativeSubagentSubmission,
+) {
+  const controller = new AbortController();
+  detachedReads.set(controller, { state, receipt });
+  return { signal: controller.signal, [Symbol.dispose]: () => detachedReads.delete(controller) };
+}
+
+function stopDetachedReads(
+  state: ParentState,
+  child: ChildState,
+  receipt: CodexNativeSubagentSubmission,
+) {
+  if (
+    !state.requesterSessionKey ||
+    child.nativeParentThreadId !== state.parentThreadId ||
+    child.parentThreadId !== state.parentThreadId ||
+    child.nativeTurnId !== receipt.submissionId ||
+    child.nativeTurnState !== "active" ||
+    child.terminal ||
+    child.subscriptionClosed ||
+    child.cancellationRequested ||
+    child.cancelledModelTurnId === receipt.submissionId ||
+    !child.completionCustody?.isCurrent() ||
+    !isDeepStrictEqual(child.historyOwner, state.historyOwner)
+  ) {
+    return;
+  }
+  for (const [controller, reader] of detachedReads) {
+    if (
+      reader.state.requesterSessionKey === state.requesterSessionKey &&
+      reader.state.requesterStorePath === state.requesterStorePath &&
+      isDeepStrictEqual(reader.state.historyOwner, child.historyOwner) &&
+      isDeepStrictEqual(reader.receipt, receipt)
+    ) {
+      controller.abort();
+    }
+  }
+}
+
 /** Pending locators live with the existing binding, not in a parallel task ledger. */
 export class CodexNativeSubagentAssignmentInventory {
   private readonly writes = new Map<ParentState, Promise<void>>();
@@ -38,7 +86,7 @@ export class CodexNativeSubagentAssignmentInventory {
         assignment: CodexNativeSubagentPendingAssignment,
         recovery: ThreadRecovery,
         custody: AgentHarnessCompletionCustody,
-      ) => Promise<void>;
+      ) => Promise<ChildState | undefined>;
       onSettled: (state: ParentState) => void;
     },
   ) {}
@@ -295,7 +343,20 @@ export class CodexNativeSubagentAssignmentInventory {
           ) {
             recovery.waitReceipt = undefined;
           }
-          await this.dependencies.restore(state, surviving, recovery, custody);
+          const child = await this.dependencies.restore(state, surviving, recovery, custody);
+          const receipt = surviving.submission;
+          if (
+            detachedReads.size &&
+            receipt &&
+            recovery.nativeTurnState === "active" &&
+            recovery.nativeTurnId === receipt.submissionId &&
+            child?.runId === surviving.runId &&
+            isDeepStrictEqual(surviving.owner, current) &&
+            canReadParent()
+          ) {
+            store.assertCurrent();
+            stopDetachedReads(state, child, receipt);
+          }
           // Restoring one child can queue binding writes needed by the next read's authority.
           await this.drain(state);
         }

@@ -341,11 +341,10 @@ class Monitor {
             // admission and its close order stay with the original parent.
             original.assignmentStore = state.assignmentStore;
           }
-          return;
+          return existing;
         }
-        const waitReceipt = this.knownChildren.has(assignment.childThreadId)
-          ? undefined
-          : recovery.waitReceipt;
+        const waitReceipt =
+          !this.knownChildren.has(assignment.childThreadId) && recovery.waitReceipt;
         const child = this.registerChildThread(
           state,
           {
@@ -362,7 +361,7 @@ class Monitor {
           },
         );
         if (!child) {
-          return;
+          return undefined;
         }
         child.recoverInitialAssignment = !readCodexNativeSubagentRunId(assignment.runId)?.turnId
           ? true
@@ -381,6 +380,7 @@ class Monitor {
         } else {
           await this.processRecoveredCompletion(state, child, recovery);
         }
+        return child;
       },
       onSettled: (state) => this.pruneParentIfUnused(state),
     });

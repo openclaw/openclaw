@@ -21,6 +21,7 @@ import type {
   ThreadRecovery,
 } from "./native-subagent-monitor-types.js";
 import { readCodexNativeSubagentNotification } from "./native-subagent-notification.js";
+import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
 import type { CodexThread, CodexTurn, JsonObject } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
@@ -258,6 +259,66 @@ export class CodexNativeSubagentHistoryRecovery {
       threadState,
     };
   }
+}
+
+// A disconnected peer has no thread subscription. Only history of the exact
+// promoted successor can justify waiting for it or admitting its final answer.
+export function readDetachedSuccessor(
+  thread: CodexThread,
+  parentThreadId: string,
+  receipt: CodexNativeSubagentSubmission,
+  includeTurns: boolean,
+): "active" | "idle" | "reread" | RecoveredCompletion | undefined {
+  const spawn = readThreadSpawnSource(thread);
+  const status = thread.status?.type;
+  if (
+    thread.id !== receipt.childThreadId ||
+    thread.parentThreadId !== parentThreadId ||
+    (spawn && spawn.parent_thread_id !== parentThreadId) ||
+    thread.forkedFromId ||
+    (status !== "idle" && status !== "notLoaded" && status !== "active")
+  ) {
+    return;
+  }
+  if (!includeTurns) {
+    return status === "active" ? "active" : "idle";
+  }
+  const turn = findCodexNativeSuccessorTurn(
+    thread.turns ?? [],
+    receipt.predecessorNativeTurnId,
+    receipt.submissionId,
+  );
+  if (
+    !turn ||
+    turn !== thread.turns?.at(-1) ||
+    (turn.threadId !== undefined && turn.threadId !== thread.id) ||
+    turn.error != null
+  ) {
+    return;
+  }
+  if (status === "active" && turn.status === "inProgress" && turn.completedAt == null) {
+    return "active";
+  }
+  // Codex can observe idle after loading history and mark the unfinished
+  // snapshot interrupted. Only a fresh, completed successor can be delivered.
+  if (status !== "active" && turn.status === "interrupted" && turn.completedAt == null) {
+    return "reread";
+  }
+  if (
+    turn.status !== "completed" ||
+    !Number.isSafeInteger(turn.completedAt) ||
+    !turn.completedAt ||
+    turn.completedAt < (turn.startedAt ?? 0) ||
+    !isJsonObject(turn)
+  ) {
+    return;
+  }
+  const completion = readTurnCompletion(turn, thread.id);
+  if (completion?.statusLabel !== "task_complete") {
+    return;
+  }
+  // A saved completion can also precede the live status change.
+  return status === "active" ? "reread" : completion;
 }
 
 // V1 records the returned states but no child turn ID. A new spawn followed by
