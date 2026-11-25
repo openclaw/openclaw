@@ -2,8 +2,10 @@ import fs from "node:fs";
 import { parseTcpPort } from "./tcp-port.js";
 
 // Internal launcher transport for the existing published-port fact, never persisted config.
-export function resolveContainerPublishedGatewayPort(): number | undefined {
-  const raw = process.env.OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT;
+export function resolveContainerPublishedGatewayPort(
+  env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+  const raw = env.OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT;
   if (raw === undefined) {
     return undefined;
   }

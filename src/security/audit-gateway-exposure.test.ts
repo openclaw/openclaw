@@ -78,6 +78,29 @@ describe("security audit gateway exposure findings", () => {
     }
   });
 
+  it.each([
+    { origins: undefined, port: undefined, proxy: false, missing: true },
+    { origins: [], port: undefined, proxy: false, missing: false },
+    { origins: undefined, port: "25432", proxy: false, missing: false },
+    { origins: [], port: "25432", proxy: false, missing: false },
+    { origins: [" "], port: "25432", proxy: false, missing: true },
+    { origins: undefined, port: "25432", proxy: true, missing: true },
+  ])("matches serving origin admission for %j", ({ origins, port, proxy, missing }) => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: proxy ? { mode: "trusted-proxy", trustedProxy: { userHeader: "x-auth-user" } } : auth,
+        controlUi: { allowedOrigins: origins },
+      },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: port,
+    });
+    expect(
+      findings.some((finding) => finding.checkId === "gateway.control_ui.allowed_origins_required"),
+    ).toBe(missing);
+  });
+
   it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", () => {
     const cfg: OpenClawConfig = {
       gateway: {

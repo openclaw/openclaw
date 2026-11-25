@@ -39,7 +39,7 @@ it does not skip Doctor or change your policy. Upgrade the selected image before
 launch if `[]` must remain authoritative.
 Upgrade the image to inherit launch defaults without saving origins. Setup
 does not upgrade your selected image or rewrite saved origin policy automatically.
-Custom images must provide `sh` and `node` for the isolated setup probe. Failed or
+Custom images must provide `node` for the isolated setup probe. Failed or
 malformed Gateway help stops setup before replacing the running Gateway.
 
 Container launch retains the image's direct Gateway command, including its normal

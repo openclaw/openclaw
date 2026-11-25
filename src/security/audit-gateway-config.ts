@@ -13,6 +13,7 @@ import { resolveGatewayAuthForConfig } from "../gateway/auth-resolve.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
+import { resolveContainerPublishedGatewayPort } from "../infra/container-environment.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
@@ -41,7 +42,13 @@ export function collectGatewayConfigFindings(
     env,
   });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
-  const controlUiAllowedOrigins = normalizeStringEntries(resolveControlUiAllowedOrigins(cfg));
+  const policyConfig: OpenClawConfig = {
+    ...cfg,
+    gateway: { ...cfg.gateway, auth: { ...cfg.gateway?.auth, mode: auth.mode } },
+  };
+  const controlUiAllowedOrigins = normalizeStringEntries(
+    resolveControlUiAllowedOrigins(policyConfig, resolveContainerPublishedGatewayPort(env)),
+  );
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
@@ -164,6 +171,7 @@ export function collectGatewayConfigFindings(
     bind !== "loopback" &&
     controlUiEnabled &&
     controlUiAllowedOrigins.length === 0 &&
+    cfg.gateway?.controlUi?.allowedOrigins?.length !== 0 &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
     findings.push({
@@ -174,8 +182,7 @@ export function collectGatewayConfigFindings(
         "Control UI is enabled on a non-loopback bind without an effective browser-origin allowlist. " +
         "Set explicit allowed origins, or omit the list to use gateway.publicOrigin.",
       remediation:
-        "Set gateway.publicOrigin with gateway.controlUi.allowedOrigins omitted, or configure a list of full trusted origins (for example https://control.example.com). " +
-        "If your deployment intentionally relies on Host-header origin fallback, set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true.",
+        "Set gateway.publicOrigin with gateway.controlUi.allowedOrigins omitted, or configure a list of full trusted origins (for example https://control.example.com). Current container images can inherit the published loopback origins when the list is omitted.",
     });
   }
   if (controlUiAllowedOrigins.includes("*")) {

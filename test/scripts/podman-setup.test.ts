@@ -21,13 +21,19 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       for (const [name, body] of Object.entries({
         podman: `
 case "$1" in
-  create) touch "$PODMAN_STUB_ARGS-volume"; printf '%s\\n' "$@" > "$PODMAN_STUB_ARGS-create"; printf '%s' "\${@:$#}" > "$PODMAN_STUB_ARGS-probe.cjs"; printf '%s' "\${@: -2:1}" > "$PODMAN_STUB_ARGS-probe-mode"; printf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';;
+  create) if [[ "\${PODMAN_STUB_NODE_ONLY:-}" == 1 && " $* " == *" --entrypoint sh "* ]]; then echo "image has no sh" >&2; exit 125; fi; touch "$PODMAN_STUB_ARGS-volume"; printf '%s\\n' "$@" > "$PODMAN_STUB_ARGS-create"; printf '%s' "\${@:$#}" > "$PODMAN_STUB_ARGS-probe.cjs"; printf '%s' "\${@: -2:1}" > "$PODMAN_STUB_ARGS-probe-mode"; printf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';;
   inspect) printf '%s\\n' 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';;
   start) (cd "$HOME" && node "$PODMAN_STUB_ARGS-probe.cjs" "$(cat "$PODMAN_STUB_ARGS-probe-mode")");;
   rm) printf "%s\\n" "$@" > "$PODMAN_STUB_ARGS"; if [[ " $* " == *" -v "* ]]; then rm -f "$PODMAN_STUB_ARGS-volume"; fi;;
   run) printf "%s\\n" "$@" > "$PODMAN_STUB_ARGS"; if [[ " $* " == *" --replace "* ]]; then echo "fixture-container-replace" >&2; fi;;
   *) printf "%s\\n" "$@" > "$PODMAN_STUB_ARGS";;
 esac`,
+        timeout: `
+if [[ "$*" == "--kill-after=1s 1s true" ]]; then exit 0; fi
+printf '%s\\n' "$*" >> "$PODMAN_STUB_ARGS-timeout"
+[[ "$1" != --kill-after=* ]] || shift
+shift
+exec "$@"`,
         openclaw: 'printf "lan\\n"',
         systemctl: "exit 0",
         uname: 'printf "Linux\\n"',
@@ -88,7 +94,7 @@ esac`,
         const sandbox = fixture(allowedOrigins);
         sandbox.run("scripts/podman/setup.sh", ["--container"]);
         expect(existsSync(`${sandbox.log}-volume`)).toBe(false);
-        expect(readFileSync(`${sandbox.log}-create`, "utf8")).toContain("--entrypoint\nsh\n");
+        expect(readFileSync(`${sandbox.log}-create`, "utf8")).toContain("--entrypoint\nnode\n");
         const config = JSON.parse(readFileSync(sandbox.file, "utf8"));
         expect(config.gateway).toEqual({
           mode: "local",
@@ -131,7 +137,9 @@ esac`,
     it("preserves manual startup for an older selected image", () => {
       const sandbox = fixture();
       writeFileSync(join(sandbox.home, "dist", "index.js"), 'console.log("--port <port>");');
-      const result = sandbox.run("scripts/run-openclaw-podman.sh", ["launch"]);
+      const result = sandbox.run("scripts/run-openclaw-podman.sh", ["launch"], "19123", 0, {
+        PODMAN_STUB_NODE_ONLY: "1",
+      });
       expect(result.stderr).toContain("Starting it with the legacy Gateway command");
       const args = readFileSync(sandbox.log, "utf8").split("\n");
       expect(args).toContain(
@@ -139,6 +147,14 @@ esac`,
       );
       expect(args).toContain("--port");
       expect(args).not.toContain("--published-port");
+    });
+
+    it("passes the existing launch timeout to the image pull probe", () => {
+      const sandbox = fixture();
+      sandbox.run("scripts/run-openclaw-podman.sh", ["launch"], "19123", 0, {
+        OPENCLAW_PODMAN_RUN_TIMEOUT: "17s",
+      });
+      expect(readFileSync(`${sandbox.log}-timeout`, "utf8")).toContain("17s podman create");
     });
 
     it.each(["scripts/podman/setup.sh", "scripts/run-openclaw-podman.sh"])(

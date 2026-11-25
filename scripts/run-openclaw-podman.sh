@@ -156,7 +156,7 @@ fi
 
 if [[ "$RUN_SETUP" == false ]]; then
   GATEWAY_IMAGE_RESULT="$(
-    openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" "$PODMAN_PULL"
+    openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" "$PODMAN_PULL" "$PODMAN_RUN_TIMEOUT"
   )"
   IFS=$'\t' read -r GATEWAY_IMAGE_ID GATEWAY_COMMAND_MODE <<<"$GATEWAY_IMAGE_RESULT"
   if [[ "$GATEWAY_COMMAND_MODE" == "legacy" ]]; then
