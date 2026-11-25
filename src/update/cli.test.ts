@@ -9,6 +9,7 @@ import { GatewayCredentialsRequiredError } from "../gateway/call-device-auth.js"
 import type { CallGatewayOptions } from "../gateway/call-options.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import * as updateRunReader from "../infra/update-run-reader.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import * as stateDatabaseCache from "../state/openclaw-state-db-cache.js";
@@ -19,6 +20,7 @@ import {
   tryAdoptInstalledPackageForGateway,
   waitForReleaseUpdateFailure,
 } from "./cli.js";
+import * as installationIdentity from "./installation-identity.js";
 import { TRIAL_BUDGET_MS } from "./launcher.js";
 import { createTrialPending, resolvePrefix, switchLink, writeTrial } from "./store.js";
 import * as releaseStore from "./store.js";
@@ -39,7 +41,11 @@ beforeEach(async () => {
 const sent = vi.hoisted(() => [] as unknown[]);
 const missingCredentials = vi.hoisted(() => ({ enabled: false }));
 const install = vi.hoisted(() => ({ kind: "git" }));
-const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
+const localRun = vi.hoisted((): Pick<UpdateRunRecord, "status" | "phase" | "origin"> => ({
+  status: "skipped",
+  phase: "finished",
+  origin: {},
+}));
 const packageTarget = vi.hoisted(() => ({ version: "" }));
 const confirmDowngrade = vi.hoisted(() =>
   vi.fn<() => Promise<"confirmed" | "cancelled" | "confirmation-required">>(),
@@ -104,7 +110,6 @@ vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
     reason: "already-current",
     steps: [],
     after: {},
-    origin: {},
   }),
 }));
 const runsGet = vi.hoisted(() => [] as Array<() => unknown>);
@@ -152,6 +157,7 @@ afterEach(async () => {
   missingCredentials.enabled = false;
   localRun.status = "skipped";
   localRun.phase = "finished";
+  localRun.origin = {};
   maintainRuntimes.mockReset();
   maintainRuntimes.mockResolvedValue([]);
   confirmDowngrade.mockReset();
@@ -442,12 +448,55 @@ it("refuses --no-restart from another checkout before preparation or creating a 
   expect(maintainRuntimes).not.toHaveBeenCalled();
 });
 
+it("lets an accessible Gateway take over an opaque first-conversion owner", async () => {
+  vi.spyOn(installationIdentity, "checkUpdateInstallationSlot").mockRejectedValueOnce(
+    new installationIdentity.UnverifiedForegroundUpdateOwnerError(123),
+  );
+  runsGet.push(() => ({
+    run: { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} },
+  }));
+  await runReleaseUpdateCli({ json: true, restart: true, runningRoot: root });
+  expect(sent).toEqual([{}]);
+  expect(prepared).toEqual([]);
+});
+
+it.each([{ restart: false }, { restart: true, tag: "beta" }])(
+  "refuses opaque foreground ownership when RPC cannot carry the update: %j",
+  async (opts) => {
+    vi.spyOn(installationIdentity, "checkUpdateInstallationSlot").mockRejectedValueOnce(
+      new installationIdentity.UnverifiedForegroundUpdateOwnerError(123),
+    );
+    await expect(runReleaseUpdateCli({ json: true, runningRoot: root, ...opts })).rejects.toThrow(
+      "operator access",
+    );
+    expect(sent).toEqual([]);
+    expect(prepared).toEqual([]);
+    expect(createRun).not.toHaveBeenCalled();
+    expect(maintainRuntimes).not.toHaveBeenCalled();
+  },
+);
+
 it("restarts the local Gateway after preparing an explicit package tag and follows its outcome", async () => {
   install.kind = "package";
   localRun.status = "running";
   localRun.phase = "activating";
+  const releaseAdmission = {
+    owner: "candidate",
+    candidateVersion: "2026.11.6",
+    verdict: "admit",
+    warnings: [{ code: "configured-plugin-path-unavailable", message: "Plugin path is absent" }],
+  } satisfies NonNullable<UpdateRunRecord["origin"]["releaseAdmission"]>;
+  localRun.origin.releaseAdmission = releaseAdmission;
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   runsGet.push(() => ({
-    run: { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} },
+    run: {
+      runId: "run-cli",
+      status: "succeeded",
+      phase: "finished",
+      steps: [],
+      after: { version: "2026.11.6" },
+      origin: {},
+    },
   }));
   await runReleaseUpdateCli({
     json: true,
@@ -462,6 +511,13 @@ it("restarts the local Gateway after preparing an explicit package tag and follo
     }),
   ]);
   expect(process.exitCode).toBe(0);
+  expect(json).toHaveBeenCalledWith(
+    expect.objectContaining({
+      status: "succeeded",
+      after: { version: "2026.11.6" },
+      origin: { releaseAdmission },
+    }),
+  );
 });
 
 it.each([

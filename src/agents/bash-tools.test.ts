@@ -198,6 +198,39 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it("lets read-only process observe but never control an owner's existing command", async () => {
+  const observer = createProcessTool({ scopeKey, readOnly: true });
+  const completedId = await heldExit(async () => {
+    const id = await startBackground(
+      createTool({ notifyOnExit: false }),
+      shellEcho("owner output"),
+    );
+    expect((await observer.execute("list", { action: "list" })).details).toMatchObject({
+      sessions: [{ sessionId: id }],
+    });
+    for (const action of [
+      "write",
+      "send-keys",
+      "paste",
+      "submit",
+      "kill",
+      "clear",
+      "remove",
+    ] as const) {
+      expect(
+        text(await observer.execute(action, { action, sessionId: id, data: "echo injected\n" })),
+      ).toContain("can only list, poll, or log");
+    }
+    expect(text(await observer.execute("log", { action: "log", sessionId: id }))).toContain(
+      "owner output",
+    );
+    return id;
+  });
+  expect(
+    (await observer.execute("poll", { action: "poll", sessionId: completedId })).details,
+  ).toMatchObject({ status: "completed" });
+});
+
 it("yields a pollable process and releases foreground callbacks", async () => {
   const onUpdate = vi.fn();
   const abort = new AbortController();

@@ -6959,6 +6959,7 @@ jobs:
             .artifacts/docker-tests/????????T??????Z/failures.json
             .artifacts/docker-tests/upgrade-survivor-*/summary.json
             .artifacts/docker-tests/upgrade-survivor-*/failure.json
+            .artifacts/upgrade-survivor/release-update-survivor/migration-bulk-access.json
             .artifacts/upgrade-survivor/release-update-survivor/healthy/summary.json
             .artifacts/upgrade-survivor/release-update-survivor/healthy/trial.json
             .artifacts/upgrade-survivor/release-update-survivor/healthy/rows-before.json

@@ -51,7 +51,13 @@ it("transfers queued input into durable running custody before source adoption",
   const { storePath, replyOperation, followupRun, runId } = fixture.context;
   const sessionKey = fixture.context.sessionKey!;
   const target = { agentId: "main", sessionId: fixture.sessionId, sessionKey, storePath };
-  await fixture.replace({ sessionId: fixture.sessionId, updatedAt: 1, status: "done" });
+  // A stopped run leaves its writer claim behind; the queued run must take it over.
+  await fixture.replace({
+    sessionId: fixture.sessionId,
+    updatedAt: 1,
+    status: "done",
+    activeWriterRunId: "stopped-run",
+  });
   const recorder = createUserTurnTranscriptRecorder({
     input: { text: "Queued input must survive adoption", idempotencyKey: `${runId}:user` },
     target: { ...target, sessionEntry: { sessionId: fixture.sessionId, updatedAt: 1 } },
@@ -80,7 +86,11 @@ it("transfers queued input into durable running custody before source adoption",
     // must already own recovery once it has consumed the queued row.
     expect((await listSessionPendingInputs(target)).items).toEqual([]);
     const entry = loadSessionEntry(target);
-    expect(entry).toMatchObject({ lifecycleRunId: runId, abortedLastRun: false });
+    expect(entry).toMatchObject({
+      lifecycleRunId: runId,
+      activeWriterRunId: runId,
+      abortedLastRun: false,
+    });
     expect(entry?.status).toBeUndefined();
     expect(entry?.startedAt).toBeGreaterThanOrEqual(replyOperation.startedAtMs);
     expect(await loadTranscriptEvents(target)).toEqual(

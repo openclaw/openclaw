@@ -51,10 +51,10 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   /** Verified configured-owner sender; admission re-checks `commands.ownerAllowFrom` per start. */
   channelOwner?: Readonly<UserChannelIdentity>;
   scopes: readonly string[];
-  /** Command-owner decision fixed at this run's start. */
-  requesterOwner?: boolean;
   /** The only answer to what this turn may do; scopes above are its operator ceiling. */
   grant: TurnGrant;
+  /** Live original-source restriction on a participant child or completion turn. */
+  participationCeiling?: import("./participation-ceiling.js").BoundParticipationCeiling;
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   signal?: AbortSignal;
@@ -78,4 +78,13 @@ export type AdmittedRunOperatorAuthority = Readonly<{
     }>;
   }>;
   modelPolicy?: PreparedOperatorModelPolicy;
+}>;
+
+/** Additional request lifetime; never replaces the authenticated access grant. */
+export type AdmittedRunInvocationAuthority = Readonly<{
+  participationAuthority?: AdmittedRunOperatorAuthority;
+  participationCeiling?: import("./participation-ceiling.js").BoundParticipationCeiling;
+  assertCurrent: () => void;
+  signal?: AbortSignal;
+  release?: () => void;
 }>;

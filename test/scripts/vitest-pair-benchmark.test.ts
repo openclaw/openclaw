@@ -521,6 +521,8 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
       'import assert from "node:assert/strict";',
       'for (const [key, value] of Object.entries({ CI: "1", OPENCLAW_VITEST_RUNTIME: "node", OPENCLAW_VITEST_MAX_WORKERS: "1", OPENCLAW_VITEST_FS_MODULE_CACHE: "0", OPENCLAW_VITEST_WORKER_CACHE: "0" })) assert.equal(process.env[key], value);',
       "assert.equal(process.env.TSX_DISABLE_CACHE, undefined);",
+      'assert.ok(process.argv.includes("--no-cache"));',
+      'assert.ok(process.argv.includes("--no-fsModuleCache"));',
       `writeFileSync(process.argv[process.argv.indexOf("--outputFile") + 1], JSON.stringify(${JSON.stringify(report)}));`,
       "console.log(JSON.stringify({ active: process.env.NODE_COMPILE_CACHE, disabled: process.env.NODE_DISABLE_COMPILE_CACHE ?? null }));",
     ].join("\n");
@@ -573,7 +575,13 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
     );
     const seeded = spawnSync(
       process.execPath,
-      ["scripts/run-vitest.mjs", "--outputFile", path.join(root, "seed-report.json")],
+      [
+        "scripts/run-vitest.mjs",
+        "--no-cache",
+        "--no-fsModuleCache",
+        "--outputFile",
+        path.join(root, "seed-report.json"),
+      ],
       { cwd: workload, env, encoding: "utf8", timeout: 10_000 },
     );
     expect(seeded.error).toBeUndefined();

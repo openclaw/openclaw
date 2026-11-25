@@ -164,6 +164,34 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    in the same update details and warning count; they never fail the core update
    or trigger rollback.
 
+Once the resident launcher owns an installation, `gateway install` keeps that
+state directory's selected launcher as its service entry. Explicit retained-CLI
+recovery still uses the requested recovery entry. Dry runs keep the existing
+read-only preview. Immutable activation and switches that need the in-place
+installer refuse with a next step; they never replace a launcher-owned
+installation through that other path.
+Explicit package versions, dist-tags, npm specs, and `--no-restart` keep their
+prepared-release behavior.
+
+Before conversion, a node-only package installation with an installed node service, no
+Gateway service definition, and no live local Gateway stays with its package installer.
+`openclaw update` uses the existing package update flow for that installation;
+it does not create a Gateway launcher, forwarding entry, or pending Gateway trial.
+Its package result names the updated installation's `node install --force` and
+`node restart` commands. Wait for node work to become idle before using them;
+the package update does not claim to have replaced or restarted a retained node
+runtime.
+
+A previously converted installation keeps its resident release owner even if its
+Gateway service was removed; `--no-restart` can still prepare its next release.
+
+Before first conversion, a live foreground Gateway can lose its installation
+path from OS process inspection. With operator access, let that Gateway handle
+the update through Control UI or `openclaw update`. If it cannot accept the
+requested update over RPC, local preparation refuses visibly rather than
+claiming an unidentified installation. Stop the Gateway through its existing
+owner, then rerun the update. A stopped Gateway remains updatable.
+
 Early Git source-updater recovery is a compatibility exception. Its separate CLI
 worker never enters Gateway startup. It opens a repair run after the first
 readiness check and finishes rebuilding and cleanup after the second. Neither
@@ -208,6 +236,34 @@ A trial started by an older preparer repeats admission before migration. A refus
 trial exits 78 and the launcher restores the previous release. Ordinary non-trial
 starts, including manual package upgrades, keep their existing migration-on-open
 behavior: a store's size alone never prevents that Gateway from starting.
+
+The candidate also publishes write-ahead restore intent at
+`<prefix>/releases/<target-release-id>/.restore`: `{v:1,runId,files:[{live,preimage}]}`.
+The launcher's selected target owns that prepared release directory, so even a
+retry from an older preparer cannot reuse another release's receipt. Paths are
+absolute; a null pre-image means remove that file on rollback. The complete
+manifest and images are durable before the replayable swap plan or any
+schema/config publication. Retries reuse their immutable originals rather than
+re-imaging changed state. A known no-upgrade trial records an empty plan.
+
+Under exclusive native-store custody, SQLite originals are checkpointed and
+closed before their main files are hard-linked as adjacent
+`*.pre-restore-<runId>` images. The checkpoint changes physical representation,
+not logical contents. The subsequent swap renames a different prepared inode
+over the live path, leaving the image immutable. WAL, SHM, journal and seal paths
+are explicit removals because committed frames are already in the main image.
+This hard-link rule is for rename-based publication, not in-place migration.
+Ordinary files and leaf symlinks retain their original contents and link targets.
+If the filesystem cannot create a hard link, preparation logs the byte-copy
+fallback and its cause; normal adjacent images need no additional database copy.
+
+Legacy `*.pre-<generation>` recovery remains unchanged while the launcher moves
+to the manifest reader. External-path restrictions above therefore still apply.
+After confirmed committed IPC, the candidate removes only images from the
+manifest its own process captured, not pinned legacy recovery. It never rereads
+a global slot or matches run IDs during cleanup. The receipt stays with its
+prepared release. Cleanup failures are advisory and name retained recovery
+files; an older receipt cannot block the next release's preparation.
 
 Each protected PostgreSQL schema-changing update changes the affected store's
 namespace name and lengthens the restart. Plan for the original and private server
@@ -293,6 +349,20 @@ then serve its seeded cron, sessions, and message history. Lazy stores that
 did not advance are reported as untouched, not claimed migrated. The
 compatibility gate becomes required when the candidate includes the
 reader-floor contract; fixture, target-schema, and integrity errors always fail.
+
+The selected lane also runs the agent SQLite migration chain from the fork-point
+schema through the real maintenance owner. Its test-side native observer rejects
+bulk-data access: statements that read or write transcript, cold-archive,
+embedding, or FTS rows, including `WHERE 0`, and index builds over those rows.
+Constant-time metadata DDL is allowed, but touching a bulk table while raising
+that store's reader floor fails. Failures name the store and version range.
+Real owner integrity checks still run unchanged; only their dynamic test-side
+boundary is excluded from migration-access classification; migration-supplied
+callbacks remain observed. Unsupported observation APIs fail coverage instead of
+silently passing. The sanitized `migration-bulk-access.json` receipt is retained
+even when observation fails, with the attempted version range. Failed observations
+retain statement identity, method, SQL source, and integrity/coverage facts, not
+database objects, catalog snapshots, or queried row values.
 
 - **Platforms:** a Linux systemd user service, a Linux container without a user
   bus, a macOS LaunchAgent and a Windows Scheduled Task. (#203497 merged with
