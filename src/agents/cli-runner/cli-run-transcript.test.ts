@@ -11,7 +11,7 @@ import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcri
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeChatHistoryMessages } from "../../gateway/chat-display-projection.sanitize.js";
 import { createAgentEventTestHarness } from "../../gateway/server-chat.agent-events.test-harness.js";
-import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import { subscribeAgentEvents } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import {
   initializeGlobalHookRunner,
@@ -458,7 +458,7 @@ it("retires only the committed Claude snapshot from the cumulative Gateway strea
   const gateway = createAgentEventTestHarness();
   gateway.register(runId, sessionKey, runId);
   onTestFinished(() => gateway.handler.dispose());
-  onTestFinished(onAgentRuntimeEvent(gateway.handler));
+  onTestFinished(subscribeAgentEvents(gateway.handler));
   onTestFinished(
     onInternalSessionTranscriptUpdate((update) => {
       gateway.handler.retireTranscript(update, Promise.resolve(true));

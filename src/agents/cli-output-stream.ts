@@ -41,6 +41,7 @@ import {
 } from "./cli-output-records.js";
 import {
   appendClaudeStreamResult,
+  claudeResultSnapshotKey,
   createCliSnapshotTextTracker,
   createClaudeSnapshotSegmentBuffer,
   recordItemText,
@@ -482,6 +483,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           result.text = taggedResult.visibleText.trim();
         }
       }
+      const snapshotKey = claudeResultSnapshotKey(sessionId, resumeCheckpointId);
       const { text, textParts, completedText, nextText, textSnapshotRanges, assistantOccurrences } =
         appendClaudeStreamResult({
           previous: output,
@@ -489,7 +491,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           assistantText,
           texts,
           offsets: { segmentStart, preserveFrom, currentMessageStart },
-          sessionId,
+          snapshotKey,
           resumeCheckpointId,
           snapshotText,
         });
@@ -532,10 +534,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       };
       // The result envelope carries the final message when present.
       output = withCliRawFinalText(output, result.text?.trim() || finalStreamedMessageText());
-      snapshotSegments.settleResult(
-        sessionId && resumeCheckpointId ? `${sessionId}:${resumeCheckpointId}` : undefined,
-        output.rawFinalText ?? nextText,
-      );
+      snapshotSegments.settleResult(snapshotKey, output.rawFinalText ?? nextText);
       if (
         parsed.openclaw_interim_result === true &&
         completedText &&

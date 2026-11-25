@@ -124,7 +124,7 @@ export function createCliSnapshotTextTracker(trackOccurrences = false) {
     beginMessage() {
       owner = {};
     },
-    snapshot(key: string) {
+    snapshot: (key: string) => {
       owner.key = key;
       const id = owner.id;
       owner = {};
@@ -247,6 +247,13 @@ function readClaudeSnapshotSegment(
   };
 }
 
+export function claudeResultSnapshotKey(
+  sessionId?: string,
+  checkpointId?: string,
+): string | undefined {
+  return sessionId && checkpointId ? `${sessionId}:${checkpointId}` : undefined;
+}
+
 /** Select output text and its snapshot provenance together, including interim results. */
 export function appendClaudeStreamResult(params: {
   previous: CliOutput | null;
@@ -254,7 +261,7 @@ export function appendClaudeStreamResult(params: {
   assistantText: string;
   texts: string[];
   offsets: { segmentStart: number; preserveFrom: number; currentMessageStart: number };
-  sessionId?: string;
+  snapshotKey?: string;
   resumeCheckpointId?: string;
   snapshotText: ReturnType<typeof createCliSnapshotTextTracker>;
 }) {
@@ -264,7 +271,7 @@ export function appendClaudeStreamResult(params: {
     assistantText,
     texts,
     offsets,
-    sessionId,
+    snapshotKey,
     resumeCheckpointId,
     snapshotText,
   } = params;
@@ -281,7 +288,8 @@ export function appendClaudeStreamResult(params: {
   const distinctNativeReply = Boolean(
     previous?.resumeCheckpointId &&
     resumeCheckpointId &&
-    (previous.resumeCheckpointId !== resumeCheckpointId || previous.sessionId !== sessionId),
+    (previous.resumeCheckpointId !== resumeCheckpointId ||
+      claudeResultSnapshotKey(previous.sessionId, previous.resumeCheckpointId) !== snapshotKey),
   );
   const appended = appendCliResultText(previous, nextText, distinctNativeReply);
   // Choose live occurrences from the same message/segment as the saved result,
@@ -295,10 +303,7 @@ export function appendClaudeStreamResult(params: {
         ? offsets.segmentStart
         : offsets.currentMessageStart,
   );
-  const finalKey =
-    resultText && sessionId && resumeCheckpointId
-      ? `${sessionId}:${resumeCheckpointId}`
-      : undefined;
+  const finalKey = resultText ? snapshotKey : undefined;
   const nextRanges = streamed
     ? source.ranges
     : finalKey
