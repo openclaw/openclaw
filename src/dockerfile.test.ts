@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
@@ -123,6 +123,38 @@ describe("Dockerfile", () => {
       expect(installed).toContain("telegram");
       expect(installed).not.toContain("facetime");
       expect(installed.includes("matrix")).toBe(selection === "matrix");
+    },
+  );
+
+  it.each([
+    { pluginRoot: "extensions", privateQa: false },
+    { pluginRoot: "extensions", privateQa: true },
+    { pluginRoot: "bundled-plugins", privateQa: false },
+    { pluginRoot: "bundled-plugins", privateQa: true },
+  ])(
+    "stages $pluginRoot test sources with private QA=$privateQa",
+    async ({ pluginRoot, privateQa }) => {
+      const dockerfile = await readDockerfile("Dockerfile", true);
+      const stage = dockerfile.match(/^FROM build AS runtime-build-output\n([\s\S]*?)(?=^FROM )/m);
+      assert(stage?.[1], "Missing runtime build output stage");
+      const commands = Array.from(stage[1].matchAll(/^RUN (.+)$/gm), ([, command]) => command);
+      const fixture = tempDirs.make("docker-runtime-plugin-tests-");
+      const plugin = join(fixture, pluginRoot, "fixture");
+      await mkdir(plugin, { recursive: true });
+      await mkdir(join(fixture, "packages"));
+      await writeFile(join(fixture, "selected-plugin-dirs"), privateQa ? "qa-lab\n" : "");
+      await writeFile(join(plugin, "index.ts"), "runtime");
+      await writeFile(join(plugin, "index.test.ts"), "test");
+      await writeFile(join(fixture, "packages", "outside.test.ts"), "outside");
+
+      const script = commands
+        .join(" && ")
+        .replaceAll("/tmp/openclaw-selected-plugin-dirs", "selected-plugin-dirs");
+      run("/bin/sh", ["-eu", "-c", script], { OPENCLAW_BUNDLED_PLUGIN_DIR: pluginRoot }, fixture);
+
+      const expected = privateQa ? ["index.test.ts", "index.ts"] : ["index.ts"];
+      expect((await readdir(plugin)).toSorted()).toEqual(expected);
+      expect(await readFile(join(fixture, "packages", "outside.test.ts"), "utf8")).toBe("outside");
     },
   );
 
