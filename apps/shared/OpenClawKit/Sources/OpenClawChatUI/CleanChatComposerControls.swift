@@ -64,7 +64,7 @@ enum CleanChatComposerMetrics {
     /// primary disc. Inter's capitals sit in the middle of its line box (ascender minus cap height equals
     /// the descender), so the two spaces stay equal at every text size: inset + ascender − cap height on
     /// top, descender + gap + the disc's inset in its row below.
-    static let expandedEditorTopInset: CGFloat = 11
+    static let expandedEditorTopInset: CGFloat = 16
     static let expandedControlsGap: CGFloat = expandedEditorTopInset - (controlTouchSize - primaryVisualSize) / 2
     /// Concentric with the primary disc: its 16 pt radius plus its 10 pt inset.
     static let expandedCornerRadius: CGFloat = 26
