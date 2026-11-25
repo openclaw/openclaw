@@ -50,6 +50,14 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "accessibility-model-and-send-controls")
     }
 
+    func testChatComposerAddSheetReachesSkillsAndConnectorTools() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat", initialDestination: "chat", name: "chat-composer-add-pages"))
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(self.chatMessageInput(in: app).waitForExistence(timeout: 8))
+        self.verifyComposerAddSheet(in: app)
+    }
+
     func testChatComposerAddSheetPutsASkillInFrontOfTheDraft() throws {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat", initialDestination: "chat", name: "chat-composer-add-skill"))
@@ -63,7 +71,9 @@ extension OpenClawSnapshotUITests {
         app.buttons["chat-attachment-picker"].tap()
         let addSheet = app.descendants(matching: .any)["chat-composer-add-sheet"]
         XCTAssertTrue(addSheet.waitForExistence(timeout: 3))
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3), "The sheet opens with the keyboard down")
+        XCTAssertTrue(
+            app.keyboards.firstMatch.waitForNonExistence(timeout: 3),
+            "The sheet opens with the keyboard down")
         app.buttons["chat-composer-add-skills"].tap()
         let skill = app.buttons["chat-composer-skill-release"]
         XCTAssertTrue(skill.waitForExistence(timeout: 3))
