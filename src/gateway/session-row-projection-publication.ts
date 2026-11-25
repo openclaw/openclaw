@@ -25,7 +25,6 @@ export function createSessionRowPublication(owner: {
   runAsOwner: <T>(run: () => T) => T;
   registryFactsReady: () => boolean;
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
-  markRelated: (row: records.Row, includeChildren: boolean) => void;
   placement: {
     publish: (sessionId: string, change: SessionRowChange) => boolean;
     invalidate: (sessionId: string) => void;
@@ -42,7 +41,6 @@ export function createSessionRowPublication(owner: {
     entry: NonNullable<records.Row["storedEntry"]>,
     databaseFacts?: records.RetainedSessionRowDatabaseFacts,
   ) {
-    owner.markRelated(row, records.changesSessionRowDependents(row.storedEntry, entry));
     owner.runAsOwner(() => {
       if (entry.archivedAt !== undefined && !owner.registryFactsReady()) {
         owner.invalidateSelection();

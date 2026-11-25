@@ -25,3 +25,17 @@ describe("stripMarkdown HTML projection", () => {
     expect(stripMarkdown(input, { stripHtml: true, linkStyle: "label" })).toBe(expected);
   });
 });
+
+describe("stripMarkdown table projection", () => {
+  const tableHeader = "| ID | Value |\n| --- | --- |\n";
+  const codeRow = "| item | `  go  ` |";
+
+  it.each([
+    [codeRow, "item\n• Value:  go "],
+    [codeRow + "\n| after | Done |", "item\n• Value:  go \n\nafter\n• Value: Done"],
+    ["| item |   go   |", "item\n• Value: go"],
+    ["| [item](https://example.com) | `   ` |", "item (https://example.com)\n• Value:    "],
+  ])("preserves inline-code whitespace and trims cell padding: %s", (rows, expected) => {
+    expect(stripMarkdown(tableHeader + rows)).toBe(expected);
+  });
+});

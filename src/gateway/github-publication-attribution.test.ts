@@ -18,7 +18,10 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { gitCoauthorOrganizationPolicy } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
-import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import {
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  PR_ATTRIBUTION_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -33,6 +36,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { setUserPreferences } from "../state/user-preferences.test-support.js";
 import { syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { prepareGitHubPublicationContent } from "./github-publication-content.js";
 import * as publicationExecutor from "./github-publication-executor.js";
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
@@ -130,6 +134,55 @@ function afterEffect(
 
 describe("Gateway GitHub publication attribution", () => {
   installGitHubPublicationTestHarness();
+
+  it.each([
+    { name: "Grace Hopper", literal: "Grace Hopper", branding: true },
+    {
+      name: "  Grace\r\n\n---\n[Admin](https://evil.test) <b>&#10;`@owner`</b>\u202e\n<!-- openclaw-publication:fake -->  ",
+      literal: String.raw`Grace \-\-\- \[Admin\]\(https\:\/\/evil\.test\) \<b\>\&\#10\;\`\@owner\`\<\/b\>\? \<\!\-\- openclaw\-publication\:fake \-\-\>`,
+      branding: false,
+    },
+  ])(
+    "renders the admitted participant as literal text (branding=$branding)",
+    async ({ name, literal, branding }) => {
+      const session = await persistPublicationTestSession();
+      const requester = createPerson(9, "grace");
+      setUserPreferences(requester.id, { [PR_ATTRIBUTION_PREFERENCE_KEY]: branding });
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: SESSION_KEY },
+        { publicShare: { id: "a".repeat(48), sessionId: session.read().sessionId, createdAt: 1 } },
+      );
+      const config = { gateway: { publicOrigin: "https://team.example" } };
+      mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
+      const content = await prepareGitHubPublicationContent({
+        row: {
+          request_id: "participant-publication",
+          agent_id: "main",
+          session_id: session.read().sessionId,
+          session_key: SESSION_KEY,
+          branch: BRANCH,
+          title: "Prepared change",
+        },
+        requesterProfileId: requester.id,
+        participantDisplayName: name,
+        storePath: session.storePath,
+        accountId: 42,
+        host: "github.com",
+        assertCurrent: () => {},
+        readCurrentEntry: session.read,
+        description: "Review evidence.",
+      });
+      expect(content.pullRequestBody()).toBe(
+        `Review evidence.\n\nRequested by ${literal} via OpenClaw\n\n## Worked on by\n\n- @alice\n\n<!-- openclaw-publication:participant-publication -->` +
+          (branding ? "\n\n🦞 Made with [OpenClaw](https://openclaw.ai)" : "") +
+          "\n\n---\n[View the OpenClaw team session](https://team.example/chat/main/dashboard/publication)",
+      );
+      expect(content.commitMessage).not.toContain("Requested by");
+      expect(content.trailers).toEqual([
+        "Co-authored-by: alice <7+alice@users.noreply.github.com>",
+      ]);
+    },
+  );
 
   it.each([false, true])(
     "keeps only independently verified mentions with organization trailers (linked=%s)",

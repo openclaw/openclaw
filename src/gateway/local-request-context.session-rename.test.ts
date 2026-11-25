@@ -114,7 +114,7 @@ describe("guest session rename through the agent catalog", () => {
                 sessionKey: TARGET,
                 expectedSessionId: "session-tools-target-id",
               },
-              "Session-scoped writes require your own session",
+              "session is shared for this connection",
             ],
             [
               { action: "patch", label: "Stale", expectedSessionId: "replaced-session" },

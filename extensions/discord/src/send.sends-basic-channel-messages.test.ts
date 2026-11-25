@@ -6,7 +6,8 @@ import {
   Routes,
   type APIMessageTopLevelComponent,
 } from "discord-api-types/v10";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   createDiscordLoopbackRest,
   discordWebMediaMockFactory,
@@ -217,6 +218,80 @@ it("sends embed-only messages with a card receipt and enforced nonce", async () 
     enforce_nonce: true,
   });
   expectAbsent(requestBody(postMock), "content", "flags");
+});
+
+function parsedDiscordRuns(messages: string[]) {
+  type Node = { type: string; value?: string; children?: Node[] };
+  const runs: { kind: string; value: string }[] = [];
+  function visit(node: Node, kind: string) {
+    if (node.value !== undefined) {
+      const style = node.type === "text" ? kind : node.type;
+      const last = runs.at(-1);
+      if (last?.kind === style) {
+        last.value += node.value;
+      } else {
+        runs.push({ kind: style, value: node.value });
+      }
+    } else {
+      for (const child of node.children ?? []) {
+        visit(child, node.type === "paragraph" || node.type === "root" ? kind : node.type);
+      }
+    }
+  }
+  for (const message of messages) {
+    visit(fromMarkdown(message), "text");
+  }
+  return runs;
+}
+
+async function sendMarkdown(text: string) {
+  const { send, postMock } = sendHarness([], ChannelType.GuildText);
+  postMock.mockResolvedValue({ id: "sent", channel_id: "789" });
+  await send(text, { tableMode: "bullets" });
+  return postMock.mock.calls.map((_, index) => {
+    const { content } = requestBody(postMock, index);
+    assert(typeof content === "string" && content.length > 0 && content.length <= 2000);
+    return content;
+  });
+}
+
+it.each([1996, 1997, 1998])(
+  "keeps a %i-character table label bold across messages",
+  async (size) => {
+    const label = "a".repeat(size);
+    const messages = await sendMarkdown("| Name | State |\n|---|---|\n| " + label + " | Ok |");
+    const runs = parsedDiscordRuns(messages);
+    expect(runs).toEqual([
+      { kind: "strong", value: label },
+      { kind: "text", value: expect.stringMatching(/^\n?• State: Ok$/u) },
+    ]);
+    if (size === 1996) {
+      expect(messages).toEqual(["**" + label + "**", "• State: Ok"]);
+    }
+  },
+);
+
+it("keeps escaped stars in the label and the following row in order", async () => {
+  const prefix = "x".repeat(1995);
+  const messages = await sendMarkdown(
+    "| Name | State |\n|---|---|\n| " + prefix + "\\*z | Ok |\n| Next | Done |",
+  );
+  expect(parsedDiscordRuns(messages)).toEqual([
+    { kind: "strong", value: prefix + "*z" },
+    { kind: "text", value: "\n• State: Ok" },
+    { kind: "strong", value: "Next" },
+    { kind: "text", value: "\n• State: Done" },
+  ]);
+});
+
+const longDiscordText = "a".repeat(2001);
+it.each([
+  ["ordinary text", longDiscordText, "text", longDiscordText],
+  ["escaped stars", "\\*\\*" + longDiscordText + "\\*\\*", "text", "**" + longDiscordText + "**"],
+  ["inline code", "`**" + longDiscordText + "**`", "inlineCode", "**" + longDiscordText + "**"],
+  ["fenced code", "```\n**" + longDiscordText + "**\n```", "code", "**" + longDiscordText + "**"],
+])("preserves %s across Discord messages", async (_name, source, kind, value) => {
+  expect(parsedDiscordRuns(await sendMarkdown(source))).toEqual([{ kind, value }]);
 });
 
 it("keeps native components and embeds on the first message chunk only", async () => {

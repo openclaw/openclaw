@@ -196,6 +196,7 @@ export async function handleDirectiveOnly(
         agentId: activeAgentId,
         workspaceDir: params.workspaceDir,
         provider: modelSelection.provider,
+        previousProvider: provider,
         model: modelSelection.model,
         catalog: thinkingCatalog ?? [],
         rawRuntime: directives.rawModelRuntime,

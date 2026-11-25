@@ -51,13 +51,17 @@ defineDiscordVoiceTests(
     receiveRecordedSpeech,
   }) => {
     const lastAgentCommandTools = () => {
-      const args = lastAgentCommandArgs();
-      if (typeof args.senderIsOwner !== "boolean") {
-        throw new Error("expected agent command owner identity");
+      const { runContext } = lastAgentCommandArgs();
+      const senderId =
+        runContext && typeof runContext === "object" && "senderId" in runContext
+          ? runContext.senderId
+          : undefined;
+      if (typeof senderId !== "string") {
+        throw new Error("expected agent command sender identity");
       }
       return createOpenClawCodingTools({
         config: {},
-        senderIsOwner: args.senderIsOwner,
+        senderIsOwner: senderId === "100000000000000001",
         messageProvider: "discord",
         workspaceDir: "/tmp/openclaw-discord-voice-tools",
         agentDir: "/tmp/openclaw-discord-voice-agent",
@@ -199,7 +203,7 @@ defineDiscordVoiceTests(
           expect(agentCommandMock).not.toHaveBeenCalled();
         } else if (scenario.expectedOwner !== undefined) {
           expect(agentCommandMock).toHaveBeenCalledWith(
-            expect.objectContaining({ senderIsOwner: scenario.expectedOwner }),
+            expect.objectContaining({ runContext: { senderId: scenario.userId } }),
             expect.anything(),
           );
         }
@@ -530,7 +534,7 @@ defineDiscordVoiceTests(
       await receiveVoiceUtterance(manager, "u-role");
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
       const expectedSpeaker = {
-        senderIsOwner: false,
+        runContext: { senderId: "u-role" },
         message: expect.stringContaining('speaker "Role Speaker"'),
       };
       expect(lastAgentCommandArgs()).toMatchObject(expectedSpeaker);

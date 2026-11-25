@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -53,6 +53,12 @@ it.each(["settled", "pending"] as const)(
     });
     await hydrate();
     const load = async (index: number) => (await inspect(profiles[index]!.id)).loadBytes();
+    // Keep unrelated cold reads outside the held read's real-time budget.
+    for (let index = 0; index < 32; index++) {
+      if (index !== 1) {
+        await load(index);
+      }
+    }
     const retained = await inspect(profiles[1]!.id);
     const started = createDeferred();
     const release = createDeferred();
@@ -67,26 +73,33 @@ it.each(["settled", "pending"] as const)(
           })
         : undefined;
     const firstLoad = retained.loadBytes();
-    if (phase === "pending") {
-      await started.promise;
-    } else {
-      await firstLoad;
-    }
-    for (let index = 0; index < 32; index++) {
-      if (index !== 1) {
-        await load(index);
-      }
-    }
-    await load(0);
-    await load(32);
     try {
+      if (phase === "pending") {
+        await awaitGateBeforeSettlement(
+          started.promise,
+          firstLoad,
+          "Avatar read settled before hold",
+        );
+      } else {
+        await firstLoad;
+      }
+      for (let index = 0; index < 32; index++) {
+        if (index !== 1) {
+          await load(index);
+        }
+      }
+      await load(0);
+      await load(32);
       if (phase === "pending") {
         expect(retained.loadBytes()).toBe(firstLoad);
       }
     } finally {
       release.resolve();
-      await firstLoad;
-      heldRead?.mockRestore();
+      try {
+        await firstLoad;
+      } finally {
+        heldRead?.mockRestore();
+      }
     }
 
     const other = ensureProfileForEmail("other@example.test", options);

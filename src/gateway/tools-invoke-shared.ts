@@ -45,7 +45,6 @@ import {
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
-import { ADMIN_SCOPE } from "./method-scopes.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import {
   authorizeGatewaySessionCreation,
@@ -326,7 +325,7 @@ async function invokeGatewayToolWithSignal(
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     operatorRoleActor: params.operatorRoleActor,
     openclawIdPrincipal: params.openclawIdPrincipal ?? sourceClient?.internal?.openclawIdPrincipal,
-    scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
+    scopes: [...(params.operatorScopes ?? [])],
   });
   const sessionEntry = params.preparedSession
     ? params.preparedSession.entry

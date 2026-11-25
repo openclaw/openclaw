@@ -1,5 +1,6 @@
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 
 type RecordedPublication = {
   url: string;
@@ -40,9 +41,7 @@ export function captureOwnGitHubPullRequestReader(
     };
   }
   if (!profileId) {
-    throw new Error(
-      "This conversation has no Gateway operator identity, so it cannot inspect PRs. Ask from your own Gateway profile, or ask an admin to link this channel account to it.",
-    );
+    throw new OperatorRefusalError("channel-unverified", { action: "inspect this PR" });
   }
   const profile = captureResidentUserProfileAccess(profileId);
   const accountIds = () => {
@@ -56,9 +55,7 @@ export function captureOwnGitHubPullRequestReader(
   };
   const admittedIds = accountIds();
   if (!admittedIds.length && !publication) {
-    throw new Error(
-      "Link your GitHub account once in the Control UI under Settings → Profile → Identity, on the configured GitHub host, then retry the inspection.",
-    );
+    throw new OperatorRefusalError("github-not-linked", { action: "inspect this PR" });
   }
   return {
     host,

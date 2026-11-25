@@ -16,6 +16,7 @@ import * as rootModule from "../infra/openclaw-root.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type * as UpdateInstallStatus from "../infra/update-install-status.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
 import type * as ProcessExec from "../process/exec.js";
@@ -169,7 +170,16 @@ it.each(["succeeded", "rolled-back"] as const)(
     vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
     const options = { env: process.env };
     openOpenClawStateDatabase(options);
-    const run = await createUpdateRunAsync({ trigger: "cli" }, options);
+    const releaseAdmission: NonNullable<UpdateRunRecord["origin"]["releaseAdmission"]> = {
+      owner: "candidate",
+      candidateVersion: VERSION,
+      verdict: "admit",
+      warnings: [{ code: "configured-plugin-path-unavailable", message: "Plugin path is absent" }],
+    };
+    const run = await createUpdateRunAsync(
+      { trigger: "cli", origin: { releaseAdmission } },
+      options,
+    );
     const trial: Trial = {
       v: 2,
       runId: run.runId,
@@ -198,6 +208,7 @@ it.each(["succeeded", "rolled-back"] as const)(
     expect(finished).toMatchObject({
       status: status === "succeeded" ? "succeeded" : "failed",
       phase: "finished",
+      origin: { releaseAdmission },
     });
     if (status === "succeeded") {
       expect(finished).toMatchObject({

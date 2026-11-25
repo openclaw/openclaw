@@ -8,6 +8,7 @@ import {
   captureSqliteDatabaseAdmissions,
   revokeSqliteDatabaseAdmissions,
 } from "../sqlite-database-admission.js";
+import { StartupMaintenanceRequiredError } from "../startup-maintenance-required.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
 import {
@@ -46,6 +47,172 @@ function fixture(
 }
 
 describe.skipIf(!connection)("PostgreSQL schema admission", () => {
+  it("verifies an unsealed catalog in a quoted namespace", () => {
+    withEngineStoreAdmission(() => {
+      using store = createPostgresEngineTestFixture({
+        directory: dirs.make("pg-quoted-catalog-"),
+        connection: connection!,
+        schemaPrefix: "quoted",
+        schema: { ...schema, id: "fixture-hyphen" },
+      });
+      store.open().exec("UPDATE openclaw_schema_meta SET fingerprint = NULL, ddl_hash = NULL");
+      store.invalidate();
+      expect(store.open().prepare("SELECT id FROM items").all()).toEqual([]);
+    });
+  });
+
+  it.each([false, true])(
+    "admits a sealed additive newer writer without rewriting metadata (readOnly=%s)",
+    (readOnly) => {
+      fixture(({ db, open, invalidate }) => {
+        const additiveSql =
+          "ALTER TABLE items ADD COLUMN label TEXT; CREATE TABLE future_items (id BIGINT PRIMARY KEY);";
+        const nextDdl = `${ddl}\n${additiveSql}`;
+        const compatibleStep = {
+          version: 2,
+          minReader: 1,
+          // The fixture is also a valid T+1 writer when this test runs against unpatched T.
+          sql: `${additiveSql}
+            ALTER TABLE openclaw_schema_meta ADD COLUMN IF NOT EXISTS min_reader BIGINT;
+            UPDATE openclaw_schema_meta SET min_reader = 1;`,
+          fromSchema: { postgres: ddl },
+          schema: { postgres: nextDdl },
+        };
+        expect(db.prepare("SELECT * FROM openclaw_schema_meta").get()).not.toHaveProperty(
+          "min_reader",
+        );
+        const next = {
+          ...schema,
+          version: 2,
+          postgres: nextDdl,
+          postgresMigrations: [compatibleStep],
+        };
+        const writer = open(next);
+        const read = (target = schema) =>
+          openPostgresEngineTestStore({
+            anchor: writer.anchor,
+            schema: target,
+            input: { connection: connection!, schemaPrefix: "r2", readOnly: readOnly || undefined },
+          });
+        expect(
+          writer.prepare("SELECT version, min_reader FROM openclaw_schema_meta").get(),
+        ).toEqual({
+          version: 2,
+          min_reader: 1,
+        });
+        invalidate();
+        const before = writer.prepare("SELECT * FROM openclaw_schema_meta").get();
+        const reader = read();
+        try {
+          expect(getPostgresPhysicalFacts(reader)).toMatchObject({ version: 2, minReader: 1 });
+          expect(reader.prepare("SELECT id, value FROM items").all()).toEqual([]);
+          if (!readOnly) {
+            reader.exec("INSERT INTO items (id, value) VALUES (1, 5)");
+            expect(reader.prepare("SELECT id, value FROM items").all()).toEqual([
+              { id: 1, value: 6 },
+            ]);
+          }
+          expect(writer.prepare("SELECT * FROM openclaw_schema_meta").get()).toEqual(before);
+        } finally {
+          reader.close();
+        }
+        invalidate();
+        const strictWriter = open({
+          ...next,
+          version: 3,
+          postgresMigrations: [
+            compatibleStep,
+            {
+              version: 3,
+              sql: "SELECT 1",
+              fromSchema: compatibleStep.schema,
+              schema: compatibleStep.schema,
+            },
+          ],
+        });
+        expect(
+          strictWriter.prepare("SELECT version, min_reader FROM openclaw_schema_meta").get(),
+        ).toEqual({ version: 3, min_reader: null });
+        invalidate();
+        expect(() =>
+          read({ ...schema, postgres: "SELECT forbidden_schema_work_before_reader_floor" }),
+        ).toThrow(StartupMaintenanceRequiredError);
+      });
+    },
+  );
+
+  it.each(["absent", "null"] as const)("uses the writer version for a legacy %s floor", (floor) => {
+    fixture(({ db, open, invalidate }) => {
+      if (floor === "null") {
+        db.exec("ALTER TABLE openclaw_schema_meta ADD COLUMN min_reader BIGINT");
+      }
+      invalidate();
+      expect(getPostgresPhysicalFacts(open())).toMatchObject({ version: 1, minReader: 1 });
+      db.exec("UPDATE openclaw_schema_meta SET version = 2");
+      invalidate();
+      expect(() => open()).toThrow(/schema 2 requires minimum reader 2/);
+    });
+  });
+
+  it.each([-1, 0, 2])("refuses invalid minimum reader %s for writer version 1", (minReader) => {
+    fixture(({ db, open, invalidate }) => {
+      db.exec("ALTER TABLE openclaw_schema_meta ADD COLUMN min_reader BIGINT");
+      db.prepare("UPDATE openclaw_schema_meta SET min_reader = ?").run(minReader);
+      invalidate();
+      expect(() => open()).toThrow("Cannot read PostgreSQL catalog or metadata");
+    });
+  });
+
+  it.each(["unsealed", "server major", "constrained extra"] as const)(
+    "refuses a newer writer with %s without rewriting metadata",
+    (change) => {
+      fixture(({ db, open, invalidate }) => {
+        db.exec("ALTER TABLE openclaw_schema_meta ADD COLUMN min_reader BIGINT");
+        db.exec("UPDATE openclaw_schema_meta SET version = 2, min_reader = 1");
+        if (change === "unsealed") {
+          db.exec("UPDATE openclaw_schema_meta SET fingerprint = NULL, ddl_hash = NULL");
+        } else if (change === "server major") {
+          db.exec("UPDATE openclaw_schema_meta SET server_major = 0");
+        } else {
+          db.exec("ALTER TABLE items ADD COLUMN unsafe TEXT NOT NULL DEFAULT 'unsafe'");
+        }
+        const before = db.prepare("SELECT * FROM openclaw_schema_meta").get();
+        invalidate();
+        expect(() => open()).toThrow(/schema seal|schema drift/);
+        expect(db.prepare("SELECT * FROM openclaw_schema_meta").get()).toEqual(before);
+      });
+    },
+  );
+
+  it.each([
+    ["bare nullable", "TEXT", true],
+    ["not null", "TEXT NOT NULL DEFAULT 'unsafe'", false],
+    ["default", "TEXT DEFAULT 'unsafe'", false],
+    ["unique", "TEXT UNIQUE", false],
+    ["check", "TEXT CHECK (extra IS NULL)", false],
+    ["foreign key", "BIGINT REFERENCES items(id)", false],
+    ["generated", "BIGINT GENERATED ALWAYS AS (value + 1) STORED", false],
+    ["domain", "future_domain", false],
+  ] as const)("validates unsealed same-version %s extras", (_name, definition, allowed) => {
+    fixture(({ db, open, invalidate }) => {
+      db.exec("CREATE DOMAIN future_domain AS TEXT CHECK (VALUE IS NULL)");
+      db.exec(`ALTER TABLE items ADD COLUMN extra ${definition};
+        CREATE TABLE future_items (id BIGINT PRIMARY KEY);
+        UPDATE openclaw_schema_meta SET fingerprint = NULL, ddl_hash = NULL`);
+      invalidate();
+      if (allowed) {
+        const reopened = open();
+        expect(getPostgresPhysicalFacts(reopened)).toMatchObject({ version: 1, minReader: 1 });
+        reopened.exec("INSERT INTO items (id, value) VALUES (1, 5)");
+        expect(reopened.prepare("SELECT id, value FROM items").all()).toEqual([
+          { id: 1, value: 6 },
+        ]);
+      } else {
+        expect(() => open()).toThrow("schema drift detected against generated DDL");
+      }
+    });
+  });
+
   it("restores runtime statement limits after maintenance commits and nested rollbacks", () => {
     fixture(({ db, open, invalidate }) => {
       db.exec("SET statement_timeout = '37s'");
@@ -358,6 +525,7 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
         ],
       };
       const before = db.prepare("SELECT * FROM openclaw_schema_meta").get();
+      expect(before).toMatchObject({ version: 1 });
       expect(() => open(target)).toThrow("missing_column");
       expect(db.prepare("SELECT * FROM openclaw_schema_meta").get()).toEqual(before);
       expect(db.prepare("SELECT * FROM items").all()).toEqual([{ id: 1, value: 6 }]);
@@ -402,7 +570,10 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
         { id: 1, value: 6, label: "migrated", revision: 1 },
       ]);
       expect(getPostgresPhysicalFacts(migrated)?.version).toBe(3);
-      expect(() => open(schema)).toThrow(/newer.*reverse-port/);
+      expect(migrated.prepare("SELECT version FROM openclaw_schema_meta").get()).toEqual({
+        version: 3,
+      });
+      expect(() => open(schema)).toThrow(/minimum reader 3.*reverse-port/);
     });
   });
 

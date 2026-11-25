@@ -14,7 +14,7 @@ Every model has a context window: the maximum number of tokens it can process. W
 2. The summary is saved in the session transcript.
 3. Recent messages are kept intact.
 
-In the Control UI, compaction appears as ordinary activity: **Compacting** while running and **Compacted context** when complete. It joins nearby tool activity; the collapsed summary describes the work without showing operation counts. Manual compaction while the agent is idle uses the same standalone activity row. Expand the row to see tokens saved and the percentage reduction when both before and after counts are available.
+In the Control UI, compaction appears as ordinary activity: **Compacting** while running and **Compacted context** when complete. It joins nearby tool activity; the collapsed tool summary describes the work without showing operation counts. If the turn has a **Worked** disclosure, expand it to find the compaction rows. Manual compaction while the agent is idle uses the same standalone activity row. Expand a compaction row to see tokens saved and the percentage reduction when both before and after counts are available.
 
 OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 

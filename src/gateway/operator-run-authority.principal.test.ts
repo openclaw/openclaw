@@ -287,7 +287,7 @@ it("admits the recorded Gateway owner without roles and never substitutes it for
     const other = ensureProfileForEmail("roleless@example.test");
     await expect(
       prepareSessionPrincipalRunAuthority({ ...params, profileId: other.id }),
-    ).rejects.toThrow("Gateway access is not active");
+    ).rejects.toThrow("Your role on this Gateway does not allow it");
   }));
 
 it.for([
@@ -595,7 +595,7 @@ it.each([
         operatorSource: captureQueuedOperatorRecoverySource(exec.sourceAuthority),
       },
     });
-    using wake = vi.spyOn(execNotify, "wakeOwedExec").mockImplementation(() => {});
+    using wake = vi.spyOn(execNotify, "wakeOwedExec").mockResolvedValue();
     await continueSessionQueuedInputs(exec.context, exec.target, {
       signal: new AbortController().signal,
       assertCurrent: () => {},

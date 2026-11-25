@@ -33,6 +33,7 @@ import {
   checkUpdateInstallationSlot,
   resolveInstalledPackageFrontend,
   resolveUpdateInstallationIdentity,
+  UnverifiedForegroundUpdateOwnerError,
 } from "./installation-identity.js";
 import { TRIAL_BUDGET_MS } from "./launcher.js";
 import { PREPARE_DEADLINE_MS, markForwarding, prepareUpdate } from "./run.js";
@@ -211,7 +212,14 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
   if (await delegateInstalledPackageUpdate(opts)) {
     return;
   }
-  await checkUpdateInstallationSlot(opts.runningRoot);
+  try {
+    await checkUpdateInstallationSlot(opts.runningRoot);
+  } catch (error) {
+    if (!(error instanceof UnverifiedForegroundUpdateOwnerError) || !opts.restart || opts.tag) {
+      throw error;
+    }
+    // A local update.run can identify its own argv; preparation rechecks under its lock.
+  }
   const { channel } = opts;
   let timeoutMs = opts.timeoutMs;
   if (!opts.yes) {
@@ -332,11 +340,16 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     )) &&
     record
   ) {
+    const releaseAdmission = opts.json ? record.origin.releaseAdmission : undefined;
     record = await followRun(
       record.runId,
       opts.json,
       Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
     );
+    // The local preparer recorded admission; the Gateway follow-up carries only wire fields.
+    if (record && releaseAdmission) {
+      record = { ...record, origin: { ...record.origin, releaseAdmission } };
+    }
   }
   report(record, opts.json);
   process.exitCode =

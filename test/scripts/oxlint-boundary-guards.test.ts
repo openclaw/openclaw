@@ -5,6 +5,7 @@ import { join, posix, resolve } from "node:path";
 import { beforeAll, expect, it } from "vitest";
 import noForcedProcessExit from "../../scripts/lib/no-forced-process-exit.mjs";
 import { ADMISSION_FILES } from "../../scripts/lib/no-operator-permission-read.mjs";
+import { REFUSAL_FILES } from "../../scripts/lib/no-operator-refusal-construction.mjs";
 import noRecursiveReaddir from "../../scripts/lib/no-recursive-readdir.mjs";
 import {
   CAPABILITY_PROVENANCE_FILES,
@@ -34,24 +35,28 @@ const cases = [
   ["no-register-http-handler-call", "boundary-calls.test-harness.tsx", 0],
   ["no-widen-then-assert", "widen-then-assert-violation.test.ts", 3, [3, 7, 13]],
   ["no-operator-permission-read", "operator-permission-recheck-violation.ts", 4, [1, 4, 6, 8]],
+  // A refusal built at tool time (line 4) and a subclass (line 7); instanceof reads are fine.
+  ["no-operator-refusal-construction", "operator-refusal-construction-violation.ts", 2, [4, 7]],
   // Planted divergence: a resumed turn reads its start kind; owner status comes from
-  // destructuring defaults (source and aliased destination) and from scopes. Pass-throughs
-  // (lines 9-10) are not reported.
+  // destructuring defaults (source and aliased destination), from scopes, from defaults to
+  // owner and from function values. Pass-throughs (lines 9-10) and narrowing forms (lines
+  // 23-30) are not reported.
   [
     "no-turn-authority-derivation",
     "turn-authority-derivation-violation.ts",
-    5,
-    [11, 12, 13, 13, 18],
+    9,
+    [11, 12, 13, 13, 18, 32, 33, 36, 41],
   ],
   ["no-chained-type-assertions", "chained-type-assertions-violation.ts", 3],
 ] satisfies [string, string, number, number[]?][];
 
 // Shrink only. When a file leaves a list, lower its ceiling in the same change; never raise one.
 const allowlists = [
-  ["no-operator-permission-read", "", ADMISSION_FILES, 59],
-  ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 19],
-  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 51],
-  ["no-turn-authority-derivation", "Capability module:", CAPABILITY_PROVENANCE_FILES, 4],
+  ["no-operator-permission-read", "", ADMISSION_FILES, 58],
+  ["no-operator-refusal-construction", "", REFUSAL_FILES, 9],
+  ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 18],
+  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 18],
+  ["no-turn-authority-derivation", "Capability module:", CAPABILITY_PROVENANCE_FILES, 3],
 ] as const;
 
 it.each(allowlists)(

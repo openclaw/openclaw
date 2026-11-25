@@ -1,4 +1,5 @@
 import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
+import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
@@ -24,6 +25,15 @@ export function normalizeNextcloudTalkAllowEntry(raw: string): string {
     ? `users/${normalized}`
     : normalized;
 }
+
+export const nextcloudTalkIngressIdentity = {
+  key: "nextcloud-talk-user-id",
+  // Bot webhooks are HMAC-checked with the bot secret before the actor id is read.
+  authentication: "verified",
+  normalize: (value: string) => normalizeNextcloudTalkAllowEntry(value) || null,
+  sensitivity: "pii",
+  entryIdPrefix: "nextcloud-talk-entry",
+} satisfies StableChannelIngressIdentityParams;
 
 export function normalizeNextcloudTalkAllowlist(
   values: Array<string | number> | undefined,

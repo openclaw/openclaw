@@ -445,6 +445,7 @@ export function renderChatComposerView(
               </ChatLazyBoundary>
             ) : undefined}
             <div class="agent-chat__composer-lede">
+              <regions.ComposerInviteAccess composer={props} context={context()} />
               {props.sessionAdmitted === false ? undefined : (
                 <>
                   <McpAppCatalog
@@ -472,6 +473,7 @@ export function renderChatComposerView(
               )}
               <AttachmentPreview {...props} readRevision={context().attachmentReadRevision} />
               <AttachmentReadStatus
+                videoStatus={context().runControlsProps.videoPreparationStatus?.message}
                 pendingReads={
                   props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0
                 }
@@ -479,7 +481,7 @@ export function renderChatComposerView(
               <ChatAttachmentInputs
                 {...props}
                 inputHandle={inputHandle}
-                disabled={!context().canCompose}
+                disabled={!context().canCompose || props.suggestionComposer}
                 cameraActive={props.cameraActive !== false}
               />
               {props.realtimeTalkVideoStream ? (

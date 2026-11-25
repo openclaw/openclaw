@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import * as config from "../../../config/config.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { decideTurnGrant } from "../../../gateway/operator-admission.js";
 import * as operatorCapture from "../../../gateway/operator-run-authority.js";
 import {
   resolveGatewayChatCronCreatorAuthorityAdmission,
@@ -89,7 +90,7 @@ export function registerRequesterAutomationCustodyTests({
         createCronCreatorAuthorityCapability(
           requesterTurnRunId,
           { kind: "unknown" },
-          { source: "control-ui-admin" },
+          { source: "operator" },
         ),
         "original automation management capability",
       );
@@ -155,6 +156,7 @@ export function registerRequesterAutomationCustodyTests({
             runId: "same-human-next-message",
             resolvedSessionKey: requesterSessionKey,
             client: freshClient,
+            grant: decideTurnGrant(freshClient.connect.scopes ?? []),
             hasExplicitOrigin: false,
             hasRestoredCronContinuation: false,
             isIncognito: false,
@@ -162,7 +164,7 @@ export function registerRequesterAutomationCustodyTests({
             turnKind: "main",
             isDirectExternalUser: true,
           }),
-        ).toMatchObject({ managementEntitlement: { source: "control-ui-admin" } });
+        ).toMatchObject({ managementEntitlement: { source: "operator" } });
         const resultText = "Original child result";
         await updateRun(runId, (draft) => {
           draft.execution = {

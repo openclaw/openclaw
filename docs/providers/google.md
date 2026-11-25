@@ -181,6 +181,12 @@ The bundled catalog also includes the stable `google/gemini-3.8-flash`, with a
 `gemini-flash` alias selects this model; `gemini-flash-lite` selects
 `google/gemini-3.5-flash-lite`.
 
+From December 1, 2026, Google serves `gemini-2.5-pro` requests with
+`gemini-3.8-flash` and `gemini-2.5-flash` requests with `gemini-3.5-flash-lite`,
+billed at the new model's rate ([Gemini API changelog](https://ai.google.dev/gemini-api/docs/changelog)).
+OpenClaw marks `google/gemini-2.5-pro` and `google/gemini-2.5-flash` as deprecated
+but keeps configured refs unchanged; choose a replacement model yourself.
+
 ## Capabilities
 
 | Capability             | Supported                     |
@@ -693,7 +699,7 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
       agents: {
         defaults: {
           models: {
-            "google/gemini-2.5-pro": {
+            "google/gemini-3.8-flash": {
               params: {
                 cachedContent: "cachedContents/prebuilt-context",
               },

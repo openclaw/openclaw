@@ -20,7 +20,7 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => ({
 
 installGeneratedPluginTempRootCleanup();
 
-describe("config io shell env expected keys", () => {
+describe.each([undefined, "core-only"] as const)("shell env keys (%s)", (pluginValidation) => {
   beforeEach(() => {
     loadShellEnvFallback.mockClear();
   });
@@ -73,6 +73,7 @@ describe("config io shell env expected keys", () => {
       env,
       homedir: () => home,
       observe: false,
+      pluginValidation,
     }).readBestEffortConfig();
 
     expect(loadShellEnvFallback).toHaveBeenCalledOnce();
