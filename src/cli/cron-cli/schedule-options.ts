@@ -296,7 +296,7 @@ function resolveDirectSchedule(
     const tz = parseCronTimezoneOption(options.tz);
     if (!isValidCronExpression(options.cronExpr, tz)) {
       throw new CronCliError(
-        `OpenClaw couldn’t use the cron expression “${options.cronExpr}”. Use five fields like "0 9 * * *" or six fields like "0 0 9 * * *".`,
+        `OpenClaw couldn’t use the cron expression “${options.cronExpr}”. For example, "0 7 * * *" means every day at 7:00 AM. Six-field expressions put seconds first.`,
       );
     }
     return {
