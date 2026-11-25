@@ -19,7 +19,7 @@ import {
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 
 /** Sources that draw Settings pages. */
-export const SETTINGS_SOURCES = [
+const SETTINGS_SOURCES = [
   "ui/src/components/mcp-servers-card.tsx",
   "ui/src/features/github-connections/",
   "ui/src/pages/about/",
@@ -42,8 +42,6 @@ export const SETTINGS_SOURCES = [
   "ui/src/pages/secrets/",
   "ui/src/pages/skills/",
 ];
-/** Files under those folders that draw pages outside Settings, with the page they draw. */
-export const NOT_SETTINGS_SOURCES: Readonly<Record<string, string>> = {};
 /** Rows that name their setting through a required prop of their own. */
 const SELF_NAMED_ROWS: Readonly<Record<string, (value: string) => string>> = {
   LocalToggleRow: (preference) => `local.${preference}`,
@@ -63,11 +61,10 @@ const guidance = (source: string) =>
   `Give the row \`setting="<id>"\` (raw rows: \`id="<id>"\`) with an ID listed in ${source}, or mark a status, fact or action row \`info\` (raw rows: \`data-settings-info\`).`;
 const CORE_LIST = "src/shared/control-ui-settings";
 
-export function isSettingsSource(file: string) {
+function isSettingsSource(file: string) {
   return (
     file.endsWith(".tsx") &&
     !isTest(file) &&
-    !(file in NOT_SETTINGS_SOURCES) &&
     SETTINGS_SOURCES.some((source) =>
       source.endsWith("/") ? file.startsWith(source) : file === source,
     )
