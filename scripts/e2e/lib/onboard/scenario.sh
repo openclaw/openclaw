@@ -407,6 +407,19 @@ validate_guided_health_log() {
       fi
       ;;
     reachable-unhealthy)
+      grep -q "QA_ONBOARD_HEALTH_PREFLIGHT_OK" "$GATEWAY_LOG_PATH" || {
+        echo "Diagnostic preflight never completed successfully"
+        return 1
+      }
+      # A retry of diagnostic preflight must not masquerade as the final RPC failure.
+      if log_contains "Gateway not reachable after waiting" || log_contains "Gateway diagnostic budget exhausted"; then
+        echo "The health fault occurred in preflight, not the final health RPC"
+        return 1
+      fi
+      log_contains "synthetic onboarding health failure" || {
+        echo "Classic onboarding did not surface the injected final RPC error"
+        return 1
+      }
       grep -q "QA_ONBOARD_HEALTH_FAULT" "$GATEWAY_LOG_PATH" || {
         echo "The intended diagnostic health RPC never reached the fault proxy"
         return 1

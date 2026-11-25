@@ -29,13 +29,14 @@ const server = createServer((front, reply) => {
 });
 const sockets = new WebSocketServer({ server });
 const peers = new Set();
-let backendHealthRequests = 0;
+let preflightSucceeded = false;
 
 sockets.on("connection", (front) => {
   const back = new WebSocket(`ws://127.0.0.1:${backendPort}`);
   const peer = { front, back };
   const pending = [];
   let clientMode;
+  const preflightIds = new Set();
   peers.add(peer);
 
   front.on("message", (raw) => {
@@ -51,7 +52,7 @@ sockets.on("connection", (front) => {
       request.type === "req" &&
       request.method === "health" &&
       clientMode === "backend" &&
-      ++backendHealthRequests > 1
+      preflightSucceeded
     ) {
       console.log("QA_ONBOARD_HEALTH_FAULT");
       front.send(
@@ -63,6 +64,9 @@ sockets.on("connection", (front) => {
         }),
       );
       return;
+    }
+    if (request.type === "req" && request.method === "health" && clientMode === "backend") {
+      preflightIds.add(request.id);
     }
     if (back.readyState === WebSocket.OPEN) {
       back.send(raw);
@@ -76,6 +80,11 @@ sockets.on("connection", (front) => {
     }
   });
   back.on("message", (raw) => {
+    const response = JSON.parse(raw.toString());
+    if (response.type === "res" && preflightIds.delete(response.id) && response.ok === true) {
+      preflightSucceeded = true;
+      console.log("QA_ONBOARD_HEALTH_PREFLIGHT_OK");
+    }
     if (front.readyState === WebSocket.OPEN) {
       front.send(raw);
     }
