@@ -9,7 +9,7 @@ import type * as RecoveryAdmissionModule from "../../infra/update-run-recovery-a
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import type * as ReleaseCliModule from "../../update/cli.js";
 import { checkUpdateInstallationSlot } from "../../update/installation-identity.js";
-import { resolvePrefix } from "../../update/store.js";
+import { readTrial, resolvePrefix } from "../../update/store.js";
 import type * as SharedModule from "./shared.js";
 import type * as AdmissionModule from "./update-command-admission-report.js";
 import type * as AdmittedModule from "./update-command-admitted.js";
@@ -158,17 +158,25 @@ afterEach(async () => {
   await home.restore();
 });
 const options = () => ({ run: { runId: "routing-test", env: process.env } });
-async function converted() {
+async function converted(relativeSlot = "openclaw") {
   const prefix = resolvePrefix();
-  const selected = path.join(prefix, "releases/selected/openclaw");
+  const selected = path.join(prefix, "releases", "selected", relativeSlot);
   await packageAt(selected);
-  await fs.symlink(selected, path.join(prefix, "openclaw"), "junction");
+  const slot = path.join(prefix, relativeSlot);
+  await fs.mkdir(path.dirname(slot), { recursive: true });
+  await fs.symlink(selected, slot, "junction");
 }
 
-it.each([{ channel: "dev" }, { tag: "main" }])(
-  "refuses a converted installation's legacy route %j",
-  async (opts) => {
-    await converted();
+it.each([
+  [{ channel: "dev" }, "package", "openclaw"],
+  [{ tag: "main" }, "package", "openclaw"],
+  [{ channel: "stable" }, "git", "lib/node_modules/openclaw"],
+] as const)(
+  "refuses a converted installation's mutating route %j (%s, %s)",
+  async (opts, kind, slot) => {
+    facts.kind = kind;
+    await converted(slot);
+    expect(await readTrial()).toBeNull();
     await expect(updateCommand({ ...options(), ...opts })).rejects.toThrow("resident launcher");
     expect(legacy).not.toHaveBeenCalled();
     expect(release).not.toHaveBeenCalled();

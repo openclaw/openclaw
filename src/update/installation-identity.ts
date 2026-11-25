@@ -8,6 +8,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { readGatewayLockProcessCmdline } from "../infra/gateway-lock-process.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
+import { servingGitReleaseSlot } from "../infra/git-release-paths.js";
 import { readPackageVersion } from "../infra/package-json.js";
 import { readPackageReleaseSlotSync } from "../infra/package-release-slot-path.js";
 import { resolveUpdateInstallKind } from "../infra/update-check.js";
@@ -101,7 +102,7 @@ export async function hasReleaseUpdateOwner(
 ): Promise<boolean> {
   const prefix = resolvePrefix(env);
   return Boolean(
-    readPackageReleaseSlotSync(path.join(prefix, "openclaw")) || (await readTrial(prefix))?.v === 2,
+    readPackageReleaseSlotSync(servingGitReleaseSlot(prefix)) || (await readTrial(prefix))?.v === 2,
   );
 }
 

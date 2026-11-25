@@ -1,5 +1,5 @@
-# PR #204866: measured net +711 test lines minus the standard 400-line allowance = 311.
-# src/cli/update-cli/update-command-release-owner.test.ts: converted routing refusals, node-only package ownership without a trial, documented target controls, and first-conversion foreground/native root identity.
+# PR #204866: measured net +719 test lines minus the standard 400-line allowance = 319.
+# src/cli/update-cli/update-command-release-owner.test.ts: converted routing refusals including the settled legacy Git slot without a trial, node-only package ownership, documented targets, and first-conversion root identity.
 # src/cli/update-cli/update-command-immutable-owner.test.ts: immutable activation and preview cannot replace a converted installation.
 # src/cli/update-cli/update-command-node-package-advice.test.ts: human/JSON package-result instructions and executable platform quoting, without service inspection or invented activation after failure.
 # src/cli/update-cli/update-command-post-update.test-support.ts: real finalization publishes exactly the node advice while preserving the absent-Gateway no-restart outcome.
@@ -13,4 +13,4 @@
 # src/update/prepare.test.ts: verified Gateway custody defers plugin maintenance; converted node-only preparation retains its resident owner and publishes a pending trial.
 # src/infra/git-release.test.ts: ordinary service planning keeps both legacy release layouts on their launcher; explicit strings remain reserved for recovery.
 # src/cli/update-cli/update-command-fresh-preview.test.ts: a converted installation reaches the real structured preview without changing its release slot, package, trial, or state database.
-311
+319
