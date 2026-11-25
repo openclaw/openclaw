@@ -34,7 +34,6 @@ import {
 } from "./app-sidebar-session-types.ts";
 import { createSessionAttention } from "./session-attention.ts";
 import { createSessionOwnerFilterQuery } from "./session-owner-filter.ts";
-import { SidebarSelectedAgentRow } from "./sidebar-agent-row.tsx";
 import { createSidebarScroll } from "./sidebar-context-controller.ts";
 import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 import { createSidebarPeople } from "./sidebar-people.ts";
@@ -350,11 +349,8 @@ function AppSidebarContent(
     getSessions: () => prepared().sessionDataContext?.sessions,
   });
   const SessionBody = () => hostView.renderSessionsBody();
-  // The agent row stays above any plugin-provided list: it is how the list changes agents.
-  const Sessions = () => [
-    <Show when={hostView.sidebarAgentsMode === "chip"}>
-      <SidebarSelectedAgentRow host={hostView} />
-    </Show>,
+  // The selected agent's row sits in the pinned header, above any plugin-provided list.
+  const Sessions = () => (
     <PluginSurface
       surface="session-list"
       props={{
@@ -364,8 +360,8 @@ function AppSidebarContent(
       }}
       presented={hostView.navigationVisible}
       renderDefault={() => <SessionBody />}
-    />,
-  ];
+    />
+  );
   const content = hostView.renderSidebar(Sessions, scroll, {
     pending: snapshotPending,
     saved: () => {

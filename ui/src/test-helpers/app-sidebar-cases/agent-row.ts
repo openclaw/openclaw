@@ -160,6 +160,24 @@ describe("AppSidebar selected agent row", () => {
     );
   });
 
+  it("puts the agent row above the Sessions header, beside the collapse button", async () => {
+    const { sidebar, dom } = await mountAgent();
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    const lead = dom.query(".sidebar-agent-lead")!;
+    const toolbar = dom.query(".sidebar-session-toolbar")!;
+    expect(lead.querySelector(".sidebar-agent-roster--selected")).not.toBeNull();
+    expect(lead.querySelector(".sidebar-session-toolbar__collapse")).not.toBeNull();
+    expect(lead.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toolbar.querySelector(".sidebar-session-toolbar__collapse")).toBeNull();
+
+    patchSettings({ sidebarAgentsMode: "roster" });
+    await settleRoster(sidebar);
+    expect(dom.query(".sidebar-agent-lead")).toBeNull();
+    expect(dom.query(".sidebar-session-toolbar .sidebar-session-toolbar__collapse")).not.toBeNull();
+  });
+
   it("offers Show all agents and New agent before the agent's own actions", async () => {
     const { sidebar, context, dom } = await mountAgent();
     const onNavigate = vi.fn();

@@ -129,11 +129,15 @@ openclaw-sidebar-agent-roster,
   margin-top: 12px;
 }
 
-/* The selected agent leads the list from outside its section, so it carries the
-   section's inset and top offset: the row lands where it sits in the roster. */
+/* The selected agent leads the pinned header; the inset keeps its fill on the
+   session rows' edges, and the collapse button trails it. */
+.sidebar-agent-lead {
+  padding-block: 8px 0;
+}
+
 .sidebar-agent-roster--selected {
-  margin-top: var(--sidebar-session-link-padding-block);
-  margin-bottom: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
   padding-inline: 8px;
 }
 

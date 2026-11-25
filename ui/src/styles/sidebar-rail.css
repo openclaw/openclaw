@@ -733,6 +733,18 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   border-radius: var(--radius-md);
 }
 
+/* Under the agent row, the Sessions header reads as the list's section title. */
+.sidebar--rail .sidebar-session-toolbar--section {
+  min-height: 36px;
+}
+
+.sidebar-session-toolbar--section
+  :is(.sidebar-panel-header__title, .sidebar-session-owner-filter .picker-select__label) {
+  color: var(--muted);
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-weight: 600;
+}
+
 html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {
   min-height: var(--rail-header-height);
   margin-inline: calc(-1 * var(--sidebar-pad-x));

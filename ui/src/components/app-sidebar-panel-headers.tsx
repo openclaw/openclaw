@@ -1,4 +1,5 @@
 import type { JSX } from "@solidjs/web";
+import { Show } from "solid-js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { automationsFiltered } from "../lib/cron/automations-filter.ts";
@@ -14,12 +15,16 @@ import { Icon } from "./solid/icon.tsx";
 export function SidebarPanelHeader(props: {
   class?: string;
   onToggleSidebar?: () => void;
+  /** The selected agent's line above the Sessions header carries the collapse button. */
+  collapse?: boolean;
   children: JSX.Element;
 }) {
   return (
     <div class={["sidebar-panel-header", props.class]} onMouseDown={beginNativeWindowDrag}>
       {props.children}
-      <SidebarCollapseToggle onToggle={() => props.onToggleSidebar?.()} />
+      <Show when={props.collapse !== false}>
+        <SidebarCollapseToggle onToggle={() => props.onToggleSidebar?.()} />
+      </Show>
     </div>
   );
 }
