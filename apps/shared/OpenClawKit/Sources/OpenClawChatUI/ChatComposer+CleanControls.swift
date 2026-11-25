@@ -408,7 +408,8 @@ extension OpenClawChatComposer {
                 self.viewModel.isUpdatingSessionSettings ||
                 (!self.viewModel.showsThinkingPicker && !self.viewModel.selectedModelSupportsFastMode))
         .disabled(self.viewModel.hasActiveRunForComposerSettings)
-        .accessibilityLabel("Effort")
+        // A model with speed options and no levels: the bar shows only Speed, and so does the chip.
+        .accessibilityLabel(self.viewModel.showsThinkingPicker ? "Effort" : "Speed")
         .accessibilityValue(self.viewModel.composerPhoneEffortLabel)
         .accessibilityHint(self.cleanInlineEffortDisabledHint ?? "")
         .accessibilityIdentifier("chat-composer-inline-effort")
@@ -465,7 +466,11 @@ extension OpenClawChatComposer {
         }
         #endif
         if !self.viewModel.composerModelMutationAvailable {
+            #if os(iOS)
+            return String(localized: "You don’t have permission to change the model.")
+            #else
             return String(localized: "Changing the model requires operator.write or operator.admin access.")
+            #endif
         }
         if self.viewModel.isUpdatingSessionSettings {
             return String(localized: "Saving session settings…")
@@ -480,7 +485,11 @@ extension OpenClawChatComposer {
         }
         #endif
         if !self.viewModel.composerEffortMutationAvailable {
+            #if os(iOS)
+            return String(localized: "You don’t have permission to change effort or speed.")
+            #else
             return String(localized: "Thinking and Fast controls require operator.write or operator.admin access.")
+            #endif
         }
         if self.viewModel.isUpdatingSessionSettings {
             return String(localized: "Saving session settings…")

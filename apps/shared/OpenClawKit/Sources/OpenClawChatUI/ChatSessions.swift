@@ -281,8 +281,13 @@ public enum OpenClawChatModelUnavailableReason: Sendable, Equatable, Hashable {
     public var pickerDescription: String {
         switch self {
         case .missingAuth: String(localized: "Sign-in needed")
+        #if os(iOS)
+        case .authFailed: String(localized: "Sign-in failed")
+        case .cooldown: String(localized: "Temporarily unavailable")
+        #else
         case .authFailed: String(localized: "Authentication failed")
         case .cooldown: String(localized: "Cooling down")
+        #endif
         case .unknown: String(localized: "Unavailable")
         }
     }

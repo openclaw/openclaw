@@ -61,6 +61,10 @@ struct ChatModelPickerCard: View {
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
         .accessibilityIdentifier("chat-model-picker")
+        // A catalog that failed or came back empty loads again each time the picker opens.
+        .task {
+            if self.viewModel.modelChoices.isEmpty { await self.viewModel.fetchModels() }
+        }
     }
 
     /// Back from a provider by swiping from the card's leading edge, as a navigation stack does.
@@ -243,7 +247,7 @@ struct ChatModelPickerCard: View {
             }
         }
         .buttonStyle(ChatModelPickerRowStyle(isCurrent: false))
-        .accessibilityValue(holdsCurrent ? Text("Current model") : Text(verbatim: ""))
+        .accessibilityValue(holdsCurrent ? Text("Current provider") : Text(verbatim: ""))
         .accessibilityIdentifier("chat-model-picker-provider-\(provider.id)")
     }
 
@@ -254,7 +258,7 @@ struct ChatModelPickerCard: View {
            self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID,
            !self.viewModel.isDefaultModel(selection: self.viewModel.modelSelectionID)
         {
-            let name = self.agent.name.trimmedNonEmpty ?? String(localized: "Default")
+            let name = self.agent.name.trimmedNonEmpty ?? String(localized: "Agent")
             let model = self.viewModel.defaultModelShortLabel
             Button {
                 self.viewModel.selectModel(OpenClawChatViewModel.defaultModelSelectionID)
@@ -285,7 +289,7 @@ struct ChatModelPickerCard: View {
             .buttonStyle(ChatModelPickerRowStyle(isCurrent: false))
             .disabled(self.viewModel.composerModelChoicesLocked)
             .accessibilityLabel(Text(verbatim: [name, model].compactMap(\.self).joined(separator: ", ")))
-            .accessibilityHint(Text("Switches back to the agent's model."))
+            .accessibilityHint(Text("Switches back to the agent’s model."))
             .accessibilityIdentifier("chat-model-picker-agent-default")
         }
     }

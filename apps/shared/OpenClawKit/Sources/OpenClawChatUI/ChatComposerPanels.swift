@@ -199,7 +199,8 @@ struct ChatComposerPanelHost: ViewModifier {
             .frame(width: width, height: max(0, bottom - top))
             .position(x: width / 2, y: (top + bottom) / 2)
             .contentShape(Rectangle())
-            .onTapGesture { self.controller.dismiss() }
+            // Every way of closing the picker gives the draft its keyboard back if it had it.
+            .onTapGesture { self.controller.dismiss(returningFocus: true) }
             // The card has its own Close button and the VoiceOver escape gesture.
             .accessibilityHidden(true)
             .transition(.opacity)

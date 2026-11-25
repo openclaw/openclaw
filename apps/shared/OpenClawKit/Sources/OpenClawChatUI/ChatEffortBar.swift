@@ -181,6 +181,7 @@ enum ChatEffortBarMetrics {
 extension OpenClawChatViewModel {
     /// The effort chip's VoiceOver value: the level, and the speed when it is not Standard.
     var composerPhoneEffortLabel: String {
+        guard self.showsThinkingPicker else { return ChatEffortBar.speedLabel(self.composerSpeedSelection) }
         let level = self.thinkingLevelOptions.first { $0.id == self.thinkingLevel }?.displayLabel
             ?? OpenClawChatThinkingLevelOption.displayLabel(for: self.thinkingLevel)
         switch self.composerSpeedSelection {

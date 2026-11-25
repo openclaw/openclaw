@@ -55,7 +55,12 @@ extension OpenClawChatViewModel {
             syncThinkingLevelOptions()
         } catch {
             guard self.isCurrentSession(session), requestID == self.nextModelCatalogRequestID else { return }
+            #if os(iOS)
+            // Opening the model picker loads the catalog again.
+            self.modelCatalogMessage = String(localized: "Couldn’t load models. Try again.")
+            #else
             self.modelCatalogMessage = String(localized: "Model choices could not load. Reconnect and try again.")
+            #endif
             self.syncThinkingLevelOptions()
         }
     }
@@ -67,7 +72,11 @@ extension OpenClawChatViewModel {
         let agentID = session.deliveryAgentID ?? OpenClawChatSessionKey.agentID(from: session.key) ?? self.activeAgentId
         guard let context = await self.transport.acquireModelSignInContext(agentID: agentID) else {
             guard self.isCurrentSession(session) else { return nil }
+            #if os(iOS)
+            self.errorText = Self.modelSignInNeedsUpdateMessage
+            #else
             self.errorText = String(localized: "Model sign-in needs a newer Gateway. Update it or use /login.")
+            #endif
             return nil
         }
         guard self.isCurrentSession(session) else { return nil }
@@ -80,6 +89,13 @@ extension OpenClawChatViewModel {
                 return current && self.isCurrentSession(session)
             })
     }
+
+    #if os(iOS)
+    /// Gateways without native model sign-in still answer /login in chat (it shipped first).
+    private static var modelSignInNeedsUpdateMessage: String {
+        String(localized: "Model sign-in needs a newer version of OpenClaw. Update it, or send /login in this chat.")
+    }
+    #endif
 
     public func refreshModelSignIn() async {
         await self.fetchModels()
@@ -141,7 +157,11 @@ extension OpenClawChatViewModel {
 
     public var modelSelectionTargetDescription: String? {
         switch self.sessionDefaults?.modelSelectionTarget {
+        #if os(iOS)
+        case "agent": String(localized: "Changes this agent’s default")
+        #else
         case "agent": String(localized: "Changes this agent's default")
+        #endif
         case "global": String(localized: "Changes the global default")
         default: nil
         }
@@ -360,7 +380,11 @@ extension OpenClawChatViewModel {
         } else {
             selectionID
         }
+        #if os(iOS)
+        guard let resolvedID else { return String(localized: "Model") }
+        #else
         guard let resolvedID else { return "Default" }
+        #endif
         guard let choice = self.modelChoices.first(where: {
             $0.selectionID == resolvedID || $0.modelID == resolvedID
         }) else {
