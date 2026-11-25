@@ -245,7 +245,7 @@ reader.once("message", () => process.exit(0));
             expect(result.stderr).toContain("overlays and backups retained");
             expect(result.stderr).toContain(configPath);
             expect(backups).toHaveLength(1);
-            expect(result.stderr).toContain(path.join(path.dirname(configPath), backups[0]));
+            expect(result.stderr).toContain(path.join(path.dirname(configPath), backups[0]!));
             expect(() => process.kill(identity.pid, 0)).not.toThrow();
             receipts.release("reader", "inspect");
             await withinTest(receipts.waitFor("reader", "retained bytes read"), signal);
