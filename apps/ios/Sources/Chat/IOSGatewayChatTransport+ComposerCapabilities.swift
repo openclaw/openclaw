@@ -70,14 +70,14 @@ extension IOSGatewayChatTransport {
         let configuredServers = config?.runtimeConfig.mcp?.servers ?? [:]
         let connectorNames = Set(configuredServers.keys).union(toolsByServer.keys).sorted()
         let failedSurfaces = [
-            configSurface.failed ? String(localized: "Web Search and Connectors") : nil,
+            configSurface.failed ? String(localized: "Web search and connectors") : nil,
             skillsSurface.failed ? String(localized: "Skills") : nil,
-            toolsSurface.failed ? String(localized: "Tool Access") : nil,
+            toolsSurface.failed ? String(localized: "Tools") : nil,
         ].compactMap(\.self)
         let failureMessage = failedSurfaces.isEmpty
             ? nil
             : String(
-                format: String(localized: "Could not load: %@. Retry."),
+                format: String(localized: "Couldn’t load %@. Try again."),
                 failedSurfaces.joined(separator: ", "))
 
         return OpenClawChatComposerCapabilityCatalog(

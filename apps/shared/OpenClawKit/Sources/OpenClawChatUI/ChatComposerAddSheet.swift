@@ -213,7 +213,12 @@ struct ChatComposerAddSheet: View {
     private var title: Text {
         let count = self.selection.marked.count
         if count == 0 { return Text("Add") }
-        return count == 1 ? Text("1 photo") : Text(verbatim: String(format: String(localized: "%lld photos"), count))
+        return Text(verbatim: Self.photoCount(count))
+    }
+
+    /// "1 photo", "3 photos", inflected so plurals localize.
+    static func photoCount(_ count: Int) -> String {
+        String(AttributedString(localized: "^[\(count) photo](inflect: true)").characters)
     }
 
     private var showsCapabilities: Bool {
@@ -304,7 +309,7 @@ private struct ChatComposerPhotoRow: View {
             } else if access == .full {
                 HStack(spacing: Self.spacing) {
                     self.cameraTile
-                    self.card(title: Text("No recent photos."), detail: nil, systemImage: nil, action: nil)
+                    self.card(title: Text("No recent photos"), detail: nil, systemImage: nil, action: nil)
                         .accessibilityIdentifier("chat-composer-add-no-photos")
                 }
             } else if access == .notDetermined {
@@ -321,7 +326,7 @@ private struct ChatComposerPhotoRow: View {
                 HStack(spacing: Self.spacing) {
                     self.cameraTile
                     self.card(
-                        title: Text("No access to photos"),
+                        title: Text("No access to Photos"),
                         detail: Text("Change in Settings"),
                         systemImage: "lock",
                         action: {
@@ -525,7 +530,7 @@ private struct ChatComposerSkillsPage: View {
                 } else if skills.isEmpty, !query.isEmpty {
                     ChatComposerNoResults(query: query)
                 } else if skills.isEmpty {
-                    Text("No skills configured").font(OpenClawChatTypography.settingsBody).foregroundStyle(.secondary)
+                    Text("No skills available").font(OpenClawChatTypography.settingsBody).foregroundStyle(.secondary)
                 } else {
                     ForEach(skills) { skill in
                         self.skillRow(skill, blocked: blocked)
@@ -575,7 +580,7 @@ private struct ChatComposerSkillsPage: View {
                     Text(verbatim: invocation)
                         .font(OpenClawChatTypography.settingsBody)
                         .foregroundStyle(isOn ? Color.primary : Color.secondary)
-                    let detail = expanded ? String(localized: "Off for this chat.") : skill.description
+                    let detail = expanded ? String(localized: "Off for this chat") : skill.description
                     if !detail.isEmpty {
                         Text(verbatim: detail)
                             .font(OpenClawChatTypography.settingsFootnote)
@@ -588,7 +593,7 @@ private struct ChatComposerSkillsPage: View {
             }
             .buttonStyle(.plain)
             .disabled(blocked)
-            .accessibilityValue(isOn ? Text(verbatim: "") : Text("Off for this chat."))
+            .accessibilityValue(isOn ? Text(verbatim: "") : Text("Off for this chat"))
             .accessibilityIdentifier("chat-composer-skill-\(skill.key)")
             if expanded {
                 let reason = self.caps.facts.catalog.toolOverrideMutationAvailable
@@ -600,7 +605,7 @@ private struct ChatComposerSkillsPage: View {
                         self.viewModel.toggleComposerSkill(skill)
                         self.onInsert(skill)
                     } label: {
-                        Text("Turn on and insert").font(OpenClawChatTypography.settingsBody).fontWeight(.semibold)
+                        Text("Turn on and use").font(OpenClawChatTypography.settingsBody).fontWeight(.semibold)
                     }
                     .buttonStyle(.bordered)
                     .buttonBorderShape(.capsule)
@@ -681,7 +686,7 @@ private struct ChatComposerSkillSwitchesPage: View {
                     .accessibilityIdentifier("chat-composer-skill-switch-\(skill.key)")
                 }
             } footer: {
-                ChatComposerCapabilityFooter(viewModel: self.viewModel, text: Text("Applies to this chat only."))
+                ChatComposerCapabilityFooter(viewModel: self.viewModel, text: Text("Changes apply to this chat only."))
             }
         }
         .listStyle(.insetGrouped)
@@ -720,7 +725,7 @@ private struct ChatComposerConnectorsPage: View {
                     Text("Connectors unavailable").font(OpenClawChatTypography.settingsBody)
                         .foregroundStyle(.secondary)
                 } else if catalog.connectors.isEmpty {
-                    Text("No connectors configured").font(OpenClawChatTypography.settingsBody)
+                    Text("No connectors set up").font(OpenClawChatTypography.settingsBody)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(catalog.connectors) { connector in
@@ -927,8 +932,10 @@ struct ChatComposerCapabilityDisplay {
     }
 
     var connectorsOnCount: Int? {
-        guard self.facts.catalog.connectorsAvailable, !self.facts.catalog.connectors.isEmpty else { return nil }
-        return self.facts.catalog.connectors.count { self.isOn(ChatComposerCapabilityFacts.connector($0.name)) }
+        guard self.facts.catalog.connectorsAvailable else { return nil }
+        let count = self.facts.catalog.connectors.count { self.isOn(ChatComposerCapabilityFacts.connector($0.name)) }
+        // Nothing on is the normal state: the row shows only its name.
+        return count > 0 ? count : nil
     }
 }
 

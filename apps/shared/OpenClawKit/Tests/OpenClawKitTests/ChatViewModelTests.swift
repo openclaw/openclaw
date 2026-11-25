@@ -8502,7 +8502,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { !vm.composerSkillEnabled(skill) })
         #expect(await MainActor.run { vm.composerSkillDisabledReason(skill) } == nil)
         #expect(await MainActor.run { vm.composerSkillStatusMessage(skill) } ==
-            "Not enabled for this agent. Enable for this session.")
+            "Off for this agent. Turn it on for this chat.")
 
         await MainActor.run { vm.toggleComposerSkill(skill) }
         await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())

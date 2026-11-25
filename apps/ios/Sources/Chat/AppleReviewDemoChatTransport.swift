@@ -194,7 +194,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 OpenClawChatComposerSkill(
                     key: "release",
                     name: "Release OpenClaw",
-                    description: "Cut, check and publish a release.",
+                    description: "Cut, check, and publish a release.",
                     baseEnabled: true,
                     missingDependencies: false,
                     blocked: false),
