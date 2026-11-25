@@ -13,6 +13,7 @@ enum ExecApprovalsPromptPresenter {
         var panel: NSPanel?
         var continuation: CheckedContinuation<ExecApprovalDecision?, Never>?
         var cancelled = false
+        var presentingWindowID: ObjectIdentifier?
     }
 
     @MainActor
@@ -21,9 +22,17 @@ enum ExecApprovalsPromptPresenter {
     private static var pendingPrompts: [PendingPrompt] = []
 
     @MainActor
+    static func ownsKeyWindow(for windowID: ObjectIdentifier) -> Bool {
+        self.activePrompt?.presentingWindowID == windowID &&
+            self.activePrompt?.panel != nil && NSApp.keyWindow === self.activePrompt?.panel
+    }
+
+    @MainActor
     static func prompt(
         _ request: ExecApprovalPromptRequest,
-        timeoutMs: Int? = nil) async -> ExecApprovalDecision?
+        timeoutMs: Int? = nil,
+        presentingWindowID: ObjectIdentifier? = nil,
+        validateBeforePresentation: (@MainActor () async -> Bool)? = nil) async -> ExecApprovalDecision?
     {
         if let timeoutMs, timeoutMs <= 0 { return nil }
         let promptID = UUID()
@@ -42,13 +51,13 @@ enum ExecApprovalsPromptPresenter {
         defer { timeoutWorkItem?.cancel() }
         return await withTaskCancellationHandler {
             guard !Task.isCancelled, await self.acquirePrompt(id: promptID) else { return nil }
-            guard !Task.isCancelled, self.activePrompt?.cancelled != true else {
-                self.releasePrompt(id: promptID)
-                return nil
-            }
+            defer { self.releasePrompt(id: promptID) }
+            guard !Task.isCancelled, self.activePrompt?.cancelled != true else { return nil }
+            if let validateBeforePresentation, await !validateBeforePresentation() { return nil }
+            guard !Task.isCancelled, self.activePrompt?.cancelled != true else { return nil }
+            self.activePrompt?.presentingWindowID = presentingWindowID
             let decision = await self.runPrompt(request, id: promptID)
             let cancelled = self.activePrompt?.id == promptID && self.activePrompt?.cancelled == true
-            self.releasePrompt(id: promptID)
             return Task.isCancelled || cancelled ? nil : decision
         } onCancel: {
             // Caller deadlines cancel only their own panel or queued request.

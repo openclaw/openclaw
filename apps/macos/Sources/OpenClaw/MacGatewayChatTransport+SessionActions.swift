@@ -3,14 +3,10 @@ import OpenClawChatUI
 
 extension MacGatewayChatTransport {
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease? {
-        guard let serverLease = await self.connection.captureServerLease() else { return nil }
+        guard let serverLease = await self.captureChatServerLease() else { return nil }
         guard await self.currentOutboxGatewayMatchesConnection() else { return nil }
         let request: @Sendable (OpenClawChatGatewayRequest) async throws -> Data = { request in
-            try await self.connection.request(
-                method: request.method,
-                params: request.params,
-                timeoutMs: request.timeoutMs,
-                ifCurrentServerLease: serverLease)
+            try await self.requestChatGateway(request, ifCurrentServerLease: serverLease)
         }
         return OpenClawChatNewSessionRouteLease(
             listAgents: {
@@ -34,14 +30,10 @@ extension MacGatewayChatTransport {
     }
 
     func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease? {
-        guard let serverLease = await self.connection.captureServerLease() else { return nil }
+        guard let serverLease = await self.captureChatServerLease() else { return nil }
         guard await self.currentOutboxGatewayMatchesConnection() else { return nil }
         let request: @Sendable (OpenClawChatGatewayRequest) async throws -> Data = { request in
-            try await self.connection.request(
-                method: request.method,
-                params: request.params,
-                timeoutMs: request.timeoutMs,
-                ifCurrentServerLease: serverLease)
+            try await self.requestChatGateway(request, ifCurrentServerLease: serverLease)
         }
         return OpenClawChatSessionGroupsRouteLease(
             listGroups: {
@@ -63,7 +55,7 @@ extension MacGatewayChatTransport {
     }
 
     func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {
-        guard let serverLease = await self.connection.captureServerLease() else { return nil }
+        guard let serverLease = await self.captureChatServerLease() else { return nil }
         guard await self.currentOutboxGatewayMatchesConnection() else { return nil }
         let unreadAckContract = await self.connection.supportsServerCapability(
             .sessionUnreadAckContract,
@@ -73,24 +65,16 @@ extension MacGatewayChatTransport {
             sessionTarget: { transport.sessionTarget(for: $0) },
             unreadAckContract: unreadAckContract,
             request: { request in
-                try await self.connection.request(
-                    method: request.method,
-                    params: request.params,
-                    timeoutMs: request.timeoutMs,
-                    ifCurrentServerLease: serverLease)
+                try await self.requestChatGateway(request, ifCurrentServerLease: serverLease)
             })
     }
 
     func requestChatSessionAction(_ request: OpenClawChatGatewayRequest) async throws -> Data {
-        guard let serverLease = await self.connection.captureServerLease() else {
+        guard let serverLease = await self.captureChatServerLease() else {
             throw OpenClawChatTransportSendError.notDispatched
         }
         try await self.requireCurrentOutboxGateway()
-        return try await self.connection.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
-            ifCurrentServerLease: serverLease)
+        return try await self.requestChatGateway(request, ifCurrentServerLease: serverLease)
     }
 
     func forkSession(parentKey: String) async throws -> String {

@@ -1,16 +1,19 @@
 import Foundation
+import OpenClawKit
 
 struct WebChatRoute: Equatable, Sendable {
     let sessionKey: String
     let agentID: String?
+    let nativeOwner: OpenClawNativeOwnerRef?
 
-    init(sessionKey: String, agentID: String?) {
+    init(sessionKey: String, agentID: String?, nativeOwner: OpenClawNativeOwnerRef? = nil) {
         self.sessionKey = sessionKey
-        self.agentID = Self.normalizedAgentID(agentID)
+        self.agentID = nativeOwner == nil ? Self.normalizedAgentID(agentID) : agentID
+        self.nativeOwner = nativeOwner
     }
 
     func replacingSessionKey(_ sessionKey: String) -> Self {
-        Self(sessionKey: sessionKey, agentID: self.agentID)
+        Self(sessionKey: sessionKey, agentID: self.agentID, nativeOwner: self.nativeOwner)
     }
 
     static func normalizedAgentID(_ agentID: String?) -> String? {
