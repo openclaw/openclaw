@@ -165,7 +165,7 @@ async function converted() {
   await fs.symlink(selected, path.join(prefix, "openclaw"), "junction");
 }
 
-it.each([{ dryRun: true }, { channel: "dev" }, { tag: "main" }])(
+it.each([{ channel: "dev" }, { tag: "main" }])(
   "refuses a converted installation's legacy route %j",
   async (opts) => {
     await converted();

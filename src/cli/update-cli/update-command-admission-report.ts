@@ -113,15 +113,10 @@ export async function tryRunReleaseUpdateCommand(
       (prepared.installKind === "git" && staysGit));
   const owned = await hasReleaseUpdateOwner(env);
   if (!releaseRoute) {
-    if (owned) {
-      const route = opts.dryRun
-        ? "--dry-run"
-        : opts.channel
-          ? `--channel ${opts.channel}`
-          : "--tag main";
-      const next = opts.dryRun ? "openclaw update status" : "openclaw update";
+    if (owned && !opts.dryRun) {
+      const route = opts.channel ? `--channel ${opts.channel}` : "--tag main";
       throw new Error(
-        `The resident launcher owns this installation. ${route} requires the in-place installer, which cannot replace it. To ${opts.dryRun ? "inspect" : "update"} the current installation instead, run: ${formatCliCommand(next, env)}`,
+        `The resident launcher owns this installation. ${route} requires the in-place installer, which cannot replace it. To update the current installation instead, run: ${formatCliCommand("openclaw update", env)}`,
       );
     }
     return false;
