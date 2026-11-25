@@ -132,11 +132,12 @@ struct OpenClawIDMemberJoinTests {
             peer: peer)
         #expect(pending == nil)
         #expect(await trust.saved == nil)
-        try await discovery.approve(role: "viewer")
+        // Roles are opaque names; a claw-defined role is listed like any other.
+        try await discovery.approve(role: "participant")
         let joined = try await client.admitted(
             hostname: link.hostname, clawID: clawID, rootFingerprint: link.rootFingerprint, session: Self.session,
             peer: peer)
-        #expect(joined?.role == "viewer")
+        #expect(joined?.role == "participant")
         #expect(await trust.saved?.peerKey == peer.peerKey)
     }
 
