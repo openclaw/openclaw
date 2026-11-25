@@ -5,6 +5,7 @@ import { createBridgeCallbacks } from "./realtime-quicksilver-bridge.test-suppor
 import { delegation } from "./realtime-quicksilver-events.test-support.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { createGatewayHarness } from "./realtime-quicksilver-gateway.test-support.js";
+import { OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS } from "./realtime-quicksilver-instructions.js";
 import type {
   OpenAIQuicksilverAudioPeerCallbacks,
   OpenAIQuicksilverAudioPeerContract,
@@ -15,6 +16,7 @@ import {
 } from "./realtime-quicksilver-session-limit.js";
 import { connectOpenAIQuicksilverSideband } from "./realtime-quicksilver-sideband.js";
 import type { OpenAIQuicksilverSocketFactory } from "./realtime-quicksilver-socket.shared.js";
+import { chunkOpenAIQuicksilverAppendText } from "./realtime-quicksilver-wire.js";
 import {
   createCallResponse,
   emitSideband,
@@ -387,6 +389,42 @@ describe("GPT-Live gateway relay bridge", () => {
     expect(peer.close).toHaveBeenCalledOnce();
     expect(connectedSocket.closed).toBe(true);
     expect(observed.onClose).toHaveBeenCalledWith("completed");
+  });
+
+  it("repeats ChatGPT call instructions once as silent session context before readiness", async () => {
+    const instructions = `Your name is Lachlan. ${"Only answer when addressed by name. ".repeat(20)}`;
+    const { bridge, createSocket, fetchImpl, onReady } = createBridge({
+      model: "gpt-live-1-codex",
+      voice: "cove",
+      instructions,
+      handleDelegationInput: vi.fn((): "consult" => "consult"),
+    });
+    onTestFinished(() => bridge.close());
+
+    const connection = bridge.connect();
+    await vi.waitFor(() => expect(createSocket).toHaveBeenCalledOnce());
+    const connectedSocket = createSocket.mock.results[0]!.value;
+    let sentBeforeReady: unknown[] = [];
+    onReady.mockImplementation(() => {
+      sentBeforeReady = parseSent(connectedSocket);
+    });
+    emitSideband(connectedSocket, { type: "session.started", session: {} });
+    await connection;
+    emitSideband(connectedSocket, { type: "session.started", session: {} });
+
+    expect(fetchImpl.mock.calls[0]?.[1]?.body).toContain("Your name is Lachlan.");
+    const chunks = chunkOpenAIQuicksilverAppendText(
+      `${instructions.trim()}\n\n${OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS}`,
+    );
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(parseSent(connectedSocket)).toEqual(
+      chunks.map((text) => ({
+        type: "session.context.append",
+        channel: "commentary",
+        content: [{ type: "input_text", text }],
+      })),
+    );
+    expect(sentBeforeReady).toEqual(parseSent(connectedSocket));
   });
 
   it("treats a normal upstream sideband close as completion", async () => {

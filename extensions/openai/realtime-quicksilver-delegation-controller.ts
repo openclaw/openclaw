@@ -76,6 +76,8 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   onWireEventType?: (eventType: string) => void;
   runAgentConsult: LifecycleBoundAgentConsultRunner;
   signal: AbortSignal;
+  /** Session instructions to repeat as silent context once the session starts. */
+  startupContext?: string;
 };
 
 function projectWireEventType(
@@ -126,6 +128,7 @@ export class OpenAIQuicksilverDelegationController {
   private requesterFinalOwner: { delegationId: string; generation: number } | undefined;
   private steeringPromise: Promise<void> | undefined;
   private stopped = false;
+  private startupContextSent = false;
   private drainDisposition: "abort" | "detach" | undefined;
   private readonly transcript = new OpenAIQuicksilverTranscript();
   private readonly delegations: OpenAILiveDelegationQueue;
@@ -204,6 +207,10 @@ export class OpenAIQuicksilverDelegationController {
       return;
     }
     if (event.kind === "session-started") {
+      if (this.options.startupContext && !this.startupContextSent) {
+        this.startupContextSent = true;
+        this.sendSessionContext(this.options.startupContext, "commentary");
+      }
       this.options.onSessionStarted?.(event.expiresAt);
       return;
     }

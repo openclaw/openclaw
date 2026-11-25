@@ -90,6 +90,37 @@ type OpenAIQuicksilverSessionUpdate =
 export { parseOpenAIQuicksilverEvent } from "./realtime-quicksilver-events.js";
 export type { OpenAIQuicksilverInboundEvent } from "./realtime-quicksilver-events.js";
 
+function buildOpenAIQuicksilverCallInstructions(params: {
+  hostControlsInput?: boolean;
+  instructions?: string;
+}): string {
+  return [
+    params.instructions?.trim(),
+    params.hostControlsInput ? OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function isOpenAIChatGptQuicksilverCall(model: string, auth: OpenAIQuicksilverAuth): boolean {
+  return isOpenAIGptLiveModel(model) && auth.type === "oauth";
+}
+
+/**
+ * ChatGPT GPT-Live calls ignore call-setup instructions, so the session repeats
+ * them as silent context once it starts. Shared history stays out of that channel.
+ */
+export function resolveOpenAIQuicksilverStartupContext(params: {
+  auth: OpenAIQuicksilverAuth;
+  model: string;
+  hostControlsInput?: boolean;
+  instructions?: string;
+}): string | undefined {
+  return isOpenAIChatGptQuicksilverCall(params.model, params.auth)
+    ? buildOpenAIQuicksilverCallInstructions(params)
+    : undefined;
+}
+
 export function buildOpenAIQuicksilverSession(params: {
   model: string;
   hostControlsInput?: boolean;
@@ -99,12 +130,7 @@ export function buildOpenAIQuicksilverSession(params: {
 }): OpenAIQuicksilverSession {
   const history = boundOpenAIQuicksilverContextItems(params.initialItems ?? []);
   const publicApi = isOpenAIGptLiveApiModel(params.model);
-  const instructions = [
-    params.instructions?.trim(),
-    params.hostControlsInput ? OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const instructions = buildOpenAIQuicksilverCallInstructions(params);
   // Negotiated host-controlled calls receive shared history as background, not
   // as the new call's own speech. Explicit legacy conversation seeds stay native.
   const initialItems = (params.hostControlsInput ? [] : history).map((item) => ({
@@ -402,7 +428,7 @@ export async function createOpenAIQuicksilverCall(
       runtime,
     );
   }
-  const chatGptCall = isGptLive && params.auth.type === "oauth";
+  const chatGptCall = isOpenAIChatGptQuicksilverCall(params.session.model, params.auth);
   const callUrl = chatGptCall
     ? OPENAI_CHATGPT_QUICKSILVER_CALL_URL
     : isGptLive
