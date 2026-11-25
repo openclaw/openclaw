@@ -590,7 +590,11 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
   });
 
   it("preserves an existing full same-run diagnostic and recovery kind", () => {
-    const diagnostic = { runId: "r1", summary: "Full diagnostic", kind: "auth_refresh" as const };
+    const diagnostic = {
+      runId: "r1",
+      summary: "Full diagnostic",
+      kind: "auth_refresh" as const,
+    };
     const host = makeHost({
       chatRunId: "r1",
       chatStream: "working",

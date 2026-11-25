@@ -1,7 +1,7 @@
 import { spawnSync, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import { hasErrnoCode } from "../infra/errno.js";
-import { readGatewayOwnerLeaseAsync } from "../infra/gateway-owner-lease.js";
+import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { findVerifiedGatewayListenerPidsOnPort } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
@@ -541,7 +541,7 @@ export async function stopStartupEntry(
 export async function terminateInstalledStartupRuntime(
   env: GatewayServiceEnv,
   assertCurrent?: () => void,
-  beforeMutation?: () => Promise<void>,
+  beforeMutation?: () => void | Promise<void>,
 ): Promise<void> {
   if (!(await isStartupEntryInstalled(env))) {
     return;
@@ -603,10 +603,12 @@ async function resolveListenerBackedScheduledTaskRuntime(
   deadlineMs?: number,
   installedCommand?: GatewayServiceCommandConfig | null,
 ): Promise<Pick<GatewayServiceRuntime, "status" | "pid" | "detail"> | null> {
-  // A task lease proves control ownership, not that its process uses today's definition.
+  // Only matching process evidence attests the installed command.
+  const inspectionDeadlineMs =
+    deadlineMs ?? performance.now() + WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS;
   const observed = await readBoundedScheduledTaskProcess(
     env,
-    deadlineMs ?? performance.now() + 5_000,
+    inspectionDeadlineMs,
     installedCommand,
   );
   if (!observed) {
@@ -622,25 +624,23 @@ async function resolveListenerBackedScheduledTaskRuntime(
       detail: `Matching installed process detected for gateway port ${observed.port}.`,
     };
   }
-  const owner = await readGatewayOwnerLeaseAsync({
+  const timeoutMs = Math.max(1, Math.ceil(inspectionDeadlineMs - performance.now()));
+  const owner = await readActiveGatewayLockIdentity({
     env: mergeGatewayServiceEnv(env, observed.command),
-    signal:
-      deadlineMs === undefined
-        ? undefined
-        : AbortSignal.timeout(Math.max(1, Math.ceil(deadlineMs - performance.now()))),
+    includeEmbedded: true,
+    requireInspection: true,
+    timeoutMs,
+    signal: AbortSignal.timeout(timeoutMs),
   });
-  if (deadlineMs !== undefined && performance.now() >= deadlineMs) {
+  if (performance.now() >= inspectionDeadlineMs) {
     throw new Error("Scheduled Task inspection deadline expired.");
   }
-  // A previous owned process prevents a stopped claim, but never attests the new command.
-  return owner &&
-    owner.state !== "dead" &&
-    owner.port === observed.port &&
-    owner.supervisor?.kind === "schtasks" &&
-    owner.supervisor.name?.toLowerCase() === resolveTaskName(env).toLowerCase()
+  // Live file custody prevents a stopped claim, but does not attest Scheduler ownership.
+  // Embedded/startup owners may not have published their listener port yet.
+  return owner && (owner.port === undefined || owner.port === observed.port)
     ? {
         status: "unknown",
-        detail: "The task's previous Gateway owner has not been verified stopped.",
+        detail: "The previous Gateway owner has not been verified stopped.",
       }
     : null;
 }

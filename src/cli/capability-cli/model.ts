@@ -158,6 +158,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
         const agent = resolveCapabilityAgentOption(command, opts.agent);
         const run = async (
           gateway?: <R>(params: Record<string, unknown>, modelOverride: boolean) => Promise<R>,
+          localGatewayAbsent?: true,
         ): Promise<CapabilityEnvelope> => {
           const files = opts.file as string[] | undefined;
           const requestedModel = opts.model as string | undefined;
@@ -176,6 +177,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
             ? await resolveLocalCapabilityRuntimeConfig({
                 commandName: "infer model run",
                 targetIds: getModelsCommandSecretTargetIds(),
+                ...(localGatewayAbsent ? { localGatewayAbsent } : {}),
               })
             : await captureRuntimeConfigAsyncReader()();
           const agentId = resolveCapabilityProviderAgentId(cfg, agent, "infer model run");
@@ -463,7 +465,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
             ? "refuse"
             : ({ requestOwner }) =>
                 run((params) => requestOwner("agent", params, { expectFinal: true })),
-          runLocal: () => run(),
+          runLocal: ({ localGatewayAbsent }) => run(undefined, localGatewayAbsent),
         });
       }),
     );

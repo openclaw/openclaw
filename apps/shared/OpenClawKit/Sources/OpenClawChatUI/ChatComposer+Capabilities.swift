@@ -66,7 +66,7 @@ extension OpenClawChatComposer {
                         .disabled(mode == .full && !self.viewModel.composerCapabilityCatalog.canSelectFullPermission)
                 }
                 if !self.viewModel.composerCapabilityCatalog.canSelectFullPermission {
-                    Text("Full permission requires operator.admin access.")
+                    Text("You don’t have permission to turn on Full access.")
                         .font(OpenClawChatTypography.caption)
                 }
             } label: {

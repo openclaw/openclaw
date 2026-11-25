@@ -7,6 +7,7 @@ import { addressedSession } from "../chat-spawned-subagent.ts";
 import { resolveToolOperationLabel } from "./chat-tool-row-presentation.ts";
 
 export type ActivityHeadline = Pick<AgentActivityItem, "name" | "commandBearing"> & {
+  compaction?: boolean;
   key: string;
   title: string;
   status: AgentActivityItem["status"];
@@ -69,6 +70,7 @@ export function selectActivityHeadline(
         name: operation.name,
         commandBearing: operation.commandBearing,
         status: urgent ? status : operation.status,
+        compaction: operation.kind === "compaction",
       }
     : undefined;
 }

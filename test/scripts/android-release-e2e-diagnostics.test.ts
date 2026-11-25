@@ -57,6 +57,22 @@ it.each([
   }
 });
 
+it.each([
+  ["Could not resolve private-artifact: status code 503", "dependency-resolution", "503"],
+  ["Gradle build daemon disappeared unexpectedly: private-detail", "daemon", undefined],
+  ["Compilation error: private-source", "compilation", undefined],
+  ["SDK location not found: private-path", "sdk", undefined],
+  ["Unsupported class file: private-class", "java-version", undefined],
+  ["Cannot find package private-package", "module-resolution", undefined],
+  ["SSLHandshakeException: private-host", "tls", undefined],
+  ["Timeout waiting to lock private-cache", "lock", undefined],
+  ["private-failure status code 999", "unknown", undefined],
+])("retains only classified build facts: %s", (output, buildFailure, buildHttpStatus) => {
+  const facts = commandFacts("node", [], output, "private-token");
+  expect(facts).toMatchObject({ buildFailure, buildHttpStatus });
+  expect(JSON.stringify(facts)).not.toMatch(/private|artifact|detail|source|package|host|999/u);
+});
+
 it("drops unknown tool, operation, output and phase names", () => {
   expect(
     commandFacts("/private/unknown-secret", ["secret"], "private-token", "private-secret"),

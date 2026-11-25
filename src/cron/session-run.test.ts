@@ -147,7 +147,6 @@ function restoredSource(): RestoredGatewayOperatorAuthority {
       updatedAt: 0,
     },
     automationAdmin: true,
-    controlUiAdmin: false,
     release: vi.fn(),
   };
 }

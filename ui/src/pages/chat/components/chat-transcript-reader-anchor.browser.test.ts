@@ -129,7 +129,7 @@ it("preserves a near-end reader when a deferred measurement shrinks the native r
   expect(distanceFromEnd()).toBe(4);
 });
 
-it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as const)(
+it.each(["settled", "scrolling", "idle-gap", "start", "start-growth", "programmatic"] as const)(
   "reconciles first predecessor measurements while %s",
   async (phase) => {
     const estimate = phase === "start-growth" ? 60 : 120;
@@ -232,6 +232,20 @@ it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as con
       viewport.scrollTop = 40;
       anchor.settle();
       expect(viewport.scrollTop).toBe(0);
+      expect(column.style.marginTop).toBe("");
+    } else if (phase === "idle-gap") {
+      // Virtual-core's debounce lapses between two frames of a slow native smooth scroll. The
+      // input's own scrolling continues, so a write here would cancel it.
+      virtualizer.isScrolling = false;
+      anchor.settle();
+      expect(viewport.scrollTop).toBe(500);
+      expect(column.style.marginTop).not.toBe("");
+      // The input's own idle arrives after virtual-core's idle flush; the next frame settles.
+      offsetState.nativeInputActive = false;
+      const frame = Promise.withResolvers<number>();
+      requestAnimationFrame(frame.resolve);
+      await frame.promise;
+      expect(viewport.scrollTop).toBe(420);
       expect(column.style.marginTop).toBe("");
     } else if (phase === "programmatic") {
       expect(viewport.scrollTop).toBe(420);
