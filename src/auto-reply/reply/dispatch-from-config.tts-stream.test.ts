@@ -49,8 +49,14 @@ it.each([
     chunks: [fencedDirective.slice(0, 1), fencedDirective.slice(1)],
     visible: fencedDirective,
   },
+  {
+    name: "two tildes followed by prose across blocks",
+    chunks: ["~", "~pending"],
+    visible: "~~pending",
+    finalText: "~\n~pending",
+  },
   { name: "hidden end", chunks: ["[[tts:text]]hidden speech["], visible: "" },
-])("dispatchReplyFromConfig settles $name once", async ({ chunks, visible }) => {
+])("dispatchReplyFromConfig settles $name once", async ({ chunks, visible, finalText }) => {
   ttsMocks.state.synthesizeFinalAudio = true;
   const delivered: ReplyPayload[] = [];
   const dispatcher = createReplyDispatcher({
@@ -87,7 +93,7 @@ it.each([
   expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledWith(
     expect.objectContaining({
       kind: "final",
-      payload: expect.objectContaining({ text: chunks.join("") }),
+      payload: expect.objectContaining({ text: finalText ?? chunks.join("") }),
     }),
   );
 });
@@ -236,6 +242,7 @@ describe("source completion", () => {
           return buffered ? "See " : text;
         },
         hasBufferedDirectiveText: () => buffered,
+        pendingFenceLine: () => undefined,
         flush: () => "[",
       });
       const delivered: ReplyPayload[] = [];
@@ -410,6 +417,7 @@ describe("source completion", () => {
         return buffered ? "See " : text;
       },
       hasBufferedDirectiveText: () => buffered,
+      pendingFenceLine: () => undefined,
       flush: () => "[",
     });
     ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (input: unknown) => {
