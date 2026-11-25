@@ -498,7 +498,7 @@ struct ChatCompletedWorkTests {
         let rows = ChatTranscriptRow.collapseCompletedWork(ChatTranscriptRow.build(from: merged), runWorking: false)
         let logs = Self.work(in: rows)
         #expect(logs.map(\.isActivityRun) == [true, true])
-        #expect(logs.map { ChatCompletedWorkSummary.label(work: $0) } == ["Ran commands", "Ran commands, read files"])
+        #expect(logs.map { ChatCompletedWorkSummary.label(work: $0) } == ["Ran commands", "Read files, ran commands"])
         // Narration and a lone command between it stay in place; a failure stays inside its log.
         #expect(Self.visibleIDs(rows) == [user.id, merged[3].id, merged[6].id, merged[7].id])
         #expect(logs.last.map { ChatToolActivity.items(message: $0.messages[0]).map(\.isError) } == [true])
