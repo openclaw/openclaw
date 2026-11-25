@@ -311,6 +311,7 @@ describe("login gate failure recovery", () => {
     try {
       part(element, "failure-refresh").click();
       expect(reload).not.toHaveBeenCalled();
+      await vi.dynamicImportSettled();
       await vi.waitFor(() => {
         expectText(element, ".app-toast__description").toContain("Unsaved starts will be lost.");
       });

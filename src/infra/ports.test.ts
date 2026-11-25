@@ -505,7 +505,7 @@ describeUnix("inspectPortUsage", () => {
     },
   );
 
-  it("preserves ss rows with IPv6, unknown processes, and multiple process owners", async () => {
+  it("preserves ss rows with spaced process names, IPv6, and unknown or multiple owners", async () => {
     mockUnixCommands({
       lsof: commandOutput("", 2),
       ss: commandOutput(
@@ -697,13 +697,13 @@ describeWindows("native tasklist CSV contract", () => {
 });
 
 describe.skipIf(process.platform !== "linux")("native ss process metadata contract", () => {
-  it("preserves a spaced and colon-bearing native TCP client name", async (context) => {
-    await withNativeSsConnection(context, async ({ port, clientPort, pid, stdout }) => {
+  it("preserves native TCP client metadata", async (context) => {
+    await withNativeSsConnection(context, async ({ port, clientPort, pid, command, stdout }) => {
       mockUnixCommands({ lsof: commandOutput("", 2), ss: commandOutput(stdout) });
       const result = await inspectPortConnections(port);
       expect(result.connections).toContainEqual({
         pid,
-        command: "node worker:1",
+        command,
         direction: "client",
         address: `TCP 127.0.0.1:${clientPort}->127.0.0.1:${port} (ESTABLISHED)`,
       });

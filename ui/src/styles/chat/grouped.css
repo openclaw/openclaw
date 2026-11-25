@@ -164,7 +164,7 @@
   transition: opacity 120ms ease-out;
 }
 
-.chat-group-footer:has(.msg-meta[open]) {
+.chat-group-footer:has(.msg-meta[open], .chat-send-status) {
   --chat-footer-disclosure-opacity: 1;
   --chat-footer-disclosure-pointer-events: auto;
   opacity: 1;
@@ -225,6 +225,8 @@
 .chat-group-footer-actions,
 .chat-message-actions-row {
   display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
@@ -585,7 +587,8 @@
 }
 
 .chat-group-footer:hover,
-.chat-session-activity__message:hover {
+.chat-session-activity__message:hover,
+.chat-inter-session-message:hover {
   --chat-footer-detail-position: static;
   --chat-message-action-opacity: 0.6;
   --chat-message-action-pointer-events: auto;
@@ -596,7 +599,8 @@
 /* An open picker keeps its row revealed: hover cannot reach its top-layer
    surface, and a collapsing row would carry the anchored picker with it. */
 .chat-group-footer:is(:focus-within, :has([data-copy-state="error"], [aria-expanded="true"])),
-.chat-session-activity__message:focus-within {
+.chat-session-activity__message:focus-within,
+.chat-inter-session-message:is(:focus-within, .chat-group--meta-revealed) {
   --chat-footer-detail-position: static;
   --chat-message-action-opacity: 0.6;
   --chat-message-action-pointer-events: auto;
@@ -1475,7 +1479,7 @@ button.chat-reply-attribution__target:disabled {
   --chat-bubble-background: var(--chat-participant-surface);
   background: var(--chat-bubble-background);
 
-  :where(.shell[data-background-managed]) & {
+  :where([data-background-painted]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));
@@ -1503,7 +1507,7 @@ button.chat-reply-attribution__target:disabled {
   --chat-bubble-background: var(--chat-participant-surface);
   background: var(--chat-bubble-background);
 
-  :where(.shell[data-background-managed]) & {
+  :where([data-background-painted]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));
@@ -1737,7 +1741,7 @@ button.chat-reply-attribution__target:disabled {
   border-radius: var(--radius-md);
   background: var(--chat-bubble-background);
 
-  :where(.shell[data-background-managed]) & {
+  :where([data-background-painted]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));

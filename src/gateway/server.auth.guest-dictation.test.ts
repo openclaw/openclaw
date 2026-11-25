@@ -150,22 +150,14 @@ test("guest dictation crosses the real WebSocket authorization boundary", async 
           ]),
         },
       });
-      const catalogReleased = Promise.withResolvers<"settled" | "reset">();
       configure = async () => {
-        const observe = expectDefined(captureGatewayRootWorkReleaseObserver(), "catalog root");
-        observe(catalogReleased.resolve);
+        expectDefined(captureGatewayRootWorkReleaseObserver(), "catalog root");
         return true;
       };
-      mark("catalog-refresh");
-      expect(await rpcReq(ws, "talk.catalog", { sessionKey: ownKey })).toMatchObject({
-        ok: false,
-        error: { details: { reason: "talk-catalog-warming" } },
-      });
-      mark("catalog-root-release");
-      expect(await catalogReleased.promise).toBe("settled");
       mark("dictation");
-      configure = undefined;
+      // The first read waits for the catalog build instead of answering "warming".
       const catalog = await rpcReq(ws, "talk.catalog", { sessionKey: ownKey });
+      configure = undefined;
       expect(catalog.ok).toBe(true);
       expect(catalog.payload).toEqual({
         modes: ["transcription"],

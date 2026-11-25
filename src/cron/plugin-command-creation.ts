@@ -60,6 +60,11 @@ export async function withPluginCommandScheduleCreation(
   });
 }
 
+/** Only the host's native command adapter enters this scope; chat arguments never select it. */
+export function hasPluginCommandScheduleCreation(): boolean {
+  return Boolean(creationScope.getStore());
+}
+
 /** Native tool transport only. Missing in-process custody refuses before any RPC/effect. */
 export function attachPluginCommandCreation(method: string, params: unknown, inProcess: boolean) {
   const creation = creationScope.getStore();

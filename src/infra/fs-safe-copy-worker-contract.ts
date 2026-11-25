@@ -75,6 +75,10 @@ export type ProvisionCopyDetails = {
   unreportedFiles?: number;
   unreportedBytes?: number;
   reflinkFallbackReason?: string;
+  reflinkFallbackRootHash?: string;
+  reflinkFallbackPrefixHash?: string;
+  reflinkFallbackErrno?: "EOPNOTSUPP" | "EINVAL" | "EXDEV" | "unknown";
+  reflinkFallbackProbeErrno?: "EOPNOTSUPP" | "EINVAL" | "EXDEV" | "unknown" | "clone-succeeded";
   spawnCount: number;
   spawnMs: number;
   childMs: number;

@@ -1,6 +1,7 @@
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   SessionCatalogHost,
+  SessionCatalogProfileRelation,
   SessionCatalogSession,
   SessionSharingRole,
   MessageReactionSummary,
@@ -79,6 +80,7 @@ import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
 
 export type ChatPaneInputChanges = {
+  catalogProfileRelation?: boolean;
   sessionKey?: boolean;
   inputRegion?: boolean;
   draft?: boolean;
@@ -99,7 +101,6 @@ export abstract class ChatPaneStateOwner {
   awaitDomCommit = (): Promise<boolean> => this.updateComplete;
   isConnected = false;
   headerElement: HTMLElement | null = null;
-  historySentinel: HTMLElement | null = null;
   transcriptAnnouncement: HTMLElement | null = null;
   composerShell: HTMLElement | null = null;
   composerFloat: HTMLElement | null = null;
@@ -112,12 +113,7 @@ export abstract class ChatPaneStateOwner {
     this.transcript.syncViewportGeometry();
   };
   private registerPaneElement(
-    key:
-      | "headerElement"
-      | "historySentinel"
-      | "transcriptAnnouncement"
-      | "composerShell"
-      | "composerFloat",
+    key: "headerElement" | "transcriptAnnouncement" | "composerShell" | "composerFloat",
   ) {
     return (element: HTMLElement) => {
       this[key] = element;
@@ -135,7 +131,6 @@ export abstract class ChatPaneStateOwner {
     };
   }
   protected readonly registerHeaderElement = this.registerPaneElement("headerElement");
-  protected readonly registerHistorySentinel = this.registerPaneElement("historySentinel");
   protected readonly registerTranscriptAnnouncement =
     this.registerPaneElement("transcriptAnnouncement");
   protected readonly registerComposerShell = this.registerPaneElement("composerShell");
@@ -227,6 +222,7 @@ export abstract class ChatPaneStateOwner {
   // Empty means unresolved route data: boot on the page state's default session
   // without canonicalizing until the container supplies a real key.
   sessionKey = "";
+  catalogProfileRelation: SessionCatalogProfileRelation | undefined = undefined;
   // This session-keyed pane retains its initial skeleton through URL canonicalization.
   routeLoadingSkeleton = false;
   routeResolutionPending = false;
@@ -687,9 +683,7 @@ export abstract class ChatPaneStateOwner {
   protected catalogLoadGeneration = 0;
   protected catalogRequestedSessionKey: string | null = null;
   protected olderLoadGeneration = 0;
-  protected historyObserver: IntersectionObserver | null = null;
-  protected historyObserverSentinel: HTMLElement | null = null;
-  protected historyObserverArmed = false;
+  protected historyReaderIntent = false;
   protected historyAutoLoadBlocked = false;
   protected historyIntentTimer: number | null = null;
   protected transcriptScrollTop: number | null = null;

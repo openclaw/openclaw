@@ -56,7 +56,7 @@ describePosix("repository-owned PR provisioning state", () => {
     );
     const stateDir = join(f.canonical, ".local", "pr-state");
     const databasePath = join(stateDir, "state", "openclaw.sqlite");
-    mkdirSync(join(stateDir, "state"), { recursive: true });
+    mkdirSync(join(stateDir, "state"), { recursive: true, mode: 0o700 });
     const identity = generateStoredDeviceIdentity();
     const identityRow = {
       identity_key: "primary",

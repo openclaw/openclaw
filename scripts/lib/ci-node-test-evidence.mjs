@@ -11,7 +11,7 @@ export function extractNodeFailedTests(log) {
   const files = new Map();
   const streams = new Map();
   for (const raw of stripVTControlCharacters(log).split("\n")) {
-    const line = raw.replace(/^\d{4}-\d{2}-\d{2}T\S+\s+/u, "").trim();
+    const line = raw.replace(/^\uFEFF?\d{4}-\d{2}-\d{2}T\S+\s+/u, "").trim();
     const shard = /^\[shard:([^\]]+)\]\s*(.*)$/u.exec(line);
     const stream = shard?.[1] ?? "";
     const text = (shard?.[2] ?? line).trim();
@@ -91,7 +91,9 @@ function completeInvocations(rows) {
       // evidence. An unaccounted stream must not hide an additional failure.
       if (
         text === "" ||
+        /^\[test\] inner parallelism [1-9]\d*$/u.test(text) ||
         /^\[test\] preflight test\/vitest\/vitest\.[\w.-]+\.ts$/u.test(text) ||
+        /^\[test\] preparing (?:runtime|private-qa) runtime before Vitest workers$/u.test(text) ||
         /^\[test\] running \d+ (?:Vitest shards|exact-target plans) with parallelism \d+(?: and joined exclusive barriers)?$/u.test(
           text,
         ) ||
@@ -124,6 +126,7 @@ function completeInvocations(rows) {
       current &&
       (current.files !== undefined || current.tests !== undefined) &&
       text !== "" &&
+      !(current.empty && /^(?:include|exclude):(?: |$)/u.test(text)) &&
       !/^(?:Test Files|Tests)\s/u.test(text) &&
       !/^Start at\s+\d{2}:\d{2}:\d{2}$/u.test(text) &&
       !/^Duration\s+\d+(?:\.\d+)?(?:ms|s)\b/u.test(text) &&
@@ -136,10 +139,19 @@ function completeInvocations(rows) {
     if (text.startsWith("[test] starting ")) {
       state.invocations.push({ files: undefined, tests: undefined });
     }
+    if (text === "No test files found, exiting with code 0") {
+      if (!current || current.files !== undefined || current.tests !== undefined) {
+        return false;
+      }
+      // Vitest emits no summary for a successfully completed empty selection.
+      current.empty = true;
+      current.files = false;
+      current.tests = false;
+    }
     const summary = /^(Test Files|Tests)\s+.+\(\d+\)$/u.exec(text);
     if (summary) {
       const active = state.invocations.at(-1);
-      if (!active) {
+      if (!active || active.empty) {
         return false;
       }
       const key = summary[1] === "Test Files" ? "files" : "tests";
@@ -169,7 +181,7 @@ function completeInvocations(rows) {
     }
     const failed = state.invocations.filter((invocation) => invocation.tests).length;
     if (state.terminal.kind === "failed") {
-      if (!state.trailer || failed === 0 || state.terminal.count !== failed) {
+      if (!state.trailer || failed === 0 || state.terminal.count !== state.invocations.length) {
         return false;
       }
       failedStreams++;
@@ -185,7 +197,7 @@ export function parseNodeFailureReport(log, requireComplete) {
   const rows = stripVTControlCharacters(log)
     .split("\n")
     .map((line) => {
-      const raw = line.replace(/^\d{4}-\d{2}-\d{2}T\S+\s/u, "");
+      const raw = line.replace(/^\uFEFF?\d{4}-\d{2}-\d{2}T\S+\s/u, "");
       const match = /^\[shard:([^\]]+)\]\s*(.*)$/u.exec(raw);
       return { stream: match?.[1] ?? "", text: (match?.[2] ?? raw).trim() };
     });
@@ -226,26 +238,31 @@ export function parseNodeFailureReport(log, requireComplete) {
         continue;
       }
       failureHeaders++;
-      const failure = /^FAIL\s+(?:\S+\s+)?(\S+?)(?::\d+(?::\d+)?)? > (.+)$/u.exec(line);
-      const message = lines[index + 1];
+      const failure =
+        /^FAIL\s+(?:\S+(?:\s+\([^()\r\n]+\))?\s+)?(\S+?)(?::\d+(?::\d+)?)? > (.+)$/u.exec(line);
+      // Native reporters separate a failure header from its error with blank lines.
+      let messageIndex = index + 1;
+      while (lines[messageIndex] === "") {
+        messageIndex++;
+      }
+      const message = lines[messageIndex];
       if (
         !failure ||
         !isNodeTestEvidencePath(failure[1]) ||
-        !/^(?:AssertionError|Error|TypeError|RangeError): .+/u.test(message ?? "")
+        !/^\w*Error: .+/u.test(message ?? "")
       ) {
         return [];
       }
-      let end = index + 2;
+      let end = messageIndex + 1;
       while (
         end < lines.length &&
         !/^(?:FAIL\s|Test Files\s|Tests\s|\[test\]|⎯+(?:\[\d+\/\d+\])?⎯*$)/u.test(lines[end])
       ) {
         end++;
       }
-      const assertion = lines
-        .slice(index + 1, end)
-        .join("\n")
-        .trim();
+      const assertion = lines.slice(messageIndex, end).join("\n").trim();
+      // The consumed error belongs to this header, not a second loose error.
+      index = messageIndex;
       assertionMessages.add(message);
       signatures.push({ kind: "vitest", file: failure[1], test: `${failure[2]} :: ${assertion}` });
     }

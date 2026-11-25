@@ -44,7 +44,8 @@ type WorkerWorkspaceReconciliationPlan = Omit<WorkerWorkspaceReconciliationJourn
 
 export type WorkerWorkspaceReconciliationJournalAdapter = {
   load(): Promise<WorkerWorkspaceReconciliationJournal | undefined>;
-  begin(
+  /** Omitted when the owner recovers from its existing forward receipt. */
+  begin?(
     journal: WorkerWorkspaceReconciliationJournal,
     publicationPack?: Uint8Array<ArrayBuffer>,
   ): Promise<void>;

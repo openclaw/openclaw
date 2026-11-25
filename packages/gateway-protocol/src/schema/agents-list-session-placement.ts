@@ -7,6 +7,7 @@ import { NonEmptyString } from "./primitives.js";
 export const AgentsListPlacementProperties = {
   sessionPlacement: Type.Optional(
     closedObject({
+      hasDispatchableCloudProfile: Type.Optional(Type.Literal(true)),
       requiredProfile: Type.Optional(
         closedObject({
           id: NonEmptyString,

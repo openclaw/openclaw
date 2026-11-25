@@ -16,6 +16,7 @@ import {
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { isAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { GitCommandTimeoutError } from "../../infra/git-exec.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { hasSqliteWorkerErrorCode } from "../../infra/sqlite-worker-error.js";
@@ -622,6 +623,9 @@ export function withLocalWorkspaceStore<T>(
                       throw new Error("Local workspace binding changed");
                     }
                     if (manifest && "rawManifest" in manifest) {
+                      using phases = observeDiagnosticsTimelinePhases(
+                        "attempt.setup.sandbox.workspace_selection.baseline.prepare",
+                      );
                       const prepared = await readManifest(previous, {
                         kind: "replace",
                         ...manifest,
@@ -630,6 +634,7 @@ export function withLocalWorkspaceStore<T>(
                       if (prepared.kind !== "replace") {
                         throw new Error("Local workspace baseline preparation is missing");
                       }
+                      phases.mark("attempt.setup.sandbox.workspace_selection.baseline.accept");
                       await accept(prepared.update, guard);
                     } else if (manifest && !manifest.treeRoot) {
                       const prepared = await readManifest(previous, {

@@ -53,6 +53,50 @@ it("omits native progress for OCM-managed runs", () => {
   expect(view.headline).toContain("managed by OCM");
 });
 
+it("identifies a serving target without treating a different build or rollback as recovery", () => {
+  const version = "1.0.0";
+  const attempt = run({
+    status: "failed",
+    reason: "post-update-failed",
+    target: { kind: "git", sha: "target" },
+    before: { version, buildId: "previous" },
+    after: { version, sha: "target", buildId: "candidate" },
+    verification: { serviceRunning: true, runningVersion: version, runningBuildId: "previous" },
+  });
+  const serving = { version, buildId: "candidate" };
+  const report = (patch: Partial<Run> = {}, gateway = serving) =>
+    projectUpdateRun({ ...attempt, ...patch }, true, gateway).report;
+  expect(report().headline).toContain("Last update run failed (post-update-failed)");
+  expect(report().lines).toContain("The Gateway is now serving the update target.");
+  expect(report({}, { version, buildId: "unrelated" }).lines).toEqual([]);
+  expect(report({ target: { kind: "git", sha: "different" } }).lines).toEqual([]);
+  expect(report({ before: { version, buildId: "candidate" } }).lines).toEqual([]);
+  for (const receipt of [
+    { rollbackOutcome: { status: "failed", reason: "restore" } },
+    { rollbackOutcome: { status: "succeeded", reason: "restore" } },
+    { recovery: { serviceRestartSafe: true, version, packageRollbackVerified: true } },
+  ] as const) {
+    expect(report({ verification: { ...attempt.verification, ...receipt } }).lines).toEqual([]);
+  }
+});
+
+it("accepts an exact package target version only when a build was not required", () => {
+  const version = "2.0.0";
+  const attempt = run({
+    status: "failed",
+    reason: "version-mismatch",
+    target: { kind: "package", version },
+    after: { version },
+    verification: { serviceRunning: true, runningVersion: "1.0.0" },
+  });
+  const lines = (patch: Partial<Run> = {}) =>
+    projectUpdateRun({ ...attempt, ...patch }, true, { version }).report.lines;
+  expect(lines()).toContain("The Gateway is now serving the update target.");
+  expect(lines({ reason: "build-id-mismatch" })).toEqual([]);
+  expect(lines({ after: { version, buildId: "expected" } })).toEqual([]);
+  expect(lines({ target: { kind: "git" } })).toEqual([]);
+});
+
 it("retains a recorded repair phase after the run has finished", () => {
   const view = project({
     phase: "finished",
@@ -60,6 +104,58 @@ it("retains a recorded repair phase after the run has finished", () => {
     steps: [makeStep("repairing", "failed")],
   });
   expect(view.phases.find(({ step }) => step === "repairing")?.status).toBe("failed");
+});
+
+it("shows recorded serving health without treating absent checks as failures after rollback", () => {
+  const startup = "[gateway] startup phase: before-listen";
+  const { element, find, output } = mount({
+    status: "failed",
+    phase: "finished",
+    verification: {
+      serviceRunning: true,
+      runningVersion: "2026.9.1",
+      rollbackOutcome: { status: "succeeded", reason: "startup timed out" },
+    },
+    steps: [makeStep("diagnostic:startup", "completed", startup)],
+  });
+  expect(find('[data-oracle="service"]')?.getAttribute("data-state")).toBe("pass");
+  expect(element.querySelectorAll("[data-oracle]")).toHaveLength(1);
+  const diagnostics = find(".update-run-view__diagnostics") as HTMLDetailsElement;
+  expect(diagnostics.open).toBe(false);
+  diagnostics.querySelector("summary")!.click();
+  expect(diagnostics.open).toBe(true);
+  expect(output()).toBe(startup);
+  expect(element.querySelectorAll('[data-step="diagnostic:startup"]')).toHaveLength(0);
+});
+
+it("keeps machine Doctor receipts out of user-facing steps, details, and reports", () => {
+  const receipt = JSON.stringify({
+    exitCode: 1,
+    termination: "exit",
+    counts: { error: 0, warning: 1, info: 11 },
+  });
+  const step = "finalize:doctor-lint:post-activation doctor inspections";
+  const attempt: Partial<Run> = {
+    status: "succeeded",
+    phase: "finished",
+    verification: {
+      runningVersion: "2026.9.2",
+      serviceRunning: true,
+      versionMatch: true,
+      coreReady: true,
+    },
+    steps: [
+      makeStep("post-activation doctor inspections", "completed", "Doctor checks completed."),
+      makeStep(step, "completed", receipt),
+    ],
+  };
+  const { element, output } = mount(attempt);
+  expect(element.querySelector(`[data-step="${step}"]`)).toBeNull();
+  expect(output()).toBe("Doctor checks completed.");
+  expect(element.textContent).not.toContain(receipt);
+  expect(project(attempt).report.markdown).not.toContain(receipt);
+  expect(element.querySelectorAll("[data-oracle]")).toHaveLength(2);
+  expect(element.querySelectorAll('[data-oracle][data-state="warn"]')).toHaveLength(0);
 });
 
 it("presents diagnostic receipts as readable details without inventing installation steps", () => {
@@ -256,7 +352,7 @@ it("preserves early failure phases and renders diagnostic markup as text", () =>
     finished: "failed",
   });
   expect(element.querySelectorAll(".update-run-view__step-scroll li")).toHaveLength(1);
-  expect(element.querySelectorAll('[data-oracle][data-state="warn"]')).toHaveLength(4);
+  expect(element.querySelectorAll("[data-oracle]")).toHaveLength(0);
   expect(find("img")).toBeNull();
   expect(find('[data-step="build"]')).toMatchObject({ ariaLabel: "Building OpenClaw: Failed" });
 });

@@ -6,6 +6,7 @@ import { expect, onTestFinished, test, vi } from "vitest";
 import type {
   SessionsCatalogListResult,
   SessionsCatalogReadResult,
+  SessionsCatalogRouteResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
@@ -247,10 +248,41 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       expect(
         await rpcReq(alice, "sessions.catalog.list", { search: "aaaaaaaaaaaa" }),
       ).toMatchObject({ ok: false, error: { message: "missing scope: operator.read" } });
-      const own = await rpcReq<SessionsCatalogListResult>(alice, "beam.owned.list", {
-        search: "aaaaaaaaaaaa",
-        limitPerHost: 2,
+      const discovered = await rpcReq<NonNullable<SessionsCatalogRouteResult>>(
+        alice,
+        "sessions.catalog.route",
+        { routeSegment: "beam" },
+      );
+      expect(discovered.payload).toEqual({
+        catalogId: "beam",
+        routeSegment: "beam",
+        methods: {
+          list: "beam.owned.list",
+          read: "beam.owned.read",
+          resolve: "beam.owned.resolve",
+          continue: "beam.owned.continue",
+        },
       });
+      expect(
+        (
+          await rpcReq<NonNullable<SessionsCatalogRouteResult>>(reader, "sessions.catalog.route", {
+            catalogId: "beam",
+          })
+        ).payload?.methods,
+      ).toEqual({
+        list: "sessions.catalog.list",
+        read: "sessions.catalog.read",
+        resolve: "sessions.catalog.resolve",
+      });
+      const own = await rpcReq<SessionsCatalogListResult>(
+        alice,
+        expectDefined(discovered.payload?.methods.list, "visitor catalog list method"),
+        {
+          catalogId: "beam",
+          search: "aaaaaaaaaaaa",
+          limitPerHost: 2,
+        },
+      );
       expect(own.ok, JSON.stringify(own.error)).toBe(true);
       expect(own.payload?.catalogs[0]?.hosts[0]?.sessions).toMatchObject([
         {
@@ -584,9 +616,11 @@ test("preserves model admission and rolls back revoked owned Beam adoption", asy
           ({ kind }) => kind === "adopted",
         ),
       ).toHaveLength(1);
-      expect((await rpcReq(ws, "beam.owned.resolve", allowed)).payload).toEqual({
-        sessionKey: allowedKey,
-      });
+      const destination = { sessionKey: allowedKey, sessionId: allowedEntry.sessionId };
+      expect((await rpcReq(ws, "beam.owned.resolve", allowed)).payload).toEqual(destination);
+      expect((await rpcReq(admin, "sessions.catalog.resolve", allowed)).payload).toEqual(
+        destination,
+      );
       expect((await rpcReq(ws, "beam.owned.continue", allowed)).payload).toEqual({
         sessionKey: allowedKey,
       });

@@ -26,7 +26,7 @@ export function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
   cwd?: string;
   warningText?: string;
-  session?: ExecDroppedOutputFacts;
+  session?: ExecDroppedOutputFacts & { readonly aggregated?: string };
 }): AgentToolResult<ExecToolDetails> {
   const warning = params.warningText?.trim();
   const warningText = warning ? `${params.warningText}\n\n` : "";
@@ -40,7 +40,10 @@ export function buildExecForegroundResult(params: {
     ...(outcome.status === "failed" ? { failureKind: outcome.failureKind } : {}),
     exitReason: outcome.exitReason,
     durationMs: outcome.durationMs,
-    aggregated: outcome.aggregated,
+    aggregated:
+      outcome.status === "completed" && outcome.exitCode === 0
+        ? (params.session?.aggregated ?? outcome.aggregated)
+        : outcome.aggregated,
     ...(outcome.status === "failed" ? { timedOut: outcome.timedOut } : {}),
     noOutputTimedOut: outcome.noOutputTimedOut,
     cwd: params.cwd,

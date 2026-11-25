@@ -18,7 +18,7 @@ type SessionEventDeliveryParams = Pick<
   | "assertCurrent"
 >;
 
-export async function prepareSessionEventDelivery(
+async function prepareSessionEventDelivery(
   route: DeliveryContext,
   assertCurrent: () => void,
 ): Promise<

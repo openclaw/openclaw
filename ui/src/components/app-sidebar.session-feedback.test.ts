@@ -318,7 +318,12 @@ describe("sidebar session feedback", () => {
     expect(harness.list).toHaveBeenCalledTimes(1);
     expect(sidebar.querySelectorAll("[data-session-key]")).toHaveLength(SIDEBAR_SESSION_PAGE_SIZE);
     expect(button().textContent).toContain("Loading");
-    const localMore = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]')!;
+    // Show more renders once its lazy module loads.
+    const localMore = await vi.waitFor(() => {
+      const more = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]');
+      expect(more).not.toBeNull();
+      return more!;
+    });
     expect(localMore.disabled).toBe(false);
     localMore.click();
     await settleLitElement(sidebar);

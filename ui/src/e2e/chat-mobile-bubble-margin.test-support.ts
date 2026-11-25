@@ -49,10 +49,16 @@ const message = (role: string, content: unknown, extra = {}) => ({
   timestamp: 1_800_000_000_000,
   ...extra,
 });
+const forwardedBubble = ".chat-group--inter-session .chat-bubble";
 const forwarded = (sourceSessionKey: string, content: unknown) =>
   projectChatDisplayMessages([
     message("user", content, {
-      provenance: { kind: "inter_session", sourceSessionKey, sourceTool: "sessions_send" },
+      provenance: {
+        kind: "inter_session",
+        sourceSessionKey,
+        sourceTool: "sessions_send",
+        sourceSummary: "Verification receipt",
+      },
     }),
   ]);
 
@@ -70,7 +76,7 @@ const peer = (content: unknown) =>
 const caseFor = (id: string, role: string, content: unknown, selector = ".chat-bubble") =>
   surface(id, [message(role, content)], role === "user" ? "right" : "left", selector);
 const activity = (id: string, key: string, content: unknown = longText) =>
-  surface(id, forwarded(key, content), "left", ".chat-session-activity");
+  surface(id, forwarded(key, content), "left", forwardedBubble);
 const cardSelector = ".chat-assistant-attachment-card";
 const remoteImage = (width = 960) => `https://media.example/preview-${width}.png`;
 function remoteImageCase(width: number, attachment: boolean) {
@@ -217,8 +223,11 @@ export async function measureMargin(page: Page, testCase: MarginCase) {
       .getAnimations()
       .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime));
     await Promise.allSettled(finiteAnimations.map((animation) => animation.finished));
-    const group = element.closest(".chat-group") ?? element.closest(".chat-thread-inner")!;
-    const column = group.getBoundingClientRect();
+    const column = (
+      (element.closest(".chat-group--inter-session") && element.closest(".chat-group-messages")) ??
+      element.closest(".chat-group") ??
+      element.closest(".chat-thread-inner")!
+    ).getBoundingClientRect();
     const box = element.getBoundingClientRect();
     const media = [...element.querySelectorAll(".chat-image-frame, img.chat-message-image, video")]
       .map((item) => item.getBoundingClientRect())

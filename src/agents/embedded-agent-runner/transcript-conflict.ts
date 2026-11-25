@@ -29,12 +29,6 @@ export class ReplaySafeTranscriptConflictError extends Error {
   }
 }
 
-export function isReplaySafeTranscriptConflict(error: unknown): boolean {
-  return collectErrorGraphCandidates(error, readErrorCauses).some(
-    (candidate) => candidate instanceof ReplaySafeTranscriptConflictError,
-  );
-}
-
 /** Cancellation after the execution owner positively proved the whole run effect-free. */
 export class ReplaySafeRunAbortError extends Error {
   constructor(cause: Error) {

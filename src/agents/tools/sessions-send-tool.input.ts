@@ -24,17 +24,13 @@ export function readSessionsSendTarget(params: Record<string, unknown>) {
   };
 }
 
-export function readSessionsSendMessage(params: Record<string, unknown>): string {
+export function readSessionsSendContent(params: Record<string, unknown>) {
   const message = readToolStringParam(params, "message", { required: true, trim: false });
   if (!message.trim()) {
     throw new ToolInputError("message required");
   }
-  return message;
-}
-
-export function readSessionsSendDescription(params: Record<string, unknown>): string | undefined {
   if (params.description === undefined) {
-    return undefined;
+    return { message, description: undefined };
   }
   const description = readToolStringParam(params, "description", { required: true, trim: false });
   const trimmed = description.trim();
@@ -47,7 +43,7 @@ export function readSessionsSendDescription(params: Record<string, unknown>): st
       `description must be non-blank and at most ${SESSIONS_SEND_DESCRIPTION_MAX_LENGTH} characters`,
     );
   }
-  return trimmed.replace(/[\r\n\u2028\u2029]+/gu, " ");
+  return { message, description: trimmed.replace(/[\r\n\u2028\u2029]+/gu, " ") };
 }
 
 export function readSessionsSendTimeout(

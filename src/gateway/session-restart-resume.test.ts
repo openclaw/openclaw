@@ -50,7 +50,7 @@ import {
   prepareAgentRestartRecovery,
   resumeMarkedSessions,
 } from "./session-restart-resume.js";
-import * as systemTurnAuthority from "./session-system-turn-authority.js";
+import * as systemTurnAuthority from "./session-sharing-authorization-async.js";
 
 it("requests original recorded custody only at the actual marked restart admission", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -293,7 +293,7 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
       };
       const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
         ["crash", {}, mode !== "clean-or-unknown"],
-        ["yielded", { endedAt: 120 }, false],
+        ["yielded", { endedAt: 120 }, true],
         ["stale", { startedAt: 1, updatedAt: 999 }, false],
         ["missing-start", { startedAt: undefined }, false],
         ["new-incarnation", { startedAt: 200 }, false],
@@ -400,13 +400,10 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         expect(
           loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:live" })?.entry,
         ).toHaveProperty("lifecycleRunId", "live");
-        expect(loadExactSessionEntry(sessionTarget("yielded"))?.entry).toMatchObject({
-          status: "failed",
-          lastRunError: expect.stringContaining("child completion"),
-        });
-        expect(
-          loadExactSessionEntry(sessionTarget("yielded"))?.entry.lifecycleRunId,
-        ).toBeUndefined();
+        const yielded = loadExactSessionEntry(sessionTarget("yielded"))!.entry;
+        expect(yielded.status).toBe("killed");
+        expect(yielded.lastRunError).toBeUndefined();
+        expect(yielded.lifecycleRunId).toBeUndefined();
       } finally {
         resume.mockRestore();
         releaseAgentRunContext("live", claim);
@@ -569,10 +566,16 @@ it("keeps completed reply roots unmarked while accepted inputs remain durable", 
 it("marks ordinary conversations without inheriting cron or external execution ownership", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const cases: Array<{ sessionKey: string; resumable?: true; entry?: Partial<SessionEntry> }> = [
+    const cases: Array<{
+      sessionKey: string;
+      resumable?: true;
+      automation?: true;
+      entry?: Partial<SessionEntry>;
+    }> = [
       { sessionKey: "agent:other:main", resumable: true },
       { sessionKey: "agent:other:main:thread:123.456", resumable: true },
       { sessionKey: "agent:main:cron:scheduled:run:occurrence" },
+      { sessionKey: "agent:main:dashboard-automation", automation: true },
       { sessionKey: "agent:main:acp:external" },
       {
         sessionKey: "agent:main:external-acp-binding",
@@ -591,7 +594,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
     ];
     const claims: Array<[string, string | undefined]> = [];
     try {
-      for (const { sessionKey, entry, resumable } of cases) {
+      for (const { sessionKey, entry, resumable, automation } of cases) {
         const agentId = resumable ? "other" : "main";
         replaceSessionEntrySync(
           { agentId, sessionKey },
@@ -614,7 +617,14 @@ it("marks ordinary conversations without inheriting cron or external execution o
           runId,
           claimAgentRunContext(
             runId,
-            { agentId, sessionKey, sessionId: sessionKey },
+            {
+              agentId,
+              sessionKey,
+              sessionId: sessionKey,
+              ...(automation
+                ? { cronRunsByJobId: new Map([["scheduled-job", { nextCheckEnabled: false }]]) }
+                : {}),
+            },
             { trackOwner: true, ownsContext: true },
           ),
         ]);
@@ -881,3 +891,116 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
       await live!.settled?.();
     }
   }));
+
+// A supervisor that ends work on purpose (for example an explicit operator stop
+// followed by a new deployment) starts the next Gateway with a new scope token. Work
+// interrupted under the old token must not run again, and the message queued
+// behind it ends instead of being replayed; a restart within the same scope still
+// resumes.
+it.for([
+  { live: "run", written: "token-a", startup: "token-a", resumes: true },
+  { live: "turn", written: "token-a", startup: "token-a", resumes: true },
+  { live: "run", written: "token-a", startup: "token-b", resumes: false },
+  { live: "turn", written: "token-a", startup: "token-b", resumes: false },
+  { live: "run", written: undefined, startup: "token-b", resumes: false },
+  { live: "run", written: "token-a", startup: undefined, resumes: false },
+  // Without a supervisor scope the behavior is unchanged.
+  { live: "run", written: undefined, startup: undefined, resumes: true },
+  { live: "turn", written: undefined, startup: undefined, resumes: true },
+] as const)(
+  "resumes a $live interrupted under scope $written only at startup scope $startup",
+  ({ live, written, startup, resumes }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const name = `scoped-${live}-${written ?? "none"}-${startup ?? "none"}`;
+      const target = { agentId: "main", sessionKey: `agent:main:${name}`, sessionId: name };
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+      const setScope = (scope: string | undefined) =>
+        vi.stubEnv("OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE", scope);
+      // The live work at shutdown: a claimed agent run, or a session turn.
+      const runId = `${name}-run`;
+      const claim =
+        live === "run"
+          ? claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true })
+          : undefined;
+      const turn =
+        live === "turn"
+          ? await withSessionTurn(target, async (active) => {
+              assert(active, "Expected a real session turn");
+              return { operation: active, release: active.retainExecution() };
+            })
+          : undefined;
+      const queued = await stageSessionPendingInput(target, {
+        runId: `${name}-queued`,
+        message: {
+          role: "user",
+          content: "Sent while the turn was running",
+          timestamp: Date.now(),
+          idempotencyKey: `${name}-queued:user`,
+        },
+        assertCurrent() {},
+      });
+      assert(queued, "Queued fixture input was not admitted");
+      // Resume admission starts with the session principal's authority. Stop there:
+      // reaching it is the resume decision under test.
+      const admission = vi
+        .spyOn(systemTurnAuthority, "prepareSessionSystemTurnAuthority")
+        .mockRejectedValue(new Error("Stop after observing restart admission"));
+      const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
+      const dispatch = vi
+        .spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess")
+        .mockResolvedValue({});
+      try {
+        setScope(written);
+        await persistRunningSessionsForRestart({ cfg });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
+          written ? { scope: written } : {},
+        );
+        // The process ends: its run, turn and queued sender are gone.
+        if (claim !== undefined) {
+          releaseAgentRunContext(runId, claim);
+        }
+        turn?.release();
+        await turn?.operation.ownerSettlement;
+        queued.finish("interrupted", "failed");
+        await queued.settled?.();
+        openOpenClawAgentDatabase({ agentId: "main" })
+          .db.prepare(
+            "UPDATE session_pending_inputs SET state = 'queued', lifecycle_generation = 'previous-process' WHERE input_id = ?",
+          )
+          .run(queued.inputId);
+
+        setScope(startup);
+        const context = createContext([], () => cfg);
+        await resumeMarkedSessions({
+          context,
+          signal: new AbortController().signal,
+          log: { warn: vi.fn() },
+        });
+        expect(admission.mock.calls.length > 0).toBe(resumes);
+        expect(resume).not.toHaveBeenCalled();
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+        expect(dispatch).not.toHaveBeenCalled();
+        // In scope, startup replays the queued input (which fails here without a sender);
+        // out of scope, it ends without a replay attempt.
+        expect(
+          vi
+            .mocked(context.logGateway.warn)
+            .mock.calls.some(([line]) => line.includes("was not sent after restart")),
+        ).toBe(resumes);
+        expect(await readSessionPendingInput(target, queued.inputId)).toMatchObject({
+          state: "cancelled",
+          endCause: "restart-unrecoverable",
+          message: { content: "Sent while the turn was running" },
+        });
+      } finally {
+        vi.unstubAllEnvs();
+        admission.mockRestore();
+        resume.mockRestore();
+        dispatch.mockRestore();
+        queued.finish("interrupted", "failed");
+        await queued.settled?.();
+      }
+    }),
+);

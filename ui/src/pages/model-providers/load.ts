@@ -8,6 +8,7 @@ import type {
   ModelCatalogProviderOutcome,
   ModelCatalogResult,
 } from "../../api/types.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -115,7 +116,7 @@ export function catalogDiscoveryError(result: ModelCatalogResult): string | null
   const failed = new Set(
     (result.providerOutcomes ?? [])
       .filter((outcome) => outcome.status === "unavailable")
-      .map((outcome) => outcome.provider),
+      .map((outcome) => providerDisplayLabel(outcome.provider)),
   );
   return modelCatalogRefreshError(
     result,

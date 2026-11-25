@@ -430,18 +430,15 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
     await child.spawn("child-running", "child-running-turn");
     expect(await yieldTurn()).toMatchObject({ status: "yielded" });
     await completeTurn(first);
-    await vi.waitFor(() =>
-      expect(delivery).toHaveBeenCalledWith(
-        expect.objectContaining({ childSessionKey: "codex-thread:child-settled" }),
-      ),
-    );
+    // The running sibling protects the detached parent, so the settled result waits for it.
+    expect(delivery).not.toHaveBeenCalled();
 
     // A later turn owns no new claim, yet the still-running child will resume the session.
     const second = await startTurn("run-2");
-    const result = await yieldTurn();
-    expect(result).toMatchObject({
+    expect(await yieldTurn()).toMatchObject({
       status: "already_pending",
       pendingChildren: [
+        { runId: "codex-thread:child-settled", state: "completing", wakeArmed: false },
         {
           runId: "codex-thread:child-running",
           childSessionKey: "codex-thread:child-running",
@@ -450,7 +447,6 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
         },
       ],
     });
-    expect(result.pendingChildren).toHaveLength(1);
     await completeTurn(second);
   } finally {
     harness.close();

@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Switch } from "../../components/solid/switch.tsx";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -26,14 +27,6 @@ export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCa
   const key = () => pluginRowKey(props.plugin.id);
   const pending = () => props.busy[key()];
   const busy = () => Boolean(pending());
-  const enableAction = () => {
-    const current = pending();
-    return current === "enable" || current === "disable"
-      ? current
-      : props.enabled
-        ? "disable"
-        : "enable";
-  };
   function Action(action: {
     kind: PluginMutationAction;
     label: string;
@@ -63,9 +56,11 @@ export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCa
       </ReasonedDisabledControl>
     );
   }
-  // Keep the primary action first in visual and keyboard navigation order.
-  const askAction = () =>
-    renderPluginAskAction(props.onAskPlugin, props.enabled && !props.signInServer);
+  const blockedReason = () =>
+    props.mutationBlockedReason ??
+    (props.plugin.state === "needs-setup" ? t("pluginsPage.setupRequiredNotice") : null);
+  const canToggle = () => props.canMutate && props.plugin.state !== "needs-setup";
+  const leading = () => Boolean(props.signInServer || props.onAskPlugin || props.plugin.removable);
   return (
     <>
       {/* After installation, sign-in takes the slot the Install action used. */}
@@ -82,21 +77,7 @@ export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCa
           </button>
         )}
       </Show>
-      {props.enabled ? askAction() : null}
-      <Action
-        kind={enableAction()}
-        label={t(
-          enableAction() === "disable" ? "pluginsPage.detailDisable" : "pluginsPage.detailEnable",
-        )}
-        class={props.enabled ? "oc-action-secondary" : "primary"}
-        blockedReason={
-          props.mutationBlockedReason ??
-          (props.plugin.state === "needs-setup" ? t("pluginsPage.setupRequiredNotice") : null)
-        }
-        allowed={props.canMutate && props.plugin.state !== "needs-setup"}
-        onClick={() => props.onSetEnabled(props.plugin.id, !props.plugin.enabled, key())}
-      />
-      {!props.enabled ? askAction() : null}
+      {renderPluginAskAction(props.onAskPlugin, false)}
       {props.plugin.removable ? (
         <Action
           kind="uninstall"
@@ -107,8 +88,30 @@ export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCa
           onClick={() => props.onUninstall(props.plugin.id, key())}
         />
       ) : null}
+      {leading() ? (
+        <span class="plugin-catalog-detail__actions-divider" aria-hidden="true" />
+      ) : null}
+      <ReasonedDisabledControl reason={blockedReason()}>
+        <label class="plugin-catalog-detail__enabled">
+          <span aria-hidden="true">
+            {t(props.enabled ? "pluginsPage.enabled" : "pluginsPage.disabled")}
+          </span>
+          <Switch
+            checked={props.enabled}
+            ariaLabel={props.plugin.name}
+            saving={!canToggle() || busy()}
+            onChange={() => {
+              if (!canToggle() || busy()) {
+                return false;
+              }
+              props.onSetEnabled(props.plugin.id, !props.plugin.enabled, key());
+              return undefined;
+            }}
+          />
+        </label>
+      </ReasonedDisabledControl>
       <a
-        class="btn btn--icon oc-action oc-action-icon oc-action-secondary"
+        class="btn btn--icon oc-action oc-action-icon oc-action-ghost plugin-catalog-detail__settings"
         href={props.settingsHref}
         aria-label={t("pluginsPage.detailSettings")}
         onClick={(event: MouseEvent) => handleNavigationClick(event, () => props.onSettings())}

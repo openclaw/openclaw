@@ -173,6 +173,8 @@ function normalizeClaudeCliContent(
       block.type = "toolcall";
       delete block.input;
     } else if (type === "tool_result") {
+      // Claude omits is_error on successful tool results; history must agree with live activity.
+      block.is_error ??= false;
       const toolUseId = resolveToolUseId(block);
       if (!block.name && toolUseId) {
         const toolName = toolNameRegistry.get(toolUseId);
@@ -450,8 +452,13 @@ export function parseClaudeCliHistoryEntry(
       api: "anthropic-messages",
       provider: CLAUDE_CLI_PROVIDER,
       ...(normalizeOptionalString(entry.message.model) ? { model: entry.message.model } : {}),
+      // Claude records `tool_use`; OpenClaw history uses the provider-neutral
+      // `toolUse`, which the Control UI reads to show narration as commentary.
       ...(normalizeOptionalString(entry.message.stop_reason)
-        ? { stopReason: entry.message.stop_reason }
+        ? {
+            stopReason:
+              entry.message.stop_reason === "tool_use" ? "toolUse" : entry.message.stop_reason,
+          }
         : {}),
       ...(usage ? { usage } : {}),
       ...(timestamp !== undefined ? { timestamp } : {}),

@@ -60,6 +60,7 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-co
 import { mountThreadMenu, type ThreadMenuAction } from "./chat-thread-menu.tsx";
 import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 import type { ChatWelcomeIdentityProps } from "./chat-welcome.tsx";
+import type { WidgetCommentEditorScope } from "./widget-comment-intent.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -152,8 +153,10 @@ export type ChatThreadProps = Omit<
     announceTranscript?: boolean;
     loading: boolean;
     restoring?: boolean;
+    /** First-turn content was already shown by New Session; never replace it with history placeholders. */
+    initialSubmission?: boolean;
     routeLoadingSkeleton?: boolean;
-    /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
+    /** Older-history pagination: renders the in-flow boundary row. */
     historyPagination?: ChatHistoryBoundaryProps;
     messages: unknown[];
     toolMessages: unknown[];
@@ -180,6 +183,7 @@ export type ChatThreadProps = Omit<
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
+    onStartNewSession?: (runId: string, summary: string) => void;
     failedMessageEditSource?: FailedMessageEditSource;
     failureActionsRunId?: string;
     onDismissPendingInput?: (inputId: string) => void;
@@ -206,10 +210,12 @@ export type ChatThreadProps = Omit<
     onOpenSidebar?: (content: SidebarContent) => void;
     onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
     onOpenManagedArtifact?: (href: string) => boolean;
+    /** Receives settled transcript file links; links the Gateway cannot open become text. */
+    workspaceFileLinkScope?: string;
+    onWorkspaceFileLinks?: (links: HTMLElement[]) => void;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
-    onNavigate?: (routeId: "cron", options: { search: string }) => void;
+    onNavigate?: ApplicationContext["navigate"];
     onHistoryIntent?: (event: Event) => void;
-    onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
     onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);
     onSetReply?: (target: MessageReplyTarget) => void;
     replyMessageAccess?: ReplyMessageAccess;
@@ -218,7 +224,11 @@ export type ChatThreadProps = Omit<
     onFocusComposer?: () => void;
     commentAttachments?: readonly ChatAttachment[];
     commentsDisabled?: boolean;
-    onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onAddToChat?: (
+      selection: ChatSelectionSource,
+      anchorRect: DOMRect,
+      widget?: WidgetCommentEditorScope,
+    ) => void;
     onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
     onNewSessionSelection?: (selection: ChatSelectionSource) => void;
     /** Shows one of the session's subagents. */
@@ -367,7 +377,7 @@ function toggleTouchMessageMeta(event: PointerEvent, messageElements: Iterable<H
   ) {
     return;
   }
-  const group = target.closest(".chat-group--with-footer");
+  const group = target.closest(".chat-inter-session-message, .chat-group--with-footer");
   if (
     !(group instanceof HTMLElement) ||
     !transcript.contains(group) ||
@@ -418,6 +428,14 @@ export function handleTranscriptSelectionMouseDown(event: MouseEvent) {
     !(target instanceof Element) ||
     target.closest("a, button, input, select, textarea, summary, [contenteditable]")
   ) {
+    return undefined;
+  }
+  // A multi-click on layout can select a newline or the next list item's first word.
+  // Leave single presses native so drags can still start in the gap.
+  if (!event.shiftKey && target.matches(".chat-virtual-row, .chat-group, .chat-text :is(ul, ol)")) {
+    event.preventDefault();
+    thread.focus({ preventScroll: true });
+    thread.ownerDocument.getSelection()?.removeAllRanges();
     return undefined;
   }
   const bubble = target.closest(".chat-bubble");

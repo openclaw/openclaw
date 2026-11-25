@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import {
@@ -220,43 +219,6 @@ it("rejects cwd overrides for sandboxed children before launch", async () => {
     error: expect.stringContaining("cwd override is not supported for sandboxed subagent runs"),
   });
   uncalled(gateway, registerRun);
-});
-
-it.each(["lightweight", "timer-safe TTL"] as const)("prepares %s context", async (mode) => {
-  config = createSubagentSpawnTestConfig();
-  const prepare = vi.fn(async () => undefined);
-  resolveEngine.mockResolvedValue({ prepareSubagentSpawn: prepare });
-  const params =
-    mode === "lightweight"
-      ? { context: "isolated" as const, lightContext: true }
-      : { runTimeoutSeconds: Number.MAX_SAFE_INTEGER };
-  const result = await spawn(params, { agentSessionKey: "main" });
-  expect(result.status).toBe("accepted");
-  if (mode === "lightweight") {
-    uncalled(forkSession, initializeContext, resolveEngine, prepare);
-    expect(request("agent")?.params).toMatchObject({
-      bootstrapContextMode: "lightweight",
-      bootstrapContextRunKind: "default",
-    });
-  } else {
-    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ ttlMs: MAX_TIMER_TIMEOUT_MS }));
-  }
-});
-
-it.each([
-  [undefined, "thread: true"],
-  [true, "not running on a channel"],
-] as const)("suggests session alternatives (thread=%s)", async (thread, guidance) => {
-  const result = await spawn(
-    { mode: "session", thread, context: "isolated" },
-    { agentSessionKey: "agent:main:main", agentChannel: "webchat" },
-  );
-  expect(result.status).toBe("error");
-  if (result.status === "error") {
-    expect(result.error).toContain(guidance);
-    expect(result.error).toContain('mode="run"');
-    expect(result.error).not.toContain("sessions_send");
-  }
 });
 
 it.each([

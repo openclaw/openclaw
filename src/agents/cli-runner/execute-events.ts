@@ -104,6 +104,7 @@ export function createCliEventHandlers(params: {
     data: Parameters<typeof projectAgentToolActivity>[0] & {
       result?: unknown;
       resultContentSource?: "network";
+      followsAssistantText?: true;
     },
     execution?: { args: unknown; requestedArgs?: unknown },
   ) => {
@@ -177,6 +178,7 @@ export function createCliEventHandlers(params: {
         name: event.name,
         toolCallId: event.toolCallId,
         args: event.args,
+        ...(event.followsAssistantText ? { followsAssistantText: true } : {}),
       });
     }
   };

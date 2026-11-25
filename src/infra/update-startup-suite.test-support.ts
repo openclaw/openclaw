@@ -1,7 +1,6 @@
 import { expect } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-run-result.js";
 
 export type PersistedUpdateCheckState = {
@@ -52,38 +51,12 @@ export const idleActiveWorkInspectors = (): GatewayActiveWorkInspectors => ({
   getTerminalSessions: idle,
 });
 
-const handoff = {
-  pid: 12345,
-  command: "openclaw update --yes --channel beta",
-  logPath: "/tmp/openclaw-handoff.log",
-  handoffId: "auto-handoff-id",
-  installRoot: "/opt/openclaw",
-};
-export function startedHandoff(overrides: Partial<typeof handoff> = {}) {
-  return { status: "started" as const, ...handoff, ...overrides };
-}
-
 export function updateResult(overrides: Partial<UpdateRunResult> = {}): UpdateRunResult {
   return { status: "error", mode: "npm", steps: [], durationMs: 0, ...overrides };
 }
 
-export async function recordedFailureReport(
-  run: UpdateRunRecord,
-  mode: UpdateRunResult["mode"] = "npm",
-) {
-  const { prepareUpdateFailureReport } = await import("./update-failure-report-prepare.js");
-  return prepareUpdateFailureReport({
-    attemptId: run.runId,
-    recordedRun: run,
-    result: updateResult({ mode, reason: run.reason ?? undefined }),
-  });
-}
-
 export const expectNoCalls = (...mocks: unknown[]) =>
   mocks.forEach((mock) => expect(mock).not.toHaveBeenCalled());
-
-export const expectIncludes = (text: unknown, ...parts: string[]) =>
-  parts.forEach((part) => expect(text).toContain(part));
 
 export const matchingObject = (shape: Record<string, unknown>) => [expect.objectContaining(shape)];
 

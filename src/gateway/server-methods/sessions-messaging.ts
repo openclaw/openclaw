@@ -23,6 +23,7 @@ import {
 } from "./session-mutation-guards.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { isAgentMainSessionKey, requireSessionKey } from "./sessions-shared.js";
+import { sessionSteerActiveHandlers } from "./sessions-steer-active.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -231,6 +232,7 @@ async function handleSessionSend(
 }
 
 export const sessionMessagingHandlers: GatewayRequestHandlers = {
+  ...sessionSteerActiveHandlers,
   "sessions.send": (options) => handleSessionSend("sessions.send", options),
   "sessions.steer": (options) => handleSessionSend("sessions.steer", options),
 };

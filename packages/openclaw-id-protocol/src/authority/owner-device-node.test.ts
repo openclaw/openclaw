@@ -212,7 +212,7 @@ describe("owner device with a node", () => {
   });
 
   it("refuses binding another node's key to a device", async () => {
-    const { world, cert, change } = await macWorld();
+    const { world, change } = await macWorld();
     const state = ok(await submitStatement(world.state, change, tunnel)).state;
     const other = await worldKey("other-mac");
     const otherCert = await signStatement("OwnerDeviceCert", certBody(other), world.device1.signer);
@@ -229,6 +229,5 @@ describe("owner device with a node", () => {
       ok: false,
       code: "target_mismatch",
     });
-    expect(cert).toBeDefined();
   });
 });

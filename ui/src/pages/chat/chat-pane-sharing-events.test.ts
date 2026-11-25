@@ -138,6 +138,7 @@ it("refreshes participation after profile and config changes and rejects an olde
   draw();
   await settle();
   container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")!.click();
+  await vi.dynamicImportSettled();
   await waitForSolid(() => expect(container.textContent).toContain("Can read"));
   sharingRead.mockResolvedValue(evidence("send", true));
   mounted.emitGatewayEvent("sessions.changed", { reason: "profile-identity" });

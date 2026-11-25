@@ -78,7 +78,7 @@ async function removeOwnJobFromCliRun(settleDuringRemove: boolean) {
         jobId: job.id,
         deliveryAttemptFence: null,
         resolveGatewayContext: () => fixture.context,
-        scheduledExecution: occurrence.mint({
+        scheduledExecution: await occurrence.mint({
           cfg: fixture.cfg,
           agentId: "main",
           runId: "run-1",

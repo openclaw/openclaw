@@ -207,6 +207,7 @@ suite.define(() => {
       await suite.withPage(
         {
           viewport: { width, height: 844 },
+          hasTouch: width === 390,
           colorScheme: "light",
           locale: "en-US",
           serviceWorkers: "block",
@@ -296,6 +297,25 @@ suite.define(() => {
           const preview = first.locator(".chat-message-disclosure__content");
           const shortPreview = activity.nth(1).locator(".chat-message-disclosure__content");
           const toggle = first.locator(".chat-message-disclosure__toggle");
+          const firstEntry = group.locator(".chat-inter-session-message").first();
+          if (width === 390) {
+            await first.locator(".chat-message-disclosure__description").tap();
+          } else {
+            await first.hover();
+          }
+          for (const action of [".chat-copy-btn", ".chat-reply-btn"]) {
+            const button = firstEntry.locator(action);
+            expect(await button.evaluate((node) => getComputedStyle(node).pointerEvents)).toBe(
+              "auto",
+            );
+            expect(
+              await group
+                .locator(".chat-inter-session-message")
+                .nth(1)
+                .locator(action)
+                .evaluate((node) => getComputedStyle(node).pointerEvents),
+            ).toBe("none");
+          }
           if (width === 390) {
             await preview.and(first.locator("[data-preview-overflow]")).waitFor();
             expect(await preview.evaluate((node) => getComputedStyle(node).maskImage)).toContain(
@@ -325,6 +345,7 @@ suite.define(() => {
           expect(legacyLines).toBeLessThan(3);
           expect(await toggle.textContent()).toBe("Show more");
           expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+          expect(await first.locator(".chat-message-disclosure__original").count()).toBe(0);
           const placement = await first.evaluate((node) => {
             const button = node.querySelector("button")!.getBoundingClientRect();
             const content = node
@@ -382,14 +403,34 @@ suite.define(() => {
           expect((await geometry()).bubbleLeft).toBeCloseTo(collapsed.bubbleLeft, 0);
           expect(
             await first.locator(".chat-message-disclosure__original").evaluate((body) => {
-              const css = getComputedStyle(body);
-              return [css.borderTopWidth, css.borderLeftWidth];
+              const style = getComputedStyle(body);
+              const previewBounds = body
+                .closest(".chat-message-disclosure")!
+                .querySelector(".chat-message-disclosure__description")!
+                .getBoundingClientRect();
+              const original = body.getBoundingClientRect();
+              return {
+                rule: style.borderBlockStartWidth,
+                sideBorder: style.borderInlineStartWidth,
+                spaceAbove: style.marginBlockStart,
+                spaceBelow: style.paddingBlockStart,
+                inset:
+                  Math.abs(original.left - previewBounds.left) < 1 &&
+                  Math.abs(original.right - previewBounds.right) < 1,
+              };
             }),
-          ).toEqual(["0px", "0px"]);
+          ).toEqual({
+            rule: "1px",
+            sideBorder: "0px",
+            spaceAbove: "12px",
+            spaceBelow: "12px",
+            inset: true,
+          });
           expect(await first.locator(".chat-reply-attribution, .chat-bubble").count()).toBe(0);
           await toggle.scrollIntoViewIfNeeded();
           await toggle.press("Space");
           await first.getByText(/End of receipt 1$/).waitFor({ state: "detached" });
+          expect(await first.locator(".chat-message-disclosure__original").count()).toBe(0);
           expect(await toggle.textContent()).toBe("Show more");
           await expect
             .poll(() =>

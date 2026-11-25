@@ -16,8 +16,12 @@ import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/se
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { linkOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.worker.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "../openclaw-id/tunnel-principal.js";
 import {
   cfg,
   expectCutFailure,
@@ -336,6 +340,7 @@ describe("session message-cut methods", () => {
       if (member) {
         const config = options.context.getRuntimeConfig();
         delete config.gateway!.roles!.default;
+        config.gateway!.openclawId = { enabled: true };
         setRuntimeConfigSnapshot(config);
         const principal = {
           kind: "member" as const,
@@ -343,9 +348,17 @@ describe("session message-cut methods", () => {
           accountId: "guest",
           role: "guest",
         };
+        linkOpenClawIdUserProfile(
+          { profileId: profile.id, accountId: principal.accountId, email: null },
+          {},
+        );
+        setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
         options.client.internal = { openclawIdPrincipal: principal };
         setOpenClawIdTunnelPrincipalLookup(() => principal);
-        onTestFinished(() => setOpenClawIdTunnelPrincipalLookup(undefined));
+        onTestFinished(() => {
+          setOpenClawIdTunnelPrincipalLookup(undefined);
+          setOpenClawIdMemberAccountLookup(undefined);
+        });
       }
 
       const fork = await invoke("sessions.fork", "user-entry", options);

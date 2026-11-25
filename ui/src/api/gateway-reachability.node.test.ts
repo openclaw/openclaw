@@ -2,6 +2,7 @@
 import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { bindBrowserHttpFailures } from "../app/browser-http.ts";
 import { useSocketHarness } from "./gateway-handshake.test-support.ts";
 import { getLatestWebSocket, wsInstances } from "./gateway-socket.test-support.ts";
 
@@ -9,12 +10,15 @@ const gatewayUrl = "ws://127.0.0.1:18789";
 const createClient = useSocketHarness();
 const fetchProbe = vi.fn<() => Promise<Response>>();
 const onClose = vi.fn();
+const reports = vi.fn();
 
 beforeEach(() => {
   vi.spyOn(Math, "random").mockReturnValue(0);
   fetchProbe.mockReset();
   onClose.mockReset();
+  reports.mockReset();
   vi.stubGlobal("fetch", fetchProbe);
+  return bindBrowserHttpFailures(reports);
 });
 
 function connect(url = gatewayUrl) {
@@ -27,8 +31,11 @@ it.each([
   { name: "live Gateway", body: { ok: true, status: "live" }, status: 200, busy: true },
   { name: "unavailable HTTP server", body: { ok: false }, status: 503, busy: false },
   { name: "unrelated HTTP server", body: { ok: true }, status: 200, busy: false },
+  { name: "sign-in proxy", body: {}, status: 401, busy: false, denied: true },
+  { name: "access policy", body: {}, status: 403, busy: false, denied: true },
+  { name: "missing route", body: {}, status: 404, busy: false },
   { name: "offline Gateway", body: null, status: 0, busy: false },
-])("classifies a failed upgrade against a $name", async ({ body, status, busy }) => {
+])("classifies a failed upgrade against a $name", async ({ body, status, busy, denied }) => {
   fetchProbe.mockImplementation(() =>
     status
       ? Promise.resolve(Response.json(body, { status }))
@@ -45,6 +52,7 @@ it.each([
     expect.objectContaining({ code: 1006, willRetry: true, ...(busy ? { busy: true } : {}) }),
   );
   expect(onClose.mock.calls[0]?.[0].busy === true).toBe(busy);
+  expect(reports.mock.calls).toEqual(denied ? [[null]] : []);
 });
 
 it.each(["cross-origin", "opened"])("does not probe a %s transport", async (kind) => {

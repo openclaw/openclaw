@@ -1,4 +1,8 @@
-import { PROVIDER_MODEL_INPUT } from "@openclaw/ai/provider-types";
+import {
+  PROVIDER_DEFERRED_TOOL_NAMES,
+  PROVIDER_MODEL_INPUT,
+  PROVIDER_STATE_SCOPE,
+} from "@openclaw/ai/provider-types";
 import {
   isAnthropicServerToolClearingEnabled,
   isCompactionReplayCheckpoint,
@@ -224,10 +228,11 @@ export async function settleEmbeddedAttemptStream(input: {
     const usageAssistant = hasNonzeroUsage(completedAssistantUsage)
       ? currentAttemptCompletedAssistant
       : transcriptUsageSnapshot?.assistant;
-    const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(sessionManager, {
-      provider: attempt.provider,
-      modelId: attempt.modelId,
-    });
+    const fallbackLastCacheTouchAt = readLastCacheTtlTimestamp(
+      sessionManager,
+      { provider: attempt.provider, modelId: attempt.modelId },
+      attempt.promptCacheKeepWarm,
+    );
     const promptCache = buildContextEnginePromptCacheInfo({
       retention: input.cache.retention,
       lastCallUsage,
@@ -357,6 +362,8 @@ export async function prepareEmbeddedAttemptTransport(input: {
   sandboxSessionKey: string;
   sandbox?: SandboxContext | null;
   codeModeControlsEnabled: boolean;
+  /** Hidden Tool Search directory entries that a direct call hydrates in this run. */
+  getDeferredToolEntries?: () => readonly { name: string }[] | undefined;
   providerPromptState: {
     state: ProviderPromptState;
     effectiveContextTokenBudget: number;
@@ -526,13 +533,23 @@ export async function prepareEmbeddedAttemptTransport(input: {
   })
     ? [...attempt.model.input, "video" as const]
     : undefined;
+  let deferredToolEntries: readonly { name: string }[] | undefined;
+  let deferredToolNames: ReadonlySet<string> | undefined;
   // A direct provider transport replaces the session SDK stream, so attach
   // turn-owned thinking provenance to the selected transport as well.
   session.agent.streamFn = (model, context, options) => {
+    const entries = input.getDeferredToolEntries?.();
+    if (entries !== deferredToolEntries) {
+      deferredToolEntries = entries;
+      deferredToolNames = entries && new Set(entries.map((entry) => entry.name));
+    }
     const providerOptions = {
       ...options,
       openclawThinkingExplicit: attempt.thinkingExplicit,
       ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
+      ...(deferredToolNames ? { [PROVIDER_DEFERRED_TOOL_NAMES]: deferredToolNames } : {}),
+      ...(attempt.providerStateScope ? { [PROVIDER_STATE_SCOPE]: attempt.providerStateScope } : {}),
+      ...(attempt.sessionForkRequest?.cachePrewarm ? { cachePrewarm: true as const } : {}),
     };
     // Async payload preparation outlives stream admission; managed fetch rechecks Access at egress.
     return withGuardedFetchBeforeRequest(assertAccessCurrent, () =>
@@ -579,12 +596,13 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   }
   const nativeWebSearchPolicyContext = {
-    // Provider-hosted search bypasses local execute hooks, so its request must
-    // honor the same execution cap without changing foreground function schemas.
+    // Hosted search executes before client-side gates, so it honors the execution cap. A session
+    // fork lists it like its session, so the fork shares the session's cached tools prefix.
     webSearchEnabled:
       attempt.disableTools !== true &&
       attempt.toolOverrides?.webSearch !== false &&
       (!attempt.toolExecutionAllow ||
+        attempt.sessionForkRequest !== undefined ||
         isToolExecutionAllowed(attempt.toolExecutionAllow, "web_search")),
     runtimeToolAllowlist: attempt.toolsAllow,
     sessionKey: input.sandboxSessionKey,
@@ -689,6 +707,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       {
         runId: attempt.runId,
         sessionId: attempt.sessionId,
+        authScope: input.agentDir,
         accountRoute: selectedCredential.identityKey,
       },
     );

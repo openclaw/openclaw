@@ -381,6 +381,38 @@ describe("opencode-go provider plugin", () => {
       }),
   );
 
+  it("lists the signed-in account's models for a browser sign-in", async () => {
+    await liveCatalog({ "kimi-k3": upstreamModel("kimi-k3") }, ["kimi-k3"], "console-access");
+    const resolveProviderAuth = vi.fn(() => ({
+      apiKey: "oauth:opencode-go",
+      discoveryApiKey: "console-access",
+      mode: "oauth" as const,
+      source: "profile" as const,
+      profileId: "opencode-go:default",
+    }));
+    let result: Awaited<ReturnType<NonNullable<typeof provider.catalog>["run"]>>;
+    await withFetchSpy(async (fetchMock) => {
+      fetchMock.mockRejectedValue(new Error("blocked fetch"));
+      result = await provider.catalog?.run({
+        config: {},
+        env: {},
+        providerIds: ["opencode-go"],
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+    expect(result).toMatchObject({
+      provider: { apiKey: "oauth:opencode-go" },
+    });
+    expect(result && "provider" in result && result.provider.models.map((m) => m.id)).toEqual([
+      "kimi-k3",
+    ]);
+    expect(resolveProviderAuth).toHaveBeenCalledWith("opencode-go", {
+      oauthMarker: expect.stringContaining("opencode-go"),
+    });
+  });
+
   it("does not select an unavailable preferred onboarding model", async () => {
     await expect(
       resolveOpencodeGoStarterModel({

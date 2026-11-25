@@ -14,6 +14,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveAssistantMediaPolicy } from "../assistant-media-policy.js";
 import { openAssistantMedia } from "../control-ui-assistant-media-read.js";
 import { withLocalWorkspaceProjection } from "../worker-environments/local-workspace-projection.js";
+import { sessionFileWorkspaceMatches } from "./session-file-read-authority.js";
 import { prepareSessionFileReadPath } from "./session-file-read.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import { createSessionFilesHandlerInvoker } from "./sessions-files.test-support.js";
@@ -264,4 +265,23 @@ it("revokes prepared live backing when read authority ends", async () => {
     expect(() => prepared.assertCurrent?.()).toThrow("Reader revoked");
     await expect(readMedia("/workspace/README.md")).rejects.toThrow("Reader revoked");
   });
+});
+
+it("keeps a diff read across the first turn recording no library skills", () => {
+  const created = { sessionId: "first-turn", updatedAt: 1 };
+  const prepared = {
+    ...created,
+    skillsSnapshot: { prompt: "", skills: [], librarySelections: [] },
+  };
+  expect(sessionFileWorkspaceMatches(created, prepared)).toBe(true);
+  const selected = {
+    ...prepared,
+    skillsSnapshot: {
+      ...prepared.skillsSnapshot,
+      librarySelections: [
+        { skillId: "skill", revision: "a".repeat(64), name: "notes", ownerProfileId: "owner" },
+      ],
+    },
+  };
+  expect(sessionFileWorkspaceMatches(prepared, selected)).toBe(false);
 });

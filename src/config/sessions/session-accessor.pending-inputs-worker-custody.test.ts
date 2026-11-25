@@ -21,7 +21,7 @@ import {
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
 import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
@@ -532,7 +532,7 @@ it("refuses a stale shared reader without orphaning its source settlement captur
         prepared(
           facts,
           () => {
-            invalidateOpenClawAgentDatabaseValidation(database);
+            invalidateOpenClawAgentDatabaseValidation(database, "a maintenance write");
             return consume();
           },
           assertCurrent,

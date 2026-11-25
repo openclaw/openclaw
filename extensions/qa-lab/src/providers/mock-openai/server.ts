@@ -16,10 +16,7 @@ import {
 } from "../shared/mock-model-config.js";
 import { resolveMockProviderVariant } from "../shared/mock-provider-variant.js";
 import { registerQaSessionObserver } from "../shared/session-observer-registry.js";
-import {
-  buildMessagesPayload,
-  normalizeAnthropicMessagesRequest,
-} from "./mock-anthropic-messages.js";
+import { buildMessagesPayload } from "./mock-anthropic-messages.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import { resolveAfterToolHttpFailure } from "./mock-openai-after-tool-failures.js";
 import {
@@ -32,17 +29,17 @@ import {
 } from "./mock-openai-assistant-text.js";
 import { planAutomationScenarioTurn } from "./mock-openai-automation-turns.js";
 import {
+  QA_COMPACTION_RETRY_DURABLE_MARKER,
+  QA_COMPACTION_RETRY_BULKY_MARKER,
   QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE,
   QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE,
   hasCompactionOutputRecoveryMarker,
   resolveCompactionRecoverySummary,
 } from "./mock-openai-compaction-summaries.js";
 import {
-  type ResponsesInputItem,
   type StreamEvent,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
-  type AnthropicMessagesRequest,
   type QaMockProviderDispatchRequest,
   type QaMockProviderDispatchResult,
   TINY_PNG_BASE64,
@@ -168,6 +165,7 @@ import {
   extractAllToolOutputText,
   extractFollowthroughEvidenceText,
   normalizeResponsesInput,
+  normalizeQaMockProviderRequest,
   buildSlackMpimHistoryReply,
   extractUserTurnTexts,
   extractInstructionsText,
@@ -195,7 +193,7 @@ import {
   encodeCodeModeTarget,
   resolveCodeModeExecSurface,
   canCallScenarioTool,
-  readProgressCommand,
+  buildCommandProgressEvents,
   readScenarioToolCompletion,
   resolveCurrentToolDeclarationSurface,
   readRestartCheckpointProgress,
@@ -236,41 +234,6 @@ const MOCK_HTTP_POST_ROUTES = new Map([
 const QA_COMPACTION_RETRY_PROMPT_RE = /compaction retry mutating tool check/i;
 const QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES = 256 * 1024;
 const QA_COMPACTION_OUTPUT_RECOVERY_OVERFLOW_THRESHOLD_BYTES = 96 * 1024;
-const QA_COMPACTION_RETRY_DURABLE_MARKER = "QA-COMPACTION-DURABLE-MARKER";
-const QA_COMPACTION_RETRY_BULKY_MARKER = "QA-COMPACTION-BULKY-HISTORICAL-MARKER";
-const QA_COMPACTION_RETRY_HISTORICAL_PHRASE = "post-marker historical user block";
-const QA_COMPACTION_RETRY_SUMMARY = `## Decisions
-- Continue the compaction retry from durable context without replaying a completed mutation.
-
-## Open TODOs
-- Write compaction-retry-summary.txt exactly once.
-- Return the final replay-safety marker.
-
-## Constraints/Rules
-- Preserve ${QA_COMPACTION_RETRY_DURABLE_MARKER}.
-- Write exactly: Replay safety: unsafe after write.
-
-## Pending user asks
-- Create compaction-retry-summary.txt, then reply exactly: Protocol note: replay unsafe after write.
-
-## Exact identifiers
-- ${QA_COMPACTION_RETRY_DURABLE_MARKER}
-- compaction-retry-summary.txt`;
-const QA_COMPACTION_RETRY_HISTORICAL_SUMMARY = `## Decisions
-- Preserve the latest ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} context through staged compaction.
-
-## Open TODOs
-- Continue summarizing the ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} sequence.
-
-## Constraints/Rules
-- Keep historical content distinct from live task state.
-- Do not invent durable context absent from the summarized history.
-
-## Pending user asks
-- Retain the ${QA_COMPACTION_RETRY_HISTORICAL_PHRASE} details.
-
-## Exact identifiers
-- None captured.`;
 const QA_RESTART_CHECKPOINT_COUNT = 3;
 const QA_RESTART_FINAL_TEXT = "RESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
@@ -428,29 +391,6 @@ async function buildResponsesPayload(
   } = readScenarioToolCompletion(toolDeclarationBody, input, allInputText);
   const buildToolCallEventsWithArgs = (name: string, args: Record<string, unknown>) =>
     buildScenarioToolCallEvents(toolDeclarationBody, name, args);
-  const pendingCommandProgress = (
-    progressInput: ResponsesInputItem[],
-    command: string,
-    expectedOutcome: "success" | "failure" | "either" = "success",
-  ) => {
-    const progress = readProgressCommand(progressInput, command);
-    if (progress.error) {
-      return buildAssistantEvents(progress.error);
-    }
-    if (progress.sessionId) {
-      return buildToolCallEventsWithArgs("process", {
-        action: "poll",
-        sessionId: progress.sessionId,
-        timeout: 30_000,
-      });
-    }
-    if (expectedOutcome === "failure" && !progress.failed) {
-      return buildAssistantEvents("BUG-TOOL-DID-NOT-FAIL");
-    }
-    return progress.failed && expectedOutcome === "success"
-      ? buildAssistantEvents("BUG-TOOL-FAILED")
-      : null;
-  };
   const hasCompactionRetryDurableContext = allInputText.includes(
     QA_COMPACTION_RETRY_DURABLE_MARKER,
   );
@@ -468,14 +408,7 @@ async function buildResponsesPayload(
         "reasoning_compaction_summary_fault",
       );
     }
-    return buildAssistantEvents(
-      hasCompactionRetryDurableContext
-        ? QA_COMPACTION_RETRY_SUMMARY
-        : allInputText.includes(QA_COMPACTION_RETRY_BULKY_MARKER) ||
-            allInputText.includes(QA_COMPACTION_RETRY_HISTORICAL_PHRASE)
-          ? QA_COMPACTION_RETRY_HISTORICAL_SUMMARY
-          : resolveCompactionRecoverySummary(allInputText),
-    );
+    return buildAssistantEvents(resolveCompactionRecoverySummary(allInputText));
   }
   if (
     QA_COMPACTION_RETRY_PROMPT_RE.test(allInputText) ||
@@ -1203,7 +1136,8 @@ async function buildResponsesPayload(
   }
   if (slackProgressDirectives) {
     if (hasToolOutput(slackProgressInput)) {
-      const pending = pendingCommandProgress(
+      const pending = buildCommandProgressEvents(
+        toolDeclarationBody,
         slackProgressInput,
         slackProgressDirectives.execCommand,
       );
@@ -1235,14 +1169,9 @@ async function buildResponsesPayload(
     // Progress scenarios share transcripts. Only the selected prompt's result can finish it.
     const progressInput = turn ? input.slice(turn.index) : [];
     const command = !expectsError && execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
-    if (!hasToolOutput(progressInput)) {
-      return buildToolCallEventsWithArgs(
-        command ? "exec" : "read",
-        command ? { command } : { path: readTargetFromPrompt(scenarioFamilyPrompt) },
-      );
-    }
     if (command) {
-      const pending = pendingCommandProgress(
+      const pending = buildCommandProgressEvents(
+        toolDeclarationBody,
         progressInput,
         command,
         /command fails/iu.test(scenarioFamilyPrompt)
@@ -1254,6 +1183,10 @@ async function buildResponsesPayload(
       if (pending) {
         return pending;
       }
+    } else if (!hasToolOutput(progressInput)) {
+      return buildToolCallEventsWithArgs("read", {
+        path: readTargetFromPrompt(scenarioFamilyPrompt),
+      });
     }
     const output = extractToolOutput(progressInput);
     const reply =
@@ -1865,15 +1798,11 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
   const dispatchProvider = async (
     request: QaMockProviderDispatchRequest,
   ): Promise<QaMockProviderDispatchResult> => {
-    const normalized =
-      request.route === "anthropic-messages"
-        ? normalizeAnthropicMessagesRequest(request.body as AnthropicMessagesRequest)
-        : {
-            body: request.body,
-            input: normalizeResponsesInput(request.body.input),
-            model: typeof request.body.model === "string" ? request.body.model : "",
-          };
+    const normalized = normalizeQaMockProviderRequest(request);
     const { body, input, model } = normalized;
+    if (normalized.invalidToolOutput) {
+      return { events: buildAssistantEvents("BUG-TOOL-PROGRESS-CALL-MISMATCH"), model };
+    }
     if (isRemoteCompactionV2Request(input)) {
       return { events: buildRemoteCompactionV2Events(), model };
     }

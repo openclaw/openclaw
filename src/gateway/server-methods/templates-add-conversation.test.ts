@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -9,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TemplateInstallOutcome } from "../../shared/template-install-notice.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { completeAgentOnboarding } from "./agents-onboarding.js";
+import { readChatHistoryPage } from "./chat-history-pages.js";
 import { publishTemplateInstallEvent } from "./templates-add-conversation.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -33,10 +35,18 @@ const outcomes: TemplateInstallOutcome[] = [
       status: "error",
     },
   },
+  { kind: "automation-plan", slots: [{ slotId: "morning", name: "Morning review" }] },
   {
     kind: "automation-created",
     declarationId: "morning",
     schedulerJobId: "job-morning",
+    definition: {
+      id: "job-morning",
+      name: "Saved title",
+      enabled: false,
+      configRevision: "r1",
+      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+    },
     name: "Morning review",
     enabled: false,
   },
@@ -88,20 +98,47 @@ it.each(outcomes)("publishes only one installer-authored outcome: $kind", async 
       });
       expect(outcome.plugin).not.toHaveProperty("official");
     } else {
+      const block =
+        outcome.kind === "automation-plan"
+          ? {
+              type: "automation_creation_plan",
+              planId: "template:scout",
+              slots: [{ slotId: "morning", name: "Morning review" }],
+            }
+          : {
+              type: "automation_creation_result",
+              planId: "template:scout",
+              slotId: "morning",
+              ...(outcome.kind === "automation-created"
+                ? { status: "created", jobId: "job-morning", definition: outcome.definition }
+                : { status: "failed" }),
+            };
+      const projected = {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [block],
+      };
       expect(messages[0]).toMatchObject({
-        role: "system",
-        excludeFromContext: true,
-        provenance: { kind: "internal_system", sourceTool: "templates_add_installer" },
-        content: [
-          {
-            type: "text",
-            text:
-              outcome.kind === "automation-created"
-                ? "Automation created: Morning review (paused until setup is ready)."
-                : "Automation setup failed: Morning review. Continue setup in this agent.",
-          },
-        ],
+        ...projected,
+        content: [],
+        openclawDisplayContent: [block],
       });
+      expect(broadcast.mock.calls[0]?.[1]).toMatchObject({ message: projected });
+      const history = await readChatHistoryPage({
+        entry,
+        provider: undefined,
+        sessionId: entry.sessionId,
+        storePath: resolveSessionStorePathCore(config.session?.store, { agentId: target.agentId }),
+        sessionAgentId: target.agentId,
+        canonicalKey: target.sessionKey,
+        max: 10,
+        maxHistoryBytes: 512 * 1024,
+        effectiveMaxChars: 8000,
+        offset: undefined,
+        messageId: undefined,
+      });
+      expect(history.messages).toMatchObject([projected]);
     }
     expect(JSON.stringify(messages)).not.toContain("Template setup confirmed");
   });

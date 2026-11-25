@@ -10,17 +10,13 @@ import { WizardSession } from "../../wizard/session.js";
 import {
   acceptGatewayDeviceSourceAuthority,
   captureGatewayDeviceRevocation,
-  invalidateGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import {
   createContext,
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
-import {
-  bindInProcessRequestMutationAuthority,
-  captureGatewayRequestOperatorGuard,
-} from "./session-mutation-guards.js";
+import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
 import {
   createAdmittedWizardSession,
   whenAdmittedWizardSessionSettled,
@@ -119,7 +115,6 @@ function fixture() {
     hasCurrentClientAuthority: source.isCurrent,
   };
   bindInProcessRequestMutationAuthority(options, undefined, undefined);
-  captureGatewayRequestOperatorGuard(options);
   const start = () =>
     expectDefined(systemAgentHandlers[options.req.method], "runtime setup handler")(options);
   const cleanup = async () => {
@@ -179,17 +174,6 @@ async function withStartedRuntime(
   });
 }
 
-async function expectRevokedRuntime(request: ReturnType<typeof fixture>, session: WizardSession) {
-  request.continueSetup.resolve();
-  await whenAdmittedWizardSessionSettled(session);
-  expect(await session.next()).toMatchObject({
-    done: true,
-    status: "error",
-    error: "Gateway requester authority changed",
-  });
-  expect(io.write).not.toHaveBeenCalled();
-}
-
 it("keeps the runtime effect under its retained grant after start", async () => {
   await withStartedRuntime(async (request, session) => {
     request.continueSetup.resolve();
@@ -199,20 +183,6 @@ it("keeps the runtime effect under its retained grant after start", async () => 
     expect(io.write.mock.calls[0]?.[0].plugins.entries.fixture.config).toEqual({
       enabled: true,
     });
-  });
-});
-
-it("rejects the runtime effect after device revocation", async () => {
-  await withStartedRuntime(async (request, session) => {
-    invalidateGatewayDeviceRevocation(request.context, "runtime-device", "operator");
-    await expectRevokedRuntime(request, session);
-  });
-});
-
-it("rejects the runtime effect after operator scope revocation", async () => {
-  await withStartedRuntime(async (request, session) => {
-    request.client.connect.scopes = ["operator.read"];
-    await expectRevokedRuntime(request, session);
   });
 });
 

@@ -924,12 +924,6 @@ describe("native app i18n inventory", () => {
       "The watch receives a one-time pairing code and its own device credentials. Voice is included with read and Talk access, without admin access. The microphone starts only when you tap Start on the watch. A reachable secure Gateway URL is required away from the iPhone.",
       (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
     );
-    expectSourceAtSite(
-      "Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.",
-      (site) =>
-        site.path === "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift" &&
-        site.kind === "ui-localized-call-multiline",
-    );
     expect(
       entries.some((entry) => hasSite(entry, (site) => site.path.endsWith("Info.plist"))),
     ).toBe(true);

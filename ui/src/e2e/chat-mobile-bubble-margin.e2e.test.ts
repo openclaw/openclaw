@@ -196,27 +196,25 @@ suite.define(() => {
         const pollMargin = <T>(project: (margin: Margin) => T) =>
           expect.poll(async () => project(await measure()), { message: label });
         await resizeMarginViewport(page, width);
-        if (testCase.selector === ".chat-session-activity") {
-          const activity = activePane.locator(".chat-thread .chat-session-activity");
-          const chevron = activity.locator("summary .chat-session-activity__chevron");
-          await expectBrowser(activity.locator("summary"), label).toBeVisible();
-          await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
+        if (testCase.id.startsWith("forwarded")) {
+          const activity = activePane.locator(".chat-group--inter-session .chat-bubble");
+          const toggle = activity.locator(".chat-message-disclosure__toggle");
+          const original = activity.locator(".chat-message-disclosure__original");
+          await expectBrowser(toggle, label).toHaveAttribute("aria-expanded", "false");
+          await expectBrowser(original, label).toHaveCount(0);
           const collapsed = await measure();
-          expectActivityEdges(collapsed, label);
-          await chevron.click();
-          await expectBrowser(activity.locator(".chat-bubble"), label).toBeVisible();
-          await expectBrowser(
-            activity.locator(".chat-message-disclosure__toggle"),
-            label,
-          ).toHaveCount(0);
+          expect(collapsed.closed, label).toBeCloseTo(0, 0);
+          expect(collapsed.open, label).toBeGreaterThan(0);
+          await toggle.click();
+          await expectBrowser(original, label).toBeVisible();
           const expanded = await measure();
           expectActivityEdges(expanded, label);
           expect(expanded.height, label).toBeGreaterThan(collapsed.height);
           expect(expanded.overflow, label).toBe(0);
           expectMediaInside(expanded, label);
-          await chevron.click();
-          await expectBrowser(activity, label).toHaveJSProperty("open", false);
-          await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
+          await toggle.click();
+          await expectBrowser(toggle, label).toHaveAttribute("aria-expanded", "false");
+          await expectBrowser(original, label).toHaveCount(0);
         } else if (!("excluded" in testCase)) {
           const mobile = await vi.waitFor(
             async () => {

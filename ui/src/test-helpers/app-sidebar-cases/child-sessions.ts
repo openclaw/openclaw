@@ -47,8 +47,8 @@ function parentHarness() {
     harness: createSessionsHarness("main", ["agent:main:parent"]),
   };
 }
-function expectExpanded(sidebar: SidebarLifecycleState) {
-  expect(sidebar.querySelector("[data-child-session-toggle]")?.ariaExpanded).toBe("true");
+function expandChildren(sidebar: SidebarLifecycleState) {
+  sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
 }
 const childSelector = (key: string) => `[data-session-key="${key}"]`;
 
@@ -86,7 +86,7 @@ describe("AppSidebar agent chip", () => {
 
     const toggle = sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]");
     expect(toggle?.textContent?.trim()).toContain("2");
-    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    toggle!.click();
     await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2),
@@ -123,14 +123,9 @@ describe("AppSidebar agent chip", () => {
       expect(row.querySelector(".sidebar-session-indicator")).not.toBeNull();
       expect(row.querySelector("[data-sidebar-session-pin], .session-row-state")).toBeNull();
     }
-    expect(sidebar.querySelector('[aria-label="Done"]')).not.toBeNull();
-    const runtime = sidebar.querySelector(
-      '[data-session-key="agent:main:child-one"] openclaw-elapsed-time',
-    );
-    const childTrail = childRows[0]?.querySelector<HTMLElement>(".session-row-trail");
-    expect(childTrail?.querySelector("openclaw-elapsed-time")).not.toBeNull();
-    expect(childRows[0]?.querySelector("a")?.getAttribute("aria-describedby")).toBe(childTrail?.id);
-    expect(runtime?.textContent).toMatch(/^(?:29|30|31)s$/);
+    expect(sidebar.querySelector('[aria-label="Done"]')).toBeNull();
+    expect(childRows[0]?.querySelector(".session-glyph--running")).not.toBeNull();
+    expect(childRows[0]?.querySelector("openclaw-elapsed-time")).toBeNull();
 
     harness.list.mockResolvedValue(
       listResult(
@@ -161,8 +156,8 @@ describe("AppSidebar agent chip", () => {
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     await waitForFast(() =>
       expect(
-        sidebar.querySelector('[data-session-key="agent:main:child-one"] [aria-label="Done"]'),
-      ).not.toBeNull(),
+        sidebar.querySelector('[data-session-key="agent:main:child-one"] .session-glyph--running'),
+      ).toBeNull(),
     );
   });
 
@@ -196,7 +191,7 @@ describe("AppSidebar agent chip", () => {
     await settleLitElement(sidebar);
 
     const toggle = sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]");
-    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    toggle!.click();
     await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
     await waitForFast(() =>
       expect(sidebar.querySelector('[data-session-key="agent:worker:child"]')).not.toBeNull(),
@@ -223,7 +218,7 @@ describe("AppSidebar agent chip", () => {
       result: parentResult(["agent:worker:first", "agent:worker:second"], 10),
     });
     await settleLitElement(sidebar);
-    expectExpanded(sidebar);
+    expandChildren(sidebar);
 
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     expect(harness.list.mock.calls[1]?.[0]).toMatchObject({
@@ -250,7 +245,7 @@ describe("AppSidebar agent chip", () => {
       });
     publishParent(10);
     await settleLitElement(sidebar);
-    expectExpanded(sidebar);
+    expandChildren(sidebar);
 
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     expect(sidebar.querySelector(".sidebar-recent-session--child")).toBeNull();
@@ -282,7 +277,7 @@ describe("AppSidebar agent chip", () => {
     const { provider, sidebar } = await mountSidebar(gateway, original.sessions);
     original.publishList({ result: parentResult(["agent:worker:child"], 2) });
     await settleLitElement(sidebar);
-    expectExpanded(sidebar);
+    expandChildren(sidebar);
     await waitForFast(() => expect(original.list).toHaveBeenCalledOnce());
 
     const replacement = createSessionsHarness("main", ["agent:main:parent"]);

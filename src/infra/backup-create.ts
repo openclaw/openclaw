@@ -73,7 +73,7 @@ import { safeStat } from "./path-existence.js";
 import { assertDeferredSqliteContent } from "./sqlite-snapshot-file.js";
 import { isUpdateCapturePath } from "./update-capture-paths.js";
 
-const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
+const loadTarRuntime = createLazyRuntimeModule(() => import("tar/raw"));
 
 export type BackupCreateOptions = {
   /** Internal lifecycle cancellation for backup preparation, not admitted repairs. */

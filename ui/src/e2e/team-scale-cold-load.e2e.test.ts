@@ -509,7 +509,9 @@ suite.define(() => {
         const complete = async () => {
           for (const source of facts.updateSources) {
             await thread
-              .locator(`.chat-session-activity__summary a[data-session-key="${source.sessionKey}"]`)
+              .locator(
+                `.chat-group--inter-session .chat-reply-attribution a[data-session-key="${source.sessionKey}"]`,
+              )
               .getByText(source.title, { exact: true })
               .waitFor();
           }
@@ -570,7 +572,7 @@ suite.define(() => {
         const requests = http.requests.length;
         await page.reload();
         await gateway.waitForRequest("connect");
-        await thread.locator(".chat-session-activity__summary").last().waitFor();
+        await thread.locator(".chat-group--inter-session .chat-bubble").last().waitFor();
         await page.screenshot({ path: `${suite.artifactDir}/cached-session-updates.png` });
         await complete();
         for (const method of ["sessions.resolve", "controlUi.sessionPreview"]) {

@@ -458,7 +458,9 @@ it.each(["opens", "commits"] as const)(
     expect(backup.warnings).toEqual(
       opens
         ? []
-        : [`Database changed during capture; its snapshot requires manual recovery: ${f.shared}`],
+        : [
+            `Database write generation changed or could not be confirmed during capture (the running Gateway may have written to it); automatic rollback keeps the live database instead of this snapshot: ${f.shared}`,
+          ],
     );
   },
 );
@@ -974,15 +976,15 @@ it("seals a live manual image without generation warnings while a writer commits
   }
 });
 
-it.each(["insufficient", "unknown"] as const)(
-  "preflights a separate source volume whose available capacity is %s",
+it.each(["tight", "unknown"] as const)(
+  "captures without reserving restore output on a separate source volume whose capacity is %s",
   async (capacity) => {
     const f = await fixture(true);
     const externalDirectories = f.external.map((file) => path.dirname(file));
     const largest = Math.max(
       ...(await Promise.all(f.external.map(async (file) => (await fs.stat(file)).size))),
     );
-    // Enough for either agent separately; insufficient for both retained originals plus publication.
+    // Too little for both retained originals plus publication, which restore checks itself.
     const available = 64 * 1024 * 1024 + 2 * largest;
     const stat = fs.stat;
     const backupDevice = (await stat(f.directory, { bigint: true })).dev;
@@ -1011,17 +1013,13 @@ it.each(["insufficient", "unknown"] as const)(
       };
     });
     const originals = await readFiles([f.shared, ...f.external]);
-    if (capacity === "insufficient") {
-      await expect(f.capture()).rejects.toThrow(`near ${externalDirectories[0]}`);
-      expect(await fs.readdir(f.directory)).toEqual([]);
-    } else {
+    {
       const backup = await f.capture();
       expect(backup.databases.map((entry) => entry.path).toSorted()).toEqual(
         [f.shared, ...f.external].toSorted(),
       );
-      expect(backup.warnings).toContain(
-        `Available disk space could not be measured near ${externalDirectories[0]}; database backup will be attempted.`,
-      );
+      // The image volume is measured; source volumes are restore's own check, made when it runs.
+      expect(backup.warnings).toEqual([]);
       const retainedAgentFiles = (
         await listDirectoryTreeStrict(backup.directory).then((inventory) =>
           inventory.map((entry) => entry.relativePath),

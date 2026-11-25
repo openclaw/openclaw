@@ -31,6 +31,7 @@ async function menuFixture(mobile: boolean | undefined, group = "Alpha") {
   expect(menu.openMenu()).toBe(true);
   flush();
   await menu.updateComplete;
+  await import("./chat-header-session-menu-content.tsx");
   await waitForSolid(() =>
     expect(
       menu.querySelector(mobile ? '[value="mobile-copy"]' : '[value="rename"]'),
