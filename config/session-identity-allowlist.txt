@@ -1073,7 +1073,6 @@ src/gateway/session-transcript-title-reader.worker.ts	4
 src/gateway/session-utils-read-lifetime.ts	4
 src/gateway/sessions-history-http.ts	8
 src/gateway/sessions-patch-admission.ts	2
-src/gateway/sessions-patch-display-metadata.ts	2
 src/gateway/sessions-resolve.ts	3
 src/gateway/subagent-completion-tool-handoff.ts	4
 src/gateway/talk/client-agent-consult.ts	8
