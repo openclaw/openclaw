@@ -329,6 +329,7 @@ it.each([
   { backend: "local", mode: "interrupted" },
   { backend: "local", mode: "interrupted-authorized-open" },
   { backend: "local", mode: "interrupted-authorized" },
+  { backend: "local", mode: "interrupted-authorized-named" },
   { backend: "local", mode: "interrupted-authorized-edits" },
   { backend: "local", mode: "interrupted-authorized-deleted" },
   { backend: "local", mode: "interrupted-authorized-merged" },
@@ -434,7 +435,10 @@ it.each([
         : response;
     });
     const idempotencyKey = `${mode}-update`;
-    const publication = f.coordinator.requestForSessionV2(f.request(idempotencyKey, f.guest));
+    const publication = f.coordinator.requestForSessionV2({
+      ...f.request(idempotencyKey, f.guest),
+      ...(mode === "interrupted-authorized-named" ? { pullRequestUrl: first.url } : {}),
+    });
     let requestId: string;
     if (!interruptedCase) {
       const result = await publication;
@@ -642,6 +646,20 @@ it.each([false, true])(
       }
       return result;
     });
+    if (!publisherChanged) {
+      const writes = [...f.externalWrites];
+      await expect(
+        f.coordinator.requestForSessionV2({
+          ...f.request("named-update-after-close", f.guest),
+          pullRequestUrl: first.url,
+        }),
+      ).resolves.toMatchObject({
+        status: "failed",
+        code: "github_rejected",
+        nextAction: expect.stringContaining("Reopen the requested PR"),
+      });
+      expect(f.externalWrites).toEqual(writes);
+    }
     const idempotencyKey = "new-pr-after-close";
     await expect(
       f.coordinator.requestForSessionV2(f.request(idempotencyKey, f.guest)),

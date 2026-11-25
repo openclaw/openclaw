@@ -22,15 +22,24 @@ function publicationFailureCode(value: string): PublicationFailureCode {
 
 export function checkSharedWorktreeReceipt(row: GitHubPublicationRow): void {
   assertReadableSharedGitHubPublication(row);
+  const [digest, updateTarget, extra] = row.request_digest.split(":");
   if (
-    row.request_digest !==
-    digestGitHubPublicationRequest({
-      sessionId: row.session_id,
-      idempotencyKey: row.idempotency_key,
-      title: row.title ?? undefined,
-      body: row.body ?? undefined,
-      draft: row.draft == null ? undefined : row.draft === 1,
-    })
+    extra !== undefined ||
+    (updateTarget !== undefined &&
+      (!/^[a-f0-9]{64}$/u.test(updateTarget) ||
+        (row.status === "published" &&
+          !gitHubPublicationUpdateTargetMatches(
+            updateTarget,
+            row.pull_request_url ?? undefined,
+          )))) ||
+    digest !==
+      digestGitHubPublicationRequest({
+        sessionId: row.session_id,
+        idempotencyKey: row.idempotency_key,
+        title: row.title ?? undefined,
+        body: row.body ?? undefined,
+        draft: row.draft == null ? undefined : row.draft === 1,
+      })
   ) {
     throw new Error("GitHub publication receipt is corrupt.");
   }
@@ -80,8 +89,9 @@ export function digestGitHubPublicationRequest(params: {
   title?: string;
   body?: string;
   draft?: boolean;
+  pullRequestUrl?: string;
 }): string {
-  return sha256Hex(
+  const digest = sha256Hex(
     JSON.stringify({
       sessionId: params.sessionId,
       idempotencyKey: params.idempotencyKey,
@@ -90,6 +100,21 @@ export function digestGitHubPublicationRequest(params: {
       ...(params.draft !== undefined ? { draft: params.draft } : {}),
     }),
   );
+  // Keep the original request checksum independently verifiable before GitHub observes any URL.
+  return params.pullRequestUrl ? digest + ":" + sha256Hex(params.pullRequestUrl) : digest;
+}
+
+export function gitHubPublicationUpdateTargetDigest(
+  row: Pick<GitHubPublicationRow, "request_digest">,
+) {
+  return row.request_digest.split(":", 2)[1];
+}
+
+export function gitHubPublicationUpdateTargetMatches(
+  digest: string | undefined,
+  url: string | undefined,
+) {
+  return digest !== undefined && url !== undefined && digest === sha256Hex(url);
 }
 
 export function projectGitHubPublicationResult(

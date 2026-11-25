@@ -92,7 +92,7 @@ describe("local checkout publication", () => {
       ...f.config,
       agents: { entries: { main: { workspace } } },
     });
-    const invoke = async (workspacePath: string, handoff = true) => {
+    const invoke = async (workspacePath: string, handoff = true, pullRequestUrl?: string) => {
       const respond = vi.fn();
       await withGatewayToolCallerIdentity(
         {
@@ -106,7 +106,12 @@ describe("local checkout publication", () => {
               type: "req",
               id: "owned-checkout",
               method: "sessions.github.publish",
-              params: { sessionKey: SESSION_KEY, idempotencyKey: "owned-checkout", workspacePath },
+              params: {
+                sessionKey: SESSION_KEY,
+                idempotencyKey: "owned-checkout",
+                workspacePath,
+                ...(pullRequestUrl ? { pullRequestUrl } : {}),
+              },
             },
             context: {
               ...createDirectChatContext({ getRuntimeConfig }),
@@ -138,6 +143,15 @@ describe("local checkout publication", () => {
       undefined,
       { message: expect.stringContaining("agent handoff") },
     ]);
+    expect(
+      await invoke(source.cwd, true, "https://github.com/openclaw/openclaw/pull/7"),
+    ).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringContaining("No replacement PR was created") },
+    ]);
+    expect(await readPublicationWorktreeState(source)).toEqual(before);
+    expect(source.effects).toEqual([]);
     for (const [other, message] of [
       [workspace, "not a git repository"],
       // The refusal names the admitted paths; a bare scope gives a tool caller no next step.
@@ -251,12 +265,14 @@ describe("local checkout publication", () => {
       handoff = true,
       idempotencyKey = "local-checkout",
       runId = "initial-publication-run",
+      pullRequestUrl?: string,
     ) => {
       const respond = vi.fn();
       const params = {
         sessionKey: SESSION_KEY,
         idempotencyKey,
         workspacePath,
+        ...(pullRequestUrl === undefined ? {} : { pullRequestUrl }),
       };
       await withGatewayToolCallerIdentity(
         {
@@ -717,10 +733,9 @@ describe("local checkout publication", () => {
       expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(
         acceptedHead,
       );
-      expect(await invoke(source.cwd, true, text)).toMatchObject([
-        true,
-        { status: "published", ...publicationTarget },
-      ]);
+      expect(
+        await invoke(source.cwd, true, text, undefined, publicationTarget.url + "/files"),
+      ).toMatchObject([true, { status: "published", ...publicationTarget }]);
       expect(await fs.readFile(path.join(task.entry.spawnedCwd!, "artifact.txt"), "utf8")).toBe(
         text,
       );
@@ -738,7 +753,7 @@ describe("local checkout publication", () => {
       const publishedHead = await source.git("-C", taskCheckout, "rev-parse", "HEAD");
       await fs.writeFile(path.join(taskCheckout, "artifact.txt"), text);
       await source.git("-C", taskCheckout, ...args);
-      const followUp = await invoke(taskCheckout, true, text);
+      const followUp = await invoke(taskCheckout, true, text, undefined, publicationTarget.url);
       expect(followUp, JSON.stringify(followUp)).toMatchObject([
         true,
         { status: "published", ...publicationTarget },

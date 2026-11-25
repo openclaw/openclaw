@@ -212,8 +212,11 @@ async function fixture(fork = false, linked = true, maintainer = false, sameBran
     mutations,
     entry,
     publicationSession,
-    publish: (key: string) =>
-      f.coordinator.requestForSessionV2(f.request(key, maintainer ? f.maintainer : f.guest)),
+    publish: (key: string, pullRequestUrl?: string) =>
+      f.coordinator.requestForSessionV2({
+        ...f.request(key, maintainer ? f.maintainer : f.guest),
+        pullRequestUrl,
+      }),
     expectWrites(count: number) {
       expect(pushes).toHaveLength(count);
       expect(mutations).toEqual([]);
@@ -278,7 +281,7 @@ describe("shared publication to a prepared original PR", () => {
   it("lets a linked coauthor continue a publisher-authored PR from another session", async () => {
     const f = await fixture();
     f.pr.user = { id: 42, login: "roboclaw-bot" };
-    const result = await f.publish("coauthor-continuation");
+    const result = await f.publish("coauthor-continuation", f.pr.html_url + "/files");
     expect(result, JSON.stringify(result)).toMatchObject({
       status: "published",
       url: f.pr.html_url,

@@ -306,6 +306,9 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       }
       const agentId = caller?.agentId ?? params.agentId;
       if (params.selection?.source === "personal") {
+        if (params.pullRequestUrl !== undefined) {
+          throw new Error("Updating a named PR requires shared publication.");
+        }
         if (params.workspacePath !== undefined) {
           throw new Error("workspacePath requires the local agent publication handoff.");
         }
@@ -426,6 +429,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
                 operatorAuthority: admitted.authority,
                 source: source.value!,
                 idempotencyKey: params.idempotencyKey,
+                pullRequestUrl: params.pullRequestUrl,
                 policy: caller.workspacePublicationPolicy,
                 assertCurrent: () => {
                   selectedSession.readCurrent();

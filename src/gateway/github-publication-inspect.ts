@@ -56,7 +56,7 @@ function isRepositoryName(value: string): boolean {
   );
 }
 
-function parsePullRequestUrl(value: string, host: string) {
+export function parseGitHubPullRequestUrl(value: string, host: string) {
   const url = URL.parse(value);
   const match =
     url &&
@@ -206,7 +206,7 @@ export async function readOwnGitHubPullRequest(params: {
   assertCurrent: () => void;
 }) {
   const { host, accountIds: admittedIds, publication, operatorWrite } = params.reader;
-  const target = parsePullRequestUrl(params.pullRequestUrl, host);
+  const target = parseGitHubPullRequestUrl(params.pullRequestUrl, host);
   const publicContinuation = !operatorWrite && admittedIds.length === 0;
   if (
     publicContinuation &&

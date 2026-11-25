@@ -165,6 +165,14 @@ and does not bind or prepare the PR in the conversation. Its result is data,
 not authority for another action. The separate `inspect` action below keeps its
 existing full-operator and session-publication requirements.
 
+To publish source changes specifically to an existing PR, use `github_publish`
+with `action: "publish"` and its `pullRequestUrl`. Use the workspace that
+prepared it or the same checkout that published it (with `workspacePath` if
+required). The URL asserts the target; it does not import the PR or grant write
+access. If the target doesn’t match or was closed, OpenClaw preserves the work
+and refuses without creating a replacement. Continue in the original publishing
+workspace or use `prepare_pr` where supported.
+
 Do not use `inspect_pr` as a credential preflight for the managed publisher.
 A PR authored by that publisher is not necessarily authored by an account linked
 to the requesting person. For the current conversation's existing publication,

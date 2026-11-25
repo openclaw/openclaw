@@ -76,6 +76,8 @@ export const SessionGitHubPublishParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
+  // An assertion on the prepared target, never permission to select a different destination.
+  pullRequestUrl: Type.Optional(GitHubPullRequestInspectSchema.properties.pullRequestUrl),
   workspacePath: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
   title: Type.Optional(GitHubPublicationTitleSchema),
   body: Type.Optional(GitHubPublicationBodySchema),

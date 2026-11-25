@@ -184,6 +184,7 @@ export function createGitHubPublicationCoordinator(params: {
       idempotencyKey: request.idempotencyKey,
       title: request.title,
       body: request.body,
+      pullRequestUrl: request.updatePullRequestUrl,
       draft:
         existing && existing.draft == null && request.draft === undefined
           ? undefined

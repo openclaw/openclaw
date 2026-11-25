@@ -23,6 +23,8 @@ import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import {
   digestGitHubPublicationRequest as digestRequest,
+  gitHubPublicationUpdateTargetDigest,
+  gitHubPublicationUpdateTargetMatches,
   projectGitHubPublicationResult,
 } from "./github-publication-receipt.js";
 import {
@@ -45,6 +47,7 @@ import {
   listUnreportedPersonalGitHubPublicationsAsync,
   readGitHubPublicationRequestAsync,
 } from "./github-publication-store-async.js";
+import { requireGitHubPublicationUpdateUrl } from "./github-publication-target.js";
 import { projectWorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 import type {
   WorkerSessionPlacementStore,
@@ -72,6 +75,7 @@ export type GitHubPublicationSessionRequest = SessionGitHubPublishParams & {
 };
 
 export type GitHubPublicationClaimRequestV2 = Omit<GitHubPublicationClaimRequest, "requester"> & {
+  updatePullRequestUrl?: string;
   requester: GitHubPublicationRequesterV2;
 };
 export type GitHubPublicationSessionRequestV2 = Omit<
@@ -216,6 +220,14 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       agentId: input.agentId,
       lifecycleRevision,
     };
+    const updatePullRequestUrl =
+      input.pullRequestUrl === undefined
+        ? undefined
+        : await requireGitHubPublicationUpdateUrl(
+            session,
+            loaded.entry?.worktree,
+            input.pullRequestUrl,
+          );
     const placement = await params.placements.getAsync(sessionId);
     assertRequester();
     const validateLocalExecution = () => {
@@ -258,6 +270,19 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         pending?.head_commit &&
         sameWorktree(pending, initialAuthority.worktree, initialAuthority.publicationBranch)
       ) {
+        if (
+          updatePullRequestUrl &&
+          !gitHubPublicationUpdateTargetMatches(
+            gitHubPublicationUpdateTargetDigest(pending),
+            updatePullRequestUrl,
+          )
+        ) {
+          throw new Error(
+            "An earlier publication is pending. Inspect request " +
+              pending.request_id +
+              " before updating this PR.",
+          );
+        }
         assertExpectedSharedGitHubPublisher(expected, publicationResult(pending).publisher!);
         // A new tool call must recover the accepted request before capturing later work.
         return await processDuringRun(pending, () =>
@@ -268,6 +293,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     if (requestingClaim) {
       const claimRequest = {
         expectedPublisher: expected,
+        updatePullRequestUrl,
         claim: requestingClaim,
         sessionKey: loaded.canonicalKey,
         agentId: input.agentId,
@@ -306,6 +332,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       idempotencyKey: input.idempotencyKey,
       title: input.title,
       body: input.body,
+      pullRequestUrl: updatePullRequestUrl,
       draft:
         existing && existing.draft == null && input.draft === undefined
           ? undefined
