@@ -17,13 +17,10 @@ struct ChatUserSendPresentation {
 
     let phase: Phase
     let retry: () -> Void
-    /// Withdraws a message that has not left the device.
-    let cancel: () -> Void
 
-    init(phase: Phase, retry: @escaping () -> Void = {}, cancel: @escaping () -> Void = {}) {
+    init(phase: Phase, retry: @escaping () -> Void = {}) {
         self.phase = phase
         self.retry = retry
-        self.cancel = cancel
     }
 
     /// Nil once the outbox has confirmed the message (or never held it).
@@ -43,8 +40,8 @@ struct ChatUserSendPresentation {
                 ? .deliveryUnknown : .notSent
         }
         let id = message.id
+        // A queued message is withdrawn or edited from its long-press menu (Edit, Delete).
         self.retry = { [weak viewModel] in viewModel?.retryOutboxMessage(id) }
-        self.cancel = { [weak viewModel] in viewModel?.deleteOutboxMessage(id) }
     }
 
     var isPending: Bool {
@@ -53,7 +50,7 @@ struct ChatUserSendPresentation {
 }
 
 /// The user message's line under the bubble: the time once the message is confirmed, a quiet word
-/// while it waits, or "Not sent" with tap to retry. The time keeps its space while hidden.
+/// while it waits, or what failed with "Try again". The time keeps its space while hidden.
 struct ChatUserMessageStatus: View {
     let timestamp: Double?
     let send: ChatUserSendPresentation?
@@ -70,32 +67,48 @@ struct ChatUserMessageStatus: View {
             if let send = self.send {
                 switch send.phase {
                 case .sending, .uploading:
-                    EmptyView()
+                    // Inserted rather than unhidden: VoiceOver kept a toggled element after the send.
+                    Text(verbatim: " ")
+                        .font(OpenClawChatTypography.caption2)
+                        .accessibilityLabel(Text("Sending"))
                 case .queued:
                     Text("Queued")
                         .font(OpenClawChatTypography.caption2)
                         .foregroundStyle(.secondary)
-                case .notSent, .deliveryUnknown:
-                    Button(action: send.retry) {
-                        Text(send.phase == .notSent ? "Not sent" : "Delivery unknown")
-                            .font(OpenClawChatTypography.caption2)
-                            .foregroundStyle(.primary)
-                            // A 44 pt target without growing the line.
-                            .padding(.vertical, 15)
-                            .contentShape(Rectangle())
-                            .padding(.vertical, -15)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityHint(Text("Tap to try again"))
+                case .notSent:
+                    self.failure(Text("Not sent"), hint: Text("Sends this message again."), retry: send.retry)
+                case .deliveryUnknown:
+                    self.failure(
+                        Text("May not have sent"),
+                        hint: Text("Sends this message again. It may arrive twice if it already went through."),
+                        retry: send.retry)
                 }
             }
         }
     }
+
+    /// "<what happened> · Try again": the whole line is the button, 44 pt tall without growing the
+    /// reserved line; only "Try again" reads as the action.
+    private func failure(_ status: Text, hint: Text, retry: @escaping () -> Void) -> some View {
+        Button(action: retry) {
+            HStack(spacing: 0) {
+                status.foregroundStyle(.secondary)
+                Text(verbatim: " · ").foregroundStyle(.secondary)
+                Text("Try again").foregroundStyle(.primary)
+            }
+            .font(OpenClawChatTypography.caption2)
+            .padding(.vertical, 16)
+            .contentShape(Rectangle())
+            .padding(.vertical, -16)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(status + Text(verbatim: ", ") + Text("Try again"))
+        .accessibilityHint(hint)
+    }
 }
 
 /// An attachment of a user message on its way out: an indeterminate ring while it uploads (the
-/// send is one Gateway frame, so there is no real progress to show), and a cancel button while
-/// the message still waits on the device.
+/// send is one Gateway frame, so there is no real progress to show).
 struct ChatAttachmentSendOverlay: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let send: ChatUserSendPresentation
@@ -117,19 +130,7 @@ struct ChatAttachmentSendOverlay: View {
                 }
                 .accessibilityElement()
                 .accessibilityLabel(Text("Uploading"))
-        case .queued:
-            Button(action: self.send.cancel) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.white)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.black.opacity(0.45)))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(Text("Cancel"))
-        case .sending, .notSent, .deliveryUnknown:
+        case .sending, .queued, .notSent, .deliveryUnknown:
             EmptyView()
         }
     }

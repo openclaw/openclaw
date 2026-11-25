@@ -542,6 +542,8 @@ struct ChatMessageBubble: View, @MainActor Equatable {
             self.messageBody
                 .contentShape(.accessibility, Rectangle())
                 .accessibilityElement(children: .contain)
+                // The speaker, as agent rows name theirs.
+                .accessibilityLabel(Text("You"))
                 .accessibilityIdentifier("chat-user-message-body")
                 #if !os(iOS)
                 // iPhone caps only the bubble and file cards; photos may use the column, as on the web.
