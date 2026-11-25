@@ -18,7 +18,6 @@ import * as pairingStore from "../infra/device-pairing-store-readonly.js";
 import { ensureDeviceToken, rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -41,6 +40,7 @@ import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
@@ -437,7 +437,7 @@ describe("scheduled authenticated operator source", () => {
           await changeCanonicalUserChannelIdentity("unlink", admin.profile.id, admin.identity);
           await changeCanonicalUserChannelIdentity("link", admin.profile.id, admin.identity);
           expectCurrent(restored.authority);
-          await expect(restore()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+          await expect(restore()).rejects.toThrow(OperatorRefusalError);
         } finally {
           restored.release();
         }
@@ -683,9 +683,7 @@ describe("scheduled authenticated operator source", () => {
         if (restored) {
           expectCurrent(restored.authority);
         } else {
-          await expect(fixture.restore()).rejects.toThrow(
-            GatewayOperatorRecoveryAuthorizationError,
-          );
+          await expect(fixture.restore()).rejects.toThrow(OperatorRefusalError);
         }
       }),
   );
@@ -828,7 +826,7 @@ describe("scheduled authenticated operator source", () => {
         expect(restored.authority.signal?.aborted).not.toBe(true);
         expectCurrent(restored.authority);
         // Admission narrows to read; a read-only requester starts no new chat-like work.
-        await expect(fixture.restore()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+        await expect(fixture.restore()).rejects.toThrow(OperatorRefusalError);
         fixture.setConfig(cfg);
         publish();
         expectCurrent(restored.authority);
