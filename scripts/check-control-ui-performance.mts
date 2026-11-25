@@ -76,7 +76,20 @@ const controlUiPerformanceBudgets = {
   // (+911 B over paired base 1,331,315 B) plus 64 B headroom.
   // Ayaan approved the plugin composer task card (#201695, 2026-11-19): measured 1,332,573 B
   // (+849 B over paired base 1,331,724 B) plus 64 B headroom.
-  chatBootJsGzipBytes: 1_332_637,
+  // Josh approved the #202534 transcript file-link availability cost (2026-11-20): measured
+  // 1,333,835 B (+477 B over paired base 1,333,358 B at d5a99b07) plus 64 B headroom.
+  // First-frame composer banner (#203246): #202800 lazy-loaded the banner that the
+  // #202534 measurement included; restoring it measured 1,334,416 B (+777 B over paired
+  // base 1,333,639 B at a3357794) plus 64 B headroom.
+  // Provider plugin labels on chat failure headings (#204230, standing merge authority):
+  // measured 1,334,559 B (+89 B over paired base 1,334,470 B at d16017ca) plus 64 B headroom.
+  // Voice API-key guidance (#204128): measured 1,335,688 B (+1,221 B over paired
+  // base 1,334,467 B at e2973f93), with no added headroom.
+  // Combined with b36ba3fed2: measured 1,335,757 B, retaining main's 64 B headroom.
+  // Peter requested the single Daybreak toggle (#204302, 2026-11-23): model-switch remap and
+  // stale-program repair measured +451 B over paired base 1,334,559 B at 34c8570c; on top of
+  // main's 1,335,821 B limit (which keeps its 64 B headroom) that is 1,336,272 B.
+  chatBootJsGzipBytes: 1_336_272,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
@@ -110,8 +123,11 @@ const controlUiPerformanceBudgets = {
   // measured 336,879 B gzip (+371 B over main) / 1,737,690 B raw (+771 B), plus 64 B each.
   // Ayaan approved the #198133 tool-call history styles (2026-11-16), absorbing inherited debt:
   // measured 337,248 B gzip (+209 B over main) / 1,740,170 B raw (+2,064 B), plus 64 B each.
-  totalCssGzipBytes: 337_312,
-  totalCssRawBytes: 1_740_234,
+  // Ayaan accepted the automations (#200808, #200817) and catalog/Skill Workshop (#202515,
+  // #202537, #202531, #202572, #202532) redesign styles (2026-11-22): measured on main 265577c4
+  // at 344,948 B gzip / 1,779,112 B raw, with no added headroom. Trim tracked in #203445.
+  totalCssGzipBytes: 346_369,
+  totalCssRawBytes: 1_783_929,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

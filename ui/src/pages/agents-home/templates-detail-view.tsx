@@ -1,13 +1,16 @@
-import { createSignal, Errored, For, Loading, Show } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
-import { ModalDialog } from "../../components/modal-dialog.tsx";
-import { DialogHeader } from "../../components/solid/dialog-header.tsx";
+import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-shell.tsx";
+import {
+  renderPluginDetailShell as PluginDetailShell,
+  PluginReadmeWell,
+} from "../plugins/detail-shell.tsx";
 import { PluginInstallAction } from "../plugins/install-action.tsx";
 import {
   renderPackageMetadata,
@@ -16,11 +19,11 @@ import {
 } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import { createTemplateAutomationSummary } from "./template-automation-summary.ts";
-import { TemplatePluginIcon } from "./template-plugin-icon.tsx";
+import { TemplatePluginIcon, TemplatePluginName } from "./template-plugin-icon.tsx";
 import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
+import "../../styles/sidebar-markdown.css";
 import "../../styles/templates-catalog.css";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
-import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 
 type ClawHubAudit = {
   release: string;
@@ -91,20 +94,131 @@ function renderTemplateTrustWarning(warning: string) {
   );
 }
 
+type SoulRead =
+  | { state: "loading" }
+  | { state: "ready"; html: string }
+  | { state: "error"; message: string };
+
+/** The excerpt previews the soul; Show more reads the whole SOUL.md, formatted. */
+function TemplatePersonality(props: {
+  view: TemplatesCatalogViewProps;
+  name: string;
+  excerpt: string;
+}) {
+  const [expanded, setExpanded] = createSignal(false);
+  const [read, setRead] = createSignal<SoulRead>();
+  // Only the latest read may settle; a keyed parent remounts this for another release.
+  let attempt = 0;
+  const load = () => {
+    const reader = props.view.readInstruction;
+    if (!reader) {
+      return;
+    }
+    const current = ++attempt;
+    setRead({ state: "loading" });
+    reader(props.name).then(
+      (text) => {
+        if (current === attempt) {
+          setRead({
+            state: "ready",
+            html: toSanitizedMarkdownHtml(text, { mode: "document", remoteImages: false }),
+          });
+        }
+      },
+      (error: unknown) => {
+        if (current === attempt) {
+          setRead({
+            state: "error",
+            message: formatUiError(error, t("templatesCatalog.unavailable")),
+          });
+        }
+      },
+    );
+  };
+  const value = () => (expanded() ? read() : undefined);
+  const ready = () => {
+    const current = value();
+    return current?.state === "ready" ? current : undefined;
+  };
+  const failure = () => {
+    const current = value();
+    return current?.state === "error" ? current : undefined;
+  };
+  return (
+    <PluginReadmeWell
+      alwaysExpandable={Boolean(props.view.readInstruction)}
+      onToggle={(open) => {
+        setExpanded(open);
+        if (open && (!read() || read()?.state === "error")) {
+          load();
+        }
+      }}
+    >
+      <Show
+        when={ready()}
+        fallback={
+          <>
+            <p class="templates-personality__text">{props.excerpt}</p>
+            <Show when={value()?.state === "loading"}>
+              <p class="templates-personality__status" role="status">
+                {t("common.loading")}
+              </p>
+            </Show>
+            <Show when={failure()}>
+              {(current) => (
+                <p class="templates-personality__status" role="alert">
+                  {current().message}
+                  <button type="button" class="btn btn--sm" onClick={load}>
+                    {t("templatesCatalog.retry")}
+                  </button>
+                </p>
+              )}
+            </Show>
+          </>
+        }
+      >
+        {(current) => (
+          <article class="templates-personality__markdown sidebar-markdown">
+            <SanitizedHtml
+              html={current().html}
+              class="lit-content"
+              style={{ display: "contents" }}
+            />
+          </article>
+        )}
+      </Show>
+    </PluginReadmeWell>
+  );
+}
+
 function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
-  const contents = () => props.view.readDetail()!.contents;
+  const contents = createMemo(() => props.view.readDetail()!.contents);
   const automationSummary = createTemplateAutomationSummary();
-  const [automation, setAutomation] = createSignal<
-    TemplateCatalogDetail["contents"]["automations"][number] | null
-  >(null);
+  // SOUL.md reads as the Template's personality; the page lists no other workspace files.
+  const soul = createMemo(() =>
+    contents().instructions.find((file) => file.name === "SOUL.md" && file.excerpt),
+  );
   return (
     <>
-      <TemplateWorkspaceFiles
-        files={contents().instructions}
-        onOpen={(name) =>
-          props.view.onOpenPreview("instruction", name ?? contents().instructions[0]!.name)
-        }
-      />
+      <Show when={soul()} keyed>
+        {(file) => (
+          <section class="plugin-catalog-detail__readme-section templates-personality">
+            <div class="templates-personality__label">
+              <h2 class="settings-section__heading oc-settings-section-title">
+                {t("templatesCatalog.personality")}
+              </h2>
+              <button
+                type="button"
+                class="templates-personality__file"
+                onClick={() => props.view.onOpenPreview("instruction", file.name)}
+              >
+                {file.name}
+              </button>
+            </div>
+            <TemplatePersonality view={props.view} name={file.name} excerpt={file.excerpt ?? ""} />
+          </section>
+        )}
+      </Show>
       {renderPluginCapabilitySection(
         t("templatesCatalog.skillsSection"),
         contents().skills.map((item) => ({
@@ -120,21 +234,30 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         t("templatesCatalog.integrations"),
         contents().integrations.map((item) => ({
           name:
-            item.kind === "plugin"
-              ? (props.view.pluginPresentation?.[item.name]?.name ?? item.name)
-              : item.name,
+            item.kind === "plugin" ? (
+              <TemplatePluginName
+                name={item.source === "clawhub" ? item.ref : item.name}
+                presentation={props.view.readPluginPresentation(item)}
+              />
+            ) : (
+              item.name
+            ),
           icon:
             item.kind === "plugin"
-              ? () => <TemplatePluginIcon plugin={props.view.pluginPresentation?.[item.name]} />
+              ? () => (
+                  <TemplatePluginIcon
+                    plugin={props.view.readPluginPresentation(item) ?? undefined}
+                  />
+                )
               : undefined,
           description: item.kind === "plugin" ? undefined : t("tabs.mcp"),
           trailing:
-            item.kind === "plugin" &&
-            item.source === "clawhub" &&
-            props.view.installedPluginPackages.has(`${item.ref}@${item.version}`) ? (
-              <span class="plugin-connection-status" role="status">
-                <Icon name="check" /> {t("templatesCatalog.installed")}
-              </span>
+            item.kind === "plugin" ? (
+              <Show when={props.view.readPluginPresentation(item)?.installed}>
+                <span class="plugin-connection-status" role="status">
+                  <Icon name="check" /> {t("templatesCatalog.installed")}
+                </span>
+              </Show>
             ) : undefined,
           details: (
             <p>
@@ -152,33 +275,13 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         contents().automations.map((item) => ({
           name: item.name,
           description: automationSummary(item),
-          onOpen: () => setAutomation(item),
+          // The prompt opens in place under its row.
+          details: <p class="template-automation-message">{item.message}</p>,
         })),
         () => (
           <Icon name="clock" />
         ),
       )}
-      <Show when={automation()}>
-        {(item) => (
-          <ModalDialog label={item().name} open onModal-cancel={() => setAutomation(null)}>
-            <article class="oc-dialog">
-              <DialogHeader
-                title={
-                  <>
-                    <span class="plugin-capability__icon" aria-hidden="true">
-                      <Icon name="clock" />
-                    </span>
-                    {item().name}
-                  </>
-                }
-                description={automationSummary(item())}
-                onClose={() => setAutomation(null)}
-              />
-              <div class="oc-dialog__body template-automation-message">{item().message}</div>
-            </article>
-          </ModalDialog>
-        )}
-      </Show>
     </>
   );
 }
@@ -199,6 +302,7 @@ function TemplateMetadata(props: {
         createdAt: props.detail?.createdAtMs,
         downloads: props.entry.downloads,
         categories: props.detail?.categories,
+        rail: { links: undefined },
       })}
     </>
   );
@@ -223,10 +327,16 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                 backHref={pathForRoute("templates", view().basePath)}
                 backLabel={t("tabs.templates")}
                 onBack={view().onBack}
-                icon={<TemplateArtwork src={detail() ? detail()?.iconUrl : selected().iconUrl} />}
+                icon={
+                  <TemplateArtwork
+                    src={detail() ? detail()?.iconUrl : selected().iconUrl}
+                    packageName={selected().packageName}
+                  />
+                }
+                rail
                 identity={renderPublisherIdentity({
-                  name:
-                    publisher().ownerHandle === "openclaw" ? "OpenClaw" : publisher().ownerHandle,
+                  // The handle names the publisher; a display name only when it says more.
+                  name: publisher().ownerHandle === "openclaw" ? "OpenClaw" : undefined,
                   handle: `@${publisher().ownerHandle}`,
                   official: publisher().official,
                 })}
@@ -256,6 +366,7 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                 }
                 panel={
                   <>
+                    <TemplateAddFeedback view={view()} />
                     <For each={[view().detailRequest]}>
                       {() => (
                         <Errored
@@ -291,7 +402,6 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                         </Errored>
                       )}
                     </For>
-                    <TemplateAddFeedback view={view()} />
                   </>
                 }
               />

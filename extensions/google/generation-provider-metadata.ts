@@ -3,6 +3,7 @@ import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-under
 import type {
   MusicGenerationModeCapabilities,
   MusicGenerationProvider,
+  MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import type {
@@ -116,6 +117,12 @@ export function createGoogleMediaUnderstandingProviderMetadata(): Omit<
   };
 }
 
+export function resolveGoogleMusicSupportedFormats(
+  model: string,
+): NonNullable<MusicGenerationRequest["format"]>[] {
+  return model === GOOGLE_PRO_MUSIC_MODEL ? ["mp3", "wav"] : ["mp3"];
+}
+
 export function createGoogleMusicGenerationProviderMetadata(): Omit<
   MusicGenerationProvider,
   "generateMusic"
@@ -127,8 +134,8 @@ export function createGoogleMusicGenerationProviderMetadata(): Omit<
     supportsInstrumental: true,
     supportsFormat: true,
     supportedFormatsByModel: {
-      [DEFAULT_GOOGLE_MUSIC_MODEL]: ["mp3"],
-      [GOOGLE_PRO_MUSIC_MODEL]: ["mp3", "wav"],
+      [DEFAULT_GOOGLE_MUSIC_MODEL]: resolveGoogleMusicSupportedFormats(DEFAULT_GOOGLE_MUSIC_MODEL),
+      [GOOGLE_PRO_MUSIC_MODEL]: resolveGoogleMusicSupportedFormats(GOOGLE_PRO_MUSIC_MODEL),
     },
   });
   return {

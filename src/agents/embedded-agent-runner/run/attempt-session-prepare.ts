@@ -1,4 +1,5 @@
 import { isAnthropicOAuthApiKey, isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
+import { isOpenAIResponsesApi } from "@openclaw/ai/transports";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { getOwnedSessionTranscriptReader } from "../../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
@@ -17,11 +18,11 @@ import {
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
 } from "../../agent-settings.js";
-import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
+import { isLocalBaseUrl } from "../../model-catalog-route.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
@@ -32,16 +33,15 @@ import { isOutOfTurnHistoryEntry } from "../../sessions/session-manager-codec.js
 import { sessionManagerOpenTranscriptCohort } from "../../sessions/session-manager-core.js";
 import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
-import { resolveToolSearchCatalogTool } from "../../tool-search.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { log } from "../logger.js";
-import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
-import { recordRuntimeContextProjection } from "../session-prompt-state.js";
+import { projectCompletedProjectMoves } from "../project-move-replay.js";
+import { recordRuntimeContextProjection } from "../prompt-cache-observability.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
+import { createAttemptDeferredToolResolver } from "./attempt-deferred-tool-resolver.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import {
@@ -66,6 +66,7 @@ import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 import {
   type InitialUserTurnReplayPreparation,
   prepareInitialPersistedUserTurnCohort,
+  persistCompactedCurrentUserTurnReplay,
   prepareForeignPendingUserTurns,
   preparePersistedCurrentUserTurn,
   reconcilePrePersistedCurrentUserTurn,
@@ -76,7 +77,6 @@ import {
 } from "./runtime-context-prompt.js";
 import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
-import { withEmbeddedAttemptToolActivity } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export async function prepareEmbeddedAttemptAgentSession(input: {
@@ -150,7 +150,6 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     ...clientTools,
   });
   const { allCustomTools, sessionToolAllowlist, ...clientToolRuntime } = preparedClientTools;
-  const codeMode = clientTools.codeModeControlsEnabledForRun;
 
   const { session: activeSession } = await createAgentSession({
     systemPrompt: input.initialSystemPrompt.trim(),
@@ -164,50 +163,15 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     sessionManager: input.sessionManager,
     settingsManager,
     resourceLoader,
-    resolveDeferredTool:
-      codeMode || clientTools.deferredDirectoryToolsCallable
-        ? ({ toolCall }) => {
-            if (codeMode) {
-              const entries = clientTools.toolSearchCatalogRef?.current?.entries;
-              if (entries?.some((entry) => entry.name === toolCall.name)) {
-                throw new Error(
-                  "This tool is available through Code Mode, not as a top-level tool. This call did not execute it. Use exec with JavaScript: find its callable handle with catalog.search(...), use handle.describe() for the input schema, then await the handle with the tool arguments.",
-                );
-              }
-              return undefined;
-            }
-            const toolAbortSignal = clientTools.getToolAbortSignal?.() ?? input.runAbortSignal;
-            const tool = resolveToolSearchCatalogTool(
-              {
-                config: attempt.config,
-                runtimeConfig: attempt.config,
-                agentId: input.sessionAgentId,
-                sessionKey: clientTools.sandboxSessionKey,
-                sessionId: attempt.sessionId,
-                runId: attempt.runId,
-                catalogRef: clientTools.toolSearchCatalogRef,
-                abortSignal: toolAbortSignal,
-              },
-              toolCall.name,
-            );
-            // Catalog entries own hooks; the adapter must carry the captured
-            // generation into them so approvals cannot outlive a permission change.
-            const definition = tool
-              ? toToolDefinitions([tool], clientTools.catalogToolHookContext, toolAbortSignal)[0]
-              : undefined;
-            const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
-            if (hydratedTool) {
-              log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
-              const originalExecute = hydratedTool.execute;
-              hydratedTool.execute = (...args: Parameters<typeof originalExecute>) =>
-                withEmbeddedAttemptToolActivity(attempt.runId, () => originalExecute(...args));
-            }
-            return hydratedTool;
-          }
-        : undefined,
+    resolveDeferredTool: createAttemptDeferredToolResolver({
+      attempt,
+      clientTools,
+      customTools: allCustomTools,
+      runAbortSignal: input.runAbortSignal,
+      sessionAgentId: input.sessionAgentId,
+    }),
     withSessionWriteSettlement: (operation) =>
       input.transcriptLifecycle.withTranscriptWrite(operation),
-    cleanupProviderSessionResourcesOnDispose: false,
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
     resolveCompactionThinkingLevel: createAttemptCompactionThinkingResolver(
@@ -323,6 +287,11 @@ export async function prepareEmbeddedAttemptSessionBoundary(
         // A recovery resumes its admitted history, including accepted steering.
         // Its newer user tail is not an orphan to replace with the original input.
         if (attempt.replayCurrentTranscript) {
+          await persistCompactedCurrentUserTurnReplay({
+            activeSession,
+            sessionManager,
+            currentUserTurnMessage,
+          });
           return undefined;
         }
         // An adopted current user needs no orphan repair. Replay still refreshes at core entry.
@@ -447,6 +416,11 @@ export async function prepareEmbeddedAttemptSessionBoundary(
   };
 
   const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
+  // The tested local Chat Completions route accepts retired tools in history.
+  const replayCompletedMoves =
+    !preserveExactPrompt &&
+    attempt.model?.api === "openai-completions" &&
+    isLocalBaseUrl(attempt.model.baseUrl);
   activeSession.agent.convertToLlm = async (messages) => {
     let removedRuntimeContext: AgentMessage[] | undefined;
     const normalized = normalizeMessagesForLlmBoundary(
@@ -458,19 +432,17 @@ export async function prepareEmbeddedAttemptSessionBoundary(
         },
       },
     );
+    // Persisted carriers stay after their user turn, including during tool loops;
+    // moving one would change the prefix bound to later thinking signatures.
+    const history = input.appendOnlyRuntimeContext
+      ? normalized
+      : relocateCurrentRuntimeContextCarrierToTail(normalized);
     const converted = await baseConvertToLlm(
-      // Persisted carriers stay after their user turn, including during tool loops;
-      // moving one would change the prefix bound to later thinking signatures.
-      input.appendOnlyRuntimeContext
-        ? normalized
-        : relocateCurrentRuntimeContextCarrierToTail(normalized),
+      replayCompletedMoves ? projectCompletedProjectMoves(history) : history,
     );
     applyRuntimeContextCarrierRetention(converted, input.appendOnlyRuntimeContext);
-    if (
-      !input.appendOnlyRuntimeContext &&
-      recordRuntimeContextProjection(attempt.sessionId, removedRuntimeContext, converted)
-    ) {
-      declarePromptHistoryRewrite({ ...attempt, reason: "runtimeContextCarrier" });
+    if (!input.appendOnlyRuntimeContext) {
+      recordRuntimeContextProjection(removedRuntimeContext, converted);
     }
     return converted;
   };
@@ -521,10 +493,7 @@ export async function prepareEmbeddedAttemptSessionManager(
     config: attempt.config,
     env: process.env,
   });
-  const isOpenAIResponsesApi =
-    attempt.model.api === "openai-responses" ||
-    attempt.model.api === "azure-openai-responses" ||
-    attempt.model.api === "openai-chatgpt-responses";
+  const responsesApi = isOpenAIResponsesApi(attempt.model.api);
 
   const preparedUserTurnMessage =
     attempt.skipPreparedUserTurnMessage || attempt.replayCurrentTranscript
@@ -629,7 +598,7 @@ export async function prepareEmbeddedAttemptSessionManager(
       ? attempt.userTurnTranscriptRecorder
       : undefined,
     allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-    missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
+    missingToolResultText: responsesApi ? "aborted" : undefined,
     trigger: attempt.trigger,
     suppressNextUserMessagePersistence:
       prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence,
@@ -645,7 +614,11 @@ export async function prepareEmbeddedAttemptSessionManager(
       latestPersistedUserMessage = message;
       latestRuntimeUserMessage = runtimeMessage;
       if (runtimeMessage) {
-        userTranscriptContextRegistry.record(runtimeMessage, message);
+        userTranscriptContextRegistry.record(
+          runtimeMessage,
+          message,
+          latestUserTurnTranscriptRecorder,
+        );
       }
       attempt.onUserMessagePersisted?.(message);
     },
@@ -739,11 +712,15 @@ export async function prepareEmbeddedAttemptSessionManager(
         const runtimeMessage =
           latestRuntimeUserMessage ??
           (attempt.suppressNextUserMessagePersistence ? transcriptMessage : undefined);
-        return userTranscriptContextRegistry.list(runtimeMessage, transcriptMessage);
+        return userTranscriptContextRegistry.list(
+          runtimeMessage,
+          transcriptMessage,
+          latestUserTurnTranscriptRecorder,
+        );
       },
       preparedUserTurnMessage,
     },
-    isOpenAIResponsesApi,
+    isOpenAIResponsesApi: responsesApi,
     preparedUserTurnMessage,
     sessionManager,
     transcriptPolicy,

@@ -76,6 +76,8 @@ import {
 import { stateWorkerDiskMigrations } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import { stateWorkerRetentionMigration } from "./openclaw-state-db-schema-v39-worker-retention.js";
 import { stateWorkerProvisionSourceMigration } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
+import { stateApprovalProfileMigration } from "./openclaw-state-db-schema-v41-approval-profile.js";
+import { stateWorkerLossRecoveryMigration } from "./openclaw-state-db-schema-v42-worker-loss-recovery.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -540,6 +542,8 @@ export const versionedStateMigrations = [
   ...stateWorkerDiskMigrations,
   stateWorkerRetentionMigration,
   stateWorkerProvisionSourceMigration,
+  stateApprovalProfileMigration,
+  stateWorkerLossRecoveryMigration,
 ] as const;
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -567,6 +571,8 @@ export function migrateBoundedStateSchema(
     ...stateWorkerDiskMigrations,
     stateWorkerRetentionMigration,
     stateWorkerProvisionSourceMigration,
+    stateApprovalProfileMigration,
+    stateWorkerLossRecoveryMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.

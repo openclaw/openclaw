@@ -65,7 +65,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const byParent = new Map<string, Set<string>>(),
     byKey = new Map<string, Set<string>>();
   const indexes = { byStore, byAgent, byParent, byKey };
-  const referenced = (ref: string) => records.firstReferenced(ref, rows, byKey, stores.keys());
+  const referenced = (ref: string) =>
+    rowIdentities.firstReferenced(ref, rows, byKey, stores.keys());
   const dirty = new Set<string>();
   const recents = createSessionRowRecents({
     rows,
@@ -190,10 +191,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     restoredRuns.update(previous?.storedEntry, row.storedEntry);
     childRows.replace(row);
     creators.update(previous, row);
-    if (previous) {
-      if (previous.generation !== row.generation) {
-        transcriptUpdates.remove(records.identity(row));
-      }
+    if (previous && previous.generation !== row.generation) {
+      transcriptUpdates.remove(records.identity(row));
     }
     rows.set(records.identity(row), row);
     recents.update(row);
@@ -511,6 +510,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   });
   const stop = subscribeSessionRowPublications({
     rows,
+    byKey,
     dirty,
     revisions,
     advanceRevision: () => epoch++,

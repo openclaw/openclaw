@@ -410,7 +410,7 @@ export async function executeCliProcess(params: {
       let processCancelled = false;
       const assertProcessCurrent = () => {
         if (processCancelled) {
-          throw new Error("CLI process authority is no longer active");
+          throw new Error("The CLI process was stopped. Start a new turn to retry.");
         }
       };
       const abortManagedRun = () => {
@@ -425,14 +425,8 @@ export async function executeCliProcess(params: {
         );
         const managedRun = await withChildProcessOperation("agent.cli", () =>
           supervisor.spawn({
-            prepareSpawn: params.argsPrompt ? context.cliHistoryWriter?.assertReadable : undefined,
             prepareTargetSpawn: context.preparedBackend.prepareCredentialUse,
-            prepareInput: params.stdin
-              ? async () => {
-                  await context.cliHistoryWriter?.assertReadable();
-                  await context.preparedBackend.prepareCredentialUse?.();
-                }
-              : undefined,
+            prepareInput: params.stdin ? context.preparedBackend.prepareCredentialUse : undefined,
             runId: runParams.runId,
             scopeKey,
             replaceExistingScope: Boolean(params.useResume && scopeKey),

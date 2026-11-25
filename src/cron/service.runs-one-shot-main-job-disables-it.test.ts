@@ -150,7 +150,7 @@ it.each([
   ["legacy session", { sessionKey: "agent:ops:telegram:direct:123:thread:123:456" }],
   ["owner session", { owner: { sessionKey: "agent:ops:telegram:direct:123:thread:123:456" } }],
 ] as const)(
-  "notifies the %s after refusing a main-session event without enqueuing a replay",
+  "records a refused main-session event for the %s without enqueuing a replay",
   async (_name, origin) => {
     await using f = await fixture({
       runSessionEvent: async () => ({
@@ -168,19 +168,12 @@ it.each([
     );
     await f.cron.run(job.id, "force");
     expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("auto-disabled"),
-      expect.objectContaining({
-        contextKey: `cron:${job.id}:auto-disabled`,
-        agentId: "ops",
-        sessionKey: "agent:ops:telegram:direct:123:thread:123:456",
-      }),
-    );
+    expect(f.deps.enqueueSessionEvent).not.toHaveBeenCalled();
     expect(f.cron.getJob(job.id)?.state).toMatchObject({
       lastRunStatus: "error",
       lastError: "session admission refused",
-      autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 1 },
     });
+    expect(f.cron.getJob(job.id)?.state.autoDisabled).toBeUndefined();
     expect(f.history(job.id)).toMatchObject([{ status: "error", completionStatus: "failed" }]);
   },
 );
@@ -236,13 +229,10 @@ it.each([false, true])(
     const stored = f.cron.getJob(job.id);
     expect(stored).toMatchObject({ enabled: !executionStarted, state: { consecutiveErrors: 1 } });
     if (executionStarted) {
-      expect(stored?.state.autoDisabled).toMatchObject({
-        reason: "consecutive-failures",
-        consecutiveErrors: 1,
-      });
+      expect(stored?.state.autoDisabled).toBeUndefined();
       expect(stored?.state.nextRunAtMs).toBeUndefined();
       expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining('Automation "one-shot" was auto-disabled'),
+        expect.stringContaining('Automation "one-shot" failed'),
         expect.objectContaining({ contextKey: `cron:${job.id}:failure-alert` }),
       );
     } else {

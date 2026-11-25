@@ -107,7 +107,10 @@ export function withSessionToolsFixture(
       ...(options?.audit ? { logging: { audit: { enabled: true, executionIdentity: true } } } : {}),
       agents: {
         ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" } },
+        defaults: {
+          systemAgent: { agentId: "main" },
+          model: { primary: "openai/gpt-6-astra" },
+        },
         entries: {
           main: { workspace: state.workspaceDir },
           other: { workspace: state.path("other-workspace") },

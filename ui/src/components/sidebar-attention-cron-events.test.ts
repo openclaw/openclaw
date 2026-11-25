@@ -27,13 +27,23 @@ async function setup(selection?: ApplicationContext["agentSelection"]) {
   vi.useFakeTimers();
   let inventory = cronPage("incident");
   const request = inventoryRequest(() => inventory);
-  const harness = createGatewayHarness(mockClient(request));
+  const readReceipts = vi.fn(async () => ({ status: "ok", entries: {} }));
+  const harness = createGatewayHarness(
+    mockClient((method, params) =>
+      method === "users.prefs.get" ? readReceipts() : request(method, params),
+    ),
+  );
   if (!selection) {
     harness.update({ selfUser: { id: "alice", name: "Alice" } });
   }
   store = createStore(harness.gateway, undefined, selection);
   store.activate(SidebarAttentionStoreOwner);
   await vi.advanceTimersByTimeAsync(0);
+  if (!selection) {
+    await vi.dynamicImportSettled();
+    expect(readReceipts).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(0);
+  }
   return {
     inventory(id?: string) {
       inventory = cronPage(id);
@@ -44,6 +54,9 @@ async function setup(selection?: ApplicationContext["agentSelection"]) {
     publish(action: string, overrides: Partial<CronJob> = {}) {
       const job = eventJob(overrides);
       harness.emitEvent("cron", { action, jobId: job.id, job });
+    },
+    changed() {
+      harness.emitEvent("cron.inventory.changed", {});
     },
   };
 }
@@ -68,8 +81,10 @@ it("updates Inbox attention through a minute of cron publications without invent
   h.publish("removed");
   expect(store?.entries).toEqual([]);
   h.inventory("new");
-  h.publish("added", { id: "new", name: "new" });
-  await vi.advanceTimersByTimeAsync(0);
+  h.publish("finished", { id: "new", name: "new" });
+  expect(store?.entries).toEqual([]);
+  h.changed();
+  await vi.advanceTimersByTimeAsync(50);
   expect(store?.entries).toMatchObject([{ label: "new" }]);
   expect(h.calls()).toBe(initialCalls + 1);
 });
@@ -81,7 +96,10 @@ it("does not restore a removed job when its in-flight run publishes a final snap
   expect(store?.entries).toEqual([]);
   h.publish("finished");
   expect(store?.entries).toEqual([]);
-  await vi.advanceTimersByTimeAsync(0);
+  h.changed();
+  await vi.advanceTimersByTimeAsync(50);
+  expect(store?.entries).toEqual([]);
+  h.publish("finished");
   expect(store?.entries).toEqual([]);
   expect(h.calls()).toBe(2);
 });
@@ -99,14 +117,14 @@ it.each([null, "main"])(
     h.publish("finished", { agentId: undefined, name: "Inherited owner" });
     expect(store?.entries).toMatchObject([{ label: "Inherited owner" }]);
     expect(h.calls()).toBe(1);
-    h.publish("added", { id: "other", agentId: "writer" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(store?.entries).toMatchObject([{ label: "incident" }]);
-    expect(h.calls()).toBe(2);
+    h.publish("finished", { id: "other", agentId: "writer" });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(store?.entries).toMatchObject([{ label: "Inherited owner" }]);
+    expect(h.calls()).toBe(1);
     h.inventory();
-    h.publish("updated", { agentId: "writer" });
-    await vi.advanceTimersByTimeAsync(0);
+    h.changed();
+    await vi.advanceTimersByTimeAsync(50);
     expect(store?.entries).toEqual([]);
-    expect(h.calls()).toBe(3);
+    expect(h.calls()).toBe(2);
   },
 );

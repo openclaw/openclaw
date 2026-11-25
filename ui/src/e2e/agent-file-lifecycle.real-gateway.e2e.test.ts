@@ -1,7 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
+import { waitForControlUiDocument } from "../../../src/commands/control-ui-handoff.js";
 import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.ts";
 import {
   createOpenClawTestInstance,
@@ -10,14 +11,23 @@ import {
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  startBuiltControlUiE2eServer,
+  startControlUiE2eServer,
+} from "../test-helpers/control-ui-e2e.ts";
 import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { selectAgentFileWorkspace } from "./agent-file-lifecycle.test-support.ts";
 import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openAgentFallbackChain } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent file lifecycle with a real Gateway",
   startServerBeforeBrowser: true,
+  startServer() {
+    const root = inject("controlUiE2eDeploymentAssets")?.root;
+    return root ? startBuiltControlUiE2eServer(root) : startControlUiE2eServer();
+  },
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}`,
 });
@@ -79,7 +89,9 @@ const catalogSuite = createControlUiE2eSuite({
       name: "agents-catalog-publication",
       env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
       config: {
-        gateway: { controlUi: { enabled: true } },
+        gateway: {
+          controlUi: { enabled: true, root: inject("controlUiE2eDeploymentAssets")?.root },
+        },
         agents: {
           defaults: {
             model: "fixture/anchor",
@@ -129,6 +141,12 @@ catalogSuite.define(() => {
   it("refreshes an open Agents editor after catalog publication without losing drafts", async () => {
     const owner = catalogInstance;
     const requireRecord = createRequireRecord("record", "expected-object-value");
+    // Gateway RPC can be ready before its dashboard document is available for pairing.
+    const document = await waitForControlUiDocument({
+      url: catalogSuite.server.baseUrl,
+      timeoutMs: 60_000,
+    });
+    expect(document.ready, JSON.stringify(document)).toBe(true);
     const handoff = await owner.cli(["dashboard", "--json"]);
     expect(handoff.code, handoff.stderr).toBe(0);
     const browserUrl = requireRecord(JSON.parse(handoff.stdout)).browserUrl;
@@ -223,9 +241,7 @@ catalogSuite.define(() => {
           await page.goto(url.toString());
           await waitForControlUiGatewayReady(page);
           const editor = page.locator("openclaw-agents-page");
-          const picker = editor.locator(
-            'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
-          );
+          const picker = editor.locator("openclaw-select-picker:has(#agent-primary-model)");
           const option = (id: string) => picker.locator(`[role="option"][data-value="${id}"]`);
           const waitForOption = (id: string) => expect.poll(() => option(id).count()).toBe(1);
           await openPicker(picker);
@@ -247,7 +263,7 @@ catalogSuite.define(() => {
           const selected = () => pickerValue(picker);
           await expect.poll(selected).toBe("fixture/selected");
           await expect.poll(() => readConfig("agents.entries.main.model")).toBe("fixture/selected");
-          const fallbacks = editor.locator("openclaw-multi-select.agent-fallbacks");
+          const fallbacks = await openAgentFallbackChain(editor);
           const fallbackInput = fallbacks.locator("input");
           await expect.poll(() => fallbackInput.isEnabled()).toBe(true);
           await fallbackInput.fill("fixture/anchor");
@@ -307,7 +323,7 @@ catalogSuite.define(() => {
           expect(await selected()).toBe("fixture/selected");
           expect(await identityName.inputValue()).toBe(draftName);
           expect(
-            await editor
+            await fallbacks
               .locator(".multi-select__chip")
               .evaluateAll((chips) => chips.map((chip) => chip.getAttribute("data-value"))),
           ).toContain("fixture/anchor");

@@ -39,6 +39,21 @@ export function transcriptRewritePreservesAdmission(
       }
     }
     if (metadata) {
+      // An accepted steer adds its native transcript identity without changing the admitted input.
+      if (
+        event === after &&
+        metadata.steerTargetRunId &&
+        beforeMetadata?.externalId === undefined &&
+        beforeMetadata?.importedFrom === undefined &&
+        beforeMetadata?.cliSessionId === undefined &&
+        [metadata.externalId, metadata.importedFrom, metadata.cliSessionId].every(
+          (value) => typeof value === "string" && value.trim(),
+        )
+      ) {
+        delete metadata.externalId;
+        delete metadata.importedFrom;
+        delete metadata.cliSessionId;
+      }
       delete metadata.steerTargetRunId;
       // Recording already-identical replay text must not revoke earlier completed turns.
       if (event === after && previousProjection === undefined && metadata.modelPromptProjection) {

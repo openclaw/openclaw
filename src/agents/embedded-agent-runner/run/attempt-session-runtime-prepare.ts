@@ -2,7 +2,10 @@ import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/trans
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import {
+  readRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
@@ -38,6 +41,7 @@ import {
   prepareSessionPublicationToolListing,
   retireSessionSystemPrompt,
 } from "../session-prompt-state.js";
+import { retireUserRowPromptUpdates } from "../session-prompt-update.js";
 import { resolveSessionToolPolicyDigest } from "../session-tool-checkpoint.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
@@ -164,6 +168,13 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   // prepareSessionSystemPrompt for the closed set of rebuild points.
   const usesSystemPromptSeries =
     !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
+  const toolSurface = codeModeControlsEnabledForRun
+    ? "code-mode"
+    : toolBase.toolSearchControlsEnabledForRun
+      ? resolveToolSearchConfig(toolSearchRuntimeConfig).mode
+      : "direct";
+  // A move ends the default-workspace series, retiring its guidance and tool pin.
+  const offersProjectMove = effectiveTools.some((tool) => tool.name === "session_project");
   const promptRouteKey = buildSystemPromptRouteKey({
     provider: attempt.provider,
     model: attempt.modelId,
@@ -173,11 +184,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     // The session's selected human, never the current turn's sender classification.
     personalProfile: attempt.sessionUserProfileId,
     harness: attempt.agentHarnessRuntimeOverride ?? attempt.agentHarnessId ?? "openclaw",
-    surface: codeModeControlsEnabledForRun
-      ? "code-mode"
-      : toolBase.toolSearchControlsEnabledForRun
-        ? resolveToolSearchConfig(toolSearchRuntimeConfig).mode
-        : "direct",
+    surface: offersProjectMove ? `${toolSurface}:project-move` : toolSurface,
   });
   const rankingEnabled =
     usesSystemPromptSeries &&
@@ -246,7 +253,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   if (usesSystemPromptSeries) {
     beginSessionSystemPrompt(sessionPromptState);
   }
-  const toolPolicyDigest = resolveSessionToolPolicyDigest(attempt.config, sessionAgentId);
+  const toolPolicyDigest = resolveSessionToolPolicyDigest(
+    attempt.config,
+    sessionAgentId,
+    readRunOperatorAuthority(attempt)?.participationCeiling,
+  );
   if (usesSystemPromptSeries) {
     const changed = await input.toolCatalog.installToolListingPin((tools, refresh) =>
       prepareSessionPublicationToolListing({
@@ -306,11 +317,12 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           if (wasFreshlyRendered || preparedPrompt !== projectedSystemPrompt) {
             freshSystemPrompt = preparedPrompt;
           }
+          const entries = sessionManager[sessionManagerReadTranscriptBranch]();
           const prepared = prepareSessionSystemPrompt({
             state: sessionPromptState,
             routeKey: promptRouteKey,
             systemPrompt: freshSystemPrompt,
-            entries: sessionManager[sessionManagerReadTranscriptBranch](),
+            entries,
             historyBoundaryCount: sessionManager.getBoundaryCount(),
           });
           // Keep an attempt's restart visible through subsequent continuation preparations.
@@ -326,8 +338,23 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           if (prepared.restart && resources.session) {
             await retireSystemPromptUpdates();
             restartRecorded = true;
-            resources.session.agent.state.messages = resources.session.messages.filter(
-              (message) => getOpenClawSystemUpdateKind(message) !== "prompt-update",
+            const messages = resources.session.messages;
+            const retired = (message: (typeof messages)[number]) =>
+              getOpenClawSystemUpdateKind(message) === "prompt-update";
+            // Retiring history rows moves this turn's first message; the fence follows it,
+            // or its readers would file the current user message under accepted history.
+            state.prePromptMessageCount -= messages
+              .slice(0, state.prePromptMessageCount)
+              .filter(retired).length;
+            resources.session.agent.state.messages = messages.filter(
+              (message) => !retired(message),
+            );
+          }
+          if (resources.session) {
+            resources.session.agent.state.messages = retireUserRowPromptUpdates(
+              resources.session.agent.state.messages,
+              entries,
+              prepared.restart,
             );
           }
           projectedSystemPrompt = prepared.systemPrompt;

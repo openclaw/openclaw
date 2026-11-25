@@ -58,6 +58,7 @@ const EXPECTED: Record<string, { levels: string[]; defaultLevel: string }> = {
   "xai/grok-build-0.1": { levels: ["off"], defaultLevel: "off" },
   "xai/grok-4.3": { levels: ["off", "minimal", "low", "medium", "high"], defaultLevel: "low" },
   "xai/grok-4.20-0309-reasoning": { levels: ["off"], defaultLevel: "off" },
+  "zai/glm-5.4": { levels: ["off", "low", "high", "max"], defaultLevel: "max" },
 };
 
 function kimiK3(off: boolean) {

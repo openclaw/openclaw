@@ -26,6 +26,7 @@ import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import { pluginRuntimeLoaderLogger } from "./runtime/load-context.js";
 import { createPluginServiceAutomationCapabilities } from "./service-automation-capabilities.js";
+import { createPluginServiceCatalogExports } from "./service-catalog-exports.js";
 import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
 import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
 import { createPluginServiceHealthReporter } from "./service-health.js";
@@ -521,6 +522,21 @@ async function startPreparedPluginServices({
       `${traceName}.${name.split(".").map(encodeStartupTraceSegment).join(".")}`;
     const serviceContext: OpenClawPluginServiceContextV3 = {
       sessionWork,
+      ...(service.catalogExports && {
+        catalogExports: createPluginServiceCatalogExports({
+          pluginId: entry.pluginId,
+          configPath: service.catalogExports.allowlistPath,
+          registry,
+          signal: scheduling.scheduler.signal,
+          getConfig: () => resolveGatewayContext?.()?.getRuntimeConfig(),
+          assertActive: () => {
+            lease.assertActive("catalog export");
+            if (ownedService.owner.closed || ownedService.stopRequested) {
+              throw new Error("Plugin service catalog export stopped");
+            }
+          },
+        }),
+      }),
       scheduler: scheduling.scheduler,
       config,
       workspaceDir,
@@ -617,15 +633,17 @@ async function startPreparedPluginServices({
           // service-owned Gateway/worker context, never that caller's authority or generation.
           await runOutsideOperatorToolGatewayAuthority(() =>
             runOutsidePluginRuntimeGenerationScope(() =>
-              pluginInstanceInvocation.exit(() =>
-                runServiceStart(async () =>
-                  withPluginHttpRouteRegistry(
-                    registry,
-                    () =>
-                      ownedService.startupConsumer
-                        ? ownedService.startupConsumer.run(start)
-                        : start(),
-                    lease,
+              pluginInvocationContext.exit(() =>
+                pluginInstanceInvocation.exit(() =>
+                  runServiceStart(async () =>
+                    withPluginHttpRouteRegistry(
+                      registry,
+                      () =>
+                        ownedService.startupConsumer
+                          ? ownedService.startupConsumer.run(start)
+                          : start(),
+                      lease,
+                    ),
                   ),
                 ),
               ),

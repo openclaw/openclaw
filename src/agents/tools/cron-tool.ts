@@ -301,9 +301,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
           }
           const target = await callGateway("cron.get", gatewayOpts, { id });
           operationSignal?.throwIfAborted();
-          if (getGatewayToolCallerIdentity()?.receiptAuthority?.() === false) {
-            throw new Error("The requesting turn is no longer active.");
-          }
+          getGatewayToolCallerIdentity()?.receiptAuthority?.();
           if (!isRecord(target) || typeof target.configRevision !== "string") {
             throw new Error(
               "Automation target has no current revision. Inspect it again before retrying.",

@@ -92,6 +92,7 @@ export async function selectTemplateAgentWorkspace(
 
 export type GatewayTemplateAddPlanningContext = {
   config: OpenClawConfig;
+  deviceTimeZone?: string;
   sourceMcpServers:
     | Record<string, Record<string, unknown>>
     | (() => Promise<Record<string, Record<string, unknown>>>);
@@ -124,6 +125,7 @@ export async function buildGatewayTemplateAddPlan(
     diagnostics: source.diagnostics,
     context: {
       config: context.config,
+      deviceTimeZone: context.deviceTimeZone,
       ...(context.agentId ? { agentId: context.agentId } : {}),
       ...(!context.agentId ? { agentId } : {}),
       workspace,
@@ -184,10 +186,7 @@ export async function planTemplateAddForGateway(
       workspace,
       input.source,
       () => {},
-    ).then(
-      () => true,
-      () => false,
-    );
+    ).catch(() => undefined);
     if (retained) {
       const entries = { ...input.config.agents.entries };
       delete entries[agentId];
@@ -195,6 +194,7 @@ export async function planTemplateAddForGateway(
         ...input,
         config: { ...input.config, agents: { ...input.config.agents, entries } },
         admittedWorkspace: workspace,
+        deviceTimeZone: retained.continuation.deviceTimeZone,
       };
     }
   }

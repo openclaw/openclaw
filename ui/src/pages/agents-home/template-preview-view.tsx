@@ -10,7 +10,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import { createTemplateAutomationSummary } from "./template-automation-summary.ts";
-import { TemplatePluginIcon } from "./template-plugin-icon.tsx";
+import { TemplatePluginIcon, TemplatePluginName } from "./template-plugin-icon.tsx";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateAddFeedback } from "./templates-detail-view.tsx";
 import "../../styles/templates-catalog.css";
@@ -217,16 +217,22 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                     {"kind" in item && item.kind === "plugin" ? (
                                       <span class="plugin-capability__icon">
                                         <TemplatePluginIcon
-                                          plugin={props.view.pluginPresentation?.[item.name]}
+                                          plugin={
+                                            props.view.readPluginPresentation(item) ?? undefined
+                                          }
                                         />
                                       </span>
                                     ) : undefined}
                                     <span>
                                       <strong>
-                                        {"kind" in item && item.kind === "plugin"
-                                          ? (props.view.pluginPresentation?.[item.name]?.name ??
-                                            item.name)
-                                          : item.name}
+                                        {"kind" in item && item.kind === "plugin" ? (
+                                          <TemplatePluginName
+                                            name={item.source === "clawhub" ? item.ref : item.name}
+                                            presentation={props.view.readPluginPresentation(item)}
+                                          />
+                                        ) : (
+                                          item.name
+                                        )}
                                       </strong>
                                       <small>
                                         {"excerpt" in item

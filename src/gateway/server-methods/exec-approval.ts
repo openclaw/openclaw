@@ -41,6 +41,7 @@ import {
 } from "../operator-approval-standing-grants.js";
 import { listCronStandingGrants, revokeCronStandingGrant } from "../operator-approval-store.js";
 import { resolveGrantExpiryDaysConfig } from "../standing-grant-expiry-config.js";
+import { approvalReaderSessionPolicy } from "./approval-record-lookup.js";
 import {
   captureApprovalWorkerOwner,
   registerPendingApprovalRecord,
@@ -85,7 +86,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: params.id,
         client,
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        ...approvalReaderSessionPolicy(client, context.getRuntimeConfig),
         exposeAmbiguousPrefixError: true,
       });
       authority.assertCurrent();
@@ -119,7 +120,7 @@ export function createExecApprovalHandlers(
         manager,
         client,
         approvalKind: "exec",
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        ...approvalReaderSessionPolicy(client, context.getRuntimeConfig),
       });
       authority.assertCurrent();
       respond(true, approvals, undefined);
@@ -144,7 +145,7 @@ export function createExecApprovalHandlers(
           trustedAgentRuntime &&
           context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
         ) {
-          rejectRequest("agent runtime approval authority is no longer active");
+          rejectRequest("The approval run ended. Start a new turn to request approval again.");
           return;
         }
         const workerOwner = captureApprovalWorkerOwner(trustedAgentRuntime);
@@ -435,7 +436,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: params.id,
         client,
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        ...approvalReaderSessionPolicy(client, context.getRuntimeConfig),
         respond,
         resolveTerminalReason: (snapshot) => {
           const runId = normalizeOptionalString(snapshot.request.runId);

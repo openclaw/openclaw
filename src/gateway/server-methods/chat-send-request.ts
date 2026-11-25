@@ -26,6 +26,7 @@ import {
   type AttachedChatWorkContext,
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
+import { captureSessionWorkTarget } from "../../config/sessions/session-work-start.js";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -67,6 +68,7 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
+  activeSteer?: { runId: string; profileId: string };
   normalizeThinkingLevelOverride?: boolean;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
@@ -74,6 +76,7 @@ export type NormalizedChatSendRequest = {
   clientInfo?: GatewayClientInfo;
   supportsTaskSuggestions: boolean;
   p: ChatSendRequestParams;
+  targetPrecondition?: ReturnType<typeof captureSessionWorkTarget>;
   explicitOrigin?: ChatSendExplicitOrigin;
   inboundMessage: string;
   systemInputProvenance?: InputProvenance;
@@ -114,6 +117,7 @@ export function normalizeChatSendRequest(params: {
   params: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
+  activeSteer?: { runId: string; profileId: string };
   goalResume?: SessionGoalOperation & { action: "resume" };
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
@@ -212,8 +216,7 @@ export function normalizeChatSendRequest(params: {
       p.thinking !== undefined ||
       p.fastMode !== undefined ||
       p.fastAutoOnSeconds !== undefined ||
-      p.timeoutMs !== undefined ||
-      controlUiReconnectResume.resumeRequested)
+      p.timeoutMs !== undefined)
   ) {
     // Recovery reads the persisted input and session settings, not transient run overrides.
     return reject(
@@ -227,7 +230,10 @@ export function normalizeChatSendRequest(params: {
 
   const hasGoalOperation = params.goalResume !== undefined || p.intent !== undefined;
   const commandInterpretationSuppressed =
-    suppressCommandInterpretation || hasGoalOperation || providerReview !== undefined;
+    suppressCommandInterpretation ||
+    hasGoalOperation ||
+    providerReview !== undefined ||
+    params.activeSteer !== undefined;
   // This text comes from the current provider review, not a browser-supplied command.
   const inboundMessage = p.intent || providerReview ? p.message : sanitizedMessageResult.message;
   const systemInputProvenance = params.goalResume
@@ -311,19 +317,26 @@ export function normalizeChatSendRequest(params: {
   const modelMessage = workContext
     ? [rawMessage, formatChatWorkContext(workContext.snapshot)].filter(Boolean).join("\n\n")
     : rawMessage;
+  const targetPrecondition = captureSessionWorkTarget(p);
   const requestInput = JSON.stringify([
     p.message,
+    ...(params.activeSteer
+      ? [{ operation: "active-steer", sessionId: p.sessionId, ...params.activeSteer }]
+      : []),
     p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
     ...(workContext ? [workContext.snapshot] : []),
     ...(p.appContext ? [{ appContext: stableStringify(p.appContext) }] : []),
     ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
+    ...(targetPrecondition ? [targetPrecondition.requestIdentity] : []),
   ]);
 
   const value: NormalizedChatSendRequest = {
+    ...(params.activeSteer ? { activeSteer: params.activeSteer } : {}),
     chatSendReceivedAtMs,
     clientInfo,
     supportsTaskSuggestions,
     p,
+    targetPrecondition,
     ...(params.providerReviewAcknowledgment
       ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
       : {}),

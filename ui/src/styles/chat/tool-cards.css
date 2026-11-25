@@ -33,8 +33,7 @@
 
 .chat-inline-disclosure:hover,
 .chat-tool-msg-summary:focus-within,
-.chat-tool-card__detail-link:hover,
-.chat-tool-card__detail-link:focus-visible {
+.chat-tool-card__detail-link:is(:hover, :focus-visible) {
   color: var(--text);
 }
 
@@ -68,9 +67,8 @@
   height: 12px;
 }
 
-.chat-tool-msg-summary__icon svg:not(.icon--filled),
-.chat-tool-card__action-icon svg:not(.icon--filled),
-.chat-activity-group__icon svg:not(.icon--filled) {
+:is(.chat-tool-msg-summary__icon, .chat-tool-card__action-icon, .chat-activity-group__icon)
+  svg:not(.icon--filled) {
   stroke-width: var(--chat-tool-icon-stroke-width, 1.5px);
 }
 
@@ -79,9 +77,8 @@
   stroke-width: 2px;
 }
 
-.chat-tool-row__chevron svg:not(.icon--filled),
-.chat-tool-card__block-icon svg:not(.icon--filled),
-.chat-tool-review__icon svg:not(.icon--filled) {
+:is(.chat-tool-row__chevron, .chat-tool-card__block-icon, .chat-tool-review__icon)
+  svg:not(.icon--filled) {
   stroke-width: calc(12px / 7);
 }
 
@@ -210,8 +207,7 @@
   text-underline-offset: 2px;
 }
 
-.chat-tool-row__file-link:hover,
-.chat-tool-row__file-link:focus-visible {
+.chat-tool-row__file-link:is(:hover, :focus-visible) {
   text-decoration-color: currentColor;
 }
 
@@ -247,21 +243,21 @@
   color: var(--danger);
 }
 
-.chat-tool-row__subagent-link:hover,
-.chat-tool-row__subagent-link:focus-visible {
+.chat-tool-row__subagent-link:is(:hover, :focus-visible) {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
 .chat-inline-disclosure[aria-expanded="true"] .chat-tool-row__chevron,
-.chat-tool-row--file:has(.chat-tool-row__toggle[aria-expanded="true"]) .chat-tool-row__chevron,
-.chat-tool-row--subagent:has(.chat-tool-row__toggle[aria-expanded="true"]) .chat-tool-row__chevron {
+:is(.chat-tool-row--file, .chat-tool-row--subagent):has(
+    .chat-tool-row__toggle[aria-expanded="true"]
+  )
+  .chat-tool-row__chevron {
   opacity: 1;
   transform: rotate(90deg);
 }
 
-.chat-inline-disclosure:hover .chat-tool-row__chevron,
-.chat-inline-disclosure:focus-within .chat-tool-row__chevron {
+.chat-inline-disclosure:is(:hover, :focus-within) .chat-tool-row__chevron {
   opacity: 1;
 }
 
@@ -303,16 +299,13 @@
   mask-size: contain;
 }
 
-.chat-tool-msg-summary__icon svg,
-.chat-tool-card__action-icon svg,
-.chat-activity-group__icon svg {
+:is(.chat-tool-msg-summary__icon, .chat-tool-card__action-icon, .chat-activity-group__icon) svg {
   width: var(--chat-tool-icon-size, 16px);
   height: var(--chat-tool-icon-size, 16px);
 }
 
 .chat-tool-icon--diagonal,
-.chat-tool-msg-summary__icon svg.icon--filled,
-.chat-activity-group__icon svg.icon--filled {
+:is(.chat-tool-msg-summary__icon, .chat-activity-group__icon) svg.icon--filled {
   --chat-tool-icon-size: 14px;
 }
 
@@ -371,15 +364,13 @@
   color: var(--muted);
 }
 
-.chat-tool-msg-summary:hover .chat-diffstat__add,
-.chat-tool-msg-summary:focus-visible .chat-diffstat__add,
+.chat-tool-msg-summary:is(:hover, :focus-visible) .chat-diffstat__add,
 .chat-diff__row--add .chat-diff__sign,
 .chat-activity-group__review-status[data-outcome="approved"] {
   color: var(--ok);
 }
 
-.chat-tool-msg-summary:hover .chat-diffstat__del,
-.chat-tool-msg-summary:focus-visible .chat-diffstat__del,
+.chat-tool-msg-summary:is(:hover, :focus-visible) .chat-diffstat__del,
 .chat-diff__row--del .chat-diff__sign {
   color: var(--destructive);
 }
@@ -703,8 +694,7 @@
   padding-inline-end: calc(var(--chat-tool-action-size, 40px) + 18px);
 }
 
-.chat-tool-card--flush:hover > .chat-tool-card__actions,
-.chat-tool-card--flush:focus-within > .chat-tool-card__actions {
+.chat-tool-card--flush:is(:hover, :focus-within) > .chat-tool-card__actions {
   opacity: 1;
 }
 
@@ -737,8 +727,7 @@
     background 150ms ease-out;
 }
 
-.chat-tool-card__action-btn:hover,
-.chat-tool-card__action-btn:focus-visible,
+.chat-tool-card__action-btn:is(:hover, :focus-visible),
 .chat-tool-card__actions :where(.chat-copy-btn:is(:hover, :focus-visible)) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
@@ -863,8 +852,7 @@
 /* Keep outside actions reachable and avoid restoring stale row geometry when
    the active widget's top-layer menu closes. */
 .chat-virtual-row:has(
-  .chat-tool-card__preview:hover,
-  .chat-tool-card__preview:focus-within,
+  .chat-tool-card__preview:is(:hover, :focus-within, [data-widget-inspecting]),
   .chat-tool-card__preview[data-widget-actions-above],
   .chat-tool-card__widget-actions [aria-expanded="true"]
 ) {
@@ -895,8 +883,7 @@
   transition: opacity 120ms ease-out;
 }
 
-.chat-tool-card__preview:hover [data-widget-actions],
-.chat-tool-card__preview:focus-within [data-widget-actions],
+.chat-tool-card__preview:is(:hover, :focus-within, [data-widget-inspecting]) [data-widget-actions],
 [data-widget-actions]:has(.chat-tool-card__widget-actions [aria-expanded="true"]) {
   opacity: 1;
   pointer-events: auto;
@@ -1014,12 +1001,46 @@
   color: var(--warn);
 }
 
+.chat-thread {
+  --chat-activity-row-gap: 4px;
+}
+
+/* An adjacent standalone activity is not part of this run. Keep its neighbor's
+   identity available, without reserving a second row between operations. */
+.chat-virtual-row--compact-activity > .chat-group.assistant {
+  grid-template: auto / var(--chat-avatar-column) minmax(0, 1fr) fit-content(30%);
+}
+
+.chat-virtual-row--compact-activity > .chat-group.assistant > .chat-avatar,
+.chat-virtual-row--compact-activity > .chat-group.assistant > .chat-avatar-slot {
+  width: 21px;
+  height: 21px;
+  margin-block-end: 0;
+  grid-row: 1;
+  justify-self: center;
+}
+
+.chat-virtual-row--compact-activity > .chat-group.assistant > .chat-group-footer {
+  grid-area: 1 / 3;
+  width: auto;
+  min-height: 0;
+  margin-block-start: 0;
+}
+
+.chat-group.chat-group--frame-fragment {
+  margin-block-end: calc(var(--chat-run-block-gap) - 2px);
+}
+
+.chat-virtual-row--compact-activity > .chat-group {
+  margin-block-end: var(--chat-activity-row-gap);
+}
+
 /* Expanded operations stay compact inside their own rail. The transcript owns
    list scrolling; individual output blocks retain their existing bounds. */
 .chat-activity-group__body {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--chat-activity-row-gap, 4px);
   margin: 0;
 }
 
@@ -1036,44 +1057,55 @@
 
 .chat-tool-msg-collapse--lifecycle {
   gap: 4px;
+
+  /* Keep each linked name together when it fits, without clipping the next
+     agent or the remaining count when the conversation narrows. */
+  > .chat-tool-row .chat-tool-row__title {
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
+
+    .chat-tool-row__subagent-link {
+      /* Leave room for the list separator after an unusually long name. */
+      max-width: calc(100% - 1ch);
+      vertical-align: bottom;
+      white-space: normal;
+      text-align: start;
+      outline-offset: -2px;
+    }
+  }
 }
 
-/* Transparent run/card hosts still participate in sibling selection. Apply the
-   block gap to the visible box while keeping expanded children compact. */
-:is(.chat-group-messages, .chat-agent-run-body)
+/* Transparent card hosts participate in sibling selection; put the gap on
+   the visible card. Milestones stay separate from the compact tool blocks. */
+.chat-group-messages,
+.chat-agent-run-body {
   > :is(
     .chat-activity-group,
     .chat-tool-msg-collapse,
     .chat-bubble--tool-shell,
     openclaw-chat-tool-card
-  )
-  + .chat-activity-group,
-:is(.chat-group-messages, .chat-agent-run-body)
-  > :is(
-    .chat-activity-group,
-    .chat-tool-msg-collapse,
-    .chat-bubble--tool-shell,
-    openclaw-chat-tool-card
-  )
-  + .chat-tool-msg-collapse,
-:is(.chat-group-messages, .chat-agent-run-body)
-  > :is(
-    .chat-activity-group,
-    .chat-tool-msg-collapse,
-    .chat-bubble--tool-shell,
-    openclaw-chat-tool-card
-  )
-  + .chat-bubble--tool-shell,
-:is(.chat-group-messages, .chat-agent-run-body)
-  > :is(
-    .chat-activity-group,
-    .chat-tool-msg-collapse,
-    .chat-bubble--tool-shell,
-    openclaw-chat-tool-card
-  )
-  + openclaw-chat-tool-card
-  > .chat-tool-msg-collapse {
-  margin-block-start: calc(var(--chat-run-block-gap) - var(--chat-message-gap));
+  ) {
+    + .chat-activity-group,
+    + .chat-tool-msg-collapse,
+    + .chat-bubble--tool-shell,
+    + openclaw-chat-tool-card > .chat-tool-msg-collapse {
+      margin-block-start: calc(var(--chat-run-block-gap) - var(--chat-message-gap));
+    }
+  }
+
+  > :is(.chat-activity-group, .chat-bubble--tool-shell, openclaw-chat-tool-card)
+    + .chat-tool-msg-collapse--lifecycle,
+  > :is(.chat-activity-group, .chat-bubble--tool-shell, openclaw-chat-tool-card)
+    + .chat-tool-msg-collapse--completion,
+  > :is(.chat-tool-msg-collapse--lifecycle, .chat-tool-msg-collapse--completion)
+    + .chat-activity-group,
+  > :is(.chat-tool-msg-collapse--lifecycle, .chat-tool-msg-collapse--completion)
+    + .chat-bubble--tool-shell,
+  > :is(.chat-tool-msg-collapse--lifecycle, .chat-tool-msg-collapse--completion)
+    + openclaw-chat-tool-card
+    > .chat-tool-msg-collapse {
+    margin-block-start: calc(2 * var(--chat-run-block-gap) - var(--chat-message-gap));
+  }
 }
 
 @keyframes chat-work-settle-in {

@@ -653,6 +653,7 @@ export async function buildGatewayInstallPlan(params: {
     delete serviceInputEnv[OPENCLAW_WRAPPER_ENV_KEY];
   }
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
+    env,
     port: params.port,
     allowUnconfigured:
       params.allowUnconfigured ??

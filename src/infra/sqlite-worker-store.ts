@@ -1,5 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { hydrateOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type {
@@ -69,6 +70,15 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
   );
 }
 
+const loadStateDatabaseCache = createLazyRuntimeModule(
+  () => import("../state/openclaw-state-db-cache.js"),
+);
+
+/** Gateway startup loads broker close's state owner before an update can replace its chunk. */
+export function prepareSqliteWorkerBrokerClose(): Promise<unknown> {
+  return loadStateDatabaseCache();
+}
+
 function resolveSqliteWorkerBroker() {
   return resolveGlobalSingleton(
     Symbol.for("openclaw.sqliteWorkerBroker"),
@@ -76,8 +86,7 @@ function resolveSqliteWorkerBroker() {
     (broker) =>
       withCallerErrors(
         broker.close(async () => {
-          const { closeOpenClawStateDatabaseAsync } =
-            await import("../state/openclaw-state-db-cache.js");
+          const { closeOpenClawStateDatabaseAsync } = await loadStateDatabaseCache();
           await closeOpenClawStateDatabaseAsync();
         }),
       ),

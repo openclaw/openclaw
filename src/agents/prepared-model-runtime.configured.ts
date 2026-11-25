@@ -28,7 +28,6 @@ import {
   resolveSubagentSpawnModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   buildInlineProviderModels,
   completeInlineProviderModel,
@@ -353,8 +352,8 @@ export function listConfiguredOwnerInputs(
           cfg: config,
           agentId,
           manifestPlugins: [],
-          provider: configured.provider || DEFAULT_PROVIDER,
-          model: configured.model || DEFAULT_MODEL,
+          provider: configured?.provider,
+          model: configured?.model,
           requestedRouteResolution: "resolved",
           // Session policy can narrow either configured chain after admission waits. Prepare
           // their owners once so nested execution never expands an already frozen generation.

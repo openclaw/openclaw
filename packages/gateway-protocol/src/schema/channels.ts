@@ -292,6 +292,8 @@ const TalkCatalogProviderSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
   configured: Type.Boolean(),
+  // Unconfigured because the saved sign-in doesn't cover voice; an API key would.
+  apiKeyRequired: Type.Optional(Type.Literal(true)),
   aliases: Type.Optional(Type.Array(NonEmptyString)),
   models: Type.Optional(Type.Array(Type.String())),
   voices: Type.Optional(Type.Array(Type.String())),

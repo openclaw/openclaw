@@ -5,8 +5,24 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { sleep } from "../utils/sleep.js";
 import { getHostExecMemoryBudget } from "./child-memory.js";
 
+declare const WORKER_DEPLOY_BUILD: boolean;
+
 const cgroupMount = "/sys/fs/cgroup";
 const controllers = ["cpu", "io", "memory"];
+
+type ExecCgroupPolicy = { directory: string; sessions: boolean };
+let service: {
+  resolved?: boolean;
+  root?: string;
+  relative?: string;
+  policy?: ExecCgroupPolicy | null;
+  budget?: { bytes: number; applied: Promise<void> };
+} = {};
+
+/** Only the startup owner reloads delegation and the policy it may rewrite. */
+export function reloadGatewayExecCgroup(): void {
+  service = {};
+}
 
 export type ProcessExecutionIntent = "agent-tool" | "gateway-internal";
 
@@ -14,6 +30,24 @@ function sessionExecCgroup(directory: string, scopeKey: string): string {
   return path.join(
     directory,
     `session-${createHash("sha256").update(scopeKey).digest("hex").slice(0, 32)}`,
+  );
+}
+
+/** A sealed provider Sandbox owns its worker tools; Gateway commands keep the host budget. */
+export function usesAgentExecHostMemoryBudget(input: {
+  executionIntent?: ProcessExecutionIntent;
+  cleanupOwnership?: "external";
+  workerMemoryBoundary?: "sandbox";
+}): boolean {
+  return (
+    process.platform === "linux" &&
+    input.executionIntent === "agent-tool" &&
+    input.cleanupOwnership !== "external" &&
+    !(
+      typeof WORKER_DEPLOY_BUILD === "boolean" &&
+      WORKER_DEPLOY_BUILD &&
+      input.workerMemoryBoundary === "sandbox"
+    )
   );
 }
 
@@ -221,10 +255,10 @@ export async function sweepAgentExecCgroups(): Promise<void> {
   }
   try {
     // A Gateway started inside an exec leaf does not own its parent service.
-    if (!/^0::.*\.service\/gateway$/mu.test(fs.readFileSync("/proc/self/cgroup", "utf8"))) {
+    const root = resolveGatewayServiceCgroupDirectory();
+    if (!service.relative?.endsWith(".service/gateway")) {
       return;
     }
-    const root = resolveGatewayServiceCgroupDirectory();
     if (!root) {
       return;
     }
@@ -272,16 +306,23 @@ export async function releaseAgentExecCgroupScope(scopeKey?: string): Promise<vo
 
 /** Delegation is a kernel capability, resolved from this process's own service leaf. */
 export function resolveGatewayServiceCgroupDirectory(): string | undefined {
-  const relative = /^0::(.+)$/mu.exec(fs.readFileSync("/proc/self/cgroup", "utf8"))?.[1];
-  const service =
+  if (service.resolved) {
+    return service.root;
+  }
+  // Cache absence and failures too; optional isolation is retried only by its owner.
+  service.resolved = true;
+  const relative = (service.relative = /^0::(.+)$/mu.exec(
+    fs.readFileSync("/proc/self/cgroup", "utf8"),
+  )?.[1]);
+  const match =
     relative &&
     /^(\/(?:[^/]+\/)*[^/]+\.service)\/(?:gateway|agent-exec(?:\/(?:session-[a-f0-9]{32}|unscoped))?)$/u.exec(
       relative,
     );
-  if (!service) {
+  if (!match) {
     return undefined;
   }
-  const root = path.join(cgroupMount, service[1]!);
+  const root = path.join(cgroupMount, match[1]!);
   fs.accessSync(root, fs.constants.W_OK | fs.constants.X_OK);
   fs.accessSync(path.join(root, "cgroup.subtree_control"), fs.constants.W_OK);
   fs.accessSync(path.join(root, "gateway", "cgroup.procs"), fs.constants.W_OK);
@@ -296,7 +337,7 @@ export function resolveGatewayServiceCgroupDirectory(): string | undefined {
       "the service root still contains processes; move its launcher into the gateway leaf",
     );
   }
-  return root;
+  return (service.root = root);
 }
 
 /** Bound ordinary file cache without adding another command-cancellation owner. */
@@ -306,28 +347,33 @@ export async function applyAgentExecMemoryBudget(): Promise<void> {
   }
   try {
     const root = resolveGatewayServiceCgroupDirectory();
-    const relative = /^0::(.+)$/mu.exec(fs.readFileSync("/proc/self/cgroup", "utf8"))?.[1];
-    // A nested Gateway or helper in agent-exec must not resize its parent's budget.
-    if (!root || path.join(cgroupMount, relative ?? "") !== path.join(root, "gateway")) {
+    // A nested Gateway or helper must not resize its parent's budget.
+    if (!root || service.relative !== `${root.slice(cgroupMount.length)}/gateway`) {
       return;
     }
-    const directory = path.join(root, "agent-exec");
-    if (fs.readFileSync(path.join(directory, "cpu.weight"), "utf8").trim() !== "10") {
+    const policy = resolveAgentExecCgroupPolicy();
+    if (!policy) {
       return;
     }
     const budget = getHostExecMemoryBudget();
     if (!budget) {
       return;
     }
-    const { memoryBytes } = budget;
-    const file = path.join(directory, "memory.high");
-    if (fs.readFileSync(file, "utf8").trim() !== String(memoryBytes)) {
-      // Recent kernels skip writer-side reclaim with O_NONBLOCK. On older ones,
-      // asynchronous I/O still keeps reclaim off the Gateway event loop.
-      await fs.promises.writeFile(file, String(memoryBytes), {
-        flag: fs.constants.O_WRONLY | fs.constants.O_NONBLOCK,
-      });
+    const state = service;
+    if (state.budget?.bytes !== budget.memoryBytes) {
+      // O_NONBLOCK skips writer-side reclaim on recent kernels; async I/O keeps
+      // older kernels off the event loop. Concurrent starts await the same write.
+      const applied = fs.promises
+        .writeFile(path.join(policy.directory, "memory.high"), String(budget.memoryBytes), {
+          flag: fs.constants.O_WRONLY | fs.constants.O_NONBLOCK,
+        })
+        .catch((error: unknown) => {
+          state.budget = undefined;
+          throw error;
+        });
+      state.budget = { bytes: budget.memoryBytes, applied };
     }
+    await state.budget.applied;
   } catch (error) {
     process.emitWarning(
       `Agent exec cache protection unavailable; continuing with shared sampled memory protection: ${String(error)}`,
@@ -335,15 +381,15 @@ export async function applyAgentExecMemoryBudget(): Promise<void> {
   }
 }
 
-/** Helpers discover the same delegated subtree even with an exact application environment. */
-export function getAgentExecCgroup(scopeKey?: string): string | undefined {
-  if (process.platform !== "linux") {
-    return undefined;
+function resolveAgentExecCgroupPolicy(): ExecCgroupPolicy | null {
+  if (service.policy !== undefined) {
+    return service.policy;
   }
+  service.policy = null;
   try {
     const root = resolveGatewayServiceCgroupDirectory();
     if (!root) {
-      return undefined;
+      return null;
     }
     const enabled = new Set(
       fs.readFileSync(path.join(root, "cgroup.subtree_control"), "utf8").trim().split(/\s+/u),
@@ -365,23 +411,39 @@ export function getAgentExecCgroup(scopeKey?: string): string | undefined {
           .trim()
           .split(/\s+/u),
       );
-      if (!controllers.every((controller) => delegated.has(controller))) {
-        // A retained flat policy still caps old helpers until their owner drains them.
-        return directory;
-      }
-      try {
-        return prepareAgentExecCgroupScope(directory, scopeKey);
-      } catch (error) {
-        process.emitWarning(
-          `Session exec IO policy unavailable; using the shared exec budget: ${String(error)}`,
-        );
-        return path.join(directory, "unscoped");
-      }
+      service.policy = {
+        directory,
+        sessions: controllers.every((controller) => delegated.has(controller)),
+      };
     }
   } catch {
     // Startup diagnostics own unavailable delegation; optional isolation never blocks exec.
   }
-  return undefined;
+  return service.policy;
+}
+
+/** Helpers discover the same delegated subtree even with an exact application environment. */
+export function getAgentExecCgroup(scopeKey?: string): string | undefined {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  const policy = resolveAgentExecCgroupPolicy();
+  if (!policy) {
+    return undefined;
+  }
+  const { directory, sessions } = policy;
+  // A retained flat policy still caps old helpers until their owner drains them.
+  if (!sessions) {
+    return directory;
+  }
+  try {
+    return prepareAgentExecCgroupScope(directory, scopeKey);
+  } catch (error) {
+    process.emitWarning(
+      `Session exec IO policy unavailable; using the shared exec budget: ${String(error)}`,
+    );
+    return path.join(directory, "unscoped");
+  }
 }
 
 /** Dedicated anchors/PTY helpers enter before launching their first application child. */

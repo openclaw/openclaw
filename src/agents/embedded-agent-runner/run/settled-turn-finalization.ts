@@ -6,10 +6,8 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import type { SessionTranscriptWriterFence } from "../../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import {
-  captureModelCostPricing,
-  estimateAggregateUsageCostAsync,
-} from "../../../utils/usage-format.js";
+import { captureModelCostPricing } from "../../../model-catalog/usage-pricing.js";
+import { estimateAggregateUsageCostAsync } from "../../../utils/usage-format.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import {
   buildAgentRunTerminalOutcome,
@@ -89,6 +87,11 @@ async function prepareSettledTurnFinalization(
     });
     if (costUsd !== undefined) {
       meta.costUsd = costUsd;
+      if (meta.usage) {
+        meta.usage.cost = { ...meta.usage.cost, total: costUsd };
+      }
+    } else if (meta.usage) {
+      delete meta.usage.cost;
     }
   };
   const minimumAssistantMessageIndex = (attempt.answerSegments?.at(-1)?.messageEnd ?? -1) + 1;
@@ -214,7 +217,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     input.finalization.abortSignal,
   );
   if (!assertFinalizationActive) {
-    throw new Error("admitted run authority is no longer active");
+    throw new Error("This agent run is no longer active. Start a new turn to retry.");
   }
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;

@@ -93,6 +93,8 @@ export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeF
     name?: string | null;
     username?: string | null;
     identity?: TranscriptSenderIdentity;
+    /** The platform marked the message as a forward; its text is not the sender's own words. */
+    forwarded?: boolean;
   } | null;
   /** Durable transport correlation; stored privately and never rendered into model input. */
   transport?: {

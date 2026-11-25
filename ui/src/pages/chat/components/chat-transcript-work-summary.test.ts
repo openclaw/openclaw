@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
+
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { wrapWebContent } from "../../../../../src/security/external-content.js";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
+import { openAIModel, openAIMessage } from "../chat-thread-fixtures.test-support.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
@@ -58,6 +60,7 @@ it.each([false, true])(
       { role: "user", content: "Check the workspace", timestamp: 1_000 },
       {
         role: "assistant",
+        ...openAIModel,
         runId,
         timestamp: 2_000,
         content: [
@@ -74,6 +77,7 @@ it.each([false, true])(
       },
       {
         role: "assistant",
+        ...openAIModel,
         runId,
         timestamp: 4_000,
         phase: "commentary",
@@ -81,6 +85,7 @@ it.each([false, true])(
       },
       {
         role: "assistant",
+        ...openAIModel,
         runId,
         timestamp: 5_000,
         content: [
@@ -159,6 +164,7 @@ it.each([false, true])(
       },
       {
         role: "assistant",
+        ...openAIModel,
         runId,
         timestamp: 7_000,
         phase: "final_answer",
@@ -219,6 +225,7 @@ it.each([false, true])(
       ...Array.from({ length: 300 }, (_, index) => [
         entry(`step-${index}`, index * 2 + 2, {
           role: "assistant",
+          ...openAIModel,
           phase: "commentary",
           stopReason: "toolUse",
           content: [
@@ -240,6 +247,7 @@ it.each([false, true])(
       ]).flat(),
       entry("long-answer", 602, {
         role: "assistant",
+        ...openAIModel,
         phase: "final_answer",
         stopReason: "stop",
         content: "Workspace checked",
@@ -260,7 +268,7 @@ it.each([false, true])(
                 content: "Read complete",
                 timestamp: 2_000,
               },
-              { role: "assistant", content: "Workspace checked", timestamp: 3_000 },
+              openAIMessage("Workspace checked", 3_000),
             ],
       ),
       showToolCalls: true,
@@ -347,7 +355,7 @@ const run = (runId: string) => ({ __openclaw: { runId } });
 it("shows every run's reply below completed work when completions arrive without user input", async () => {
   const container = await renderTallTranscript("work-runs", [
     { role: "user", content: "Start two subagents", timestamp: 1_000 },
-    { role: "assistant", content: "Spawning both.", timestamp: 1_500, ...run("run-user") },
+    openAIMessage("Spawning both.", 1_500, run("run-user")),
     {
       role: "toolResult",
       toolCallId: "work-runs-spawn",
@@ -356,10 +364,10 @@ it("shows every run's reply below completed work when completions arrive without
       timestamp: 2_000,
       ...run("run-user"),
     },
-    { role: "assistant", content: "Both started.", timestamp: 3_000, ...run("run-user") },
-    { role: "assistant", content: "Child A finished.", timestamp: 4_000, ...run("announce:a") },
-    { role: "assistant", content: "Child B finished.", timestamp: 5_000, ...run("announce:b") },
-    { role: "assistant", content: "All settled.", timestamp: 6_000, ...run("announce:settle") },
+    openAIMessage("Both started.", 3_000, run("run-user")),
+    openAIMessage("Child A finished.", 4_000, run("announce:a")),
+    openAIMessage("Child B finished.", 5_000, run("announce:b")),
+    openAIMessage("All settled.", 6_000, run("announce:settle")),
   ]);
   const text = container.textContent ?? "";
   for (const reply of ["Both started.", "Child A finished.", "Child B finished.", "All settled."]) {
@@ -377,9 +385,10 @@ it("keeps a later run's source cards when an earlier run's reply stays visible",
   };
   const container = await renderTallTranscript("work-sources", [
     { role: "user", content: "Start two subagents", timestamp: 1_000 },
-    { role: "assistant", content: "Child A finished.", timestamp: 2_000, ...run("announce:a") },
+    openAIMessage("Child A finished.", 2_000, run("announce:a")),
     {
       role: "assistant",
+      ...openAIModel,
       content: [{ type: "toolCall", id: "search", name: "web_search", arguments: {} }],
       timestamp: 3_000,
       ...run("announce:b"),
@@ -395,6 +404,7 @@ it("keeps a later run's source cards when an earlier run's reply stays visible",
     },
     {
       role: "assistant",
+      ...openAIModel,
       content: `Child B cited the [article](${url}).`,
       stopReason: "stop",
       timestamp: 4_000,

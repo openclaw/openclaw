@@ -6,7 +6,11 @@ import type {
   CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
 } from "../../plugins/cli-backend.types.js";
-import { CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE } from "../failover/error.js";
+import {
+  CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE,
+  CLI_LIVE_SESSION_LIMIT_ERROR_CODE,
+  FailoverError,
+} from "../failover/error.js";
 import { runCliCleanup } from "./cleanup.js";
 import { createCliFailoverError } from "./exit-error.js";
 import { cliBackendLog } from "./log.js";
@@ -27,7 +31,6 @@ type CliLiveSessionOwner = {
 type CliLiveSessionRecord = {
   handle: CliBackendLiveSessionHandle;
   owner: PreparedCliRunContext["preparedBackend"];
-  approvalGrants: Set<string>;
   cleanup?: () => Promise<void>;
   cleanupPromise?: Promise<void>;
   capture?: {
@@ -73,14 +76,6 @@ export function hasCliLiveSession(owner: CliLiveSessionOwner): boolean {
 /** Returns the opaque generation of this owner's registered execution session. */
 export function getCliLiveSessionGeneration(owner: CliLiveSessionOwner): string | undefined {
   return liveSessions.get(buildCliLiveRegistryKey(owner))?.handle.generation;
-}
-
-/** Reads owner-private standing approvals only from this exact current live process. */
-export function getCliLiveSessionApprovalGrants(
-  context: PreparedCliRunContext,
-): Set<string> | undefined {
-  const record = liveSessions.get(buildCliLiveSessionKey(context));
-  return record?.owner === context.preparedBackend ? record.approvalGrants : undefined;
 }
 
 export async function closeCliLiveSession(
@@ -160,18 +155,20 @@ function retainCleanup(context: PreparedCliRunContext, record: CliLiveSessionRec
   };
 }
 
-function createCapacityError(context: PreparedCliRunContext, message: string, code?: string) {
-  return createCliFailoverError(
-    message,
-    "rate_limit",
-    {
-      provider: context.params.provider,
-      model: context.modelId,
-      sessionId: context.params.sessionId,
-      lane: context.params.lane,
-    },
-    code ? { code } : undefined,
-  );
+/**
+ * The host, not the provider, refused this turn before any request was sent. It carries no
+ * HTTP status and is not a rate limit, so it never cools the saved login down or pins the
+ * session to a fallback; the turn can still fail over to another model.
+ */
+function createCapacityError(context: PreparedCliRunContext, message: string, code: string) {
+  return new FailoverError(message, {
+    reason: "overloaded",
+    code,
+    provider: context.params.provider,
+    model: context.modelId,
+    sessionId: context.params.sessionId,
+    lane: context.params.lane,
+  });
 }
 
 function ensureCliLiveSessionCapacity(context: PreparedCliRunContext): void {
@@ -184,7 +181,11 @@ function ensureCliLiveSessionCapacity(context: PreparedCliRunContext): void {
       return;
     }
   }
-  throw createCapacityError(context, "Too many CLI live sessions are active.");
+  throw createCapacityError(
+    context,
+    "Too many CLI live sessions are active.",
+    CLI_LIVE_SESSION_LIMIT_ERROR_CODE,
+  );
 }
 
 /**
@@ -330,9 +331,11 @@ export function createCliLiveSessionCapability(params: {
       credentialFingerprint: context.preparedBackend.secretInput?.fingerprint,
       // A warm child keeps the login it started with. Reuse it only while the native owner
       // this run was prepared under is the one it was started under.
-      nativeLoginOwnerHash: context.cliHistoryWriter?.bindsNativeLogin
-        ? sha256Hex(context.cliHistoryWriter.authFingerprint)
-        : undefined,
+      nativeLoginOwnerHash:
+        context.cliHistoryAdmission?.bindsNativeLogin &&
+        context.cliHistoryAdmission.accountFingerprint
+          ? sha256Hex(context.cliHistoryAdmission.accountFingerprint)
+          : undefined,
       skillsFingerprint,
       env: Object.keys(params.env)
         .toSorted()
@@ -421,7 +424,6 @@ export function createCliLiveSessionCapability(params: {
       const record: CliLiveSessionRecord = {
         handle,
         owner: params.context.preparedBackend,
-        approvalGrants: new Set(),
         ...(cleanup ? { cleanup } : {}),
         ...(grant && params.captureKey
           ? {
@@ -463,7 +465,6 @@ export function createCliLiveSessionCapability(params: {
       }
       record.capture?.revoke();
       liveSessions.delete(ownerKey);
-      record.approvalGrants.clear();
       retiringSessionHandles.add(handle);
       // Native runtime artifacts remain process-owned until its child exits.
       record.cleanupPromise = Promise.resolve()

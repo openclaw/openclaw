@@ -21,6 +21,7 @@ import {
   readSessionSentTools,
   retireSessionSystemPrompt,
 } from "./session-prompt-state.js";
+import { retireUserRowPromptUpdates } from "./session-prompt-update.js";
 import {
   readToolSurfaceCheckpoint,
   resolveSessionToolPolicyDigest,
@@ -807,6 +808,54 @@ describe("session tool surface", () => {
     ).toEqual(["message", "read"]);
   });
 
+  it.each([false, true])(
+    "separates participation pins across warm and restored turns (restored=%s)",
+    async (restored) => {
+      const entries: SessionEntry[] = [];
+      const ceiling = {
+        kind: "send" as const,
+        profileId: "guest",
+        sessionKey: "agent:main:shared",
+        tools: ["read", "ls"],
+      };
+      const creatorPolicy = resolveSessionToolPolicyDigest({}, "main");
+      const participantPolicy = resolveSessionToolPolicyDigest({}, "main", ceiling);
+      expect(participantPolicy).not.toBe(creatorPolicy);
+      expect(
+        resolveSessionToolPolicyDigest({}, "main", {
+          ...ceiling,
+          profileId: "other",
+          tools: ["ls", "read", "read"],
+        }),
+      ).toBe(participantPolicy);
+      const defaultPolicy = resolveSessionToolPolicyDigest({}, "main", {
+        ...ceiling,
+        tools: undefined,
+      });
+      expect(defaultPolicy).not.toBe(participantPolicy);
+      expect(defaultPolicy).not.toBe(creatorPolicy);
+      for (const [policy, offered] of [
+        [participantPolicy, ["ls", "read"]],
+        [creatorPolicy, ["exec", "ls", "message", "read"]],
+        [participantPolicy, ["ls", "read"]],
+        [defaultPolicy, ["exec", "ls", "read"]],
+        [creatorPolicy, ["exec", "ls", "message", "read"]],
+      ] as const) {
+        const tools = surface(
+          offered.map((name) => tool(name)),
+          entries,
+          routeKey,
+          policy,
+        );
+        expect(names(tools)).toEqual(offered);
+        await persist(entries);
+        if (restored) {
+          fixture.reload();
+        }
+      }
+    },
+  );
+
   it("drops pinned tools when the tool policy changes", () => {
     surface([tool("read"), tool("exec")]);
     expect(surface([tool("read")], [], routeKey, "policy-b").map((entry) => entry.name)).toEqual([
@@ -849,4 +898,52 @@ describe("embedded session active project keys", () => {
     expect(prepare("session-one", null)).toEqual(["repo-a"]);
     expect(prepare("session-two", null)).toEqual([]);
   });
+});
+
+it("retires user-row prompt deltas sent before the newest rebuild", () => {
+  const row = (text: string, timestamp: string, projection?: string) => ({
+    role: "user" as const,
+    content: [{ type: "text" as const, text }],
+    timestamp: Date.parse(timestamp),
+    ...(projection
+      ? { __openclaw: { modelPromptProjection: { version: 1, text: projection } } }
+      : {}),
+  });
+  const plain = row("before", "2026-10-01T00:00:01Z", `before\n\n${updateHeading}rule A`);
+  const hooked = row(
+    "hooked",
+    "2026-10-01T00:00:02Z",
+    `recalled memory\n\nhooked\n\n${updateHeading}rule B`,
+  );
+  const recent = row("after", "2026-10-01T00:00:04Z", `after\n\n${updateHeading}rule C`);
+  const update = {
+    role: "custom" as const,
+    customType: "openclaw.system-update",
+    content: `${updateHeading}rule D`,
+    display: false,
+    details: { kind: "prompt-update", turnScoped: false },
+    timestamp: Date.parse("2026-10-01T00:00:05Z"),
+  };
+  const rebuild: SessionEntry = {
+    ...entryMetadata,
+    timestamp: "2026-10-01T00:00:03Z",
+    id: "rebuild",
+    type: "custom",
+    customType: "openclaw.system-prompt",
+    data: { restart: true },
+  };
+  const messages = [plain, hooked, recent, update];
+  expect(retireUserRowPromptUpdates(messages, [], false)).toBe(messages);
+  const retained = retireUserRowPromptUpdates(messages, [rebuild], false);
+  expect(retained.slice(2)).toEqual([recent, update]);
+  expect(retained[0]).not.toHaveProperty("__openclaw.modelPromptProjection");
+  // Other model-only text on the row survives the retirement.
+  expect(retained[1]).toHaveProperty(
+    "__openclaw.modelPromptProjection.text",
+    "recalled memory\n\nhooked",
+  );
+  // The rebuilding request drops prompt-update rows and every older delta.
+  const rebuilding = retireUserRowPromptUpdates(messages, [], true);
+  expect(rebuilding).toHaveLength(3);
+  expect(rebuilding[2]).not.toHaveProperty("__openclaw.modelPromptProjection");
 });

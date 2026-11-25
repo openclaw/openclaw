@@ -5,7 +5,11 @@ import { promisify } from "node:util";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
-import { writeHostFile } from "./host-file-write.js";
+import {
+  prepareHostFileMutation,
+  writeHostFile,
+  type HostFileMutationPreparer,
+} from "./host-file-write.js";
 import {
   type MemoryWriteProvenanceObserver,
   withMemoryWriteProvenance,
@@ -33,7 +37,9 @@ export type ApplyPatchFileOptions = {
   sandbox?: SandboxApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Host default: false; sandbox default: true. */
   workspaceOnly?: boolean;
+  strictWorkspaceRoot?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+  prepareHostFileMutation?: HostFileMutationPreparer;
 };
 
 type PatchCreateOutcome = "created" | "exists";
@@ -104,11 +110,15 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         return decodeUtf8Input(buffer, `File ${filePath}`);
       },
       writeFile: async (filePath, content) => {
-        await writeHostFile(filePath, content, options.signal);
+        await writeHostFile(filePath, content, options.signal, options.prepareHostFileMutation);
       },
       createFileExclusive: async (filePath, content) => {
         try {
-          options.signal?.throwIfAborted();
+          await using effect = await prepareHostFileMutation(
+            options.prepareHostFileMutation,
+            options.signal,
+          );
+          effect.assertCurrent();
           await fs.writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
           return "created";
         } catch (error) {
@@ -119,11 +129,19 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         }
       },
       remove: async (filePath) => {
-        options.signal?.throwIfAborted();
+        await using effect = await prepareHostFileMutation(
+          options.prepareHostFileMutation,
+          options.signal,
+        );
+        effect.assertCurrent();
         await fs.rm(filePath);
       },
       mkdirp: async (dir) => {
-        options.signal?.throwIfAborted();
+        await using effect = await prepareHostFileMutation(
+          options.prepareHostFileMutation,
+          options.signal,
+        );
+        effect.assertCurrent();
         await fs.mkdir(dir, { recursive: true });
       },
     });
@@ -135,7 +153,11 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
   });
   const roots = new Map([[path.resolve(containmentRoot), initialRoot]]);
   const resolveTarget = async (filePath: string) => {
-    const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
+    const selectedRoot = await resolveHostRootAsync(
+      containmentRoot,
+      filePath,
+      options.strictWorkspaceRoot,
+    );
     const relative = toRelativeSandboxPath(selectedRoot, filePath);
     let root = roots.get(selectedRoot);
     if (!root) {
@@ -146,7 +168,10 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
     }
     const assertBeforeMutation = () => {
       options.signal?.throwIfAborted();
-      toRelativeSandboxPath(resolveHostWorkspaceRoot(containmentRoot, filePath), filePath);
+      toRelativeSandboxPath(
+        resolveHostWorkspaceRoot(containmentRoot, filePath, options.strictWorkspaceRoot),
+        filePath,
+      );
     };
     return { root, relative, assertBeforeMutation };
   };
@@ -154,7 +179,11 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
   // absolute paths keep a literal "~" component from becoming home expansion.
   return withPatchMemoryWriteProvenance(options.memoryWriteProvenance, {
     readFile: async (filePath) => {
-      const selectedRoot = await resolveHostRootAsync(containmentRoot, filePath);
+      const selectedRoot = await resolveHostRootAsync(
+        containmentRoot,
+        filePath,
+        options.strictWorkspaceRoot,
+      );
       const opened = await openRootFile({
         absolutePath: filePath,
         rootPath: selectedRoot,
@@ -173,23 +202,37 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
     },
     writeFile: async (filePath, content) => {
       const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
+      await using effect = await prepareHostFileMutation(
+        options.prepareHostFileMutation,
+        options.signal,
+      );
       assertBeforeMutation();
       await root
         .write(path.resolve(root.rootReal, relative), content, {
           encoding: "utf8",
           mutationSymlinks: "follow-parents-within-root",
-          assertBeforeMutation,
+          assertBeforeMutation: () => {
+            effect.assertCurrent();
+            assertBeforeMutation();
+          },
         })
         .catch(rethrowHostMutationError);
     },
     createFileExclusive: async (filePath, content) => {
       try {
         const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
+        await using effect = await prepareHostFileMutation(
+          options.prepareHostFileMutation,
+          options.signal,
+        );
         assertBeforeMutation();
         await root.create(path.resolve(root.rootReal, relative), content, {
           encoding: "utf8",
           mutationSymlinks: "reject",
-          assertBeforeMutation,
+          assertBeforeMutation: () => {
+            effect.assertCurrent();
+            assertBeforeMutation();
+          },
         });
         return "created";
       } catch (error) {
@@ -201,10 +244,21 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
     },
     remove: async (filePath) => {
       const { root, relative, assertBeforeMutation } = await resolveTarget(filePath);
+      await using effect = await prepareHostFileMutation(
+        options.prepareHostFileMutation,
+        options.signal,
+      );
       assertBeforeMutation();
       // remove requires a relative path; "./" preserves literal tilde names.
       // Omitted mutationSymlinks lets it unlink the final symlink itself.
-      await root.remove(`./${relative}`, { assertBeforeMutation }).catch(rethrowHostMutationError);
+      await root
+        .remove(`./${relative}`, {
+          assertBeforeMutation: () => {
+            effect.assertCurrent();
+            assertBeforeMutation();
+          },
+        })
+        .catch(rethrowHostMutationError);
     },
   });
 }

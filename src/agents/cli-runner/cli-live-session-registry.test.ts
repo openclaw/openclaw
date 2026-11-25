@@ -15,7 +15,6 @@ import {
   acceptsCliLiveSession,
   closeCliLiveSession,
   createCliLiveSessionCapability,
-  getCliLiveSessionApprovalGrants,
   getCliLiveSessionGeneration,
   hasCliLiveSession,
   restartCliLiveSession,
@@ -67,10 +66,11 @@ async function createOwner(
   context.effectiveAuthProfileId = options.authProfileId;
   context.preparedBackend.mcpConfigHash = options.mcpConfigHash;
   if (options.nativeLogin) {
-    context.cliHistoryWriter = {
-      authFingerprint: options.nativeLogin,
+    context.cliHistoryAdmission = {
+      replaysHistory: true,
+      accountFingerprint: options.nativeLogin,
       bindsNativeLogin: true,
-    } as NonNullable<typeof context.cliHistoryWriter>;
+    };
   }
   admissions.push(admission);
   context.params.admittedRunContext = await admission.admit("plugin-harness");
@@ -166,14 +166,12 @@ describe("generic plugin-owned live session registry", () => {
           await held.promise;
         },
       });
-      getCliLiveSessionApprovalGrants(original.context)?.add("Read");
       const next = await createOwner({ sessionId: original.sessionId });
 
       let restarting: Promise<void> | undefined;
       try {
         expect(next.capability.current()).toBe(original.session);
         expect(next.capability.fingerprint).not.toBe(original.session.fingerprint);
-        expect(getCliLiveSessionApprovalGrants(next.context)).toBeUndefined();
         expect(() => next.capability.activate(original.session)).toThrow("admitted run");
         restarting = next.capability.restart();
         await entered.promise;
@@ -183,7 +181,6 @@ describe("generic plugin-owned live session registry", () => {
         await restarting;
       }
       next.register();
-      expect(getCliLiveSessionApprovalGrants(next.context)?.size).toBe(0);
       expect(original.capability.current()).toBe(next.session);
       expect(original.close).toHaveBeenCalledOnce();
     },

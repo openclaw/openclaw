@@ -7,7 +7,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { execa, type Options as ExecaOptions } from "execa";
 import { withNodeRuntimePath } from "../../node-runtime-env.mjs";
 import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
-import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import { ensureOpenClawExecMarkerOnProcess } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
 import { getFileLockProcessStartTime, getProcessInstanceStartTime } from "../shared/pid-alive.js";
@@ -19,6 +19,7 @@ import {
 } from "./child-process-tree.js";
 import type { CommandProcessCustody } from "./command-process-custody.types.js";
 import { readCommandProcessStartTime } from "./command-process-identity.js";
+import type { CommandStdinFile } from "./command-stdin-file.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -31,78 +32,14 @@ import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.j
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
 import {
+  brokerExecaOptions,
   restoreExecaResult,
   type BrokerExecaOptions,
-  type BrokerOutputOption,
 } from "./spawn-broker/execa-protocol.js";
 import type { CommandSpawnOptions, CommandSubprocess } from "./spawn-broker/execa-types.js";
 import type { SpawnBrokerHost } from "./spawn-broker/host.js";
 import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
-
-function isOutputOption(value: unknown): value is BrokerOutputOption | undefined {
-  return (
-    value === undefined ||
-    value === "pipe" ||
-    value === "ignore" ||
-    value === "inherit" ||
-    (typeof value === "object" &&
-      value !== null &&
-      "file" in value &&
-      typeof value.file === "string" &&
-      Object.keys(value).length === 1)
-  );
-}
-
-/** Unsupported native descriptors and independent-lifetime commands remain explicit local paths. */
-function brokerExecaOptions(options: CommandSpawnOptions): BrokerExecaOptions | undefined {
-  if (options.ipc || options.cleanup === false || typeof options.stdin === "number") {
-    return undefined;
-  }
-  if (
-    options.stdout === "inherit" ||
-    options.stderr === "inherit" ||
-    options.stdio === "inherit" ||
-    typeof options.stdout === "number" ||
-    typeof options.stderr === "number"
-  ) {
-    return undefined;
-  }
-  if (
-    options.stdio &&
-    typeof options.stdio !== "string" &&
-    options.stdio.some((entry, fd) => typeof entry === "number" || (fd > 0 && entry === "inherit"))
-  ) {
-    return undefined;
-  }
-  if (
-    (options.cwd !== undefined && typeof options.cwd !== "string") ||
-    (options.input !== undefined &&
-      typeof options.input !== "string" &&
-      !(options.input instanceof Uint8Array)) ||
-    (options.stdin !== undefined &&
-      options.stdin !== "pipe" &&
-      options.stdin !== "ignore" &&
-      options.stdin !== "inherit") ||
-    !isOutputOption(options.stdout) ||
-    !isOutputOption(options.stderr) ||
-    (options.shell !== undefined && options.shell !== false)
-  ) {
-    throw new TypeError("Unsupported spawn broker execa stream or invocation options");
-  }
-  if (
-    Array.isArray(options.stdio) &&
-    (options.stdio.length !== 3 ||
-      !["pipe", "ignore", "inherit"].includes(String(options.stdio[0])) ||
-      !isOutputOption(options.stdio[1]) ||
-      !isOutputOption(options.stdio[2]))
-  ) {
-    throw new TypeError("Unsupported spawn broker execa stdio");
-  }
-  const { cancelSignal: _cancelSignal, ...serializable } = options;
-  // SAFETY: The allowed options were checked above, excluding streams, URLs, IPC and native descriptors.
-  return serializable as BrokerExecaOptions;
-}
 
 function spawnBrokerCommand(
   host: SpawnBrokerHost,
@@ -586,6 +523,7 @@ export function shouldSpawnWithShell(params: {
 }
 
 type SpawnCommandOptions = CommandSpawnOptions & {
+  stdinFile?: CommandStdinFile;
   executionIntent?: ProcessExecutionIntent;
   executionScopeKey?: string;
   baseEnv?: NodeJS.ProcessEnv;
@@ -643,7 +581,16 @@ export function spawnCommandWithInvocation<
   child: CommandSubprocess<OptionsType>;
   invocation: ReturnType<typeof resolveSafeChildProcessInvocation>;
 } {
-  if (process.platform === "win32" && commandCreatesChildPipes(options)) {
+  if (
+    options.stdinFile &&
+    (options.input !== undefined || options.stdin !== undefined || options.stdio !== undefined)
+  ) {
+    throw new TypeError("Command stdin file cannot be combined with input, stdin, or stdio");
+  }
+  if (
+    process.platform === "win32" &&
+    commandCreatesChildPipes(options.stdinFile ? { ...options, stdin: 0 } : options)
+  ) {
     assertAppContainerSpawnSupported();
   }
   const scope = commandProcessScope.getStore();
@@ -660,6 +607,7 @@ export function spawnCommandWithInvocation<
     inheritScopeCancellation = true,
     executionIntent = "gateway-internal",
     executionScopeKey,
+    stdinFile,
     ...execaOptions
   }: SpawnCommandOptions = options;
   const commandEnv = preparedEnv ?? resolveCommandEnv({ argv, baseEnv, env });
@@ -684,7 +632,14 @@ export function spawnCommandWithInvocation<
   const broker = getSpawnBroker();
   // CLI and other platforms have no broker scope. Independent applications and
   // native descriptors retain their explicitly selected in-process transport.
-  const remoteOptions = broker ? brokerExecaOptions(commandOptions) : undefined;
+  const prepared = broker ? brokerExecaOptions(commandOptions) : "no-broker";
+  const remoteOptions = typeof prepared === "string" ? undefined : prepared;
+  if (stdinFile && broker) {
+    if (!remoteOptions) {
+      throw new TypeError("Command stdin file requires broker-compatible process options");
+    }
+    remoteOptions.stdinFile = stdinFile.source;
+  }
   if (remoteOptions && executionTimeoutMs !== undefined) {
     // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
     remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
@@ -703,10 +658,22 @@ export function spawnCommandWithInvocation<
         )
       : runWithMainThreadTask(
           "process:spawn",
-          () => execa(limited.command, limited.args, commandOptions),
+          () =>
+            execa(
+              limited.command,
+              limited.args,
+              // SAFETY: Execa passes numeric descriptors through to Node despite its fd-0 type.
+              stdinFile ? { ...commandOptions, stdin: stdinFile.fd as 0 } : commandOptions,
+            ),
           "command",
         );
-  recordChildProcessSpawn(invocation.command, child.nodeChildProcess, undefined, invocation.args);
+  recordChildProcessSpawn(
+    invocation.command,
+    child.nodeChildProcess,
+    undefined,
+    invocation.args,
+    typeof prepared === "string" ? `native.${prepared}` : "broker",
+  );
   if (scope) {
     retainCommandProcess(scope, child, inheritScopeCancellation, reservation);
   }
@@ -750,5 +717,5 @@ export function resolveCommandEnv(params: {
     resolvedEnv.NPM_CONFIG_FUND ??= "false";
     resolvedEnv.npm_config_fund ??= "false";
   }
-  return markOpenClawExecEnv(resolvedEnv);
+  return ensureOpenClawExecMarkerOnProcess(resolvedEnv);
 }

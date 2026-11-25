@@ -247,12 +247,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 105880,
-    "roughTokens": 26470
+    "chars": 105924,
+    "roughTokens": 26481
   },
   "openClawBaseInstructions": {
-    "chars": 6573,
-    "roughTokens": 1644
+    "chars": 7208,
+    "roughTokens": 1802
   },
   "openClawDeveloperInstructions": {
     "chars": 3683,
@@ -263,12 +263,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 12932,
-    "roughTokens": 3233
+    "chars": 13567,
+    "roughTokens": 3392
   },
   "totalWithDynamicToolsJson": {
-    "chars": 118814,
-    "roughTokens": 29704
+    "chars": 119493,
+    "roughTokens": 29874
   },
   "userInputText": {
     "chars": 879,
@@ -317,7 +317,7 @@ Do not invent commands.
 Config read: `gateway` (`config.get|config.schema.lookup`) when exposed; config writes require `openclaw`.
 Config recovery: if broken config or an unavailable setup tool blocks an explicit local repair, use existing file/exec permissions—prefer `openclaw config`, else save a rollback copy, apply the narrow repair, validate, and read back. Never override approvals, readonly config, containment, or disabled tools, or edit access/approval/ownership policies.
 `/openclaw` rescue only runs supported commands—never instruct users to send free-form setup or tool-enable requests to it.
-This Gateway: use the built-in updater by default (Git on source installs only for an explicit exact-revision request with host maintenance authority; shell access != update authority). Owners can send `/update` in chat when `commands.restart` is enabled. On explicit owner/scheduled maintenance, `gateway` runs `update.run` (supervised restart), `restart`, and `update.cleanup` (`dryRun` previews; permanently removes rollback copies—require an explicit cleanup request). Report accepted/deferred status accurately; scheduling != completion. Missing chat ownership needs Control UI owner setup or Gateway operator help. Keep a working restart path before stopping; if runtime admission refuses, report the blocker and never bypass via `exec`.
+Before updating this Gateway on an explicit owner request, identify the installation that is actually serving and consult its host or installation documentation. Use the built-in updater for standard installs. For a directly served Git checkout, use its documented in-place update procedure only when the host authorizes it for this caller. An owner need not specify a revision for that procedure. Otherwise use Git on source installs only for an explicitly requested exact revision with host maintenance authorization. If you cannot establish the serving installation or an authorized procedure, report the blocker instead of guessing. Shell access is not update authority. Change installation methods only on explicit operator request. Owners can send `/update` in chat when `commands.restart` is enabled. On explicit owner/scheduled maintenance, `gateway`: use update.run only when the installation uses the built-in updater. It provides supervised restart. The other actions are `restart` and `update.cleanup` (`dryRun` previews; permanently removes rollback copies—require an explicit cleanup request). Report accepted/deferred status accurately; scheduling != completion. Missing chat ownership needs Control UI owner setup or Gateway operator help. Keep a working restart path before stopping; if runtime admission refuses, report the blocker and never bypass via `exec`.
 Remote hosts: verify it is not this Gateway, then use exec/SSH under normal approvals (`openclaw` only targets local; do not block on local agent-ID migration).
 
 ## Documentation
@@ -605,7 +605,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "effectId": {
-          "description": "sendWithEffect id/name.",
+          "description": "Numeric Telegram message effect id; private chats only.",
           "type": "string"
         },
         "emoji": {
@@ -628,9 +628,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "gatewayUrl": {
           "type": "string"
-        },
-        "gifPlayback": {
-          "type": "boolean"
         },
         "groupId": {
           "type": "string"
@@ -994,12 +991,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "target": {
           "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
-          "type": "string"
-        },
-        "targetAuthor": {
-          "type": "string"
-        },
-        "targetAuthorUuid": {
           "type": "string"
         },
         "targets": {

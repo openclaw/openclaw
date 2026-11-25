@@ -1,4 +1,5 @@
-import type { Page } from "playwright";
+import type { Browser, Page } from "playwright";
+import { onTestFinished } from "vitest";
 import type {
   ClawHubTemplateCatalogDetail,
   ClawHubTemplateCatalogEntry,
@@ -24,6 +25,22 @@ export const workflowOperator = {
   installs: 200,
   updatedAtMs: 1_790_000_000_000,
 } satisfies ClawHubTemplateCatalogEntry;
+export const weeklyAutomations = [
+  {
+    name: "Weekly brief",
+    schedule: "0 9 * * 1",
+    timezone: "UTC",
+    enabled: false,
+    message: "Summarize last week's work.\n\nList anything still waiting on a decision.",
+  },
+  {
+    name: "Midweek nudge",
+    schedule: "0 21 * * 3",
+    timezone: "UTC",
+    enabled: false,
+    message: "Remind me of anything due before Friday.",
+  },
+] satisfies ClawHubTemplateCatalogDetail["contents"]["automations"];
 export const auditUrl = "https://clawhub.ai/openclaw/templates/workflow-operator/security-audit";
 export const publishedAtMs = 1_780_000_000_000;
 export const soulExcerpt = "Keep the owner informed about approved workflows. ".repeat(24);
@@ -32,7 +49,39 @@ export const skillExcerpt =
 const config = { gateway: { controlUi: { experimental: { templates: true } } } };
 export const agentsList = makeBootRoster({ agents: [{ id: "main", name: "Main" }] });
 
-export async function installTemplateCatalogGateway(
+export function createTemplateCatalogFixture(runtime: () => { browser: Browser; baseUrl: string }) {
+  return async function fixture(
+    viewport: { width: number; height: number; timezoneId?: string } = { width: 1440, height: 900 },
+    entry: ClawHubTemplateCatalogEntry = workflowOperator,
+    detailPublisher: Partial<Pick<ClawHubTemplateCatalogEntry, "ownerHandle" | "official">> = {},
+    loading = false,
+    colorScheme: "light" | "dark" = "light",
+    linkPreviews = false,
+    catalogEntries: ClawHubTemplateCatalogEntry[] = [entry],
+  ) {
+    const { browser, baseUrl } = runtime();
+    const context = await browser.newContext({
+      colorScheme,
+      locale: "en-US",
+      serviceWorkers: "block",
+      timezoneId: viewport.timezoneId,
+      viewport: { width: viewport.width, height: viewport.height },
+    });
+    onTestFinished(() => context.close());
+    const page = await context.newPage();
+    const gateway = await installTemplateCatalogGateway(page, {
+      entry,
+      detailPublisher,
+      loading,
+      linkPreviews,
+      catalogEntries,
+    });
+    await page.goto(`${baseUrl}templates`);
+    return { page, gateway };
+  };
+}
+
+async function installTemplateCatalogGateway(
   page: Page,
   options: {
     entry: ClawHubTemplateCatalogEntry;

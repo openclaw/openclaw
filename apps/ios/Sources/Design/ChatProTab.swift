@@ -46,6 +46,8 @@ struct ChatProTab: View {
     @State private var isGatewayStatusManuallyExpanded = false
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     let openSettings: () -> Void
+    /// Set only while no Gateway has ever been saved or connected on this device.
+    let startFirstGatewaySetup: (() -> Void)?
 
     var body: some View {
         self.content
@@ -180,6 +182,15 @@ struct ChatProTab: View {
                     !self.appModel.talkMode.isEnabled &&
                         !self.appModel.talkMode.hasActivePushToTalkSession &&
                         !self.appModel.voiceNoteRecorder.ownsPendingChatAttachment
+                },
+                firstConnectionNotice: self.startFirstGatewaySetup.map { start in
+                    OpenClawChatFirstConnectionNotice(
+                        title: String(localized: "Not connected yet"),
+                        message: UIDevice.current.userInterfaceIdiom == .pad
+                            ? String(localized: "Connect this iPad to OpenClaw on your computer.")
+                            : String(localized: "Connect this iPhone to OpenClaw on your computer."),
+                        actionTitle: String(localized: "Connect"),
+                        action: start)
                 })
                 .environment(
                     \.openClawEmbeddedBrowserUnavailableReason,
@@ -283,14 +294,12 @@ struct ChatProTab: View {
     /// never headlines: the title stays empty until the session is named (web `titlePending`).
     private var headerSessionTitle: String? {
         guard let session = self.viewModel?.currentSessionEntry() else { return nil }
-        let title = CommandCenterTab.sessionTitle(session)
+        let title = SessionPresentation.title(session)
         return title.isEmpty || title == session.key ? nil : title
     }
 
     private var gatewayStatusIsHealthy: Bool {
-        Self.gatewayStatusTone(
-            state: self.gatewayDisplayState,
-            isGatewayUsable: self.gatewayConnected) == .success
+        Self.gatewayStatusTone(state: self.gatewayDisplayState) == .success
     }
 
     private var headerAgentAccessibilityLabel: String {
@@ -310,7 +319,7 @@ struct ChatProTab: View {
     }
 
     private var expandedGatewayStatusLabel: some View {
-        Text(Self.gatewayStatusTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))
+        Text(Self.gatewayStatusTitle(state: self.gatewayDisplayState))
             .font(OpenClawType.subheadMedium)
             .foregroundStyle(.primary)
             .lineLimit(1)
@@ -327,7 +336,6 @@ struct ChatProTab: View {
     private var showsExpandedGatewayStatus: Bool {
         Self.gatewayStatusShouldExpand(
             state: self.gatewayDisplayState,
-            isGatewayUsable: self.gatewayConnected,
             isManuallyExpanded: self.isGatewayStatusManuallyExpanded)
     }
 
@@ -592,14 +600,11 @@ struct ChatProTab: View {
     }
 
     private var gatewayAccessibilityLabel: String {
-        "Gateway: \(Self.gatewayStatusTitle(state: self.gatewayDisplayState, isGatewayUsable: self.gatewayConnected))"
+        "Gateway: \(Self.gatewayStatusTitle(state: self.gatewayDisplayState))"
     }
 
     private var gatewayStatusColor: Color {
-        switch Self.gatewayStatusTone(
-            state: self.gatewayDisplayState,
-            isGatewayUsable: self.gatewayConnected)
-        {
+        switch Self.gatewayStatusTone(state: self.gatewayDisplayState) {
         case .success:
             OpenClawBrand.statusSuccess
         case .warning:
@@ -609,13 +614,10 @@ struct ChatProTab: View {
         }
     }
 
-    nonisolated static func gatewayStatusTone(
-        state: GatewayDisplayState,
-        isGatewayUsable: Bool) -> GatewayStatusTone
-    {
+    nonisolated static func gatewayStatusTone(state: GatewayDisplayState) -> GatewayStatusTone {
         switch state {
         case .connected:
-            isGatewayUsable ? .success : .warning
+            .success
         case .connecting, .error:
             .warning
         case .disconnected:
@@ -625,18 +627,15 @@ struct ChatProTab: View {
 
     nonisolated static func gatewayStatusShouldExpand(
         state: GatewayDisplayState,
-        isGatewayUsable: Bool,
         isManuallyExpanded: Bool) -> Bool
     {
-        isManuallyExpanded || self.gatewayStatusTone(
-            state: state,
-            isGatewayUsable: isGatewayUsable) != .success
+        isManuallyExpanded || self.gatewayStatusTone(state: state) != .success
     }
 
-    nonisolated static func gatewayStatusTitle(state: GatewayDisplayState, isGatewayUsable: Bool) -> String {
+    nonisolated static func gatewayStatusTitle(state: GatewayDisplayState) -> String {
         switch state {
         case .connected:
-            isGatewayUsable ? "Connected" : "Unavailable"
+            "Connected"
         case .connecting:
             "Connecting"
         case .error:
@@ -693,7 +692,7 @@ struct ChatProTab: View {
 
     private var activeAgentModelReference: String? {
         guard let activeAgent else { return nil }
-        let modelID = RootSidebar.agentModelLabel(activeAgent)
+        let modelID = AgentIdentityPresentation.modelLabel(for: activeAgent)
         let providerID = activeAgent.model?["provider"]?.value as? String
         return ChatModelMenuPresentation.qualifiedModelReference(modelID: modelID, providerID: providerID)
     }
@@ -798,13 +797,14 @@ private struct ChatToolbarStatusPopover<Status: View>: ViewModifier {
 }
 
 /// RootTabs rebuilds the chat tab with fresh closures on every sidebar open and close.
-/// Equal header controls mean nothing the tab draws changed: both closures only call
-/// RootTabs methods that read its live state, so an older copy behaves the same.
+/// Compare header controls and first-run action availability, not closure identity.
+/// The closures call RootTabs methods that read its live state.
 /// The tab's own model, environment, and state reads still invalidate it directly.
 extension ChatProTab: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.headerSidebarAction?.systemName == rhs.headerSidebarAction?.systemName &&
             lhs.headerSidebarAction?.accessibilityIdentifier == rhs.headerSidebarAction?.accessibilityIdentifier &&
-            lhs.headerSidebarAction?.drawerPresentation === rhs.headerSidebarAction?.drawerPresentation
+            lhs.headerSidebarAction?.drawerPresentation === rhs.headerSidebarAction?.drawerPresentation &&
+            (lhs.startFirstGatewaySetup != nil) == (rhs.startFirstGatewaySetup != nil)
     }
 }

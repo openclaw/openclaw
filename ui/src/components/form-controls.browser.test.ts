@@ -612,7 +612,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
               <div class="file-view__search"><input data-scale data-baseline="16" data-scale-base="12" value="query" /></div>
               <input data-scale data-baseline="16" data-scale-base="12.5" class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
-                <span data-scale data-baseline="12" class="sidebar-recent-session__name">Child session</span>
+                <span data-scale class="sidebar-recent-session__name">Child session</span>
                 <span data-scale class="session-row-trail">3m</span>
               </div>
             </div>`
@@ -679,35 +679,22 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     },
   );
 
-  it.each([
-    { label: "merged chat chrome", nativeClass: "", merged: true, search: "visible" },
-    { label: "topbar still shown", nativeClass: "", merged: false, search: "hidden" },
-  ])(
-    "shows the mobile drawer command palette button only where nothing else carries it ($label)",
-    async ({ nativeClass, merged, search }) => {
+  it.each(["shell--merged-chat-chrome", ""])(
+    "hides rail search in the mobile drawer with or without a topbar (%s)",
+    async (chromeClass) => {
       await withBrowserPage(mobileContext.newPage(), async (page) => {
         await setFixture(
           page,
-          `<div class="shell shell--mobile-nav ${merged ? "shell--merged-chat-chrome" : ""}">
+          `<div class="shell shell--mobile-nav ${chromeClass}">
             <nav class="sidebar-rail">
               <button class="sidebar-rail__button sidebar-brand__desktop-control sidebar-brand__search"></button>
             </nav>
           </div>`,
-          `class="${nativeClass}"`,
+          "",
           `<meta name="viewport" content="width=device-width, initial-scale=1.0" />`,
         );
-
-        const [display] = await readStyles(page, [".sidebar-brand__search"], "display");
-
-        // Merged chat chrome hides the topbar, leaving the drawer as the only
-        // surface that can carry search. Everywhere else - including every native
-        // host, which never merges - the topbar keeps its own, so a drawer copy
-        // would put two on screen at once.
-        if (search === "visible") {
-          expect(display).not.toBe("none");
-        } else {
-          expect(display).toBe("none");
-        }
+        await page.addStyleTag({ content: readStyleSheet("ui/src/styles/sidebar-rail.css") });
+        expect(await page.locator(".sidebar-brand__search").isVisible()).toBe(false);
       });
     },
   );

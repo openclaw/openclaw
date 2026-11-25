@@ -3,6 +3,7 @@ import {
   readPublishedAcpSessionRows,
 } from "../acp/runtime/session-meta-keys.js";
 import { rowToAcpSessionMeta } from "../acp/runtime/session-meta-readonly.js";
+import { reconcileSessionWorktreeAvailability } from "../agents/worktrees/session-lifecycle.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -45,10 +46,15 @@ export function prepareSessionRowSharedFacts({
         prepared.acpMeta = published[0] ? rowToAcpSessionMeta(published[0]) : null;
       }
     }
+    if (!prepared.entry?.worktree) {
+      prepared.worktree = null;
+    }
     if (!prepared.entry?.repositoryWorkspaceId) {
       prepared.repositoryWorkspace = null;
     }
-    return prepared.acpMeta !== undefined && prepared.repositoryWorkspace !== undefined
+    return prepared.acpMeta !== undefined &&
+      prepared.repositoryWorkspace !== undefined &&
+      prepared.worktree !== undefined
       ? []
       : [{ row, prepared }];
   });
@@ -62,6 +68,9 @@ export function prepareSessionRowSharedFacts({
       {
         type: "sessionRows.sharedFacts",
         entries: sharedRows.map(({ row, prepared }) => ({
+          ...(prepared.worktree === undefined && prepared.entry?.worktree
+            ? { worktreeId: prepared.entry.worktree.id }
+            : {}),
           ...(prepared.acpMeta === undefined
             ? {
                 acp: {
@@ -89,11 +98,18 @@ export function prepareSessionRowSharedFacts({
       },
       { context: shared },
     ),
-    accept(
+    async accept(
       reply: Extract<OpenClawStateReadResult, { type: "sessionRows.sharedFacts" }> | undefined,
     ) {
       for (const [index, { prepared }] of sharedRows.entries()) {
         const sharedFacts = reply?.rows[index];
+        if (prepared.worktree === undefined) {
+          prepared.worktree = await reconcileSessionWorktreeAvailability(
+            sharedFacts?.worktree ?? undefined,
+            env,
+            shared.admission.assertCurrent,
+          );
+        }
         if (prepared.acpMeta === undefined) {
           prepared.acpMeta = sharedFacts?.acp ? rowToAcpSessionMeta(sharedFacts.acp) : null;
         }

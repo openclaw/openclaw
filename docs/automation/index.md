@@ -96,8 +96,8 @@ See [Hooks](/automation/hooks).
 
 Existing heartbeat monitors migrate into ordinary editable jobs with their own
 scratch, execution policies, and delivery settings. Setup provisions one
-proactive check for the ambient owner; later reloads and restarts leave job edits
-and deletions alone. See [Heartbeat migration](/gateway/heartbeat).
+disabled **Proactive check** for the ambient owner. See [First setup](/gateway/heartbeat#first-setup)
+to turn it on. Later reloads and restarts leave job edits and deletions alone.
 
 ## How they work together
 

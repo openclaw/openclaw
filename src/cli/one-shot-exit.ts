@@ -7,7 +7,13 @@ import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
 import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 
 let requestedExitCode: number | "process" | undefined;
-let settledExitWatchdog: { delayMs: number; failedExitSignal?: "SIGTERM" | "SIGUSR2" } | undefined;
+let settledExitWatchdog:
+  | {
+      delayMs: number;
+      failedExitSignal?: "SIGTERM" | "SIGUSR2";
+      flushLogs?: () => Promise<void>;
+    }
+  | undefined;
 
 function resolveProcessExitCode(fallback = 0): number {
   const value = process.exitCode;
@@ -79,7 +85,10 @@ export async function runCliWithExitFinalization(params: {
       // Final disposers can log after the Gateway's earlier flush. Join those writes before
       // bounding leftover handles; natural exit still avoids forcing V8 compiler teardown.
       if (settledExitWatchdog !== undefined) {
-        await (await import("../logging/logger.js")).flushLogger();
+        await (
+          settledExitWatchdog.flushLogs ??
+          (async () => (await import("../logging/logger.js")).flushLogger())
+        )();
         await new Promise<void>((resolve) => {
           drainProcessOutput(resolve);
         });
@@ -117,11 +126,13 @@ export function requestExitAfterOneShotOutput(
  * Long-lived owners retire their deadline watchdogs once shutdown settles. Ask the CLI to bound
  * a referenced handle nobody closed after every command-owned job, disposer and finalizer ends.
  */
+/** A Gateway passes its already-loaded log flush: exit can follow an in-place update. */
 export function requestSettledExitWatchdog(
   delayMs: number,
   failedExitSignal?: "SIGTERM" | "SIGUSR2",
+  flushLogs?: () => Promise<void>,
 ): void {
-  settledExitWatchdog = { delayMs, failedExitSignal };
+  settledExitWatchdog = { delayMs, failedExitSignal, flushLogs };
 }
 
 /**

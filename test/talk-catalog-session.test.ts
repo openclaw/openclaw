@@ -15,7 +15,6 @@ import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../src/plugins/runtime/generation-scope.js";
 import { captureGatewayRootWorkReleaseObserver } from "../src/process/gateway-work-admission.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
-import { createDeferred } from "./helpers/promise.js";
 
 const sessionKey = "agent:researcher:catalog";
 
@@ -82,7 +81,6 @@ it.each([false, true])(
           { getRuntimeConfig: () => config },
           () => projection,
         );
-        let catalogReleased = createDeferred<"settled" | "reset">();
         const registry = createEmptyPluginRegistry();
         registry.mediaUnderstandingProviders.push({
           pluginId: "openai",
@@ -100,7 +98,7 @@ it.each([false, true])(
               expectDefined(
                 captureGatewayRootWorkReleaseObserver(),
                 "catalog refresh must own root work admission",
-              )(catalogReleased.resolve);
+              );
               return false;
             },
             synthesize: async () => {
@@ -129,12 +127,7 @@ it.each([false, true])(
                 [{ sessionKey }, selectedHasCredentials],
                 [{}, !selectedHasCredentials],
               ] as const) {
-                catalogReleased = createDeferred<"settled" | "reset">();
-                expect(await call("talk.catalog", params)).toMatchObject({
-                  ok: false,
-                  error: { retryable: true, details: { reason: "talk-catalog-warming" } },
-                });
-                expect(await catalogReleased.promise).toBe("settled");
+                // The first read for each agent answers with the catalog, not "warming".
                 expect(await call("talk.catalog", params)).toMatchObject({
                   ok: true,
                   error: undefined,

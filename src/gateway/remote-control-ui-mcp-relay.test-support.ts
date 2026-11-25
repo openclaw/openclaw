@@ -224,7 +224,15 @@ export async function expectMcpRelayPrincipalAuthority(params: {
             scopes: member ? ["operator.read", "operator.write"] : undefined,
           }),
           member ? "trusted-proxy" : "remote-ingress",
-          member ? ["operator.read", "operator.write"] : ["operator.admin"],
+          member
+            ? [
+                "operator.read",
+                "operator.write",
+                "operator.approvals",
+                "operator.questions",
+                "operator.talk",
+              ]
+            : ["operator.admin"],
         );
         const caller = [...params.clients].find(
           (client) => client.connect.device?.id === identity.deviceId,

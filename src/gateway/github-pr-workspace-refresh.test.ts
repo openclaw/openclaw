@@ -593,31 +593,20 @@ describe("imported PR source refresh", () => {
       expect(f.writes).toEqual([]);
     },
   );
-  it.each(["requester revocation", "private repository"])(
-    "refuses %s before pushing to its own prepared bot PR",
-    async (change) => {
-      const own = await advancedOwnBotPublishedPr(false);
-      const { f, published, upstreamGit, advanced } = own;
-      expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: advanced });
-      const pushes = servePublishedRemote(own);
-      if (change === "requester revocation") {
-        await f.revoke();
-      } else {
-        f.pr.base.repo.private = true;
-      }
-      const publication = f.coordinator.requestForSessionV2(f.request("continue-pr", f.guest));
-      if (change === "private repository") {
-        await expect(publication).resolves.toMatchObject({
-          status: "failed",
-          code: "identity_changed",
-        });
-      } else {
-        await expect(publication).rejects.toThrow("no longer authorized");
-      }
-      expect(pushes).toEqual([]);
-      expect(await upstreamGit("rev-parse", `refs/heads/${published.branch}`)).toBe(advanced);
-    },
-  );
+  it("refuses a private repository before pushing to its own prepared bot PR", async () => {
+    const own = await advancedOwnBotPublishedPr(false);
+    const { f, published, upstreamGit, advanced } = own;
+    expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: advanced });
+    const pushes = servePublishedRemote(own);
+    f.pr.base.repo.private = true;
+    const publication = f.coordinator.requestForSessionV2(f.request("continue-pr", f.guest));
+    await expect(publication).resolves.toMatchObject({
+      status: "failed",
+      code: "identity_changed",
+    });
+    expect(pushes).toEqual([]);
+    expect(await upstreamGit("rev-parse", `refs/heads/${published.branch}`)).toBe(advanced);
+  });
   it("preserves staged-only guest bytes and succeeds after the guest commits them", async () => {
     const f = await fixture();
     await f.invoke();

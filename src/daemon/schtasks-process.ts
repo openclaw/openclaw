@@ -370,17 +370,16 @@ export async function readBoundedScheduledTaskProcess(
       );
     });
     if (candidates.length > 0) {
-      const owner = await readGatewayOwnerLeaseAsync({
+      const timeoutMs = Math.max(1, Math.ceil(remaining()));
+      const owner = await readActiveGatewayLockIdentity({
         env: mergeGatewayServiceEnv(env, command),
-        signal: AbortSignal.timeout(Math.ceil(remaining())),
+        includeEmbedded: true,
+        requireInspection: true,
+        timeoutMs,
+        signal: AbortSignal.timeout(timeoutMs),
       });
       remaining();
-      if (
-        owner?.state !== "live" ||
-        owner.port !== port ||
-        owner.supervisor?.kind !== "schtasks" ||
-        owner.supervisor.name?.toLowerCase() !== resolveTaskName(env).toLowerCase()
-      ) {
+      if (!owner || owner.port !== port) {
         return null;
       }
       pid = candidates.some((entry) => getSnapshotProcessId(entry) === owner.pid)
@@ -419,7 +418,7 @@ export async function readBoundedScheduledTaskProcess(
 export async function terminateScheduledTaskNodeHost(
   env: GatewayServiceEnv,
   assertCurrent?: () => void,
-  beforeMutation?: () => Promise<void>,
+  beforeMutation?: () => void | Promise<void>,
 ): Promise<number[]> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
   const installedArguments = command?.programArguments;
@@ -452,7 +451,7 @@ export async function terminateScheduledTaskGatewayListeners(
   assertCurrent?: () => void,
   stop?: {
     end: () => Promise<void>;
-    beforeMutation?: () => Promise<void>;
+    beforeMutation?: () => void | Promise<void>;
     restart?: boolean;
     onStopped?: () => void;
     warn: (message: string) => void;

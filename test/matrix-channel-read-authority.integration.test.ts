@@ -363,7 +363,11 @@ describe("registered installed Matrix reads", () => {
           }
         }
       });
-      await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(/no longer active/);
+      await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(
+        owner === "caller"
+          ? "Message-read turn authority is no longer active"
+          : "Plugin matrix was reloaded during the read. Retry the action.",
+      );
       if (boundary === "preparation") {
         expect(fixture.requests.map((request) => request.path)).toEqual([revokeAt]);
       } else {

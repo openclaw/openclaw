@@ -9,6 +9,7 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { captureDelegatedToolPolicyAssertion } from "../agents/delegated-tool-policy.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
 import { findModelCatalogEntry } from "../agents/model-catalog-lookup.js";
@@ -38,13 +39,27 @@ import type {
   GatewaySessionTitleModelSelection,
 } from "./session-create-service.types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import {
+  prepareSessionPermissionModeAuthorization,
+  readSessionPermissionAuthority,
+} from "./session-permission-authorization.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 
 /** Creation and adoption retain the settings mutation owner's native permission guard. */
 export async function prepareSessionCreateRuntimeSelection(params: {
   request: Pick<
     CreateGatewaySessionParams,
-    "cfg" | "model" | "agentRuntime" | "requestingOperatorScopes" | "waitForModelCatalog"
+    | "cfg"
+    | "getCurrentConfig"
+    | "commitGuard"
+    | "readSessionSharing"
+    | "getCurrentSessionAccessCap"
+    | "model"
+    | "agentRuntime"
+    | "requestingOperatorScopes"
+    | "requestingOperatorProfileId"
+    | "operatorRoleActor"
+    | "waitForModelCatalog"
   >;
   agentId: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -85,7 +100,35 @@ export async function prepareSessionCreateRuntimeSelection(params: {
   ) {
     return selection;
   }
+  let permissionAuthority:
+    | Awaited<ReturnType<typeof prepareSessionPermissionModeAuthorization>>
+    | undefined;
+  const release = () => {
+    permissionAuthority?.release();
+    selection.release?.();
+  };
   try {
+    const getCurrentConfig = request.getCurrentConfig ?? (() => request.cfg);
+    permissionAuthority = await prepareSessionPermissionModeAuthorization({
+      ...params,
+      permissionMode: entry.permissionMode,
+      getCurrentConfig,
+      readSharing: request.readSessionSharing,
+      assertCurrent: request.commitGuard,
+      readAuthority: () =>
+        readSessionPermissionAuthority(getCurrentConfig(), {
+          ...request,
+          operatorAuthority: params.operatorAuthority,
+        }),
+    });
+    request.commitGuard?.();
+    const validatePermissionAuthority = () =>
+      permissionAuthority!.validate(existingEntry, entry.permissionMode);
+    const authorityError = validatePermissionAuthority();
+    if (authorityError) {
+      release();
+      return { ok: false, error: authorityError };
+    }
     // Keep execution runtime imports lazy for creation without permission changes.
     const { prepareSessionPatchSandboxChange } =
       await import("./server-methods/sessions-patch-sandbox.runtime.js");
@@ -100,15 +143,16 @@ export async function prepareSessionCreateRuntimeSelection(params: {
       storePath: params.storePath,
       lifecycleIdentities: [sessionKey, existingEntry?.sessionId],
     });
-    const validate = () => validatePermissions() || selection.validate?.();
+    const validate = () =>
+      validatePermissionAuthority() || validatePermissions() || selection.validate?.();
     const error = validate();
     if (error) {
-      selection.release?.();
+      release();
       return { ok: false, error };
     }
-    return { ...selection, validate };
+    return { ...selection, validate, release };
   } catch (error) {
-    selection.release?.();
+    release();
     throw error;
   }
 }
@@ -200,8 +244,8 @@ export function prepareSessionCreateModelSelection(params: {
     agentId,
     catalog: [],
     raw: model,
-    defaultProvider: defaults.provider,
-    defaultModel: defaults.model,
+    defaultProvider: defaults?.provider ?? DEFAULT_PROVIDER,
+    defaultModel: defaults?.model,
     preparedModelSelection,
   });
   if (!resolved.ok) {
@@ -266,7 +310,6 @@ export function resolveSessionCreationCommitGuard(
     assertDelegationCurrent?.();
     if (hasSelection) {
       prepared.assertPreparedTargetCurrent();
-      prepared.readOperatorAuthority()?.assertCurrent();
       const error = prepared.validateSelection();
       if (error) {
         throw new Error(error.message);
@@ -303,11 +346,16 @@ export async function prepareSessionCreateDefaultAccount(params: {
     await import("../agents/auth-profiles/session-override.js");
   params.assertCurrent?.();
   params.defaults.assertCurrent();
+  const sessionModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  if (!sessionModel) {
+    // No configured model: no account to bind; the session is created unpinned.
+    return { ok: true, validate: () => undefined };
+  }
   const selected = prepareSessionPatchModelSelection({
     cfg: params.cfg,
     agentId: params.agentId,
     selection: {
-      ...resolveSessionModelRef(params.cfg, params.entry, params.agentId),
+      ...sessionModel,
       isDefault: params.resetToDefault,
     },
     resetToDefault: params.resetToDefault,
@@ -371,6 +419,9 @@ export async function resolveSessionForkMaxTokens(params: {
   loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;
 }): Promise<number | undefined> {
   const childModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  if (!childModel) {
+    return undefined;
+  }
   const childCatalog = params.loadGatewayModelCatalogSnapshot
     ? await params.loadGatewayModelCatalogSnapshot()
     : undefined;

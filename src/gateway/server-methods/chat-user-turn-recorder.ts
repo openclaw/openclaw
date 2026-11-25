@@ -150,7 +150,9 @@ export function createGatewayChatUserTurnController(params: {
     ...(request.p.replyToId ? { replyToId: request.p.replyToId } : {}),
     ...(sender ? { sender } : {}),
     ...(sourceClients.length ? { transport: { clients: sourceClients } } : {}),
-    ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
+    ...(admission.operatorAuthority?.grant.owner
+      ? { senderIsOwner: admission.operatorAuthority.grant.owner }
+      : {}),
     provenance:
       request.systemInputProvenance ??
       (params.client?.internal?.syntheticClient ? undefined : { kind: "external_user" }),
@@ -218,7 +220,7 @@ export function createGatewayChatUserTurnController(params: {
     return { retained, text };
   };
   const workerGoalSource: SessionSourceAssertion | undefined =
-    admission.codexGoalAdmission === "worker"
+    admission.runtimeGoal === "worker"
       ? Object.assign(() => captureWorkerGoalSource()(), {
           prepareSessionSource: prepareWorkerGoalSource,
           prepareSessionSourceScope: prepareWorkerGoalSource,
@@ -226,6 +228,7 @@ export function createGatewayChatUserTurnController(params: {
       : undefined;
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     onMessagePersisted: params.onMessagePersisted,
+    ...(request.activeSteer ? { trackInputCompletion: true } : {}),
     ...(recoveredInput ? { message: recoveredInput.target.message } : {}),
     // Attribution and submitted bytes survive reconnect; generated state does not.
     pendingInputRequestFingerprint:
@@ -238,6 +241,7 @@ export function createGatewayChatUserTurnController(params: {
                 ...request.p,
                 sessionId: getRpcSourceIdentity(admission.sourceRef).sessionId,
                 expectedLeafEntryId: undefined,
+                ...(request.activeSteer ? { activeSteer: request.activeSteer } : {}),
               },
               sender.identity ?? sender.id,
               hasGatewayAdminScope(params.client),
@@ -252,7 +256,7 @@ export function createGatewayChatUserTurnController(params: {
             runId: session.clientRunId,
             ...params.goalCommitGuard,
             assertCurrent:
-              admission.codexGoalAdmission === "worker"
+              admission.runtimeGoal === "worker"
                 ? composeSessionSourceAssertion([
                     params.goalCommitGuard?.assertCurrent,
                     workerGoalSource,
@@ -286,10 +290,7 @@ export function createGatewayChatUserTurnController(params: {
       ? { sessionLifecyclePatch: { lastInteractionAt: params.startedAt } }
       : {}),
     errorContext: "gateway chat user turn transcript",
-    assertOriginalInputCommit: composeSessionSourceAssertion([
-      params.assertOriginalInputCommit,
-      admission.operatorAuthority?.assertCurrent,
-    ]),
+    assertOriginalInputCommit: params.assertOriginalInputCommit,
     beforeMessageWrite: (event) => {
       if (recoveredInput) {
         return event.message;
@@ -299,6 +300,7 @@ export function createGatewayChatUserTurnController(params: {
       if (originalInput && next?.role === "user") {
         const userMessage: PersistedUserTurnMessage = next;
         const metadata = { ...asOptionalRecord(Reflect.get(next, "__openclaw")) };
+        delete metadata.activeSteer;
         delete metadata.chatRequestIdentity;
         delete metadata.suppressCommandInterpretation;
         delete metadata.chatSendDelivery;
@@ -315,6 +317,19 @@ export function createGatewayChatUserTurnController(params: {
           ...(contextFreeCommand ? { excludeFromContext: true } : {}),
           __openclaw: {
             ...metadata,
+            ...(request.activeSteer
+              ? {
+                  activeSteer: {
+                    ...request.activeSteer,
+                    sessionId: request.p.sessionId,
+                    textUnchanged:
+                      extractTextFromChatContent(next.content, {
+                        joinWith: "\n",
+                        normalizeText: (text) => text,
+                      }) === request.p.message,
+                  },
+                }
+              : {}),
             ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
             ...(request.suppressCommandInterpretation
               ? { suppressCommandInterpretation: true }
@@ -423,8 +438,8 @@ export function createGatewayChatUserTurnController(params: {
       contextFreeCommand = true;
     }
     // A setup/error fallback must not activate a Goal before placement admission.
-    // The selected native harness promotes staged input through persistApproved.
-    if (admission.codexGoalAdmission && !recorder.hasPersisted()) {
+    // The selected runtime promotes staged input through persistApproved.
+    if (admission.runtimeGoal && !recorder.hasPersisted()) {
       return undefined;
     }
     const persisted = await measureDiagnosticsTimelineSpan(
@@ -451,7 +466,7 @@ export function createGatewayChatUserTurnController(params: {
     getSessionInitializationOptions: () => ({
       requestedSessionId: session.requestedSessionId,
       resumeRequestedSession: request.reconnectResumeRequested,
-      ...(admission.localInputAdmission || admission.codexGoalAdmission
+      ...(admission.localInputAdmission || admission.runtimeGoal
         ? {
             expectedExistingSessionId: admission.admittedSessionId,
             pinExpectedExistingSession: true,

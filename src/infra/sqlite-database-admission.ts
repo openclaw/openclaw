@@ -75,7 +75,6 @@ const descriptors = createSqliteDatabaseDescriptorOwner(seals);
 export const {
   prepareOwnedSqliteDatabaseAdmission,
   prepareSqliteDatabaseAdmissionAsync,
-  retainSqliteDatabaseAdmissionLocation,
   retainPreparedSqliteDatabaseAdmissionLocation,
   prepareSqliteDatabaseAdmission,
 } = descriptors;
@@ -569,6 +568,20 @@ export function* captureSqliteDatabaseDescriptorCustodyLocations(): Iterable<str
   for (const { location } of state.registry.descriptors.values()) {
     yield location;
   }
+}
+
+/** Release registered identities, including files removed or replaced since admission. */
+export function retireSqliteDatabaseDescriptorCustody(): void {
+  withSqliteDatabaseAdmissionSettlement(() => {
+    for (const [identity, custody] of state.registry.descriptors) {
+      if (!state.registry.retireDescriptor(identity, {})) {
+        throw new Error(
+          `OpenClaw state database descriptor custody remains held for ${custody.location}.`,
+        );
+      }
+    }
+    state.localSchemaRevisions.clear();
+  });
 }
 
 /** Explicit removal or maintenance calls this only after its owner has joined native consumers. */

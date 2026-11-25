@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { canonicalPathFromExistingAncestor, type root as fsRoot } from "../infra/fs-safe.js";
+import { prepareHostFileMutation, type HostFileMutationPreparer } from "./host-file-write.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { resolveHostWorkspaceRoot, resolveHostRootAsync } from "./workspace-write-scope.js";
 
@@ -10,18 +11,24 @@ export async function writeHostWorkspaceFile(
   absolutePath: string,
   content: string,
   abortSignal?: AbortSignal,
+  prepareMutation?: HostFileMutationPreparer,
+  strictWorkspaceRoot?: boolean,
 ) {
-  const selectedRoot = await resolveHostRootAsync(root, absolutePath);
+  const selectedRoot = await resolveHostRootAsync(root, absolutePath, strictWorkspaceRoot);
   // Reject lexical escapes before opening the lazily created workspace root.
   const relative = toRelativeWorkspacePath(selectedRoot, absolutePath);
   const rootHandle = await getRoot(selectedRoot);
+  await using effect = await prepareHostFileMutation(prepareMutation, abortSignal);
   // Absolute admitted paths preserve literal "~" workspace directories.
   await rootHandle.write(path.resolve(rootHandle.rootReal, relative), content, {
     mkdir: true,
     mutationSymlinks: "follow-parents-within-root",
     assertBeforeMutation: () => {
-      abortSignal?.throwIfAborted();
-      toRelativeWorkspacePath(resolveHostWorkspaceRoot(root, absolutePath), absolutePath);
+      effect.assertCurrent();
+      toRelativeWorkspacePath(
+        resolveHostWorkspaceRoot(root, absolutePath, strictWorkspaceRoot),
+        absolutePath,
+      );
     },
   });
 }

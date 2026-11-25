@@ -88,11 +88,12 @@ export async function runSummarizationCompletion(
   });
 }
 
-/** @internal The host owns requests; a worker may render each budget from its captured source. */
-export async function runSummarizationCompletionFromSource(
-  params: Omit<SummarizationCompletionParams, "messages">,
-  serialize: (maxChars: number) => BoundedConversation | Promise<BoundedConversation>,
-): Promise<Result<string, CompactionError>> {
+/** Instructions that follow the conversation; a warm request sends them after its own history. */
+export function formatSummaryInstructions(params: {
+  prompt: string;
+  customInstructions?: string;
+  previousSummary?: string;
+}): string {
   let instructions = "";
   if (params.previousSummary) {
     instructions += `<previous-summary>\n${params.previousSummary}\n</previous-summary>\n\n`;
@@ -102,6 +103,15 @@ export async function runSummarizationCompletionFromSource(
   if (params.customInstructions) {
     instructions += `\n\nAdditional focus: ${params.customInstructions}`;
   }
+  return instructions;
+}
+
+/** @internal The host owns requests; a worker may render each budget from its captured source. */
+export async function runSummarizationCompletionFromSource(
+  params: Omit<SummarizationCompletionParams, "messages">,
+  serialize: (maxChars: number) => BoundedConversation | Promise<BoundedConversation>,
+): Promise<Result<string, CompactionError>> {
+  const instructions = formatSummaryInstructions(params);
   const { model, thinkingLevel, maxTokens, signal, apiKey, headers } = params;
   const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
   const fableReasoning =
