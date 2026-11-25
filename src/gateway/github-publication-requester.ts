@@ -305,7 +305,7 @@ function prepareRequesterPolicy(
           { cause },
         );
       }
-      // Data fence: the session was replaced or reset. Its owner may change; admission already ran.
+      // Data fence on the session incarnation only; ownership is not re-checked after admission.
       if (
         entry.sessionId !== target.sessionId ||
         (entry.lifecycleRevision ?? null) !== target.lifecycleRevision
