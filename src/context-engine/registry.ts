@@ -67,6 +67,8 @@ const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
 type ResolvedContextEngineMetadata = {
   owner: string;
   engineId: string;
+  /** Present when process quarantine downgrades this engine's guarded calls to the default. */
+  defaultEngineId?: string;
   sourceEngine?: ContextEngine;
   source?: ContextEngineFactoryResources;
   ownsSource?: boolean;
@@ -83,7 +85,6 @@ function wrapResolvedContextEngine(
   rawEngine: ContextEngine,
   metadata: ResolvedContextEngineMetadata & {
     factory: ContextEngineFactory;
-    defaultEngineId?: string;
     factoryCtx: ContextEngineFactoryContext;
   },
 ): ContextEngine {
@@ -409,9 +410,11 @@ export function resolveContextEngineOwnerPluginId(
   engine: ContextEngine | undefined | null,
 ): string | undefined {
   const metadata = engine ? resolvedEngineMetadata.get(engine) : undefined;
-  // Downgraded work belongs to its core-owned fallback, never the disabled plugin.
-  const owner =
-    metadata && !getContextEngineQuarantine(metadata.engineId) ? metadata.owner : undefined;
+  // Downgraded work belongs to its core-owned fallback, never the disabled plugin. Logical-turn
+  // engines have no fallback, so they keep running, and owning, the plugin during quarantine.
+  const downgraded =
+    metadata?.defaultEngineId !== undefined && getContextEngineQuarantine(metadata.engineId);
+  const owner = metadata && !downgraded ? metadata.owner : undefined;
   return owner ? pluginIdFromContextEngineOwner(owner) : undefined;
 }
 

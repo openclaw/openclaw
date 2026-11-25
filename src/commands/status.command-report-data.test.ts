@@ -109,7 +109,9 @@ it.each([false, true])(
     });
     if (degraded) {
       expect(output).toMatch(/Context engine[^\n]*WARN/);
-      expect(output).toContain("1 quarantined; downgraded to legacy: synthetic-context");
+      expect(output).toContain(
+        "1 quarantined: synthetic-context; subagent and compaction work use legacy until restart or plugin reload; agent turns still retry the engine",
+      );
       expect(output).toMatch(/Config hot reload[^\n]*WARN/);
       expect(output).toContain("watcher retries exhausted; restart the gateway to restore it");
     } else {

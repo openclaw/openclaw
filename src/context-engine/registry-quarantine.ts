@@ -58,7 +58,7 @@ export async function recordContextEngineQuarantine(params: {
   const ownerSuffix = params.owner ? ` owner=${sanitizeForLog(params.owner)}` : "";
   console.error(
     `[context-engine] Context engine "${sanitizeForLog(params.engineId)}"${ownerSuffix} failed during ${sanitizeForLog(params.operation)}: ` +
-      `${sanitizeForLog(quarantine.reason)}; quarantining it for this process and falling back to default engine "${params.defaultEngineId}".`,
+      `${sanitizeForLog(quarantine.reason)}; quarantining it for this process. Subagent spawn and cleanup, compaction, and other host-resolved calls use default engine "${params.defaultEngineId}" until the plugin reloads or the Gateway restarts; agent turns ignore this quarantine and retry the engine every turn.`,
   );
   return quarantine;
 }
