@@ -4,8 +4,8 @@ import { hasProviderBrandIcon, providerDisplayLabel } from "./provider-icon-data
 
 describe("model provider labels", () => {
   it.each([
-    ["constructor", "Constructor"],
-    ["__proto__", "Proto"],
+    ["constructor", "constructor"],
+    ["__proto__", "__proto__"],
     ["openai", "OpenAI"],
     ["xai", "xAI"],
     ["acp-opencode", "OpenCode (ACP)"],
@@ -60,7 +60,7 @@ it("uses configured names without reinterpreting provider identity", () => {
   expect(providerDisplayLabel("rtx-pro-workstation", { providerName: "Workstation" })).toBe(
     "Workstation",
   );
-  expect(providerDisplayLabel("rtx-pro-workstation")).toBe("Rtx Pro Workstation");
+  expect(providerDisplayLabel("rtx-pro-workstation")).toBe("rtx-pro-workstation");
   expect(providerDisplayLabel("openai", { providerName: "My inference server" })).toBe(
     "My inference server",
   );

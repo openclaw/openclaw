@@ -1,6 +1,6 @@
+// Same manifest projection as the server; regenerate with `pnpm providers:names:gen`.
+import BUNDLED_PROVIDER_NAMES from "../../../src/shared/provider-names.generated.json" with { type: "json" };
 import { takeGraphemes } from "../lib/graphemes.ts";
-// Bundled plugin manifests own these names; regenerate with `pnpm ui:provider-names:gen`.
-import BUNDLED_PROVIDER_NAMES from "./provider-names.generated.json" with { type: "json" };
 
 const PROVIDER_ICON_NAMES = new Set([
   "abacus",
@@ -165,7 +165,12 @@ export function providerDisplayLabel(
     }
   }
   const acpAgent = ACP_HARNESS_PROVIDER.exec(provider)?.[1];
-  return acpAgent ? `${providerDisplayLabel(acpAgent)} (ACP)` : formatRawProviderLabel(provider);
+  // Harness labels are a different identity domain; unnamed custom providers keep their id.
+  if (acpAgent) {
+    const name = providerDisplayLabel(acpAgent);
+    return `${name === acpAgent ? formatRawProviderLabel(acpAgent) : name} (ACP)`;
+  }
+  return provider;
 }
 
 /** Provider id from a canonical `provider/model` reference, or null when absent. */

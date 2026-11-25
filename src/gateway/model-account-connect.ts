@@ -440,10 +440,11 @@ export function createModelAccountConnectService(options: {
         if (!provider) {
           const name = resolveProviderDisplayName(choice.providerId, {
             config: options.getConfig(),
+            fallbackName: choice.groupLabel,
           });
           provider = {
             id: choice.providerId,
-            label: name === choice.providerId ? (choice.groupLabel ?? name) : name,
+            label: name,
             methods: [],
           };
           providers.set(choice.providerId, provider);

@@ -1,41 +1,45 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  getCurrentPluginMetadataSnapshotRequiredRuntime as getCurrentPluginMetadataSnapshot,
-  loadPluginMetadataSnapshotRuntime as loadPluginMetadataSnapshot,
-} from "../plugins/plugin-metadata-snapshot-required.js";
+import { getCurrentPluginMetadataSnapshotRuntime } from "../plugins/plugin-metadata-snapshot.runtime.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
+import bundledProviderNames from "../shared/provider-names.generated.json" with { type: "json" };
 
 export type ProviderDisplayNameSources = {
+  /** Explicit config wins; configless Gateway callers use the published runtime config. */
   config?: OpenClawConfig;
-  /**
-   * Owner maps of an already selected metadata snapshot. Omitted, the current snapshot
-   * is read and plugin metadata is loaded when none is published; pass the owners you
-   * hold (or `{}`) where a lookup must not start discovery.
-   */
+  /** Selected metadata generation. Omission reads the current snapshot, never discovers plugins. */
   owners?: Pick<PluginMetadataSnapshotOwnerMaps, "providerNames">;
+  /** Authored label from an older third-party plugin without manifest names. */
+  fallbackName?: string;
 };
 
 /**
- * Name of a model provider as a person would recognise it ("Google Vertex AI").
- *
- * The operator's configured name wins, then the name the owning plugin's manifest
- * declares in `providerNames`. A provider the operator defined without a name has
- * only its id, which is returned unchanged; every bundled provider has a manifest
- * name (`src/plugins/contracts/provider-display-names.contract.test.ts`).
+ * Operator name, then installed manifest name, then the bundled manifest projection.
+ * Unnamed custom providers retain their exact id. Displaying an error must never
+ * start plugin discovery or depend on the metadata system having started successfully.
  */
 export function resolveProviderDisplayName(
   provider: string,
   sources: ProviderDisplayNameSources = {},
 ): string {
-  const configured = resolveMergedModelProviderConfig(sources.config, provider)?.name?.trim();
+  const config = sources.config ?? runtimeConfigPublication.current?.config;
+  const configured = resolveMergedModelProviderConfig(config, provider)?.name?.trim();
   if (configured) {
     return configured;
   }
   const owners =
     sources.owners ??
-    getCurrentPluginMetadataSnapshot({ allowWorkspaceScopedSnapshot: true })?.owners ??
-    loadPluginMetadataSnapshot({ config: {} }).owners;
-  return owners.providerNames?.get(normalizeProviderId(provider)) ?? provider;
+    getCurrentPluginMetadataSnapshotRuntime({
+      config,
+      allowWorkspaceScopedSnapshot: true,
+    })?.owners;
+  const id = normalizeProviderId(provider);
+  const bundled: Readonly<Record<string, string>> = bundledProviderNames;
+  return (
+    owners?.providerNames?.get(id) ??
+    (Object.hasOwn(bundled, id) ? bundled[id]! : undefined) ??
+    (sources.fallbackName?.trim() || provider)
+  );
 }

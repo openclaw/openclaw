@@ -131,7 +131,7 @@ describe("fetchCopilotUsage", () => {
 
     expect(await fetchCopilotUsage("token", 5000, mockFetch)).toEqual({
       provider: "github-copilot",
-      displayName: "Copilot",
+      displayName: "GitHub Copilot",
       windows,
       plan,
     });

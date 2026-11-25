@@ -1,24 +1,26 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import bundledProviderNames from "../shared/provider-names.generated.json" with { type: "json" };
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 /** One provider cannot hold the aggregate usage response beyond this deadline. */
 export const PROVIDER_USAGE_TIMEOUT_MS = 5000;
 
+// Preserve the shipped SDK's closed-key export, deriving every value from the manifest owner.
 export const PROVIDER_LABELS = {
-  anthropic: "Claude",
-  clawrouter: "ClawRouter",
-  deepseek: "DeepSeek",
-  "github-copilot": "Copilot",
-  "google-gemini-cli": "Gemini",
-  minimax: "MiniMax",
-  openai: "OpenAI",
-  openrouter: "OpenRouter",
-  venice: "Venice",
-  xai: "xAI",
-  xiaomi: "Xiaomi",
-  "xiaomi-token-plan": "Xiaomi Token Plan",
-  zai: "z.ai",
+  anthropic: bundledProviderNames.anthropic,
+  clawrouter: bundledProviderNames.clawrouter,
+  deepseek: bundledProviderNames.deepseek,
+  "github-copilot": bundledProviderNames["github-copilot"],
+  "google-gemini-cli": bundledProviderNames["google-gemini-cli"],
+  minimax: bundledProviderNames.minimax,
+  openai: bundledProviderNames.openai,
+  openrouter: bundledProviderNames.openrouter,
+  venice: bundledProviderNames.venice,
+  xai: bundledProviderNames.xai,
+  xiaomi: bundledProviderNames.xiaomi,
+  "xiaomi-token-plan": bundledProviderNames["xiaomi-token-plan"],
+  zai: bundledProviderNames.zai,
 } as const satisfies Readonly<Record<string, string>>;
 
 /** Dynamic-key lookup view; closed-key reads should use PROVIDER_LABELS directly. */

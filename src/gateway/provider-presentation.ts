@@ -39,7 +39,7 @@ export function resolveProviderPresentation(
   const name = resolveProviderDisplayName(providerId, { config: cfg });
   return {
     // An operator-defined provider without a name has only its id; clients label it.
-    ...(name !== providerId ? { providerName: name } : {}),
+    ...(provider?.name || name !== providerId ? { providerName: name } : {}),
     ...(icon
       ? {
           providerIcon:

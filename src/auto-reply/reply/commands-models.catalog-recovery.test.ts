@@ -118,7 +118,7 @@ it("replies with known models while acquisition is held and includes newly publi
   try {
     const reply = await withinTest(browse(), signal);
     expect(reply?.text).toContain("- anthropic/claude-opus-4-5");
-    expect(reply?.text).toContain("anthropic: checking models…");
+    expect(reply?.text).toContain("Anthropic: checking models…");
     expect(reply?.text).not.toContain("claude-sonnet-4-6");
     acquisition.resolve(refreshedCatalog);
     await withinTest(published.promise, signal);
@@ -139,12 +139,12 @@ it("keeps usable choices and clears the refresh warning after recovery for /mode
 
   expect(failedRefresh?.shouldContinue).toBe(false);
   expect(failedRefresh?.reply?.text).toContain("Some models could not be refreshed.");
-  expect(failedRefresh?.reply?.text).toContain("- anthropic (1)");
+  expect(failedRefresh?.reply?.text).toContain("- Anthropic (anthropic, 1)");
   snapshot.refreshFailed = false;
   const recovered = await handleModelsCommand(params, true);
   expect(recovered?.shouldContinue).toBe(false);
   expect(recovered?.reply?.text).not.toContain("Some models could not be refreshed.");
-  expect(recovered?.reply?.text).toContain("- anthropic (1)");
+  expect(recovered?.reply?.text).toContain("- Anthropic (anthropic, 1)");
 });
 
 it("lists bound models as unavailable when the native-auth plugin is disabled despite a provider key", async () => {

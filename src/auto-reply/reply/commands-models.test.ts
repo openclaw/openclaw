@@ -69,7 +69,7 @@ function expectText(text: string | undefined, ...fragments: string[]) {
 function expectOpenAIList(text: string | undefined) {
   expectText(
     text,
-    "Models (openai) — showing 1-2 of 2 (page 1/1)",
+    "Models (OpenAI) — showing 1-2 of 2 (page 1/1)",
     "- openai/gpt-4.1",
     "- openai/gpt-4.1-mini",
     "Switch: /model <provider/model>",
@@ -249,7 +249,7 @@ describe("handleModelsCommand", () => {
     setCredentials(["anthropic"]);
 
     const providersResult = await runModels("/models");
-    expect(providersResult?.reply?.text).toContain("- anthropic (2)");
+    expect(providersResult?.reply?.text).toContain("- Anthropic (anthropic, 2)");
     expect(providersResult?.reply?.text).not.toContain("- google");
     expect(providersResult?.reply?.text).not.toContain("- openai");
 
@@ -329,9 +329,9 @@ describe("handleModelsCommand", () => {
 
     const result = await runModels("/models", { models: { "openai/*": {}, "vllm/*": {} } });
 
-    expect(result?.reply?.text).toContain("- openai (2)");
-    expect(result?.reply?.text).toContain("- vllm (2)");
-    expect(result?.reply?.text).not.toContain("- anthropic");
+    expect(result?.reply?.text).toContain("- OpenAI (openai, 2)");
+    expect(result?.reply?.text).toContain("- vLLM (vllm, 2)");
+    expect(result?.reply?.text).not.toContain("- Anthropic (anthropic,");
   });
 
   it("honors explicit all browse when listing CLI runtime models", async () => {

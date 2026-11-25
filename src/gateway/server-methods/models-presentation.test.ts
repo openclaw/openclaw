@@ -40,6 +40,7 @@ describe("models.list provider presentation", () => {
         ["Workstation", { source: "file", path: "/private/icons/workstation.png" }],
         ["Studio", { source: "url", url: "https://images.example.com/studio.png" }],
         ["Studio server", { source: "builtin", name: "server" }],
+        ["workstation", { source: "builtin", name: "server" }],
       ] as const) {
         const respond = await listModels({
           view: "all",

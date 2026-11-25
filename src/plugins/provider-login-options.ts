@@ -163,6 +163,7 @@ function projectChannelChoice(
   const name = resolveProviderDisplayName(choice.providerId, {
     config: params?.config,
     owners: params?.metadataSnapshot?.owners,
+    fallbackName: choice.groupLabel,
   });
   return {
     choiceId: choice.choiceId,
@@ -170,8 +171,7 @@ function projectChannelChoice(
     providerId: choice.providerId,
     methodId: choice.methodId,
     label: choice.choiceLabel,
-    // A third-party plugin without `providerNames` still has its sign-in group label.
-    providerLabel: name === choice.providerId ? (choice.groupLabel ?? name) : name,
+    providerLabel: name,
     command: formatProviderLoginChoiceRef(choice),
     mode:
       choice.channelLogin && kind && choice.appGuidedAuth

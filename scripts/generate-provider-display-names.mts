@@ -1,16 +1,15 @@
 #!/usr/bin/env node
-// Projects each bundled plugin manifest's `providerNames` into the table the Control UI
-// reads before a Gateway catalog has loaded. The manifests own the names.
+// Projects plugin-owned provider names for server and client readers before metadata loads.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
 
-const outputPath = "ui/src/components/provider-names.generated.json";
+const outputPath = "src/shared/provider-names.generated.json";
 
 try {
   const args = process.argv.slice(2);
   if (args.some((arg) => arg !== "--check")) {
-    throw new Error("Usage: node scripts/generate-control-ui-provider-names.mts [--check]");
+    throw new Error("Usage: node scripts/generate-provider-display-names.mts [--check]");
   }
   const repoRoot = fileURLToPath(new URL("../", import.meta.url));
   const names = new Map<string, string>();
@@ -47,7 +46,7 @@ try {
     repoRoot,
   });
   if (check && result.changed) {
-    throw new Error("Stale Control UI provider names; run pnpm ui:provider-names:gen");
+    throw new Error("Stale bundled provider names; run pnpm providers:names:gen");
   }
   console.log(`[ui-provider-names] ${check ? "checked" : "generated"} ${outputPath}`);
 } catch (error) {

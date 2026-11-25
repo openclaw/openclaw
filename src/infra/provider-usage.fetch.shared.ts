@@ -2,7 +2,6 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { resolveProviderDisplayName } from "../agents/provider-display-name.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { cancelUnreadResponseBody } from "./http-body.js";
-import { providerUsageLabel } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
 
 /** Fetches JSON-compatible provider usage endpoints with an abort timeout. */
@@ -32,7 +31,7 @@ export function buildUsageErrorSnapshot(
 ): ProviderUsageSnapshot {
   return {
     provider,
-    displayName: providerUsageLabel(provider) ?? resolveProviderDisplayName(provider),
+    displayName: resolveProviderDisplayName(provider),
     windows: [],
     error,
   };
