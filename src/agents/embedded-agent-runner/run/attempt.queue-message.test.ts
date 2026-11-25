@@ -3,21 +3,30 @@ import {
   bindMessageInjectionAdmission,
   MessageInjectionAcceptedUnconfirmedError,
 } from "../../../auto-reply/reply/message-injection-authority.js";
+import { resolveReplyMessageInjectionFailure } from "../../../sessions/session-controller.message-injection-failure.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore as deferred } from "../../../shared/deferred.js";
 import type { AgentHarnessQuestionGatewayCall } from "../../harness/gateway-question-dispatch.js";
 import { runAgentHarnessGatewayQuestion } from "../../harness/gateway-question.js";
 import {
+  createAssistant,
+  createAssistantResultStream,
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
+  streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import type { AgentSessionEvent } from "../../sessions/agent-session-types.js";
 import { registerQueuedUserMessageRetirement } from "../../sessions/queued-user-message-retirement.js";
 import {
   reportSteeringMessagePersistenceFailure,
   setSteeringMessageIdentity,
 } from "../../sessions/steering-message-identity.js";
-import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt-queue-message.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import {
+  claimEmbeddedPendingUserInputAnswer,
+  steerActiveSessionWithOptionalDeliveryWait,
+} from "./attempt-queue-message.js";
 
 type Session = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[0];
 type Options = NonNullable<Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2]>;
@@ -37,7 +46,7 @@ function message(text: string, identity: string = text): Message {
 }
 
 function fixture(queue: Message[] = [], target = queue[0], prepare?: () => Promise<void>) {
-  const listeners = new Set<(event: unknown) => void>();
+  const listeners = new Set<(event: AgentSessionEvent) => unknown>();
   const retire = vi.fn(() => true);
   const accepted = vi.fn();
   const settled = vi.fn();
@@ -70,7 +79,7 @@ function fixture(queue: Message[] = [], target = queue[0], prepare?: () => Promi
     accepted,
     settled,
     abort,
-    emit(event: unknown) {
+    emit(event: AgentSessionEvent) {
       for (const listener of listeners) {
         listener(event);
       }
@@ -121,6 +130,127 @@ async function admittedFixture(
   }
   return { ...f, realSession: session };
 }
+
+it("keeps a steer through a long tool and delivers it at the next model boundary", async () => {
+  const started = deferred();
+  const release = deferred();
+  const requests: string[] = [];
+  streamMocks.streamSimple.mockImplementation((model, context) => {
+    requests.push(JSON.stringify(context.messages));
+    return createAssistantResultStream(
+      createAssistant(
+        model,
+        requests.length === 1
+          ? [{ type: "toolCall", id: "held", name: "hold", arguments: {} }]
+          : "Done",
+        requests.length === 1 ? "toolUse" : "stop",
+      ),
+    );
+  });
+  const { session } = await createTestSession({
+    customTools: [
+      {
+        ...createStubTool("hold"),
+        execute: async () => {
+          started.resolve();
+          await release.promise;
+          return { content: [{ type: "text", text: "Tool complete" }], details: {} };
+        },
+      },
+    ],
+  });
+  const active = session.prompt("Start the tool");
+  await started.promise;
+  vi.useFakeTimers();
+  const accepted = vi.fn();
+  const waiting = observe(
+    steerActiveSessionWithOptionalDeliveryWait(session, "Pending correction", {
+      waitForTranscriptCommit: true,
+      onQueueAccepted: accepted,
+    }),
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+    await vi.advanceTimersByTimeAsync(120_001);
+    expect(waiting.isSettled()).toBe(false);
+    expect(session.getSteeringMessages()).toEqual(["Pending correction"]);
+  } finally {
+    vi.useRealTimers();
+    release.resolve();
+    await active;
+    await waiting.done;
+  }
+  expect(waiting.result.error).toBeUndefined();
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).toContain("Pending correction");
+  expect(session.getSteeringMessages()).toEqual([]);
+});
+
+it.each([
+  "transcript_commit_timeout",
+  "tool_boundary_timeout",
+  "session_ended",
+  "session_handoff",
+  "steering_closed",
+  "source_cancelled",
+] as const)("reports %s after withdrawing the exact pending steer", async (runtimeReason) => {
+  vi.useFakeTimers();
+  const target = message("pending correction");
+  const f = fixture([target]);
+  const closed = new AbortController();
+  if (runtimeReason === "tool_boundary_timeout") {
+    f.session.agent!.getToolInterruptionStatus = () => ({
+      interruptible: [],
+      blocked: [{ toolCallId: "held-tool", toolName: "synthetic_tool" }],
+    });
+  }
+  const waiting = observe(
+    steerActiveSessionWithOptionalDeliveryWait(
+      f.session,
+      "pending correction",
+      {
+        queueIdentity: "pending correction",
+        waitForTranscriptCommit: true,
+        deliveryTimeoutMs: runtimeReason.endsWith("timeout") ? 120_000 : undefined,
+        abortSignal: f.abort.signal,
+        onQueueAccepted: f.accepted,
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      closed.signal,
+    ),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.accepted).toHaveBeenCalledExactlyOnceWith(true);
+  expect(waiting.isSettled()).toBe(false);
+  if (runtimeReason.endsWith("timeout")) {
+    await vi.advanceTimersByTimeAsync(120_000);
+  } else if (runtimeReason === "session_ended" || runtimeReason === "session_handoff") {
+    f.emit({ type: runtimeReason === "session_ended" ? "agent_settled" : "agent_handoff" });
+  } else if (runtimeReason === "steering_closed") {
+    closed.abort();
+  } else {
+    f.abort.abort();
+  }
+  await waiting.done;
+  expect(waiting.result.error).toMatchObject({
+    name: "MessageInjectionWithdrawnError",
+    runtimeReason,
+  });
+  expect(
+    resolveReplyMessageInjectionFailure(waiting.result.error, { accepted: true }),
+  ).toMatchObject({
+    status: "rejected",
+    reason: "injection_unavailable",
+    runtimeReason,
+  });
+  expect(f.queue).toEqual([]);
+  expect(f.listeners).toHaveLength(0);
+});
 
 it("retains real enqueued input when admission cleanup fails", async () => {
   const f = await admittedFixture(async (consume) => {
@@ -226,7 +356,7 @@ it("closes admission on pre-enqueue persistence failure when the observer throws
   }
 });
 
-it.each(["message_end", "agent_handoff"])(
+it.each(["message_end", "agent_handoff"] as const)(
   "keeps admission-only steering owned until %s",
   async (terminal) => {
     vi.useFakeTimers();
@@ -487,12 +617,67 @@ it("keeps an image steer pending across nonterminal retry and compaction events"
   } satisfies Message;
   const f = fixture([target]);
   const wait = f.wait("", { images: [image] });
-  f.emit({ type: "agent_end", messages: [] });
+  f.emit({ type: "agent_end", messages: [], willRetry: true });
   await vi.advanceTimersByTimeAsync(0);
-  f.emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1_000 });
+  f.emit({ type: "auto_retry_start" });
   f.emit({ type: "compaction_start", reason: "threshold" });
   await vi.advanceTimersByTimeAsync(0);
   expect(f.queue).toEqual([target]);
   f.emit({ type: "message_end", message: target });
   await expect(wait).resolves.toBeUndefined();
 });
+
+it.each(["claim", "text", "image"] as const)(
+  "keeps a live question available after a denied human %s input",
+  async (kind) => {
+    const sessionKey = `agent:main:question-permission-${kind}`;
+    const abort = new AbortController();
+    const pending = runAgentHarnessGatewayQuestion({
+      questions: [
+        { id: "answer", header: "Answer", question: "Continue?", isSecret: true, options: [] },
+      ],
+      sessionKey,
+      timeoutMs: 60_000,
+      signal: abort.signal,
+      gatewayCall: vi.fn<AgentHarnessQuestionGatewayCall>(),
+      delivery: { onBlockReply: vi.fn(async () => undefined) },
+    });
+    const steer = vi.fn(async () => undefined);
+    const session = { steer, subscribe: () => () => {} };
+    try {
+      const options = {
+        isInboundUserMessage: true,
+        allowPendingUserInputAnswer: false as const,
+        ...(kind === "image" ? { images: [image] } : {}),
+      };
+      if (kind === "claim") {
+        await expect(
+          claimEmbeddedPendingUserInputAnswer("status control", options, sessionKey),
+        ).resolves.toBe(false);
+      } else {
+        await steerActiveSessionWithOptionalDeliveryWait(
+          session,
+          "status control",
+          options,
+          sessionKey,
+        );
+      }
+      expect(steer).toHaveBeenCalledTimes(kind === "claim" ? 0 : 1);
+      // A later permitted answer must still consume the original pending question.
+      await steerActiveSessionWithOptionalDeliveryWait(
+        session,
+        "Continue",
+        { isInboundUserMessage: true },
+        sessionKey,
+      );
+      await expect(pending).resolves.toMatchObject({
+        status: "answered",
+        answers: { answers: { answer: ["Continue"] } },
+      });
+      expect(steer).toHaveBeenCalledTimes(kind === "claim" ? 0 : 1);
+    } finally {
+      abort.abort();
+      await pending;
+    }
+  },
+);

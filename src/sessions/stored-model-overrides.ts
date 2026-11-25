@@ -1,4 +1,3 @@
-// Resolves persisted per-session model choices across child and parent sessions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelFallbackRouteResolution } from "../agents/model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
@@ -25,7 +24,8 @@ export type StoredModelOverride = {
 function resolveStoredOverrideFromEntry(
   params: {
     entry?: SessionEntry;
-    defaultProvider: string;
+    /** Provider for a bare stored model id; omitted uses the core bare-id provider. */
+    defaultProvider?: string;
     source: StoredModelOverride["source"];
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
@@ -60,7 +60,8 @@ function resolveStoredOverrideFromEntry(
 export function resolveDirectStoredModelOverride(
   params: {
     sessionEntry?: SessionEntry;
-    defaultProvider: string;
+    /** Provider for a bare stored model id; omitted uses the core bare-id provider. */
+    defaultProvider?: string;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
 ): StoredModelOverride | null {
@@ -88,14 +89,15 @@ function resolveParentSessionKeyCandidate(params: {
   return null;
 }
 
-/** @deprecated Use resolveStoredModelOverrideAsync; final compatibility day: 2026-12-31. */
+/** @deprecated Use resolveStoredModelOverrideAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveStoredModelOverride(params: {
   loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   parentSessionKey?: string;
-  defaultProvider: string;
+  /** Provider for a bare stored model id; omitted uses the core bare-id provider. */
+  defaultProvider?: string;
   allowPluginNormalization?: boolean;
 }): StoredModelOverride | null {
   warnPluginSdkDeprecation({
@@ -121,6 +123,13 @@ export async function resolveStoredModelOverrideAsync(
       sessionKey: string,
     ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   },
+): Promise<StoredModelOverride | null> {
+  return resolveStoredModelOverrideCoreAsync(params);
+}
+
+/** Async resolver for internal callers that carry prepared manifest metadata. */
+export async function resolveStoredModelOverrideCoreAsync(
+  params: Parameters<typeof resolveStoredModelOverrideAsync>[0] & ModelManifestNormalizationContext,
 ): Promise<StoredModelOverride | null> {
   if (params.sessionEntry?.modelOverrideSource === "default") {
     return null;
@@ -159,7 +168,8 @@ export function resolveStoredModelOverrideCore(
 
 function resolveParentStoredModelOverride(
   params: {
-    defaultProvider: string;
+    /** Provider for a bare stored model id; omitted uses the core bare-id provider. */
+    defaultProvider?: string;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
   parentEntry: SessionEntry | undefined,

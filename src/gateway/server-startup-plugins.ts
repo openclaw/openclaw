@@ -34,7 +34,6 @@ import {
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 type GatewayPluginBootstrapLog = {
@@ -61,12 +60,12 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
         if (params.pluginMetadataSnapshot?.registrySource !== "derived") {
           return;
         }
-        const [{ withPluginLifecycleLease }, { refreshPluginRegistryAfterConfigMutation }] =
+        const [{ withPluginLifecycleLeaseAsync }, { refreshPluginRegistryAfterConfigMutation }] =
           await Promise.all([
             import("../plugins/plugin-lifecycle-lease.js"),
             import("../plugins/registry-refresh.js"),
           ]);
-        await withPluginLifecycleLease(
+        await withPluginLifecycleLeaseAsync(
           {
             signal: params.signal,
             assertCurrent: () => params.signal.throwIfAborted(),
@@ -104,6 +103,34 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
           await import("./server-startup-session-migration.js");
         params.signal.throwIfAborted();
         await runGatewaySessionStartupMaintenance(params);
+      },
+    ],
+    [
+      // An earlier updater can leave this installation's pnpm launcher pointing at its
+      // removed stage while the Gateway runs the new version; heal it without a command.
+      "cli-launcher",
+      async () => {
+        const [{ resolveOpenClawPackageRootSync }, { repairPublishedPnpmLaunchers }] =
+          await Promise.all([
+            import("../infra/openclaw-root.js"),
+            import("../infra/update-launcher-repair.js"),
+          ]);
+        const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+        params.signal.throwIfAborted();
+        if (!root) {
+          return;
+        }
+        const { repaired, failed } = await repairPublishedPnpmLaunchers({ root });
+        for (const repair of repaired) {
+          params.log.info(
+            `Repaired the openclaw launcher ${repair.file}: it still pointed at the removed update stage ${repair.stage}.`,
+          );
+        }
+        for (const { file, error } of failed) {
+          params.log.warn(
+            `The openclaw launcher ${file} still points at a removed update stage and could not be repaired: ${formatErrorMessageWithCode(error)}. Recreate it with pnpm add -g --allow-build=openclaw openclaw@<installed-version>.`,
+          );
+        }
       },
     ],
     [
@@ -337,23 +364,27 @@ export async function loadGatewayStartupPluginRuntime(params: {
   startupTrace?: Pick<GatewayStartupTrace, "detail">;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   resolveGatewayContext?: GatewayContextResolver;
-  pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
-  getCurrentPluginRegistry?: () => PluginRegistry;
+  signal?: AbortSignal;
 }) {
+  const { confirmPluginStateMigrationReadiness } =
+    await import("../plugins/plugin-state-migration-readiness.js");
+  try {
+    await confirmPluginStateMigrationReadiness({
+      config: params.activationSourceConfig ?? params.cfg,
+      env: process.env,
+      signal: params.signal ?? new AbortController().signal,
+      warn: (message) => params.log.warn(message),
+    });
+  } catch (error) {
+    params.log.warn(`Plugin data/settings readiness could not be confirmed: ${String(error)}`);
+  }
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
+  const beforeBootstrapImport = performance.now();
   const { prepareGatewayPluginLoad } = await import("./server-plugin-bootstrap.js");
-  await params.pluginRuntimeClaim?.waitForUnblocked();
-  if (params.pluginRuntimeClaim && !params.pluginRuntimeClaim.isCurrent()) {
-    const currentPluginRegistry = params.getCurrentPluginRegistry?.();
-    if (!currentPluginRegistry) {
-      throw new Error("superseded Gateway startup cannot resolve the current plugin runtime");
-    }
-    return {
-      pluginRegistry: currentPluginRegistry,
-      gatewayMethods: params.baseMethods,
-    };
-  }
+  params.startupTrace?.detail("plugins.gateway-bootstrap-import", [
+    ["durationMs", performance.now() - beforeBootstrapImport],
+  ]);
   const loaded = await prepareGatewayPluginLoad({
     loadIntent: "startup",
     cfg: params.cfg,

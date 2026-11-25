@@ -20,6 +20,7 @@ export type BoardWidgetPageMenu = {
 };
 
 export type BoardWidgetCellCallbacks = {
+  presentationReady?: () => void;
   appViewGeneration: () => number;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
   movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
@@ -62,6 +63,7 @@ export type BoardWidgetCellProps = {
 };
 export type BoardWidgetCellHandle = {
   readonly presentationReady: boolean;
+  focusWidget(): void;
   selectMenuItem(value: string | undefined): void;
   teardown(): Promise<void>;
   restartAfterTeardown(): void;

@@ -67,7 +67,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
+  NODE_VERSION: "24.22.1"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -148,16 +148,6 @@ jobs:
 
       - name: Build Mantis harness
         run: pnpm build
-
-      - name: Cache Mantis candidate pnpm store
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.local/share/pnpm/store
-            ~/.cache/pnpm
-          key: mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-
 
       - name: Install Crabbox CLI
         env:

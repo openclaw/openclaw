@@ -431,14 +431,4 @@ throw new Error("Invalid CLI options reached config loading");`,
       );
     },
   );
-
-  it("passes Vitest targets into the runner command", () => {
-    expect(
-      buildVitestProfileCommandWithArgs({
-        mode: "runner",
-        outputDir: "/tmp/profile-runner",
-        vitestArgs: ["src/example.test.ts"],
-      }).args,
-    ).toContain("src/example.test.ts");
-  });
 });

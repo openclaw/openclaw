@@ -16,11 +16,6 @@ const BUZZ_RELAY_SOFTWARE = "https://github.com/block/buzz";
 const BUZZ_LOCAL_DEV_RELAY_PUBLIC_KEY =
   "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
 
-type AuthenticatedBuzzRelaySession = {
-  relay: Relay;
-  relayPublicKey: string;
-};
-
 export function parseBuzzAuthTag(raw: string): string[] | undefined {
   if (!raw.trim()) {
     return undefined;
@@ -119,7 +114,10 @@ export async function connectAuthenticatedBuzzRelaySession(params: {
   secretKey: Uint8Array;
   authTag?: string[];
   signal?: AbortSignal;
-}): Promise<AuthenticatedBuzzRelaySession> {
+}): Promise<{
+  relay: Relay;
+  relayPublicKey: string;
+}> {
   const relay = new Relay(params.relayUrl, { enableReconnect: false });
   const setupAbort = new AbortController();
   const signal = params.signal

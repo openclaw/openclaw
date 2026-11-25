@@ -8,9 +8,10 @@ export class DatabasePortDataError extends Error {}
 export async function withPostgresConnection<T>(
   input: NonNullable<DatabaseEngineInput>,
   run: (client: Client) => Promise<T>,
+  options?: { connectionTimeoutMillis?: number; query_timeout?: number },
 ): Promise<T> {
   const { Client } = await import("pg");
-  const client = new Client({ connectionString: input.connection });
+  const client = new Client({ connectionString: input.connection, ...options });
   client.on("error", () => undefined);
   await client.connect();
   try {

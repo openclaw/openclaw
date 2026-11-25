@@ -121,7 +121,8 @@ extension VoiceWakeOverlayController {
         let used = layout.usedRect(for: container)
 
         let contentHeight = ceil(used.height + (textInset.height * 2))
-        let total = contentHeight + self.verticalPadding * 2
+        let errorHeight: CGFloat = self.model.sendError == nil ? 0 : 36
+        let total = contentHeight + self.verticalPadding * 2 + errorHeight
         return max(self.minHeight, min(total, self.maxHeight))
     }
 

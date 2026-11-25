@@ -1,10 +1,30 @@
 import { listen } from "../lib/reactive/listener.ts";
 import { isMobileNavLayout } from "./mobile-nav-layout.ts";
 
+const EDGE_SWIPE_START_PX = 32;
 const MIN_OPEN_DISTANCE_PX = 44;
 const OPEN_RATIO = 0.15;
 const LOCK_DISTANCE_PX = 7;
 const DIRECTION_RATIO = 1.25;
+// Controls that use horizontal drags themselves. Links and buttons are absent
+// on purpose: a drag past the tap slop never activates them.
+const HORIZONTAL_DRAG_CONTROLS =
+  "input, textarea, select, [role='slider'], [contenteditable]:not([contenteditable='false'])";
+
+// A rightward swipe reveals content to a scroller's left. A table or code
+// block resting at that edge cannot use the swipe, so it opens the drawer.
+function scrollsWithRightwardSwipe(target: Element): boolean {
+  if (!(target instanceof HTMLElement) || target.scrollWidth <= target.clientWidth + 1) {
+    return false;
+  }
+  const style = getComputedStyle(target);
+  if (style.overflowX !== "auto" && style.overflowX !== "scroll") {
+    return false;
+  }
+  // RTL scrollers rest at scrollLeft 0 and scroll left through negative offsets.
+  const leftEdge = style.direction === "rtl" ? target.clientWidth - target.scrollWidth : 0;
+  return target.scrollLeft > leftEdge + 1;
+}
 
 type Swipe = {
   identifier: number;
@@ -13,9 +33,11 @@ type Swipe = {
   lockedHorizontal: boolean;
 };
 
-export type NavDrawerHost = Pick<HTMLElement, "querySelector" | "isConnected"> & {
+export type NavDrawerHost = Pick<HTMLElement, "isConnected"> & {
   readonly element: HTMLElement;
+  readonly navDrawerElement?: HTMLElement;
   readonly onboardingMode: boolean;
+  readonly initialConnectionPending?: boolean;
   readonly navDrawerOpen: boolean;
 };
 
@@ -33,6 +55,7 @@ export class NavDrawerSwipeOwner {
       isMobileNavLayout() &&
       !this.host.navDrawerOpen &&
       !this.host.onboardingMode &&
+      !this.host.initialConnectionPending &&
       !document.openClawModalLayers?.size
     );
   }
@@ -56,8 +79,7 @@ export class NavDrawerSwipeOwner {
   }
 
   private openAfterSwipe(deltaX: number): void {
-    const width =
-      this.host.querySelector<HTMLElement>(".shell-nav")?.getBoundingClientRect().width ?? 0;
+    const width = this.host.navDrawerElement?.getBoundingClientRect().width ?? 0;
     if (deltaX >= Math.max(MIN_OPEN_DISTANCE_PX, width * OPEN_RATIO)) {
       // Commit once intent is clear; a held gesture must not leave clipped
       // navigation text and a non-interactive scrim sitting over the chat.
@@ -73,29 +95,28 @@ export class NavDrawerSwipeOwner {
     if (!this.canOpen() || event.touches.length !== 1) {
       return;
     }
+    const touch = event.touches[0];
+    if (!touch) {
+      return;
+    }
     const path = event.composedPath();
     const content = path.find(
       (target): target is HTMLElement =>
         target instanceof HTMLElement && target.classList.contains("content"),
     );
-    if (!content) {
+    // The reachable content edge includes the shell’s device safe-area inset.
+    // Leave gestures farther inside to content such as canvas orbit controls.
+    if (!content || touch.clientX > content.getBoundingClientRect().left + EDGE_SWIPE_START_PX) {
       return;
     }
-    const blocked = path.slice(0, path.indexOf(content)).some((target) => {
-      if (!(target instanceof Element)) {
-        return false;
-      }
-      if (
-        target.matches(
-          "a, button, input, textarea, select, pre, [role='slider'], [contenteditable]:not([contenteditable='false'])",
-        )
-      ) {
-        return true;
-      }
-      return target instanceof HTMLElement && target.scrollWidth > target.clientWidth + 1;
-    });
-    const touch = event.touches[0];
-    if (blocked || !touch) {
+    const blocked = path
+      .slice(0, path.indexOf(content))
+      .some(
+        (target) =>
+          target instanceof Element &&
+          (target.matches(HORIZONTAL_DRAG_CONTROLS) || scrollsWithRightwardSwipe(target)),
+      );
+    if (blocked) {
       return;
     }
     this.swipe = {

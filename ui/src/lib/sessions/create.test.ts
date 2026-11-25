@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { requestSessionCreate, resolveSessionCreateParams } from "./create.ts";
+import { requestSessionCreate } from "./create.ts";
+import { resolveSessionCreateParams } from "./session-create-params.ts";
 
 describe("resolveSessionCreateParams", () => {
   it("marks a Control UI child as parallel to its selected parent", () => {

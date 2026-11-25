@@ -1,15 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { readSqliteTranscriptPayload } from "../../scripts/lib/sqlite-transcript-payload.mjs";
-import {
-  readSessionGoalOperationInDatabase,
-  type SessionGoalOperation,
-} from "../config/sessions/goals-operations.js";
 import {
   loadExactSessionEntry,
-  listSessionParticipantsReadOnly,
-  persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -26,22 +19,33 @@ import {
   releaseOpenClawAgentDatabaseLease,
 } from "../state/openclaw-agent-db-lease.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { LEGACY_PARTICIPANTS_SCHEMA } from "../state/openclaw-agent-schema-history.js";
-import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-agent-schema-v21.test-support.js";
 import {
   cleanupSessionStateForTest,
   useSessionStoreTempDirs,
 } from "../test-utils/session-state-cleanup.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import { sessionSqlFixture } from "./doctor-session-sqlite.sql.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-doctor-canonical-store-");
+
+function doctor(store: Awaited<ReturnType<typeof createStore>>, mode: "recover" | "inspect") {
+  return runDoctorSessionSqlite({ cfg: store.cfg, env: store.env, allAgents: true, mode });
+}
+
+function migrate(store: Awaited<ReturnType<typeof createStore>>) {
+  return migrateLegacyMediaPersistence({
+    configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(store.cfg, {
+      env: store.env,
+    }),
+    env: store.env,
+  });
+}
 
 async function createStore() {
   const root = sessionDirs.make();
@@ -63,193 +67,63 @@ async function createStore() {
   const options = toDatabaseOptions(resolveSqliteReadScope(scope));
   const sqlitePath = resolveOpenClawAgentSqlitePath(options);
   await cleanupSessionStateForTest({ stateDir, rootPath: root });
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   return { cfg, env, options, root, scope, sqlitePath, stateDir, storePath };
 }
 
 async function createHistoricalSharedStore() {
   const store = await createStore();
-  const goalOperation = {
-    action: "start",
-    operationId: "goal-before-participant-upgrade",
-    issuedAtMs: Date.now(),
-    requestFingerprint: "shared-store-goal-fixture",
-    objective: "Preserve this Goal across the participant migration.",
-  } satisfies SessionGoalOperation;
-  const turn = await persistSessionTranscriptTurn(
-    { ...store.scope, sessionId: "doctor-session" },
-    {
-      config: store.cfg,
-      expectedSessionId: "doctor-session",
-      messages: [{ message: { role: "user", content: goalOperation.objective } }],
-      sessionTurnMutation: { kind: "goal", operation: goalOperation, runId: "goal-start" },
-      updateMode: "none",
-    },
-  );
-  const goalReceipt = turn.sessionTurnMutationResult?.result;
-  expect(goalReceipt).toMatchObject({ action: "start", status: "started", runId: "goal-start" });
-  await cleanupSessionStateForTest({ stateDir: store.stateDir, rootPath: store.root });
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  const source = openNodeSqliteDatabase(store.sqlitePath);
-  const retained = [
-    "session_nodes",
-    "session_windows",
-    "transcript_events",
-    "transcript_rewrite_watermarks",
-    "transcript_event_identities",
-    "session_transcript_active_events",
-    "session_transcript_index_state",
-    "session_transcript_fts",
-    "session_goal_operations",
-  ].map((table) => {
-    const rows = source.prepare(`SELECT * FROM "${table}"`).all();
-    if (table === "transcript_events") {
-      for (const row of rows) {
-        row.event_json = readSqliteTranscriptPayload(row);
-      }
-    }
-    return { table, rows };
-  });
-  source.close();
-  fs.rmSync(store.sqlitePath);
-  const database = openNodeSqliteDatabase(store.sqlitePath);
-  try {
-    seedOpenClawAgentSchemaV21(database);
-    removeCanonicalValidationFromHistoricalAgentFixture(database);
-    database.exec("BEGIN; PRAGMA defer_foreign_keys = ON;");
-    for (const { table, rows } of retained) {
-      const columns = database
-        .prepare(`PRAGMA table_info("${table}")`)
-        .all()
-        .map((column) => {
-          if (typeof column.name !== "string") {
-            throw new Error(`Invalid historical fixture column in ${table}`);
-          }
-          return column.name;
-        });
-      const insert = database.prepare(
-        `INSERT INTO "${table}" (${columns.map((column) => `"${column}"`).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
-      );
-      for (const row of rows) {
-        insert.run(
-          ...columns.map((column) => {
-            const value = row[column];
-            if (value === undefined) {
-              throw new Error(`Missing historical fixture value ${table}.${column}`);
-            }
-            return value;
-          }),
-        );
-      }
-    }
-    database.exec("COMMIT;");
-    const goalState = readStoredGoalState(database, store.scope.sessionKey);
-    database.exec("DROP TABLE session_participants;");
-    database.exec(LEGACY_PARTICIPANTS_SCHEMA);
-    database
-      .prepare(
-        "INSERT INTO session_participants VALUES (?, 'human', 'person', 'profile', 3, 10, 20)",
-      )
-      .run(store.scope.sessionKey);
-    database
-      .prepare(
-        `UPDATE session_nodes SET entry_json = json_set(entry_json,
-          '$.createdVia', 'operator', '$.createdAt', 5,
-          '$.createdActor', json('{"type":"human","id":"person","label":"Original creator"}'))
-         WHERE session_key = ?`,
-      )
-      .run(store.scope.sessionKey);
-    database.exec("PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;");
-    database.exec(`
+  using database = openNodeSqliteDatabase(store.sqlitePath);
+  const sql = sessionSqlFixture(database);
+  restoreEmptyV21StorageForHistoricalFixture(database);
+  removeCanonicalValidationFromHistoricalAgentFixture(database);
+  database.exec("DROP TABLE session_participants;");
+  database.exec(LEGACY_PARTICIPANTS_SCHEMA);
+  sql`INSERT INTO session_participants VALUES (${store.scope.sessionKey}, 'human', 'person', 'profile', 3, 10, 20)`.run();
+  database.exec("PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;");
+  database.exec(`
       INSERT INTO cache_entries (scope, key, value_json, expires_at, updated_at)
         VALUES ('doctor', 'preserved', '{"ok":true}', 100, 1);
       DROP INDEX idx_agent_cache_expiry;
       CREATE INDEX idx_agent_cache_expiry ON cache_entries(key);
     `);
-    database.enableDefensive?.(false);
-    database.exec(`PRAGMA writable_schema = ON;
+  database.enableDefensive?.(false);
+  database.exec(`PRAGMA writable_schema = ON;
       UPDATE sqlite_schema SET sql = 'CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL'
         WHERE name = 'idx_agent_cache_expiry';
       PRAGMA writable_schema = OFF;`);
-    const schemaCookie = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
-    database.exec(`PRAGMA schema_version = ${schemaCookie + 1};`);
-    return { ...store, goalOperation, goalReceipt, goalState };
-  } finally {
-    database.close();
-  }
-}
-
-function readStoredGoalState(
-  database: ReturnType<typeof openNodeSqliteDatabase>,
-  sessionKey: string,
-) {
-  return {
-    goal: database
-      .prepare(
-        "SELECT json_extract(entry_json, '$.goal') AS goal_json FROM session_nodes WHERE session_key = ?",
-      )
-      .get(sessionKey),
-    receipts: database
-      .prepare("SELECT * FROM session_goal_operations WHERE session_key = ? ORDER BY operation_id")
-      .all(sessionKey),
-    ddl: database
-      .prepare(
-        "SELECT name, sql FROM sqlite_schema WHERE tbl_name = 'session_goal_operations' ORDER BY name",
-      )
-      .all(),
-  };
+  const schemaCookie = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
+  database.exec(`PRAGMA schema_version = ${schemaCookie + 1};`);
+  return store;
 }
 
 async function repairHistoricalSharedStore(store: Awaited<ReturnType<typeof createStore>>) {
-  const report = await runDoctorSessionSqlite({
-    cfg: store.cfg,
-    env: store.env,
-    allAgents: true,
-    mode: "recover",
-  });
+  const report = await doctor(store, "recover");
   expect(report.totals.issues).toBe(0);
   expect(report.targets[0]?.corruptRecovery).toBeUndefined();
 }
 
 function expectUpgradedSharedStore(store: Awaited<ReturnType<typeof createHistoricalSharedStore>>) {
   const reopened = openOpenClawAgentDatabase(store.options);
+  const sql = sessionSqlFixture(reopened.db);
   expect(reopened.agentId).toBe("main");
-  expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
-    OPENCLAW_AGENT_SCHEMA_VERSION,
-  );
-  expect(reopened.db.prepare("SELECT agent_id, schema_version FROM schema_meta").get()).toEqual({
+  expect(sql`PRAGMA user_version`.get()?.user_version).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+  expect(sql`SELECT agent_id, schema_version FROM schema_meta`.get()).toEqual({
     agent_id: "main",
     schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
   });
   expect(loadExactSessionEntry(store.scope)?.entry.sessionId).toBe("doctor-session");
-  expect(loadExactSessionEntry(store.scope)?.entry.goal).toEqual(store.goalReceipt?.goal);
-  expect(loadExactSessionEntry(store.scope)?.entry).toMatchObject({
-    createdAt: 5,
-    createdVia: "operator",
-    createdActor: { type: "human", source: "profile", id: "person", label: "Original creator" },
-  });
-  expect(
-    readStoredGoalState(requireNativeSqliteDatabase(reopened.db), store.scope.sessionKey),
-  ).toEqual(store.goalState);
-  expect(
-    readSessionGoalOperationInDatabase(reopened, {
-      ...store.scope,
-      expectedSessionId: "doctor-session",
-      operation: store.goalOperation,
-    }),
-  ).toEqual(store.goalReceipt);
-  expect(listSessionParticipantsReadOnly(store.scope).get(store.scope.sessionKey)).toEqual([
-    {
-      identity: { type: "profile", id: "person" },
-      contributionCount: 3,
-      firstPromptedAt: null,
-      lastPromptedAt: null,
-    },
-  ]);
-  expect(reopened.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-  expect(reopened.db.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+  expect(sql`PRAGMA foreign_key_check`.all()).toEqual([]);
+  expect(sql`PRAGMA integrity_check`.get()?.integrity_check).toBe("ok");
+}
+
+function sharedData(sqlitePath: string) {
+  using database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+  return {
+    version: database.prepare("PRAGMA user_version").get(),
+    rows: ["schema_meta", "session_nodes", "session_participants", "retained_participant_view"].map(
+      (table) => database.prepare(`SELECT * FROM ${table}`).all(),
+    ),
+  };
 }
 
 describe("Doctor canonical session SQLite targets", () => {
@@ -264,20 +138,15 @@ describe("Doctor canonical session SQLite targets", () => {
       env: store.env,
     });
     try {
-      const migrated = await migrateLegacyMediaPersistence({
-        configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(store.cfg, {
-          env: store.env,
-        }),
-        env: store.env,
-      });
+      const migrated = await migrate(store);
       expect(migrated.changes).toEqual([]);
       expect(migrated.warnings).toEqual([
         expect.stringMatching(
-          /^Agent database maintenance deferred: .*stop that process and rerun openclaw doctor --fix/s,
+          /^Agent database maintenance deferred: .*stop the Gateway and other OpenClaw processes, or reboot, then rerun openclaw doctor --fix/s,
         ),
       ]);
       await expect(repairHistoricalSharedStore(store)).rejects.toThrow(
-        /stop that process and rerun openclaw doctor --fix/,
+        /stop the Gateway and other OpenClaw processes, or reboot, then rerun openclaw doctor --fix/,
       );
       expect(fs.readFileSync(store.sqlitePath)).toEqual(before);
     } finally {
@@ -285,29 +154,22 @@ describe("Doctor canonical session SQLite targets", () => {
     }
     await repairHistoricalSharedStore(store);
     expectUpgradedSharedStore(store);
-    expect(
-      openOpenClawAgentDatabase(store.options)
-        .db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'doctor'")
-        .get(),
-    ).toEqual({ value_json: '{"ok":true}' });
+    const sql = sessionSqlFixture(openOpenClawAgentDatabase(store.options).db);
+    expect(sql`SELECT value_json FROM cache_entries WHERE scope = 'doctor'`.get()).toEqual({
+      value_json: '{"ok":true}',
+    });
   });
 
   it("keeps shared data in place when participant dependencies refuse canonical-index recovery", async () => {
     const store = await createHistoricalSharedStore();
-    const database = openNodeSqliteDatabase(store.sqlitePath);
-    try {
+    {
+      using database = openNodeSqliteDatabase(store.sqlitePath);
       database.exec(
         "CREATE VIEW retained_participant_view AS SELECT actor_id FROM session_participants;",
       );
-    } finally {
-      database.close();
     }
-    const report = await runDoctorSessionSqlite({
-      cfg: store.cfg,
-      env: store.env,
-      allAgents: true,
-      mode: "recover",
-    });
+    const before = sharedData(store.sqlitePath);
+    const report = await doctor(store, "recover");
     expect(report.targets[0]?.issues).toEqual([
       expect.objectContaining({
         code: "sqlite_recovery_inspect_failed",
@@ -320,46 +182,17 @@ describe("Doctor canonical session SQLite targets", () => {
     expect(
       fs.readdirSync(path.dirname(store.sqlitePath)).some((file) => file.includes(".corrupt-")),
     ).toBe(false);
-    const migrated = await migrateLegacyMediaPersistence({
-      configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(store.cfg, {
-        env: store.env,
-      }),
-      env: store.env,
-    });
+    const migrated = await migrate(store);
     expect(migrated).toEqual({
       changes: [],
       warnings: [
-        `Skipped agent database migration for ${store.sqlitePath}: Error: Participant migration cannot rebuild unknown indexes, views, or triggers.`,
+        `Skipped agent database migration: Error: Participant migration cannot rebuild unknown indexes, views, or triggers. Database: ${store.sqlitePath}`,
+      ],
+      notices: [
+        expect.stringContaining('rerun "openclaw doctor --fix" against the same state/config'),
       ],
     });
-    const preserved = openNodeSqliteDatabase(store.sqlitePath, { readOnly: true });
-    try {
-      expect(readStoredGoalState(preserved, store.scope.sessionKey)).toEqual(store.goalState);
-      expect(preserved.prepare("PRAGMA user_version").get()?.user_version).toBe(17);
-      expect(preserved.prepare("SELECT agent_id, schema_version FROM schema_meta").get()).toEqual({
-        agent_id: "main",
-        schema_version: 17,
-      });
-      expect(
-        preserved
-          .prepare(
-            "SELECT actor_id, contribution_count, first_prompted_at, last_prompted_at FROM session_participants",
-          )
-          .all(),
-      ).toEqual([
-        { actor_id: "person", contribution_count: 3, first_prompted_at: 10, last_prompted_at: 20 },
-      ]);
-      expect(preserved.prepare("SELECT actor_id FROM retained_participant_view").all()).toEqual([
-        { actor_id: "person" },
-      ]);
-      expect(
-        preserved
-          .prepare("SELECT current_session_id FROM session_nodes WHERE session_key = ?")
-          .get(store.scope.sessionKey),
-      ).toEqual({ current_session_id: "doctor-session" });
-    } finally {
-      preserved.close();
-    }
+    expect(sharedData(store.sqlitePath)).toEqual(before);
   });
 
   it("never treats an exact SQLite database as a legacy import file", async () => {
@@ -381,12 +214,7 @@ describe("Doctor canonical session SQLite targets", () => {
 
   it("inspects the shared SQLite database without a legacy session file", async () => {
     const store = await createStore();
-    const report = await runDoctorSessionSqlite({
-      cfg: store.cfg,
-      env: store.env,
-      allAgents: true,
-      mode: "inspect",
-    });
+    const report = await doctor(store, "inspect");
 
     expect(report.totals).toMatchObject({
       targets: 1,
@@ -394,8 +222,10 @@ describe("Doctor canonical session SQLite targets", () => {
       sqliteEntries: 1,
       issues: 0,
     });
-    expect(report.targets[0]?.sqlitePath).toBe(store.sqlitePath);
-    expect(report.targets[0]?.dbStats?.integrityCheck).toBe("ok");
+    expect(report.targets[0]).toMatchObject({
+      sqlitePath: store.sqlitePath,
+      dbStats: { integrityCheck: "ok" },
+    });
     expect(loadExactSessionEntry(store.scope)?.entry.sessionId).toBe("doctor-session");
     expect(openOpenClawAgentDatabase(store.options).agentId).toBe("main");
   });

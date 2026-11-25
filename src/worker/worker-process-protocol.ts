@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { parseWorkerLaunchDescriptor, type WorkerLaunchPlan } from "./launch-descriptor.js";
@@ -18,6 +19,7 @@ export function buildWorkerProcessTurn<T extends WorkerLaunchPlan>(
   descriptor: T,
   idleRetention = false,
   canonicalWorkspace = false,
+  processChanges = false,
 ) {
   return {
     type: "turn" as const,
@@ -25,6 +27,13 @@ export function buildWorkerProcessTurn<T extends WorkerLaunchPlan>(
     descriptor,
     ...(idleRetention ? { idleRetention: true as const } : {}),
     ...(canonicalWorkspace ? { canonicalWorkspace: true as const } : {}),
+    // Both sides must opt in: older supervisors reject unknown stdout frames.
+    ...(processChanges &&
+    descriptor.admission.handshake.protocolFeatures.includes(
+      NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE,
+    )
+      ? { processChanges: true as const }
+      : {}),
   };
 }
 
@@ -33,11 +42,11 @@ export function measureWorkerProcessTurnBytes(
   idleRetention = false,
 ): number {
   // The node supplies the endpoint privately. Replace only its JSON null placeholder
-  // with the parser-owned bound and reserve the node-owned canonical-folder marker.
+  // with the parser-owned bound and reserve the node-owned feature markers.
   return (
     Buffer.byteLength(
       JSON.stringify(
-        buildWorkerProcessTurn({ ...plan, connectionEndpoint: null }, idleRetention, true),
+        buildWorkerProcessTurn({ ...plan, connectionEndpoint: null }, idleRetention, true, true),
       ),
     ) -
     "null".length +
@@ -88,8 +97,30 @@ const ProcessResultSchema = workerProtocolObject({
       result.status === "completed" ||
       (result.status === "failed" && result.reason === "turn-failed")),
 );
+const mcpCallIdentity = { turnId: TurnIdSchema, requestId: TurnIdSchema };
+const McpResultSchema = z.union([
+  workerProtocolObject({
+    type: z.literal("mcp-result"),
+    ...mcpCallIdentity,
+    result: workerProtocolObject({
+      content: z.array(z.unknown()),
+      structuredContent: z.record(z.string(), z.unknown()).optional(),
+      isError: z.boolean().optional(),
+    }),
+  }),
+  workerProtocolObject({ type: z.literal("mcp-result"), ...mcpCallIdentity, error: z.string() }),
+]);
+export type WorkerMcpResult = z.infer<typeof McpResultSchema>;
 const ProcessMessageSchema = z.union([
+  workerProtocolObject({
+    type: z.literal("mcp-call"),
+    ...mcpCallIdentity,
+    toolId: TurnIdSchema,
+    arguments: z.record(z.string(), z.unknown()),
+  }),
+  workerProtocolObject({ type: z.literal("mcp-cancel"), ...mcpCallIdentity }),
   WorkerProcessObservationResultSchema,
+  workerProtocolObject({ type: z.literal("processes-changed") }),
   ProcessResultSchema,
   workerProtocolObject({
     type: z.literal("idle-ready"),
@@ -102,6 +133,9 @@ export type WorkerProcessResult = z.infer<typeof ProcessResultSchema>;
 export type WorkerProcessMessage = z.infer<typeof ProcessMessageSchema>;
 
 export function parseWorkerProcessRequest(value: unknown) {
+  if (isRecord(value) && value.type === "mcp-result") {
+    return McpResultSchema.parse(value);
+  }
   const observation = WorkerProcessObservationRequestSchema.safeParse(value);
   if (observation.success) {
     return observation.data;
@@ -122,10 +156,11 @@ export function parseWorkerProcessRequest(value: unknown) {
     hasExactOwnKeys(
       value,
       ["type", "turnId", "descriptor"],
-      ["idleRetention", "canonicalWorkspace"],
+      ["idleRetention", "canonicalWorkspace", "processChanges"],
     ) &&
     (value.idleRetention === undefined || value.idleRetention === true) &&
-    (value.canonicalWorkspace === undefined || value.canonicalWorkspace === true)
+    (value.canonicalWorkspace === undefined || value.canonicalWorkspace === true) &&
+    (value.processChanges === undefined || value.processChanges === true)
   ) {
     const descriptor = parseWorkerLaunchDescriptor(value.descriptor);
     if (descriptor.assignment.turnId !== value.turnId) {
@@ -135,6 +170,7 @@ export function parseWorkerProcessRequest(value: unknown) {
       descriptor,
       value.idleRetention === true,
       value.canonicalWorkspace === true,
+      value.processChanges === true,
     );
   }
   throw new Error("invalid managed worker request");

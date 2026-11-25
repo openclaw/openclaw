@@ -59,10 +59,10 @@ export type PreparedTranscriptReport = {
 export type TranscriptReportCommit = {
   committed: boolean;
   projectionNeedsReconcile: boolean;
-  cliHistoryChanged?: boolean;
   abortedPartial?: AbortedSessionTranscriptPartialResult;
   sessionEntryChanged?: boolean;
   entry?: InternalSessionEntry;
+  fullEntry?: InternalSessionEntry;
 };
 
 export type TranscriptReportWorkerOperations = {

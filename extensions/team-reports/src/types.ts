@@ -50,14 +50,9 @@ export type ReportDocument = z.infer<typeof reportDocumentSchema>;
 
 export type SummaryDocument = z.infer<typeof summaryDocumentSchema>;
 
-type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
-
-/** Per-run context handed to sources. Sources must honor `signal` and never log credentials. */
+/** Per-run context handed to sources. Sources must never log credentials. */
 export type SourceRuntime = {
   logger: RuntimeLogger;
-  signal?: AbortSignal;
-  /** Test seam; production uses the SDK guarded fetch. */
-  fetchImpl?: FetchLike;
 };
 
 /** Resolved (secret already materialized) GitHub source configuration. */

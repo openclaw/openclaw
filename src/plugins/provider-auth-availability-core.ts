@@ -277,7 +277,7 @@ export function createProviderAuthAvailability(
     return filterAuthProfileIds(store, profileIds, params).length > 0;
   }
 
-  /** @deprecated Use isProviderApiKeyConfiguredAsync. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use isProviderApiKeyConfiguredAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   function isProviderApiKeyConfigured(
     params: Parameters<typeof isProviderApiKeyConfiguredFromStore>[0],
   ): boolean {
@@ -324,7 +324,7 @@ export function createProviderAuthAvailability(
     return isProviderApiKeyConfiguredFromStore({ ...params, store }, persistedCredential);
   }
 
-  /** @deprecated Use listUsableProviderAuthProfileIdsAsync. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use listUsableProviderAuthProfileIdsAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   function listUsableProviderAuthProfileIds(params: ProviderAuthProfileLookup): {
     agentDir: string;
     profileIds: string[];
@@ -342,7 +342,7 @@ export function createProviderAuthAvailability(
     }
   }
 
-  /** @deprecated Use isProviderAuthProfileConfiguredAsync. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use isProviderAuthProfileConfiguredAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   function isProviderAuthProfileConfigured(params: ProviderAuthProfileLookup): boolean {
     warnPluginSdkDeprecation({
       family: "auth-profile-sync-operations",

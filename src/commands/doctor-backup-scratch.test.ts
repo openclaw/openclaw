@@ -59,6 +59,9 @@ it("reports without mutation and fixes abandoned scratch at recorded archive loc
       "Backup scratch",
     );
   } finally {
-    await finishBackupScratch(live);
+    await expect(finishBackupScratch(live)).resolves.toBeUndefined();
   }
+  mocks.note.mockClear();
+  await noteBackupScratchHealth({}, true);
+  expect(mocks.note).not.toHaveBeenCalled();
 });

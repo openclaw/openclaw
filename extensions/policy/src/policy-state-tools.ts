@@ -89,11 +89,7 @@ export function scanPolicyTools(raw: string): readonly PolicyToolEvidence[] {
   return tools;
 }
 
-function markdownSectionLines(raw: string): readonly {
-  readonly line: number;
-  readonly text: string;
-  readonly sectionDepth: number;
-}[] {
+function markdownSectionLines(raw: string) {
   const lines = raw.split(/\r?\n/);
   let sectionDepth: number | undefined;
   let foundSection = false;

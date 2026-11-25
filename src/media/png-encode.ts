@@ -54,9 +54,6 @@ function encodePng(buffer: Buffer, width: number, height: number, channels: 3 | 
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bit depth
   ihdr[9] = channels === 4 ? 6 : 2; // color type RGB/RGBA
-  ihdr[10] = 0; // compression
-  ihdr[11] = 0; // filter
-  ihdr[12] = 0; // interlace
 
   return Buffer.concat([
     signature,

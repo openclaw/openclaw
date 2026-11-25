@@ -1,7 +1,41 @@
 import type { HeapSpaceInfo } from "node:v8";
+import type { getSessionRowSelectionMetrics } from "./gateway-work-metrics.js";
 import type { GcSample } from "./gc-observer.js";
 import type { WorkerMessageMetric } from "./worker-message-metrics.js";
+import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 import type { WorkerRequestKind } from "./worker-request-kind.js";
+
+export type WorkerGcProfiles = { heap: string; cpu: string };
+
+export type WorkerGcStorm = {
+  workerId?: string;
+  runId?: string;
+  sessionKeyHash?: string;
+  cellCount: number;
+  activeCellCount: number;
+  bridgeMethods: string[];
+  majorCollections: number;
+  intervalMs: number;
+  heapUsed: number;
+  heapTotal: number;
+  external: number;
+  arrayBuffers: number;
+  heapSizeLimitBytes: number;
+  captureStatus?: "requested" | "complete" | "unavailable";
+  captureReason?: string;
+  profiles?: WorkerGcProfiles;
+};
+
+export type WorkerMemorySample = Pick<
+  NodeJS.MemoryUsage,
+  "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
+> & {
+  heapSizeLimitBytes?: number;
+  oldGenerationAfterGcBytes?: number;
+  heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
+  retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
+  gc?: GcSample[];
+};
 
 export type DiagnosticRuntimeMeasurementFields =
   | {
@@ -20,6 +54,10 @@ export type DiagnosticRuntimeMeasurementFields =
     }
   | {
       type: "diagnostic.gc";
+      /** Native full-heap usage immediately after a major collection. */
+      heapUsedAfterMajorGcBytes?: number;
+      /** Unix time when the isolate's existing profiler drained that collection. */
+      heapUsedAfterMajorGcTimestampSeconds?: number;
       durationMs: number;
       /** Optional for existing SDK event producers; native observers always supply attribution. */
       kind?: GcSample["kind"];
@@ -47,6 +85,12 @@ export type DiagnosticWorkerRequestFields = {
       | "posted"
       | "postFinished"
       | "received"
+      | "backendLoadStarted"
+      | "backendLoadFinished"
+      | "openGrantStarted"
+      | "openGrantFinished"
+      | "factoryStarted"
+      | "factoryFinished"
       | "inputReady"
       | "executeStarted"
       | "executeFinished"
@@ -95,14 +139,44 @@ export type DiagnosticWorkerRetainedData = {
   truncated?: boolean;
 };
 
+/** Direct physical workers; unknown external policies and missing heap samples stay explicit. */
+export type DiagnosticWorkerCensus = {
+  kind: string;
+  poolId?: number;
+  workerClass: WorkerPoolClass | "other";
+  count: number;
+  floor: number | null;
+  cap: number | null;
+  pointReadCap?: number;
+  idlePolicy: "timeout" | "retain-one" | "until-close" | "unknown";
+  idleTimeoutMs?: number;
+  burstIdleTimeoutMs?: number;
+  heapUsedBytes: number | null;
+  heapSampledCount: number;
+  /** Logical endpoints inside a shared worker host; they are not additional workers. */
+  hostedEndpoints?: number;
+};
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
+  /** Linux RssAnon: resident anonymous pages, including managed heaps and buffers. */
+  anonymousRssBytes?: number;
+  /** Linux VmSwap: swapped anonymous private pages, excluding shared-memory swap. */
+  anonymousSwapBytes?: number;
   heapTotalBytes: number;
   heapUsedBytes: number;
+  /** Actual main-isolate V8 limit; absent on runtimes without V8. */
+  heapSizeLimitBytes?: number;
+  /** old_space + large_object_space at the last observed native major-GC epilogue. */
+  oldGenerationAfterGcBytes?: number;
   externalBytes: number;
   arrayBuffersBytes: number;
   heapSpaces?: HeapSpaceInfo[];
   workerCount?: number;
+  /** Live PostgreSQL bridges, including children of workers with diagnostic registration. */
+  postgresBridgeCount?: number;
+  /** Threads that started their own PostgreSQL pool without inherited endpoints. */
+  postgresPoolSelfRootCount?: number;
   workerHeapSampledCount?: number;
   workerHeapTotalBytes?: number;
   workerHeapUsedBytes?: number;
@@ -128,6 +202,8 @@ export type DiagnosticMemoryUsage = {
     retainedData?: readonly DiagnosticWorkerRetainedData[];
     /** Actual V8 isolate limit; unavailable on runtimes without V8. */
     heapSizeLimitBytes?: number;
+    /** Absent until a major GC is observed, and for native-only fallback samples. */
+    oldGenerationAfterGcBytes?: number;
     threadId?: number;
     /** Same bounded slot as diagnostic.gc; absent for overflow and other scripts. */
     workerSlot?: number;
@@ -142,8 +218,21 @@ export type DiagnosticMemoryUsage = {
     started: number;
     retired: { reason: string; count: number }[];
   }[];
+  /** Process-lifetime worker totals; retired workers remain represented after native exit. */
+  workerTaskMetrics?: {
+    workerClass: WorkerPoolClass | "other";
+    script: string;
+    /** Absent for broker workers, which do not use the pool task-reply protocol. */
+    tasksCompleted?: number;
+    heapUsedHighWaterBytes: number;
+    gc: { kind: GcSample["kind"]; count: number; durationMs: number; reclaimedBytes: number }[];
+  }[];
   /** Main-thread transport totals; unknown payload sizes remain separate from known zero bytes. */
   workerMessages?: WorkerMessageMetric[];
+  /** Linux physical reads by outer operation in direct reader workers, including retired workers. */
+  sqliteReaderMetrics?: { operation: string; count: number; readBytes: number }[];
+  /** Process-lifetime selector totals with bounded shape and caller labels. */
+  sessionRowSelections?: ReturnType<typeof getSessionRowSelectionMetrics>;
 };
 
 export const DIAGNOSTIC_MEMORY_PRESSURE_METRICS = [
@@ -162,15 +251,36 @@ export type DiagnosticMemoryPressureMetrics = Partial<
 export type DiagnosticMemoryPressureFields = DiagnosticMemoryPressureMetrics & {
   type: "diagnostic.memory.pressure";
   level: "warning" | "critical";
-  reason: "rss_threshold" | "heap_threshold" | "worker_heap_threshold" | "rss_growth";
+  reason:
+    | "rss_threshold"
+    | "heap_threshold"
+    | "worker_heap_threshold"
+    | "process_memory_threshold"
+    | "rss_growth";
   memory: DiagnosticMemoryUsage;
 };
+
+export function isMemoryPressureReason(
+  reason: string,
+): reason is DiagnosticMemoryPressureFields["reason"] {
+  return (
+    reason === "rss_threshold" ||
+    reason === "heap_threshold" ||
+    reason === "worker_heap_threshold" ||
+    reason === "process_memory_threshold" ||
+    reason === "rss_growth"
+  );
+}
 
 export type DiagnosticChildProcessSpawnFields = {
   type: "diagnostic.child_process.spawn";
   family: string;
   /** Bounded Git owner or SQLite session/transport; unknown for unattributed Git. */
   operation?: string;
+  transport?:
+    | "broker"
+    | `native.${"no-broker" | "ipc" | "independent" | "descriptor" | "inherit" | "stdio"}`;
+  thread?: "main" | "worker";
   count: number;
   intervalMs: number;
 };

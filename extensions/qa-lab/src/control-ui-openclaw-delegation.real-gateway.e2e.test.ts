@@ -3,6 +3,7 @@ import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-ru
 import type { Page, WebSocket } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
+import { waitForControlUiGatewayReady } from "../../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
 import {
   authenticateControlUi,
@@ -106,10 +107,14 @@ function observeEvents(page: Page, gatewayUrl: string, sessionKey: string, activ
 }
 
 async function expandResult(page: Page, onlyCollapsed: boolean) {
-  const work = page.locator(".chat-work-group > .chat-activity-group__summary").first();
-  await work.waitFor();
-  if ((await work.getAttribute("aria-expanded")) !== "true") {
-    await work.click();
+  const activities = page.locator(".chat-activity-group:not(.chat-work-group)");
+  await activities.first().waitFor();
+  for (const disclosure of await activities
+    .locator(":scope > .chat-activity-group__summary")
+    .all()) {
+    if ((await disclosure.getAttribute("aria-expanded")) !== "true") {
+      await disclosure.click();
+    }
   }
   const summaries = page.locator(".chat-tool-msg-summary");
   await summaries.first().waitFor();
@@ -228,6 +233,7 @@ suite.define(() => {
           },
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await waitForControlUiGatewayReady(page);
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.fill(prompt);
         await page.getByRole("button", { name: "Send message" }).click();
@@ -353,17 +359,15 @@ fullAccessSuite.define(() => {
           const proofDir = fullAccessSuite.artifactDir;
           const gateway = fullAccessRuntime.gateway;
           if (fullAccessGatewayUsed) {
-            // Retain provisioned credentials, but retire the previous run authority before reset.
-            await gateway.restartAfterStateMutation(async () => {
-              await gateway.runCli([
-                "config",
-                "set",
-                "logging.level",
-                '"debug"',
-                "--strict-json",
-                "--expect-current-json",
-                '"info"',
-              ]);
+            // The previous turn finished; reset only its persisted logging change.
+            const current = await gateway.call("config.get", {});
+            if (!isRecord(current) || typeof current.hash !== "string") {
+              throw new Error("Gateway did not return a config revision");
+            }
+            expect(loggingLevel(current.config)).toBe("info");
+            await gateway.call("config.patch", {
+              raw: JSON.stringify({ logging: { level: "debug" } }),
+              baseHash: current.hash,
             });
           }
           fullAccessGatewayUsed = true;
@@ -391,6 +395,7 @@ fullAccessSuite.define(() => {
             );
             await authenticateControlUi(page, gateway);
             await page.goto(controlUiSessionUrl(fullAccessSuite.server.baseUrl, sessionKey));
+            await waitForControlUiGatewayReady(page);
             const composer = page.locator(".agent-chat__composer-combobox textarea");
             await composer.fill(prompt);
             await captureControlUi(page, proofDir, "01-request.png");

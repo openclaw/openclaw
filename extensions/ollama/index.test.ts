@@ -5,7 +5,7 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import plugin from "./index.js";
-import { createModel } from "./model.test-support.js";
+import { createModel, dynamicContext } from "./model.test-support.js";
 import { OLLAMA_DEFAULT_API_KEY } from "./src/discovery-shared.js";
 import { buildOllamaModelDefinition } from "./src/provider-models.js";
 
@@ -204,15 +204,6 @@ function mockInstalledModels(models: Record<string, boolean | undefined>, parame
     capabilities: models[modelId] ? ["completion", "tools"] : ["completion"],
     ...(parameterCount !== undefined ? { parameterCount } : {}),
   }));
-}
-
-function dynamicContext(modelId: string, config: Record<string, unknown> = {}) {
-  return {
-    config,
-    provider: "ollama",
-    modelId,
-    modelRegistry: { find: vi.fn(() => null) },
-  };
 }
 
 async function runCatalog(
@@ -491,13 +482,18 @@ describe("ollama plugin", () => {
     expect(showMock).not.toHaveBeenCalled();
   });
 
-  it.each([{ baseUrl: "https://ollama.com.example/v1", contextTokens: 32_768 }])(
-    "prepares the exact configured idle model at $baseUrl with its runtime context",
-    async ({ baseUrl, contextTokens }) => {
+  it.each(["literal", "SecretRef"] as const)(
+    "prepares the exact configured idle model with its runtime context and %s credential",
+    async (credential) => {
+      const baseUrl = "https://ollama.com.example/v1";
+      const contextTokens = 32_768;
       const provider = registerProvider();
       const config = ollamaConfig({
         baseUrl,
-        apiKey: "fixture-access",
+        apiKey:
+          credential === "literal"
+            ? "fixture-access"
+            : { source: "env" as const, provider: "default", id: "OLLAMA_SETUP_TEST_KEY" },
         api: "ollama" as const,
         models: [
           {
@@ -511,7 +507,7 @@ describe("ollama plugin", () => {
       mockShow(["completion", "tools"], 262_144);
       const result = await provider.auth[0].appGuidedSetup?.prepare({
         config,
-        env: {},
+        env: { OLLAMA_SETUP_TEST_KEY: "fixture-access" },
         modelRef: "ollama/qwen-tool",
       });
       expect(result).toMatchObject({
@@ -523,6 +519,9 @@ describe("ollama plugin", () => {
       const prepared = result?.configPatch?.models?.providers?.ollama?.models?.[0];
       expect(prepared?.contextWindow).toBe(262_144);
       expect(prepared?.contextTokens).toBe(contextTokens);
+      expect(showMock).toHaveBeenCalledWith("https://ollama.com.example", "qwen-tool", {
+        apiKey: "fixture-access",
+      });
       expect(loadedMock).not.toHaveBeenCalled();
     },
   );
@@ -665,7 +664,7 @@ describe("ollama plugin", () => {
     const discoveredFor = (name: string) => ({
       baseUrl,
       api: "ollama" as const,
-      models: [{ id: modelId, name, contextWindow: 8192, maxTokens: 2048 }],
+      models: [createModel(modelId, name, { contextWindow: 8192, maxTokens: 2048 })],
     });
     const completeDiscovery: Array<(result: ReturnType<typeof discoveredFor>) => void> = [];
     const started = Promise.withResolvers<void>();
@@ -747,8 +746,14 @@ describe("ollama plugin", () => {
       .mockResolvedValueOnce({ value: "managed-dynamic-access" })
       .mockResolvedValueOnce({ value: "rotated-managed-access" })
       .mockResolvedValueOnce({ unresolvedRefReason: "managed credential is unavailable" });
-    mockDiscovery([{ id: modelId, name: "Managed private model", contextWindow: 8192 }], baseUrl);
-    mockDiscovery([{ id: modelId, name: "Rotated managed model", contextWindow: 8192 }], baseUrl);
+    mockDiscovery(
+      [createModel(modelId, "Managed private model", { contextWindow: 8192 })],
+      baseUrl,
+    );
+    mockDiscovery(
+      [createModel(modelId, "Rotated managed model", { contextWindow: 8192 })],
+      baseUrl,
+    );
     const context = dynamicContext(modelId, config);
     await expect(provider.prepareDynamicModel?.(context as never)).resolves.toMatchObject({
       id: modelId,

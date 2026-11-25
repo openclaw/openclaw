@@ -1,5 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  getInternalToolTurnCompletion,
+  setInternalToolTurnCompletion,
+} from "../../../../packages/agent-core/src/internal-hooks.js";
+import {
   getAgentToolInputScope,
   resolveAgentAssistantTurnId,
 } from "../../../../packages/agent-core/src/tool-execution-context.js";
@@ -16,19 +20,17 @@ import {
 import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
 import { captureToolAuthoredSourceReply } from "../../embedded-agent-tool-authored-source-reply.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
-import {
-  getInternalToolTurnCompletion,
-  setInternalToolTurnCompletion,
-} from "../../runtime/internal-hooks.js";
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import { isToolResultError, readToolResultDetails } from "../../tool-result-error.js";
 import { createSourceReplyBatchCompletion } from "../../tool-source-reply-completion.js";
+import { isResumingAlreadyPendingSessionsYieldResult } from "../../tools/sessions-yield-tool.js";
 
 type MessageToolTerminalRoute = Omit<
   Parameters<typeof isDeliveredMessagingToolSendToCurrentSource>[0],
   "send" | "deliveredPayload"
 > & {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  messageToolFinalByDefault?: boolean;
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
@@ -106,6 +108,8 @@ export function installMessageToolTerminalHook(
   },
 ): void {
   const finalReplyInputs = new Set<object>();
+  // Per input: a steered or queued input must deliver its own reply before its yield ends it.
+  const deliveredReplyInputs = new WeakSet<object>();
   const nestedCompletion = createSourceReplyBatchCompletion();
   const previousCompletion = getInternalToolTurnCompletion(params.agent);
   // Let sibling tools settle, then finish without another model request.
@@ -125,7 +129,7 @@ export function installMessageToolTerminalHook(
     nestedCompletion.observe(context.result);
     const toolName = context.toolCall.name;
     const toolArgs = argsRecordForToolCall(context);
-    const final = resolveMessageToolSourceReplyFinal(toolArgs);
+    const final = resolveMessageToolSourceReplyFinal(toolArgs, params.messageToolFinalByDefault);
     const extractionArgs =
       toolName === "message" &&
       params.currentProvider &&
@@ -159,12 +163,26 @@ export function installMessageToolTerminalHook(
     } finally {
       delivered ||= isDelivered(hookResult);
       if (delivered) {
+        if (inputScope) {
+          deliveredReplyInputs.add(inputScope);
+        }
         if (final && inputScope) {
           finalReplyInputs.add(inputScope);
         }
         params.onDeliveredSourceReply?.();
       }
     }
-    return delivered && final ? { ...hookResult, terminate: true } : hookResult;
+    // The visible reply already went out and an earlier turn's wake resumes this session.
+    const endsAfterPendingYield =
+      inputScope !== undefined &&
+      deliveredReplyInputs.has(inputScope) &&
+      !context.isError &&
+      isResumingAlreadyPendingSessionsYieldResult(toolName, context.result);
+    if (endsAfterPendingYield) {
+      finalReplyInputs.add(inputScope);
+    }
+    return (delivered && final) || endsAfterPendingYield
+      ? { ...hookResult, terminate: true }
+      : hookResult;
   };
 }

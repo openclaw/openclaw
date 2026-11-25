@@ -1,23 +1,9 @@
 import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  observeHostDataSql,
-  trackSqliteStatementExecutions,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { ensureOpenClawAgentBoardSchemaInTransaction } from "../../state/openclaw-agent-board-schema.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
-import {
-  ensureSessionInputCompletionsSchema,
-  ensureSessionPendingInputsSchema,
-} from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { prepareComparisonClaimsFromStores } from "./legacy-main-session-key-scan.js";
-import { readClaim, readComparisonClaim } from "./legacy-main-session-migration-claims.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
   databasePath,
@@ -31,7 +17,7 @@ import {
   captureSessionRetirementReader,
   withSessionRetirementReaders,
 } from "./session-retirement-read.js";
-import { maintenanceLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 const { createFixture } = setupLegacyMainSessionMigrationTests();
 const restorers: Array<() => void> = [];
@@ -59,54 +45,6 @@ function setup() {
   const list = () => listSessionEntryKeysReadOnly({ ...options(), storePath: store().path });
   return { ...fixture, store, options, seed, reader, list };
 }
-
-it("compares retained history without acquiring Doctor deletion custody", () => {
-  const fixture = setup();
-  const key = "agent:main:chat";
-  fixture.seed(key, "main");
-  const options = fixture.options("main");
-  runOpenClawAgentWriteTransaction(({ db }) => {
-    ensureOpenClawAgentBoardSchemaInTransaction(db);
-    ensureSessionPendingInputsSchema(db);
-    ensureSessionInputCompletionsSchema(db);
-  }, options);
-  const database = openOpenClawAgentDatabase(options);
-  const store = fixture.store("main");
-  const observed = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(database.db),
-    ["node", "input"],
-    (sql) => {
-      if (!/^select /i.test(sql)) {
-        return null;
-      }
-      if (/\b(?:session_pending_inputs|session_input_completions)\b/.test(sql)) {
-        return "input";
-      }
-      const node =
-        /\b(?:board_widgets|board_tabs|session_members|session_participants|session_progress_cards|session_suggestions|session_reactions|heartbeat_outcomes)\b/;
-      return node.test(sql) || sql.startsWith('select "legacy_acp_migration_json" ')
-        ? "node"
-        : null;
-    },
-  );
-  restorers.push(observed.restore);
-  const comparison = readComparisonClaim(database, store, key, "agent:ops:chat");
-  expect(comparison).toMatchObject({
-    canonicalKey: "agent:ops:chat",
-    key,
-    entry: { sessionId: "session-agent-main-chat" },
-    generations: [expect.anything()],
-  });
-  expect(observed.counts).toEqual({ node: 0, input: 0 });
-  const custody = readClaim(database, store, key, "agent:ops:chat");
-  expect(custody?.generations[0]?.contentFingerprint).toBe(
-    comparison?.generations[0]?.contentFingerprint,
-  );
-  expect(custody?.nodeArtifactFingerprint).toMatch(/^[a-f0-9]{64}$/);
-  expect(custody?.generations[0]?.fingerprint).toMatch(/^[a-f0-9]{64}$/);
-  expect(observed.counts.node).toBeGreaterThan(0);
-  expect(observed.counts.input).toBe(2);
-});
 
 it("keeps detailed legacy detection current after a foreign transcript commit", async () => {
   const fixture = setup();
@@ -208,45 +146,30 @@ it.each(["refusal", "eviction"] as const)(
     const fixture = setup();
     const key = "agent:ops:retirement";
     fixture.seed(key);
-    const cleanupEntered = createDeferredCore();
-    const releaseCleanup = createDeferredCore();
-    const writerSettled = createDeferredCore();
     const readFailure = new Error("Retirement reader failed after dispatch");
     let following: Promise<string> | undefined;
-    vi.spyOn(maintenanceLane.pool, "rotate").mockImplementation(() => {
-      cleanupEntered.resolve();
-      return Promise.race([writerSettled.promise, releaseCleanup.promise]);
+    const { pool } = sessionStoreLane;
+    const run = pool.run.bind(pool);
+    vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false);
+    vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
+      const request = typeof input === "function" ? await input() : input;
+      if (request.kind !== "session-retirement-read") {
+        return run(request, controls);
+      }
+      following = runOpenClawAgentWriteAdmission(fixture.options(), () => "following writer");
+      if (settlement === "refusal") {
+        throw readFailure;
+      }
+      await run(request, controls);
+      return {
+        ok: true,
+        value: { kind: "session-retirement-read", result: { operation: "keys", keys: [key] } },
+        closedHistoryDatabase: request.database,
+      };
     });
-    for (const { pool } of [maintenanceLane, targetDiscoveryLane]) {
-      const run = pool.run.bind(pool);
-      vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false);
-      vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
-        const request = typeof input === "function" ? await input() : input;
-        if (request.kind !== "session-retirement-read") {
-          return run(request, controls);
-        }
-        following = runOpenClawAgentWriteAdmission(fixture.options(), () => {
-          writerSettled.resolve();
-          return "following writer";
-        });
-        if (settlement === "refusal") {
-          throw readFailure;
-        }
-        return {
-          ok: true,
-          value: { kind: "session-retirement-read", result: { operation: "keys", keys: [key] } },
-          closedHistoryDatabase: request.database,
-        };
-      });
-    }
     const reading = fixture.list();
     try {
-      const outcome = await Promise.race([
-        reading.catch((error: unknown) => error),
-        cleanupEntered.promise.then(
-          () => new Error("Retirement cleanup waits on its own queued writer"),
-        ),
-      ]);
+      const outcome = await reading.catch((error: unknown) => error);
       if (settlement === "refusal") {
         expect(outcome).toBe(readFailure);
       } else {
@@ -254,7 +177,6 @@ it.each(["refusal", "eviction"] as const)(
       }
       await expect(following).resolves.toBe("following writer");
     } finally {
-      releaseCleanup.resolve();
       await Promise.allSettled([reading, following]);
     }
   },

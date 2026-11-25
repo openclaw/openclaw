@@ -3,6 +3,7 @@ import { hasCanonicalCronDeliveryMode } from "../cron/store/delivery-codec.js";
 import type { CronJob } from "../cron/types.js";
 import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -80,8 +81,8 @@ function isWatchableExitJob(job: CronJob, defaultAgentId?: string): job is OnExi
 export function createCronExitWatchers(
   initialHandlers: CronExitWatcherHandlers,
   scheduler: GatewayScheduler,
-  options?: { retryBackoffMs?: readonly number[] },
 ): CronExitWatchers {
+  const spawnBroker = getSpawnBroker();
   let handlers = initialHandlers;
   let retries = scheduler.scope();
   const ownerSettlements = new Set<Promise<void>>();
@@ -98,10 +99,6 @@ export function createCronExitWatchers(
     }
   };
   const shell = resolveExitWatchShell();
-  const retryBackoffMs =
-    options?.retryBackoffMs && options.retryBackoffMs.length > 0
-      ? options.retryBackoffMs
-      : ON_EXIT_WATCH_RETRY_BACKOFF_MS;
   // Reserving the slot before spawn lets cancel/replace retire an in-flight arm.
   // Async continuations publish only while this exact slot remains current.
   type WatcherSlot = {
@@ -223,7 +220,9 @@ export function createCronExitWatchers(
         return;
       }
       const delayMs =
-        retryBackoffMs[Math.min(slot.consecutiveFailures - 1, retryBackoffMs.length - 1)]!;
+        ON_EXIT_WATCH_RETRY_BACKOFF_MS[
+          Math.min(slot.consecutiveFailures - 1, ON_EXIT_WATCH_RETRY_BACKOFF_MS.length - 1)
+        ]!;
       slot.retryJob = retries.schedule({
         id: `${scopeKey(job.id)}:retry`,
         delayMs,
@@ -243,7 +242,7 @@ export function createCronExitWatchers(
     };
     // Spawn, retries, and exit settlement belong to the watcher after its creator returns.
     void runInDetachedAsyncContext(() =>
-      (async () => {
+      runWithSpawnBroker(spawnBroker, async () => {
         // The command may rearm while an admitted payload drains, but not over
         // a predecessor whose process cleanup is still pending or failed.
         for (const previous of predecessors) {
@@ -382,7 +381,7 @@ export function createCronExitWatchers(
             return;
           }
         }
-      })()
+      })
         .catch((error: unknown) => {
           slot.settlementFailure = { error };
           handlers.logger.warn(

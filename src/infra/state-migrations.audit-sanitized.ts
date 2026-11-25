@@ -5,6 +5,29 @@ import {
   type AuditMigrationRoot,
 } from "./state-migrations.audit-recovery.js";
 
+export async function secureAuditArchiveFile(params: {
+  root: AuditMigrationRoot;
+  relativePath: string;
+  label: string;
+  warnings: string[];
+}): Promise<boolean> {
+  try {
+    const opened = await params.root.openWritable(params.relativePath, {
+      writeMode: "update",
+    });
+    try {
+      await opened.handle.chmod(0o600);
+      await opened.handle.sync();
+    } finally {
+      await opened.handle.close();
+    }
+    return true;
+  } catch (error) {
+    params.warnings.push(`Failed securing ${params.label} legacy source: ${String(error)}`);
+    return false;
+  }
+}
+
 export async function writeRecoveredSanitizedAuditArchive(params: {
   sourceLabel: string;
   root: AuditMigrationRoot;

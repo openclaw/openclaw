@@ -11,10 +11,9 @@ import { formatDateTimeMs } from "../../lib/format.ts";
 import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import { agentDisplayName } from "./agent-filter.ts";
 import type { SessionsBoardController } from "./sessions-board-controller.ts";
-import { cardRelativeTime } from "./view-card-time.tsx";
+import { RelativeTime } from "./view-card-time.tsx";
 import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
 import { SessionStatusBadge, type SessionStatusPresentation } from "./view-session-status.tsx";
-import "../../styles/sessions-board.css";
 
 const PULL_REQUEST_STATE_PRIORITY = { open: 0, draft: 1, merged: 2, closed: 3 };
 
@@ -123,7 +122,12 @@ export function SessionsBoard(props: SessionsBoardProps) {
       writable: host.connection.connected && host.connection.canWrite && !controller.busy,
       hasDock: controller.hasDock,
       hasSnapshot: Boolean(snapshot),
+      sessionsLoaded: controller.sessionsLoaded,
       loading: controller.loading,
+      nextCursor: snapshot?.nextCursor,
+      canLoad: host.connection.connected && !controller.busy,
+      loaded: snapshot?.sessions.length ?? 0,
+      total: snapshot?.total ?? snapshot?.sessions.length ?? 0,
       visibleError: [props.pageError, controller.error].filter(Boolean).join("\n"),
       warning: snapshot?.warning,
       peopleFilter: controller.peopleFilter,
@@ -215,8 +219,26 @@ export function SessionsBoard(props: SessionsBoardProps) {
             {state().warning}
           </div>
         ) : null}
-        {!state().hasSnapshot && state().loading ? (
+        {!state().sessionsLoaded && state().loading ? (
           <div role="status">{t("workboard.sessionsBoard.loading")}</div>
+        ) : null}
+        {state().nextCursor ? (
+          <div class="workboard-pagination" role="status">
+            <span>
+              {t("workboard.sessionsBoard.partial", {
+                count: String(state().loaded),
+                total: String(state().total),
+              })}
+            </span>
+            <button
+              class="btn"
+              type="button"
+              disabled={state().loading || !state().canLoad}
+              onClick={() => void props.controller.loadMore()}
+            >
+              {t("workboard.sessionsBoard.loadMore")}
+            </button>
+          </div>
         ) : null}
         <div class="workboard-board-viewport">
           <div
@@ -232,7 +254,11 @@ export function SessionsBoard(props: SessionsBoardProps) {
                   ]}
                   data-session-column={column().id}
                   style={{ "--workboard-column-accent": column().color }}
-                  aria-label={`${column().label}, ${column().sessions.length}`}
+                  aria-label={
+                    state().sessionsLoaded
+                      ? `${column().label}, ${column().sessions.length}`
+                      : column().label
+                  }
                   onDragOver={(event: DragEvent) => {
                     if (!state().writable || !props.controller.draggedKey) {
                       return;
@@ -257,7 +283,9 @@ export function SessionsBoard(props: SessionsBoardProps) {
                   <header class="workboard-column__header" title={column().description}>
                     <h2>
                       {column().label}
-                      <span class="workboard-column__count">{column().sessions.length}</span>
+                      {state().sessionsLoaded ? (
+                        <span class="workboard-column__count">{column().sessions.length}</span>
+                      ) : null}
                     </h2>
                   </header>
                   <div class="workboard-column__cards">
@@ -323,12 +351,12 @@ export function SessionsBoard(props: SessionsBoardProps) {
                             class="workboard-session-tile__time"
                             title={formatDateTimeMs(session().lastActivityAt)}
                           >
-                            {cardRelativeTime(session().lastActivityAt, Date.now())}
+                            <RelativeTime timestamp={session().lastActivityAt} now={Date.now()} />
                           </span>
                         </div>
                       )}
                     </For>
-                    {column().sessions.length ? null : (
+                    {!state().sessionsLoaded || column().sessions.length ? null : (
                       <span class="workboard-sessions__empty">
                         {t("workboard.sessionsBoard.empty")}
                       </span>

@@ -1,10 +1,15 @@
-import {
-  listActiveEmbeddedRunSessionIds,
-  listActiveEmbeddedRunSessionKeys,
-} from "../agents/embedded-agent-runner/active-run-projections.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import {
+  listActiveSessionRunIds,
+  listActiveSessionRunKeys,
+} from "../sessions/session-controller.queries.js";
+import {
+  getRpcSourceIdentity,
+  listRpcSourceEntries,
+} from "../sessions/session-controller.rpc-sources.js";
 import type { ResolvedInProcessGatewayDispatch } from "./server-plugin-in-process-dispatch.types.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
+import { captureGatewayScopeMatcher } from "./session-runtime-scope.js";
 
 const temporalKeys = new WeakMap<object, ReadonlySet<string>>();
 
@@ -16,9 +21,14 @@ export function transientSessionKeys(
     targets: { has: (key: string) => boolean };
   },
 ) {
-  const keys = new Set(listActiveEmbeddedRunSessionKeys());
-  const ids = new Set(listActiveEmbeddedRunSessionIds());
-  for (const run of context.chatAbortControllers.values()) {
+  const keys = new Set(listActiveSessionRunKeys());
+  const ids = new Set(listActiveSessionRunIds());
+  const matchesGateway = captureGatewayScopeMatcher(context.resolveGatewayContext);
+  for (const [, ref] of listRpcSourceEntries()) {
+    if (!matchesGateway(ref.input)) {
+      continue;
+    }
+    const run = getRpcSourceIdentity(ref);
     if (run.sessionKey) {
       keys.add(run.sessionKey);
     }

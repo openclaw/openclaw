@@ -32,6 +32,51 @@ const testBashExecPath = process.platform === "darwin" ? "/bin/bash" : "bash";
 
 const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 
+it.each(["(params) {", "(e) {", "(e){"])(
+  "injects the upgrade deadline into a built plugin owner %s",
+  (signature) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-deadline-"));
+    try {
+      const dist = join(root, "dist");
+      mkdirSync(dist);
+      writeFileSync(
+        join(dist, "update-command-plugins-fixture.mjs"),
+        `export async function updatePluginsAfterCoreUpdate${signature} return "uninterrupted"; }`,
+      );
+      const error = "Update finalization timed out in plugins after 15000ms";
+      writeFileSync(
+        join(dist, "writer.mjs"),
+        `function mutateConfigFileWithRetry() { throw new Error(${JSON.stringify(error)}); }
+export { mutateConfigFileWithRetry as write };`,
+      );
+      execFileSync(testNodeExecPath, [
+        "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs",
+        "deadline-hook",
+        root,
+        root,
+      ]);
+      const driver = join(root, "driver.mjs");
+      writeFileSync(
+        driver,
+        `import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+globalThis.setTimeout = callback => queueMicrotask(callback);
+await import(pathToFileURL(${JSON.stringify(join(root, "repair-deadline-hook.mjs"))}).href);
+const { updatePluginsAfterCoreUpdate } = await import(pathToFileURL(${JSON.stringify(join(dist, "update-command-plugins-fixture.mjs"))}).href);
+await assert.rejects(updatePluginsAfterCoreUpdate({ configWriteOptions: {} }), { message: ${JSON.stringify(error)} });`,
+      );
+      execFileSync(testNodeExecPath, [driver, "update", "repair"]);
+      expect(JSON.parse(readFileSync(join(root, "deadline-write-refused.json"), "utf8"))).toEqual({
+        phase: "plugins",
+        deadlineMs: 15_000,
+        refused: true,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
 function selectFrozenUpgradeOracle(
   root: string,
   version: string,
@@ -220,18 +265,12 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
       ? ["@openclaw/codex unavailable; using clawhub:@openclaw/codex instead.", finalMessage]
       : [finalMessage];
   const outcomes: PluginUpdateOutcome[] = [
-    {
-      pluginId: "discord",
+    ...["discord", "whatsapp"].map((pluginId): PluginUpdateOutcome => ({
+      pluginId,
       status: "updated",
       nextVersion: "2026.9.4",
-      message: "Repaired Discord.",
-    },
-    {
-      pluginId: "whatsapp",
-      status: "updated",
-      nextVersion: "2026.9.4",
-      message: "Repaired WhatsApp.",
-    },
+      message: `Repaired ${pluginId}.`,
+    })),
     ...messages.map((message): PluginUpdateOutcome => ({
       pluginId: "codex",
       status: "error",
@@ -269,6 +308,105 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
 }
 
 describe("upgrade recovery result assertions", () => {
+  // Scoped projection of the recovery receipt from Actions artifact 14890042643.
+  const lifecycle = {
+    runId: "00000000-0000-4000-8000-000000000000",
+    phase: "finished",
+    status: "succeeded",
+    after: { version: "2026.11.16-first-hop.0" },
+    steps: [
+      { step: "activating", status: "completed" },
+      { step: "notice:activating", status: "skipped" },
+    ],
+  };
+  it.each([
+    { name: "terminal success", patch: {}, status: 0 },
+    { name: "prepared activation", patch: { phase: "activating", status: "running" }, status: 1 },
+    {
+      name: "failed step",
+      patch: { steps: [{ step: "activating", status: "failed" }] },
+      status: 1,
+    },
+  ])("classifies lifecycle receipts: $name", ({ patch, status }) => {
+    const result = runJsonAssertion(
+      "assert-successful-update-json",
+      { ...lifecycle, ...patch },
+      lifecycle.after.version,
+    );
+    expect(result.status, result.stderr).toBe(status);
+  });
+
+  it.each([true, false])(
+    "requires serving Gateway verification for resident restart: %s",
+    (ready) => {
+      const version = lifecycle.after.version;
+      const buildId = "fixture-build";
+      const result = runJsonAssertion(
+        "assert-successful-update-json",
+        {
+          ...lifecycle,
+          target: { version },
+          after: { version, buildId },
+          verification: {
+            runningVersion: version,
+            runningBuildId: buildId,
+            booted: true,
+            coreReady: ready,
+            serviceRunning: true,
+            versionMatch: true,
+          },
+        },
+        version,
+        "",
+        "1",
+      );
+      expect(result.status, result.stderr).toBe(ready ? 0 : 1);
+      expect(result.stdout).toBe(ready ? "resident" : "");
+    },
+  );
+
+  it.each([
+    { name: "skipped startup", patch: {}, succeeds: true },
+    { name: "failed startup", patch: { exitCode: 1 }, succeeds: false },
+    { name: "unclassified skip", patch: { advisory: undefined }, succeeds: false },
+    { name: "another step", patch: { name: "database migration" }, succeeds: false },
+    { name: "timeout", patch: { termination: "timeout" }, succeeds: false },
+    { name: "signal", patch: { signal: "SIGTERM" }, succeeds: false },
+    { name: "killed process", patch: { killed: true }, succeeds: false },
+    { name: "truncated output", patch: { outputLimitExceeded: true }, succeeds: false },
+    {
+      name: "failure facts",
+      patch: { failureFacts: [{ code: "startup-failed" }] },
+      succeeds: false,
+    },
+  ])("classifies activated Gateway $name", ({ patch, succeeds }) => {
+    const result = runJsonAssertion(
+      "assert-successful-update-json",
+      {
+        status: "ok",
+        after: { version: "2026.11.5" },
+        steps: [
+          {
+            name: "activated-gateway-startup",
+            exitCode: null,
+            advisory: {
+              kind: "recoverable-maintenance",
+              message:
+                "This profile does not configure a local Gateway; the activated release was not started.",
+            },
+            ...patch,
+          },
+        ],
+        postUpdate: { plugins: { status: "ok", sync: { errors: [] }, npm: { outcomes: [] } } },
+      },
+      "2026.11.5",
+    );
+    expect(result.status, result.stderr).toBe(succeeds ? 0 : 1);
+    if (!succeeds) {
+      expect(result.stderr).toContain("successful update contained a failed core step");
+    }
+  });
+
   it.each<{
     name: string;
     patch?: Record<string, unknown>;
@@ -759,12 +897,13 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
     writeSharedRuntimeCaches(stateDir);
     writeJson(join(matrixInstallDir, "package.json"), {
       name: "@openclaw/matrix",
+      version: "2026.11.5-beta.1",
     });
     writeJson(join(stateDir, "plugins", "installs.json"), {
       installRecords: {
         matrix: {
           source: "clawhub",
-          spec: "clawhub:@openclaw/matrix",
+          spec: "clawhub:@openclaw/matrix@beta",
           installPath: matrixInstallDir,
           clawhubPackage: "@openclaw/matrix",
           clawhubChannel: "official",
@@ -778,16 +917,21 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
       acceptedIntents: ["configured-plugin-installs"],
     });
 
-    execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-state"], {
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-        OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "configured-plugin-installs",
-      },
-      stdio: "pipe",
-    });
+    for (const args of [
+      ["assert-baseline-plugin", "2026.11.5-beta.1", "matrix", "beta"],
+      ["assert-state"],
+    ]) {
+      execFileSync(testNodeExecPath, [ASSERTIONS_PATH, ...args], {
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+          OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "configured-plugin-installs",
+        },
+        stdio: "pipe",
+      });
+    }
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -981,6 +1125,7 @@ function assertCompanionPluginRecords(
       for (const file of [
         "release-version.mjs",
         "sqlite-transcript-payload.mjs",
+        "update-receipt.mjs",
         "upgrade-survivor-policy.mjs",
         "upgrade-survivor-scenarios.json",
       ]) {
@@ -1339,9 +1484,9 @@ publishDiagnostics(artifacts, destination, value => value, "passed");`,
             writeFileSync(
               join(binDir, "openclaw"),
               `#!/usr/bin/env node
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 assert.deepEqual(process.argv.slice(2), ["transcripts", "path", "2026-07-01/design-review", "--dir"]);
 const root = process.env.OPENCLAW_STATE_DIR;
 const sessionDir = path.join(root, "transcripts", "2026-07-01", "design-review");
@@ -1368,12 +1513,6 @@ process.stdout.write(sessionDir + "\\n");
       }),
     ) as string[];
 
-    expect(scenarios).toContain("base");
-    expect(scenarios).toContain("codex-allowlist-survival");
-    expect(scenarios).toContain("mobile-pairing-reconnect");
-    expect(scenarios).toContain("acpx-openclaw-tools-bridge");
-    expect(scenarios).toContain("prerelease-plugin-registry");
-    expect(scenarios).toContain("sqlite-volume");
     expect(scenarios).toEqual(UPGRADE_SURVIVOR_ASSERTION_SCENARIOS);
     expect(new Set(scenarios).size).toBe(scenarios.length);
   });
@@ -1393,6 +1532,28 @@ process.stdout.write(sessionDir + "\\n");
     );
     expect(() => run({ mode: "tools", codeTimeoutMs: 5000 }, "baseline")).toThrow(/legacy timeout/);
     expect(() => run({ mode: "tools" })).not.toThrow();
+  });
+
+  it("requires the pre-split skill_workshop allowlist to gain skill_library once", () => {
+    const run = (config: unknown, stage: "baseline" | "survival" = "survival") =>
+      assertConfig({
+        acceptedIntents: ["skill-library-split"],
+        baselineVersion: "2026.10.9",
+        config,
+        scenario: "base",
+        stage,
+      });
+    const marker = { migrations: { skillLibraryToolSplit: true } };
+    expect(() => run({ tools: { allow: ["read", "skill_workshop"] } }, "baseline")).not.toThrow();
+    expect(() =>
+      run({ meta: marker, tools: { allow: ["read", "skill_workshop", "skill_library"] } }),
+    ).not.toThrow();
+    expect(() => run({ meta: marker, tools: { allow: ["read", "skill_workshop"] } })).toThrow(
+      /exactly once/,
+    );
+    expect(() => run({ tools: { allow: ["read", "skill_workshop", "skill_library"] } })).toThrow(
+      /marker/,
+    );
   });
 
   it("allows token rotation and requires each reconnect to use the newest stored token", () => {
@@ -1558,7 +1719,7 @@ process.stdout.write(sessionDir + "\\n");
     }
   });
 
-  it("requires every seeded legacy cron specimen before update", () => {
+  it("requires every baseline cron SQLite specimen before update", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-cron-"));
     try {
       const stateDir = join(root, "state");
@@ -1572,17 +1733,24 @@ process.stdout.write(sessionDir + "\\n");
       };
       const run = (command: string) =>
         spawnSync(testNodeExecPath, [ASSERTIONS_PATH, command], { env, encoding: "utf8" });
-      const seeded = run("seed");
+      const seeded = spawnSync(testNodeExecPath, [ASSERTIONS_PATH, "seed"], {
+        env: { ...env, OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base" },
+        encoding: "utf8",
+      });
       expect(seeded.status, seeded.stderr).toBe(0);
-      const cronStore = join(stateDir, "cron", "jobs.json");
+      mkdirSync(join(stateDir, "state"), { recursive: true });
+      const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+      db.exec("CREATE TABLE cron_jobs(job_id TEXT PRIMARY KEY, job_json TEXT NOT NULL)");
+      for (let index = 0; index < 5; index++) {
+        db.prepare("INSERT INTO cron_jobs VALUES (?, ?)").run(`cron-${index}`, "{}");
+      }
       const baseline = run("assert-state");
       expect(baseline.status, baseline.stderr).toBe(0);
-      const store = JSON.parse(readFileSync(cronStore, "utf8"));
-      store.jobs.pop();
-      writeJson(cronStore, store);
+      db.prepare("DELETE FROM cron_jobs WHERE job_id = ?").run("cron-4");
+      db.close();
       const missingRow = run("assert-state");
       expect(missingRow.status).not.toBe(0);
-      expect(missingRow.stderr).toContain("legacy cron authority fixture row count changed");
+      expect(missingRow.stderr).toContain("baseline cron authority fixture row count changed");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -1761,58 +1929,45 @@ process.stdout.write(sessionDir + "\\n");
   });
 
   it("binds trusted inspection to the same plugin, package, root, and install record", () => {
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.plugin.id = "unrelated";
-        },
-      }),
-    ).toThrow(/discord inspected plugin id changed/);
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.plugin.packageName = "@example/unrelated";
-        },
-      }),
-    ).toThrow(/discord inspected package name changed/);
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.plugin.rootDir = inspections.whatsapp!.plugin.rootDir;
-        },
-      }),
-    ).toThrow(/discord inspected install path changed/);
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.install.integrity = "different-artifact";
-        },
-      }),
-    ).toThrow(/discord inspected install record changed/);
+    const reject = (
+      mutateInspection: (inspections: Record<string, PluginInspectFixture>) => void,
+      error: RegExp,
+    ) =>
+      expect(() =>
+        assertCompanionPluginRecords(undefined, true, undefined, { mutateInspection }),
+      ).toThrow(error);
+    reject((rows) => {
+      rows.discord!.plugin.id = "unrelated";
+    }, /discord inspected plugin id changed/);
+    reject((rows) => {
+      rows.discord!.plugin.packageName = "@example/unrelated";
+    }, /discord inspected package name changed/);
+    reject((rows) => {
+      rows.discord!.plugin.rootDir = rows.whatsapp!.plugin.rootDir;
+    }, /discord inspected install path changed/);
+    reject((rows) => {
+      rows.discord!.install.integrity = "different-artifact";
+    }, /discord inspected install record changed/);
   });
 
   it("requires artifact-bound consent for every published recovery plugin", () => {
     const ids = ["codex", "discord", "whatsapp"];
     expect(() => assertCompanionPluginRecords(undefined, true, ids)).not.toThrow();
     for (const id of ids) {
-      expect(() =>
-        assertCompanionPluginRecords(
-          (records) => {
-            records[id]!.acceptedSurfaceHash = "incorrect";
-          },
-          true,
-          ids,
-        ),
-      ).toThrow(/plugin consent hash changed/);
-      expect(() =>
-        assertCompanionPluginRecords(
-          (records) => {
-            records[id]!.acceptedSurfaceIntegrity = "different-artifact";
-          },
-          true,
-          ids,
-        ),
-      ).toThrow(/plugin consent integrity changed/);
+      for (const [field, error] of [
+        ["acceptedSurfaceHash", /plugin consent hash changed/],
+        ["acceptedSurfaceIntegrity", /plugin consent integrity changed/],
+      ] as const) {
+        expect(() =>
+          assertCompanionPluginRecords(
+            (records) => {
+              records[id]![field] = "incorrect";
+            },
+            true,
+            ids,
+          ),
+        ).toThrow(error);
+      }
     }
   });
 
@@ -1885,6 +2040,30 @@ process.stdout.write(sessionDir + "\\n");
         return env;
       });
     expect(verify).not.toThrow();
+  });
+
+  it.each([false, true])("preserves frozen inline ACP metadata (shared database: %s)", (shared) => {
+    runSessionStateAssertion(
+      (stateDir) => {
+        const env = seedSessionSourceFixture(stateDir, "acpx-openclaw-tools-bridge");
+        const storePath = join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const legacy = JSON.parse(readFileSync(storePath, "utf8"));
+        const store = createMigratedSessionFileStore();
+        store["agent:main:slack:channel:cupgrade"] = {
+          ...store["agent:main:slack:channel:cupgrade"],
+          acp: legacy["agent:main:slack:channel:cupgrade"].acp,
+        };
+        writeMigratedSessionFiles(stateDir);
+        writeJson(storePath, store);
+        if (shared) {
+          mkdirSync(join(stateDir, "state"), { recursive: true });
+          const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+          db.close();
+        }
+        return env;
+      },
+      { scenario: "acpx-openclaw-tools-bridge" },
+    );
   });
 
   it.each<{
@@ -1978,7 +2157,7 @@ process.stdout.write(sessionDir + "\\n");
         writeFileSync(
           join(bin, "openclaw"),
           `#!${testNodeExecPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const method = process.argv[4];
 const params = JSON.parse(process.argv[process.argv.indexOf("--params") + 1]);
 const outcome = process.env.PROBE_OUTCOME;
@@ -2092,7 +2271,8 @@ process.stdout.write(JSON.stringify(result));
     ).toThrow(/retained retired sessionFile metadata/);
   });
 
-  it("rejects ClawHub npm-pack installs outside the managed extensions root", () => {
+  it("accepts ClawHub npm-pack installs only inside the managed extensions root", () => {
+    expect(() => assertConfiguredPluginState()).not.toThrow();
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-outside-"));
     try {
       expect(() =>

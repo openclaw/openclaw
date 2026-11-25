@@ -18,7 +18,7 @@ Bind modes, host-provider URLs, the Claude CLI backend, Bonjour/mDNS, and mounte
 - `loopback`: only processes inside the container network namespace can reach the gateway directly.
 
 <Note>
-Use bind mode values in `gateway.bind` (`lan` / `loopback` / `custom` / `tailnet` / `auto`), not host aliases like `0.0.0.0` or `127.0.0.1`.
+Use bind mode values in `gateway.bind` (`lan` / `loopback` / `custom` / `tailnet` / `auto`), not host aliases like `0.0.0.0` or `127.0.0.1`. Also note `loopback` and `tailnet` are host-centric: inside a container network namespace there is no Tailscale interface, and both modes leave published ports unable to reach the gateway (`tailnet` falls back to loopback-only). Containerized gateways should keep `lan` (the setup default) or use `custom` with `customBindHost: "0.0.0.0"`.
 </Note>
 
 ## Host local providers
@@ -113,6 +113,21 @@ Use the published Gateway URL, Tailscale, or wide-area DNS-SD for Docker hosts o
 
 Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw`, `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, and `OPENCLAW_AUTH_PROFILE_SECRET_DIR` to `/home/node/.config/openclaw`, so those paths survive container replacement. When a variable is unset, `docker-compose.yml` falls back under `${HOME}`, or `/tmp` if `HOME` itself is missing, so `docker compose up` never emits an empty-source volume spec on bare environments.
 
+Keep SQLite state on a persistent local filesystem on the Docker host, including
+any custom database paths. Use a local bind mount or a Docker volume backed by
+local storage; a named volume can still use a network-backed driver. Avoid NAS
+mounts over NFS, SMB, or CIFS: they do not provide the shared-memory coordination
+SQLite WAL requires, which can cause corruption.
+
+OpenClaw automatically uses rollback journaling (`journal_mode=DELETE`) on
+detected NFS/SMB/CIFS mounts. This protection does not make network storage the
+recommended deployment or remove its locking requirements. [Doctor](/gateway/doctor/checks)
+warns about confirmed network-backed SQLite paths without blocking updates. To
+relocate, stop the Gateway, back up the state, and move the whole state directory
+and any custom database paths to local storage before restarting. Keep one
+Gateway replica per state volume and follow the
+[stop-first upgrade sequence](/install/docker#upgrading-container-images).
+
 That mounted config directory holds:
 
 - `openclaw.json` for behavior config
@@ -127,4 +142,4 @@ Installed downloadable plugins store package state under the mounted OpenClaw ho
 
 For full VM persistence details, see [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
-**Disk growth hotspots:** `media/`, per-agent SQLite databases, legacy session JSONL transcripts, the shared SQLite state database, installed plugin package roots, and rolling file logs under `/tmp/openclaw/`.
+**Disk growth hotspots:** `media/`, per-agent SQLite databases, legacy session JSONL transcripts, the shared SQLite state database, installed plugin package roots, and rolling file logs under the selected state directory's `logs/` directory.

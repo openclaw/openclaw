@@ -26,7 +26,7 @@ export function preparePersonalAuthProfileUsage(store: AuthProfileStore, profile
             input: { profileId, reduction },
           });
           if (result && isDeepStrictEqual(store.profiles[profileId], reduction.expectedProfile)) {
-            store.usageStats = { ...store.usageStats, [profileId]: result.next };
+            store.usageStats = { ...store.usageStats, [profileId]: result };
           }
           return result;
         },

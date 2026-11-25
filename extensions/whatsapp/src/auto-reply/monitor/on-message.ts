@@ -42,21 +42,36 @@ import {
 import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { formatError } from "../../session.js";
+import { jidToE164 } from "../../targets-runtime.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { buildMentionConfig, isBotMentioned, resolveOwnerList } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { hasWhatsAppAudioBody, transcribeWhatsAppAudioMessage } from "./audio-preflight.js";
-import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 import { noteGroupMember } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import { updateLastRouteInBackground } from "./last-route.js";
-import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
 import {
   createWhatsAppStatusReactionController,
   type StatusReactionController,
 } from "./status-reaction.js";
+
+function resolvePeerId(msg: AdmittedWebInboundMessage) {
+  const admission = msg.admission;
+  if (admission.conversation.kind === "group") {
+    return admission.conversation.id;
+  }
+  const sender = getSenderIdentity(msg);
+  if (sender.e164) {
+    return sender.e164;
+  }
+  const conversationId = admission.conversation.id;
+  if (conversationId.includes("@")) {
+    return jidToE164(conversationId) ?? conversationId;
+  }
+  return normalizeE164(conversationId);
+}
 
 const MAX_GROUP_DROP_WARNINGS = 100;
 const groupDropWarned = createDedupeCache({
@@ -279,7 +294,6 @@ export function createWebOnMessageHandler(params: {
           backgroundTasks: params.backgroundTasks,
           storeAgentId: route.agentId,
           sessionKey: route.sessionKey,
-          channel: "whatsapp",
           to: conversationId,
           accountId: route.accountId,
           ctx: metaCtx,
@@ -377,11 +391,21 @@ export function createWebOnMessageHandler(params: {
             body: mentionText ?? msg.payload.commandBody ?? msg.payload.body,
           },
         };
-        const commandBody = stripMentionsForCommand(
-          mentionMsg.payload.body,
-          mentionConfig.mentionRegexes,
-          self.e164,
-        );
+        let commandBody = mentionMsg.payload.body;
+        const mentionRegexes = mentionConfig.mentionRegexes;
+        const selfE164 = self.e164;
+        for (const re of mentionRegexes) {
+          commandBody = commandBody.replace(re, " ");
+        }
+        if (selfE164) {
+          // `selfE164` is usually like "+1234"; strip down to digits so we can match "+?1234" safely.
+          const digits = selfE164.replace(/\D/g, "");
+          if (digits) {
+            const pattern = new RegExp(`\\+?${digits}`, "g");
+            commandBody = commandBody.replace(pattern, " ");
+          }
+        }
+        commandBody = commandBody.replace(/\s+/g, " ").trim();
         const activationCommand = parseActivationCommand(commandBody);
         const ownerSender = normalizeE164(getSenderIdentity(msg, account.authDir).e164 ?? "");
         const owner =

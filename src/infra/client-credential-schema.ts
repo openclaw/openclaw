@@ -1,7 +1,15 @@
 // Independent of the selected Gateway engine and its shared schema version.
 export const CLIENT_CREDENTIAL_SCHEMA_VERSION = 1;
 
-export const CLIENT_CREDENTIAL_SCHEMA_SQL = `CREATE TABLE device_identities (
+export const CLIENT_CREDENTIAL_SOURCE_TABLES = [
+  "device_identities",
+  "device_auth_tokens",
+  "gateway_origin_device_tokens",
+  "exec_approvals_config",
+] as const;
+
+// These unchanged tables also describe the shared-state v25 migration source.
+export const CLIENT_CREDENTIAL_LEGACY_TABLES_SQL = `CREATE TABLE device_identities (
   identity_key TEXT NOT NULL PRIMARY KEY,
   device_id TEXT NOT NULL,
   public_key_pem TEXT NOT NULL,
@@ -29,7 +37,9 @@ CREATE TABLE gateway_origin_device_tokens (
   scopes_json TEXT NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   PRIMARY KEY (gateway_scope, device_id, role)
-) STRICT;
+) STRICT;`;
+
+export const CLIENT_CREDENTIAL_SCHEMA_SQL = `${CLIENT_CREDENTIAL_LEGACY_TABLES_SQL}
 CREATE TABLE native_exec_socket_credentials (
   socket_key TEXT NOT NULL PRIMARY KEY CHECK (socket_key = 'current'),
   socket_path TEXT,
@@ -75,3 +85,16 @@ export type ClientCredentialDatabase = {
     updated_at_ms: number;
   };
 };
+
+export type ClientIdentityRecord = ClientCredentialDatabase["device_identities"];
+export type ClientTokenRecord = ClientCredentialDatabase["device_auth_tokens"];
+export type ClientSocketRecord = ClientCredentialDatabase["native_exec_socket_credentials"];
+
+export type ClientCredentialResult =
+  | { kind: "identity"; identity: ClientIdentityRecord | null }
+  | { kind: "token"; token: ClientTokenRecord | null }
+  | { kind: "tokens"; tokens: ClientTokenRecord[]; nextRole: string | null }
+  | { kind: "identityRepair"; identity: ClientIdentityRecord; repaired: boolean; rotated: boolean }
+  | { kind: "changed"; changed: boolean }
+  | { kind: "cleared"; count: number }
+  | { kind: "socket"; socket: ClientSocketRecord | null };

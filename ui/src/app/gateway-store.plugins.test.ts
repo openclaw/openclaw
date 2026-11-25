@@ -46,7 +46,7 @@ describe("plugin capabilities", () => {
   });
 
   it("refreshes plugin methods and surfaces on the existing connection", async () => {
-    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
     const sessionKey = gateway.snapshot.sessionKey;
     const before = gateway.snapshot;
     const publications = new Map<number, boolean>();
@@ -64,7 +64,7 @@ describe("plugin capabilities", () => {
       controlUiWidgetKinds: [{ pluginId: "notes", kind: "notes:card", label: "Note" }],
     });
     current().request.mockResolvedValue(published);
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 7 }));
+    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 7 }));
     await vi.waitFor(() => expect(gateway.snapshot.pluginCapabilities?.generation).toBe(7));
     expect(gateway.snapshot.hello).toMatchObject({
       features: { methods: published.methods },
@@ -72,7 +72,7 @@ describe("plugin capabilities", () => {
       controlUiWidgetKinds: published.controlUiWidgetKinds,
     });
     current().request.mockResolvedValue(capabilities(8));
-    current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 8 }));
+    current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 8 }));
     await vi.waitFor(() => expect(gateway.snapshot.hello?.controlUiTabs).toEqual([]));
     expect(gateway.snapshot).not.toBe(before);
     expect(gateway.snapshot.hello).toBe(before.hello);
@@ -91,10 +91,10 @@ describe("plugin capabilities", () => {
     { boundary: "replacement", event: "plugins.changed" },
     { boundary: "same-client reconnect", event: "plugins.controlUi.changed" },
   ])("discards a $event capability response after $boundary", async ({ boundary, event }) => {
-    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
     const pending = createDeferred<unknown>();
     current().request.mockReturnValue(pending.promise);
-    current().opts.onEvent?.(
+    current().testOptions.onEvent?.(
       createGatewayEvent(
         event,
         event === "plugins.changed" ? { generation: 7 } : { revision: "off" },
@@ -106,9 +106,9 @@ describe("plugin capabilities", () => {
     if (boundary === "replacement") {
       gateway.connect();
     } else {
-      current().opts.onClose?.({ code: 1006, reason: "disconnected", willRetry: true });
+      current().testOptions.onClose?.({ code: 1006, reason: "disconnected", willRetry: true });
     }
-    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
     pending.resolve(capabilities(7, { methods: ["plugin.retired.read"] }));
     await vi.dynamicImportSettled();
     expect(gateway.snapshot.pluginCapabilities).toBeNull();
@@ -116,7 +116,7 @@ describe("plugin capabilities", () => {
   });
 
   it("ignores malformed plugin change events", async () => {
-    current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
     const pending: ReturnType<typeof createDeferred<unknown>>[] = [];
     current().request.mockImplementation(() => {
       const request = createDeferred<unknown>();
@@ -124,7 +124,7 @@ describe("plugin capabilities", () => {
       return request.promise;
     });
     const changed = (generation: unknown) =>
-      current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation }));
+      current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation }));
 
     changed(7);
     await vi.waitFor(() => expect(pending).toHaveLength(1));
@@ -134,9 +134,13 @@ describe("plugin capabilities", () => {
     pending[0]!.resolve(capabilities(7));
     await vi.waitFor(() => expect(gateway.snapshot.pluginCapabilities?.generation).toBe(7));
 
-    current().opts.onEvent?.(createGatewayEvent("plugins.controlUi.changed", { revision: "off" }));
+    current().testOptions.onEvent?.(
+      createGatewayEvent("plugins.controlUi.changed", { revision: "off" }),
+    );
     await vi.waitFor(() => expect(pending).toHaveLength(2));
-    current().opts.onEvent?.(createGatewayEvent("plugins.controlUi.changed", { revision: 42 }));
+    current().testOptions.onEvent?.(
+      createGatewayEvent("plugins.controlUi.changed", { revision: 42 }),
+    );
     await vi.dynamicImportSettled();
     expect(pending).toHaveLength(2);
     pending[1]!.resolve(capabilities(8));
@@ -146,7 +150,7 @@ describe("plugin capabilities", () => {
   it("preserves an in-flight Inbox read across capability publication", async () => {
     const auth = { role: "operator", scopes: ["operator.read"] };
     const server = { bootId: "inbox-boot", connId: "inbox-connection" };
-    current().opts.onHello?.({
+    current().testOptions.onHello?.({
       ...GATEWAY_STORE_TEST_HELLO,
       auth,
       server,
@@ -179,7 +183,7 @@ describe("plugin capabilities", () => {
     const inbox = createMentionsCapability(gateway);
     try {
       await vi.waitFor(() => expect(current().request).toHaveBeenCalledWith("mentions.list", {}));
-      current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
+      current().testOptions.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
       await vi.waitFor(() => expect(gateway.snapshot.pluginCapabilities?.generation).toBe(1));
       expect(gateway.snapshot.hello?.auth).toBe(auth);
       expect(gateway.snapshot.hello?.server).toBe(server);
@@ -249,9 +253,9 @@ describe("warm admission ownership", () => {
     window.dispatchEvent(new Event("pagehide"));
     const { gateway, current } = createGatewayStoreTestStore({ settings });
     gateway.connect();
-    expect(current().opts.offlineRecoveryScope).toBe("account-a");
-    expect(current().opts.password).toBeUndefined();
-    expect(current().opts.token).toBeUndefined();
+    expect(current().testOptions.offlineRecoveryScope).toBe("account-a");
+    expect(current().testOptions.password).toBeUndefined();
+    expect(current().testOptions.token).toBeUndefined();
     expect(gateway.snapshot.phase).toBe("connecting");
     gateway.stop();
   });
@@ -282,14 +286,14 @@ describe("warm admission ownership", () => {
       const bytes = localStorage.getItem(key);
       try {
         gateway.connect(overrides);
-        expect(current().opts.offlineRecoveryScope).toBe(admitted ? "account-a" : undefined);
+        expect(current().testOptions.offlineRecoveryScope).toBe(admitted ? "account-a" : undefined);
         const replacement = { ...saved, recoveryScope: replacementScope };
         if (admitted) {
           persistBootRecord(replacement);
           window.dispatchEvent(new Event("pagehide"));
           persistBootRecord(replacement);
         }
-        current().opts.onClose?.({
+        current().testOptions.onClose?.({
           code: 4008,
           reason: "rejected",
           willRetry: false,
@@ -321,7 +325,7 @@ describe("warm admission ownership", () => {
         const { gateway, current } = createGatewayStoreTestStore({ settings });
         try {
           gateway.connect();
-          current().opts.onHello?.({
+          current().testOptions.onHello?.({
             type: "hello-ok",
             protocol: 1,
             auth: { method: "token", role: "operator", scopes: [], recoveryScope: "live-owner" },
@@ -334,7 +338,7 @@ describe("warm admission ownership", () => {
           localStorage.setItem(key, JSON.stringify(replacement));
           persistBootRecord(replacement);
           if (transition === "rejection") {
-            current().opts.onClose?.({
+            current().testOptions.onClose?.({
               code: 4008,
               reason: "rejected",
               willRetry: false,

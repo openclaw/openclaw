@@ -2,7 +2,6 @@
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { transitionOwnedDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite-claim.kernel.js";
 import {
-  completeDeliveryQueueEntryInDatabase,
   completeLoadedDeliveryQueueEntryInDatabase,
   deleteDeliveryQueueEntryInDatabase,
   prepareDeliveryQueueTerminalEntry,
@@ -124,11 +123,7 @@ export function ackDeliveryInDatabase(
         stateDir,
       );
       if (current.completionRetention && options?.suppressCompletionReceipt !== true) {
-        if (hasExpectedClaim) {
-          completeLoadedDeliveryQueueEntryInDatabase(database, queueName, id, current);
-        } else {
-          completeDeliveryQueueEntryInDatabase(database, queueName, id);
-        }
+        completeLoadedDeliveryQueueEntryInDatabase(database, queueName, id, current);
       } else {
         deleteDeliveryQueueEntryInDatabase(database, queueName, id);
       }

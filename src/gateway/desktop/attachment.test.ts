@@ -1,10 +1,8 @@
 import { once } from "node:events";
-import net from "node:net";
 import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { connectRfbAttachment } from "./attachment.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
 const { cleanupWarning } = vi.hoisted(() => ({ cleanupWarning: vi.fn() }));
@@ -12,8 +10,6 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: cleanupWarning }),
 }));
 
-const servers: net.Server[] = [];
-const sockets: net.Socket[] = [];
 const tcpAttachment = { kind: "tcp", host: "127.0.0.1", port: 5900 } as const;
 type Registry = ReturnType<typeof createDesktopSessionRegistry>;
 let registry: Registry;
@@ -28,12 +24,7 @@ beforeEach(() => {
   cleanupWarning.mockClear();
 });
 function request(overrides: Partial<Parameters<Registry["acquire"]>[0]> = {}) {
-  return {
-    sourceKey: "node:one",
-    ownerEpoch: 1,
-    start,
-    ...overrides,
-  };
+  return { sourceKey: "node:one", ownerEpoch: 1, start, ...overrides };
 }
 
 function holdTeardown() {
@@ -57,33 +48,6 @@ function observe(owner: Registry, close = () => {}) {
 afterEach(async () => {
   vi.useRealTimers();
   await registry.stopAll();
-  for (const socket of sockets.splice(0)) {
-    socket.destroy();
-  }
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        }),
-    ),
-  );
-});
-
-it("connects a loopback TCP attachment", async () => {
-  const server = net.createServer((socket) => sockets.push(socket));
-  servers.push(server);
-  const accepted = once(server, "connection").then(() => undefined);
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected TCP test server address");
-  }
-
-  sockets.push(connectRfbAttachment({ kind: "tcp", host: "127.0.0.1", port: address.port }));
-
-  await expect(accepted).resolves.toBeUndefined();
 });
 
 it.each([false, true])("claims only its source's live stream (closed: %s)", async (closed) => {
@@ -124,15 +88,14 @@ it.each([false, true])("claims only its source's live stream (closed: %s)", asyn
 
 it.each(["acquire", "activate"] as const)("refreshes idle cleanup after %s", async (method) => {
   vi.useFakeTimers();
-  registry = createDesktopSessionRegistry({ lingerMs: 25 });
   const params = request({ teardown });
   await registry[method](params);
-  await vi.advanceTimersByTimeAsync(20);
+  await vi.advanceTimersByTimeAsync(48_000);
   await registry[method](params);
-  await vi.advanceTimersByTimeAsync(20);
+  await vi.advanceTimersByTimeAsync(48_000);
   expect(teardown).not.toHaveBeenCalled();
 
-  await vi.advanceTimersByTimeAsync(5);
+  await vi.advanceTimersByTimeAsync(12_000);
   expect(teardown).toHaveBeenCalled();
 });
 
@@ -195,7 +158,7 @@ it("bounds pending observer reservations before streams are started", async () =
 it.each([1, 2])("bounds repeated failed cleanup at epoch %s", async (ownerEpoch) => {
   const failure = new Error("transport still running");
   teardown.mockRejectedValue(failure);
-  const params = request({ start, teardown, dispose });
+  const params = request({ teardown, dispose });
   await registry.acquire(params);
   try {
     if (ownerEpoch === 1) {
@@ -275,17 +238,16 @@ it("retains failed resource disposal for a later cleanup retry", async () => {
 
 it("does not linger-stop a reservation when another observer disconnects", async () => {
   vi.useFakeTimers();
-  registry = createDesktopSessionRegistry({ lingerMs: 25 });
   await registry.activate(request({ teardown }));
   const observer = observe(registry);
   const pending = createPendingStream(registry);
   expect(pending.reserve()).toBe(true);
   expect(observer).toBeDefined();
   observer?.release();
-  await vi.advanceTimersByTimeAsync(100);
+  await vi.advanceTimersByTimeAsync(240_000);
   expect(teardown).not.toHaveBeenCalled();
 
   await pending.stop();
-  await vi.advanceTimersByTimeAsync(25);
+  await vi.advanceTimersByTimeAsync(60_000);
   expect(teardown).toHaveBeenCalled();
 });

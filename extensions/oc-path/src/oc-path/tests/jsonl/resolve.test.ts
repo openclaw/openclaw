@@ -12,7 +12,7 @@ const log = `{"event":"start","ts":1}
 `;
 
 function rs(ocPath: string) {
-  const { ast } = parseJsonl(log);
+  const ast = parseJsonl(log);
   return resolveJsonlOcPath(ast, parseOcPath(ocPath));
 }
 
@@ -47,7 +47,7 @@ describe("resolveJsonlToUniversal — file-relative line metadata (regression)",
   ].join("\n");
 
   it("findOcPaths over wildcard surfaces correct file-relative lines", () => {
-    const { ast } = parseJsonl(logLocal);
+    const ast = parseJsonl(logLocal);
     const matches = findOcPaths(ast, parseOcPath("oc://session.jsonl/*/event"));
     expect(matches).toHaveLength(4);
     const lines = matches.map((m) => m.match.line);

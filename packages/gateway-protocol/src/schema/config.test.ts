@@ -1,7 +1,10 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
-  ConfigSchemaLookupResultSchema,
+  validateConfigSchemaLookupResult,
+  validateUpdateRunParams,
+} from "../validators/operations.js";
+import {
   ConfigSchemaResponseSchema,
   UpdateAvailableSchema,
   UpdateHoldParamsSchema,
@@ -33,12 +36,12 @@ describe("ConfigSchemaResponseSchema", () => {
 });
 
 describe("ConfigSchemaLookupResultSchema", () => {
-  it("accepts a documentation URL in the resolved hint", () => {
+  it("accepts documentation and inherited-default metadata in the resolved hint", () => {
     expect(
-      Value.Check(ConfigSchemaLookupResultSchema, {
+      validateConfigSchemaLookupResult({
         path: "gateway",
         schema: { type: "object" },
-        hint: { docsUrl: "https://docs.openclaw.ai/gateway" },
+        hint: { docsUrl: "https://docs.openclaw.ai/gateway", inheritedDefault: true },
         children: [],
       }),
     ).toBe(true);
@@ -157,6 +160,42 @@ describe("update protocol schemas", () => {
     expect(Value.Check(UpdateRunParamsSchema, { requester: { senderId: 123 } })).toBe(false);
   });
 
+  it("accepts optional update consent and exactly one closed checkout identity", () => {
+    const validRequests = [
+      {},
+      { acceptCapabilities: true },
+      { acceptCapabilities: false },
+      { checkout: { gitCommonDir: "/checkouts/openclaw/.git" } },
+      { checkout: { packageRoot: "/packages/openclaw" } },
+      {
+        acceptCapabilities: true,
+        checkout: { gitCommonDir: "/checkouts/openclaw/.git" },
+      },
+    ];
+    const invalidRequests = [
+      { acceptCapabilities: "true" },
+      { acceptCapabilities: null },
+      { checkout: null },
+      { checkout: {} },
+      { checkout: { gitCommonDir: "" } },
+      { checkout: { packageRoot: "" } },
+      { checkout: { gitCommonDir: 123 } },
+      { checkout: { packageRoot: 123 } },
+      { checkout: { gitCommonDir: "/repo/.git", packageRoot: "/repo" } },
+      { checkout: { gitCommonDir: "/repo/.git", extra: true } },
+      { checkout: { packageRoot: "/repo", extra: true } },
+      { checkout: { root: "/repo" } },
+    ];
+    for (const request of validRequests) {
+      expect(Value.Check(UpdateRunParamsSchema, request)).toBe(true);
+      expect(validateUpdateRunParams(request)).toBe(true);
+    }
+    for (const request of invalidRequests) {
+      expect(Value.Check(UpdateRunParamsSchema, request)).toBe(false);
+      expect(validateUpdateRunParams(request)).toBe(false);
+    }
+  });
+
   it("accepts only closed, exact tracked Git targets for update.run", () => {
     const target = {
       kind: "git",
@@ -164,7 +203,6 @@ describe("update protocol schemas", () => {
       upstreamSha: "1234567890abcdef1234567890abcdef12345678",
     };
 
-    expect(Value.Check(UpdateRunParamsSchema, {})).toBe(true);
     expect(Value.Check(UpdateRunParamsSchema, { target })).toBe(true);
 
     for (const invalidTarget of [
@@ -289,7 +327,12 @@ describe("update protocol schemas", () => {
         schedule: {
           channel: "dev",
           autoEnabled: true,
-          target: { kind: "git", upstreamRef: "origin/main", commitsBehind: -1 },
+          target: {
+            kind: "git",
+            upstreamRef: "origin/main",
+            upstreamSha: "abcdef1234",
+            commitsBehind: -1,
+          },
         },
       }),
     ).toBe(false);

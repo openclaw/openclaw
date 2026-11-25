@@ -5,8 +5,8 @@ import Testing
 
 struct NativeStateBootstrapTests {
     @Test
-    func `version zero database composes identity and port guardian tables`() throws {
-        let tempDir = FileManager.default.temporaryDirectory
+    func `identity bootstrap preserves the independent PortGuardian database`() throws {
+        let tempDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         let databaseURL = tempDir.appendingPathComponent("openclaw.sqlite", isDirectory: false)
@@ -25,7 +25,6 @@ struct NativeStateBootstrapTests {
         """)
 
         _ = try DeviceIdentitySQLiteStore.loadOrCreate(
-            databaseURL: databaseURL,
             destinationStateDirURL: tempDir,
             profile: .primary)
 
@@ -38,8 +37,7 @@ struct NativeStateBootstrapTests {
             """
             SELECT group_concat(type || ':' || name, ',')
             FROM (SELECT type, name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name)
-            """) == "index:idx_device_identities_device,index:idx_macos_port_guardian_records_port," +
-            "table:device_identities,table:macos_port_guardian_records")
+            """) == "index:idx_macos_port_guardian_records_port,table:macos_port_guardian_records")
     }
 
     private static func execute(_ databaseURL: URL, _ sql: String) throws {

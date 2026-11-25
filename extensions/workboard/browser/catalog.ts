@@ -6,11 +6,6 @@ import { normalizeCardsPayload } from "./lib/workboard/normalization.ts";
 import { getWorkboardState, invalidateWorkboardLoads } from "./lib/workboard/runtime.ts";
 import { WORKBOARD_CHANGED_EVENT, type WorkboardBoardSummary } from "./lib/workboard/types.ts";
 
-type WorkboardCatalogSnapshot = {
-  boards: readonly Pick<WorkboardBoardSummary, "id" | "name" | "kind" | "icon" | "color">[];
-  ready: boolean;
-};
-
 const RETRY_MS = 2_000;
 
 export class WorkboardCatalog {
@@ -22,10 +17,9 @@ export class WorkboardCatalog {
   private pending = false;
   private generation = 0;
   private lastChange: ReturnType<typeof normalizeWorkboardChange> = null;
-  private snapshot: WorkboardCatalogSnapshot = { boards: [], ready: false };
 
   constructor(
-    private readonly onSnapshot: (snapshot: WorkboardCatalogSnapshot) => void,
+    private readonly onBoards: (boards: readonly WorkboardBoardSummary[]) => void,
     private readonly host: WorkboardCapability,
   ) {}
 
@@ -33,7 +27,7 @@ export class WorkboardCatalog {
     if (this.disposed) {
       return;
     }
-    const reconnecting = connected && !this.connected && this.snapshot.ready;
+    const reconnecting = connected && !this.connected && this.host.boardsReady;
     if (this.connected !== connected || this.client !== client) {
       this.invalidate();
     }
@@ -77,7 +71,7 @@ export class WorkboardCatalog {
     this.invalidate();
     const state = getWorkboardState(this.host);
     state.boards = state.boards.filter((board) => board.id !== id);
-    this.publishCatalog(state.boards, this.snapshot.ready);
+    this.publishCatalog(state.boards, this.host.boardsReady);
     this.ensureAndRecover(true);
   }
 
@@ -102,7 +96,7 @@ export class WorkboardCatalog {
         this.clearRetry();
         return;
       }
-      if (!force && this.snapshot.ready) {
+      if (!force && this.host.boardsReady) {
         return;
       }
       if (this.retryTimer === null) {
@@ -119,7 +113,7 @@ export class WorkboardCatalog {
       this.pending ||= force;
       return this.load;
     }
-    if (!force && this.snapshot.ready) {
+    if (!force && this.host.boardsReady) {
       return false;
     }
     const generation = this.generation;
@@ -163,18 +157,7 @@ export class WorkboardCatalog {
   private publishCatalog(boards: WorkboardBoardSummary[], ready: boolean): void {
     this.host.setBoardsReady(ready);
     this.host.notify();
-    const snapshot: WorkboardCatalogSnapshot = {
-      boards: boards.map(({ id, name, kind, icon, color }) => ({
-        id,
-        ...(name ? { name } : {}),
-        ...(kind ? { kind } : {}),
-        ...(icon ? { icon } : {}),
-        ...(color ? { color } : {}),
-      })),
-      ready,
-    };
-    this.snapshot = snapshot;
-    this.onSnapshot(snapshot);
+    this.onBoards(boards);
   }
 
   private clearRetry(): void {

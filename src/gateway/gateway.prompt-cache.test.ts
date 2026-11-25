@@ -11,16 +11,19 @@ import { createChatFixture, sendChatAndWait } from "./gateway-chat-fixture.test-
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 
 const childResponse = createDeferred();
+const spawnPrompt = "Start the cache-prefix child.";
+const childTask = "Return the child cache-prefix result.";
+const childReply = "Child verification completed.";
 let spawnRequested = false;
 const fixture = createChatFixture("prompt-cache", {
   async respond(body, sessionId, response) {
-    if (!spawnRequested && body.includes("Start the synthetic cache-prefix child.")) {
+    if (!spawnRequested && body.includes(spawnPrompt)) {
       spawnRequested = true;
       writeToolCall(
         response,
         "sessions_spawn",
         {
-          task: "Return the synthetic child cache-prefix result.",
+          task: childTask,
           agentId: "main",
           context: "isolated",
           completionTarget: "parent",
@@ -30,17 +33,19 @@ const fixture = createChatFixture("prompt-cache", {
       );
       return undefined;
     }
-    const isChild =
-      body.includes("Return the synthetic child cache-prefix result.") &&
-      sessionId !== fixture.sessionIds[0];
+    const isChild = body.includes(childTask) && sessionId !== fixture.sessionIds[0];
     if (isChild) {
       await childResponse.promise;
     }
-    return isChild ? "Synthetic child verification completed." : "Fixture reply complete.";
+    return isChild ? childReply : "Fixture reply complete.";
   },
   configure(config, model) {
-    const providerId = "openai";
-    const modelRef = `${providerId}/${model.modelId}`;
+    const modelRef = `openai/${model.modelId}`;
+    model.config.models[0].compat = {
+      supportsPromptCacheKey: true,
+      supportsStore: false,
+      sendSessionIdHeader: true,
+    };
     return {
       ...config,
       agents: {
@@ -51,27 +56,10 @@ const fixture = createChatFixture("prompt-cache", {
           models: { [modelRef]: { params: { transport: "sse", openaiWsWarmup: false } } },
         },
       },
-      models: {
-        mode: "replace",
-        providers: {
-          [providerId]: {
-            ...model.config,
-            models: [
-              {
-                ...model.config.models[0],
-                compat: {
-                  supportsPromptCacheKey: true,
-                  supportsStore: false,
-                  sendSessionIdHeader: true,
-                },
-              },
-            ],
-          },
-        },
-      },
+      models: { mode: "replace", providers: { openai: model.config } },
       tools: { allow: ["sessions_spawn"], toolSearch: false },
       plugins: {
-        allow: [providerId],
+        allow: ["openai"],
         load: { paths: [path.resolve("extensions/openai")] },
         slots: { memory: "none" },
       },
@@ -82,16 +70,32 @@ const { requests, sessionIds: requestSessionIds, errors: providerErrors } = fixt
 beforeAll(() => fixture.start(), 90_000);
 afterAll(() => fixture.close());
 
-it("preserves the provider prefix across chat.send, completion and Gateway restart", async ({
+async function waitForRun(runId: string | undefined, timeoutMs = 30_000) {
+  const result = await fixture.client.request<{ status: string }>(
+    "agent.wait",
+    { runId, timeoutMs },
+    { timeoutMs: timeoutMs + 5_000 },
+  );
+  expect(result.status).toBe("ok");
+}
+
+it("keeps cache identity through operator, WebChat, completion and restart turns", async ({
   signal,
 }) => {
   const sessionKey = `agent:main:cache-prefix-${randomUUID()}`;
   const requestStart = requests.length;
-  // The real first send establishes the conversation metadata used by command continuations.
+  const initialized = await fixture.client.request<{ runId: string; status: string }>("agent", {
+    sessionKey,
+    message: "Remember this conversation.",
+    deliver: false,
+    idempotencyKey: randomUUID(),
+  });
+  expect(initialized.status).toBe("accepted");
+  await waitForRun(initialized.runId, 60_000);
   const initializedRunId = await sendChatAndWait(
     fixture.client,
     sessionKey,
-    "Remember this synthetic conversation for the completion update.",
+    "Continue in WebChat.",
     60_000,
   );
   const completion = createDeferred();
@@ -112,8 +116,7 @@ it("preserves the provider prefix across chat.send, completion and Gateway resta
   const stopObserving = onAgentEvent(observeCompletion);
   const stopObservingPrivate = onAgentAuditEvent(observeCompletion);
   try {
-    // The real spawn owns child lineage and the completion's one-use tool grant.
-    await sendChatAndWait(fixture.client, sessionKey, "Start the synthetic cache-prefix child.");
+    const parentRunId = await sendChatAndWait(fixture.client, sessionKey, spawnPrompt);
     const outputs = requests.slice(requestStart).flatMap((body) => {
       const payload = JSON.parse(body) as {
         input: Array<{ type?: string; output?: string }>;
@@ -124,31 +127,23 @@ it("preserves the provider prefix across chat.send, completion and Gateway resta
       status?: string;
       runId?: string;
     } | null;
-    expect(spawnResult?.status, "sessions_spawn admits the child through its real tool").toBe(
-      "accepted",
-    );
+    expect(spawnResult?.status).toBe("accepted");
     // Complete the child after the parent turn so its result takes the separate announce path.
     childResponse.resolve();
-    expect(spawnResult?.runId, "sessions_spawn returns its admitted child run").toBeTruthy();
-    const child = await fixture.client.request<{ status: string }>(
-      "agent.wait",
-      { runId: spawnResult!.runId, timeoutMs: 30_000 },
-      { timeoutMs: 35_000 },
-    );
-    expect(child.status, "the child completes before its private parent announcement").toBe("ok");
+    expect(spawnResult?.runId).toBeTruthy();
+    await waitForRun(spawnResult!.runId);
     await withinTest(completion.promise, signal);
+    const completionRunId = [...terminalRuns].find((runId) => runId !== parentRunId);
+    expect(completionRunId).toBeTruthy();
+    // Lifecycle end precedes durable input completion and RPC settlement.
+    await waitForRun(completionRunId);
   } finally {
     childResponse.resolve();
     stopObserving();
     stopObservingPrivate();
   }
-  // Reopen the same persisted conversation through a fresh Gateway and authenticated client.
   await fixture.restart();
-  await sendChatAndWait(
-    fixture.client,
-    sessionKey,
-    "Continue the same synthetic conversation after the child completion.",
-  );
+  await sendChatAndWait(fixture.client, sessionKey, "Continue after completion.");
   expect(providerErrors.length).toBe(0);
   expect(
     requests.slice(requestStart).some((body) => {
@@ -158,25 +153,21 @@ it("preserves the provider prefix across chat.send, completion and Gateway resta
     "the capturing provider receives full history without stored-response continuation",
   ).toBe(false);
   const parentSessionId = requestSessionIds[requestStart];
-  expect(parentSessionId, "the provider receives the physical session identity").toBeTruthy();
+  expect(parentSessionId).toBeTruthy();
   // Physical identity selects the parent independently of the cache key and history under test.
   const turnRequests = requests
     .slice(requestStart)
     .filter((_body, index) => requestSessionIds[requestStart + index] === parentSessionId);
-  expect(turnRequests, "parent requests include the tool loop and completion").toHaveLength(5);
+  expect(turnRequests).toHaveLength(6);
   const prefixes = turnRequests.map((body) => {
     const payload = JSON.parse(body) as { prompt_cache_key?: unknown };
-    expect(
-      typeof payload.prompt_cache_key === "string" && payload.prompt_cache_key.length > 0,
-      "the provider receives a nonempty session cache key",
-    ).toBe(true);
+    expect(payload.prompt_cache_key).toBe(`${parentSessionId}:0`);
     return snapshotProviderPrefix("openai-responses", payload);
   });
-  expect(
-    prefixes[3]!.history.join("\n").includes("Synthetic child verification completed."),
-    "the internal completion reached the provider",
-  ).toBe(true);
-  for (let index = 1; index < prefixes.length; index += 1) {
+  expect(prefixes[4]!.history.join("\n")).toContain(childReply);
+  // Preserve prefix coverage from WebChat initialization; the preceding operator
+  // turn also checks cache identity without coupling this test to ingress envelopes.
+  for (let index = 2; index < prefixes.length; index += 1) {
     assertStableProviderPrefix(prefixes[index - 1]!, prefixes[index]!, {
       label: `Gateway chat/completion turn ${index + 1}`,
     });

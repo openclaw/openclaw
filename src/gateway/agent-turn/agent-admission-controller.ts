@@ -7,9 +7,11 @@ import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
-  beginSessionWorkAdmission,
-  type SessionWorkAdmissionLease,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  captureSessionTarget,
+  type SessionEffectRef,
+} from "../../sessions/session-controller.lifecycle.js";
+import { isRpcSourceRegistered } from "../../sessions/session-controller.rpc-sources.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import {
   assertExpectedExistingSession,
@@ -25,7 +27,7 @@ import {
   readGatewayDedupeEntry,
   setAbortedAgentDedupeEntries,
 } from "./agent-dedupe.js";
-import { resolveAgentSessionWorkStartError } from "./agent-handler-helpers.js";
+import { resolveAgentSessionWorkStartBlock } from "./agent-handler-helpers.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export function createAgentAdmissionController(params: {
@@ -34,7 +36,6 @@ export function createAgentAdmissionController(params: {
   agentDedupeKeys: string[];
   preAcceptedReservedSessionKey?: string;
   expectedSession?: ExpectedExistingSessionConstraint;
-  admissionOwner?: symbol;
   context: AgentTurnContext;
   io: AgentTurnIo;
   dedupeLifecycle: AgentDedupeLifecycle;
@@ -49,7 +50,7 @@ export function createAgentAdmissionController(params: {
   getSupersededSessionId: () => string | undefined;
   setAdmittedSessionId: (sessionId: string) => void;
 }) {
-  let admission: SessionWorkAdmissionLease | undefined;
+  let admission: SessionEffectRef | undefined;
   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
   let postAdmissionAbort: ReturnType<typeof readGatewayDedupeEntry>;
   let postAdmissionTimeout: ReturnType<typeof buildAbortedAgentPayload> | undefined;
@@ -129,9 +130,9 @@ export function createAgentAdmissionController(params: {
     if (params.getSessionPersisted() && !latestEntry) {
       throw new Error(`Session "${resolvedSessionKey}" was deleted while starting work. Retry.`);
     }
-    const archivedError = resolveAgentSessionWorkStartError(resolvedSessionKey, latestEntry);
-    if (archivedError) {
-      throw new Error(archivedError);
+    const workStartBlock = resolveAgentSessionWorkStartBlock(resolvedSessionKey, latestEntry);
+    if (workStartBlock) {
+      throw new Error(workStartBlock.message);
     }
     if (
       commitOutcome &&
@@ -152,14 +153,12 @@ export function createAgentAdmissionController(params: {
       ? AGENT_RUN_RESTART_ABORT_STOP_REASON
       : "rpc";
     if (admittedRunAbort?.entry) {
-      admittedRunAbort.entry.abortStopReason = stopReason;
+      admittedRunAbort.entry.adapter.abortStopReason = stopReason;
     }
     if (admittedRunAbort) {
       const entry = admittedRunAbort.entry;
       const ownsRun =
-        entry !== undefined &&
-        params.context.chatAbortControllers.get(params.runId) === entry &&
-        !entry.registrationCleanupRequested;
+        entry !== undefined && isRpcSourceRegistered(entry) && !entry.input.retirementRequested;
       admittedRunAbort.controller.abort(reason);
       return ownsRun ? { runId: params.runId } : undefined;
     }
@@ -182,37 +181,38 @@ export function createAgentAdmissionController(params: {
     if (admission) {
       return;
     }
-    const isSettling = () => admittedRunAbort?.entry?.terminalOutcomeObserved === true;
+    const isSettling = () => admittedRunAbort?.entry?.adapter.terminalOutcomeObserved === true;
     const getAbortReason = () => admittedRunAbort?.controller.signal.reason;
     const sessionKey = params.getResolvedSessionKey();
+    if (!sessionKey) {
+      assertAllowed();
+      return;
+    }
+    const target = captureSessionTarget({
+      storeScope: scope,
+      sessionKey,
+      aliases: [params.getRequestedSessionKey()],
+      agentId: admissionAgentId(),
+      incarnation: params.getResolvedSessionId(),
+    });
     admission =
       consumeExpectedSessionWorkAdmission({
         constraint: params.expectedSession,
-        scope,
-        identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
+        target,
         onInterrupt: interrupt,
         isSettling,
         getAbortReason,
       }) ??
-      (await beginSessionWorkAdmission({
-        agentId: params.getResolvedSessionAgentId() ?? params.getAgentId(),
-        scope,
-        run: {
-          runId: params.runId,
-          sessionKey: params.getResolvedSessionKey(),
-          sessionId: params.getResolvedSessionId(),
-          agentId: admissionAgentId(),
-        },
+      (await beginSessionEffect({
+        agentId: admissionAgentId(),
+        target,
+        sourceInput: admittedRunAbort?.entry?.input,
         isSettling,
         getAbortReason,
-        identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
         storeWriterIdentities:
-          sessionKey &&
-          parseAgentSessionKey(sessionKey) &&
-          normalizeStoreSessionKey(sessionKey) === sessionKey
+          parseAgentSessionKey(sessionKey) && normalizeStoreSessionKey(sessionKey) === sessionKey
             ? [sessionKey]
             : undefined,
-        ...(params.admissionOwner ? { owner: params.admissionOwner } : {}),
         assertAllowed: () => {
           assertAllowed(false);
         },
@@ -267,6 +267,7 @@ export function createAgentAdmissionController(params: {
       admittedRunAbort = value;
     },
     release: () => {
+      admittedRunAbort?.cleanup();
       admission?.release();
     },
   };

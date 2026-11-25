@@ -17,6 +17,8 @@ import {
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
+import { getTelegramAdoptedDmThreadId } from "../dm-topic-adopt.js";
+import type { TelegramGroupConfigResolver } from "../group-config-helpers.js";
 import type { TelegramThreadSpec } from "../thread-spec.js";
 import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
@@ -30,7 +32,7 @@ import {
   normalizeForwardedContext,
   resolveTelegramNonTextBody,
   resolveTelegramPrimaryMedia,
-  resolveTelegramRichMessageBody,
+  resolveTelegramRichMessagePlaceholder,
   resolveTelegramTextContent,
   type TelegramForwardedContext,
   type TelegramMediaKind,
@@ -69,17 +71,13 @@ function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs
   pruneMapToMaxSize(telegramForumFlagByChatId, TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS);
 }
 
-export function getCachedTelegramForumFlag(
-  chatId: string | number,
-  nowMs?: number,
-): boolean | undefined {
+export function getCachedTelegramForumFlag(chatId: string | number): boolean | undefined {
   const cacheKey = String(chatId);
   const cached = telegramForumFlagByChatId.get(cacheKey);
   if (!cached) {
     return undefined;
   }
-  const effectiveNow = nowMs ?? Date.now();
-  if (cached.expiresAtMs <= effectiveNow) {
+  if (cached.expiresAtMs <= Date.now()) {
     return undefined;
   }
   return cached.isForum;
@@ -200,14 +198,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   // the decision. Lets command auth survive transient store I/O failures.
   skipPairingStoreRead?: boolean;
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
-  resolveTelegramGroupConfig: (
-    chatId: string | number,
-    messageThreadId: number | undefined,
-    cfg: OpenClawConfig,
-  ) => {
-    groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-    topicConfig?: TelegramTopicConfig;
-  };
+  resolveTelegramGroupConfig: TelegramGroupConfigResolver;
 }): Promise<{
   threadSpec: TelegramThreadSpec;
   resolvedThreadId?: number;
@@ -336,6 +327,11 @@ export function resolveTelegramMessageThreadSpec(
   if (message.chat.is_direct_messages === true) {
     const id = parseStrictPositiveInteger(message.direct_messages_topic?.topic_id);
     return id === undefined ? { scope: "none" } : { id, scope: "direct-messages" };
+  }
+  // Topic fact decided once by the receiving account's ingress monitor.
+  const adoptedDmThreadId = getTelegramAdoptedDmThreadId(message);
+  if (adoptedDmThreadId !== undefined) {
+    return { id: adoptedDmThreadId, scope: "dm" };
   }
   const isGroup = message.chat.type === "group" || message.chat.type === "supergroup";
   return resolveTelegramThreadSpec({
@@ -508,7 +504,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const safeReplyText = replyTextParts?.text ?? "";
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody = safeReplyText.trim() || resolveTelegramRichMessageBody(replyLike) || "";
+    const replyBody =
+      safeReplyText.trim() || resolveTelegramRichMessagePlaceholder(replyLike) || "";
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {

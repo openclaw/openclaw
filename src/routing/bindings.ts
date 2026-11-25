@@ -76,10 +76,3 @@ export function buildChannelAccountBindings(cfg: OpenClawConfig) {
   }
   return map;
 }
-
-export function resolvePreferredAccountId(params: {
-  defaultAccountId: string;
-  boundAccounts: string[];
-}): string {
-  return params.boundAccounts[0] ?? params.defaultAccountId;
-}

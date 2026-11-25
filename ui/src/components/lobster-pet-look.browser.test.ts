@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
-import { canonicalLobsterLook, lobsterLookStyle, renderLobsterSvg } from "./lobster-pet-look.ts";
+import { canonicalLobsterLook, lobsterLookStyle } from "./lobster-pet-identity.ts";
+import { renderLobsterSvg } from "./lobster-pet-look.tsx";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
 const container = document.createElement("div");
@@ -67,6 +68,9 @@ it.each([
   ["shellvis", ".lob-microphone"],
   ["leonardodepinchy", ".lob-leonardodepinchy__brush"],
   ["alexandergrahamshell", ".lob-telephone-receiver"],
+  ["santaclaws", ".lob-candy-cane"],
+  ["clawnadian", ".lob-hockey-stick"],
+  ["clawlombian", ".lob-maraca"],
 ] as const)("keeps %s’s prop attached through claw sizes and wave poses", (id, propSelector) => {
   const palette = expectDefined(
     LOBSTER_PET_PALETTES.find((entry) => entry.id === id),

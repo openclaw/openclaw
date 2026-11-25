@@ -1,4 +1,3 @@
-// Tests subagent agent-list command output and filtering.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureSubagentListReadContext } from "../../../agents/subagents/registry/subagent-list.js";
 import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagents/registry/subagent-registry-queries.js";
@@ -7,21 +6,15 @@ const THREAD_CHANNEL = "thread-chat";
 const ROOM_CHANNEL = "room-chat";
 const MAIN_SESSION_KEY = "agent:main:main";
 
-const { listBySessionMock, getChannelPluginMock, normalizeChannelIdMock } = vi.hoisted(() => ({
-  listBySessionMock: vi.fn(),
-  getChannelPluginMock: vi.fn((channel: string) =>
+const { listBySessionMock } = vi.hoisted(() => ({ listBySessionMock: vi.fn() }));
+
+// mock-isolation: Use synthetic channel descriptors without loading the bundled plugin registry.
+vi.mock("../../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (channel: string) =>
     channel === "thread-chat" || channel === "room-chat"
-      ? {
-          config: {
-            hasPersistedAuthState: () => false,
-          },
-          conversationBindings: {
-            supportsCurrentConversationBinding: true,
-          },
-        }
+      ? { conversationBindings: { supportsCurrentConversationBinding: true } }
       : null,
-  ),
-  normalizeChannelIdMock: vi.fn((channel: string) => channel),
+  normalizeChannelId: (channel: string) => channel,
 }));
 
 vi.mock("../../../infra/outbound/session-binding-service.js", async (importOriginal) => ({
@@ -30,72 +23,53 @@ vi.mock("../../../infra/outbound/session-binding-service.js", async (importOrigi
     new Map([...new Set(keys)].map((key) => [key, listBySessionMock(key)])),
 }));
 
-vi.mock("../../../channels/plugins/index.js", () => ({
-  getChannelPlugin: getChannelPluginMock,
-  normalizeChannelId: normalizeChannelIdMock,
-}));
-
 let handleSubagentsAgentsAction: typeof import("./action-agents.js").handleSubagentsAgentsAction;
 
-function activeBinding(params: {
-  bindingId: string;
-  channel: string;
-  conversationId: string;
-  targetSessionKey: string;
-}) {
-  return {
-    bindingId: params.bindingId,
-    targetSessionKey: params.targetSessionKey,
+function bindSession(targetSessionKey: string, channel: string, conversationId: string) {
+  const binding = {
+    bindingId: `binding-${conversationId}`,
+    targetSessionKey,
     targetKind: "subagent",
-    conversation: {
-      channel: params.channel,
-      accountId: "default",
-      conversationId: params.conversationId,
-    },
+    conversation: { channel, accountId: "default", conversationId },
     status: "active",
     boundAt: Date.now() - 20_000,
   };
+  listBySessionMock.mockImplementation((sessionKey: string) =>
+    sessionKey === targetSessionKey ? [binding] : [],
+  );
 }
 
-function subagentRun(params: {
-  childSessionKey: string;
-  endedAgoMs?: number;
-  runId: string;
-  startedAgoMs?: number;
-  task: string;
-}) {
-  const startedAgoMs = params.startedAgoMs ?? 20_000;
+function subagentRun(
+  task: string,
+  params: { childSessionKey?: string; endedAgoMs?: number; startedAgoMs?: number } = {},
+) {
+  const startedAt = Date.now() - (params.startedAgoMs ?? 20_000);
   return {
-    runId: params.runId,
-    childSessionKey: params.childSessionKey,
+    runId: task,
+    childSessionKey: params.childSessionKey ?? `agent:main:subagent:${task.replaceAll(" ", "-")}`,
     requesterSessionKey: MAIN_SESSION_KEY,
     requesterDisplayKey: "main",
-    task: params.task,
+    task,
     cleanup: "keep" as const,
-    createdAt: Date.now() - startedAgoMs,
+    createdAt: startedAt,
     execution:
       params.endedAgoMs === undefined
-        ? { status: "running" as const, startedAt: Date.now() - startedAgoMs }
+        ? { status: "running" as const, startedAt }
         : {
             status: "terminal" as const,
-            startedAt: Date.now() - startedAgoMs,
+            startedAt,
             endedAt: Date.now() - params.endedAgoMs,
             outcome: { status: "ok" as const },
           },
   };
 }
 
-function agentsActionInput(channel: string, runs: ReturnType<typeof subagentRun>[]) {
+async function agentsReply(channel: string, runs: ReturnType<typeof subagentRun>[]) {
   const snapshot = new Map(runs.map((run) => [run.runId, run]));
-  return {
+  const result = await handleSubagentsAgentsAction({
     params: {
-      ctx: {
-        Provider: channel,
-        Surface: channel,
-      },
-      command: {
-        channel,
-      },
+      ctx: { Provider: channel, Surface: channel },
+      command: { channel },
     },
     requesterKey: MAIN_SESSION_KEY,
     readContext: {
@@ -107,7 +81,8 @@ function agentsActionInput(channel: string, runs: ReturnType<typeof subagentRun>
       ),
     },
     restTokens: [],
-  } as never;
+  } as never);
+  return result.reply?.text;
 }
 
 describe("handleSubagentsAgentsAction", () => {
@@ -116,152 +91,62 @@ describe("handleSubagentsAgentsAction", () => {
   });
 
   beforeEach(() => {
-    listBySessionMock.mockReset();
-    getChannelPluginMock.mockClear();
-    normalizeChannelIdMock.mockClear();
+    listBySessionMock.mockReset().mockReturnValue([]);
   });
 
   it("dedupes stale bound rows for the same child session", async () => {
     const childSessionKey = "agent:main:subagent:worker";
-    listBySessionMock.mockImplementation((sessionKey: string) =>
-      sessionKey === childSessionKey
-        ? [
-            activeBinding({
-              bindingId: "binding-1",
-              channel: THREAD_CHANNEL,
-              conversationId: "thread-1",
-              targetSessionKey: childSessionKey,
-            }),
-          ]
-        : [],
-    );
+    bindSession(childSessionKey, THREAD_CHANNEL, "thread-1");
 
-    const result = await handleSubagentsAgentsAction(
-      agentsActionInput(THREAD_CHANNEL, [
-        subagentRun({
-          runId: "run-current",
-          childSessionKey,
-          task: "current worker label",
-          startedAgoMs: 10_000,
-        }),
-        subagentRun({
-          runId: "run-stale",
-          childSessionKey,
-          task: "stale worker label",
-          endedAgoMs: 15_000,
-        }),
-      ]),
-    );
+    const text = await agentsReply(THREAD_CHANNEL, [
+      subagentRun("current worker label", { childSessionKey, startedAgoMs: 10_000 }),
+      subagentRun("stale worker label", { childSessionKey, endedAgoMs: 15_000 }),
+    ]);
 
-    expect(result.reply?.text).toContain("current worker label");
-    expect(result.reply?.text).not.toContain("stale worker label");
+    expect(text).toContain("current worker label");
+    expect(text).not.toContain("stale worker label");
   });
 
   it("keeps /agents numbering aligned with target resolution when hidden recent rows exist", async () => {
-    const hiddenSessionKey = "agent:main:subagent:hidden-recent";
     const visibleSessionKey = "agent:main:subagent:visible-bound";
-    listBySessionMock.mockImplementation((sessionKey: string) =>
-      sessionKey === visibleSessionKey
-        ? [
-            activeBinding({
-              bindingId: "binding-visible",
-              channel: THREAD_CHANNEL,
-              conversationId: "thread-visible",
-              targetSessionKey: visibleSessionKey,
-            }),
-          ]
-        : [],
-    );
+    bindSession(visibleSessionKey, THREAD_CHANNEL, "thread-visible");
 
-    const result = await handleSubagentsAgentsAction(
-      agentsActionInput(THREAD_CHANNEL, [
-        subagentRun({
-          runId: "run-stale-unended",
-          childSessionKey: "agent:main:subagent:stale-unended",
-          task: "stale unended worker",
-          startedAgoMs: 3 * 60 * 60_000,
-        }),
-        subagentRun({
-          runId: "run-hidden-recent",
-          childSessionKey: hiddenSessionKey,
-          task: "hidden recent worker",
-          startedAgoMs: 10_000,
-          endedAgoMs: 5_000,
-        }),
-        subagentRun({
-          runId: "run-visible-bound",
-          childSessionKey: visibleSessionKey,
-          task: "visible bound worker",
-          endedAgoMs: 15_000,
-        }),
-      ]),
-    );
+    const text = await agentsReply(THREAD_CHANNEL, [
+      subagentRun("stale unended worker", { startedAgoMs: 3 * 60 * 60_000 }),
+      subagentRun("hidden recent worker", { startedAgoMs: 10_000, endedAgoMs: 5_000 }),
+      subagentRun("visible bound worker", {
+        childSessionKey: visibleSessionKey,
+        endedAgoMs: 15_000,
+      }),
+    ]);
 
-    expect(result.reply?.text).toContain("2. visible bound worker");
-    expect(result.reply?.text).not.toContain("1. visible bound worker");
-    expect(result.reply?.text).not.toContain("hidden recent worker");
-    expect(result.reply?.text).not.toContain("stale unended worker");
+    expect(text).toContain("2. visible bound worker");
+    expect(text).not.toContain("1. visible bound worker");
+    expect(text).not.toContain("hidden recent worker");
+    expect(text).not.toContain("stale unended worker");
   });
 
   it("shows room-channel runs as unbound when the plugin supports conversation bindings", async () => {
-    listBySessionMock.mockReturnValue([]);
+    const text = await agentsReply(ROOM_CHANNEL, [subagentRun("room worker")]);
 
-    const result = await handleSubagentsAgentsAction(
-      agentsActionInput(ROOM_CHANNEL, [
-        subagentRun({
-          runId: "run-room-worker",
-          childSessionKey: "agent:main:subagent:room-worker",
-          task: "room worker",
-        }),
-      ]),
-    );
-
-    expect(result.reply?.text).toContain("room worker (unbound)");
-    expect(result.reply?.text).not.toContain("bindings unavailable");
+    expect(text).toContain("room worker (unbound)");
+    expect(text).not.toContain("bindings unavailable");
   });
 
   it("formats bindings generically", async () => {
     const childSessionKey = "agent:main:subagent:room-bound";
-    listBySessionMock.mockImplementation((sessionKey: string) =>
-      sessionKey === childSessionKey
-        ? [
-            activeBinding({
-              bindingId: "binding-room",
-              channel: ROOM_CHANNEL,
-              conversationId: "room-thread-1",
-              targetSessionKey: childSessionKey,
-            }),
-          ]
-        : [],
-    );
+    bindSession(childSessionKey, ROOM_CHANNEL, "room-thread-1");
 
-    const result = await handleSubagentsAgentsAction(
-      agentsActionInput(ROOM_CHANNEL, [
-        subagentRun({
-          runId: "run-room-bound",
-          childSessionKey,
-          task: "room bound worker",
-        }),
-      ]),
-    );
+    const text = await agentsReply(ROOM_CHANNEL, [
+      subagentRun("room bound worker", { childSessionKey }),
+    ]);
 
-    expect(result.reply?.text).toContain("room bound worker (binding:room-thread-1)");
+    expect(text).toContain("room bound worker (binding:room-thread-1)");
   });
 
   it("shows bindings unavailable for channels without conversation binding support", async () => {
-    getChannelPluginMock.mockReturnValueOnce(null);
-    listBySessionMock.mockReturnValue([]);
+    const text = await agentsReply("irc", [subagentRun("irc worker")]);
 
-    const result = await handleSubagentsAgentsAction(
-      agentsActionInput("irc", [
-        subagentRun({
-          runId: "run-irc-worker",
-          childSessionKey: "agent:main:subagent:irc-worker",
-          task: "irc worker",
-        }),
-      ]),
-    );
-
-    expect(result.reply?.text).toContain("irc worker (bindings unavailable)");
+    expect(text).toContain("irc worker (bindings unavailable)");
   });
 });

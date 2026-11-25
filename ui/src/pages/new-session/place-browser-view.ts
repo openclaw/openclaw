@@ -24,7 +24,8 @@ function filterBrowserEntries(entries: readonly FsDirEntry[], prefix: string): F
   if (!prefix) {
     return [...entries];
   }
-  const query = prefix.toLowerCase();
+  // macOS stores many names in NFD; NFC comparison keeps typed precomposed queries matching.
+  const query = prefix.toLowerCase().normalize("NFC");
   // Case-sensitive filesystems can hold `App` and `app`; the typed spelling must win first.
   const spelled: FsDirEntry[] = [];
   const exact: FsDirEntry[] = [];
@@ -35,7 +36,7 @@ function filterBrowserEntries(entries: readonly FsDirEntry[], prefix: string): F
     if (entry.hidden && !prefix.startsWith(".")) {
       continue;
     }
-    const name = entry.name.toLowerCase();
+    const name = entry.name.toLowerCase().normalize("NFC");
     if (entry.name === prefix) {
       spelled.push(entry);
     } else if (name === query) {

@@ -1,5 +1,3 @@
-// Shared Gateway session projection types.
-// Keeps server methods and Control UI payloads aligned.
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionPlacement,
@@ -9,9 +7,9 @@ import type {
 import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionsPatchResult as ProtocolSessionsPatchResult } from "../../packages/gateway-protocol/src/sessions-patch-result.js";
-import type { StickyModelSelectionTarget } from "../agents/sticky-model-selection.js";
 import type { SessionPreviewItem } from "../config/sessions/session-history-read.types.js";
 import type { SessionEntry, SessionGoal, SessionOrigin } from "../config/sessions/types.js";
+import type { ModelSelectionScope } from "../config/types.agent-defaults.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type { FastModeSource } from "../shared/fast-mode.js";
 import type {
@@ -39,10 +37,14 @@ export type GatewaySessionsDefaults = {
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
-  modelSelectionTarget?: StickyModelSelectionTarget;
+  modelSelectionTarget?: ModelSelectionScope;
 };
 
-type SubagentRunState = "active" | "interrupted" | "historical";
+/**
+ * The child's current registry run. `paused` is a yielded run awaiting a continuation;
+ * its `status` stays the terminal-looking value older clients already render.
+ */
+type SubagentRunState = "active" | "paused" | "interrupted" | "historical";
 
 export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "worktree"> & {
   worktree?: SessionEntry["worktree"];
@@ -69,6 +71,7 @@ export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "w
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
+  cyberAccessProgram?: SessionEntry["cyberAccessProgram"];
   fastMode?: FastMode;
   effectiveFastMode?: FastMode;
   effectiveFastModeSource?: FastModeSource;
@@ -82,6 +85,7 @@ export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "w
   sendPolicy?: "allow" | "deny";
   goal?: SessionGoal;
   hasActiveRun?: boolean;
+  backgroundProcessCount?: number;
   activeRunIds?: string[];
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;

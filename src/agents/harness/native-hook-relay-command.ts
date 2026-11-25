@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   isStandaloneRuntimeExecutable,
   resolveOpenClawCliInvocation,
@@ -7,11 +8,7 @@ import {
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { DEFAULT_RELAY_TIMEOUT_MS } from "./native-hook-relay-constants.js";
 import type { NativeHookRelayEvent, NativeHookRelayProvider } from "./native-hook-relay-types.js";
-import {
-  normalizeOptionalPositiveInteger,
-  normalizePositiveInteger,
-  shellQuoteArgs,
-} from "./native-hook-relay-utils.js";
+import { normalizePositiveInteger, shellQuoteArgs } from "./native-hook-relay-utils.js";
 
 function resolveNativeHookRelayNicePrefix(value: number | false | undefined): string[] {
   if (process.platform === "win32" || value === false || value === undefined) {
@@ -28,8 +25,8 @@ export function resolveNativeHookRelayCommandTimeoutMs(
   configuredTimeoutMs: number | undefined,
   overrideTimeoutMs: number | undefined,
 ): number | undefined {
-  const configured = normalizeOptionalPositiveInteger(configuredTimeoutMs);
-  const override = normalizeOptionalPositiveInteger(overrideTimeoutMs);
+  const configured = floorPositiveFiniteNumber(configuredTimeoutMs);
+  const override = floorPositiveFiniteNumber(overrideTimeoutMs);
   if (configured === undefined) {
     return override;
   }

@@ -3,7 +3,7 @@ import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -17,10 +17,12 @@ import {
   resetCompactHooksHarnessMocks,
   resolveContextEngineMock,
 } from "./compact.hooks.harness.js";
-import type { QueuedCompactionHostOptions } from "./compact.queued-execution.js";
+import type { QueuedCompactionHostOptions } from "./compact.types.js";
 import type { AcceptedCompactionSuccessor } from "./compaction-successor.js";
 
-const { compactEmbeddedAgentSession: compact } = await loadCompactHooksHarness();
+const { compactEmbeddedAgentSession: compact } = await loadCompactHooksHarness({
+  durableSession: true,
+});
 // The harness resets modules. Load every real owner afterward so the manager
 // and queued compaction share the same private write context and database lifetime.
 const [
@@ -34,6 +36,7 @@ const [
   },
   { closeOpenClawAgentDatabasesAsync, closeOpenClawAgentDatabasesForTest },
   { SessionManager: PersistentSessionManager },
+  sessionManagerViews,
   safetyTimeout,
   realSafetyTimeout,
   { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot },
@@ -42,6 +45,7 @@ const [
   import("../../config/sessions/session-accessor.js"),
   import("../../state/openclaw-agent-db.js"),
   import("../sessions/session-manager.js"),
+  import("../sessions/session-manager-view-types.js"),
   import("./compaction-safety-timeout.js"),
   vi.importActual<typeof import("./compaction-safety-timeout.js")>(
     "./compaction-safety-timeout.js",
@@ -104,12 +108,11 @@ function expectPostCompactionCalls(count = 0) {
 }
 
 async function waitForCheckpoint(checkpoint: Promise<unknown>, pending: Promise<unknown>) {
-  await Promise.race([
+  await awaitGateBeforeSettlement(
     checkpoint,
-    pending.then(() => {
-      throw new Error("Queued compaction settled before the checkpoint");
-    }),
-  ]);
+    pending,
+    "Queued compaction settled before the checkpoint",
+  );
 }
 const compactParams = (abortSignal?: AbortSignal) => ({
   ...target(),
@@ -152,23 +155,22 @@ type BackendAppendOutcome = ReturnType<ReturnType<typeof createBackendAppend>>;
 type TranscriptRewrite = NonNullable<ContextEngineRuntimeContext["rewriteTranscriptEntries"]>;
 
 async function transcriptFixture() {
-  const { SessionManager } = await import("../sessions/index.js");
-  const openAsync = vi.spyOn(SessionManager, "openAsync");
-  const originalOpenAsync = expectDefined(
-    openAsync.getMockImplementation(),
-    "session-manager bridge",
-  );
+  const originalOpenAsync = PersistentSessionManager.openAsync.bind(PersistentSessionManager);
+  const openAsync = vi.spyOn(PersistentSessionManager, "openAsync");
   const hooks: { beforeBranchRead?: () => void } = {};
   openAsync.mockImplementation(async (...args) => {
-    const manager = await PersistentSessionManager.openAsync(...args);
-    const getBranch = manager.getBranch.bind(manager);
-    vi.spyOn(manager, "getBranch").mockImplementation((...branchArgs) => {
-      hooks.beforeBranchRead?.();
-      return getBranch(...branchArgs);
-    });
+    const manager = await originalOpenAsync(...args);
+    const readBranch =
+      manager[sessionManagerViews.sessionManagerReadTranscriptBranch].bind(manager);
+    vi.spyOn(manager, sessionManagerViews.sessionManagerReadTranscriptBranch).mockImplementation(
+      (...branchArgs) => {
+        hooks.beforeBranchRead?.();
+        return readBranch(...branchArgs);
+      },
+    );
     return manager;
   });
-  restoreTranscriptBridge = () => openAsync.mockImplementation(originalOpenAsync);
+  restoreTranscriptBridge = () => openAsync.mockRestore();
   const manager = PersistentSessionManager.open(target(), workspaceDir);
   const entryId = manager.appendMessage({
     role: "user",
@@ -403,23 +405,13 @@ it.each([false, true])(
       hostCommitHeld.resolve();
       await releaseHostCommit.promise;
     });
-    const onHostCompactionTranscriptSettled = vi.fn<
-      NonNullable<QueuedCompactionHostOptions["onHostCompactionTranscriptSettled"]>
-    >(async (commit) => {
-      expect(commit).toMatchObject(hostCommit);
-      expect(maintain).toHaveBeenCalledOnce();
-      expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
-      expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
-    });
     const pending = compact(compactParams(controller.signal), {
       onCommitted,
       onHostCompactionCommitted,
-      onHostCompactionTranscriptSettled,
     });
     try {
       await waitForCheckpoint(hostCommitHeld.promise, pending);
       expect(onHostCompactionCommitted).toHaveBeenCalledOnce();
-      expect(onHostCompactionTranscriptSettled).not.toHaveBeenCalled();
       expectPostCompactionCalls();
       releaseHostCommit.resolve();
 
@@ -430,7 +422,6 @@ it.each([false, true])(
       });
       expect(onCommitted).toHaveBeenCalledOnce();
       expect(onHostCompactionCommitted).toHaveBeenCalledOnce();
-      expect(onHostCompactionTranscriptSettled).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
       expect(loadSessionEntry(target())).toMatchObject(successor);
       expectPostCompactionCalls(abortAfterCommit ? 0 : 1);
       if (!abortAfterCommit) {
@@ -801,10 +792,9 @@ it.each([
   },
 );
 
-it("refreshes host state when cancellation follows a committed maintenance rewrite", async () => {
+it("preserves a committed maintenance rewrite after cancellation", async () => {
   const { request, transcriptBefore } = await transcriptFixture();
   const controller = new AbortController();
-  const onHostCompactionTranscriptSettled = vi.fn();
   contextEngineCompactMock.mockResolvedValueOnce(completed(sessionId));
   maintain.mockImplementationOnce(async ({ runtimeContext }) => {
     const rewrite = expectDefined(runtimeContext?.rewriteTranscriptEntries, "active rewrite");
@@ -813,12 +803,12 @@ it("refreshes host state when cancellation follows a committed maintenance rewri
     return result;
   });
 
-  await expect(
-    compact(compactParams(controller.signal), { onHostCompactionTranscriptSettled }),
-  ).resolves.toMatchObject({ ...success, result: { tokensAfter: 40 } });
+  await expect(compact(compactParams(controller.signal))).resolves.toMatchObject({
+    ...success,
+    result: { tokensAfter: 40 },
+  });
 
   expect(loadTranscriptEventsSync(target())).not.toEqual(transcriptBefore);
-  expect(onHostCompactionTranscriptSettled).toHaveBeenCalledOnce();
   expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
   expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
 });

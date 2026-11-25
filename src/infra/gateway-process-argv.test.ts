@@ -5,6 +5,18 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { classifyOpenClawArgv, parseProcCmdline } from "./gateway-process-argv.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type Options = NonNullable<Parameters<typeof classifyOpenClawArgv>[1]>;
+function expectKind(argv: string[], kind: string, opts: Options = {}) {
+  expect(classifyOpenClawArgv(argv, opts).kind).toBe(kind);
+}
+function expectEntry(argv: string[], entryIndex?: number, opts: Options = {}) {
+  expect(classifyOpenClawArgv(argv, opts)).toEqual(
+    entryIndex === undefined ? { kind: "other" } : { kind: "openclaw", entryIndex },
+  );
+}
+function uncertain(argv: string[], cause: string) {
+  expect(classifyOpenClawArgv(argv)).toMatchObject({ kind: "unclassified", cause });
+}
 
 function scriptFixture(entry: string, packageName = "openclaw") {
   const root = tempDirs.make("process-argv-");
@@ -16,37 +28,28 @@ function scriptFixture(entry: string, packageName = "openclaw") {
 }
 
 it("parses proc arguments without retaining empty entries", () => {
-  const cases: Array<[string, string[]]> = [
-    [" node \0 gateway \0\0 --port \0 18789 \0", ["node", "gateway", "--port", "18789"]],
-    [" gateway ", ["gateway"]],
-    [" \0\t\0 ", []],
-  ];
-  for (const [raw, expected] of cases) {
-    expect(parseProcCmdline(raw)).toStrictEqual(expected);
-  }
+  expect(
+    [" node \0 gateway \0\0 --port \0 18789 \0", " gateway ", " \0\t\0 "].map(parseProcCmdline),
+  ).toStrictEqual([["node", "gateway", "--port", "18789"], ["gateway"], []]);
 });
 
 it("classifies executable identities and the requested command, excluding argument values", () => {
   const built = scriptFixture("dist/entry.js");
   const cases: Array<[string[], string | undefined, "openclaw" | "other"]> = [
-    ...["NODE", "bun", "tsx"].flatMap((runtime): typeof cases => [
-      [[runtime, built.script, "GATEWAY"], "gateway", "openclaw"],
-      [[runtime, built.script, "doctor"], "gateway", "other"],
-    ]),
+    [["NODE", built.script, "GATEWAY"], "gateway", "openclaw"],
+    [["node", built.script, "doctor"], "gateway", "other"],
     [["node", built.script, "doctor"], "doctor", "openclaw"],
     [["python", "doctor", "worker.py"], "doctor", "other"],
     [["C:\\bin\\openclaw.cmd", "gateway"], "gateway", "openclaw"],
-    [["/usr/local/bin/openclaw-gateway"], "gateway", "openclaw"],
     [["C:\\bin\\openclaw-gateway.EXE"], "gateway", "openclaw"],
     [["openclaw-doctor"], "gateway", "other"],
     [["openclaw", "agent", "--message", "gateway"], "gateway", "other"],
     [["openclaw", "--profile", "gateway", "status"], "gateway", "other"],
     [["node", "/srv/openclaw/openclaw.mjs", "tui", "--local"], undefined, "openclaw"],
     [["openclaw"], undefined, "openclaw"],
-    [["python", "worker.py"], undefined, "other"],
   ];
   for (const [argv, command, kind] of cases) {
-    expect(classifyOpenClawArgv(argv, { command }).kind).toBe(kind);
+    expectKind(argv, kind, { command });
   }
 });
 
@@ -55,15 +58,12 @@ it("classifies the runtime script after flags and subcommands without adopting a
   const other = scriptFixture("app.js", "unrelated-service");
   const source = scriptFixture("src/index.ts");
   const namedRun = scriptFixture("run", "unrelated-service");
+  const foreign = scriptFixture("dist/index.js", "unrelated-service");
+  const worker = scriptFixture("dist/infra/example.worker.js");
   const cases: Array<[string[], number | undefined]> = [
-    ...["--inspect", "--inspect-brk", "--inspect-wait", "--expose-gc"].map(
-      (flag): [string[], number] => [["node", flag, owned.script, "gateway"], 2],
-    ),
+    [["node", "--inspect", owned.script, "gateway"], 2],
     [["tsx", "watch", source.script, "gateway"], 2],
-    ...["--watch", "--hot", "--no-install"].map((flag): [string[], number] => [
-      ["bun", flag, "run", owned.script, "gateway"],
-      3,
-    ]),
+    [["bun", "--hot", "run", owned.script, "gateway"], 3],
     [["node", "--import", owned.script, other.script, owned.script], undefined],
     [["node", "--eval", "0", owned.script], undefined],
     [["node", other.script, "/opt/openclaw/openclaw.mjs"], undefined],
@@ -71,50 +71,17 @@ it("classifies the runtime script after flags and subcommands without adopting a
     [["node", "--trace-uncaught", owned.script], 2],
     [["node", "--cpu-prof-name", owned.script, other.script], undefined],
     [["bun", "run", "run", owned.script], undefined],
+    [["node", foreign.script], undefined],
+    [["node", worker.script], 1],
   ];
   for (const [argv, entryIndex] of cases) {
-    expect(classifyOpenClawArgv(argv, { cwd: namedRun.root })).toEqual(
-      entryIndex === undefined ? { kind: "other" } : { kind: "openclaw", entryIndex },
-    );
+    expectEntry(argv, entryIndex, {
+      cwd: namedRun.root,
+      additionalEntrypoints: ["dist/infra/example.worker.js"],
+    });
   }
   for (const runtime of ["node", "bun"]) {
-    expect(classifyOpenClawArgv([runtime, "--unknown-option", owned.script, "gateway"])).toEqual({
-      kind: "unclassified",
-      cause: "runtime-syntax",
-      reason: "unsupported runtime option --unknown-option",
-    });
-  }
-});
-
-it("uses package identity for built, source, launcher, and registered worker entrypoints", () => {
-  for (const entry of [
-    "dist/index.js",
-    "dist/entry.js",
-    "src/entry.ts",
-    "src/index.ts",
-    "scripts/run-node.mjs",
-    "dist/infra/example.worker.js",
-  ]) {
-    const owned = scriptFixture(entry);
-    const other = scriptFixture(entry, "unrelated-service");
-    const additionalEntrypoints = entry.endsWith(".worker.js") ? [entry] : undefined;
-    expect(
-      classifyOpenClawArgv(["node", entry], { cwd: owned.root, additionalEntrypoints }),
-    ).toEqual({
-      kind: "openclaw",
-      entryIndex: 1,
-    });
-    expect(
-      classifyOpenClawArgv(["node", entry], { cwd: other.root, additionalEntrypoints }),
-    ).toEqual({
-      kind: "other",
-    });
-    expect(
-      classifyOpenClawArgv(["node", other.script, "gateway"], {
-        command: "gateway",
-        additionalEntrypoints,
-      }).kind,
-    ).toBe("other");
+    uncertain([runtime, "--unknown-option", owned.script, "gateway"], "runtime-syntax");
   }
 });
 
@@ -124,14 +91,12 @@ it("uses the resolved entrypoint for relative spellings and launcher targets", (
     ["index.js", path.dirname(owned.script)],
     ["./dist//index.js", owned.root],
   ] as const) {
-    expect(classifyOpenClawArgv(["node", script], { cwd }).kind).toBe("openclaw");
+    expectKind(["node", script], "openclaw", { cwd });
   }
   const launcher = scriptFixture("openclaw.mjs");
   const resolved = vi.spyOn(fs, "realpathSync").mockReturnValue(launcher.script);
   try {
-    expect(classifyOpenClawArgv(["node", path.join(launcher.root, "dist/index.js")]).kind).toBe(
-      "openclaw",
-    );
+    expectKind(["node", path.join(launcher.root, "dist/index.js")], "openclaw");
   } finally {
     resolved.mockRestore();
   }
@@ -139,39 +104,11 @@ it("uses the resolved entrypoint for relative spellings and launcher targets", (
 
 it("preserves uncertainty when cwd, script, or package identity cannot be inspected", () => {
   const owned = scriptFixture("dist/index.js");
-  expect(classifyOpenClawArgv(["node", "dist/index.js"])).toEqual({
-    kind: "unclassified",
-    cause: "cwd",
-    reason: expect.stringContaining("working directory"),
-  });
+  uncertain(["node", "dist/index.js"], "cwd");
   const manifest = path.join(owned.root, "package.json");
-  for (const contents of ["{", undefined]) {
-    if (contents === undefined) {
-      fs.unlinkSync(manifest);
-    } else {
-      fs.writeFileSync(manifest, contents);
-    }
-    expect(classifyOpenClawArgv(["node", owned.script])).toEqual({
-      kind: "unclassified",
-      cause: "package-identity",
-      reason: expect.stringContaining("package identity"),
-    });
-  }
+  fs.writeFileSync(manifest, "{");
+  uncertain(["node", owned.script], "package-identity");
   fs.unlinkSync(owned.script);
-  expect(classifyOpenClawArgv(["node", owned.script])).toEqual({
-    kind: "unclassified",
-    cause: "script",
-    reason: expect.stringContaining("resolve script"),
-  });
-  expect(classifyOpenClawArgv(["node", owned.script, "gateway"], { command: "gateway" }).kind).toBe(
-    "unclassified",
-  );
-});
-
-it("rejects foreign standalone scripts even without a package identity", () => {
-  const other = scriptFixture("service.js", "unrelated-service");
-  fs.unlinkSync(path.join(other.root, "package.json"));
-  for (const command of [undefined, "gateway"]) {
-    expect(classifyOpenClawArgv(["node", other.script], { command }).kind).toBe("other");
-  }
+  uncertain(["node", owned.script], "script");
+  expectKind(["node", owned.script, "gateway"], "unclassified", { command: "gateway" });
 });

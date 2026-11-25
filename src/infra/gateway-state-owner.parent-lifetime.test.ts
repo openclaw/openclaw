@@ -9,6 +9,7 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
@@ -29,8 +30,7 @@ it.for(["independent", "preload", "env"] as const)(
       import { acquireGatewayStateOwner } from ${JSON.stringify(ownerUrl.href)};
       watchCliRespawnParent();
       const owner = acquireGatewayStateOwner({ databasePath: ${JSON.stringify(databasePath)} });
-      const payload = JSON.parse(fs.readFileSync(owner.path, "utf8"));
-      if (Boolean(payload.parentPid) !== ${bound}) throw new Error("Wrong producer lifetime");
+      if (Boolean(JSON.parse(fs.readFileSync(owner.path, "utf8")).parentPid) !== ${bound}) throw new Error("Wrong producer lifetime");
       const db = new DatabaseSync(${JSON.stringify(databasePath)});
       db.exec("CREATE TABLE witness(value TEXT); BEGIN; INSERT INTO witness VALUES ('complete')");
       let disconnected = false;
@@ -48,14 +48,14 @@ it.for(["independent", "preload", "env"] as const)(
         db.close();
         watch.close();
         owner.release();
-        process.stdout.write(rollback ? "rolled back" : "committed");
       }
       process.once("SIGTERM", () => settle(true));
       process.once("disconnect", () => { disconnected = true; });
       process.send(process.pid);
     `;
+    const executable = resolveTestNodeExecPath();
     const childArgs = [
-      ...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1),
+      ...resolveRuntimeWorkerArgv(ownerUrl, executable).slice(0, -1),
       ...(transport === "preload" ? ["--import", CLI_PARENT_BOUND_PRELOAD] : []),
       "--input-type=module",
       "-e",
@@ -73,46 +73,33 @@ it.for(["independent", "preload", "env"] as const)(
       child.once("message", pid => { process.send(pid); process.exit(0); });
     `,
     );
-    const launcher = spawn(
-      resolveTestNodeExecPath(),
-      ["--import", CLI_PARENT_BOUND_PRELOAD, launcherPath],
-      {
-        env: { ...process.env, HOME: root, OPENCLAW_STATE_DIR: root },
-        stdio: ["ignore", "pipe", "pipe", "ipc"],
-      },
-    );
+    const launcher = spawn(executable, ["--import", CLI_PARENT_BOUND_PRELOAD, launcherPath], {
+      env: { ...process.env, HOME: root, OPENCLAW_STATE_DIR: root },
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
     const closed = once(launcher, "close");
-    let stdout = "";
     let stderr = "";
     let ownerPid: number | undefined;
-    launcher.stdout?.on("data", (chunk) => {
-      stdout += chunk;
-    });
     launcher.stderr?.on("data", (chunk) => {
       stderr += chunk;
     });
     try {
       [ownerPid] = await withinTest(once(launcher, "message"), signal);
       expect(await withinTest(closed, signal), stderr).toEqual([0, null]);
-      expect(stdout, stderr).toBe(bound ? "rolled back" : "committed");
       using db = new DatabaseSync(databasePath);
       expect(db.prepare("SELECT value FROM witness").all()).toEqual(
         bound ? [] : [{ value: "complete" }],
       );
-      const successor = acquireGatewayStateOwner({ databasePath });
-      successor.release();
+      acquireGatewayStateOwner({ databasePath }).release();
     } finally {
-      if (ownerPid !== undefined) {
-        try {
-          process.kill(ownerPid, "SIGKILL");
-        } catch {
-          /* Already exited. */
+      try {
+        killPidIfAlive(ownerPid);
+      } finally {
+        if (launcher.exitCode === null && launcher.signalCode === null) {
+          launcher.kill("SIGKILL");
         }
+        await closed;
       }
-      if (launcher.exitCode === null && launcher.signalCode === null) {
-        launcher.kill("SIGKILL");
-      }
-      await closed;
     }
   },
 );

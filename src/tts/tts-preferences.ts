@@ -54,9 +54,6 @@ async function loadPath(context: OpenClawStateWorkerContext): Promise<PreparedTt
   if (!reply) {
     return {};
   }
-  if (!reply.ok || reply.type !== "tts.prefsPath") {
-    throw new Error("Unexpected TTS preference-path read result");
-  }
   const installed = getTtsMachinePathAdmission(databasePath, () => reply.row);
   return preparePath((installed ? installed.row : reply.row)?.value_json);
 }

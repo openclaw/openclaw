@@ -1,49 +1,50 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, untrack, onCleanup } from "solid-js";
+import { createMemo, createSignal, For, Show, onSettled } from "solid-js";
 import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../packages/gateway-protocol/src/session-agent-status.ts";
 import {
+  isPluginsHubRoute,
+  isRailSectionPin,
+  SIDEBAR_NAV_ROUTES,
+  USERS_SECTION_PLUGIN_PAGES,
   normalizeSidebarEntries,
+  sidebarSectionForRoute,
   parseSidebarEntry,
   serializeSidebarEntry,
-  SIDEBAR_NAV_ROUTES,
   titleForRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import {
-  beginNativeWindowDrag,
-  beginNativeWindowDragFromTopInset,
-} from "../app/native-window-drag.ts";
-import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../lib/keyboard-shortcut-contract.ts";
+import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
+import { useApplication } from "../lib/reactive/context.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { forgetSectionLocation } from "../lib/section-navigation.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
+import { navigationItemCurrent } from "../plugins/navigation-sections.ts";
+import { isSidebarRouteActive } from "./app-sidebar-nav-menus.tsx";
+import { SidebarPagesMenu } from "./app-sidebar-pages.tsx";
 import {
+  sidebarCollapsedByChoice,
   renderSidebarAgentCard,
   renderAppSidebarFooterBar,
   renderAppSidebarPluginTab,
-  renderAppSidebarPageEntry,
   type AppSidebarRenderHost,
 } from "./app-sidebar-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
-import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
-import "./sidebar-collapse-toggle.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { renderNewSessionLink } from "./solid/new-session-link.tsx";
-import {
-  SessionGlyph,
-  renderSessionUnreadBadge,
-  renderSessionOwnerAvatar,
-} from "./solid/session-presentation.tsx";
+import { Popover, type PopoverHandle } from "./solid/popover.tsx";
+import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
+import { SessionGlyph, renderSessionUnreadBadge } from "./solid/session-presentation.tsx";
 
 type SidebarZone = ReturnType<AppSidebarRenderHost["reconciledSidebarZone"]>;
 type RailPinTouchPress = {
@@ -54,139 +55,391 @@ type RailPinTouchPress = {
   opened: boolean;
 };
 
+/**
+ * Before a rail or menu destination opens. The page decides the sidebar, so choosing a section
+ * only opens a sidebar the user had closed. Choosing the section already open returns to its
+ * start: Automations and Dashboards forget the page they would otherwise reopen.
+ */
+function revealDestination(host: AppSidebarRenderHost, entry: SidebarZoneEntry) {
+  if (host.onExitSettings) {
+    return;
+  }
+  const section = entry.type === "route" ? sidebarSectionForRoute(entry.route) : undefined;
+  if (!section) {
+    return;
+  }
+  if (host.navigationView === section && section === "automations") {
+    forgetSectionLocation(section);
+  }
+  if (!isMobileNavLayout() && sidebarCollapsedByChoice(host)) {
+    host.onToggleSidebar?.();
+  }
+}
+
+const PEEK_DELAY_MS = 300;
+
+/**
+ * With the sidebar closed, resting the pointer on a rail item that has a section shows that
+ * section's sidebar floating beside the rail without changing the page. Leaving the sidebar
+ * or choosing a link in it puts the previous view back; opening the sidebar keeps the section.
+ */
+function attachRailPeek(host: AppSidebarRenderHost, rail: HTMLElement): () => void {
+  // The rail is not attached yet when its ref runs; bind the sidebar on first hover.
+  let sidebar: Element | null = null;
+  const removeListeners: Array<() => void> = [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let previous: AppSidebarRenderHost["navigationView"] | undefined;
+  const end = (restore: boolean) => {
+    clearTimeout(timer);
+    if (previous === undefined) {
+      return;
+    }
+    sidebar?.removeAttribute("data-peek");
+    if (restore) {
+      host.navigationView = previous;
+    }
+    previous = undefined;
+    host.invalidate();
+  };
+  const sectionAt = (target: EventTarget | null) => {
+    const item =
+      target instanceof Element
+        ? target.closest("[data-navigation-view], [data-sidebar-entry]")
+        : null;
+    const view = item?.getAttribute("data-navigation-view");
+    if (view === "sessions" || view === "online") {
+      return view;
+    }
+    const entry = parseSidebarEntry(item?.getAttribute("data-sidebar-entry"));
+    return entry?.type === "route" ? sidebarSectionForRoute(entry.route) : undefined;
+  };
+  const over = (event: PointerEvent) => {
+    if (!sidebar) {
+      sidebar = rail.closest("openclaw-app-sidebar");
+      if (sidebar) {
+        removeListeners.push(
+          listen(sidebar, "pointerleave", leave),
+          listen(sidebar, "click", click),
+        );
+      }
+    }
+    clearTimeout(timer);
+    const section = sectionAt(event.target);
+    if (
+      !section ||
+      event.pointerType === "touch" ||
+      !host.navigationCollapsed ||
+      host.onExitSettings ||
+      isMobileNavLayout()
+    ) {
+      return;
+    }
+    const show = () => {
+      previous ??= host.navigationView;
+      host.navigationView = section;
+      sidebar?.setAttribute("data-peek", "");
+      host.invalidate();
+    };
+    // Moving between section items while peeking switches at once.
+    if (previous === undefined) {
+      timer = setTimeout(show, PEEK_DELAY_MS);
+    } else {
+      show();
+    }
+  };
+  function leave() {
+    end(true);
+  }
+  function click(event: Event) {
+    if (previous === undefined) {
+      clearTimeout(timer);
+    } else if (!host.navigationCollapsed) {
+      end(false);
+    } else if (
+      event.composedPath().some((target) => target instanceof Element && target.matches("a[href]"))
+    ) {
+      end(true);
+    }
+  }
+  removeListeners.push(listen(rail, "pointerover", over));
+  return () => {
+    clearTimeout(timer);
+    for (const remove of removeListeners) {
+      remove();
+    }
+  };
+}
+
 export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
-  const newSessionAccess = createMemo(() => host.readNewSessionAccess());
   const zone = createMemo(() => host.reconciledSidebarZone());
   const pins = createMemo(() =>
-    (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).map(
-      (entry) => parseSidebarEntry(entry)!,
+    (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).filter(
+      (entry) => !entry.startsWith("session:"),
     ),
   );
-  const views = ["pages", "sessions", "online"] as const;
-  const viewLabel = (view: (typeof views)[number]) =>
-    view === "pages"
-      ? t("nav.pages")
-      : view === "sessions"
-        ? titleForRoute("sessions")
-        : t("presence.usersTitle");
-  return (
+  // Saved order is kept; the rail shows native sections first, then everything else.
+  const sectionPins = createMemo(() => pins().filter(isRailSectionPin));
+  const otherPins = createMemo(() => pins().filter((entry) => !isRailSectionPin(entry)));
+  // The agent avatar above only switches agents; Sessions below it opens the session list, and
+  // "more" below the sections opens a page menu. A page that brings its own sidebar list, like
+  // Systems, is not the Sessions list.
+  const sessionsPressed = () =>
+    host.navigationVisible &&
+    !host.onExitSettings &&
+    !host.navigationCollapsed &&
+    host.navigationView === "sessions" &&
+    !host.contextualSidebar;
+  // Focus returns to the open view's button, and shell chrome anchors to it.
+  const registerView = (view: "sessions" | "online") =>
+    elementRef((element: HTMLButtonElement) => {
+      host.navigationViewElements.set(view, element);
+      return () => {
+        if (host.navigationViewElements.get(view) === element) {
+          host.navigationViewElements.delete(view);
+        }
+      };
+    });
+  const peoplePressed = () =>
+    host.navigationVisible &&
+    !host.onExitSettings &&
+    !host.navigationCollapsed &&
+    host.navigationView === "online";
+  let pagesMenu: PopoverHandle | undefined;
+  let moreButton: HTMLButtonElement | undefined;
+  const [pagesMenuOpen, setPagesMenuOpen] = createSignal(false);
+  // Boards share one route but not one address, so the rail follows the router and the plugins.
+  const app = useApplication();
+  const [opened, setOpened] = createSignal(0);
+  onSettled(() => {
+    const changed = () => setOpened((value) => value + 1);
+    const stops = [app?.router.subscribe(changed), app?.plugins.subscribe(changed)];
+    return () => stops.forEach((stop) => stop?.());
+  });
+  // "More" marks where you are when the open page lives in its menu and no rail item marks it,
+  // read by the rule each item marks itself with.
+  const moreHoldsPage = createMemo(() => {
+    opened();
+    const route = host.activeRouteId;
+    const pluginPage = host.activePluginTabId;
+    const menuRoute = route && isPluginsHubRoute(route) ? "plugins" : route;
+    const inMenu = pluginPage
+      ? !USERS_SECTION_PLUGIN_PAGES.has(pluginPage)
+      : menuRoute !== "sessions" && SIDEBAR_NAV_ROUTES.some((entry) => entry === menuRoute);
+    if (!inMenu) {
+      return false;
+    }
+    const registrations = host.pluginNavigation();
+    return !pins().some((key) => {
+      const entry = parseSidebarEntry(key);
+      if (entry?.type === "route") {
+        return isSidebarRouteActive(route, entry.route);
+      }
+      if (entry?.type !== "plugin") {
+        return false;
+      }
+      const item = registrations.find((candidate) => candidate.key === entry.key);
+      return item
+        ? navigationItemCurrent(registrations, item, window.location, true)
+        : route === "plugin" && pluginPage === entry.key;
+    });
+  });
+  // A section's pin stands for its open children unless the open child is pinned itself:
+  // the most specific pin marks where you are.
+  const sectionsYielding = createMemo(() => {
+    opened();
+    const registrations = host.pluginNavigation();
+    return new Set(
+      registrations
+        .filter(
+          (item) =>
+            item.value.parent &&
+            pins().includes(`plugin:${item.key}`) &&
+            navigationItemCurrent(registrations, item, window.location, false),
+        )
+        .map((item) => `${item.pluginId}/${item.value.parent}`),
+    );
+  });
+  const standsForSection = (key: string) => !sectionsYielding().has(key);
+  return [
     <nav
+      ref={elementRef((element: HTMLElement) => attachRailPeek(host, element))}
       class="sidebar-rail"
       aria-label={t("nav.pages")}
+      data-tooltip-placement="right"
       onMouseDown={beginNativeWindowDragFromTopInset}
     >
       {renderSidebarAgentCard(host)}
-      <div class="sidebar-rail__create">
-        {renderNewSessionLink({
-          get basePath() {
-            return host.basePath;
-          },
-          get agentId() {
-            return host.expandedAgentId();
-          },
-          class: "sidebar-rail__button sidebar-new-session",
-          get label() {
-            return t("agentChip.newConversation");
-          },
-          showShortcut: true,
-          get disabledReason() {
-            const access = newSessionAccess();
-            return access.allowed ? undefined : access.reason;
-          },
-          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-        })}
-      </div>
       <div class="sidebar-rail__views">
-        <For each={views}>
-          {(view) => (
-            <button
-              type="button"
-              class="sidebar-rail__button"
-              title={
-                host.navigationView === view && view !== "online"
-                  ? `${viewLabel(view)} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`
-                  : viewLabel(view)
+        <openclaw-tooltip prop:content={titleForRoute("sessions")}>
+          <button
+            ref={registerView("sessions")}
+            type="button"
+            class="sidebar-rail__button"
+            data-navigation-view="sessions"
+            aria-label={titleForRoute("sessions")}
+            aria-pressed={sessionsPressed() ? "true" : "false"}
+            onClick={() => {
+              const state = host.router?.getState();
+              const pending = state?.pendingMatches[0];
+              const destination = (pending ?? state?.matches[0])?.routeId ?? host.activeRouteId;
+              const returnToSession = !isMobileNavLayout() && !isSessionRouteId(destination);
+              // The visible list can still look selected while a cold page is taking over.
+              if (sessionsPressed() && !(pending && returnToSession)) {
+                return;
               }
-              data-navigation-view={view}
-              aria-label={viewLabel(view)}
-              aria-pressed={
-                host.navigationVisible && !host.navigationCollapsed && host.navigationView === view
-                  ? "true"
-                  : "false"
+              host.navigationView = "sessions";
+              if (host.onExitSettings) {
+                host.onExitSettings();
+              } else if (!isMobileNavLayout() && sidebarCollapsedByChoice(host)) {
+                host.onToggleSidebar?.();
               }
-              onClick={() => {
-                const active = host.navigationView === view;
-                host.navigationView = view;
-                if (
-                  !isMobileNavLayout() &&
-                  ((active && view !== "online") || host.navigationCollapsed)
-                ) {
-                  host.onToggleSidebar?.();
+              // Off a session page, Sessions returns to the session last open, in its preferred
+              // face; the mobile drawer closes on navigation, so there it only opens the list.
+              if (!host.onExitSettings && returnToSession) {
+                if (host.sessionKey) {
+                  host.selectSession(host.sessionKey);
+                } else {
+                  host.onNavigate?.("chat");
                 }
-                host.requestUpdate();
-              }}
-            >
-              <Icon
-                name={
-                  view === "pages" ? "layoutGrid" : view === "sessions" ? "messageCircle" : "users"
-                }
-              />
-            </button>
-          )}
-        </For>
+              }
+              host.invalidate();
+            }}
+          >
+            <Icon name="sessions" filled={sessionsPressed()} />
+          </button>
+        </openclaw-tooltip>
+        <openclaw-tooltip prop:content={t("presence.peopleTitle")}>
+          <button
+            ref={registerView("online")}
+            type="button"
+            class="sidebar-rail__button"
+            data-navigation-view="online"
+            aria-label={t("presence.peopleTitle")}
+            aria-pressed={peoplePressed() ? "true" : "false"}
+            onClick={() => {
+              // People is the Users section: Activity in the content, people in the sidebar.
+              host.navigationView = "online";
+              if (host.onExitSettings) {
+                host.onExitSettings();
+              } else if (!isMobileNavLayout() && sidebarCollapsedByChoice(host)) {
+                host.onToggleSidebar?.();
+              }
+              // The mobile drawer closes on navigation, so there People only opens the list.
+              if (!isMobileNavLayout()) {
+                host.onNavigate?.("activity");
+              }
+              host.invalidate();
+            }}
+          >
+            <Icon name="users" filled={peoplePressed()} />
+          </button>
+        </openclaw-tooltip>
       </div>
-      <button
-        type="button"
-        class="sidebar-rail__button sidebar-brand__search sidebar-brand__desktop-control"
-        title={`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
-        aria-label={t("chat.openCommandPalette")}
-        disabled={!host.onOpenPalette}
-        onClick={() => host.onOpenPalette?.()}
-      >
-        <Icon name="search" />
-      </button>
       <div
         class={[
           "sidebar-rail__pins",
           { "sidebar-rail__pins--drag-active": host.sessionOrganizer.sidebarZoneDragActive },
         ]}
         aria-label={t("nav.customize")}
-        onClick={(event) => {
-          if (
-            !isMobileNavLayout() &&
-            !host.navigationCollapsed &&
-            event.button === 0 &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            !event.shiftKey &&
-            !event.altKey &&
-            event
+        // Capture runs before the pin's own link navigates.
+        ref={nativeListener(
+          "click",
+          (event: MouseEvent) => {
+            if (
+              event.button !== 0 ||
+              event.metaKey ||
+              event.ctrlKey ||
+              event.shiftKey ||
+              event.altKey ||
+              !event
+                .composedPath()
+                .some(
+                  (target) =>
+                    target instanceof Element &&
+                    target.matches("a[href], button:not([disabled], [data-navigation-view])"),
+                )
+            ) {
+              return;
+            }
+            const pin = event
               .composedPath()
-              .some(
-                (target) =>
-                  target instanceof Element && target.matches("a[href], button:not([disabled])"),
-              )
-          ) {
-            host.onToggleSidebar?.();
-          }
-        }}
+              .find(
+                (target): target is Element =>
+                  target instanceof Element && target.hasAttribute("data-sidebar-entry"),
+              );
+            const entry = pin ? parseSidebarEntry(pin.getAttribute("data-sidebar-entry")) : null;
+            if (entry) {
+              revealDestination(host, entry);
+            }
+          },
+          true,
+        )}
         onDragOver={(event) => host.sessionOrganizer.handleSidebarZoneDragOver(event)}
         onDragLeave={(event) => host.sessionOrganizer.handleSidebarZoneDragLeave(event)}
         onDrop={(event) => host.sessionOrganizer.handleSidebarZoneDrop(event)}
       >
-        <For each={pins()} keyed={serializeSidebarEntry}>
-          {(entry) => renderRailPin(host, untrack(entry), zone)}
+        <For each={sectionPins()}>
+          {(key) => renderRailPin(host, parseSidebarEntry(key)!, zone, standsForSection)}
+        </For>
+        <openclaw-tooltip prop:content={t("nav.pages")}>
+          <button
+            ref={(element) => (moreButton = element)}
+            type="button"
+            class={[
+              "sidebar-rail__button sidebar-rail__more",
+              // Pressed while its menu is open, or while the page shown lives in it.
+              { "nav-item--active": pagesMenuOpen() || moreHoldsPage() },
+            ]}
+            data-rail-more=""
+            aria-label={t("nav.pages")}
+            aria-haspopup="dialog"
+            aria-controls="sidebar-pages-menu"
+            aria-expanded={pagesMenuOpen() ? "true" : "false"}
+            onClick={() => (pagesMenuOpen() ? pagesMenu?.hide() : pagesMenu?.show())}
+          >
+            <Icon name="moreHorizontal" />
+          </button>
+        </openclaw-tooltip>
+        <Show when={otherPins().length > 0}>
+          <span class="sidebar-rail__separator" aria-hidden="true" />
+        </Show>
+        <For each={otherPins()}>
+          {(key) => renderRailPin(host, parseSidebarEntry(key)!, zone, standsForSection)}
         </For>
       </div>
       <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
-    </nav>
-  );
+    </nav>,
+    // Keep the rows unmounted until opening, but render the available links on the first open.
+    <Popover
+      id="sidebar-pages-menu"
+      label={t("nav.pages")}
+      class="sidebar-pages-menu-popover"
+      anchor={moreButton}
+      placement="right-start"
+      lazy
+      dismissOutsidePointer
+      dismissOutsideFocus
+      onOpenChange={setPagesMenuOpen}
+      ref={(handle) => (pagesMenu = handle)}
+    >
+      <SidebarPagesMenu
+        host={host}
+        onNavigate={(entry) => {
+          pagesMenu?.hide();
+          if (entry) {
+            revealDestination(host, entry);
+          }
+        }}
+      />
+    </Popover>,
+  ];
 }
 
 function renderRailPin(
   host: AppSidebarRenderHost,
   entry: SidebarZoneEntry,
   zone: () => SidebarZone,
+  standsForSection: (key: string) => boolean,
 ): JSX.Element {
   const serialized = serializeSidebarEntry(entry);
   const session = () => (entry.type === "session" ? zone().sessionRows.get(entry.key) : undefined);
@@ -230,9 +483,12 @@ function renderRailPin(
           }),
         )
       : null;
+  let trigger: HTMLElement | undefined;
+  const triggerRef = (element: HTMLAnchorElement) => (trigger = element);
   const content =
     entry.type === "person" ? (
       <a
+        ref={triggerRef}
         class="sidebar-rail__button"
         draggable="false"
         href={person()?.href}
@@ -247,11 +503,11 @@ function renderRailPin(
             </Show>
           }
         >
-          {(user) => renderSessionOwnerAvatar(user())}
+          {(user) => <SessionOwnerAvatar owner={user()} />}
         </Show>
       </a>
     ) : entry.type === "route" ? (
-      host.sidebarMenus.renderRoute(entry.route)
+      host.sidebarMenus.renderRoute(entry.route, host, triggerRef)
     ) : (
       <Show
         when={session()}
@@ -265,29 +521,28 @@ function renderRailPin(
                     prop:kind={"navigation"}
                     prop:navigationKey={entry.key}
                     prop:navigationChildren={false}
+                    prop:navigationSection={entry.type === "plugin" && standsForSection(entry.key)}
                     prop:navigationMenus={host.sidebarMenus}
                   />
                 </Show>
               }
             >
-              {(item) => renderAppSidebarPluginTab(host, item)}
+              {(item) => renderAppSidebarPluginTab(host, item, triggerRef)}
             </Show>
           ) : undefined
         }
       >
         {(row) => (
           <a
+            ref={triggerRef}
             class="sidebar-rail__button"
             draggable="false"
             href={host.sidebarSessionHref(row())}
             aria-label={label()}
             aria-current={row().active ? "page" : undefined}
-            onClick={(event) => {
-              if (shouldHandleNavigationClick(event)) {
-                event.preventDefault();
-                host.selectSession(row().key, undefined, row());
-              }
-            }}
+            onClick={(event) =>
+              handleNavigationClick(event, () => host.selectSession(row().key, undefined, row()))
+            }
           >
             <RailSessionGlyph session={row()} label={label()} />
           </a>
@@ -319,14 +574,16 @@ function renderRailPin(
   };
   const openMenu = (event: MouseEvent | KeyboardEvent) => {
     if (!host.sidebarSnapshot) {
-      handleContextMenuEvent(event, pin?.querySelector("a, button") ?? null, (trigger, x, y) =>
-        host.sidebarMenus.openRailPinMenu(serialized, label(), x, y, trigger),
+      handleContextMenuEvent(event, trigger ?? pin ?? null, (menuTrigger, x, y) =>
+        host.sidebarMenus.openRailPinMenu(serialized, label(), x, y, menuTrigger),
       );
     }
   };
-  onCleanup(() => {
+  onSettled(() => () => {
     clearTimeout(press?.timer);
-    pin?.removeEventListener("click", captureClick, true);
+    if (host.sidebarMenus.railPins.get(serialized) === pin) {
+      host.sidebarMenus.railPins.delete(serialized);
+    }
   });
   const available = () =>
     entry.type === "person" ||
@@ -336,20 +593,33 @@ function renderRailPin(
   return (
     <Show when={available()}>
       <div
-        ref={(element) => {
-          pin = element;
-          element.addEventListener("click", captureClick, true);
-        }}
+        ref={[
+          (element: HTMLDivElement) => {
+            pin = element;
+            host.sidebarMenus.railPins.set(serialized, element);
+          },
+          nativeListener("click", captureClick, true),
+        ]}
         class={[
           "sidebar-rail__pin",
           drop()?.entry === serialized ? `sidebar-zone-entry--drop-${drop()?.position}` : undefined,
         ]}
         data-sidebar-entry={serialized}
+        tabindex={-1}
         title={host.sidebarMenus.railPinMenuPosition ? "" : label()}
         draggable={!host.sidebarSnapshot ? "true" : "false"}
         onContextMenu={openMenu}
         onKeyDown={openMenu}
+        onFocusIn={(event) => {
+          if (event.target instanceof HTMLElement && event.target.matches("a, button")) {
+            trigger = event.target;
+          }
+        }}
         onPointerDown={(event) => {
+          const target = event.target.closest<HTMLElement>("a, button");
+          if (target && pin?.contains(target)) {
+            trigger = target;
+          }
           clearTimeout(press?.timer);
           press = undefined;
           if (host.sidebarSnapshot || event.pointerType !== "touch" || !event.isPrimary) {
@@ -364,13 +634,18 @@ function renderRailPin(
           press = current;
           current.timer = setTimeout(() => {
             current.timer = undefined;
-            const trigger = pin?.querySelector<HTMLElement>("a, button");
-            if (host.sidebarSnapshot || !pin?.isConnected || !trigger) {
+            if (host.sidebarSnapshot || !pin?.isConnected) {
               press = undefined;
               return;
             }
             current.opened = true;
-            host.sidebarMenus.openRailPinMenu(serialized, label(), current.x, current.y, trigger);
+            host.sidebarMenus.openRailPinMenu(
+              serialized,
+              label(),
+              current.x,
+              current.y,
+              trigger ?? pin,
+            );
           }, 500);
         }}
         onPointerMove={(event) => {
@@ -397,6 +672,9 @@ function renderRailPin(
 }
 
 function RailSessionGlyph(props: { session: SidebarRecentSession; label: string }) {
+  const subagentsWorking = createMemo(
+    () => (props.session.subagentSummary?.runningChildCount ?? props.session.runningChildCount) > 0,
+  );
   const graphic = createMemo(() =>
     Boolean(
       props.session.icon &&
@@ -428,108 +706,20 @@ function RailSessionGlyph(props: { session: SidebarRecentSession; label: string 
       }
       running={
         (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) ||
-        props.session.runningChildCount > 0
+        subagentsWorking() ||
+        (props.session.backgroundProcessCount ?? 0) > 0
       }
       queued={
         (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) &&
         props.session.status === "queued" &&
-        props.session.runningChildCount === 0
+        !subagentsWorking()
+      }
+      background={
+        !(props.session.isRunVisuallyActive ?? props.session.hasActiveRun) &&
+        !subagentsWorking() &&
+        (props.session.backgroundProcessCount ?? 0) > 0
       }
       badge={props.session.unread ? renderSessionUnreadBadge() : undefined}
     />
-  );
-}
-
-/** Pages is the accessible destination catalog, not another favorites list. */
-export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
-  const zone = createMemo(() => host.reconciledSidebarZone());
-  const dashboards = () => host.navigationCatalog.dashboards;
-  const dashboardRows = createMemo(() =>
-    host.sidebarSnapshot
-      ? host.sidebarSnapshot.pages
-          .filter((row) => !row.archived)
-          .map((row) => restoreSnapshotSession(row, host.getRouteSessionKey()))
-      : (dashboards()?.result?.sessions ?? []).map((row) =>
-          host.getSessionNavigationState().toSidebarSession(row),
-        ),
-  );
-  const rows = createMemo(() => {
-    const result = new Map(zone().sessionRows);
-    for (const row of dashboardRows()) {
-      result.set(row.key, row);
-    }
-    return result;
-  });
-  const entries = createMemo(() => {
-    const result: SidebarZoneEntry[] = SIDEBAR_NAV_ROUTES.filter((route) =>
-      host.sidebarMenus.isRouteEnabled(route),
-    ).map((route) => ({ type: "route", route }));
-    for (const key of new Set([
-      ...zone().pluginTabs.keys(),
-      ...host.pluginNavigation().map((entry) => entry.key),
-    ])) {
-      result.push({ type: "plugin", key });
-    }
-    for (const row of dashboardRows()) {
-      result.push({ type: "session", key: row.key });
-    }
-    return result;
-  });
-  return (
-    <nav
-      class="sidebar-pages"
-      aria-label={t("nav.pages")}
-      onDragOver={(event) => host.sessionOrganizer.handleSessionListDragOver(event)}
-      onDrop={(event) => host.sessionOrganizer.handleSessionListDrop(event)}
-    >
-      <div class="sidebar-pages__heading sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
-        <span>{t("nav.pages")}</span>
-        <openclaw-sidebar-collapse-toggle prop:onToggle={() => host.onToggleSidebar?.()} />
-      </div>
-      <openclaw-mcp-app-catalog surface="sidebar" />
-      <For each={entries()} keyed={serializeSidebarEntry}>
-        {(entry) => {
-          const fixedEntry = untrack(entry);
-          const key = serializeSidebarEntry(fixedEntry);
-          // Allocate once per entry; the rendered link owns its reactive fields.
-          const content = untrack(() =>
-            renderAppSidebarPageEntry(host, fixedEntry, rows, () => zone().pluginTabs),
-          );
-          return (
-            <div class="sidebar-pages__entry">
-              {content}
-              <button
-                type="button"
-                class={[
-                  "sidebar-pages__pin",
-                  { "sidebar-pages__pin--pinned": host.sidebarEntries.includes(key) },
-                ]}
-                disabled={Boolean(host.sidebarSnapshot)}
-                aria-label={t(host.sidebarEntries.includes(key) ? "nav.unpin" : "nav.pin")}
-                onClick={() => {
-                  if (host.sidebarEntries.includes(key)) {
-                    host.sessionOrganizer.removeSidebarEntry(key);
-                  } else {
-                    host.sessionOrganizer.writeSidebarEntryAt(key, undefined, undefined);
-                  }
-                }}
-              >
-                <Icon name="pin" />
-              </button>
-            </div>
-          );
-        }}
-      </For>
-      <Show when={dashboards()?.error}>{(error) => <span role="alert">{error()}</span>}</Show>
-      <Show when={dashboards()?.result?.hasMore}>
-        <button
-          type="button"
-          class="btn btn--sm"
-          onClick={() => host.navigationCatalog.loadMoreDashboards()}
-        >
-          {t("chat.selectors.loadMoreSessions")}
-        </button>
-      </Show>
-    </nav>
   );
 }

@@ -63,10 +63,6 @@ export class TeamReportsStore {
     return this.execute("latestPeople", undefined);
   }
 
-  getDayReports(sinceMs: number, untilMs: number) {
-    return this.execute("getDayReports", { sinceMs, untilMs });
-  }
-
   listPersonDays(
     login: string,
     options: TeamReportsOperations["listPersonDays"]["input"]["options"] = {},

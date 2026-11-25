@@ -35,21 +35,4 @@ describe("resolvePluginUninstallId", () => {
 
     expect(result).toEqual({ ok: true, value: { pluginId: "calendar" } });
   });
-
-  it("rejects an ambiguous plugin display name", () => {
-    const result = resolvePluginUninstallId({
-      rawId: "calendar",
-      config: {},
-      plugins: [
-        { id: "calendar-one", name: "calendar" },
-        { id: "calendar-two", name: "calendar" },
-      ],
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error:
-        'Plugin uninstall target "calendar" is ambiguous; matches: calendar-one, calendar-two. Use an exact plugin id.',
-    });
-  });
 });

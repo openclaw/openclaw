@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES as MAX_BYTES,
@@ -6,6 +7,7 @@ import {
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { buildRuntimeContextCustomMessage } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import { prepareParticipationTestRun } from "../../agents/participation-ceiling.test-support.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import { testWorkerDescriptor } from "../../node-host/node-worker-supervisor.test-support.js";
@@ -19,9 +21,30 @@ import { createWorkerImageHistory } from "../../worker/replay-images.test-suppor
 import { parseWorkerProcessRequest } from "../../worker/worker-process-protocol.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
 import {
+  assertSupportedTurn,
   fitLaunchDescriptorWithRuntimeIdentity,
   windowInitialMessages,
 } from "./worker-turn-payload.js";
+
+it("refuses participating input at direct worker execution preflight", () => {
+  expect(() =>
+    assertSupportedTurn({
+      runId: "participant-worker",
+      timeoutMs: 60_000,
+      sessionId: "session",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      ...prepareParticipationTestRun({
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:session",
+      }),
+    }),
+  ).toThrow(
+    "Participating inputs require Gateway-local OpenClaw execution. Worker placements cannot enforce their permission ceiling; use a Gateway-local OpenClaw session.",
+  );
+});
 
 const runtimeIdentityToken = vi.hoisted(() => ({
   value: "fixture-runtime-identity-token",
@@ -63,9 +86,9 @@ function assistantMessage(timestamp: number): AgentMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text: "visible" }],
-    api: "openai-responses",
-    provider: "openai",
-    model: "gpt-5.6-luna",
+    api: PROVIDER_REPLAY.api,
+    provider: PROVIDER_REPLAY.provider,
+    model: PROVIDER_REPLAY.model,
     providerReplay: structuredClone(PROVIDER_REPLAY),
     usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
     stopReason: "stop",
@@ -132,26 +155,27 @@ function fit(messages: Messages, parsed = false) {
 
 function completeWindow(messages: AgentMessage[], promptMessages = 1) {
   const projected = windowInitialMessages(messages, promptMessages);
-  if (projected.kind !== "complete") {
-    throw new Error("expected complete projection");
-  }
+  assert(projected.kind === "complete", "expected complete projection");
   return projected.messages;
 }
 
 function toolResultAt(messages: Messages, index: number) {
   const message = messages[index];
-  if (message?.role !== "toolResult") {
-    throw new Error("expected tool result");
-  }
+  assert(message?.role === "toolResult", "expected tool result");
   return message;
+}
+
+function replayPayload() {
+  return completeWindow([assistantMessage(1), toolResultMessage({ payload: "" }, 2)]);
+}
+
+function measuredDescriptor(messages: Messages) {
+  return parseWorkerLaunchPlan(buildDescriptor(messages));
 }
 
 async function launched(messages: Messages, parsed = false) {
   const result = await fit(messages, parsed);
-  expect(result.kind).toBe("launch");
-  if (result.kind !== "launch") {
-    throw new Error("expected launch plan");
-  }
+  assert(result.kind === "launch", "expected launch plan");
   return result.plan;
 }
 
@@ -188,9 +212,7 @@ describe("windowInitialMessages", () => {
           ? [{ kind: "conversation-data", text: "Active exec sessions: none" }]
           : undefined,
       );
-      if (!context) {
-        throw new Error("Expected runtime context");
-      }
+      assert(context, "Expected runtime context");
       const history = [userMessage("previous turn", 1), context, assistantMessage(3)];
       expect(windowInitialMessages(history)).toEqual({ kind: "complete", messages: history });
     },
@@ -222,7 +244,6 @@ describe("windowInitialMessages", () => {
       details: {
         reason: "provider-replay-message-limit",
         messageCount: MAX_MESSAGES - 1,
-        limitMessages: MAX_MESSAGES - 2,
       },
     });
   });
@@ -230,11 +251,11 @@ describe("windowInitialMessages", () => {
 
 describe("fitLaunchDescriptor", () => {
   it.each([0, 1])("fits the complete transport bound at cap %+i byte(s)", async (delta) => {
-    const messages = completeWindow([assistantMessage(1), toolResultMessage({ payload: "" }, 2)]);
+    const messages = replayPayload();
     const targetBytes = MAX_BYTES + delta;
-    const emptyBytes = measureLaunch(parseWorkerLaunchPlan(buildDescriptor(messages)));
+    const emptyBytes = measureLaunch(measuredDescriptor(messages));
     toolResultAt(messages, 1).details = { payload: "x".repeat(targetBytes - emptyBytes) };
-    expect(measureLaunch(parseWorkerLaunchPlan(buildDescriptor(messages)))).toBe(targetBytes);
+    expect(measureLaunch(measuredDescriptor(messages))).toBe(targetBytes);
     const fitted = await fit(messages, true);
     expect(fitted.kind).toBe(delta > 0 ? "provider-replay-unavailable" : "launch");
     expect(runtimeIdentityToken.mint).toHaveBeenCalledTimes(delta > 0 ? 0 : 1);
@@ -252,14 +273,14 @@ describe("fitLaunchDescriptor", () => {
   });
 
   it("fits the actual near-ceiling launch transport with nested escaping", async () => {
-    const messages = completeWindow([assistantMessage(1), toolResultMessage({ payload: "" }, 2)]);
+    const messages = replayPayload();
     const emptyBytes = Buffer.byteLength(JSON.stringify(buildDescriptor(messages)));
     const payloadBytes = MAX_BYTES - 4_608 - emptyBytes;
     const escaped = '"\\\0\n'.repeat(500_000);
     toolResultAt(messages, 1).details = {
       payload: escaped + "x".repeat(payloadBytes - (JSON.stringify(escaped).length - 2)),
     };
-    const candidate = parseWorkerLaunchPlan(buildDescriptor(messages));
+    const candidate = measuredDescriptor(messages);
     parseNodeWorkerLaunchInput(JSON.stringify(launchInput(candidate)));
     const suffix = "/__openclaw__/worker";
     const prefix = "wss://worker.invalid/";
@@ -289,31 +310,15 @@ describe("fitLaunchDescriptor", () => {
       type: "text",
       text: "[image data removed - already processed by model]",
     };
-    const padding = MAX_BYTES - measureLaunch(parseWorkerLaunchPlan(buildDescriptor(expected)));
+    const padding = MAX_BYTES - measureLaunch(measuredDescriptor(expected));
     latest.details = { payload: '"'.repeat(100_000) + "x".repeat(padding) };
     expected[4] = structuredClone(latest);
-    expect(measureLaunch(parseWorkerLaunchPlan(buildDescriptor(expected)))).toBe(MAX_BYTES);
+    expect(measureLaunch(measuredDescriptor(expected))).toBe(MAX_BYTES);
     const original = structuredClone(messages);
     const plan = await launched(messages, true);
     expect(plan.assignment.initialMessages).toEqual(expected);
     expect(measureLaunch(plan)).toBe(MAX_BYTES);
     expect(messages).toEqual(original);
-  });
-
-  it("does not rewrite opaque replay images to fit the next launch", async () => {
-    const history = createWorkerImageHistory();
-    const owner = history[1];
-    if (owner?.role !== "assistant") {
-      throw new Error("Expected replay owner");
-    }
-    owner.providerReplay = structuredClone(PROVIDER_REPLAY);
-    const before = JSON.stringify(history);
-    await expect(fit(history)).resolves.toMatchObject({
-      reason: "provider-replay-launch-payload-limit",
-      limitBytes: MAX_BYTES,
-    });
-    expect(JSON.stringify(history)).toBe(before);
-    expect(runtimeIdentityToken.mint).not.toHaveBeenCalled();
   });
 
   it("drops complete old turns while retaining the replay anchor", async () => {

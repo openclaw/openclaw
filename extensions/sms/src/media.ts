@@ -1,4 +1,3 @@
-// Sms plugin module owns inbound Twilio media downloads and outbound MMS hosting.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
@@ -27,6 +26,8 @@ import { TWILIO_MMS_MAX_BYTES } from "./twilio.js";
 import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
 
 const TWILIO_API_HOSTNAME = "api.twilio.com";
+// Twilio answers the api.twilio.com media URL with a redirect to this CDN host.
+const TWILIO_MMS_CDN_HOSTNAME = "mms.twiliocdn.com";
 const TWILIO_MEDIA_PATH_RE =
   /^\/2010-04-01\/Accounts\/([^/]+)\/Messages\/([^/]+)\/Media\/(ME[0-9a-fA-F]{32})$/u;
 const TWILIO_MEDIA_TOTAL_TIMEOUT_MS = 60_000;
@@ -195,9 +196,6 @@ export async function prepareHostedSmsMedia(params: PrepareHostedSmsMediaParams)
   });
   const store = getHostedSmsMediaStore(params.account.accountId);
   const captionByteLength = params.captionByteLength ?? 0;
-  if (!Number.isSafeInteger(captionByteLength) || captionByteLength < 0) {
-    throw new Error("MMS caption byte length must be a non-negative integer.");
-  }
   const aggregateMediaBudget = TWILIO_MMS_IMAGE_MAX_BYTES - captionByteLength - 1;
   if (aggregateMediaBudget < 1) {
     throw new Error("Twilio MMS caption leaves no room for an attachment below 5,000,000 bytes.");
@@ -214,7 +212,7 @@ export async function prepareHostedSmsMedia(params: PrepareHostedSmsMediaParams)
       mediaAccess: resolveOutboundMediaAccess(params),
       validateBeforePersist: (media) => {
         const contentType = media.contentType?.split(";", 1)[0]?.trim().toLowerCase();
-        if (!contentType || !TWILIO_MMS_EXTENSION_BY_TYPE[contentType]) {
+        if (!contentType || !Object.hasOwn(TWILIO_MMS_EXTENSION_BY_TYPE, contentType)) {
           throw new Error(
             `Twilio MMS does not support media type ${contentType || "unknown content type"}.`,
           );
@@ -344,29 +342,20 @@ export async function materializeSmsInboundMedia(params: {
   const savedPaths: string[] = [];
   const cleanup = createInboundMediaCleanup(savedPaths);
   const declaredUnavailableCount = params.msg.unavailableMediaCount ?? 0;
+  const withoutMedia = (count: number) => ({
+    body: count > 0 ? inboundMediaUnavailableBody(params.msg.body, count) : params.msg.body,
+    media: [],
+    cleanup,
+  });
   if (params.msg.media.length === 0) {
-    return {
-      body:
-        declaredUnavailableCount > 0
-          ? inboundMediaUnavailableBody(params.msg.body, declaredUnavailableCount)
-          : params.msg.body,
-      media: [],
-      cleanup,
-    };
+    return withoutMedia(declaredUnavailableCount);
   }
   const callbackAccountSid = params.msg.accountSid;
   if (!callbackAccountSid || callbackAccountSid !== params.account.accountSid) {
     params.log?.warn?.(
       `Refused Twilio MMS attachments for ${params.msg.messageSid}: webhook account mismatch`,
     );
-    return {
-      body: inboundMediaUnavailableBody(
-        params.msg.body,
-        declaredUnavailableCount + params.msg.media.length,
-      ),
-      media: [],
-      cleanup,
-    };
+    return withoutMedia(declaredUnavailableCount + params.msg.media.length);
   }
   // The operator cap applies per attachment; Twilio's aggregate budget spans the message.
   let remainingBytes = TWILIO_MMS_MAX_BYTES;
@@ -411,7 +400,8 @@ export async function materializeSmsInboundMedia(params: {
           filePathHint: inboundMediaFileName(media.contentType, index),
           fallbackContentType: media.contentType,
           maxBytes: Math.min(params.account.mediaMaxBytes ?? remainingBytes, remainingBytes),
-          ssrfPolicy: { hostnameAllowlist: [TWILIO_API_HOSTNAME] },
+          // The initial URL is pinned to the API host above; the CDN is allowed only as a redirect hop.
+          ssrfPolicy: { hostnameAllowlist: [TWILIO_API_HOSTNAME, TWILIO_MMS_CDN_HOSTNAME] },
           timeoutMs: TWILIO_MEDIA_TOTAL_TIMEOUT_MS,
           responseHeaderTimeoutMs: TWILIO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
           readIdleTimeoutMs: TWILIO_MEDIA_READ_IDLE_TIMEOUT_MS,
@@ -455,9 +445,10 @@ export async function materializeSmsInboundMedia(params: {
 
 function hostedSmsMediaFileName(id: string, contentType: string | undefined): string | undefined {
   const normalizedContentType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
-  const extension = normalizedContentType
-    ? TWILIO_MMS_EXTENSION_BY_TYPE[normalizedContentType]
-    : undefined;
+  const extension =
+    normalizedContentType && Object.hasOwn(TWILIO_MMS_EXTENSION_BY_TYPE, normalizedContentType)
+      ? TWILIO_MMS_EXTENSION_BY_TYPE[normalizedContentType]
+      : undefined;
   return extension ? `mms-${id.slice(0, 10)}${extension}` : undefined;
 }
 

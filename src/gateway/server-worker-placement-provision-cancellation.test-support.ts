@@ -3,10 +3,10 @@ import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js"
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
+import { createRuntimeFactory } from "./server-worker-placement.test-support.js";
 import type { WorkerSessionPlacementIdentity } from "./worker-environments/placement-record.js";
 import type { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import * as support from "./worker-environments/service.test-support.js";
@@ -33,21 +33,17 @@ export function createHeldWorkspacePreflight() {
   };
 }
 
+const runtimeFactory = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 export async function createRuntime(
   placements: ReturnType<typeof createWorkerSessionPlacementStore>,
   environments: ReturnType<typeof support.createService>,
   cancelSessionWork: WorkerPlacementSessionWorkCancellation = vi.fn(async () => {}),
 ) {
-  return createGatewayWorkerPlacementRuntime({
+  return runtimeFactory({
     initialPlacements: await placements.listAsync(),
-    scheduler: createTestGatewayScheduler(),
-    getCommittedRuntimeConfig: getRuntimeConfig,
     placements,
     environments,
-    gatewayNamespace: "gateway-test",
-    warn: vi.fn(),
     cancelSessionWork,
-    revokeSessionAuthority: vi.fn(),
   });
 }
 

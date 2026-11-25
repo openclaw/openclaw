@@ -1,10 +1,10 @@
-import { observeElementRect, type Rect, type Virtualizer } from "@tanstack/virtual-core";
+import type { Rect, Virtualizer } from "@tanstack/virtual-core";
 import {
   resolveTranscriptScrollMargin,
   syncScrollMargin,
   type createPositionRailGutter,
 } from "./chat-transcript-geometry.ts";
-import { unscaledBorderBox } from "./chat-transcript-layout-owner.ts";
+import { type TranscriptLayoutOwner, unscaledBorderBox } from "./chat-transcript-layout-owner.ts";
 
 type ViewportRectOwner = {
   getScrollElement(): HTMLDivElement | null;
@@ -14,7 +14,8 @@ type ViewportRectOwner = {
   measureConnectedRows(): boolean;
   queueRowMeasure(): void;
   onViewportResize(): void;
-  requestUpdate(): void;
+  layout: TranscriptLayoutOwner;
+  invalidate(): void;
 };
 
 function sameDimension(previous: number | null | undefined, next: number): boolean {
@@ -84,6 +85,14 @@ export class TranscriptViewportRect {
       // The host supplies only the header height already compensated by its render.
       syncScrollMargin(instance, scrollMargin);
       callback(rect);
+      if (railGeometry) {
+        this.owner.layout.restoreRows(
+          instance,
+          railGeometry.columnWidth,
+          rect.width,
+          railGeometry.gutter,
+        );
+      }
       if (widthChanged) {
         // Preserve offscreen estimates; connected resizeItem measurements own scroll compensation.
         this.owner.measureConnectedRows();
@@ -92,7 +101,7 @@ export class TranscriptViewportRect {
       this.owner.positionRail.sync(railGeometry);
       if (widthChanged || heightChanged) {
         this.owner.onViewportResize();
-        this.owner.requestUpdate();
+        this.owner.invalidate();
       }
     };
     const syncRect = () => {
@@ -104,9 +113,26 @@ export class TranscriptViewportRect {
       }
     };
     this.syncRect = syncRect;
-    const cleanup = observeElementRect(instance, deliverRect);
+    syncRect();
+    const element = instance.scrollElement;
+    const ResizeObserver = instance.targetWindow?.ResizeObserver;
+    // Composer compensation must see the viewport before deferred row measurements.
+    const observer =
+      element && ResizeObserver
+        ? new ResizeObserver(([entry]) => {
+            const box = entry?.borderBoxSize?.[0];
+            if (box) {
+              deliverRect({ width: Math.round(box.inlineSize), height: Math.round(box.blockSize) });
+            } else {
+              syncRect();
+            }
+          })
+        : null;
+    if (element) {
+      observer?.observe(element, { box: "border-box" });
+    }
     return () => {
-      cleanup?.();
+      observer?.disconnect();
       if (this.syncRect === syncRect) {
         this.syncRect = null;
       }

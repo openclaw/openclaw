@@ -93,6 +93,8 @@ export async function runHostedChannelSetup(
   assertPersistentEffectCurrent?: () => void,
 ): Promise<HostedSetupCompletion> {
   const { createChannelSetupHooks, setupChannels } = await import("../flows/channel-setup.js");
+  const { storeChannelSetupCredentials } =
+    await import("../commands/channels/plugin-config-persistence.js");
   return await runHostedSetup({
     label: "Channel setup",
     runtime,
@@ -102,19 +104,27 @@ export async function runHostedChannelSetup(
         runtime: setupRuntime,
         beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
       });
+      const nextConfig = await setupChannels(baseConfig, setupRuntime, prompter, {
+        initialSelection: [channel],
+        forceAllowFromChannels: [channel],
+        allowIMessageInstall: true,
+        allowSignalInstall: true,
+        deferStatusUntilSelection: true,
+        quickstartDefaults: true,
+        skipDmPolicyPrompt: true,
+        skipConfirm: true,
+        beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
+        ...(assertPersistentEffectCurrent ? { assertPersistentEffectCurrent } : {}),
+        onPostWriteHook: channelSetup.onPostWriteHook,
+      });
       return {
-        nextConfig: await setupChannels(baseConfig, setupRuntime, prompter, {
-          initialSelection: [channel],
-          forceAllowFromChannels: [channel],
-          allowIMessageInstall: true,
-          allowSignalInstall: true,
-          deferStatusUntilSelection: true,
-          quickstartDefaults: true,
-          skipDmPolicyPrompt: true,
-          skipConfirm: true,
+        nextConfig: await storeChannelSetupCredentials({
+          cfg: nextConfig,
+          previousConfig: baseConfig,
           beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
-          ...(assertPersistentEffectCurrent ? { assertPersistentEffectCurrent } : {}),
-          onPostWriteHook: channelSetup.onPostWriteHook,
+          ...(assertPersistentEffectCurrent
+            ? { assertCurrent: assertPersistentEffectCurrent }
+            : {}),
         }),
         afterWrite: async (configPath) => await channelSetup.runPostWriteHooks(configPath),
       };
@@ -272,10 +282,7 @@ function formatMemoryImportProviders(providers: ConfirmedMemoryImportProviderOut
     .join(", ");
 }
 
-export async function auditMemoryImport(
-  providers: MemoryImportProviderOutcome[],
-  appendAuditEntry = appendSystemAgentAuditEntry,
-): Promise<void> {
+export async function auditMemoryImport(providers: MemoryImportProviderOutcome[]): Promise<void> {
   const confirmedProviders = providers.filter(hasConfirmedMemoryImportCount);
   const importedProviders = confirmedProviders.filter((provider) => provider.migrated > 0);
   const indeterminateProviders = providers.filter(
@@ -299,7 +306,7 @@ export async function auditMemoryImport(
           .join("; ")}`
       : `Imported memory via chat: ${providerSummary}`;
   try {
-    await appendAuditEntry({
+    await appendSystemAgentAuditEntry({
       operation: "memory.import",
       summary,
       details: {
@@ -324,7 +331,6 @@ export async function auditMemoryImport(
 
 export async function renderMemoryImport(
   outcome: HostedMemoryImportOutcome | undefined,
-  appendAuditEntry = appendSystemAgentAuditEntry,
 ): Promise<string> {
   if (!outcome) {
     return "Memory import did not complete. No outcome was reported, and no success was assumed.";
@@ -350,7 +356,7 @@ export async function renderMemoryImport(
   );
   const importedItems = importedProviders.reduce((total, provider) => total + provider.migrated, 0);
   const providerSummary = formatMemoryImportProviders(importedProviders);
-  await auditMemoryImport(outcome.providers, appendAuditEntry);
+  await auditMemoryImport(outcome.providers);
 
   if (importedItems === 0) {
     if (indeterminateProviders.length > 0) {

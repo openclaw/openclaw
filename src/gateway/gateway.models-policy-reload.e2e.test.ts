@@ -6,13 +6,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import * as policy from "../plugins/provider-policy-surface.js";
 import * as artifacts from "../plugins/public-surface-loader.js";
-import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
-import {
-  getPluginRegistryForContext,
-  getPluginRuntimeGatewayRequestScope,
-} from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { connectUserModelAccountAsync } from "../state/user-model-account-operations.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -76,15 +73,9 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
           baseUrl: "https://provider.invalid/v1",
           api: "openai-completions",
           apiKey: "fixture-key",
-          models: modelIds.map((id) => ({
-            id,
-            name: id,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 32000,
-            maxTokens: 1024,
-          })),
+          models: modelIds.map((id) =>
+            buildCatalogModel(id, { contextWindow: 32000, maxTokens: 1024 }),
+          ),
         },
       },
     },
@@ -113,7 +104,6 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
   let requesterProfileId: string | undefined;
   let measuredLoads = 0;
   let measuredLookups = 0;
-  const versions = new Set<number | undefined>();
   const original = policy.resolveDirectBundledProviderPolicySurface;
   const resolvePolicy = vi
     .spyOn(policy, "resolveDirectBundledProviderPolicySurface")
@@ -128,7 +118,6 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
       if (measured) {
         measuredLoads += candidateLoads.mock.calls.length - beforeLoads;
         measuredLookups += 1;
-        versions.add(getPluginRegistryVersion(getPluginRegistryForContext()));
       }
       return surface;
     });
@@ -143,16 +132,13 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
       .join("");
     return { agentId: "main", authProfileId, provider };
   };
-  const measure = async (label: string) => {
+  const measure = async () => {
     await gateway.client.request("models.list", nextRequest());
     candidateLoads.mockClear();
     resolvePolicy.mockClear();
-    versions.clear();
     measuredLoads = 0;
     measuredLookups = 0;
-    const timings: number[] = [];
     for (let i = 0; i < 12; i++) {
-      const started = performance.now();
       const beforeLookups = measuredLookups;
       const result = await gateway.client.request<{
         models: { id: string }[];
@@ -161,20 +147,7 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
       expect(result.models.some((model) => model.id === "model-0")).toBe(true);
       expect(result.accountSelection?.kind).toBe("personal");
       expect(measuredLookups).toBeGreaterThan(beforeLookups);
-      timings.push(performance.now() - started);
     }
-    timings.sort((a, b) => a - b);
-    console.log(
-      JSON.stringify({
-        label,
-        p50: timings[5],
-        p95: timings[11],
-        loads: measuredLoads,
-        lookups: measuredLookups,
-        versions: [...versions],
-      }),
-    );
-    expect(measuredLookups).toBeGreaterThan(0);
     return measuredLoads;
   };
   try {
@@ -186,14 +159,14 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
       credential: { type: "api_key", provider: "openai", key: "fixture-personal-key" },
       assertCurrent() {},
     }));
-    await measure("before-reload");
+    await measure();
     const before = await gateway.client.request<{ hash: string }>("config.get", {});
     await gateway.client.request("config.patch", {
       baseHash: before.hash,
       raw: JSON.stringify({ agents: { defaults: { model: { primary: "openai/model-1" } } } }),
     });
     expect(getRuntimeConfig().agents?.defaults?.model).toEqual({ primary: "openai/model-1" });
-    const afterLoads = await measure("after-reload");
+    const afterLoads = await measure();
     expect(afterLoads).toBe(0);
   } finally {
     resolvePolicy.mockRestore();

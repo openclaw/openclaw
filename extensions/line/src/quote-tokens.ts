@@ -37,7 +37,6 @@ export function readLineQuoteToken(message: MessageContent): string | undefined 
     : undefined;
 }
 
-/** Remembers the token an inbound message can later be quoted with. */
 export function recordLineQuoteToken(params: {
   accountId: string;
   chatId: string;
@@ -60,7 +59,6 @@ export function recordLineQuoteToken(params: {
   pruneMapToMaxSize(tokens, QUOTE_TOKEN_LIMIT);
 }
 
-/** Resolves the token that quotes one message in one chat, if it is still known. */
 export function resolveLineQuoteToken(params: {
   cfg: OpenClawConfig;
   accountId: string | null | undefined;

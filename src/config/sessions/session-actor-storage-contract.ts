@@ -12,7 +12,6 @@ import type {
   SessionActorMemoryCollaborationReads,
   SessionActorMemoryCollaborationWrites,
 } from "./session-actor-memory-collaboration-contract.js";
-import type { SessionActorMemoryCompletionReads } from "./session-actor-memory-completion-contract.js";
 import type {
   SessionActorMemoryConversationReads,
   SessionActorMemoryConversationWrites,
@@ -51,7 +50,6 @@ import type {
   SessionActorMemoryUsageWrites,
 } from "./session-actor-memory-usage-contract.js";
 import type { SessionActorAuthority, SessionActorHotState } from "./session-actor-state.types.js";
-import type { PendingInputCustodyCandidate } from "./session-pending-input-history.types.js";
 import type { SessionLifecyclePatchEffects } from "./session-run-lifecycle-projection.js";
 import type { TranscriptAppendRefusal } from "./session-transcript-writer-claim-error.js";
 
@@ -65,7 +63,6 @@ export type SessionActorStorageReads = SessionActorMemoryConversationReads &
   SessionActorMemoryReportsReads &
   SessionActorMemoryUsageReads &
   SessionActorMemorySearchReads &
-  SessionActorMemoryCompletionReads &
   SessionActorMemoryEntryReads &
   SessionActorMemoryForkReads &
   SessionActorMemoryHistoryReads &
@@ -125,9 +122,4 @@ export type SessionActorStorageOutcome<Value> =
 export type SessionActorStorageAuthority = SessionActorAuthority & {
   /** The host supplies CLI fork capabilities; memory entry patches travel with the command. */
   parentFork?: SessionActorMemoryParentForkCallbacks;
-  /** The existing live pending-input owner decides whether reconciliation may interrupt custody. */
-  isPendingInputProtected?(
-    candidate: PendingInputCustodyCandidate,
-    currentSessionId: string | undefined,
-  ): boolean;
 };

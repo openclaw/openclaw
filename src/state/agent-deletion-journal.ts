@@ -1,6 +1,5 @@
 import path from "node:path";
-import { isMainThread } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
 import {
@@ -15,7 +14,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveAgentCreationClaimAgentId } from "./agent-creation-claim.js";
 import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
-import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
+import { hasTemplateDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
 import { agentDeletionJournalPublication } from "./agent-deletion-journal-publication.js";
 import { resolveAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
 import {
@@ -39,15 +38,11 @@ import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
-import {
-  executeExistingOpenClawStateRead,
-  withExistingOpenClawStateDatabaseCurrentReadOnly,
-} from "./openclaw-state-db-readonly.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import {
   assertAgentDeletionJournalAvailable,
   ensureAgentDeletionJournalPhaseSchema,
 } from "./openclaw-state-db-schema-additive.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
@@ -76,6 +71,13 @@ function publishDeletingAgent(
     databasePaths: [path.join(entry.agentDir, "openclaw-agent.sqlite"), ...entry.databasePaths],
     cleanupCompleted: false,
   }));
+  agentDeletionJournalPublication.stagePostimages(database.db, [
+    {
+      agentId: entry.agentId,
+      operationId: entry.operationId,
+      cleanupCompleted: entry.cleanupCompleted,
+    },
+  ]);
 }
 
 type AgentDeletionDatabase = Pick<
@@ -115,9 +117,6 @@ function readAgentDeletionPathFenceRows(
     assertAgentDeletionJournalAvailable(database);
   }
   try {
-    if (!tableExists(database, "agent_deletion_journal")) {
-      return { known: false, rows: [] };
-    }
     const db = getNodeSqliteKysely<AgentDeletionDatabase>(database);
     let known = true;
     let query = db.selectFrom("agent_deletion_journal").selectAll();
@@ -295,8 +294,7 @@ export function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPat
         typeof entry.coversDescendants === "boolean" &&
         typeof entry.done === "boolean" &&
         (entry.note === undefined || typeof entry.note === "string") &&
-        Array.isArray(entry.sourcePaths) &&
-        entry.sourcePaths.every((sourcePath) => typeof sourcePath === "string"),
+        isStringArray(entry.sourcePaths),
     )
   ) {
     throw new Error("Invalid agent deletion cleanup path journal.");
@@ -316,33 +314,20 @@ export function readAgentDeletionJournalInDatabase(
 
 export function listPendingAgentDeletionJournalsInDatabase(
   database: Pick<OpenClawStateDatabase, "db">,
-): { entries: AgentDeletionJournalEntry[]; manualClawAgentIds: string[] } {
+): { entries: AgentDeletionJournalEntry[]; manualTemplateAgentIds: string[] } {
   const entries: AgentDeletionJournalEntry[] = [];
-  const manualClawAgentIds: string[] = [];
+  const manualTemplateAgentIds: string[] = [];
   for (const row of readAgentDeletionPathFenceRows(database.db).rows) {
     if (row.cleanup_completed === 1) {
       continue;
     }
-    if (row.phase == null && hasClawDeletionOwnership(database, row.agent_id)) {
-      manualClawAgentIds.push(row.agent_id);
+    if (row.phase == null && hasTemplateDeletionOwnership(database, row.agent_id)) {
+      manualTemplateAgentIds.push(row.agent_id);
     } else {
       entries.push(fromRow(row));
     }
   }
-  return { entries, manualClawAgentIds };
-}
-
-export function readAgentDeletionJournal(
-  agentId: string,
-  options: OpenClawStateDatabaseOptions = {},
-  purpose: AgentDeletionJournalPurpose = "maintenance",
-): AgentDeletionJournalEntry | undefined {
-  // Worker commit guards must read current authority without joining the worker's writer lock.
-  return withExistingOpenClawStateDatabaseCurrentReadOnly(
-    (database) => readAgentDeletionJournalInDatabase(database, agentId, purpose),
-    // Workers can read the live fence directly; repeated inspection children would block their actor.
-    purpose === "runtime" && !isMainThread ? { ...options, allowNativeRead: true } : options,
-  );
+  return { entries, manualTemplateAgentIds };
 }
 
 export function beginAgentDeletionJournalInDatabase(
@@ -376,8 +361,8 @@ export function beginAgentDeletionJournalInDatabase(
     ) {
       throw new Error(`Agent ${normalized.agentId} deletion changed before recovery.`);
     }
-    if (existing.phase == null && hasClawDeletionOwnership(database, normalized.agentId)) {
-      throw new Error(`Agent ${normalized.agentId} deletion requires its Claw removal owner.`);
+    if (existing.phase == null && hasTemplateDeletionOwnership(database, normalized.agentId)) {
+      throw new Error(`Agent ${normalized.agentId} deletion requires its Template removal owner.`);
     }
   }
   const registeredDatabasePaths = executeSqliteQuerySync(
@@ -429,13 +414,6 @@ export function beginAgentDeletionJournalInDatabase(
       },
     };
     publishDeletingAgent(database, discovery, result.entry);
-    agentDeletionJournalPublication.stagePostimages(database.db, [
-      {
-        agentId: result.entry.agentId,
-        operationId: result.entry.operationId,
-        cleanupCompleted: result.entry.cleanupCompleted,
-      },
-    ]);
     return result;
   }
   const createdAt = Date.now();
@@ -460,13 +438,6 @@ export function beginAgentDeletionJournalInDatabase(
     entry: { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false },
   };
   publishDeletingAgent(database, discovery, result.entry);
-  agentDeletionJournalPublication.stagePostimages(database.db, [
-    {
-      agentId: result.entry.agentId,
-      operationId: result.entry.operationId,
-      cleanupCompleted: result.entry.cleanupCompleted,
-    },
-  ]);
   return result;
 }
 
@@ -645,12 +616,9 @@ export async function listPendingAgentDeletionJournalsAsync(
     { type: "agentRecovery.pendingDeletions", input: undefined },
     { current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "agentRecovery.pendingDeletions")) {
-    throw new Error("Unexpected pending agent deletion read result");
-  }
   return {
     entries: reply?.entries ?? [],
-    manualClawAgentIds: reply?.manualClawAgentIds ?? [],
+    manualTemplateAgentIds: reply?.manualTemplateAgentIds ?? [],
   };
 }
 

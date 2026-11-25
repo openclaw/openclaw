@@ -5,7 +5,9 @@ import {
   requestSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { currentSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
+import { assertSqliteWorkerRequestAuthority } from "../../infra/sqlite-writer-admission-client.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
   readOpenClawAgentDatabaseIdentity,
@@ -22,18 +24,20 @@ import {
 } from "./session-accessor.sqlite-entry-read.js";
 import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry-revision.js";
 import {
-  assertCanonicalSessionKeyWrite,
   readWithCanonicalSessionAdmission,
   readWithCanonicalSessionReaderContinuation,
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-row.js";
 import { projectSessionEntryCapabilityFacts } from "./session-entry-capability-facts.js";
 import type {
   SessionEntryCurrentAdmissionFacts,
   SessionEntryCurrentFacts,
   SessionEntryCurrentSource,
 } from "./session-entry-current.types.js";
+import { captureSessionExecutionPolicy } from "./session-entry-execution-policy.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
+import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 
 // One last-key/read-policy projection per native handle; the revision owner invalidates its facts.
 const currentEntryReads = new WeakMap<
@@ -83,17 +87,13 @@ function createCurrentEntryRead(
           ? {}
           : { repositoryWorkspaceId: current.repositoryWorkspaceId }),
         ...(current.deviceFolder ? { deviceFolder: { ...current.deviceFolder } } : {}),
+        goal: current.goal,
         lifecycleRevision: current.lifecycleRevision,
         lifecycleRunId: current.lifecycleRunId,
+        lastRunId: current.lastRunId,
         activeWriterRunId: current.activeWriterRunId,
-        ...(current.subagentRecovery
-          ? {
-              subagentRecovery: {
-                lastRunId: current.subagentRecovery.lastRunId,
-                sessionLifecycleRunId: current.subagentRecovery.sessionLifecycleRunId,
-              },
-            }
-          : {}),
+        skillLibrarySelections: current.skillLibrarySelections,
+        executionPolicy: captureSessionExecutionPolicy(current),
       };
       return true;
     },
@@ -133,6 +133,9 @@ function assertSessionEntryCurrentNativeSource(
   source: SessionEntryCurrentSource,
   database?: OpenClawAgentReadOnlyDatabase,
 ): void {
+  if (source.readCustody) {
+    assertSessionStoreReadCandidate(source.readCustody.sourcePath, source.readCustody.candidates);
+  }
   assertExistingDatabaseIdentity(
     source.path,
     `file:${source.databaseIdentity}`,
@@ -149,6 +152,10 @@ function assertSessionEntryCurrentNativeSource(
     ) {
       throw new Error("Session currency native owner differs from its captured source");
     }
+  }
+  const operation = currentSqliteWorkerOperationAdmission.getStore();
+  if (operation) {
+    assertSqliteWorkerRequestAuthority(operation.owner);
   }
 }
 

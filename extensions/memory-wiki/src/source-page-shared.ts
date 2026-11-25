@@ -2,11 +2,13 @@ import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import { canAccess } from "openclaw/plugin-sdk/path-existence-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   decodeWikiPageUtf8,
   preserveHumanNotesBlock,
   renderMarkdownFence,
+  escapeWikiTitle,
   renderWikiMarkdown,
 } from "./markdown.js";
 import {
@@ -30,7 +32,7 @@ export function renderImportedSourcePage(params: {
   return renderWikiMarkdown({
     frontmatter: params.frontmatter,
     body: [
-      `# ${params.frontmatter.title}`,
+      `# ${escapeWikiTitle(params.frontmatter.title)}`,
       "",
       `## ${params.sourceHeading}`,
       ...params.sourceDetails,
@@ -66,10 +68,7 @@ export async function writeImportedSourcePage(params: {
     previous.sourceUpdatedAtMs === params.sourceUpdatedAtMs &&
     previous.sourceSize === params.sourceSize &&
     previous.renderFingerprint === params.renderFingerprint &&
-    (await fs.access(path.join(params.vaultRoot, params.pagePath)).then(
-      () => true,
-      () => false,
-    ))
+    (await canAccess(path.join(params.vaultRoot, params.pagePath)))
   ) {
     return { pagePath: params.pagePath, changed: false, created: false };
   }

@@ -10,17 +10,22 @@ import type { RunCliAgentParams } from "./types.js";
 export async function resolveCliMcpMemoryAudience(
   run: Pick<
     RunCliAgentParams,
-    "config" | "sessionId" | "senderIsOwner" | "sessionEntry" | "sessionTarget" | "storePath"
+    | "config"
+    | "sessionId"
+    | "senderIsOwner"
+    | "sessionEntry"
+    | "sessionTarget"
+    | "storePath"
+    | "admittedRunContext"
   > & { assertCurrent?: () => void },
   grant: { agentId: string; sessionKey: string },
 ): Promise<{ memoryAudience?: MemoryAudience; release: () => void }> {
   const storePath = run.sessionTarget?.storePath ?? run.storePath;
   return await resolveEmbeddedAttemptMemoryAudience({
-    config: run.config,
+    run,
     agentId: grant.agentId,
     sessionKey: grant.sessionKey,
     sessionId: run.sessionId,
-    senderIsOwner: run.senderIsOwner,
     // Without an admitted row and its store there is no verified lineage to resolve.
     admission: run.sessionEntry && storePath ? { entry: run.sessionEntry, storePath } : undefined,
     assertCallerCurrent: run.assertCurrent,

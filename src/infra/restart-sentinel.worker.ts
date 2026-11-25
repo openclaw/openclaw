@@ -26,12 +26,11 @@ import {
   beginUpdateFailureReportReceiptCleanupRowSync,
   beginStaleUpdateFailureReportReceiptCleanupRowSync,
   completeUpdateFailureReportReceiptCleanupRowSync,
-  claimUpdateFailureReportArtifactSweepRowSync,
-  releaseUpdateFailureReportArtifactSweepRowSync,
   refreshUpdateFailureReportReceiptPreparationRowSync,
   finalizeUpdateFailureReportReceiptRowSync,
   markUpdateFailureReportReceiptPendingRowSync,
   markUpdateFailureReportReceiptPreparedRowSync,
+  readUpdateFailureReportReceiptRowSync,
 } from "./update-failure-report-receipt-store.js";
 import type { UpdateFailureReportReceipt } from "./update-failure-report-receipt.js";
 
@@ -58,6 +57,22 @@ function receiptTransaction<Input, Output>(
       },
       { operationLabel: label },
     );
+}
+
+// SDK-reachable legacy sweep keys confirm the reservation without claiming custody.
+function sweepReservationCurrent(
+  db: EngineConnection,
+  input: {
+    attemptId: string;
+    expectedReservationId: string;
+    sweepOwnerId: string;
+    sweepGeneration: string;
+  },
+): boolean {
+  const receipt = readUpdateFailureReportReceiptRowSync(db, input.attemptId);
+  return (
+    receipt?.reservationId === input.expectedReservationId && receipt.artifactSweep === "pending"
+  );
 }
 
 export const restartSentinelOperations = {
@@ -93,41 +108,11 @@ export const restartSentinelOperations = {
   ),
   "restartSentinel.claimSweep": receiptTransaction(
     "update-failure-report.claimSweep",
-    (
-      db,
-      input: {
-        attemptId: string;
-        expectedReservationId: string;
-        sweepOwnerId: string;
-        sweepGeneration: string;
-      },
-    ) =>
-      claimUpdateFailureReportArtifactSweepRowSync(
-        db,
-        input.attemptId,
-        input.expectedReservationId,
-        input.sweepOwnerId,
-        input.sweepGeneration,
-      ),
+    sweepReservationCurrent,
   ),
   "restartSentinel.releaseSweep": receiptTransaction(
     "update-failure-report.releaseSweep",
-    (
-      db,
-      input: {
-        attemptId: string;
-        expectedReservationId: string;
-        sweepOwnerId: string;
-        sweepGeneration: string;
-      },
-    ) =>
-      releaseUpdateFailureReportArtifactSweepRowSync(
-        db,
-        input.attemptId,
-        input.expectedReservationId,
-        input.sweepOwnerId,
-        input.sweepGeneration,
-      ),
+    sweepReservationCurrent,
   ),
   "restartSentinel.refreshPreparation": receiptTransaction(
     "update-failure-report.refreshPreparation",
@@ -171,7 +156,7 @@ export const restartSentinelOperations = {
     (db, input: { payload: RestartSentinelPayload; expectedRevision: number | null }) => {
       const current = readRestartSentinelSnapshotSync(db);
       return current.state.kind !== "invalid" && current.revision === input.expectedRevision
-        ? writeRestartSentinelRowSync(db, input.payload)
+        ? writeRestartSentinelRowSync(db, input.payload, current.revision)
         : null;
     },
   ),

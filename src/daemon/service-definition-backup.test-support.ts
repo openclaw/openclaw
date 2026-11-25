@@ -17,6 +17,7 @@ import { captureGatewayServiceDefinitionBackup } from "./service-definition-back
 import { native } from "./service-definition-backup.mocks.test-support.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "./service-stage.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { stageSystemdService } from "./systemd-install.js";
 import { resolveSystemdUnitPath } from "./systemd-service-files.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
@@ -30,18 +31,8 @@ beforeEach(() => {
   native.command.mockReset();
   native.task.mockReset();
   native.transport.mockReset().mockResolvedValue(undefined);
-  native.launchctl.mockReset().mockResolvedValue({
-    code: 113,
-    stdout: "",
-    stderr: "Could not find service",
-    termination: "exit",
-  });
-  native.identity.mockReset().mockResolvedValue({
-    code: 0,
-    stdout: "S-1-5-21-1-2-3-1001\n",
-    stderr: "",
-    termination: "exit",
-  });
+  native.launchctl.mockReset().mockResolvedValue(nativeExit("", "Could not find service", 113));
+  native.identity.mockReset().mockResolvedValue(nativeExit("S-1-5-21-1-2-3-1001\n"));
 });
 
 async function fixture(
@@ -49,6 +40,7 @@ async function fixture(
   ancillary = false,
   originalDefinition?: Buffer,
   originalMode = 0o600,
+  exportTask: (xml: string) => string = (xml) => xml,
 ) {
   const root = await fs.realpath(dirs.make("service-definition-backup-"));
   const env: GatewayServiceEnv = {
@@ -63,6 +55,13 @@ async function fixture(
   };
   await seedCompletedRuntimePinMigration(env);
   vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  const [resolveSourcePath, installService] = (
+    {
+      linux: [resolveSystemdUnitPath, stageSystemdService],
+      darwin: [resolveLaunchAgentPlistPath, stageLaunchAgent],
+      win32: [resolveTaskScriptPath, installScheduledTask],
+    } as const
+  )[platform];
   const readFile = fs.readFile.bind(fs);
   if (platform === "linux") {
     vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
@@ -75,25 +74,20 @@ async function fixture(
       return readFile(...args);
     });
   }
-  const sourcePath =
-    platform === "linux"
-      ? resolveSystemdUnitPath(env)
-      : platform === "darwin"
-        ? resolveLaunchAgentPlistPath(env)
-        : resolveTaskScriptPath(env);
+  const sourcePath = resolveSourcePath(env);
   const command: GatewayServiceCommandConfig = {
     programArguments: ["/usr/bin/node", "/old/index.js", "gateway"],
     sourcePath,
     definitionPaths: [sourcePath],
     environment: { OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR! },
   };
-  native.command.mockImplementation(async () => command);
+  native.command.mockResolvedValue(command);
   const original =
     originalDefinition ??
     (platform === "linux"
       ? Buffer.from(buildSystemdUnit(command).replace("KillMode=mixed\n", ""))
       : platform === "darwin"
-        ? Buffer.from([0x62, 0x70, 0x6c, 0x69, 0x73, 0x74, 0x30, 0x30, 0xff, 0x81])
+        ? Buffer.from("62706c6973743030ff81", "hex")
         : Buffer.from("@echo off\r\nnode old.js gateway\r\n"));
   const files = [
     sourcePath,
@@ -126,7 +120,7 @@ async function fixture(
   const originalTask = task;
   native.task.mockImplementation(async (args: string[]) => {
     if (args[0] === "/Query") {
-      return { code: 0, stderr: "", stdout: args.includes("/XML") ? task : "" };
+      return { code: 0, stderr: "", stdout: args.includes("/XML") ? exportTask(task) : "" };
     }
     if (args[0] === "/Create") {
       task = (await fs.readFile(args[args.indexOf("/XML") + 1]!)).subarray(2).toString("utf16le");
@@ -156,13 +150,7 @@ async function fixture(
       stdout: new PassThrough(),
       definitionTransaction: hooks,
     };
-    if (platform === "linux") {
-      await stageSystemdService(args);
-    } else if (platform === "darwin") {
-      await stageLaunchAgent(args);
-    } else {
-      await installScheduledTask(args);
-    }
+    await installService(args);
   };
   return {
     ...context,

@@ -3,7 +3,6 @@ import type { RoleRefMap, RoleSnapshotOptions } from "./pw-role-snapshot.js";
 import { ROLE_SNAPSHOT_MAX_DEPTH } from "./snapshot-depth-limit.js";
 import { INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-/** Role snapshot ref metadata used by agent-facing snapshots. */
 export type CdpRoleRef = RoleRefMap[string] & {
   backendDOMNodeId?: number;
   frameId?: string;
@@ -11,7 +10,6 @@ export type CdpRoleRef = RoleRefMap[string] & {
 
 export type CursorInteractiveInfo = {
   text: string;
-  tagName: string;
   hasOnClick?: boolean;
   hasCursorPointer?: boolean;
   hasTabIndex?: boolean;
@@ -36,6 +34,16 @@ export type RoleTreeNode = {
   transparent?: boolean;
 };
 
+/** Ignored nodes and unnamed generic wrappers carry no role structure of their own. */
+function isWrapperNode(raw: RawAXNode, role: string, name: string): boolean {
+  const normalizedRole = role.toLowerCase();
+  return (
+    raw.ignored === true ||
+    ["none", "presentation", "fragment"].includes(normalizedRole) ||
+    (normalizedRole === "generic" && !name)
+  );
+}
+
 export function buildRoleTree(
   nodes: RawAXNode[],
   rootBackendNodeId?: number,
@@ -49,7 +57,6 @@ export function buildRoleTree(
     }
     const role = axValue(raw.role) || "unknown";
     const name = axValue(raw.name);
-    const normalizedRole = role.toLowerCase();
     byId.set(nodeId, tree.length);
     tree.push({
       raw,
@@ -61,14 +68,7 @@ export function buildRoleTree(
           ? Math.floor(raw.backendDOMNodeId)
           : undefined,
       children: [],
-      ...(rootBackendNodeId !== undefined
-        ? {
-            transparent:
-              raw.ignored === true ||
-              ["none", "presentation", "fragment"].includes(normalizedRole) ||
-              (normalizedRole === "generic" && !name),
-          }
-        : {}),
+      ...(rootBackendNodeId !== undefined ? { transparent: isWrapperNode(raw, role, name) } : {}),
     });
   }
 
@@ -155,17 +155,18 @@ export function renderRoleTree(
   options: RoleSnapshotOptions,
   state: { truncated: boolean; recordIframePositions?: boolean; flattenInteractive?: boolean },
   depth = 0,
+  level = 0,
 ): void {
   const node = tree[index]!;
   if (options.maxDepth !== undefined && depth > options.maxDepth) {
     return;
   }
-  if (depth > ROLE_SNAPSHOT_MAX_DEPTH) {
+  if (level > ROLE_SNAPSHOT_MAX_DEPTH) {
     state.truncated = true;
     return;
   }
   if (shouldIncludeRoleNode(node, options)) {
-    const indent = "  ".repeat(state.flattenInteractive && options.interactive ? 0 : depth);
+    const indent = "  ".repeat(state.flattenInteractive && options.interactive ? 0 : level);
     const name = node.name ? ` ${JSON.stringify(node.name)}` : "";
     const ref = node.ref ? ` [ref=${node.ref}]` : "";
     const nth = node.nth !== undefined && node.nth > 0 ? ` [nth=${node.nth}]` : "";
@@ -179,7 +180,10 @@ export function renderRoleTree(
       `${indent}- ${node.role}${name}${ref}${nth}${roleStateSuffix(node.raw)}${value}${url}${cursorSuffix(node.cursorInfo)}`,
     );
   }
+  // Wrappers never count toward maxDepth; unscoped trees still render and indent them.
+  const childDepth = depth + (isWrapperNode(node.raw, node.role, node.name) ? 0 : 1);
+  const childLevel = level + (node.transparent ? 0 : 1);
   for (const child of node.children) {
-    renderRoleTree(tree, child, output, options, state, depth + (node.transparent ? 0 : 1));
+    renderRoleTree(tree, child, output, options, state, childDepth, childLevel);
   }
 }

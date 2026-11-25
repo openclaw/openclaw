@@ -25,6 +25,7 @@ export function useSubagentProgressCohort(fixture: { readonly stateDir: string }
     requesterTurnRunId: string,
     ids: readonly string[],
     requesterOrigin?: { channel: string; to: string; accountId: string },
+    labels?: Readonly<Record<string, string>>,
   ) {
     for (const id of ids) {
       await writeSubagentSessionEntry({
@@ -46,6 +47,7 @@ export function useSubagentProgressCohort(fixture: { readonly stateDir: string }
         requesterOrigin,
         requesterTurnRunId,
         task: `Delegated ${id}`,
+        ...(labels?.[id] ? { label: labels[id] } : {}),
         cleanup: "keep",
         expectsCompletionMessage: true,
       });

@@ -10,6 +10,8 @@ import {
 export type ContextEntry = SessionTreeEntry & { seq: number };
 export type ModelContextRequest = {
   entry: ContextEntry;
+  /** The payload stays at its acceptance row; this marker owns its model-visible position. */
+  placement?: ContextEntry;
   omitCheckpoint: boolean;
   toolResultOmission?: string;
 };
@@ -20,6 +22,18 @@ export type ModelContextPrefix = {
   hasUser: boolean;
   pairing: ModelContextPairingFacts;
 };
+
+function readToolResultOwners(messages: readonly AgentMessage[]): ModelContextPairingFacts {
+  const owners = new Map<AgentMessage, Extract<AgentMessage, { role: "assistant" }>>();
+  for (const frame of classifyToolUseResultPairing(messages)) {
+    for (const occurrence of frame.occurrences) {
+      if (occurrence.sourceResult) {
+        owners.set(occurrence.sourceResult, frame.assistant);
+      }
+    }
+  }
+  return owners;
+}
 
 /** Select an owned suffix before SQLite payloads can enter JavaScript or cross a worker. */
 export function selectBoundedModelRequests(
@@ -128,27 +142,15 @@ export function selectBoundedModelRequests(
   }
   const pairing =
     prefix?.pairing ??
-    (() => {
-      const messages = candidates.flatMap(({ entry }) => {
+    readToolResultOwners(
+      candidates.flatMap(({ entry }) => {
         const message =
           entry.type === "message" ? entry.message : projectSessionEntryMessage(entry);
         return message ? [message] : [];
-      });
-      const original = classifyToolUseResultPairing(messages);
-      const owners = new Map<AgentMessage, AgentMessage>();
-      const spans: Array<{ assistant: AgentMessage; result: AgentMessage }> = [];
-      for (const frame of original.frames) {
-        for (const occurrence of frame.occurrences) {
-          if (occurrence.sourceResult) {
-            owners.set(occurrence.sourceResult, frame.assistant);
-            spans.push({ assistant: frame.assistant, result: occurrence.sourceResult });
-          }
-        }
-      }
-      return { owners, spans };
-    })();
-  // Cached spans preserve canonical assistant order, including owners in the discarded prefix.
-  for (const { assistant, result } of pairing.spans) {
+      }),
+    );
+  // Map order preserves canonical assistant order, including owners in the discarded prefix.
+  for (const [result, assistant] of pairing) {
     const start = assistant === PREFIX_TOOL_OWNER ? -1 : positions.get(assistant)!;
     const end = positions.get(result)!;
     if (start < cut && cut <= end) {
@@ -159,10 +161,50 @@ export function selectBoundedModelRequests(
     }
   }
   // A large newest atomic frame may consume the headroom without exceeding the hard cap.
+  // A cut that starts on the trailing user message keeps only the prompt the caller
+  // removes before inference, so an oversized previous turn would leave no history.
   const latestTurnStart = turnStarts.at(-1) ?? candidates.length;
+  const trailingPromptOnly = latestTurnStart === candidates.length - 1 && cut === latestTurnStart;
   let selected = candidates.slice(
-    cut === candidates.length || cut > latestTurnStart ? fallbackCut : cut,
+    cut === candidates.length || cut > latestTurnStart || trailingPromptOnly ? fallbackCut : cut,
   );
+  // Removing an older repeated ID must not turn an ambiguous result into a different call's result.
+  const keepsToolOwnership = (selection: readonly ModelContextRequest[]) => {
+    const messages = selection.flatMap(({ entry }) =>
+      entry.type === "message" ? [entry.message] : [],
+    );
+    const owners = readToolResultOwners(messages);
+    return messages.every(
+      (message) => message.role !== "toolResult" || pairing.get(message) === owners.get(message),
+    );
+  };
+  // An in-turn retry rehydrates from here after its tool frames outgrew the cap. A suffix
+  // that starts inside the current turn would drop the request the retry must still answer.
+  const turnStart = candidates.findLastIndex(
+    ({ entry }) => entry.type === "message" && entry.message.role === "user",
+  );
+  if (turnStart >= 0 && turnStart < candidates.length - selected.length) {
+    const turnRequest = candidates[turnStart]!;
+    const reserved =
+      (sizes.get(turnRequest.entry) ?? readSizes([turnRequest]).get(turnRequest.entry)!) +
+      (boundary ? sizes.get(boundary.entry)! : 0);
+    try {
+      const tail = selectBoundedModelRequests(candidates.slice(turnStart + 1), readSizes, {
+        ...limits,
+        maxBytes: limits.maxBytes - reserved,
+        maxEvents: limits.maxEvents - (boundary ? 2 : 1),
+      });
+      // The tail selector cannot see calls before the request; keep canonical ownership.
+      if (keepsToolOwnership(tail)) {
+        return boundary ? [boundary, turnRequest, ...tail] : [turnRequest, ...tail];
+      }
+    } catch (error) {
+      // A request that fits beside no frame, or would orphan a result, keeps the plain suffix.
+      if (!(error instanceof RangeError)) {
+        throw error;
+      }
+    }
+  }
   // A discarded prefix no longer needs savings from retained tool results.
   // Recount after turn/frame closure, then restore newest affordable bodies.
   let retainedBytes = boundary ? sizes.get(boundary.entry)! : 0;
@@ -185,25 +227,8 @@ export function selectBoundedModelRequests(
       "The latest messages exceed this session's context limit. Start a new session with a brief summary to continue.",
     );
   }
-  const selectedMessages = selected.flatMap(({ entry }) =>
-    entry.type === "message" ? [entry.message] : [],
-  );
-  // Removing an older repeated ID must not turn an ambiguous result into a different call's result.
-  const selectedOwners = new Map<AgentMessage, AgentMessage>();
-  for (const frame of classifyToolUseResultPairing(selectedMessages).frames) {
-    for (const occurrence of frame.occurrences) {
-      if (occurrence.sourceResult) {
-        selectedOwners.set(occurrence.sourceResult, frame.assistant);
-      }
-    }
-  }
-  for (const message of selectedMessages) {
-    if (
-      message.role === "toolResult" &&
-      pairing.owners.get(message) !== selectedOwners.get(message)
-    ) {
-      throw new RangeError("Session context limit would change tool-result ownership");
-    }
+  if (!keepsToolOwnership(selected)) {
+    throw new RangeError("Session context limit would change tool-result ownership");
   }
   return boundary ? [boundary, ...selected] : selected;
 }

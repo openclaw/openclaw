@@ -1,5 +1,3 @@
-// In-memory dedupe helpers for plugin runtime hot paths.
-
 import { resolveGlobalDedupeCache } from "../infra/dedupe.js";
 import type { OpenKeyedStoreOptions } from "./plugin-state-runtime.js";
 

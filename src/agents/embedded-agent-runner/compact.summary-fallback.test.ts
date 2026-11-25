@@ -1,10 +1,18 @@
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, expect, it, onTestFinished } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  createCompactionNoticePayload,
+  resolveCompactionCompletionNotice,
+} from "../../auto-reply/reply/compaction-notice.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadAndActivateRootPluginRegistry } from "../../plugins/loader.js";
+import { writePlugin } from "../../plugins/loader.test-fixtures.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -12,11 +20,21 @@ import {
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { compactEmbeddedAgentSession } from "./compact.queued.js";
+import { compactEmbeddedAgentSessionDirect } from "./compact.js";
+import { compactQueuedEmbeddedAgentSession as compactEmbeddedAgentSession } from "./compact.queued.js";
 
 // Real queued compaction, native delegate, AgentSession, and SQLite transcript; only the
 // provider is a local OpenAI-compatible endpoint whose summary requests stall, fail, or answer.
-type SummaryMode = "stall" | "provider-timeout" | "bare-408" | "server-error" | "error" | "ok";
+type SummaryMode =
+  | "stall"
+  | "provider-timeout"
+  | "bare-408"
+  | "server-error"
+  | "auth-error"
+  | "error"
+  | "refusal"
+  | "refusal-primary"
+  | "ok";
 type SessionTarget = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
 type Fixture = { state: OpenClawTestState; config: OpenClawConfig; target: SessionTarget };
 
@@ -35,7 +53,42 @@ beforeAll(async () => {
     req.on("end", () => {
       summaryRequests.push(body);
       summaryArrived.resolve();
-      const mode: SummaryMode = body.includes('"model":"fallback-model"') ? "ok" : summaryMode;
+      const fallbackRoute = body.includes('"model":"fallback-model"');
+      if (summaryMode === "refusal" || summaryMode === "refusal-primary") {
+        const answer = summaryMode === "refusal-primary" && fallbackRoute;
+        const text = "## Goal\nFallback route summary.";
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(
+          [
+            { type: "message_start", message: { id: "summary", usage: { input_tokens: 2 } } },
+            ...(answer
+              ? [
+                  { type: "content_block_start", index: 0, content_block: { type: "text" } },
+                  { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+                ]
+              : []),
+            {
+              type: "message_delta",
+              delta: answer
+                ? { stop_reason: "end_turn" }
+                : {
+                    stop_reason: "refusal",
+                    stop_details: {
+                      type: "refusal",
+                      category: "reasoning_extraction",
+                      explanation: "Synthetic summary refusal.",
+                    },
+                  },
+              usage: { output_tokens: 0 },
+            },
+            { type: "message_stop" },
+          ]
+            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+            .join(""),
+        );
+        return;
+      }
+      const mode: SummaryMode = fallbackRoute ? "ok" : summaryMode;
       if (mode === "stall") {
         res.writeHead(200, { "content-type": "text/event-stream" });
         return;
@@ -46,6 +99,7 @@ beforeAll(async () => {
         return;
       }
       const errors = {
+        "auth-error": [401, "summary model authentication failed"],
         "provider-timeout": [408, "upstream request timed out"],
         "server-error": [500, "Internal Server Error"],
         error: [400, "summary model rejected the request"],
@@ -127,6 +181,8 @@ async function createFixture(
   options: {
     modelFallback?: boolean;
     safeguard?: boolean;
+    refusal?: boolean;
+    fallbackRuntime?: string;
   } = {},
 ) {
   const state = await createOpenClawTestState({ prefix: "openclaw-summary-fallback-" });
@@ -161,10 +217,16 @@ async function createFixture(
     models: {
       providers: {
         fixture: {
-          api: "openai-completions",
+          api: options.refusal ? "anthropic-messages" : "openai-completions",
           apiKey: "synthetic-fixture",
           baseUrl,
-          models: [model("model"), model("fallback-model")],
+          models: [
+            model("model"),
+            {
+              ...model("fallback-model"),
+              ...(options.fallbackRuntime ? { agentRuntime: { id: options.fallbackRuntime } } : {}),
+            },
+          ],
         },
       },
     },
@@ -182,7 +244,34 @@ async function createFixture(
   return { ...fixture, seeded: appendToolTurns(fixture, 0, 8) };
 }
 
-function compactSession(fixture: Fixture, abortSignal?: AbortSignal) {
+async function compactSession(
+  fixture: Fixture,
+  abortSignal?: AbortSignal,
+  trigger: "manual" | "budget" = "budget",
+  preflight = false,
+  identity: { runId?: string; diagId?: string } = {},
+) {
+  let preparedSession:
+    | import("./run/compaction-accounting-bridge.js").PreparedCompactionSession
+    | undefined;
+  if (preflight) {
+    const { prepareGatewaySessionCompaction } =
+      await import("../../gateway/server-methods/sessions-compaction-runner.js");
+    const { readSessionEntryReadOnlyInWorker } =
+      await import("../../config/sessions/session-entry-read-runtime.js");
+    const entry = await readSessionEntryReadOnlyInWorker(fixture.target);
+    if (!entry) {
+      throw new Error("Missing fixture entry");
+    }
+    const prepared = await prepareGatewaySessionCompaction({
+      ...fixture.target,
+      sessionStoreKey: fixture.target.sessionKey,
+      cfg: fixture.config,
+      entry,
+    });
+    preparedSession = prepared.preparedSession;
+    expect(preparedSession?.source).toBeDefined();
+  }
   return compactEmbeddedAgentSession(
     {
       ...fixture.target,
@@ -193,12 +282,13 @@ function compactSession(fixture: Fixture, abortSignal?: AbortSignal) {
       config: fixture.config,
       provider: "fixture",
       model: "model",
-      trigger: "budget",
+      trigger,
       force: true,
+      ...identity,
       abortSignal,
       enqueue: async (task) => await task(),
     },
-    { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined } },
+    { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined }, preparedSession },
   );
 }
 
@@ -217,6 +307,85 @@ function expectFallbackSummary(fixture: Fixture) {
     expect.stringContaining("removed without a summary"),
   ]);
 }
+
+const requestedModels = () => summaryRequests.map((body) => JSON.parse(body).model);
+
+it.each([
+  { safeguard: true, trigger: "manual", modelFallback: true },
+  { safeguard: true, trigger: "budget", modelFallback: false },
+  { safeguard: false, trigger: "budget", modelFallback: true },
+  // Fallback setup throws before any request: its harness is not registered.
+  { safeguard: false, trigger: "budget", modelFallback: true, fallbackRuntime: "missing" },
+] as const)(
+  "trims a refused summary once with a visible notice ($trigger, safeguard=$safeguard, fallback=$modelFallback)",
+  async ({ safeguard, trigger, modelFallback, ...options }) => {
+    const fallbackRuntime = "fallbackRuntime" in options ? options.fallbackRuntime : undefined;
+    const fixture = await createFixture({
+      safeguard,
+      refusal: true,
+      modelFallback,
+      fallbackRuntime,
+    });
+    const seeded = [...fixture.seeded, ...appendToolTurns(fixture, 8, 43)];
+    summaryMode = "refusal";
+
+    const result = await compactSession(fixture, undefined, trigger, true);
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: true,
+      result: { details: { summaryRefused: true } },
+    });
+    // The fallback route refuses too; neither route is asked twice.
+    expect(requestedModels()).toEqual(
+      modelFallback && !fallbackRuntime ? ["model", "fallback-model"] : ["model"],
+    );
+    expect(result.result?.tokensAfter).toBeLessThan(24_000);
+    expect(result.result?.tokensBefore).toBeGreaterThan(24_000);
+    expectFallbackSummary(fixture);
+    expect(getCompactions(fixture)[0]?.fromHook).toBe(safeguard && !modelFallback);
+    const session = openSession(fixture);
+    expect(
+      session
+        .getBranch()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.id),
+    ).toEqual(seeded);
+    expect(session.buildSessionContext().messages.at(-1)).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-50",
+    });
+    expect(
+      createCompactionNoticePayload(resolveCompactionCompletionNotice(result, false)).text,
+    ).toContain("Context trimmed because the summarizer refused");
+    expect(
+      createCompactionNoticePayload(resolveCompactionCompletionNotice(result, true)).text,
+    ).toContain("Continuing with bounded recent context");
+  },
+);
+
+it.each([false, true])(
+  "retries a refused summary once on the next fallback route (safeguard=%s)",
+  async (safeguard) => {
+    const fixture = await createFixture({ safeguard, refusal: true, modelFallback: true });
+    summaryMode = "refusal-primary";
+
+    const result = await compactSession(fixture, undefined, "manual", true);
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: true,
+      result: { details: { summaryRoute: "fixture/fallback-model" } },
+    });
+    // The refusing route is asked once; split-turn and quality requests stay on the fallback.
+    expect(requestedModels().lastIndexOf("model")).toBe(0);
+    expect(requestedModels()[1]).toBe("fallback-model");
+    expect(getCompactions(fixture).map((entry) => entry.summary)).toEqual([
+      expect.stringContaining("Fallback route summary."),
+    ]);
+    expect(Boolean(getCompactions(fixture)[0]?.fromHook)).toBe(safeguard);
+  },
+);
 
 it("commits a deterministic reduction after a bodyless 408 summary timeout", async () => {
   const fixture = await createFixture();
@@ -267,6 +436,127 @@ it.each([
   expectFallbackSummary(fixture);
 });
 
+// Both prepared callers announce progress under the runId and diagId they pass in:
+// recovery emits `compaction` events, Gateway `sessions.compact` its operation id.
+it.each([
+  { caller: "recovery", trigger: "budget", preflight: false, diagId: "ovf-progress" },
+  { caller: "sessions.compact", trigger: "manual", preflight: true, diagId: undefined },
+] as const)(
+  "persists the $caller compaction under its progress identity",
+  async ({ trigger, preflight, diagId }) => {
+    const fixture = await createFixture();
+    summaryMode = "ok";
+    const runId = "progress-run";
+
+    expect(
+      await compactSession(fixture, undefined, trigger, preflight, { runId, diagId }),
+    ).toMatchObject({ ok: true, compacted: true });
+    expect(getCompactions(fixture).map((entry) => entry["__openclaw"])).toEqual([
+      { runId, itemId: diagId ?? expect.stringMatching(/^cmp-/) },
+    ]);
+  },
+);
+
+it.each([false, true])(
+  "uses the fallback model's runtime only for unlocked native sessions (locked=%s)",
+  async (locked) => {
+    const fixture = await createFixture();
+    summaryMode = "auth-error";
+    const plugin = writePlugin({
+      id: "summary-native",
+      dir: fixture.state.path("summary-native"),
+      registration: `api.registerAgentHarness({
+      id: "summary-native",
+      label: "Primary summary runtime",
+      authBootstrap: "harness",
+      supports: (context) => context.requestedRuntime === "summary-native" && context.provider === "fixture"
+        ? { supported: true }
+        : { supported: false, reason: "Primary runtime cannot run the fallback provider" },
+      runAttempt: async () => { throw new Error("Compaction must not run an agent turn"); },
+    });`,
+    });
+    await fs.writeFile(
+      fixture.state.path("summary-native", "openclaw.plugin.json"),
+      JSON.stringify({
+        id: plugin.id,
+        activation: { onStartup: false, onAgentHarnesses: ["summary-native"] },
+        configSchema: { type: "object", properties: {}, additionalProperties: false },
+      }),
+    );
+    const primary = fixture.config.models!.providers!.fixture!;
+    fixture.config.models!.providers!.backup = {
+      ...primary,
+      models: primary.models.filter(({ id }) => id === "fallback-model"),
+    };
+    delete primary.apiKey;
+    fixture.config.agents!.defaults!.model = {
+      primary: "fixture/model",
+      fallbacks: ["backup/fallback-model"],
+    };
+    fixture.config.plugins = {
+      allow: [plugin.id],
+      load: { paths: [plugin.dir] },
+      slots: { memory: "none" },
+    };
+    await fixture.state.writeConfig(fixture.config);
+    await loadAndActivateRootPluginRegistry({
+      config: fixture.config,
+      workspaceDir: fixture.state.workspaceDir,
+      onlyPluginIds: [plugin.id],
+      cache: false,
+    });
+    const scope = new AsyncWorkScope();
+    let result;
+    try {
+      result = await scope.run(() =>
+        compactEmbeddedAgentSessionDirect({
+          ...fixture.target,
+          sessionTarget: fixture.target,
+          sessionFile: fixture.target.sessionKey,
+          workspaceDir: fixture.state.workspaceDir,
+          agentDir: fixture.state.agentDir(),
+          config: fixture.config,
+          provider: "fixture",
+          model: "model",
+          agentHarnessId: "summary-native",
+          modelSelectionLocked: locked,
+          trigger: "budget",
+          force: true,
+        }),
+      );
+    } finally {
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [scope],
+        () => scope.drain(),
+      );
+    }
+
+    expect(JSON.parse(summaryRequests[0]!).model).toBe("model");
+    if (locked) {
+      expect(result).toMatchObject({ ok: false, compacted: false });
+      expect(summaryRequests.map((request) => JSON.parse(request).model)).not.toContain(
+        "fallback-model",
+      );
+      expect(getCompactions(fixture)).toHaveLength(0);
+      return;
+    }
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+    expect(summaryRequests.map((request) => JSON.parse(request).model)).toContain("fallback-model");
+    expect(getCompactions(fixture).at(-1)?.summary).toContain("Model summary after recovery.");
+    const session = openSession(fixture);
+    expect(
+      session
+        .getBranch()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.id),
+    ).toEqual(fixture.seeded);
+    expect(session.buildSessionContext().messages.at(-1)).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-7",
+    });
+  },
+);
+
 it.each([
   { failure: "a caller Stop", mode: "stall", stop: true },
   { failure: "a non-timeout summary error", mode: "error", stop: false },
@@ -285,4 +575,78 @@ it.each([
   expect(await pending).toMatchObject({ ok: false, compacted: false });
   expect(summaryRequests.length).toBeGreaterThan(0);
   expect(getCompactions(fixture)).toHaveLength(0);
+});
+
+it("constructs raised manual summary budgets after native sent-tool checkpoint selection", async () => {
+  summaryMode = "ok";
+  const fixture = await createFixture();
+  fixture.config.agents!.defaults!.compaction!.maxSummaryChars = 20000;
+  await fixture.state.writeConfig(fixture.config);
+  const manager = await SessionManager.openAsync(fixture.target, fixture.state.workspaceDir);
+  await manager.appendCustomEntryAsync("openclaw.system-prompt", {
+    tools: [
+      {
+        name: "prior_tool",
+        description: "retained tool wording ".repeat(1200),
+        parameters: { type: "object", properties: {} },
+      },
+    ],
+  });
+  const reader = await import("../../config/sessions/session-compaction-prepared.js");
+  const read = reader.readPreparedSessionCompactionInWorker;
+  let observed = false;
+  const plan = vi
+    .spyOn(reader, "readPreparedSessionCompactionInWorker")
+    .mockImplementation(async (target, operation, signal) => {
+      const value = await read(target, operation, signal);
+      if (operation.kind === "plan" && value.status === "prepared") {
+        observed = true;
+        expect(operation.options.work.requestBudget).toBeUndefined();
+        expect(value.plan.requestBudget?.fixedTokens).toBeGreaterThan(10000);
+      }
+      return value;
+    });
+  onTestFinished(() => plan.mockRestore());
+  expect(await compactSession(fixture, undefined, "manual", true)).toMatchObject({
+    ok: true,
+    compacted: true,
+  });
+  expect(observed).toBe(true);
+});
+
+it("keeps required cancellation-settlement floors outside the hook anti-loop boundary", async () => {
+  const fixture = await createFixture({ safeguard: true });
+  summaryMode = "server-error";
+  const { attachCompactionAccountingRecorder } =
+    await import("./run/compaction-accounting-bridge.js");
+  const contextEngineRuntimeContext = {};
+  attachCompactionAccountingRecorder(contextEngineRuntimeContext, {
+    requestRequiresCompaction: true,
+  });
+  const scope = new AsyncWorkScope();
+  try {
+    const result = await scope.run(() =>
+      compactEmbeddedAgentSessionDirect({
+        ...fixture.target,
+        sessionTarget: fixture.target,
+        sessionFile: fixture.target.sessionKey,
+        workspaceDir: fixture.state.workspaceDir,
+        agentDir: fixture.state.agentDir(),
+        config: fixture.config,
+        provider: "fixture",
+        model: "model",
+        trigger: "budget",
+        force: true,
+        contextEngineRuntimeContext,
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(getCompactions(fixture)[0]?.fromHook).toBe(false);
+    expect(getCompactions(fixture)[0]?.details).toMatchObject({ qualityDegraded: true });
+  } finally {
+    await AsyncWorkScope.runWhenAllIdle(
+      () => [scope],
+      () => scope.drain(),
+    );
+  }
 });

@@ -1,5 +1,10 @@
 // Memory schema operations shared by host maintenance and native publication workers.
 export {
+  memoryPathPostgresExpressions,
+  MEMORY_PATH_POSTGRES_INDEXES,
+  MEMORY_PATH_POSTGRES_INDEX_SQL,
+} from "../../packages/memory-host-sdk/src/host/memory-path-postgres.js";
+export {
   memoryStandingIntentSearchSchema,
   memoryTextSearchSchema,
   memoryVectorSearchSchema,
@@ -13,6 +18,8 @@ export {
   markInvalidImportedMemoryEmbeddings,
   rebuildMemoryChunkFts,
   ensureMemoryIndexSchema,
+  readRepairedMemoryIndexSchema,
+  publishRepairedMemoryIndexSchema,
   stageMemoryIndexSchemaExtension,
   ensureMemoryPathFtsTriggers,
   ensureMemoryRecallMetadataSchema,

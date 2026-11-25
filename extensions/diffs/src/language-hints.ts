@@ -1,10 +1,6 @@
 import { resolveLanguage } from "@pierre/diffs";
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
-import {
-  bundledLanguagesBase,
-  bundledLanguagesInfo,
-  getBundledLanguageAliases,
-} from "./shiki-curated-languages.js";
+import { bundledLanguagesBase, bundledLanguagesInfo } from "./shiki-curated-languages.js";
 import type { DiffViewerPayload } from "./types.js";
 
 const BASE_DIFF_VIEWER_LANGUAGE_HINTS = [
@@ -15,26 +11,22 @@ const BASE_DIFF_VIEWER_LANGUAGE_HINTS = [
 
 const BASE_LANGUAGE_HINTS = new Set<SupportedLanguages>(BASE_DIFF_VIEWER_LANGUAGE_HINTS);
 const BASE_LANGUAGE_ALIASES = new Map<string, SupportedLanguages>(
-  bundledLanguagesInfo.flatMap((language) =>
-    getBundledLanguageAliases(language).map((alias) => [alias, language.id as SupportedLanguages]),
-  ),
+  bundledLanguagesInfo.flatMap((language) => {
+    const aliases = "aliases" in language ? language.aliases : [];
+    return aliases.map((alias) => [alias, language.id as SupportedLanguages]);
+  }),
 );
 type DiffPayloadFile = FileContents | FileDiffMetadata;
-
-// The curated viewer bundles this module outside Plugin SDK package resolution.
-function normalizeLanguageHint(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  return normalized || undefined;
-}
 
 export async function normalizeSupportedLanguageHint(
   value?: string,
   options: { languagePackAvailable?: boolean } = {},
 ): Promise<SupportedLanguages | undefined> {
-  const normalized = normalizeLanguageHint(value);
+  // The curated viewer bundles this module outside Plugin SDK package resolution.
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
   if (!normalized) {
     return undefined;
   }

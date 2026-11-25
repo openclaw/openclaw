@@ -4,11 +4,11 @@ import { sleepWithAbort } from "@openclaw/retry";
 import { createConfigIO } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
+import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import {
-  compareSemverStrings,
   resolveNpmChannelTag,
   resolveUpdateInstallKind,
   resolveUpdateRegistryTarget,
@@ -75,10 +75,8 @@ export function startNodeHostAutoUpdate(params: {
       signal.throwIfAborted();
       return Date.now() - current.mtimeMs >= MIN_ACTIVATION_INTERVAL_MS;
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return true;
-      }
-      throw error;
+      ignoreMissingPath(error);
+      return true;
     }
   };
 

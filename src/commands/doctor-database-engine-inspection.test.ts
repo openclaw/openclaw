@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
@@ -36,6 +36,31 @@ beforeAll(async () => {
 });
 
 describe("Doctor physical engine inspection", () => {
+  it("does not require optional plugin port descriptors when their stores are absent", async () => {
+    const stateDir = tempDirs.make("doctor-engine-absent-stores-");
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    try {
+      const absent = await inspectDoctorDatabaseEngines({
+        config: {},
+        stateDir,
+        env: {
+          OPENCLAW_STATE_DIR: stateDir,
+          HOME: stateDir,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        },
+      });
+      expect(absent.discoveryFailed).toBe(false);
+      expect(absent.stores).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ family: "team-reports", path: null, issues: [] }),
+        ]),
+      );
+      expect(fs.readdirSync(stateDir)).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("reports all physical state engines despite incompatible configuration without changing artifacts", () => {
     expect(inspection.observed.state).toEqual(["sqlite", "postgres"]);
     expect(inspection.stateRoots.map(({ physical }) => physical.engine)).toEqual([

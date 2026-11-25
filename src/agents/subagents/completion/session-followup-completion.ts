@@ -6,6 +6,7 @@ import {
   registerAgentEventLifecycleRotationHandler,
 } from "../../../infra/agent-events.js";
 import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
+import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { createDeferredCore, type Deferred } from "../../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
@@ -168,9 +169,10 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
   ): FollowupSuccessor {
     const cohort =
       this.cohort ?? (this.execution.runId === runId ? this.execution.admittedCohort : undefined);
+    // The settle wake offers the cohort's last partition; earlier partitions already settled.
     if (
       !cohort ||
-      cohort.entries.length !== entries.length ||
+      entries.length === 0 ||
       !entries.every((entry) =>
         cohort.entries.some((current) => isSameSubagentRunOwner(current, entry)),
       )
@@ -298,12 +300,16 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
     if (this.signal.aborted) {
       return;
     }
-    this.lifetime.abort(error ?? new Error("Followup completion custody ended."));
+    const reason = error ?? new Error("Followup completion custody ended.");
+    materializeErrorStack(reason);
+    this.lifetime.abort(reason);
     if (state.executions.get(this.execution.runId) === this) {
       state.executions.delete(this.execution.runId);
     }
     this.execution.settled.resolve();
-    this.result.reject(error ?? new Error("Followup completion custody ended."));
+    const rejection = error ?? new Error("Followup completion custody ended.");
+    materializeErrorStack(rejection);
+    this.result.reject(rejection);
     this.request.custody.signal.removeEventListener("abort", this.revoked);
     this.request.custody.release();
   }

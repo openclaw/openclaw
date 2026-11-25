@@ -5,6 +5,7 @@ import { buildChatApiAttachments } from "../pages/chat/attachment-api.ts";
 import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-store.ts";
 import { AttachmentPreview } from "../pages/chat/components/chat-attachments.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { ChatAttachment } from "./chat/chat-types.ts";
 import { mcpAppMessageInput } from "./mcp-app-message.ts";
 
@@ -17,7 +18,7 @@ afterEach(() => {
 });
 
 describe("app message content handoff", () => {
-  it("keeps untitled text in the message and titled text as named removable attachments", () => {
+  it("keeps untitled text in the message and titled text as named removable attachments", async () => {
     const turn = mcpAppMessageInput(
       [
         { type: "text", text: "Compare these parts." },
@@ -49,6 +50,9 @@ describe("app message content handoff", () => {
     mountSolid(() => createComponent(AttachmentPreview, { attachments, onAttachmentsChange }), {
       container,
     });
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-attachment-remove")).not.toBeNull(),
+    );
     const remove = container.querySelector<HTMLButtonElement>(".chat-attachment-remove");
     expect(remove?.getAttribute("aria-label")).toContain("Part dimensions");
     remove!.click();

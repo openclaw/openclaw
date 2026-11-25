@@ -9,7 +9,6 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import {
   prepareSqliteAuditRecord,
   type SequencedSqliteAuditRecordEntry,
-  type SqliteAuditRecordEntry,
 } from "./sqlite-audit-record.kernel.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 
@@ -123,15 +122,4 @@ export function createSqliteAuditRecordWriter<T>(
       );
     },
   };
-}
-
-export async function registerSqliteAuditRecordAsync<T>(
-  options: Parameters<typeof createSqliteAuditRecordWriter<T>>[0],
-  record: SqliteAuditRecordEntry<T>,
-): Promise<void> {
-  await createSqliteAuditRecordWriter<T>(options).register(
-    record.key,
-    record.value,
-    record.createdAt,
-  );
 }

@@ -1,5 +1,5 @@
 // Normalizes browser evaluate input while preserving the public `fn` string API.
-import { Script } from "node:vm";
+import { parse } from "acorn";
 
 const FUNCTION_SOURCE_PATTERN = /^(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/;
 const EXPRESSION_RESULT_NAME = "__openclawEvaluateExpressionResult";
@@ -8,8 +8,7 @@ function canParseAsExpression(source: string): boolean {
   try {
     // Parse only. Browser evaluate input is intentionally executable, but the
     // Gateway should not run caller-provided page JavaScript while routing.
-    const parseExpression = new Script(`"use strict";\n(${source});`);
-    void parseExpression;
+    parse(`"use strict";\n(${source});`, { ecmaVersion: "latest" });
     return true;
   } catch {
     return false;
@@ -24,12 +23,13 @@ export function normalizeBrowserEvaluateFunctionSource(
   if (!trimmed) {
     return "";
   }
-  if (FUNCTION_SOURCE_PATTERN.test(trimmed) && canParseAsExpression(trimmed)) {
+  const isExpression = canParseAsExpression(trimmed);
+  if (FUNCTION_SOURCE_PATTERN.test(trimmed) && isExpression) {
     return trimmed;
   }
   const argumentName = params.argumentName;
   const args = argumentName ? `(${argumentName})` : "()";
-  if (canParseAsExpression(trimmed)) {
+  if (isExpression) {
     const invokeArgs = argumentName ? argumentName : "";
     return [
       `${args} => {`,
@@ -39,4 +39,11 @@ export function normalizeBrowserEvaluateFunctionSource(
     ].join("\n");
   }
   return `async ${args} => {\n${trimmed}\n}`;
+}
+
+/** Wait predicates must parse before any passive wait starts. */
+export function normalizeBrowserWaitFunctionSource(source: string): string {
+  const normalized = normalizeBrowserEvaluateFunctionSource(source);
+  parse(`(${normalized});`, { ecmaVersion: "latest" });
+  return normalized;
 }

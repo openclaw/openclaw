@@ -1,13 +1,11 @@
 import { WorkerTaskError } from "@openclaw/worker-runtime";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ContextPreparationTimeoutError } from "../../agents/failover/local-preparation-error.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
 
-const { run } = vi.hoisted(() => ({ run: vi.fn() }));
-// mock-isolation: Keep native worker creation and database resource registration outside this fixture.
-vi.mock("./session-transcript-read-pools.js", () => ({
-  createSessionTranscriptReadPool: () => ({ run }),
-}));
+const run = vi.fn();
 
 const target = {
   agentId: "main",
@@ -18,6 +16,13 @@ const target = {
 
 beforeEach(() => {
   run.mockReset();
+  vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation((prepare, options) =>
+    run(typeof prepare === "function" ? prepare() : prepare, options),
+  );
+});
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  vi.restoreAllMocks();
 });
 
 it("gives cold context reads three minutes while preserving caller cancellation", async () => {
@@ -27,11 +32,10 @@ it("gives cold context reads three minutes while preserving caller cancellation"
   await expect(
     readSessionTranscriptModelContextInWorker(target, undefined, controller.signal),
   ).resolves.toBe(context);
-  expect(run).toHaveBeenCalledWith(
-    expect.objectContaining({ kind: "model-context", target }),
-    { timeoutMs: 180_000, signal: controller.signal },
-    expect.any(Object),
-  );
+  expect(run).toHaveBeenCalledWith(expect.objectContaining({ kind: "model-context", target }), {
+    timeoutMs: 180_000,
+    signal: controller.signal,
+  });
   controller.abort();
   await expect(
     readSessionTranscriptModelContextInWorker(target, undefined, controller.signal),

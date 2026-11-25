@@ -1,6 +1,6 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
 import {
@@ -140,7 +140,7 @@ export abstract class SubagentWaitManager {
           return;
         }
         void this.waitForSubagentCompletion(runId, entry, waitTimeoutMs, true);
-      }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref?.();
+      }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref();
       log.info(reason, {
         runId,
         childSessionKey: entry.childSessionKey,

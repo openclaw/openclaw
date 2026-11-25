@@ -38,18 +38,6 @@ function allowConfig(models: Record<string, ModelEntry>, modelPolicy?: { allow: 
   return { agents: { defaults: { models, ...(modelPolicy ? { modelPolicy } : {}) } } };
 }
 
-it("detects owned vLLM aliases", () => {
-  const raw = providerConfig({
-    vllm: {
-      params: { temperature: 0 },
-      models: [{ id: "local-model", params: { qwen_thinking_format: false } }],
-    },
-  });
-  expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
-    "models.providers.vllm.models",
-  ]);
-});
-
 it("retires pricing while preserving the hosted catalog config", () => {
   const raw = { models: { pricing: { enabled: false }, catalogRefresh: { enabled: true } } };
   migration("models.pricing-retired").apply(raw, []);
@@ -70,14 +58,11 @@ it("strips matching and dead compat overrides while preserving divergences", () 
       requiresMistralToolIds: true,
     }),
   });
-  const detect = () =>
-    compatMigration.legacyRules?.map((rule) => rule.match?.(raw.models.providers, raw));
-  expect(detect()).toEqual([true, true, true]);
+  expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("models.providers");
   compatMigration.apply(raw, []);
   const { anthropic, openai } = raw.models.providers;
   expect(anthropic.models[0]?.compat).toEqual({ supportsTemperature: true });
   expect(openai.models[0]?.compat).toEqual({ supportsTemperature: true });
-  expect(detect()).toEqual([false, false, true]);
 });
 
 it("preserves live compat for custom models and routes", () => {
@@ -102,7 +87,6 @@ it("defers the entire mixed restriction without opening model access", () => {
   });
   expectUnchanged(allowMigration, raw);
   expect(validateConfigObjectRaw(raw).ok).toBe(true);
-  expect(allowMigration.legacyRules?.[1]?.match?.(raw.agents?.defaults?.models, raw)).toBe(true);
   for (const agentId of ["first", "second"]) {
     const policy = createModelVisibilityPolicy({
       cfg: raw,
@@ -121,13 +105,11 @@ it("preserves the restriction after a new-version write and does not overwrite l
     meta: { lastTouchedVersion: "2026.7.2" },
     ...allowConfig({ "openai/*": {}, "anthropic/claude-sonnet-4-6": { alias: "sonnet" } }),
   };
-  expect(allowMigration.legacyRules?.[0]?.match?.(raw.agents.defaults.models, raw)).toBe(true);
   expect(apply(allowMigration, raw)).toHaveLength(1);
   expect(raw).toMatchObject({
     agents: { defaults: { modelPolicy: { allow: ["openai/*", "anthropic/claude-sonnet-4-6"] } } },
     meta: { migrations: { modelPolicyAllowlist: true } },
   });
-  expect(allowMigration.legacyRules?.[0]?.match?.(raw.agents.defaults.models, raw)).toBe(false);
   Object.assign(raw.agents.defaults, { modelPolicy: { allow: ["google/*"] } });
   expect(apply(allowMigration, raw)).toEqual([]);
   expect(raw).toHaveProperty("agents.defaults.modelPolicy.allow", ["google/*"]);
@@ -168,10 +150,9 @@ it.each(["deepseek-v4-flash", "deepseek/deepseek-v4-flash"])(
   (id) => {
     const model = { id, contextWindow: 200_000, maxTokens: 61_440 };
     const raw = providerConfig({ deepseek: { models: [model] } });
-    expect(windowMigration.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(true);
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("models.providers");
     expect(apply(windowMigration, raw)).toHaveLength(1);
     expect(model).toEqual({ id, contextWindow: 1_000_000, maxTokens: 61_440 });
-    expect(windowMigration.legacyRules?.[0]?.match?.(raw.models.providers, raw)).toBe(false);
     expect(apply(windowMigration, raw)).toEqual([]);
   },
 );

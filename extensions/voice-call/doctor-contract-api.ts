@@ -1,5 +1,5 @@
-// Voice Call API module exposes the plugin public contract.
 import { existsSync } from "node:fs";
+import path from "node:path";
 // Doctor enumeration cold-loads this closure; the state-DB helpers stay behind a
 // lazy doctor-repair-runtime import so enumeration never pulls the kysely/state-db graph.
 import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
@@ -66,6 +66,17 @@ const schemaMigrationDescriptions = {
   "portable-identity-columns-v22": "ACP resume keys and receipt cursors -> portable columns",
   "task-run-indexes-v24": "retained task indexes -> ordered cron history and runtime/run lookup",
   "session-state-head-layout-v26": "session state heads -> primary-key table layout",
+  "state-write-indexes-v27": "replay, skill usage, and lease writes -> smaller index maintenance",
+  "github-publication-draft-v28": "GitHub publication requests -> durable draft choice",
+  "local-client-credentials-v29": "client credentials and native socket material -> local owner",
+  "automation-policy-fence-v30":
+    "heartbeat monitors -> ordinary automation timing and delivery policy fence",
+  "local-workspace-manifests-v31": "local workspace baselines -> incremental checkpoint manifests",
+  "local-workspace-cas-v35":
+    "local workspace baselines -> shared immutable trees and scan fingerprints",
+  "template-names-v36": "starter installs and provenance -> canonical Template storage names",
+  "worker-resource-receipts-v37": "worker environments -> immutable provider resource receipts",
+  "repository-disk-authority-v38": "repository authority and pending-result disk identity retained",
   "subagent-operator-recovery-v25": "subagent recovery -> original operator authority required",
   "meeting-transcript-start-time": "meeting transcript start times -> persisted chronology",
   "predicate-columns-v21":
@@ -82,6 +93,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "voice-call-sqlite-schema",
     label: "Voice Call SQLite schema",
+    collectBackupResources(params) {
+      const database = path.join(resolveVoiceCallStorePath(params), "state", "openclaw.sqlite");
+      return existsSync(database) ? [{ path: database, kind: "sqlite" }] : [];
+    },
     async detectLegacyState(params) {
       const storePath = resolveVoiceCallStorePath(params);
       if (!existsSync(storePath)) {

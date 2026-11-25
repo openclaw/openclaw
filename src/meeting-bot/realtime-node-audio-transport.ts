@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
+import { captureCurrentPluginBackgroundRunner } from "../plugins/plugin-instance-invocation.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import { sleep } from "../utils/sleep.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
@@ -35,13 +36,17 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
   const outputLoopbackVerifier = createMeetingOutputLoopbackVerifier({
     audioFormat: params.audioFormat ?? "pcm16-24khz",
   });
+  // Bridge commands outlive the request that joined the meeting.
+  const runInBackground = captureCurrentPluginBackgroundRunner();
   const invoke = (action: string, payload: Record<string, unknown> = {}, timeoutMs = 5_000) =>
-    params.runtime.nodes.invoke({
-      nodeId: params.nodeId,
-      command: params.commandName,
-      params: { action, bridgeId: params.bridgeId, ...payload },
-      timeoutMs,
-    });
+    runInBackground(() =>
+      params.runtime.nodes.invoke({
+        nodeId: params.nodeId,
+        command: params.commandName,
+        params: { action, bridgeId: params.bridgeId, ...payload },
+        timeoutMs,
+      }),
+    );
   const runOutputCommand = <T>(task: () => Promise<T>): Promise<T> => {
     if (outputGenerationSupported) {
       return task();
@@ -129,8 +134,8 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
       try {
         await invoke("stop");
       } catch (error) {
-        params.logger.debug?.(
-          `${params.logScope} node audio bridge stop ignored: ${formatErrorMessage(error)}`,
+        params.logger.warn(
+          `${params.logScope} node audio bridge stop did not complete: ${formatErrorMessage(error)}`,
         );
       }
     },

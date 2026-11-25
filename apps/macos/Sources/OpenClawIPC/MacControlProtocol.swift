@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawNativeState
 
 public struct MacControlRequest: Codable, Sendable {
     public var operation: String
@@ -17,6 +18,8 @@ public struct MacControlRequest: Codable, Sendable {
     public var browser: Bool?
     public var idOrName: String?
     public var deadline: Date?
+    public var credentialRoot: String?
+    public var credentialOperation: ClientCredentialOperation?
 
     public init(operation: String) {
         self.operation = operation

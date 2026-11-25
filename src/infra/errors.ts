@@ -7,8 +7,9 @@ import {
 import { redactSensitiveText } from "../logging/redact.js";
 export {
   collectErrorGraphCandidates,
-  readErrorCauses,
   extractErrorCode,
+  formatErrorStackWithMessage,
+  readErrorCauses,
   readErrorName,
 } from "@openclaw/normalization-core/error-coercion";
 export { hasErrnoCode, isErrno, isMissingPathError } from "./errno.js";
@@ -29,7 +30,7 @@ export function formatErrorMessageWithCode(err: unknown): string {
   return formatSharedErrorMessage(err, { includeCode: true, redact: redactSensitiveText });
 }
 
-export { stringifyNonErrorCause, toErrorObject } from "@openclaw/normalization-core/error-coercion";
+export { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 
 export function formatUncaughtError(err: unknown): string {
   if (extractErrorCode(err) === "INVALID_CONFIG") {

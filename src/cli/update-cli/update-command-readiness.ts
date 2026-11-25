@@ -36,7 +36,6 @@ import {
   gatewayServiceCommandUsesRoot,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
-import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
 export async function verifyPreviousGatewayForUpdate(params: {
   root: string;
@@ -44,10 +43,8 @@ export async function verifyPreviousGatewayForUpdate(params: {
   env: NodeJS.ProcessEnv;
   opts: UpdateCommandOptions;
   timeoutMs?: number;
-  observedStartupMs?: number;
   assertCurrent?: () => void;
   signal?: AbortSignal;
-  requirePluginHealth?: boolean;
   expectedVersion?: string;
   gatewayPort?: number;
   waitForStartup?: boolean;
@@ -57,9 +54,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
   const run = proofOptions.run;
   const { deadlineMs: timeoutMs, derivation } = resolveGatewayStartupTiming(process.platform, {
     timeoutMs: params.timeoutMs,
-    observedStartupMs: params.observedStartupMs,
     migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
-    previousGateway: true,
   });
   const startedAtMs = Date.now();
   const sharedDeadline = params.opts.run?.deadline;
@@ -90,7 +85,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
       detail,
     };
     if (run) {
-      recordUpdateRunStep(run.runId, fact, { env: run.env });
+      recordUpdateRunStep(run.runId, fact, run);
     }
     defaultRuntime[params.opts.json ? "error" : "log"](`${fact.step}: ${detail}`);
   };
@@ -108,7 +103,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
       }
       const expectedVersion = params.expectedVersion ?? installedVersion;
       progress("readiness", `checking service and listener identity on port ${port}`);
-      const { health, readyz } = await observeUpdateGatewayReadiness({
+      const { health, readyz, http } = await observeUpdateGatewayReadiness({
         serviceEnv: env,
         gatewayPort: port,
         expectedVersion: expectedVersion ?? undefined,
@@ -119,11 +114,10 @@ export async function verifyPreviousGatewayForUpdate(params: {
         requireRunningService: true,
         waitForStartup: params.waitForStartup,
         signal: deadline.signal,
-        requirePluginHealth: params.requirePluginHealth,
         assertCurrent,
         onProgress: progress,
       });
-      if (!health.healthy || !readyz) {
+      if (!health.healthy || !(http?.coreReady ?? readyz)) {
         progress(health.waitOutcome ?? "unverified", health.probeError ?? lastReason, true);
         return false;
       }
@@ -191,11 +185,9 @@ export type UpdateGatewayReadinessParams = {
   deadlineMs?: number;
   deadline?: GatewayRestartDeadline;
   onProgress?: (stage: string, reason: string) => void;
-  observedStartupMs?: number;
   expectedVersion?: string;
   expectedBuildId?: string;
   requireRunningService?: boolean;
-  requirePluginHealth?: boolean;
   health?: GatewayRestartSnapshot;
   /** Installation observes native startup; final verification owns HTTP and identity proof. */
   healthOnly?: boolean;
@@ -213,6 +205,13 @@ export type UpdateGatewayReadinessParams = {
   }>;
 };
 
+export function hasRunningGatewayService(health: GatewayRestartSnapshot): boolean {
+  return (
+    health.runtime.status === "running" &&
+    (process.platform === "win32" || health.runtime.pid !== undefined)
+  );
+}
+
 export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean {
   if (health.waitOutcome === "still-starting") {
     return true;
@@ -225,7 +224,6 @@ export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean
     ["waiting for Gateway listener", "startup migration"].includes(health.startupPhase ?? "") &&
     !health.versionMismatch &&
     !health.buildIdMismatch &&
-    !health.activatedPluginErrors?.length &&
     health.staleGatewayPids.length === 0
   );
 }
@@ -235,7 +233,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   const waitForStartup = params.waitForStartup !== false;
   const { deadlineMs: timeoutMs } = resolveGatewayStartupTiming(process.platform, {
     timeoutMs: params.timeoutMs,
-    observedStartupMs: params.observedStartupMs,
     migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
   });
   const startedAtMs = performance.now();
@@ -256,11 +253,11 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   };
   const service = resolveGatewayService();
   const probeParams = {
+    assertCurrent,
     service,
     port: params.gatewayPort,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
-    requirePluginHealth: params.requirePluginHealth ?? false,
     requireChannelHealth: false,
     env: params.serviceEnv,
     signal: deadline.signal,
@@ -292,15 +289,21 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       assertCurrent();
       return inspectedHealth;
     }
-    const supervisorKeepsAlive = await deadline.read("service supervisor", () =>
-      hasLoadedLaunchdKeepAliveSupervisor({ service, env: params.serviceEnv }),
+    // Read the canonical LaunchAgent KeepAlive policy once before polling so an
+    // unloaded agent can still reach the existing recovery path promptly.
+    const supervisorKeepsAlive = await deadline.read("service supervisor", async () =>
+      process.platform === "darwin"
+        ? service.isLoaded({ env: params.serviceEnv }).catch(() => false)
+        : false,
     );
     assertCurrent();
+    let probed = false;
     const observed = await waitForGatewayHealthyRestart({
       ...probeParams,
       deadlineOutcome: "snapshot",
       timeoutMs: Math.max(1, remainingMs()),
       onObservation: (snapshot) => {
+        probed = true;
         health = snapshot;
         retainChannelTimeouts(snapshot);
         params.onProgress?.(
@@ -311,7 +314,8 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       requireRunningService: params.requireRunningService,
       supervisorKeepsAlive,
     });
-    health = observed;
+    // Expiry before the first observation returns a budget placeholder, not a probe result.
+    health = probed ? observed : { ...observed, probeError: undefined };
     assertCurrent();
     return observed;
   };
@@ -337,7 +341,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           (health.waitOutcome !== undefined && health.waitOutcome !== "healthy") ||
           health.versionMismatch ||
           health.buildIdMismatch ||
-          health.activatedPluginErrors?.length ||
           health.staleGatewayPids.length > 0)
       ) {
         return { health, readyz: false, http: undefined, launchAgentRecovery };
@@ -349,6 +352,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       assertCurrent();
       http = await deadline.read("HTTP readiness", () =>
         waitForGatewayHttpReadiness({
+          requireChannelHealth: false,
           config: context.config,
           port: params.gatewayPort,
           attempts: waitForStartup ? Math.ceil(remainingMs() / DEFAULT_RESTART_HEALTH_DELAY_MS) : 1,
@@ -365,30 +369,11 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       );
       assertCurrent();
       const readyz = http.readyz === 200;
-      if (
-        health.healthy &&
-        (!params.requireRunningService || health.runtime.status === "running")
-      ) {
-        const startupPhase = health.startupPhase;
-        health = await deadline.read("final Gateway identity", () =>
-          inspectGatewayRestart({
-            ...probeParams,
-            probeContext: context,
-            timeoutMs: Math.max(1, remainingMs()),
-          }),
-        );
-        assertCurrent();
-        retainChannelTimeouts(health);
-        health.startupPhase = startupPhase;
-        if (
-          params.requireRunningService &&
-          (health.runtime.status !== "running" ||
-            (process.platform !== "win32" && health.runtime.pid === undefined))
-        ) {
-          health.healthy = false;
-        }
+      // HTTP does not change the restart owner's observed process/build identity.
+      if (params.requireRunningService && !hasRunningGatewayService(health)) {
+        health.healthy = false;
       }
-      if (!readyz || remainingMs() === 0) {
+      if (!(http.coreReady ?? readyz) || remainingMs() === 0) {
         health = {
           ...health,
           healthy: false,
@@ -430,10 +415,13 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         healthy: false,
         waitOutcome,
         // Only the wait owner's interval may retain startup progress. A hung
-        // observation cannot inherit an earlier snapshot's startup phase.
+        // observation cannot inherit an earlier snapshot's startup phase, but the
+        // last probe error still explains why readiness never settled.
         startupPhase: interval ? health.startupPhase : `timed out during ${error.phase}`,
         elapsedMs: performance.now() - startedAtMs,
-        probeError: interval ? health.probeError : error.message,
+        probeError: interval
+          ? health.probeError
+          : `${error.message}${health.probeError ? ` Last health probe: ${health.probeError}` : ""}`,
       },
       readyz: false,
       http,

@@ -30,12 +30,9 @@ import {
   decodeUpdateFailureReportReservation,
   type UpdateFailureReportReceipt,
 } from "./update-failure-report-receipt.js";
-import { resolveUpdateInstallRoot } from "./update-install-root.js";
+import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
 
-export type {
-  RestartSentinelContinuation,
-  RestartSentinelPayload,
-} from "./restart-sentinel-store.js";
+export type { RestartSentinelPayload } from "./restart-sentinel-store.js";
 export type { UpdateFailureReportReceipt } from "./update-failure-report-receipt.js";
 
 export type VerifiedGitUpdateReceipt = {
@@ -122,7 +119,7 @@ export async function inspectManagedHandoffSentinel(
   assertCurrent?.();
   const reply = await executeExistingOpenClawStateRead(
     { env: context.environment, path: context.admission.databasePath },
-    { type: "restartSentinel.managedHandoffInspect", input },
+    { type: "restartSentinel.managedHandoffInspect", input: { ...input } },
     { context, current: true },
   );
   context.admission.assertCurrent();
@@ -216,44 +213,6 @@ export function completeUpdateFailureReportReceiptCleanup(
   );
 }
 
-export function claimUpdateFailureReportArtifactSweep(
-  attemptId: string,
-  expectedReservationId: string,
-  sweepOwnerId: string,
-  sweepGeneration: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<boolean> {
-  return runRestartSentinelOperation(
-    {
-      type: "restartSentinel.claimSweep",
-      input: { attemptId, expectedReservationId, sweepOwnerId, sweepGeneration },
-    },
-    context,
-    undefined,
-    decodeUpdateFailureReportMutation,
-  );
-}
-
-export function releaseUpdateFailureReportArtifactSweep(
-  attemptId: string,
-  expectedReservationId: string,
-  sweepOwnerId: string,
-  sweepGeneration: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<boolean> {
-  return runRestartSentinelOperation(
-    {
-      type: "restartSentinel.releaseSweep",
-      input: { attemptId, expectedReservationId, sweepOwnerId, sweepGeneration },
-    },
-    context,
-    undefined,
-    decodeUpdateFailureReportMutation,
-  );
-}
-
 export function refreshUpdateFailureReportReceiptPreparation(
   attemptId: string,
   reservationId: string,
@@ -327,23 +286,6 @@ export async function readUpdateFailureReportReceipt(
   return reply?.receipt ?? null;
 }
 
-export async function hasUpdateFailureReportArtifactSweepLease(
-  attemptId: string,
-  expectedReservationId: string,
-  sweepOwnerId: string,
-  sweepGeneration: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<boolean> {
-  const receipt = await readUpdateFailureReportReceipt(attemptId, env, context);
-  return (
-    receipt?.artifactSweep === "pending" &&
-    receipt.reservationId === expectedReservationId &&
-    receipt.sweepOwnerId === sweepOwnerId &&
-    receipt.sweepGeneration === sweepGeneration
-  );
-}
-
 /** Publish an outcome only while its producer and the captured notification are unchanged. */
 export async function writeRestartSentinelIfUnchanged(params: {
   payload: RestartSentinelPayload;
@@ -406,7 +348,13 @@ export async function finalizeUpdateRestartSentinelRunningVersion(
         argv1: process.argv[1],
       })))
     : null;
-  const actualRoot = discoveredRoot ? resolveUpdateInstallRoot(discoveredRoot) : null;
+  // A restarted Gateway finds its root by real path; on a release link that is
+  // the release the link selects, which is the same installation.
+  const actualRoot = discoveredRoot
+    ? expectedRoot && updateInstallRootsMatch(expectedRoot, discoveredRoot)
+      ? expectedRoot
+      : resolveUpdateInstallRoot(discoveredRoot)
+    : null;
 
   const finalized = await runRestartSentinelOperation(
     {

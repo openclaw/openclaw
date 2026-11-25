@@ -24,6 +24,12 @@ import { statePortProvider } from "./state-port.js";
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const secret = "synthetic-secret-must-not-appear-in-export";
+const retainedPluginRows = [
+  { plugin_id: "active-memory", value_json: '{"disabled":true}' },
+  { plugin_id: "mcp-relay", value_json: '{"clientId":"client"}' },
+  { plugin_id: "x", value_json: "15000000" },
+];
+const retainedBlobHex = Buffer.from("retained-plugin-document").toString("hex");
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
@@ -98,13 +104,34 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
                 );
               `);
               source
-                .prepare("INSERT INTO device_auth_tokens VALUES ('device', 'operator', ?, '[]', 1)")
-                .run(secret);
-              source
                 .prepare(
                   "INSERT INTO secret_store_entries VALUES ('team', '', 'fixture', ?, 'secret', 1, 1, NULL, NULL, NULL)",
                 )
                 .run(secret);
+              const pluginInsert = source.prepare(
+                "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at) VALUES (?, ?, ?, ?, 1)",
+              );
+              for (const [plugin, pluginNamespace, key, value] of [
+                ["zalouser", "credentials", "default", { cookie: secret }],
+                ["matrix", "@retained.credentials", "account:default", { accessToken: secret }],
+                ["discord", "activities-doc-tokens", secret, { widgetId: "widget" }],
+                [
+                  "discord",
+                  "thread-bindings",
+                  "thread",
+                  { threadId: "thread", webhookToken: secret },
+                ],
+                ["x", "x.spend", "cycle", 15_000_000],
+                ["active-memory", "session-toggles", "session", { disabled: true }],
+                ["mcp-relay", "mcp-relay-authority", "grant:client", { clientId: "client" }],
+              ] as const) {
+                pluginInsert.run(plugin, pluginNamespace, key, JSON.stringify(value));
+              }
+              const blobInsert = source.prepare(
+                "INSERT INTO plugin_blob_entries (plugin_id, namespace, entry_key, metadata_json, blob, created_at) VALUES (?, ?, 'blob', '{}', ?, 1)",
+              );
+              blobInsert.run("zalouser", "credentials", Buffer.from(secret));
+              blobInsert.run("fixture", "documents", Buffer.from("retained-plugin-document"));
             } else {
               source.exec(
                 "INSERT INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0)",
@@ -191,6 +218,33 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
             );
             const imagePath = path.join(pgDir, "postgres", "database.sqlite");
             using image = openNodeSqliteDatabase(imagePath);
+            if (family === "state") {
+              expect(
+                image
+                  .prepare("SELECT name FROM sqlite_schema WHERE name = 'device_auth_tokens'")
+                  .all(),
+              ).toEqual([]);
+              expect(image.prepare("SELECT count(*) AS n FROM plugin_state_entries").get()?.n).toBe(
+                4,
+              );
+              expect(
+                image
+                  .prepare(
+                    "SELECT plugin_id, value_json FROM plugin_state_entries WHERE plugin_id IN ('active-memory', 'mcp-relay', 'x') ORDER BY plugin_id",
+                  )
+                  .all(),
+              ).toEqual(retainedPluginRows);
+              expect(
+                image
+                  .prepare("SELECT value_json FROM plugin_state_entries WHERE plugin_id='discord'")
+                  .all(),
+              ).toEqual([{ value_json: '{"threadId":"thread"}' }]);
+              expect(
+                image
+                  .prepare("SELECT plugin_id, lower(hex(blob)) AS bytes FROM plugin_blob_entries")
+                  .all(),
+              ).toEqual([{ plugin_id: "fixture", bytes: retainedBlobHex }]);
+            }
             for (const table of sqliteManifest.excludedTables) {
               expect(image.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get()?.n).toBe(0);
               expect(envelope.verification.tables[table]?.rows).toBe(0);
@@ -212,7 +266,7 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
             expect(
               source
                 .prepare(
-                  `SELECT COUNT(*) AS n FROM ${family === "state" ? "device_auth_tokens" : "auth_profile_store"}`,
+                  `SELECT COUNT(*) AS n FROM ${family === "state" ? "secret_store_entries" : "auth_profile_store"}`,
                 )
                 .get()?.n,
             ).toBe(1);
@@ -228,6 +282,26 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
                 Buffer.from(secret),
               ),
             ).toBe(true);
+            if (family === "state") {
+              using fullImage = openNodeSqliteDatabase(
+                path.join(unredacted, "postgres", "database.sqlite"),
+              );
+              expect(
+                fullImage.prepare("SELECT count(*) AS n FROM plugin_state_entries").get()?.n,
+              ).toBe(7);
+              expect(
+                fullImage.prepare("SELECT count(*) AS n FROM plugin_blob_entries").get()?.n,
+              ).toBe(2);
+              expect(
+                fullImage
+                  .prepare(
+                    "SELECT value_json FROM plugin_state_entries WHERE plugin_id='discord' AND namespace='thread-bindings'",
+                  )
+                  .all(),
+              ).toEqual([
+                { value_json: JSON.stringify({ threadId: "thread", webhookToken: secret }) },
+              ]);
+            }
             if (!generic) {
               for (const [index, directory] of [pgDir, unredacted].entries()) {
                 const targetPath = state.path(`restored-${index}.sqlite`);
@@ -249,7 +323,7 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
                     { value_json: family === "state" ? '"keep"' : '{"retained":true}' },
                   ]);
                   const secretTable =
-                    family === "state" ? "device_auth_tokens" : "auth_profile_store";
+                    family === "state" ? "secret_store_entries" : "auth_profile_store";
                   expect(
                     (
                       await client.query(
@@ -265,6 +339,47 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
                         )
                       ).rows,
                     ).toEqual([{ n: index }]);
+                    expect(
+                      (
+                        await client.query(
+                          `SELECT count(*)::int AS n FROM "${restored.namespace}".plugin_state_entries`,
+                        )
+                      ).rows,
+                    ).toEqual([{ n: index === 0 ? 4 : 7 }]);
+                    expect(
+                      (
+                        await client.query(
+                          `SELECT plugin_id, value_json FROM "${restored.namespace}".plugin_state_entries WHERE plugin_id IN ('active-memory', 'mcp-relay', 'x') ORDER BY plugin_id`,
+                        )
+                      ).rows,
+                    ).toEqual(retainedPluginRows);
+                    expect(
+                      (
+                        await client.query(
+                          `SELECT value_json FROM "${restored.namespace}".plugin_state_entries WHERE plugin_id='discord' AND namespace='thread-bindings'`,
+                        )
+                      ).rows,
+                    ).toEqual([
+                      {
+                        value_json: JSON.stringify(
+                          index === 0
+                            ? { threadId: "thread" }
+                            : { threadId: "thread", webhookToken: secret },
+                        ),
+                      },
+                    ]);
+                    expect(
+                      (
+                        await client.query(
+                          `SELECT plugin_id, encode(blob, 'hex') AS bytes FROM "${restored.namespace}".plugin_blob_entries ORDER BY plugin_id`,
+                        )
+                      ).rows,
+                    ).toEqual([
+                      { plugin_id: "fixture", bytes: retainedBlobHex },
+                      ...(index === 0
+                        ? []
+                        : [{ plugin_id: "zalouser", bytes: Buffer.from(secret).toString("hex") }]),
+                    ]);
                   }
                 } finally {
                   await client.query(`DROP SCHEMA "${restored.namespace}" CASCADE`);

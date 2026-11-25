@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, untrack, type Accessor } from "@solidjs/signals";
+import { createEffect, createSignal, onCleanup, type Accessor } from "@solidjs/signals";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import {
   type AfterCommitEffect,
@@ -39,8 +39,8 @@ export function createSolidRenderLifecycle<T>(options: {
     }
     requestedGeneration += 1;
     setRevision(requestedGeneration);
-    // Invalidation samples visibility without subscribing its synchronous domain caller.
-    if (untrack(options.presented)) {
+    // Telemetry follows committed visibility without subscribing the invalidating caller.
+    if (committedRequest >= 0) {
       notifyRenderLifecycleForTest(options.host, "invalidate");
     }
   };
@@ -106,7 +106,7 @@ export function createSolidRenderLifecycle<T>(options: {
   const runTasks = () => {
     for (const task of Array.from(tasks)) {
       // Recheck after each callback: one callback can park the pane before the next runs.
-      if (disposed || !untrack(options.presented)) {
+      if (disposed || !options.presented()) {
         break;
       }
       if (!task.started && task.generation <= committedRequest) {
@@ -125,6 +125,7 @@ export function createSolidRenderLifecycle<T>(options: {
     () => ({ frame: frame(), presented: options.presented() }),
     (next) => {
       if (!next.presented) {
+        committedRequest = -1;
         // Pending work waits for reveal; already-started foreground work retires.
         for (const task of Array.from(tasks)) {
           if (task.started) {

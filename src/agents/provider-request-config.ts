@@ -6,12 +6,13 @@ import type {
 } from "../config/types.provider-request.js";
 import { assertSecretInputResolved } from "../config/types.secrets.js";
 import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
-import type { Api } from "../llm/types.js";
+import type { Api, ModelRequestHeaders } from "../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   attachProviderAuthAuthority,
   getProviderAuthAuthority,
 } from "../plugins/provider-auth-authority.js";
+import { TLS_SECRET_FIELDS } from "../secrets/provider-request-secret-fields.js";
 import {
   type ProviderRequestCapabilities,
   type ProviderRequestCapability,
@@ -46,10 +47,10 @@ type ResolveProviderRequestPolicyConfigParams = {
   defaultBaseUrl?: string;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
-  discoveredHeaders?: Record<string, string>;
-  providerHeaders?: Record<string, string>;
-  modelHeaders?: Record<string, string>;
-  callerHeaders?: Record<string, string>;
+  discoveredHeaders?: ModelRequestHeaders;
+  providerHeaders?: ModelRequestHeaders;
+  modelHeaders?: ModelRequestHeaders;
+  callerHeaders?: ModelRequestHeaders;
   precedence?: ProviderRequestHeaderPrecedence;
   authHeader?: boolean;
   compat?: unknown;
@@ -242,16 +243,16 @@ export function normalizeBaseUrl(
 // Header keys are compared case-insensitively and prototype-polluting names are
 // dropped before values are attached to outbound provider requests.
 function mergeProviderRequestHeaders(
-  ...headerSets: Array<Record<string, string> | undefined>
-): Record<string, string> | undefined {
-  let merged: Record<string, string> | undefined;
+  ...headerSets: Array<ModelRequestHeaders | undefined>
+): ModelRequestHeaders | undefined {
+  let merged: ModelRequestHeaders | undefined;
   const headerNamesByLowerKey = new Map<string, string>();
   for (const headers of headerSets) {
     if (!headers) {
       continue;
     }
     if (!merged) {
-      merged = Object.create(null) as Record<string, string>;
+      merged = Object.create(null) as ModelRequestHeaders;
     }
     for (const [key, value] of Object.entries(headers)) {
       const normalizedKey = normalizeLowercaseStringOrEmpty(key);
@@ -310,7 +311,6 @@ function resolveAuthOverride(params: {
         mode: "authorization-bearer",
         headerName: "Authorization",
         value,
-        injectAuthorizationHeader: true,
       } as const;
     }
   }
@@ -325,14 +325,12 @@ function resolveAuthOverride(params: {
         headerName,
         value,
         ...(prefix ? { prefix } : {}),
-        injectAuthorizationHeader: false,
       } as const;
     }
   }
   return {
     configured: false,
     mode: params.authHeader ? "authorization-bearer" : "provider-default",
-    injectAuthorizationHeader: params.authHeader === true,
   } as const;
 }
 
@@ -365,7 +363,7 @@ export function applyPreparedRuntimeAuthToModel<
     provider: string;
     api?: RequestApi;
     baseUrl?: string;
-    headers?: Record<string, string>;
+    headers?: ModelRequestHeaders;
   },
 >(
   model: T,
@@ -443,9 +441,9 @@ function resolveProxyOverride(request: ProviderRequestTransportOverrides | undef
 }
 
 function applyResolvedAuthHeader(
-  headers: Record<string, string> | undefined,
+  headers: ModelRequestHeaders | undefined,
   auth: ResolvedProviderRequestAuthConfig,
-): Record<string, string> | undefined {
+): ModelRequestHeaders | undefined {
   if (!auth.configured) {
     return headers;
   }
@@ -473,7 +471,7 @@ function toTlsConnectOptions(
     return undefined;
   }
   const next: Record<string, unknown> = {};
-  for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+  for (const key of TLS_SECRET_FIELDS) {
     if (tls[key]) {
       next[key] = tls[key];
     }
@@ -585,9 +583,9 @@ export function resolveProviderRequestConfig(params: {
   providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
-  discoveredHeaders?: Record<string, string>;
-  providerHeaders?: Record<string, string>;
-  modelHeaders?: Record<string, string>;
+  discoveredHeaders?: ModelRequestHeaders;
+  providerHeaders?: ModelRequestHeaders;
+  modelHeaders?: ModelRequestHeaders;
   authHeader?: boolean;
   request?: ProviderRequestTransportOverrides;
 }) {
@@ -614,11 +612,11 @@ export function resolveProviderRequestHeaders(params: {
   baseUrl?: string;
   capability?: ProviderRequestCapability;
   transport?: ProviderRequestTransport;
-  callerHeaders?: Record<string, string>;
-  defaultHeaders?: Record<string, string>;
+  callerHeaders?: ModelRequestHeaders;
+  defaultHeaders?: ModelRequestHeaders;
   precedence?: ProviderRequestHeaderPrecedence;
   request?: ProviderRequestTransportOverrides;
-}): Record<string, string> | undefined {
+}): ModelRequestHeaders | undefined {
   return resolveProviderRequestPolicyConfig({
     provider: params.provider,
     api: params.api,

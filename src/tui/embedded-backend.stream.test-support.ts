@@ -1,8 +1,14 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../agents/internal-runtime-context.js";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  registerAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
 
 export function captureBackendEvents(backend: EmbeddedTuiBackend) {
@@ -24,7 +30,10 @@ type StreamTestContext = {
     promise: Promise<EmbeddedAgentResult>;
     resolve: (result: EmbeddedAgentResult) => void;
   };
-  prepareReply: (reply: Promise<EmbeddedAgentResult>) => void;
+  prepareReply: (
+    reply: Promise<EmbeddedAgentResult>,
+    onStart?: (signal: AbortSignal) => void,
+  ) => void;
   emitAgentEvent: (event: unknown) => void;
   flushMicrotasks: () => Promise<void>;
   embeddedEventTimestamp: number;
@@ -38,6 +47,73 @@ export function registerEmbeddedBackendStreamTests({
   flushMicrotasks,
   embeddedEventTimestamp,
 }: StreamTestContext) {
+  it.each([
+    { method: "abortChat", wait: "pending", caveat: true },
+    { method: "abortChat", wait: "absent", caveat: false },
+    { method: "abortChat", wait: "cleared", caveat: false },
+    { method: "stop command", wait: "pending", caveat: true },
+    { method: "stop command", wait: "absent", caveat: false },
+    { method: "stop command", wait: "cleared", caveat: false },
+  ])(
+    "reports cancellation eligibility for $method with $wait wait",
+    async ({ method, wait, caveat }) => {
+      const pending = createPendingReply();
+      const started = deferred<AbortSignal>();
+      const runId = `local-cancel-${method}-${wait}`;
+      const sessionKey = "agent:main:main";
+      registerAgentRunContext(runId, { sessionKey });
+      onTestFinished(() => clearAgentRunContext(runId));
+      const context = getAgentRunContext(runId);
+      if (!context) {
+        throw new Error("Expected the test run to be registered");
+      }
+      prepareReply(pending.promise, (signal) => {
+        signal.addEventListener("abort", () => delete context.localModelWait, { once: true });
+        started.resolve(signal);
+      });
+      const backend = createBackend();
+      const events = captureBackendEvents(backend);
+      backend.start();
+      await backend.sendChat({ sessionKey, message: "long task", runId });
+      const signal = await started.promise;
+      if (wait !== "absent") {
+        context.localModelWait = { requestId: `${runId}:model:1` };
+      }
+      if (wait === "cleared") {
+        delete context.localModelWait;
+      }
+      const abort = async () => {
+        if (method === "abortChat") {
+          expect(await backend.abortChat({ sessionKey, runId })).toEqual({
+            ok: true,
+            aborted: true,
+            runIds: [runId],
+          });
+        } else {
+          await backend.sendChat({ sessionKey, message: "/stop" });
+        }
+      };
+      await abort();
+      expect(signal.aborted).toBe(true);
+      expect(context.localModelWait).toBeUndefined();
+      await abort();
+      pending.resolve({ payloads: [], meta: { aborted: true } });
+      await flushMicrotasks();
+      expect(events.filter((event) => event.event === "chat")).toEqual([
+        {
+          event: "chat",
+          payload: {
+            runId,
+            sessionKey,
+            agentId: "main",
+            state: "aborted",
+            ...(caveat ? { localModelMayStillBeFinishing: true } : {}),
+          },
+        },
+      ]);
+    },
+  );
+
   it("paces display deltas and flushes them before tools, corrections, and completion", async () => {
     const pending = createPendingReply();
     prepareReply(pending.promise);

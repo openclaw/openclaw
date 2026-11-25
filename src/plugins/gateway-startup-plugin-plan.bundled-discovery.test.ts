@@ -1,4 +1,3 @@
-// Covers gateway-startup plan activation under bundledDiscovery machine state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,70 +7,25 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
 import { resolveGatewayStartupPluginPlanFromRegistry } from "./channel-plugin-ids.js";
-import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
+import { createInstalledPluginIndexFixture } from "./gateway-startup.test-helpers.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 function buildStartupFixture() {
-  const records: InstalledPluginIndexRecord[] = ["openai", "browser"].map((pluginId) => {
-    const rootDir = `/tmp/plugins/${pluginId}`;
-    return {
-      pluginId,
-      manifestPath: `${rootDir}/openclaw.plugin.json`,
-      manifestHash: `${pluginId}-manifest`,
-      rootDir,
-      origin: "bundled",
-      enabled: true,
-      enabledByDefault: true,
-      startup: {
-        sidecar: true,
-        memory: false,
-        agentHarnesses: [],
-        configPaths: [],
-      },
-      contributions: {
-        channels: [],
-        channelConfigs: [],
-        providers: pluginId === "openai" ? ["openai"] : [],
-        modelCatalogProviders: [],
-        modelSupportPrefixes: [],
-        modelSupportPatterns: [],
-        autoEnableProviderIds: [],
-        commandAliases: [],
-        contracts: {},
-      },
-      compat: [],
-    };
-  });
-  const index: PluginRegistrySnapshot = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: records,
-    diagnostics: [],
-  };
   const manifestRegistry: PluginManifestRegistry = {
-    plugins: ["openai", "browser"].map((id) => ({
-      id,
-      origin: "bundled",
-      enabledByDefault: true,
-      activation: { onStartup: true },
-      providers: id === "openai" ? ["openai"] : [],
-      channels: [],
-      cliBackends: [],
-      rootDir: `/tmp/plugins/${id}`,
-      source: `/tmp/plugins/${id}/index.ts`,
-      manifestPath: `/tmp/plugins/${id}/openclaw.plugin.json`,
-      skills: [],
-      hooks: [],
-    })),
+    plugins: ["openai", "browser"].map((id) =>
+      createPluginManifestRecordFixture({
+        id,
+        enabledByDefault: true,
+        activation: { onStartup: true },
+        providers: id === "openai" ? ["openai"] : [],
+        rootDir: `/tmp/plugins/${id}`,
+        source: `/tmp/plugins/${id}/index.ts`,
+      }),
+    ),
     diagnostics: [],
   };
-  return { index, manifestRegistry };
+  return { index: createInstalledPluginIndexFixture(manifestRegistry), manifestRegistry };
 }
 
 describe("gateway startup plan under bundledDiscovery compat", () => {

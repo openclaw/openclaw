@@ -1,5 +1,6 @@
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { GithubCounts, GithubItemKind, PersonReport } from "../types.js";
+import { GITHUB_ITEM_KINDS } from "../github-item-kinds.js";
+import type { GithubCounts, PersonReport } from "../types.js";
 
 export function metric(label: string, value: string | number, detail = "", trend = ""): string {
   return `<div class="oc-summary-metric"><span class="oc-summary-metric-copy"><small>${escapeHtml(label)}</small><strong>${escapeHtml(String(value))}</strong>${detail ? `<small>${escapeHtml(detail)}</small>` : ""}${trend}</span></div>`;
@@ -20,9 +21,9 @@ export function renderAvatar(
   ).toUpperCase();
   const pixels = { xs: 20, sm: 36, md: 40, xl: 72 }[size];
   const image = /^[A-Za-z0-9-]{1,39}$/.test(login)
-    ? `<img src="https://avatars.githubusercontent.com/${escapeHtml(login)}?s=${pixels}" width="${pixels}" height="${pixels}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+    ? `<img src="https://avatars.githubusercontent.com/${escapeHtml(login)}?s=${pixels}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
     : "";
-  return `<span class="oc-avatar oc-avatar-${size}" data-initials="${escapeHtml(initials)}">${image}</span>`;
+  return `<span class="oc-avatar oc-avatar-${size}" aria-hidden="true" data-initials="${escapeHtml(initials)}">${image}</span>`;
 }
 
 export function safeExternalUrl(value: string): string | undefined {
@@ -35,34 +36,11 @@ export function safeExternalUrl(value: string): string | undefined {
     : undefined;
 }
 
-export const ITEM_LABELS: Record<GithubItemKind, string> = {
-  commit: "Commit",
-  pr_opened: "PR opened",
-  pr_merged: "PR merged",
-  pr_closed: "PR closed",
-  issue_opened: "Issue opened",
-  issue_closed: "Issue closed",
-  issue_comment: "Issue comment",
-  review_comment: "Review comment",
-  security_advisory: "Security advisory",
-};
-
 export function countDescription(counts: GithubCounts): string {
-  const entries: Array<[number, string]> = [
-    [counts.commits, "commits"],
-    [counts.prsOpened, "PRs opened"],
-    [counts.prsMerged, "PRs merged"],
-    [counts.prsClosed, "PRs closed"],
-    [counts.issuesOpened, "issues opened"],
-    [counts.issuesClosed, "issues closed"],
-    [counts.issueComments, "issue comments"],
-    [counts.reviewComments, "review comments"],
-    [counts.securityAdvisories, "security advisories"],
-  ];
   return (
-    entries
-      .filter(([count]) => count > 0)
-      .map(([count, label]) => `${count} ${label}`)
+    Object.values(GITHUB_ITEM_KINDS)
+      .filter(({ field }) => counts[field] > 0)
+      .map(({ field, plural }) => `${counts[field]} ${plural}`)
       .join(" · ") || "No GitHub activity recorded."
   );
 }

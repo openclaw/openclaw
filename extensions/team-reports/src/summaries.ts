@@ -12,7 +12,6 @@ import type {
 } from "./types.js";
 
 export type SummaryLlm = Pick<OpenClawPluginApi["runtime"]["llm"], "complete">;
-type CompletionParams = Parameters<SummaryLlm["complete"]>[0];
 type SummaryLogger = Pick<SourceRuntime["logger"], "warn">;
 
 type SummaryResult = {
@@ -316,11 +315,9 @@ export async function generateSummaries(params: {
   options: TeamReportsConfig["summaries"];
   llm: SummaryLlm;
   previous?: { report: ReportDocument; summary: SummaryDocument };
-  signal?: AbortSignal;
   logger?: SummaryLogger;
 }): Promise<SummaryResult> {
-  const { report, options, previous, signal } = params;
-  signal?.throwIfAborted();
+  const { report, options, previous } = params;
   const digest = buildEvidenceDigest(report);
   const fingerprint = createHash("sha256").update(digest).digest("hex");
   const generatedAtMs = Date.now();
@@ -348,7 +345,7 @@ export async function generateSummaries(params: {
   if (!options.enabled || Buffer.byteLength(digest, "utf8") > MAX_DIGEST_BYTES) {
     return fallbackResult(report, fingerprint, generatedAtMs);
   }
-  const messages: CompletionParams["messages"] = [
+  const messages: Parameters<SummaryLlm["complete"]>[0]["messages"] = [
     { role: "system", content: SYSTEM_PROMPT },
     { role: "user", content: digest },
   ];
@@ -356,7 +353,6 @@ export async function generateSummaries(params: {
   const maxTokens = Math.min(32_000, 4_000 + 300 * report.members.length);
   let failureReason = "Model summary unavailable: invalid JSON after repair";
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    signal?.throwIfAborted();
     let result: Awaited<ReturnType<SummaryLlm["complete"]>>;
     try {
       result = await params.llm.complete({
@@ -366,10 +362,8 @@ export async function generateSummaries(params: {
         agentId: options.agentId,
         maxTokens,
         purpose: "team-reports summary",
-        signal,
       });
     } catch {
-      signal?.throwIfAborted();
       return fallbackResult(
         report,
         fingerprint,
@@ -378,7 +372,6 @@ export async function generateSummaries(params: {
         params.logger,
       );
     }
-    signal?.throwIfAborted();
     try {
       const parsed = parseResponse(result.text, report);
       return {

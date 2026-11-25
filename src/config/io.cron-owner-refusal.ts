@@ -1,6 +1,10 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  isUpdateRehearsalReadOnlyPath,
+  resolveUpdateRehearsalRoot,
+} from "../infra/update-rehearsal-paths.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -11,6 +15,20 @@ type CronOwnerRefusalDeps = Pick<
   Pick<typeof import("../commands/doctor/cron/legacy-repair.js"), "loadLegacyCronRepairState">;
 const RETRY = ' Run "openclaw doctor --fix", then retry.';
 const CRON_OWNER_REFUSAL = "cron-owner-safety";
+
+/** Only a disposable config can defer data ownership lost by a released update driver. */
+export async function canDeferRehearsalCronMigration(
+  cfg: OpenClawConfig,
+  configPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  if (!resolveUpdateRehearsalRoot(env) || isUpdateRehearsalReadOnlyPath(configPath, env)) {
+    return false;
+  }
+  const { readCronStoreSelectionForDoctor } =
+    await import("../commands/doctor/cron/default-store-selection.js");
+  return (await readCronStoreSelectionForDoctor(cfg, env)).status === "unresolved";
+}
 
 export function createCronOwnerWriteRefusalError(message: string, cause?: unknown): Error {
   return Object.assign(new Error(message, cause === undefined ? undefined : { cause }), {

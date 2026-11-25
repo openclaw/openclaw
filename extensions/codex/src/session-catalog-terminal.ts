@@ -1,4 +1,3 @@
-// Codex catalog terminal ownership: validated native start/resume commands and plans.
 import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-harness-registration";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

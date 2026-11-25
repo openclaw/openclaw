@@ -1,5 +1,6 @@
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import { hasErrnoCode } from "./errno.js";
 
 const PROC_SELF_FD_PATH = "/proc/self/fd";
@@ -16,9 +17,12 @@ export type SqliteWalSplitBrainEvent = {
   targetInode?: string;
 };
 
-function readUnlessMissing<T>(read: () => T, allowClosedDescriptor = false): T | undefined {
+async function readUnlessMissing<T>(
+  read: () => Promise<T>,
+  allowClosedDescriptor = false,
+): Promise<T | undefined> {
   try {
-    return read();
+    return await read();
   } catch (error) {
     if ((allowClosedDescriptor && hasErrnoCode(error, "EBADF")) || hasErrnoCode(error, "ENOENT")) {
       return undefined;
@@ -39,14 +43,14 @@ function isSqliteWalSidecarSplitBrain(
   );
 }
 
-export function detectSqliteWalSplitBrain(
+export async function detectSqliteWalSplitBrain(
   databasePath: string,
-): SqliteWalSplitBrainEvent | undefined {
-  const descriptors = readUnlessMissing(() => fs.readdirSync(PROC_SELF_FD_PATH));
+): Promise<SqliteWalSplitBrainEvent | undefined> {
+  const descriptors = await readUnlessMissing(() => fs.promises.readdir(PROC_SELF_FD_PATH));
   const sidecarPaths = [`${databasePath}-wal`, `${databasePath}-shm`];
   for (const descriptorName of descriptors ?? []) {
     const descriptorPath = path.join(PROC_SELF_FD_PATH, descriptorName);
-    const linkedPath = readUnlessMissing(() => fs.readlinkSync(descriptorPath));
+    const linkedPath = await readUnlessMissing(() => fs.promises.readlink(descriptorPath));
     if (linkedPath === undefined) {
       continue;
     }
@@ -56,18 +60,31 @@ export function detectSqliteWalSplitBrain(
     if (!sidecarPath) {
       continue;
     }
-    const descriptor = readUnlessMissing(
-      () => fs.fstatSync(Number(descriptorName), { bigint: true }),
+    const descriptor = await readUnlessMissing(
+      () => promisify(fs.fstat)(Number(descriptorName), { bigint: true }),
       true,
     );
     if (
       descriptor === undefined ||
-      readUnlessMissing(() => fs.readlinkSync(descriptorPath)) !== linkedPath
+      (await readUnlessMissing(() => fs.promises.readlink(descriptorPath))) !== linkedPath
     ) {
       continue;
     }
-    const target = readUnlessMissing(() => fs.statSync(sidecarPath, { bigint: true }));
+    const target = await readUnlessMissing(() => fs.promises.stat(sidecarPath, { bigint: true }));
     if (!isSqliteWalSidecarSplitBrain(descriptor, target)) {
+      continue;
+    }
+    // The async target lookup may outlive native close or reuse of this descriptor.
+    const current = await readUnlessMissing(
+      () => promisify(fs.fstat)(Number(descriptorName), { bigint: true }),
+      true,
+    );
+    if (
+      !current ||
+      current.dev !== descriptor.dev ||
+      current.ino !== descriptor.ino ||
+      (await readUnlessMissing(() => fs.promises.readlink(descriptorPath))) !== linkedPath
+    ) {
       continue;
     }
     return {

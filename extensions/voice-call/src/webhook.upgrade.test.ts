@@ -1,12 +1,12 @@
 import { errorMonitor, once } from "node:events";
 import http from "node:http";
 import net from "node:net";
-import type { Duplex } from "node:stream";
+import { Duplex } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
-import { describe, expect, it, vi } from "vitest";
-import { normalizeVoiceCallConfig, validateProviderConfig } from "./config.js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { normalizeVoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { MockProvider } from "./providers/mock.js";
@@ -14,6 +14,8 @@ import { TwilioProvider } from "./providers/twilio.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { makeRequest } from "./webhook/realtime-handler.lifecycle.test-helpers.js";
+import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 
 vi.mock("./realtime-transcription.runtime.js", () => ({
   getRealtimeTranscriptionProvider: () => undefined,
@@ -42,10 +44,6 @@ function createServer(streaming = false, streamPath = "/voice/stream/realtime") 
     streaming: { enabled: streaming, streamPath: "/voice/stream" },
     realtime: { enabled: !streaming, streamPath },
   });
-  const validation = validateProviderConfig(config);
-  if (!validation.valid) {
-    throw new Error(validation.errors.join("; "));
-  }
   config.serve.port = 0;
   const manager = new CallManager(config);
   const server = new VoiceCallWebhookServer(
@@ -124,8 +122,7 @@ describe("VoiceCallWebhookServer upgrade rejection", () => {
       if (!rejectedSocket) {
         throw new Error("No rejected server socket");
       }
-      expect(rejectedSocket.destroyed).toBe(false);
-      expect(rejectedSocket.writableFinished).toBe(false);
+      expect(rejectedSocket).toMatchObject({ destroyed: false, writableFinished: false });
       expect(rejectedSocket.writableLength).toBeGreaterThan(0);
       const failure = Object.assign(new Error("synthetic rejection transport failure"), {
         code: "ECONNRESET",
@@ -193,13 +190,8 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
   it("waits for owned handlers and shares concurrent stop completion", async () => {
     const config = createVoiceCallBaseConfig({ tunnelProvider: "none" });
     config.serve.port = 0;
-    let releaseHandlerClose: (() => void) | undefined;
-    const handlerClose = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseHandlerClose = resolve;
-        }),
-    );
+    const handlerClosed = createDeferred<void>();
+    const handlerClose = vi.fn(() => handlerClosed.promise);
     const delayedHangup = vi.fn(async () => ({ success: true }));
     const server = new VoiceCallWebhookServer(
       createTestPluginServiceScheduler(),
@@ -220,23 +212,98 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
     streamLifecycle.disconnect("provider-call", "stream-1");
 
     const firstStop = server.stop();
-    const secondStop = server.stop();
-    let stopped = false;
-    void firstStop.then(() => {
-      stopped = true;
-    });
+    const stopped = vi.fn();
+    void firstStop.then(stopped);
 
     try {
-      expect(secondStop).toBe(firstStop);
+      expect(server.stop()).toBe(firstStop);
       expect(handlerClose).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(2_100);
-      expect(stopped).toBe(false);
+      expect(stopped).not.toHaveBeenCalled();
       expect(delayedHangup).not.toHaveBeenCalled();
     } finally {
-      releaseHandlerClose?.();
+      handlerClosed.resolve();
       await firstStop;
       vi.useRealTimers();
     }
-    expect(stopped).toBe(true);
+    expect(stopped).toHaveBeenCalledOnce();
+  });
+});
+
+function rejectedUpgradeHarness(closing = false) {
+  const config = normalizeVoiceCallConfig({ realtime: { enabled: true } });
+  const resolveRegistration = vi.fn((): never => {
+    throw new Error("Rejected upgrades must not acquire a provider");
+  });
+  const streamDisconnectLifecycle = new StreamDisconnectGrace(() => {});
+  const handler = new RealtimeCallHandler(
+    config.realtime,
+    new CallManager(config),
+    resolveRegistration,
+    "/voice/webhook",
+    streamDisconnectLifecycle,
+  );
+  let flush = () => {};
+  let response = "";
+  const socket = new Duplex({
+    read() {},
+    write(chunk: Buffer, _encoding, callback) {
+      response += chunk.toString();
+      flush = callback;
+    },
+  });
+  const shutdown = createDeferred<void>();
+  const pendingClose = closing ? handler.close(shutdown.promise) : undefined;
+  onTestFinished(async () => {
+    flush();
+    socket.destroy();
+    shutdown.resolve();
+    try {
+      await pendingClose;
+      await handler.close();
+    } finally {
+      streamDisconnectLifecycle.close();
+    }
+  });
+  return {
+    resolveRegistration,
+    socket,
+    flush: () => flush(),
+    response: () => response,
+    reject: () =>
+      handler.handleWebSocketUpgrade(
+        makeRequest("/voice/stream/realtime/invalid-token"),
+        socket,
+        Buffer.alloc(0),
+      ),
+  };
+}
+
+describe("realtime upgrade rejection", () => {
+  it.each([
+    [401, "Unauthorized"],
+    [503, "Service Unavailable"],
+  ] as const)(
+    "flushes HTTP %s before closing without acquiring a provider",
+    async (status, reason) => {
+      const { resolveRegistration, socket, response, flush, reject } = rejectedUpgradeHarness(
+        status === 503,
+      );
+      const closed = once(socket, "close");
+      reject();
+      expect(response()).toBe(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
+      expect(socket.destroyed).toBe(false);
+      expect(resolveRegistration).not.toHaveBeenCalled();
+      flush();
+      await closed;
+      expect(socket.destroyed).toBe(true);
+    },
+  );
+
+  it("owns raw socket errors while rejection bytes are buffered", async () => {
+    const { socket, reject } = rejectedUpgradeHarness();
+    reject();
+    expect(() => socket.emit("error", new Error("synthetic raw socket failure"))).not.toThrow();
+    expect(socket.destroyed).toBe(true);
   });
 });

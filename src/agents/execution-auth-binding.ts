@@ -179,12 +179,8 @@ function decodeJwtIdentity(token: string | undefined): { subject?: string; email
       email?: unknown;
     };
     return {
-      ...(typeof claims.sub === "string" && normalizeIdentity(claims.sub)
-        ? { subject: normalizeIdentity(claims.sub) }
-        : {}),
-      ...(typeof claims.email === "string" && normalizeIdentity(claims.email, true)
-        ? { email: normalizeIdentity(claims.email, true) }
-        : {}),
+      subject: typeof claims.sub === "string" ? normalizeIdentity(claims.sub) : undefined,
+      email: typeof claims.email === "string" ? normalizeIdentity(claims.email, true) : undefined,
     };
   } catch {
     return {};

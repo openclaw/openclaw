@@ -42,19 +42,26 @@ refreshes its session-hosting declaration and current worker slots. The Gateway
 waits for that fresh declaration before making the host available again; the
 app or node-host process does not need to restart.
 
-When a session first needs the current worker build, the Gateway sends its sealed
-worker artifact to the paired host. The node verifies the exact content hash,
+After a Gateway update or reconnect, supported persistent paired hosts prefetch
+the current sealed worker archive in the background. Prefetch downloads and verifies
+the archive only; it does not extract, prewarm, or launch a worker. A session arriving
+during prefetch takes priority and cancels the background transfer if needed.
+Prefetch failures produce a warning and leave normal session installation available.
+Older nodes and cloud-enrolled nodes keep session-owned installation.
+
+When a session first needs the current worker build, the node reuses a valid
+prefetched archive or acquires it from the paired Gateway. It verifies the exact content hash,
 publishes the artifact atomically, and prewarms it when supported by the execution mode.
 The artifact contains its complete JavaScript dependency closure; the node does
 not install packages or execute lifecycle scripts. Runtime chunks are sealed and
 verified with the artifact, and cold workers complete admission before loading
-the turn runtime. Installation belongs to the
-session request and receives its cancellation signal. Reconnect maintenance does
-not install or prewarm a worker build.
+the turn runtime. Installation belongs to the session request and receives its
+cancellation signal.
 
 Once installed, persistent nodes retain one current worker artifact per Gateway
-namespace, even with no sessions. Older builds remain only while a live or
-recoverable placement needs them; normal maintenance removes unreferenced builds.
+namespace, even with no sessions. Prefetched archives use the same bounded retention.
+Older builds remain only while a live or recoverable placement needs them;
+normal maintenance removes unreferenced builds.
 Each new dispatch still validates the installed artifact and reuses it when valid,
 avoiding another download. Cloud-enrolled nodes keep their own execution-mode-specific
 installation and retention lifecycle.
@@ -204,6 +211,9 @@ new work; active turns and background commands keep their slots. When no free
 or reclaimable slot remains, the node stays available for status and cancellation
 but is not selected for a new session turn.
 
+If a capacity refresh fails, the node logs a warning and advertises no available
+slots. Restart the node host if its capacity does not recover.
+
 Capacity, host-stat, and skill-bin updates do not interrupt active node work or
 change its pairing authority. This behavior requires an updated Gateway; node
 configuration and stored pairings remain unchanged.
@@ -254,6 +264,16 @@ to receive this protection; installing a new worker bundle alone does not update
 the node's supervisor. Recovery keeps capacity occupied while the previous owner
 finishes stopping its commands. An upgraded node host preserves the released
 startup message and detached process-group ownership for older worker bundles.
+
+Windows node hosts record when the native Job launcher contains a worker tree
+with kill-on-close ownership. If that node host dies, Windows terminates the Job;
+after restart, recovery waits until the recorded supervisor and worker are gone,
+checking their PIDs and process creation times. It then allows one second for
+the remaining Job members to exit before interrupting the launch and releasing
+its slot. A descendant that broke away from the Job or is unusually slow to die
+could briefly overlap the next turn; this is an accepted recovery tradeoff.
+Older receipts and launches without the native helper retain conservative cleanup
+checks.
 
 Installed node hosts package the POSIX launch helpers separately to reduce
 per-turn startup work. Update and restart the node host to receive this
@@ -388,12 +408,11 @@ selected folder becomes the session workspace root, so deployments that contain
 `operator.write` sessions with `tools.fs.workspaceOnly` should also set a root list.
 
 For a specific paired device that advertises `workerHost.deviceFolders: true`,
-choose **Existing folder on device** in the workspace picker and enter an
-absolute path on that device. This option is not available for **Auto**, cloud
-workers, runtimes without worker-turn execution, or devices that do not advertise
-the capability. Operators with `operator.admin` can also choose **Browse folders
-on** _device_ to list folders on that device through its `fs.listDir` command.
-The listing is not limited to `folders` roots; the device validates the chosen
+choose **Existing folder on** _device_ in the workspace picker. Operators with
+`operator.admin` then browse folders on that device through its `fs.listDir`
+command; other operators enter an absolute path on that device. This option is
+not available for **Auto**, cloud workers, runtimes without worker-turn
+execution, or devices that do not advertise the capability. The listing is not limited to `folders` roots; the device validates the chosen
 folder when the session is created. The Gateway never browses or resolves this
 path locally.
 
@@ -425,7 +444,7 @@ worker inside its own container instead:
       enabled: true,
       isolation: "container",
       // Optional: use a digest-pinned, private-registry, or preloaded image.
-      // containerImage: "registry.example.com/openclaw/node:24.21.0-slim",
+      // containerImage: "registry.example.com/openclaw/node:24.22.1-slim",
     },
   },
 }
@@ -435,6 +454,14 @@ Restart the node host after changing either setting. Isolation defaults to
 `"none"`, preserving the existing direct-process behavior. This setting is
 enforced locally on the node; the Gateway cannot silently disable it or fall
 back to an unisolated worker.
+
+Isolation applies only to sessions placed on this node. When `sessions.dispatch`
+to the node is refused (for example, because no container engine works), the
+session stays unplaced, and its turns run on the Gateway like any other
+undispatched session. To forbid Gateway-local execution entirely, set
+[`cloudWorkers.requiredProfile`](/gateway/config-cloud-workers#required-worker-profile)
+to a device profile for this node; turns then fail with an actionable error
+instead of running on the Gateway.
 
 Container isolation is supported on Linux and macOS node hosts; Windows is
 unsupported because native Windows paths cannot be mounted at their original
@@ -452,10 +479,10 @@ If an engine command times out, the launch error names the engine and operation
 (for example, `docker info`) and its deadline. It omits command arguments and
 environment values. Check that operation against the selected daemon before retrying.
 
-The default image is `node:24.21.0-slim`; the engine pulls it on first use when it
+The default image is `node:24.22.1-slim`; the engine pulls it on first use when it
 is not already present. Set `nodeHost.workerRuns.containerImage` to choose a
 digest-pinned image, a private-registry image, or an image already available
-to the engine. The image must provide a supported Node.js 24.16+ or 26.1+ runtime on
+to the engine. The image must provide a compatible Node.js 24.16.0+ on 24.x or 26.1.0+ runtime (24.22.1+/26.12.1+ strongly recommended for security) on
 its standard executable search path. If the image cannot be pulled, is
 inaccessible, or does not provide a suitable Node.js runtime, that session
 launch fails visibly; it never retries as a bare host process. Preload the
@@ -463,7 +490,7 @@ image or configure registry access before hosting sessions on an offline or
 restricted node. The default image can advance when OpenClaw updates its dependencies.
 Before upgrading an offline node, preload the new default image or set
 `nodeHost.workerRuns.containerImage` to a supported image already cached on that node.
-For example, a cached `node:24.19.0-slim` remains supported and can be selected explicitly.
+For example, a cached `node:26.12.1-slim` can be selected explicitly.
 Existing explicit image settings are preserved; replace unsupported Node images before
 upgrading OpenClaw. Worker startup requires a supported runtime; older releases may
 fail before the runtime diagnostic can run.

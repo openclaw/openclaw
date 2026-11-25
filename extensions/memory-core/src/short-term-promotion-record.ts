@@ -199,6 +199,7 @@ export async function recordShortTermRecalls(params: {
     if (admitted.length === 0) {
       return;
     }
+    let nonDailyKeysByClaim: Map<string, string> | undefined;
     const origins: MemoryEntryOrigin[] = [];
     for (const result of admitted) {
       const { path: normalizedPath, startLine, endLine, score } = recallEventResult(result);
@@ -220,15 +221,21 @@ export async function recordShortTermRecalls(params: {
           ? normalizeSnippet(result.identitySnippet ?? rawSnippet)
           : rawSnippet;
       const claimHash = buildClaimHash(identitySnippet);
-      const nonDailyEntry =
-        signalType === "daily"
-          ? Object.values(store.entries).find(
-              (entry) =>
-                !entry.key.startsWith("memory:claim:") &&
-                entry.recallCount + entry.groundedCount > 0 &&
-                entry.claimHash === claimHash,
-            )
-          : undefined;
+      if (signalType === "daily" && !nonDailyKeysByClaim) {
+        nonDailyKeysByClaim = new Map();
+        // Daily writes preserve non-daily eligibility and the first stored match.
+        for (const entry of Object.values(store.entries)) {
+          const hash = entry.claimHash;
+          if (
+            hash &&
+            !entry.key.startsWith("memory:claim:") &&
+            entry.recallCount + entry.groundedCount > 0 &&
+            !nonDailyKeysByClaim.has(hash)
+          ) {
+            nonDailyKeysByClaim.set(hash, entry.key);
+          }
+        }
+      }
       // Non-daily writers retain their path-qualified identity unless daily
       // ingestion has already established the canonical claim entry.
       const claimKey =
@@ -244,7 +251,7 @@ export async function recordShortTermRecalls(params: {
       const dailyClaimEntry =
         signalType === "daily" ? undefined : store.entries[buildDailyClaimEntryKey(claimHash)];
       const key =
-        nonDailyEntry?.key ??
+        nonDailyKeysByClaim?.get(claimHash) ??
         dailyClaimEntry?.key ??
         (signalType !== "recall" || store.entries[claimKey] ? claimKey : buildEntryKey(result));
       const existing = store.entries[key];

@@ -9,8 +9,15 @@ export type SnapshotLoaderModule = Pick<
   typeof import("./plugin-metadata-snapshot.js"),
   "resolvePluginMetadataSnapshot" | "loadPluginMetadataSnapshot"
 >;
+export type MetadataPolicyReaders = Pick<
+  typeof import("./manifest-metadata-scan.js"),
+  "listOpenClawPluginManifestMetadata"
+> &
+  Pick<typeof import("../secrets/provider-env-vars.js"), "listKnownProviderAuthEnvVarNamesCore">;
 
-type SnapshotReaderSlot = Partial<CurrentSnapshotModule & SnapshotLoaderModule>;
+type SnapshotReaderSlot = Partial<
+  CurrentSnapshotModule & SnapshotLoaderModule & MetadataPolicyReaders
+>;
 
 const readerLifetime = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginMetadataSnapshotReaderCustody"),
@@ -21,6 +28,8 @@ const readerKeys = [
   "getCurrentPluginMetadataSnapshot",
   "resolvePluginMetadataSnapshot",
   "loadPluginMetadataSnapshot",
+  "listOpenClawPluginManifestMetadata",
+  "listKnownProviderAuthEnvVarNamesCore",
 ] as const satisfies readonly (keyof SnapshotReaderSlot)[];
 
 // globalThis-keyed so a require-loaded second module instance shares the slot.

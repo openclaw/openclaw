@@ -2,6 +2,11 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceGatewayControl,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
@@ -107,6 +112,20 @@ export function emitSideband(socket: FakeSocket, payload: unknown, isBinary = fa
   socket.emit("message", Buffer.from(JSON.stringify(payload)), isBinary);
 }
 
+export function publicTranscript(
+  role: "user" | "assistant",
+  delta: string,
+  start_ms = 0,
+  end_ms = 100,
+) {
+  return {
+    type: `session.${role === "user" ? "input" : "output"}_transcript.delta`,
+    delta,
+    start_ms,
+    end_ms,
+  };
+}
+
 export function createBroker(params?: {
   fetchImpl?: typeof fetch;
   runAgentConsult?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
@@ -139,6 +158,86 @@ export function createBroker(params?: {
     { claimAppend: vi.fn(() => true) },
   );
   return { realtime, sockets, socketRequests, logger, runAgentConsult };
+}
+
+export type TestBroker = ReturnType<typeof createBroker>["realtime"];
+type SessionRequest = Parameters<TestBroker["broker"]["createBrowserSession"]>[0];
+export const AUDIO_ONLY_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+
+export async function reserveSession(
+  realtime: TestBroker,
+  request: SessionRequest,
+  auth: Parameters<TestBroker["broker"]["createBrowserSession"]>[1] = {
+    type: "api-key",
+    token: "platform-key",
+  },
+) {
+  const reservation = await realtime.broker.createBrowserSession(request, auth);
+  if (reservation.transport !== "webrtc") {
+    throw new Error("Expected WebRTC reservation");
+  }
+  return reservation;
+}
+
+type LiveSessionOverrides<T = RealtimeVoiceBrowserSessionCreateRequest> = T extends unknown
+  ? Omit<T, "providerConfig"> & { ownerConnId?: string }
+  : never;
+export function reserveLiveSession(realtime: TestBroker, overrides: LiveSessionOverrides = {}) {
+  return reserveSession(realtime, {
+    providerConfig: {},
+    model: "gpt-live-test-canary",
+    runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+    ...overrides,
+  });
+}
+
+export function reserveGaSession(
+  realtime: TestBroker,
+  createBridge: (params: {
+    apiKey: string;
+    callId: string;
+    onTerminal: () => void;
+  }) => RealtimeVoiceBridge,
+  gatewayControl: RealtimeVoiceGatewayControl = { bindBridge: vi.fn() },
+  ownerConnId?: string,
+) {
+  return reserveSession(realtime, {
+    providerConfig: {},
+    model: "gpt-realtime-2.1",
+    gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
+    gaSideband: { createBridge },
+    clientControl: { owner: "gateway" },
+    gatewayControl,
+    ...(ownerConnId ? { ownerConnId } : {}),
+  });
+}
+
+export async function postOffer(realtime: TestBroker, params: Parameters<typeof createRequest>[0]) {
+  const { response, handling } = startOffer(realtime, params);
+  await handling;
+  return response;
+}
+
+export function startOffer(realtime: TestBroker, params: Parameters<typeof createRequest>[0]) {
+  const response = createResponseHarness();
+  return { response, handling: realtime.handler(createRequest(params), response.res) };
+}
+
+export function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}) {
+  return {
+    connect: vi.fn(async () => undefined),
+    close: vi.fn(),
+    sendAudio: vi.fn(),
+    setMediaTimestamp: vi.fn(),
+    submitToolResult: vi.fn(),
+    acknowledgeMark: vi.fn(),
+    isConnected: vi.fn(() => true),
+    ...overrides,
+  } satisfies RealtimeVoiceBridge;
+}
+
+export function requestTarget(url: string | URL | Request): string {
+  return typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
 }
 
 type DelegationOptions = ConstructorParameters<typeof OpenAIQuicksilverDelegationController>[0];

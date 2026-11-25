@@ -21,10 +21,8 @@ import { loadExecApprovalsReadOnlyAsync } from "openclaw/plugin-sdk/exec-approva
 import { createStageTimingTracker } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
-import {
-  resolveCodexAppServerAuthProfileId,
-  resolveCodexAppServerAuthProfileIdForAgent,
-} from "./auth-profile.js";
+import { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
+import type { CodexAppServerAuthRequirement } from "./auth-types.js";
 import {
   assertCodexSessionRuntimeOwnership,
   resolveCodexBindingAppServerConnection,
@@ -43,6 +41,7 @@ import {
 } from "./config.js";
 import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
+import { createCodexWorkerClientFactory } from "./node-app-server-transport.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
 import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
@@ -65,7 +64,6 @@ import {
   getLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
-import { withCodexAppServerGitConfig } from "./transport-stdio.js";
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
@@ -123,12 +121,27 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       }
     },
   };
-  // Upstream cannot remove registered environments, so node leases own one disposable client.
+  // Each worker duplex owns a disposable native client, never a shared local process.
+  // Strict one-shot runs also need an attempt-owned process: a shared peer can legitimately
+  // keep the cached client alive after this run, which leaves its cleanup receipt unprovable.
+  const workerHostedCloud =
+    pluginConfig.appServer?.workerHostedCloud === true &&
+    isCodexRemoteExecPlacementSandbox(sandbox);
   const attemptClientFactory =
     options.clientFactory ??
-    (isCodexPairedNodeRemoteExecPlacementSandbox(sandbox)
-      ? createIsolatedCodexAppServerClient
-      : getLeasedSharedCodexAppServerClient);
+    (workerHostedCloud && sandbox
+      ? createCodexWorkerClientFactory({
+          runtime: options.runtime,
+          permissionMode: params.permissionMode,
+          sandbox,
+          signal: params.abortSignal ?? new AbortController().signal,
+          assertCurrent: () => assertCurrent(),
+          workspaceReadiness: params.hostCapabilities.workspaceReadiness,
+        })
+      : isCodexPairedNodeRemoteExecPlacementSandbox(sandbox) ||
+          (params.oneShotCliRun === true && params.cleanupBundleMcpOnRunEnd === true)
+        ? createIsolatedCodexAppServerClient
+        : getLeasedSharedCodexAppServerClient);
   preDynamicStartupStages.mark("sandbox");
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
     // Explicit modes replace legacy fields; full also replaces approval-file floors.
@@ -171,6 +184,13 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     preparedEnvironment?.managedLocalIdentity === true ||
     (preparedEnvironment !== undefined &&
       Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
+  const ownsLocalExecution = (appServer: CodexAppServerRuntimeOptions) =>
+    !sandbox?.enabled &&
+    !remoteExec &&
+    appServer.start.transport === "stdio" &&
+    !isCodexAppServerProxyLaunch(appServer.start.args) &&
+    !appServer.remoteWorkspaceRoot;
+  let scratchEnv: Record<string, string> | undefined;
   let shellEnvironment = baseShellEnvironment;
   let shellPathPrepend: readonly string[] | undefined;
   let shellGitConfigParameters: string | undefined;
@@ -181,35 +201,27 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     );
     // Resolve placement before projecting host PATH; socket peers and remote workspaces
     // own their tool lookup even when their control connection runs on this machine.
-    const ownedLocalProcess =
-      !sandbox?.enabled &&
-      !remoteExec &&
-      appServer.start.transport === "stdio" &&
-      !isCodexAppServerProxyLaunch(appServer.start.args) &&
-      !appServer.remoteWorkspaceRoot;
+    const ownedLocalProcess = ownsLocalExecution(appServer);
     const localToolEnv = ownedLocalProcess ? preparedEnvironment?.localToolEnv : undefined;
     shellGitConfigParameters = ownedLocalProcess
       ? preparedEnvironment?.localGitConfigParameters
       : undefined;
     const hasLocalToolEnv = localToolEnv && Object.keys(localToolEnv).length > 0;
     shellPathPrepend = hasLocalToolEnv ? preparedEnvironment?.localToolPathPrepend : undefined;
-    shellEnvironment = hasLocalToolEnv
+    const processEnvironment = hasLocalToolEnv
       ? { ...baseShellEnvironment, ...localToolEnv }
       : baseShellEnvironment;
+    shellEnvironment = ownedLocalProcess
+      ? { ...processEnvironment, ...scratchEnv }
+      : processEnvironment;
     // Tool lookup must not reject native login requests. Codex owns profile and
     // snapshot startup; only the identity restrictions above disable login.
-    const prepared = shellEnvironment
+    return processEnvironment
       ? {
           ...appServer,
-          start: { ...appServer.start, env: { ...appServer.start.env, ...shellEnvironment } },
+          start: { ...appServer.start, env: { ...appServer.start.env, ...processEnvironment } },
         }
       : appServer;
-    return shellGitConfigParameters
-      ? {
-          ...prepared,
-          start: withCodexAppServerGitConfig(prepared.start, shellGitConfigParameters),
-        }
-      : prepared;
   };
   let bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
@@ -263,9 +275,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       bindingIdentity = physicalIdentity;
     }
   }
-  let modelExecution:
-    | ReturnType<NonNullable<typeof params.hostCapabilities.bindModelExecution>>
-    | undefined;
+  let modelExecution: ReturnType<NonNullable<typeof params.hostCapabilities.bindModelExecution>>;
   const assertModelExecutionCurrent = () => modelExecution?.assertCurrent();
   generationAuthorityTransferred = true;
   const {
@@ -300,6 +310,15 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   let startupBinding = admittedBinding;
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
+  const selectedAuthProfileId =
+    params.runtimePlan?.auth.forwardedAuthProfileId ??
+    params.authProfileId ??
+    startupBinding?.authProfileId;
+  // A resolved key can describe Gateway model availability, not worker auth intent.
+  // Worker-owned handoff below never forwards it; explicit account choices still reject.
+  if (workerHostedCloud && (usesSupervisionConnection || selectedAuthProfileId)) {
+    throw new Error("Use worker auth: detach supervision and clear the Gateway auth profile.");
+  }
   if (usesSupervisionConnection && isCodexResponsesOAuthRun(params)) {
     throw new Error(
       "ChatGPT subscription sharing requires an OpenClaw-owned Codex session; detach from native supervision first.",
@@ -334,58 +353,55 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     ).appServer;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
-  const appServerHomeScope = resolveCodexAppServerHomeScope({
-    appServer: pluginConfig.appServer,
-  });
+  const appServerHomeScope = resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer });
+  const nativeCommandAuth = params.runtimePlan?.auth.selectedAuthMode === "native-command";
+  if (nativeCommandAuth && usesSupervisionConnection) {
+    throw new Error("Native command auth requires an OpenClaw-owned Codex session.");
+  }
   const preparedAuthRoute = usesSupervisionConnection
     ? undefined
     : params.runtimePlan?.auth.modelRoute;
-  const startupAuthProfileCandidate = usesSupervisionConnection
-    ? undefined
-    : preparedAuthRoute
-      ? params.runtimePlan?.auth.forwardedAuthProfileId
-      : (params.runtimePlan?.auth.forwardedAuthProfileId ??
-        params.authProfileId ??
-        startupBinding?.authProfileId);
-  const resolvedStartupAuthProfileId = usesSupervisionConnection
-    ? undefined
-    : preparedAuthRoute
-      ? startupAuthProfileCandidate
-      : params.authProfileStore
-        ? resolveCodexAppServerAuthProfileId({
-            authProfileId: startupAuthProfileCandidate,
-            store: params.authProfileStore,
-            config: params.config,
-          })
+  const startupAuthRequirement: CodexAppServerAuthRequirement | undefined = nativeCommandAuth
+    ? "native-command"
+    : preparedAuthRoute?.authRequirement;
+  const nativeAuthOwned = usesSupervisionConnection || workerHostedCloud || nativeCommandAuth;
+  const resolvedStartupAuthProfileId = nativeCommandAuth
+    ? params.authProfileId || params.runtimePlan?.auth.forwardedAuthProfileId
+    : nativeAuthOwned
+      ? undefined
+      : preparedAuthRoute
+        ? params.runtimePlan?.auth.forwardedAuthProfileId
         : await resolveCodexAppServerAuthProfileIdForAgent({
-            authProfileId: startupAuthProfileCandidate,
+            authProfileId: selectedAuthProfileId,
+            authProfileStore: params.authProfileStore,
             agentDir,
             config: params.config,
           });
-  const authHandoff = usesSupervisionConnection
-    ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
-    : await resolveCodexAppServerPreparedAuthHandoff({
-        authRequirement: preparedAuthRoute?.authRequirement,
-        resolvedApiKey: params.resolvedApiKey,
-        authProfileId: resolvedStartupAuthProfileId,
-        authProfileStore: params.authProfileStore,
-        agentDir,
-        homeScope: appServerHomeScope,
-        requirePreparedAuth: isCodexRemoteExecPlacementSandbox(sandbox),
-        config: params.config,
-        subscriptionProfileRequiredError:
-          "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",
-        subscriptionProfileUnusableError: "Prepared Codex subscription auth profile is unusable.",
-      });
+  // Worker hosting keeps all authentication on the worker. Other native-command
+  // placements still use the handoff owner, including its remote-exec refusal.
+  const authHandoff =
+    usesSupervisionConnection || workerHostedCloud
+      ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
+      : await resolveCodexAppServerPreparedAuthHandoff({
+          authRequirement: startupAuthRequirement,
+          resolvedApiKey: params.resolvedApiKey,
+          authProfileId: resolvedStartupAuthProfileId,
+          authProfileStore: params.authProfileStore,
+          agentDir,
+          homeScope: appServerHomeScope,
+          requirePreparedAuth: isCodexRemoteExecPlacementSandbox(sandbox),
+          config: params.config,
+          subscriptionProfileRequiredError:
+            "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",
+          subscriptionProfileUnusableError: "Prepared Codex subscription auth profile is unusable.",
+        });
   const {
     authProfileId: startupAuthProfileId,
     nativeAuthProfile,
     preparedAuth: startupPreparedAuth,
   } = authHandoff;
   const startupClientAuthProfileId =
-    usesSupervisionConnection ||
-    appServerHomeScope === "user" ||
-    startupPreparedAuth?.kind === "api-key"
+    nativeAuthOwned || appServerHomeScope === "user" || startupPreparedAuth?.kind === "api-key"
       ? null
       : startupAuthProfileId;
   const resolveReviewerPolicyContext = (binding: CodexAppServerThreadBinding | undefined) => {
@@ -404,11 +420,14 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     startupBinding,
     reviewerPolicyContext,
   );
-  const effectiveWorkspace = sandbox?.enabled
-    ? sandbox.workspaceAccess === "rw"
-      ? resolvedWorkspace
-      : sandbox.workspaceDir
-    : resolvedWorkspace;
+  const effectiveWorkspace =
+    workerHostedCloud && sandbox
+      ? sandbox.containerWorkdir
+      : sandbox?.enabled
+        ? sandbox.workspaceAccess === "rw"
+          ? resolvedWorkspace
+          : sandbox.workspaceDir
+        : resolvedWorkspace;
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
     throw new Error(
@@ -423,7 +442,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     fallbackCwd: effectiveWorkspace,
   });
   const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : sessionPermissionCwd;
-  if (effectiveWorkspace !== resolvedWorkspace) {
+  if (!workerHostedCloud && effectiveWorkspace !== resolvedWorkspace) {
     await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
   }
   preDynamicStartupStages.mark("effective-workspace");
@@ -458,7 +477,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       env: { ...process.env, ...session.start.env, ...shellEnvironment },
       agentDir,
     });
-    return withPreparedProcessEnv(trusted);
+    return withPreparedProcessEnv(
+      workerHostedCloud && sandbox
+        ? { ...trusted, connectionClass: "remote", remoteWorkspaceRoot: sandbox.containerWorkdir }
+        : trusted,
+    );
   };
   let appServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
   preDynamicStartupStages.mark("app-server-policy");
@@ -506,6 +529,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     execution.assertCurrent();
   };
   try {
+    if (workerHostedCloud) {
+      // Worker initialization can execute native auth before turn-time model selection,
+      // including when Gateway discovery selected an API-key/subscription availability route.
+      bindModelExecution({ provider: params.provider, model: params.modelId });
+    }
     const startupBindingBeforeRotation = startupBinding;
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
       assertCurrent,
@@ -546,13 +574,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     }
     // Only local execution roots address Gateway settings; remote paths belong
     // to their executor. Prepare after permission admission and before tools/startup.
-    if (
-      !sandbox?.enabled &&
-      !remoteExec &&
-      appServer.start.transport === "stdio" &&
-      !isCodexAppServerProxyLaunch(appServer.start.args) &&
-      !appServer.remoteWorkspaceRoot
-    ) {
+    if (ownsLocalExecution(appServer)) {
+      scratchEnv = await params.hostCapabilities.prepareLocalExecScratch?.({
+        cwd: params.sessionRoot ?? effectiveCwd,
+      });
+      shellEnvironment = { ...shellEnvironment, ...scratchEnv };
       params.hostCapabilities.prepareContinuationRetryCount?.({ cwd: effectiveCwd });
     }
     const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
@@ -648,6 +674,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       fastModeAutoProgressState,
       preDynamicStartupStages,
       attemptClientFactory,
+      workerHostedCloud,
+      callerOwnedAttemptClient:
+        workerHostedCloud || attemptClientFactory === createIsolatedCodexAppServerClient,
       runtimeArtifactRequest,
       pluginConfig,
       computerUseConfig,
@@ -669,7 +698,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       isInactiveThreadBootstrapBinding,
       usesSupervisionConnection,
       startupAuthProfileId,
-      startupAuthRequirement: preparedAuthRoute?.authRequirement,
+      startupAuthRequirement,
+      nativeCommandAuth,
       startupPreparedAuth,
       startupClientAuthProfileId,
       effectiveWorkspace,
@@ -686,6 +716,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       mutable,
       initialStartupBindingHadInactiveThreadBootstrap,
       initialInactiveThreadBootstrapBindingForcedFreshStart,
+      // Prompt continuity must see a thread the token fuse rotated away above.
+      initialNativeThreadId: startupBindingBeforeRotation?.threadId,
     };
   } catch (error) {
     // The attempt owns this listener only after connection preparation returns.

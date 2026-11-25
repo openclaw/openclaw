@@ -1,6 +1,14 @@
 import type { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import type { MemoryDatabaseAdmission } from "./manager-database-admission.js";
-import type { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
+import type {
+  MemoryEmbeddingCacheRetireCursor,
+  MemoryEmbeddingCacheRetirement,
+} from "./manager-embedding-cache-retire.js";
+import type {
+  loadMemoryEmbeddingCache,
+  MemoryEmbeddingCacheEvictionPreference,
+} from "./manager-embedding-cache.js";
+import type { MemoryRebuildEmbeddingQuery } from "./manager-rebuild-embeddings.js";
 import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import type { MemoryShadowConnection, MemoryShadowFailure } from "./manager-shadow-task.js";
@@ -26,6 +34,11 @@ export type MemoryPublicationState = {
   extensionPath?: string;
 };
 export type MemoryPublicationFragment = { json: string; last: boolean };
+export type MemoryPublicationSchema = {
+  fts: string | null;
+  paths: string | null;
+  vector: string | null;
+};
 export type MemoryEmbeddingCacheEntry = {
   hash: string;
   embedding: number[];
@@ -36,12 +49,19 @@ export type MemoryEmbeddingCacheHeader = {
   provider: { id: string; model: string };
   providerKey: string;
   maxEntries?: number;
+  unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference;
 };
 export type MemoryEmbeddingCacheMutation =
   | { kind: "upsert"; header: MemoryEmbeddingCacheHeader; entries: MemoryEmbeddingCacheEntry[] }
   | { kind: "clear"; identities: MemoryIndexProviderIdentity[] };
 export type MemoryPublicationResult<T> =
-  | { ok: true; value: T; facts?: MemoryDatabaseFacts; writeToken?: string }
+  | {
+      ok: true;
+      value: T;
+      facts?: MemoryDatabaseFacts;
+      searchSchema?: MemoryPublicationSchema;
+      writeToken?: string;
+    }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
   "database.reset": { input: undefined; output: MemoryPublicationResult<boolean> };
@@ -69,7 +89,7 @@ export type MemoryPublicationOperations = {
   "schema.admit": {
     input: Pick<
       Parameters<typeof ensureMemoryIndexSchema>[0],
-      "cacheEnabled" | "ftsEnabled" | "ftsTokenizer"
+      "cacheEnabled" | "ftsEnabled" | "ftsTokenizer" | "fresh"
     >;
     output: MemoryPublicationResult<
       ReturnType<typeof ensureMemoryIndexSchema> & { admission?: MemoryDatabaseAdmission }
@@ -84,7 +104,10 @@ export type MemoryPublicationOperations = {
     output: ReturnType<typeof loadMemorySourceFileState>;
   };
   "cache.read": {
-    input: Omit<Parameters<typeof loadMemoryEmbeddingCache>[0], "db">;
+    input: Omit<Parameters<typeof loadMemoryEmbeddingCache>[0], "db"> & {
+      cacheEnabled?: boolean;
+      published?: MemoryRebuildEmbeddingQuery;
+    };
     output: ReturnType<typeof loadMemoryEmbeddingCache>;
   };
   "source.hash": {
@@ -95,13 +118,18 @@ export type MemoryPublicationOperations = {
     input: { source: "memory" | "sessions"; path: string };
     output: ReturnType<typeof readMemorySourceChunks>;
   };
-  "session.current": {
-    input: { agentId: string; sessionId: string };
-    output: "current" | "forgotten";
-  };
   "cache.prune": {
-    input: { maxEntries: number };
+    input: {
+      maxEntries: number;
+      unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference;
+      recount?: boolean;
+    };
     output: MemoryPublicationResult<boolean>;
+  };
+  "cache.retire": {
+    input: MemoryEmbeddingCacheRetirement;
+    /** The next page cursor, or null once the fenced rows are exhausted. */
+    output: MemoryPublicationResult<MemoryEmbeddingCacheRetireCursor | null>;
   };
   "cache.stage.start": {
     input: { header: MemoryEmbeddingCacheHeader };
@@ -165,7 +193,7 @@ export type MemoryPublicationOperations = {
       sourceIdentity: MemoryShadowConnection["fileIdentity"];
       metaKey: string;
       expectedRevision: number;
-      sourceHasVectors: boolean;
+      sourceSchema: MemoryPublicationSchema;
       vectorIndexComplete: boolean;
       state: MemoryPublicationState;
     };

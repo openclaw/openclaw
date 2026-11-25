@@ -10,8 +10,8 @@ import {
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
@@ -26,7 +26,9 @@ export async function searchMemoryForCli(
   let readRebuildWarning: () => string | undefined = () => undefined;
   let results: MemorySearchResult[];
   try {
-    readRebuildWarning = captureMemoryRebuildNotice(await readMemorySearchManagerStatus(manager));
+    readRebuildWarning = captureMemoryRebuildNotice(
+      await readMemorySearchManagerStatus(manager, { includeCounts: false }),
+    );
     results = await manager.search(query, {
       maxResults: params.maxResults,
       minScore: params.minScore,
@@ -46,10 +48,10 @@ export async function searchMemoryForCli(
     );
   }
   assertCurrent?.();
-  const status = await readMemorySearchManagerStatus(manager);
+  const status = await readMemorySearchManagerStatus(manager, { includeCounts: false });
   const staleness = resolveMemorySearchStaleness(status, agentId);
   let warning = [staleness?.warning, readRebuildWarning()].filter(Boolean).join(" ");
-  const pluginConfig = asNullableRecord(cfg.plugins?.entries?.["memory-core"]?.config) ?? {};
+  const pluginConfig = resolvePluginConfigObject(cfg, "memory-core") ?? {};
   if (resolveMemoryDreamingConfig({ cfg, pluginConfig }).enabled) {
     const dreaming = resolveMemoryDeepDreamingConfig({ cfg, pluginConfig });
     const record = () =>

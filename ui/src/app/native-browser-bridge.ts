@@ -3,7 +3,10 @@
  * Handler: window.webkit.messageHandlers.openclawBrowser, Promise reply {ok:true,...}
  * or {ok:false,error}. Requests use type: open {tabId,url,sessionKey,activate?}, navigate
  * {tabId,url}, back/forward/reload/stop/close/snapshot/download {tabId}, inspect {tabId,x,y},
- * present {scope,tabId,rect:{x,y,width,height}|null,visible}, release-scope {scope}.
+ * present {scope,tabId,rect:{x,y,width,height}|null,visible}, release-scope {scope},
+ * set-color-scheme {colorScheme: light|dark} (macOS dashboard chrome).
+ * Hosts advertising __OPENCLAW_NATIVE_BROWSER_CUTOUTS__ also accept
+ * overlay-cutouts {cutouts:[{x,y,width,height,radius}]}, in viewport CSS pixels.
  * IDs and scopes are opaque; web-created IDs are `mac-` plus a generated UUID.
  * Open replies include tabId. The host reuses a session's tab at the requested URL or its
  * retained initial-request alias, so the returned ID may differ from the request.
@@ -22,8 +25,9 @@
  * its reply adds cancelled (true when the save panel was dismissed).
  */
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserInspectedNode } from "../components/browser/browser-client.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 
@@ -43,6 +47,7 @@ export type NativeBrowserTab = {
 };
 export type NativeBrowserState = { revision: number; tabs: NativeBrowserTab[] };
 type NativeBrowserRect = { x: number; y: number; width: number; height: number };
+export type NativeBrowserCutout = NativeBrowserRect & { radius: number };
 export type NativeBrowserMessage =
   | { type: "open"; tabId: string; url: string; sessionKey: string; activate?: boolean }
   | { type: "navigate"; tabId: string; url: string }
@@ -58,7 +63,9 @@ export type NativeBrowserMessage =
       rect: NativeBrowserRect | null;
       visible: boolean;
     }
-  | { type: "release-scope"; scope: string };
+  | { type: "release-scope"; scope: string }
+  | { type: "overlay-cutouts"; cutouts: NativeBrowserCutout[] }
+  | { type: "set-color-scheme"; colorScheme: "light" | "dark" };
 export type NativeBrowserReply =
   | {
       ok: true;
@@ -80,6 +87,9 @@ type NativeBrowserWindow = Window & {
   };
 };
 const STATE_EVENT = "openclaw:native-browser-state";
+type StateSubscription = { revision: number; listener: (state: NativeBrowserState) => void };
+type StatePool = { subscribers: Set<StateSubscription>; stop: () => void };
+const statePools = new WeakMap<Window, StatePool>();
 
 function nativeWindow(): NativeBrowserWindow | undefined {
   return typeof window === "undefined" ? undefined : window;
@@ -148,8 +158,7 @@ function isNode(value: unknown): value is BrowserInspectedNode | null {
     (isRecord(value) &&
       typeof value.tag === "string" &&
       typeof value.id === "string" &&
-      Array.isArray(value.classes) &&
-      value.classes.every((entry: unknown) => typeof entry === "string") &&
+      isStringArray(value.classes) &&
       typeof value.role === "string" &&
       typeof value.name === "string" &&
       typeof value.focusable === "boolean" &&
@@ -211,7 +220,10 @@ export async function postNativeBrowserMessage(
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : "Native browser request failed",
+      error:
+        error instanceof Error
+          ? formatUiError(error, "Native browser request failed")
+          : "Native browser request failed",
     };
   }
 }
@@ -228,13 +240,42 @@ export function subscribeNativeBrowserState(
   if (!hasNativeBrowserBridge()) {
     return () => {};
   }
-  let revision = readNativeBrowserState()?.revision ?? -1;
-  const onState = (event: Event) => {
-    const state: unknown = event instanceof CustomEvent ? event.detail : null;
-    if (isState(state) && state.revision > revision) {
-      revision = state.revision;
-      listener(state);
+  let pool = statePools.get(window);
+  if (!pool) {
+    const subscribers = new Set<StateSubscription>();
+    pool = {
+      subscribers,
+      stop: listen(window, STATE_EVENT, (event) => {
+        const state: unknown = event instanceof CustomEvent ? event.detail : null;
+        if (!isState(state)) {
+          return;
+        }
+        const delivery = [...subscribers];
+        for (const subscriber of delivery) {
+          if (!subscribers.has(subscriber) || state.revision <= subscriber.revision) {
+            continue;
+          }
+          subscriber.revision = state.revision;
+          try {
+            subscriber.listener(state);
+          } catch (error) {
+            // Native dispatch isolates listeners; sharing must preserve that boundary.
+            reportError(error);
+          }
+        }
+      }),
+    };
+    statePools.set(window, pool);
+  }
+  const subscription = { revision: readNativeBrowserState()?.revision ?? -1, listener };
+  pool.subscribers.add(subscription);
+  return () => {
+    if (!pool.subscribers.delete(subscription)) {
+      return;
+    }
+    if (pool.subscribers.size === 0) {
+      pool.stop();
+      statePools.delete(window);
     }
   };
-  return listen(window, STATE_EVENT, onState);
 }

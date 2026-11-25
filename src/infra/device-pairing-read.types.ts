@@ -51,6 +51,7 @@ export type DevicePairingCommitReceipt = {
   revision: string;
   changed: DevicePairingBindingFact[];
   tokensReplaced?: { deviceId: string; roles: string[] };
+  retiredNodeToken?: { deviceId: string; expectedToken: string };
   workerEnvironment?: CloudWorkerSetupCompletionPublication;
   nodeApproval?: {
     nodeId: string;

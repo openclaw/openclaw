@@ -2,233 +2,514 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  Errored,
+  lazy,
+  Loading,
   onCleanup,
   onSettled,
   Show,
-  untrack,
 } from "solid-js";
+import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
+import { bootComposerElement, finishBootFrame } from "../../app/boot-composer.ts";
+import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import {
   availableLinkReaders,
   availableLinkPreviewReaders,
 } from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
+import { i18n } from "../../i18n/lib/translate.ts";
+import { isChatControlCommand } from "../../lib/chat/commands.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { cancelLayout, yieldAfterLayout } from "../../lib/layout-frame.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
-import { i18nRevision } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
+import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectTheme } from "../../lib/reactive/theme.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
+import { projectChatFields } from "./chat-field-projection.ts";
+import { chatGoalOperations } from "./chat-goals.ts";
+import {
+  inlineCommandPresentation,
+  type InlineCommandPresentation,
+} from "./chat-inline-command-presentation.ts";
+import { adoptBootComposer } from "./chat-pane-boot-composer.ts";
+import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
-import {
-  ChatProviderReviewDialog,
-  createChatProviderReview,
-  type ChatProviderReviewOwner,
-} from "./chat-provider-review-controller.tsx";
+import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
+import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
+import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
-import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
+import { readChatSessionSnapshot } from "./session-message-cache.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import { waitForPrewarmedChatSnapshot } from "./session-snapshot-store.ts";
+import { splitChatConstruction, yieldChatTask } from "./yield-chat-task.ts";
+
+const ChatComposerCapabilityDialogs = lazy(() => import("./chat-composer-capability-host.tsx"), {
+  export: "ChatComposerCapabilityDialogs",
+});
+
+const ChatProviderReviewHost = lazy(() => import("./chat-provider-review-controller.tsx"), {
+  export: "ChatProviderReviewHost",
+});
 
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
+  for (const owner of [
+    runtime.tasks,
+    runtime.publication,
+    runtime.repository,
+    runtime.headerPresentation,
+    runtime.collaboration,
+    runtime.companionIntents,
+    runtime.presentation,
+    runtime.resetConfirmation,
+    runtime.progressVisibility,
+    runtime.dashboardPresentation,
+    runtime.sessionCreation,
+    runtime.swarm,
+    runtime.boardPresentation,
+    runtime.pendingPanelToggles,
+    runtime.workspaceConflicts,
+    runtime.mobilePresentation,
+  ]) {
+    projectChatFields(owner);
+  }
+  projectChatFields(runtime, [
+    ...chatPanePropertyKeys,
+    "composerCapabilities",
+    "paneWidth",
+    "desktopFocus",
+    "deferredSessionHydration",
+    "dashboardControls",
+    "replyNavigationSessionKey",
+    "replyNavigationId",
+  ]);
   const [ready, setReady] = createSignal(false);
-  const [revision, setRevision] = createSignal(0);
+  let preparedInlineCommands: InlineCommandPresentation | undefined;
+  let preparationError: string | undefined;
   let disposed = false;
-  let publicationQueued = false;
-  let complete: (() => void) | undefined;
-  let previousInputs:
-    | Pick<ChatPaneRuntime, "sessionKey" | "inputRegion" | "draft" | "focusComposer">
-    | undefined;
+  let pendingLayout: Promise<void> | undefined;
+  let pendingCommit: Deferred<boolean> | undefined;
+  let previousFocusComposer: boolean | undefined;
   let focusPending = false;
 
-  function publish() {
-    if (disposed || !publicationQueued) {
-      return;
-    }
-    runtime.refreshBoardSubscriptions();
-    publicationQueued = false;
-    setRevision((value) => value + 1);
-    if (runtime.presented && document.visibilityState !== "hidden") {
-      notifyRenderLifecycleForTest(runtime.element, "invalidate");
-    }
+  function waitForCommit(): Promise<boolean> {
+    return (pendingCommit ??= createDeferredCore<boolean>()).promise;
   }
 
-  runtime.invalidate = () => {
-    if (disposed || !runtime.isConnected) {
-      return;
-    }
-    if (!complete) {
-      runtime.updateComplete = new Promise<boolean>((resolve) => {
-        complete = () => resolve(true);
-      });
-    }
-    if (!publicationQueued) {
-      publicationQueued = true;
-      // Domain mutations stay synchronous; rendering retains its microtask boundary.
-      queueMicrotask(publish);
-    }
+  Object.defineProperty(runtime, "updateComplete", {
+    configurable: true,
+    get: () =>
+      new Promise<boolean>((resolve) => {
+        // Bridge property effects enter the frame before this settled-DOM observation.
+        queueMicrotask(() => onSettled(() => resolve(pendingCommit?.promise ?? true)));
+      }),
+  });
+  runtime.awaitDomCommit = () => {
+    const promise = waitForCommit();
+    queueMicrotask(() =>
+      onSettled(() => {
+        // Explicit DOM tasks may need no new frame. Parked tasks wait for reveal or disposal.
+        if (
+          pendingCommit?.promise === promise &&
+          (disposed ||
+            (!pendingLayout && runtime.presented && runtime.presentation.documentVisible))
+        ) {
+          const finish = pendingCommit;
+          pendingCommit = undefined;
+          finish.resolve(true);
+        }
+      }),
+    );
+    return promise;
   };
 
   onSettled(() => {
-    if (!runtime.isConnected) {
-      runtime.start();
+    const gateway = runtime.context.gateway;
+    const pendingSnapshot = waitForPrewarmedChatSnapshot(
+      resolveChatSnapshotKey(
+        {
+          settings: gateway.connection,
+          client: gateway.snapshot.client,
+          hello: gateway.snapshot.hello,
+          agentsList: runtime.context.agents.state.agentsList,
+        },
+        { sessionKey: runtime.sessionKey },
+      ),
+    );
+    if (!pendingSnapshot && !runtime.context.theme.settings.chatInlineCommands) {
+      setReady(true);
+      return;
     }
-    runtime.invalidate();
-    // Drain startup before mounting children, as the previous pane lifecycle did.
-    publish();
-    setReady(true);
+    const prepare = async () => {
+      await pendingSnapshot;
+      if (runtime.context.theme.settings.chatInlineCommands) {
+        preparedInlineCommands = await inlineCommandPresentation();
+      }
+    };
+    // No live subscription starts until an enabled renderer can consume stdout.
+    void prepare()
+      .catch((error: unknown) => {
+        preparationError = formatUiError(error);
+      })
+      .finally(() => {
+        if (!disposed) {
+          setReady(true);
+        }
+      });
   });
   onCleanup(() => {
     disposed = true;
+    cancelLayout(runtime);
     runtime.dispose();
-    complete?.();
-    complete = undefined;
-    runtime.updateComplete = Promise.resolve(true);
+    pendingCommit?.resolve(true);
+    pendingCommit = undefined;
   });
 
   function prepareRender() {
-    const { sessionKey, inputRegion, draft, focusComposer } = runtime;
-    const next = { sessionKey, inputRegion, draft, focusComposer };
-    const changes = {
-      sessionKey: next.sessionKey !== previousInputs?.sessionKey,
-      inputRegion: next.inputRegion !== previousInputs?.inputRegion,
-      draft: next.draft !== previousInputs?.draft,
-      focusComposer: next.focusComposer !== previousInputs?.focusComposer,
-    };
-    previousInputs = next;
-    focusPending ||= changes.focusComposer;
-    runtime.chatState.prepareRender();
-    runtime.synchronizeInputs(changes);
+    void waitForCommit();
+    focusPending ||= runtime.focusComposer !== previousFocusComposer;
+    previousFocusComposer = runtime.focusComposer;
+    // Other source frames may show a buffered stream before its normal RAF publishes it.
+    runtime.chatState.captureRenderChanges();
+    // Target/activation checks make reconciliation idempotent; apply layout before sampling it.
+    runtime.synchronizeInputs({});
   }
   function commitRender() {
-    const finish = complete;
-    complete = undefined;
-    runtime.updateComplete = Promise.resolve(true);
+    const finish = pendingCommit;
+    pendingCommit = undefined;
     const focus = focusPending;
     focusPending = false;
     runtime.afterRender(focus);
+    adoptBootComposer(runtime);
     runtime.chatState.commitRender();
-    finish?.();
+    if (runtime.ownsRouteComposer && runtime.transcript.isPositionSettled) {
+      finishBootFrame("transcript");
+    }
+    if (runtime.presented && runtime.presentation.documentVisible) {
+      notifyRenderLifecycleForTest(runtime.element, "commit");
+    }
+    finish?.resolve(true);
   }
 
-  function MountedPane() {
-    const context = runtime.context;
-    const gateway = projectGateway(context.gateway);
-    const presented = () => {
-      revision();
-      return runtime.presented;
-    };
-    runtime.mountPanelActions();
-    runtime.mountToolIcons(revision);
-    const progressScope = createMemo(
-      () => {
-        revision();
-        return runtime.readProgressCardScope();
-      },
-      {
-        equals: (a, b) =>
-          a.store === b.store &&
-          a.client === b.client &&
-          a.hello === b.hello &&
-          a.target?.sessionKey === b.target?.sessionKey &&
-          a.target?.agentId === b.target?.agentId,
-      },
-    );
-    // Seed the watch from the same memo identity its first effect will publish.
-    const progress = projectProgressCard(untrack(progressScope));
-    const cacheProgress = () => {
-      const { target, store, options } = runtime.readProgressCardScope();
-      if (target && options.admitAutomaticRead()) {
-        runtime.cacheProgressCard(target, store.get(target));
-      }
-    };
-    // Bind the imperative store watch to the current connection and conversation.
-    createEffect(progressScope, (next) => progress.replaceSource(next));
-    onSettled(() => {
-      // Parking may stop rendering, but reset/delete events must still retire card lifetimes.
-      const stop = progress.subscribe(cacheProgress);
-      cacheProgress();
-      return stop;
-    });
-    const sources = [
-      runtime.context.plugins,
-      runtime.context.navigation,
-      nativeGatewaysCapability(),
-    ].map((source) =>
-      projectSource(source, {
-        read: (capability) => capability,
-        subscribe: (capability, notify) => capability?.subscribe(notify) ?? (() => {}),
-        equality: "revision",
+  function PreparedPane() {
+    // Projections created by start belong to this retained component.
+    if (!runtime.isConnected) {
+      // The ready gate defers connection until settlement; its projections belong to this view.
+      runtime.start(preparedInlineCommands, preparationError);
+    }
+    const initialState = runtime.state;
+    // Freeze admission before yielding: live refill must not turn a cold load warm.
+    const initialCachedSession = Boolean(
+      initialState &&
+      readChatSessionSnapshot(initialState.chatMessagesBySession, initialState, {
+        sessionKey: initialState.sessionKey,
       }),
     );
-    onSettled(() => installChatComposerPickerDismissal(runtime.element.ownerDocument));
-    // Relative labels tick only while this retained pane is presented.
-    const minutePoll = useVisiblePoll(60_000, () => runtime.invalidate());
-    const lifecycle = createSolidRenderLifecycle({
-      host: runtime.element,
-      presented: () => presented() && document.visibilityState !== "hidden",
-      read: () => {
-        revision();
-        progress.read();
-        i18nRevision();
-        sources.forEach((source) => source.read());
-        prepareRender();
-        return runtime.render(() => providerReview);
-      },
+    const splitColdBoot =
+      !initialCachedSession &&
+      !document.documentElement.hasAttribute("data-openclaw-warm-frame") &&
+      bootComposerElement() &&
+      splitChatConstruction;
+    if (runtime.ownsRouteComposer && !initialCachedSession) {
+      finishBootFrame();
+    }
+    // Split localized cached panes too, after their catalogs are ready. Only
+    // document boot has a retained composer; route handoffs stay immediate.
+    if (
+      !splitColdBoot &&
+      (!initialCachedSession || i18n.getLocale() !== "en") &&
+      bootComposerElement()
+    ) {
+      pendingLayout = yieldAfterLayout(runtime);
+    }
+    if (!pendingLayout) {
+      return <PreparedFrame />;
+    }
+    const [mounted, setMounted] = createSignal(false);
+    void waitForCommit();
+    // Mount the pane, composer and Details together after the loading frame.
+    void pendingLayout.then(() => {
+      if (!disposed) {
+        setMounted(true);
+      }
     });
-    const frame = createMemo(() => lifecycle.snapshot());
-    const providerReview: ChatProviderReviewOwner = createChatProviderReview({
-      source: () => frame().providerReviewSource,
-      readState: () => runtime.readProviderReviewState(),
-    });
-    // Commit transcript geometry and control the browser timer after Solid publishes the frame.
-    createEffect(
-      () => ({ frame: frame(), presented: presented() }),
-      (next, previous) => {
-        if (next.frame !== previous?.frame) {
-          commitRender();
+    function PreparedFrame() {
+      pendingLayout = undefined;
+      const context = runtime.context;
+      // The pane retains mobile presentation while its optional host is absent.
+      onSettled(() => runtime.observeMobileViewport());
+      const parentSession = projectOwner(runtime.parentSession, (owner) => owner.read(), Object.is);
+      const transcriptPosition = projectOwner(
+        runtime.transcript,
+        (owner) => owner.isPositionSettled,
+        Object.is,
+      );
+      const repository = createMemo(() => {
+        const target = runtime.repository.target;
+        return target
+          ? projectOwner(target.store, (owner) => owner.get(target.key), Object.is)
+          : undefined;
+      });
+      const publication = createMemo(() => {
+        const binding = runtime.publication.binding;
+        return binding ? projectOwner(binding, (owner) => owner.view()) : undefined;
+      });
+      const gateway = projectGateway(context.gateway);
+      const theme = projectTheme(context.theme);
+      // Startup attaches one host for this mounted pane's lifetime.
+      const state = runtime.state;
+      const realtime = createMemo(() => {
+        const owner = runtime.state?.realtimeTalk;
+        return (
+          owner && {
+            view: projectOwner(
+              owner,
+              (source) => source.snapshot,
+              (previous, next) =>
+                Object.entries(previous).every(
+                  ([key, value]) =>
+                    key === "realtimeTalkConversationState" ||
+                    Object.is(value, Reflect.get(next, key)),
+                ),
+            ),
+            conversation: projectOwner(
+              owner,
+              (source) => source.snapshot.realtimeTalkConversationState.entries,
+              Object.is,
+            ),
+          }
+        );
+      });
+      const readRealtimeTalkConversation = () => realtime()?.conversation.read() ?? [];
+      // Ordinary keystrokes stay in the composer; command intent changes the pane's submit gate.
+      const controlCommand = projectOwner(
+        runtime.chatState.composerDraft,
+        (source) => isChatControlCommand(source.read().draft),
+        Object.is,
+      );
+      const attachments = projectOwner(
+        runtime.chatState.composerDraft,
+        (source) => source.read().attachments,
+        Object.is,
+      );
+      const queuedEdit =
+        state &&
+        projectSource(state, {
+          read: activeQueuedMessageEdit,
+          subscribe: subscribeQueuedMessageEdit,
+          equality: "revision",
+        });
+      const swarm = createMemo(() => {
+        const hydrator = runtime.swarm.hydrator;
+        return hydrator ? projectOwner(hydrator, (owner) => owner) : undefined;
+      });
+      const board = createMemo(() => {
+        const provider = runtime.boardPresentation.provider;
+        return provider
+          ? [
+              projectOwner(provider.snapshot$, (source) => source.value),
+              projectOwner(provider.loadError$, (source) => source.value),
+            ]
+          : [];
+      });
+      runtime.mountPanelActions();
+      runtime.mountToolIcons(() => gateway.read().snapshot);
+      const progressScope = createMemo(
+        () => {
+          gateway.read();
+          return runtime.readProgressCardScope();
+        },
+        {
+          equals: (a, b) =>
+            a.store === b.store &&
+            a.client === b.client &&
+            a.hello === b.hello &&
+            a.target?.sessionKey === b.target?.sessionKey &&
+            a.target?.agentId === b.target?.agentId,
+        },
+      );
+      const progress = projectProgressCard(progressScope);
+      const cacheProgress = () => {
+        const { target, store, options } = runtime.readProgressCardScope();
+        if (target && options.admitAutomaticRead()) {
+          runtime.cacheProgressCard(target, store.get(target));
         }
-        if (next.presented) {
-          minutePoll.start();
-        } else {
-          minutePoll.stop();
-        }
-      },
-    );
-    const sessionKey = () => {
-      frame();
-      return runtime.sessionKey;
-    };
-    const agentId = () => {
-      frame();
-      return runtime.agentId ?? parseAgentSessionKey(runtime.sessionKey)?.agentId;
-    };
-    // Keep this passthrough host cold: the shared hover bootstrap upgrades it on intent.
-    // Importing its renderer here makes the optional runtime a required boot dependency.
-    return (
-      <openclaw-link-reader-hovercard-provider
-        prop:client={
-          gateway.read().snapshot.phase === "connected" ? gateway.read().snapshot.client : null
-        }
-        prop:readers={availableLinkPreviewReaders(gateway.read().snapshot)}
-        prop:claimedReaders={availableLinkReaders(gateway.read().snapshot)}
-        prop:pagePreviewContext={context}
-        prop:agentId={agentId()}
-        prop:sessionKey={sessionKey()}
-      >
-        <PaneLayout layout={frame().layout} />
-        <ChatProviderReviewDialog owner={providerReview} />
-        <Show when={frame().capabilityDialogs}>
-          {(dialogs) => <ChatComposerCapabilityDialogs {...dialogs()} />}
+      };
+      onSettled(() => {
+        // Parking may stop rendering, but reset/delete events must still retire card lifetimes.
+        const stop = progress.subscribe(cacheProgress);
+        cacheProgress();
+        return stop;
+      });
+      const composerCapabilities = createMemo(() => {
+        const owner = runtime.composerCapabilities;
+        return owner && projectOwner(owner, (source) => source);
+      });
+      const sources = [
+        context.plugins,
+        context.agents,
+        context.config,
+        context.overlays,
+        context.navigation,
+        context.placementStartup,
+        context.runtimeConfig,
+        runtime.presence,
+        state && sessionWorkspaceForHost(state),
+        chatInputOwnerForContext(context),
+        runtime.sessionDiscussion,
+        runtime.questionPromptState,
+        state && chatGoalOperations(state),
+        runtime.activeSessionResources,
+        runtime.sessionCompanionThreads,
+        nativeGatewaysCapability(),
+      ].map((source) => source && projectOwner(source, (capability) => capability));
+      onSettled(() => installChatComposerPickerDismissal(runtime.element.ownerDocument));
+      // Relative labels tick only while this retained pane is presented.
+      const [relativeTime, setRelativeTime] = createSignal(Date.now());
+      const minutePoll = useVisiblePoll(60_000, () => setRelativeTime(Date.now()));
+      const catalogPoll = useVisiblePoll(5_000, () => void runtime.pollCatalogSession());
+      const [providerReview, setProviderReview] = createSignal<ChatProviderReviewOwner>();
+      const frame = createParkedProjection(
+        () => {
+          relativeTime();
+          gateway.read();
+          publication()?.read();
+          repository()?.read();
+          parentSession.read();
+          transcriptPosition.read();
+          progress.read();
+          realtime()?.view.read();
+          theme.preferences.read();
+          controlCommand.read();
+          attachments.read();
+          queuedEdit?.read();
+          swarm()?.read();
+          board().forEach((source) => source.read());
+          i18nRevision();
+          sources.forEach((source) => source?.read());
+          composerCapabilities()?.read();
+          prepareRender();
+          return runtime.render(providerReview, readRealtimeTalkConversation);
+        },
+        () => runtime.presented && runtime.presentation.documentVisible,
+      );
+      // Keep an admitted review alive after its row clears or its dialog closes.
+      const reviewVisited = createMemo<boolean>((previous) => {
+        const source = frame().providerReviewSource;
+        return previous || Boolean(source && selectedChatSessionRow(source.state)?.providerReview);
+      });
+      const questions = createComposerQuestions(
+        runtime.presentationId,
+        () => frame().layout?.primary.chat ?? null,
+      );
+      // Only cold boot already exposes a loading frame. Restored panes keep their
+      // synchronous construction even after the warm-frame deadline expires.
+      if (!splitColdBoot) {
+        return <MountedPane />;
+      }
+      const [constructed, setConstructed] = createSignal(false);
+      onSettled(() => {
+        frame();
+        pendingLayout = yieldChatTask().then(() => {
+          pendingLayout = undefined;
+          if (!disposed) {
+            setConstructed(true);
+          }
+        });
+      });
+      return (
+        <Show
+          when={constructed()}
+          fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}
+        >
+          <MountedPane />
         </Show>
-      </openclaw-link-reader-hovercard-provider>
+      );
+      function MountedPane() {
+        // Commit transcript geometry and control the browser timer after Solid publishes the frame.
+        createEffect(
+          () => ({ frame: frame(), presented: runtime.presented }),
+          (next, previous) => {
+            if (next.frame !== previous?.frame) {
+              commitRender();
+            }
+            if (next.presented) {
+              minutePoll.start();
+              catalogPoll.start();
+            } else {
+              minutePoll.stop();
+              catalogPoll.stop();
+            }
+          },
+        );
+        // Keep this passthrough host cold: the shared hover bootstrap upgrades it on intent.
+        // Importing its renderer here makes the optional runtime a required boot dependency.
+        return (
+          <openclaw-link-reader-hovercard-provider
+            data-cached-session={initialCachedSession ? "true" : "false"}
+            prop:client={
+              gateway.read().snapshot.phase === "connected" ? gateway.read().snapshot.client : null
+            }
+            prop:readers={availableLinkPreviewReaders(gateway.read().snapshot)}
+            prop:claimedReaders={availableLinkReaders(gateway.read().snapshot)}
+            prop:pagePreviewContext={context}
+            prop:agentId={runtime.agentId ?? parseAgentSessionKey(runtime.sessionKey)?.agentId}
+            prop:sessionKey={runtime.sessionKey}
+          >
+            <PaneLayout layout={frame().layout} questions={questions} />
+            <Show when={reviewVisited()}>
+              <Errored
+                fallback={(error, reset) => (
+                  <InlineAlert tone="danger" role="alert">
+                    {formatUiError(error())}
+                    <button class="btn btn--sm" type="button" onClick={reset}>
+                      {t("common.retry")}
+                    </button>
+                  </InlineAlert>
+                )}
+              >
+                <Loading>
+                  <ChatProviderReviewHost
+                    source={() => frame().providerReviewSource}
+                    readState={() => runtime.state}
+                    onReady={(owner) => setProviderReview(owner)}
+                  />
+                </Loading>
+              </Errored>
+            </Show>
+            <Show when={frame().capabilityDialogs}>
+              {(dialogs) => (
+                <ChatLazyBoundary>
+                  <ChatComposerCapabilityDialogs {...dialogs()} />
+                </ChatLazyBoundary>
+              )}
+            </Show>
+          </openclaw-link-reader-hovercard-provider>
+        );
+      }
+    }
+
+    return (
+      <Show when={mounted()} fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}>
+        <PreparedFrame />
+      </Show>
     );
   }
 
   return (
-    <Show when={ready()}>
-      <MountedPane />
+    <Show when={ready()} fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}>
+      <PreparedPane />
     </Show>
   );
 }

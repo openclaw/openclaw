@@ -31,18 +31,71 @@ import {
 } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
 import { registerCommandGroups } from "./program/register-command-groups.js";
 import {
   getCliPluginInvocationResources,
   withCliCommandCleanup,
   withCliProcessScope,
+  type CliHarnessCleanup,
 } from "./runtime-cleanup-scope.js";
 import { closeCliResources, getPendingCliDisposers } from "./runtime-cleanup.js";
 
 const fixtureCleanups: Array<() => void> = [];
 const quietLogger = { info() {}, warn() {}, error() {}, debug() {} };
 let sequence = 0;
+
+function withInvocation(
+  run: (resources: CliPluginInvocationResources, cleanup: CliHarnessCleanup) => Promise<void>,
+) {
+  return withCliProcessScope(() =>
+    withCliCommandCleanup(false, async (cleanup) => {
+      const resources = getCliPluginInvocationResources()!;
+      try {
+        await run(resources, cleanup!);
+      } finally {
+        await resources.release();
+      }
+    }),
+  );
+}
+
+const expectClosed = (operation: Promise<unknown>) =>
+  expect(operation).rejects.toThrow("invocation is closed");
+
+function cleanupHarness(id: string, dispose: () => Promise<void>): AgentHarness {
+  return {
+    id,
+    label: id,
+    dispose,
+    supports: () => ({ supported: true }),
+    runAttempt: async () => {
+      throw new Error("cleanup-only fixture");
+    },
+  };
+}
+
+function expectNative(
+  fixture: ReturnType<typeof nativeFixture>,
+  isOpen: boolean,
+  read?: "afterCleanup" | "disposalRead" | "abortRead",
+) {
+  expect(fixture.state).toMatchObject({
+    database: { isOpen },
+    disposals: isOpen ? 0 : 1,
+  });
+  if (read) {
+    expect(fixture.state[read]).toEqual({ value: 42 });
+  }
+}
+
+function checkProvider(providers: ReturnType<typeof resolvePluginProviders>, id: string) {
+  expect(providers).toHaveLength(1);
+  expect(providers[0]?.isCacheTtlEligible?.({ provider: id, modelId: "synthetic-model" })).toBe(
+    true,
+  );
+}
 
 function nativeFixture(
   options: {
@@ -125,14 +178,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };`,
   );
   if (options.sdkProvider) {
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id,
-        providers: [id],
-        configSchema: { type: "object", properties: {}, additionalProperties: false },
-      }),
-    );
+    writeFixtureJsonSync(path.join(plugin.dir, "openclaw.plugin.json"), {
+      id,
+      providers: [id],
+      configSchema: { type: "object", properties: {}, additionalProperties: false },
+    });
   }
   const config = { plugins: { allow: [id], load: { paths: [plugin.dir] } } };
   const env = {
@@ -142,32 +192,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };
   const fixture = {
     id,
-    key,
     state,
     config,
     env,
-    load: async () => {
-      const acquisition = await acquirePluginRegistryForInspection({
-        config,
-        env,
-        logger: quietLogger,
-      });
-      try {
-        expect(
-          acquisition.registry.plugins,
-          JSON.stringify(acquisition.registry.diagnostics),
-        ).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ id, source: plugin.file, status: "loaded" }),
-          ]),
-        );
-        expect(state.database).toBeDefined();
-        return acquisition;
-      } catch (error) {
-        await acquisition.release().catch(() => {});
-        throw error;
-      }
-    },
+    resolveProviders: () => resolvePluginProviders({ config, env, onlyPluginIds: [id] }),
+    load: () => acquirePluginRegistryForInspection({ config, env, logger: quietLogger }),
   };
   fixtureCleanups.push(() => {
     state.resume.resolve();
@@ -192,46 +221,42 @@ afterAll(cleanupPluginLoaderFixturesForTest);
 
 it("joins the shipped eager registrar's real promise before releasing its native resource", async () => {
   const fixture = nativeFixture();
-  await withCliProcessScope(() =>
-    withCliCommandCleanup(false, async () => {
-      const resources = getCliPluginInvocationResources()!;
-      const registry = await resources.acquire(fixture.load);
-      const program = new Command();
-      const registered = registerCommandGroups(
-        program,
-        [
-          {
-            placeholders: [{ name: "native", description: "Native" }],
-            register: (target) =>
-              registry.cliRegistrars[0]!.register({
-                program: target,
-                parentPath: [],
-                config: fixture.config,
-                logger: quietLogger,
-              }),
-          },
-        ],
-        { eager: true, primary: null, registerPrimaryOnly: false },
-      );
-      expect(registered).toBeUndefined();
-      await fixture.state.entered.promise;
-      let released = false;
-      const closing = resources.release().then(() => {
-        released = true;
-      });
-      try {
-        await expect(resources.run(() => undefined)).rejects.toThrow("invocation is closed");
-        expect(released).toBe(false);
-        expect(fixture.state.database!.isOpen).toBe(true);
-      } finally {
-        fixture.state.resume.resolve();
-        await closing;
-      }
-      expect(program.commands.map((command) => command.name())).toEqual(["native"]);
-      expect(fixture.state.disposals).toBe(1);
-      expect(fixture.state.database!.isOpen).toBe(false);
-    }),
-  );
+  await withInvocation(async (resources) => {
+    const registry = await resources.acquire(fixture.load);
+    const program = new Command();
+    const registered = registerCommandGroups(
+      program,
+      [
+        {
+          placeholders: [{ name: "native", description: "Native" }],
+          register: (target) =>
+            registry.cliRegistrars[0]!.register({
+              program: target,
+              parentPath: [],
+              config: fixture.config,
+              logger: quietLogger,
+            }),
+        },
+      ],
+      { eager: true, primary: null, registerPrimaryOnly: false },
+    );
+    expect(registered).toBeUndefined();
+    await fixture.state.entered.promise;
+    let released = false;
+    const closing = resources.release().then(() => {
+      released = true;
+    });
+    try {
+      await expectClosed(resources.run(() => undefined));
+      expect(released).toBe(false);
+      expect(fixture.state.database!.isOpen).toBe(true);
+    } finally {
+      fixture.state.resume.resolve();
+      await closing;
+    }
+    expect(program.commands.map((command) => command.name())).toEqual(["native"]);
+    expectNative(fixture, false);
+  });
 });
 
 it("keeps closed command admission separate from retained cleanup authority", async () => {
@@ -244,15 +269,11 @@ it("keeps closed command admission separate from retained cleanup authority", as
   const release = vi.fn(async () => {});
   resources.beginClose();
   try {
-    await expect(resources.acquire(load)).rejects.toThrow("invocation is closed");
-    await expect(foreign.track(() => resources.acquire(load))).rejects.toThrow(
-      "invocation is closed",
-    );
+    await expectClosed(resources.acquire(load));
+    await expectClosed(foreign.track(() => resources.acquire(load)));
     await resources.runCleanup(async () => {
-      await expect(runOutsideAsyncWorkScope(() => resources.acquire(load))).rejects.toThrow(
-        "invocation is closed",
-      );
-      await expect(resources.run(command)).rejects.toThrow("invocation is closed");
+      await expectClosed(runOutsideAsyncWorkScope(() => resources.acquire(load)));
+      await expectClosed(resources.run(command));
       expect(() => resources.adopt({ release })).toThrow("invocation is closed");
       resources.register(command);
       await expect(resources.waitForRegistrations()).rejects.toThrow(
@@ -294,16 +315,14 @@ it("joins cleanup-held acquisition and its sibling work before native disposal",
   try {
     await awaitGateBeforeSettlement(loadReady.promise, cleanup, "cleanup acquisition was refused");
     closing = resources.release();
-    expect(fixture.state.database!.isOpen).toBe(true);
-    expect(fixture.state.disposals).toBe(0);
+    expectNative(fixture, true);
     finishLoad.resolve();
     await awaitGateBeforeSettlement(
       cleanupReady.promise,
       cleanup,
       "late cleanup acquisition was refused",
     );
-    expect(fixture.state.database!.isOpen).toBe(true);
-    expect(fixture.state.disposals).toBe(0);
+    expectNative(fixture, true);
   } finally {
     finishLoad.resolve();
     finishCleanup.resolve();
@@ -312,9 +331,7 @@ it("joins cleanup-held acquisition and its sibling work before native disposal",
   }
   await expect(cleanup).resolves.toBeUndefined();
   await expect(closing).resolves.toBeUndefined();
-  expect(fixture.state.afterCleanup).toEqual({ value: 42 });
-  expect(fixture.state.disposals).toBe(1);
-  expect(fixture.state.database!.isOpen).toBe(false);
+  expectNative(fixture, false, "afterCleanup");
 });
 
 it("seals acquisition before physical disposal even inside retained cleanup", async () => {
@@ -335,7 +352,7 @@ it("seals acquisition before physical disposal even inside retained cleanup", as
     await resources.runCleanup(async () => {
       // A repeated close cannot reopen admission after the disposal snapshot was taken.
       resources.beginClose();
-      await expect(resources.acquire(load)).rejects.toThrow("invocation is closed");
+      await expectClosed(resources.acquire(load));
     });
     expect(load).not.toHaveBeenCalled();
   } finally {
@@ -343,7 +360,7 @@ it("seals acquisition before physical disposal even inside retained cleanup", as
     await closing;
   }
   resources.beginClose();
-  await expect(resources.acquire(load)).rejects.toThrow("invocation is closed");
+  await expectClosed(resources.acquire(load));
   expect(load).not.toHaveBeenCalled();
   expect(release).toHaveBeenCalledOnce();
 });
@@ -355,51 +372,27 @@ it("retains CLI SDK providers through their actual local Gateway context", async
   const fixture = nativeFixture({ sdkProvider: true });
   const foreign = new LegacyPluginSdkResourceHost();
   try {
-    await withCliProcessScope(() =>
-      withCliCommandCleanup(false, async () => {
-        const resources = getCliPluginInvocationResources()!;
-        const registry = await resources.acquire(fixture.load);
-        const resolveProviders = () =>
-          resolvePluginProviders({
-            config: fixture.config,
-            env: fixture.env,
-            onlyPluginIds: [fixture.id],
-          });
-        try {
-          const captured = await resources.run(() =>
-            withPluginRuntimeRegistryScope(registry, () =>
-              withLocalGatewayRequestScope(
-                { deps: {}, getRuntimeConfig: () => fixture.config },
-                () => {
-                  const scope = getPluginRuntimeGatewayRequestScope();
-                  if (!scope) {
-                    throw new Error("The local Gateway must retain its request scope");
-                  }
-                  return { scope, providers: resolveProviders() };
-                },
-              ),
-            ),
-          );
-          expect(captured.providers).toHaveLength(1);
-          expect(
-            captured.providers[0]?.isCacheTtlEligible?.({
-              provider: fixture.id,
-              modelId: "synthetic-model",
-            }),
-          ).toBe(true);
-          await resources.release();
-          expect(fixture.state.disposals).toBe(1);
-          expect(fixture.state.database?.isOpen).toBe(false);
-          expect(() =>
-            foreign.run(() =>
-              withPluginRuntimeGatewayRequestScope(captured.scope, resolveProviders),
-            ),
-          ).toThrow("SDK resource host is closed");
-        } finally {
-          await resources.release();
-        }
-      }),
-    );
+    await withInvocation(async (resources) => {
+      const registry = await resources.acquire(fixture.load);
+      const resolveProviders = fixture.resolveProviders;
+      const captured = await resources.run(() =>
+        withPluginRuntimeRegistryScope(registry, () =>
+          withLocalGatewayRequestScope({ deps: {}, getRuntimeConfig: () => fixture.config }, () => {
+            const scope = getPluginRuntimeGatewayRequestScope();
+            if (!scope) {
+              throw new Error("The local Gateway must retain its request scope");
+            }
+            return { scope, providers: resolveProviders() };
+          }),
+        ),
+      );
+      checkProvider(captured.providers, fixture.id);
+      await resources.release();
+      expectNative(fixture, false);
+      expect(() =>
+        foreign.run(() => withPluginRuntimeGatewayRequestScope(captured.scope, resolveProviders)),
+      ).toThrow("SDK resource host is closed");
+    });
   } finally {
     await foreign.close();
     await state.cleanup();
@@ -410,115 +403,75 @@ it.each(["returned", "cooperating"] as const)(
   "keeps native SDK provider resources through %s cleanup work after the five-second grace",
   async (mode) => {
     const fixture = nativeFixture({ sdkProvider: true });
-    await withCliProcessScope(() =>
-      withCliCommandCleanup(false, async (cleanup) => {
-        const resources = getCliPluginInvocationResources()!;
-        const registry = await resources.acquire(fixture.load);
-        // Terminal cleanup consumes an admitted handle; it cannot acquire a retired provider.
-        const providers = withPluginRuntimeRegistryScope(registry, () =>
-          resolvePluginProviders({
-            config: fixture.config,
-            env: fixture.env,
-            onlyPluginIds: [fixture.id],
-          }),
-        );
-        const entered = createDeferredCore();
-        const resume = createDeferredCore();
-        let descendant: Promise<void> | undefined;
-        const actualCleanup = async () => {
-          entered.resolve();
-          await resume.promise;
-          expect(providers).toHaveLength(1);
-          expect(
-            providers[0]!.isCacheTtlEligible?.({
-              provider: fixture.id,
-              modelId: "synthetic-model",
-            }),
-          ).toBe(true);
-          fixture.state.afterCleanup = fixture.state.database!.prepare("SELECT 42 AS value").get();
-        };
-        const dispose = async () => {
-          descendant = trackAsyncWork(actualCleanup);
-          if (mode === "returned") {
-            await descendant;
-          }
-        };
-        const harness: AgentHarness = {
-          id: "native-cleanup",
-          label: "Native cleanup",
-          supports: () => ({ supported: true }),
-          runAttempt: async () => {
-            throw new Error("cleanup-only fixture");
-          },
-          dispose,
-        };
-        withPluginRegistrationContext(registry, fixture.id, () => registerAgentHarness(harness));
-        withPluginRuntimeRegistryScope(registry, () => getRegisteredAgentHarness(harness.id));
-        vi.useFakeTimers();
-        const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
-        const closing = closeCliResources(cleanup);
-        let release: Promise<void> | undefined;
-        try {
-          await entered.promise;
-          await vi.advanceTimersByTimeAsync(5_000);
-          await closing;
-          if (mode === "returned") {
-            expect(getPendingCliDisposers()).toContain("agent-harness/native-cleanup");
-            expect(stderr).toHaveBeenCalledWith(expect.stringContaining("native-cleanup"));
-          } else {
-            // A completed disposer wrapper is not evidence that its admitted descendant finished.
-            expect(getPendingCliDisposers()).not.toContain("agent-harness/native-cleanup");
-          }
-          release = resources.release();
-          await vi.advanceTimersByTimeAsync(0);
-          expect(fixture.state.database!.isOpen).toBe(true);
-          expect(fixture.state.disposals).toBe(0);
-        } finally {
-          // Native worker shutdown joins through setImmediate; fake timers must end first.
-          vi.useRealTimers();
-          resume.resolve();
-          await Promise.allSettled([closing, descendant]);
-          await (release ?? resources.release());
+    await withInvocation(async (resources, cleanup) => {
+      const registry = await resources.acquire(fixture.load);
+      // Terminal cleanup consumes an admitted handle; it cannot acquire a retired provider.
+      const providers = withPluginRuntimeRegistryScope(registry, fixture.resolveProviders);
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      let descendant: Promise<void> | undefined;
+      const actualCleanup = async () => {
+        entered.resolve();
+        await resume.promise;
+        checkProvider(providers, fixture.id);
+        fixture.state.afterCleanup = fixture.state.database!.prepare("SELECT 42 AS value").get();
+      };
+      const dispose = async () => {
+        descendant = trackAsyncWork(actualCleanup);
+        if (mode === "returned") {
+          await descendant;
         }
-        await expect(descendant).resolves.toBeUndefined();
-        expect(fixture.state.afterCleanup).toEqual({ value: 42 });
-        expect(fixture.state.disposals).toBe(1);
-        expect(getPendingCliDisposers()).not.toContain("agent-harness/native-cleanup");
-      }),
-    );
+      };
+      const harness = cleanupHarness("native-cleanup", dispose);
+      withPluginRegistrationContext(registry, fixture.id, () => registerAgentHarness(harness));
+      withPluginRuntimeRegistryScope(registry, () => getRegisteredAgentHarness(harness.id));
+      vi.useFakeTimers();
+      const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+      const closing = closeCliResources(cleanup);
+      let release: Promise<void> | undefined;
+      try {
+        await entered.promise;
+        await vi.advanceTimersByTimeAsync(5_000);
+        await closing;
+        if (mode === "returned") {
+          expect(getPendingCliDisposers()).toContain("agent-harness/native-cleanup");
+          expect(stderr).toHaveBeenCalledWith(expect.stringContaining("native-cleanup"));
+        } else {
+          // A completed disposer wrapper is not evidence that its admitted descendant finished.
+          expect(getPendingCliDisposers()).not.toContain("agent-harness/native-cleanup");
+        }
+        release = resources.release();
+        await vi.advanceTimersByTimeAsync(0);
+        expectNative(fixture, true);
+      } finally {
+        // Native worker shutdown joins through setImmediate; fake timers must end first.
+        vi.useRealTimers();
+        resume.resolve();
+        await Promise.allSettled([closing, descendant]);
+        await (release ?? resources.release());
+      }
+      await expect(descendant).resolves.toBeUndefined();
+      expect(fixture.state.afterCleanup).toEqual({ value: 42 });
+      expect(fixture.state.disposals).toBe(1);
+      expect(getPendingCliDisposers()).not.toContain("agent-harness/native-cleanup");
+    });
   },
 );
 
 it("releases the first native acquisition even when it is created only during cleanup", async () => {
   const fixture = nativeFixture();
-  await withCliProcessScope(() =>
-    withCliCommandCleanup(false, async (cleanup) => {
-      // The invocation captures its owner before any registry or command preparation exists.
-      const resources = cleanup?.pluginResources;
-      const dispose = async () => {
-        await getCliPluginInvocationResources()!.acquire(fixture.load);
-        fixture.state.afterCleanup = fixture.state.database!.prepare("SELECT 42 AS value").get();
-      };
-      const harness: AgentHarness = {
-        id: "late-native-cleanup",
-        label: "Late native cleanup",
-        supports: () => ({ supported: true }),
-        runAttempt: async () => {
-          throw new Error("cleanup-only fixture");
-        },
-        dispose,
-      };
-      cleanup!.harnesses.set(harness, dispose);
-      try {
-        await closeCliResources(cleanup);
-      } finally {
-        await resources?.release();
-      }
-      expect(fixture.state.afterCleanup).toEqual({ value: 42 });
-      expect(fixture.state.disposals).toBe(1);
-      expect(fixture.state.database!.isOpen).toBe(false);
-    }),
-  );
+  await withInvocation(async (resources, cleanup) => {
+    // The invocation captures its owner before any registry or command preparation exists.
+    const dispose = async () => {
+      await getCliPluginInvocationResources()!.acquire(fixture.load);
+      fixture.state.afterCleanup = fixture.state.database!.prepare("SELECT 42 AS value").get();
+    };
+    const harness = cleanupHarness("late-native-cleanup", dispose);
+    cleanup.harnesses.set(harness, dispose);
+    await closeCliResources(cleanup);
+    await resources.release();
+    expectNative(fixture, false, "afterCleanup");
+  });
 });
 
 it("attempts independent resource releases and retains cleanup failures", async () => {
@@ -546,16 +499,14 @@ it("leaves standalone command programs with their caller after registration retu
   fixture.state.resume.resolve();
   const program = new Command();
   const configPath = path.join(fixture.env.HOME, "openclaw.json");
-  fs.writeFileSync(configPath, JSON.stringify(fixture.config));
+  writeFixtureJsonSync(configPath, fixture.config);
   await withEnvAsync({ ...fixture.env, OPENCLAW_CONFIG_PATH: configPath }, () =>
     registerPluginCliCommandsFromValidatedConfig(program, fixture.env),
   );
   expect(getCliPluginInvocationResources()).toBeUndefined();
   expect(program.commands.map((command) => command.name())).toEqual(["native"]);
   await program.parseAsync(["node", "fixture", "native"]);
-  expect(fixture.state.afterCleanup).toEqual({ value: 42 });
-  expect(fixture.state.disposals).toBe(0);
-  expect(fixture.state.database!.isOpen).toBe(true);
+  expectNative(fixture, true, "afterCleanup");
 });
 
 it.each(["async-context", "work-tracker"] as const)(
@@ -564,25 +515,8 @@ it.each(["async-context", "work-tracker"] as const)(
     const fixture = nativeFixture({ capturedDisposal });
     const resources = new CliPluginInvocationResources();
     await resources.acquire(fixture.load);
-    let failure: unknown;
-    try {
-      await resources.release();
-    } catch (error) {
-      failure = error;
-    }
-    expect(
-      {
-        nativeRead: fixture.state.disposalRead,
-        disposals: fixture.state.disposals,
-        open: fixture.state.database!.isOpen,
-      },
-      JSON.stringify(failure, ["message", "errors", "cause"]),
-    ).toEqual({
-      nativeRead: { value: 42 },
-      disposals: 1,
-      open: false,
-    });
-    expect(failure).toBeUndefined();
+    await expect(resources.release()).resolves.toBeUndefined();
+    expectNative(fixture, false, "disposalRead");
   },
 );
 
@@ -592,7 +526,5 @@ it("joins queued abort cleanup before starting native resource disposal", async 
   await resources.acquire(fixture.load);
   await resources.release();
   await expect(fixture.state.abortCleanup).resolves.toBeUndefined();
-  expect(fixture.state.abortRead).toEqual({ value: 42 });
-  expect(fixture.state.disposals).toBe(1);
-  expect(fixture.state.database!.isOpen).toBe(false);
+  expectNative(fixture, false, "abortRead");
 });

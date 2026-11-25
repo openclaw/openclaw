@@ -1,6 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
-import { API } from "typescript/unstable/sync";
+import { API } from "typescript/sync";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   auditCanonicalCoercionExports,
@@ -13,6 +11,7 @@ import {
   type CoercionHelperDeclaration,
 } from "../../scripts/check-coercion-helper-declarations.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const parser = new API();
 afterAll(() => parser.close());
@@ -214,18 +213,10 @@ describe("coercion helper declaration AST guard", () => {
 
   it("scans a temporary repository and reports sorted, owner-specific diagnostics", async () => {
     const repoRoot = tempDirs.make("coercion-helper-guard-");
-    fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
-    fs.mkdirSync(path.join(repoRoot, "extensions", "demo"), { recursive: true });
-    fs.mkdirSync(path.join(repoRoot, "config"), { recursive: true });
-    fs.writeFileSync(path.join(repoRoot, "src", "z.ts"), "class Owner { readString() {} }\n");
-    fs.writeFileSync(
-      path.join(repoRoot, "extensions", "demo", "a.ts"),
-      "const asRecord = () => ({});\n",
-    );
-    fs.writeFileSync(
-      path.join(repoRoot, "config", "root.ts"),
-      "class Config { normalizeOptionalString() {} }\n",
-    );
+    const fixture = fixtureFiles(repoRoot);
+    fixture.write("src/z.ts", "class Owner { readString() {} }\n");
+    fixture.write("extensions/demo/a.ts", "const asRecord = () => ({});\n");
+    fixture.write("config/root.ts", "class Config { normalizeOptionalString() {} }\n");
     const stdout: string[] = [];
     const stderr: string[] = [];
     expect(

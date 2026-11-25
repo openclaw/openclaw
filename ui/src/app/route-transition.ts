@@ -7,6 +7,7 @@ import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 
 type RouteTransitionOptions = {
   document: Document;
+  getOutlet: () => ControlUiReadinessOutlet | undefined;
   from: RouteId | undefined;
   navigate: () => Promise<void>;
   prefersReducedMotion: boolean;
@@ -24,8 +25,13 @@ const SESSION_ROUTE_ENTER_OPTIONS: KeyframeAnimationOptions = {
   easing: "cubic-bezier(0.16, 1, 0.3, 1)",
 };
 
-function waitForChatRouteReady(document: Document) {
-  if (document.querySelector(".agent-chat__composer-combobox")) {
+// Route transitions observe Chat's nodes across page lifetimes; they do not render those nodes.
+function waitForChatRouteReady(document: Document, outlet: ControlUiReadinessOutlet | undefined) {
+  if (
+    outlet
+      ?.renderedElements?.("openclaw-chat-pane")
+      .some((pane) => pane.active && pane.composerReady)
+  ) {
     return { cancel: () => undefined, ready: Promise.resolve() };
   }
   const { promise: ready, resolve } = createDeferredCore();
@@ -35,10 +41,16 @@ function waitForChatRouteReady(document: Document) {
   };
 }
 
-async function navigateAndAnimate(options: RouteTransitionOptions) {
-  const { document, navigate, prefersReducedMotion, router, signal, to } = options;
-  const outlet = document.querySelector<ControlUiReadinessOutlet>("openclaw-router-outlet");
-  const chatReady = waitForChatRouteReady(document);
+export async function navigateWithRouteTransition(options: RouteTransitionOptions): Promise<void> {
+  const { document, from, navigate, prefersReducedMotion, router, signal, to } = options;
+  if (from !== "new-session" || to !== "chat") {
+    return navigate();
+  }
+
+  // Navigation commits the URL while the outlet keeps the submitted prompt live.
+  // Only the entrance animation waits for the rendered chat composer.
+  const outlet = options.getOutlet();
+  const chatReady = waitForChatRouteReady(document, outlet);
   let canceled = false;
   let animation: Animation | undefined;
   const { promise: cancellation, resolve: resolveCanceled } = createDeferredCore();
@@ -86,15 +98,4 @@ async function navigateAndAnimate(options: RouteTransitionOptions) {
     stopAbort?.();
     chatReady.cancel();
   }
-}
-
-export async function navigateWithRouteTransition(options: RouteTransitionOptions): Promise<void> {
-  const { from, navigate, to } = options;
-  if (from !== "new-session" || to !== "chat") {
-    return navigate();
-  }
-
-  // Navigation commits the URL while the outlet keeps the submitted prompt live.
-  // Only the entrance animation waits for the rendered chat composer.
-  return navigateAndAnimate(options);
 }

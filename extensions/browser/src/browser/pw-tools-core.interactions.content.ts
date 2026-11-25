@@ -13,7 +13,11 @@ import {
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
   EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
 } from "./constants.js";
-import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
+import { normalizeBrowserWaitFunctionSource } from "./evaluate-source.js";
+import {
+  evaluateBrowserWaitPredicate,
+  type BrowserWaitPredicateState,
+} from "./page-function-runtime.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   ensurePageState,
@@ -24,20 +28,17 @@ import {
 import {
   assertInteractionCurrent,
   awaitActionWithAbort,
-  awaitNavigationGuardedInteraction,
-  createAbortPromiseWithListener,
   type GuardedInteractionOptions,
   type InteractionTargetOptions,
-  interactionNavigationPolicy,
   reconcileRemoteDialogAfterActionSettled,
   runCancellablePageInteraction,
+  runGuardedPageInteraction,
   throwIfInteractionAborted,
 } from "./pw-tools-core.interactions.navigation.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 import { runPageEmulationTransition } from "./pw-tools-core.state.js";
 import {
   ANNOTATION_MAX_LABELS_DEFAULT,
-  type AnnotationItem,
   buildOverlayClearScript,
   buildOverlayInjectionScript,
   type CoordinateSpace,
@@ -105,46 +106,6 @@ async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { 
   );
 }
 
-type BrowserWaitPredicateState = {
-  document: unknown;
-  pending?: boolean;
-  predicate?: () => unknown;
-  settled?: { kind: "value"; value: unknown } | { error: unknown; kind: "error" };
-};
-
-function createBrowserWaitPredicate(source: string): (state: BrowserWaitPredicateState) => boolean {
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- compile only; Playwright runs it in-page
-  return new Function(
-    "state",
-    `
-      if (state.document !== this.document) throw "Wait predicate document changed";
-      state.predicate ??= (${source});
-      var settled = state.settled;
-      if (settled) {
-        delete state.settled;
-        if (settled.kind === "error") throw settled.error;
-        if (!!settled.value) return true;
-      }
-      if (state.pending) return false;
-      var predicate = state.predicate;
-      var value = predicate();
-      if (!value || typeof value.then !== "function") return !!value;
-      state.pending = true;
-      value.then(
-        function(resolved) {
-          state.settled = { kind: "value", value: resolved };
-          delete state.pending;
-        },
-        function(error) {
-          state.settled = { error: error, kind: "error" };
-          delete state.pending;
-        }
-      );
-      return false;
-    `,
-  ) as (state: BrowserWaitPredicateState) => boolean;
-}
-
 export async function waitForViaPlaywright(
   opts: GuardedInteractionOptions & {
     timeMs?: number;
@@ -160,12 +121,10 @@ export async function waitForViaPlaywright(
   const page = await getPageForTargetId(opts);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
   const fn = opts.fn;
-  const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
-  const predicate = fn ? createBrowserWaitPredicate(predicateSource) : undefined;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
+  const predicateSource = fn ? normalizeBrowserWaitFunctionSource(fn) : "";
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   const waitForStep = async <T>(stepPromise: Promise<T>) => {
-    await awaitActionWithAbort(stepPromise, abortPromise, reconcileRemoteDialog);
+    await awaitActionWithAbort(stepPromise, opts.signal, reconcileRemoteDialog);
   };
   const waitForSettledStep = async <T>(stepPromise: Promise<T>) => {
     await stepPromise;
@@ -212,13 +171,16 @@ export async function waitForViaPlaywright(
         }
         throwIfInteractionAborted(opts.signal);
         await waitFor(
-          page.waitForFunction(
-            predicate!,
-            {
-              document: documentHandle,
-            } satisfies BrowserWaitPredicateState,
-            { timeout },
-          ),
+          page
+            .waitForFunction(
+              evaluateBrowserWaitPredicate,
+              {
+                document: documentHandle,
+                source: predicateSource,
+              } satisfies BrowserWaitPredicateState,
+              { timeout },
+            )
+            .then((result) => result.dispose()),
         );
       } finally {
         await documentHandle.dispose();
@@ -226,32 +188,16 @@ export async function waitForViaPlaywright(
     }
   };
 
-  try {
-    // Playwright exposes no per-wait cancellation; retiring the shared
-    // connection would disrupt sibling tabs. Only executable waits need the
-    // request guard, which must own the full sequence before their predicate.
-    // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
-    // this guard owns navigation during the action, not jobs trusted JS schedules later.
-    if (!fn) {
-      await runWaitSequence(waitForStep);
-      return;
-    }
-    await awaitNavigationGuardedInteraction(
-      {
-        action: async () => await runWaitSequence(waitForSettledStep),
-        cdpUrl: opts.cdpUrl,
-        page,
-        ...interactionNavigationPolicy(opts),
-        targetId: opts.targetId,
-        assertCurrent: opts.assertCurrent,
-      },
-      abortPromise,
-      opts.signal,
-      reconcileRemoteDialog,
-    );
-  } finally {
-    cleanup();
+  // Playwright exposes no per-wait cancellation; retiring the shared
+  // connection would disrupt sibling tabs. Only executable waits need the
+  // request guard, which must own the full sequence before their predicate.
+  // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
+  // this guard owns navigation during the action, not jobs trusted JS schedules later.
+  if (!fn) {
+    await runWaitSequence(waitForStep);
+    return;
   }
+  await runGuardedPageInteraction(page, opts, () => runWaitSequence(waitForSettledStep));
 }
 
 type ScreenshotOptions = {
@@ -259,6 +205,8 @@ type ScreenshotOptions = {
   type?: "png" | "jpeg";
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Effective launch mode recorded on the owned Chrome process, when known. */
+  headless?: boolean;
 };
 
 async function runScreenshotOperation<T>(
@@ -288,6 +236,26 @@ function screenshotLocator(page: Page, ref?: string, element?: string): Locator 
   return ref ? refLocator(page, ref) : element ? page.locator(element).first() : undefined;
 }
 
+async function renderHiddenTab(page: Page): Promise<() => Promise<void>> {
+  const session = await page
+    .context()
+    .newCDPSession(page)
+    .catch(() => undefined);
+  if (!session) {
+    return async () => {};
+  }
+  session.on("Page.screencastFrame", ({ sessionId }) => {
+    void session.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
+  });
+  await session
+    .send("Page.startScreencast", { format: "jpeg", quality: 1, maxWidth: 1, maxHeight: 1 })
+    .catch(() => {});
+  return async () => {
+    await session.send("Page.stopScreencast").catch(() => {});
+    await session.detach().catch(() => {});
+  };
+}
+
 async function capturePageScreenshot(
   page: Page,
   opts: ScreenshotOptions,
@@ -296,6 +264,12 @@ async function capturePageScreenshot(
   opts.signal?.throwIfAborted();
   if (locator && opts.fullPage) {
     throw new Error("fullPage is not supported for element screenshots");
+  }
+  // Background tabs never produce a frame, so the native capture would never settle
+  // and keep this page's transition queue busy. Headless Chrome activates the tab, as
+  // the raw CDP path does; headed Chrome keeps the user's tab (#134400), see below.
+  if (opts.headless !== false) {
+    await page.bringToFront().catch(() => {});
   }
   const type = opts.type ?? "png";
   const emulation = ensurePageState(page).emulation;
@@ -307,6 +281,9 @@ async function capturePageScreenshot(
   // Resolve a fixed handle with a bounded wait: an unbounded Locator screenshot
   // could keep retrying a missing selector after the caller has already timed out.
   const element = await locator?.elementHandle({ timeout: preparation.timeout });
+  // A DevTools screencast makes Chromium render the hidden tab for this capture
+  // without activating it, so the user's visible tab and focus never change.
+  const stopRendering = opts.headless === false ? await renderHiddenTab(page) : undefined;
   try {
     await element?.scrollIntoViewIfNeeded(preparation);
     opts.signal?.throwIfAborted();
@@ -369,7 +346,11 @@ async function capturePageScreenshot(
         });
       }
     } finally {
-      await element?.dispose();
+      try {
+        await element?.dispose();
+      } finally {
+        await stopRendering?.();
+      }
     }
   }
 }
@@ -392,7 +373,6 @@ export async function takeScreenshotViaPlaywright(
 type LabeledScreenshotOptions = InteractionTargetOptions &
   ScreenshotOptions & {
     refs?: Record<string, { role: string; name?: string; nth?: number }>;
-    maxLabels?: number;
     ref?: string;
     element?: string;
   };
@@ -404,21 +384,8 @@ export async function screenshotWithLabelsViaPlaywright(opts: LabeledScreenshotO
   );
 }
 
-async function screenshotWithLabelsOnPage(
-  page: Page,
-  opts: LabeledScreenshotOptions,
-): Promise<{
-  buffer: Buffer;
-  labels: number;
-  skipped: number;
-  annotations: AnnotationItem[];
-}> {
+async function screenshotWithLabelsOnPage(page: Page, opts: LabeledScreenshotOptions) {
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const maxLabels =
-    typeof opts.maxLabels === "number" && Number.isFinite(opts.maxLabels)
-      ? Math.max(1, Math.floor(opts.maxLabels))
-      : ANNOTATION_MAX_LABELS_DEFAULT;
-
   const refKey = normalizeOptionalString(opts.ref);
   const elementSelector = normalizeOptionalString(opts.element);
   const locator = screenshotLocator(page, refKey, elementSelector);
@@ -481,7 +448,7 @@ async function screenshotWithLabelsOnPage(
     }
     const target = refLocator(page, ref);
     // Full-page tail refs cannot contribute annotations after the label budget fills.
-    if (space === "fullpage" && inputs.length >= maxLabels) {
+    if (space === "fullpage" && inputs.length >= ANNOTATION_MAX_LABELS_DEFAULT) {
       skippedRefs += 1;
       continue;
     }
@@ -510,7 +477,6 @@ async function screenshotWithLabelsOnPage(
     scroll: origin,
     viewport: view,
     elementRect,
-    maxLabels,
   });
 
   try {

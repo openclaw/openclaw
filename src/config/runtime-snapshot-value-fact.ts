@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { isDeeplyFrozenPlainData, isPlainData } from "../shared/immutable-data.js";
+import { configPathAffectsReader, projectConfigReadDependencies } from "./read-dependencies.js";
 import {
   cloneConfigWithResolutionFacts,
   serializeConfigResolutionFacts,
@@ -28,12 +29,6 @@ export function hashRuntimeConfigValue(value: OpenClawConfig): string {
     immutableConfigHashes.set(value, fingerprint);
   }
   return fingerprint;
-}
-
-export function hashRuntimeConfigPreparation(config: OpenClawConfig): string {
-  return sha256Base64Url(
-    stableConfigStringify({ config, facts: serializeConfigResolutionFacts(config) }),
-  );
 }
 
 // A detached publication value proves reuse across mutable clones without trusting their identity.
@@ -72,16 +67,6 @@ export function matchesRuntimeConfigValueFact(
     : hashRuntimeConfigValue(config) === fact.fingerprint;
 }
 
-export function matchesRuntimeConfigPublicationFact(
-  config: OpenClawConfig,
-  fact: RuntimeConfigValueFact,
-): boolean {
-  return (
-    matchesRuntimeConfigValueFact(config, fact) &&
-    isDeepStrictEqual(serializeConfigResolutionFacts(config), fact.facts)
-  );
-}
-
 export function matchesRuntimeSourceConfigValueFact(
   config: OpenClawConfig,
   fact: RuntimeConfigValueFact,
@@ -98,11 +83,12 @@ export function matchesRuntimeSourceConfigValueFact(
 }
 
 export function hashModelConfig(config: OpenClawConfig, sourceConfig: OpenClawConfig): string {
-  const project = (value: OpenClawConfig) => {
-    const { ui: _ui, meta, ...rest } = value;
-    const { lastTouchedVersion: _lastTouchedVersion, ...modelMeta } = meta ?? {};
-    return { config: { ...rest, meta: modelMeta }, facts: serializeConfigResolutionFacts(value) };
-  };
+  const project = (value: OpenClawConfig) => ({
+    config: projectConfigReadDependencies(value, "metadata"),
+    facts: serializeConfigResolutionFacts(value, (path) =>
+      configPathAffectsReader(path, "metadata"),
+    ),
+  });
   return sha256Base64Url(
     stableConfigStringify({ runtime: project(config), source: project(sourceConfig) }),
   );

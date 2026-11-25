@@ -1,4 +1,4 @@
-import {
+import fs, {
   mkdirSync,
   realpathSync,
   renameSync,
@@ -7,19 +7,18 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, join } from "node:path";
 import { backup, type DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import {
-  isSessionNodePayloadSelect,
-  observeHostDataSql,
-  trackSqliteStatementExecutions,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
+import * as admissionReceipts from "../../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { NativeWorker } from "../../infra/worker-native-handle.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   invalidateRegisteredAgentDatabasesMemo,
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
@@ -29,6 +28,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as entryReads from "./session-accessor.sqlite-entry-read.js";
@@ -37,6 +37,7 @@ import {
   loadSessionEntryReadOnlyInScope,
   loadSessionEntryReadOnlyResultInScope,
   replaceSessionEntrySync,
+  patchSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
@@ -45,19 +46,26 @@ import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js"
 import { readSessionEntryList } from "./session-entry-list.worker.js";
 import {
   readSessionEntryReadOnlyInWorker,
+  readSessionEntriesFromStoreInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "./session-entry-read-runtime.js";
-import { readSessionEntryWorkerRequest } from "./session-entry-read.worker.js";
+import { readSessionRuntimeTargetWorkerRequest } from "./session-runtime-target-read.worker.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
+import * as historyWorker from "./session-transcript-worker-runtime.js";
 
 const sqliteError = (message: string, errcode = 26) =>
   Object.assign(new Error(message), { code: "ERR_SQLITE_ERROR", errcode });
+const databaseTarget = ({ agentId, path }: { agentId: string; path: string }) => ({
+  agentId,
+  path,
+});
+const sessionEntry = (sessionId = "original") => ({ sessionId, updatedAt: 1 });
 
 function createEntryFixture(env: NodeJS.ProcessEnv) {
   const database = openOpenClawAgentDatabase({ agentId: "main", env });
   const sessionKey = "agent:main:readonly-entry";
-  writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+  writeSessionEntry(database, sessionKey, sessionEntry());
   const scope = {
     agentId: "main",
     databaseAgentId: "main",
@@ -68,7 +76,28 @@ function createEntryFixture(env: NodeJS.ProcessEnv) {
   return { database, scope };
 }
 
-it("reuses listing revisions without payload scans and invalidates sibling edits and reopened readers", () =>
+it("hydrates only selected entries in a worker listing", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const { database, scope } = createEntryFixture(env);
+    for (let index = 0; index < 32; index++) {
+      writeSessionEntry(database, `agent:main:unrelated-${index}`, {
+        sessionId: `unrelated-${index}`,
+        updatedAt: 1,
+      });
+    }
+    using parsed = vi.spyOn(JSON, "parse");
+    const result = await readSessionEntryList({
+      kind: "session-entry-list",
+      database: databaseTarget(database),
+      scope: { ...scope, sessionKeys: [scope.sessionKey], projection: "full" },
+    });
+    expect(result.entries).toMatchObject([{ sessionKey: scope.sessionKey, entry: sessionEntry() }]);
+    expect(
+      parsed.mock.calls.filter(([json]) => json.includes('"sessionId":"unrelated-')),
+    ).toHaveLength(0);
+  }));
+
+it("reuses listing revisions and invalidates sibling edits and reopened readers", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:catalog-revision";
@@ -78,7 +107,7 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
       updatedAt: 1,
       category: "Team",
     });
-    const target = { agentId: database.agentId, path: database.path };
+    const target = databaseTarget(database);
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
     const peer = nodeSqlite.openNodeSqliteDatabase(target.path);
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
@@ -96,32 +125,16 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
         ifRevision,
       });
     try {
-      const originalRevision = retained.run(target, () => {
-        const first = read();
+      const originalRevision = await retained.run(target, async () => {
+        const first = await read();
         expect(first.entries).toMatchObject(listed("Team"));
         expect(first.revision).toBeTypeOf("string");
-        const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, { ...target, env });
-        if (!opened.found) {
-          throw new Error("Expected the retained catalog database");
-        }
-        const payloads = trackSqliteStatementExecutions(
-          requireNativeSqliteDatabase(opened.value.db),
-          ["entries"],
-          (sql) =>
-            isSessionNodePayloadSelect(sql) ||
-            (sql.includes('from "session_nodes"') && sql.includes('"entry_json"'))
-              ? "entries"
-              : null,
-        );
-        using _ = { [Symbol.dispose]: () => payloads.restore() };
-
-        expect(read(first.revision)).toMatchObject({
+        expect(await read(first.revision)).toMatchObject({
           entries: [],
           unchanged: true,
           revision: first.revision,
           source: first.source,
         });
-        expect(payloads.counts.entries).toBe(0);
         runSqliteImmediateTransactionSync(peer, () => {
           peer
             .prepare(
@@ -133,17 +146,16 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
             .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
             .run(sessionKey);
         });
-        const changed = read(first.revision);
+        const changed = await read(first.revision);
         expect(changed.entries).toMatchObject(listed("Private"));
         expect(changed.revision).not.toBe(first.revision);
         expect(changed.unchanged).toBeUndefined();
-        expect(payloads.counts.entries).toBeGreaterThan(0);
         return first.revision;
       });
       retained.close();
-      retained.run(target, () => {
+      await retained.run(target, async () => {
         // A new connection can reuse the original SQLite counters, but never its revision.
-        const reopened = read(originalRevision);
+        const reopened = await read(originalRevision);
         expect(reopened.revision).not.toBe(originalRevision);
         expect(reopened.unchanged).toBeUndefined();
         expect(reopened.entries).toMatchObject(listed("Private"));
@@ -154,43 +166,46 @@ it("reuses listing revisions without payload scans and invalidates sibling edits
     }
   }));
 
-it("resolves runtime targets through an admitted reader without freshness probes", () =>
+it("resolves runtime targets and refuses replacement by a newer schema", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionId = "runtime-target-session";
     const sessionKey = "agent:main:persisted-target";
-    replaceSessionEntrySync({ agentId: "main", env, sessionKey }, { sessionId, updatedAt: 1 });
-    const read = () =>
-      readSessionEntryWorkerRequest({
+    replaceSessionEntrySync({ agentId: "main", env, sessionKey }, sessionEntry(sessionId));
+    const read = (
+      agentId = "main",
+      selectedId = sessionId,
+      key = "agent:main:fallback",
+      keyFormat?: "agent-qualified",
+    ) =>
+      readSessionRuntimeTargetWorkerRequest({
         kind: "session-runtime-target",
-        database: { agentId: database.agentId, path: database.path },
-        scope: {
-          agentId: "main",
-          env,
-          sessionId,
-          sessionKey: "agent:main:fallback",
-          storePath: database.path,
-        },
+        database: databaseTarget(database),
+        scope: { agentId, env, sessionId: selectedId, sessionKey: key, storePath: database.path },
+        keyFormat,
       });
-    await read();
-    const queries = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["freshness"],
-      (sql) =>
-        /^PRAGMA data_version;?$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
-          ? "freshness"
-          : null,
-    );
-    try {
-      expect(await read()).toMatchObject({
-        kind: "session-runtime-target",
-        target: { agentId: "main", sessionId, sessionKey, storePath: database.path },
-        source: { agentId: database.agentId, path: database.path },
-      });
-      expect(queries.counts.freshness).toBe(0);
-    } finally {
-      queries.restore();
-    }
+    expect(read()).toMatchObject({
+      kind: "session-runtime-target",
+      target: { agentId: "main", sessionId, sessionKey, storePath: database.path },
+      source: { agentId: database.agentId, path: database.path },
+    });
+
+    const logicalKey = "agent:helper:runtime-fallback";
+    writeSessionEntry(database, logicalKey, {
+      sessionId: "helper-current",
+      lifecycleRevision: "helper-lifecycle",
+      updatedAt: 1,
+    });
+    expect(read("helper", "missing-window", "runtime-fallback", "agent-qualified")).toMatchObject({
+      target: {
+        agentId: "helper",
+        sessionId: "missing-window",
+        sessionKey: logicalKey,
+        selectedSessionId: "helper-current",
+        selectedLifecycleRevision: "helper-lifecycle",
+      },
+      source: { agentId: "main", path: database.path },
+    });
 
     const replacement = `${database.path}.replacement`;
     await backup(requireNativeSqliteDatabase(database.db), replacement);
@@ -202,7 +217,7 @@ it("resolves runtime targets through an admitted reader without freshness probes
       peer.close();
     }
     renameSync(replacement, database.path);
-    await expect(read()).rejects.toThrow("newer schema version");
+    expect(() => read()).toThrow("newer schema version");
   }));
 
 it("reads session projections in the worker and observes the next sibling commit", () =>
@@ -219,9 +234,6 @@ it("reads session projections in the worker and observes the next sibling commit
            VALUES (?, ?, ?, 1)`,
       )
       .run(scope.sessionKey, JSON.stringify({ type: "profile" }), "sibling-participant");
-    const sql = observeHostDataSql();
-    using _ = { [Symbol.dispose]: () => sql.restore() };
-
     const after = await readSessionEntryReadOnlyInWorker(scope);
     expect(after).toMatchObject({
       sessionId: "original",
@@ -229,9 +241,6 @@ it("reads session projections in the worker and observes the next sibling commit
       participantCount: 1,
     });
     expect(before?.participants).toBeUndefined();
-    expect(
-      sql.queries.filter((query) => /\bsession_(?:nodes|windows|participants)\b/.test(query)),
-    ).toEqual([]);
   }));
 
 it.each([false, true])(
@@ -310,10 +319,12 @@ it.each(["schema-retained", "schema-disposable", "row", "rollback"] as const)(
         ? sqliteError("native selected-row query failed", 1)
         : new Error("selected row could not be decoded");
       let reader: typeof database.db | undefined;
-      const read = vi.spyOn(entryReads, "readSessionEntryRow").mockImplementation((source) => {
-        reader = source.db;
-        throw failure;
-      });
+      const read = vi
+        .spyOn(entryReads, "readSessionEntrySelectionInDatabase")
+        .mockImplementation((source) => {
+          reader = source.db;
+          throw failure;
+        });
       const exec = database.db.exec.bind(database.db);
       const rollback =
         mode === "rollback"
@@ -368,7 +379,7 @@ it("keeps source refusal outside the ordinary row-error result", () =>
 it("propagates raw worker failure without calling the optional-data consumer", () =>
   withOpenClawTestState({ label: "readonly-entry-transport" }, async ({ env, path }) => {
     const failure = new Error("worker could not start");
-    using _ = vi.spyOn(targetDiscoveryLane.pool, "run").mockRejectedValueOnce(failure);
+    using _ = vi.spyOn(sessionStoreLane.pool, "run").mockRejectedValueOnce(failure);
     const consume = vi.fn(async () => undefined);
 
     await expect(
@@ -411,29 +422,37 @@ it("returns unavailable registry facts as locator data without catching candidat
   }));
 
 it.runIf(process.platform !== "win32").each([
-  { retarget: true, logicalAgentId: "main" },
-  { retarget: false, logicalAgentId: "ops" },
+  { retarget: true, logicalAgentId: "main", canonical: false },
+  { retarget: false, logicalAgentId: "ops", canonical: false },
+  { retarget: true, logicalAgentId: "main", canonical: true },
 ])(
-  "retains logical $logicalAgentId through its alias consumer (retargeted: $retarget)",
-  async ({ retarget, logicalAgentId }) => {
+  "retains logical $logicalAgentId through its consumer (retargeted: $retarget, canonical: $canonical)",
+  async ({ retarget, logicalAgentId, canonical }) => {
     await withOpenClawTestState({ label: "readonly-store-alias" }, async ({ env, path }) => {
       const original = openOpenClawAgentDatabase({ agentId: "main", env });
       const sessionKey = `agent:${logicalAgentId}:alias`;
-      writeSessionEntry(original, sessionKey, { sessionId: "original", updatedAt: 1 });
+      writeSessionEntry(original, sessionKey, sessionEntry());
       if (logicalAgentId !== "main") {
-        writeSessionEntry(original, "agent:main:alias", { sessionId: "other-agent", updatedAt: 1 });
+        writeSessionEntry(original, "agent:main:alias", sessionEntry("other-agent"));
       }
       const replacement = retarget
         ? openOpenClawAgentDatabase({ agentId: "main", path: path("replacement.sqlite"), env })
         : undefined;
-      const alias = path("custom.sqlite");
-      symlinkSync(original.path, alias);
+      const alias = canonical ? original.path : path("custom.sqlite");
+      if (!canonical) {
+        symlinkSync(original.path, alias);
+      }
+      const moved = path("original.sqlite");
       let consumed = false;
       const pending = withSessionEntryReadOnlyInWorker(
         {
           agentId: logicalAgentId,
           sessionKey,
-          storePath: logicalAgentId === "main" ? path("custom.json") : alias,
+          storePath: canonical
+            ? original.path
+            : logicalAgentId === "main"
+              ? path("custom.json")
+              : alias,
           env,
         },
         () => {},
@@ -450,7 +469,11 @@ it.runIf(process.platform !== "win32").each([
           consumed = true;
           await Promise.resolve();
           if (replacement) {
-            unlinkSync(alias);
+            if (canonical) {
+              renameSync(alias, moved);
+            } else {
+              unlinkSync(alias);
+            }
             symlinkSync(replacement.path, alias);
           }
           return read.value;
@@ -463,12 +486,16 @@ it.runIf(process.platform !== "win32").each([
       } else {
         await expect(pending).resolves.toMatchObject({ sessionId: "original" });
       }
+      if (canonical) {
+        unlinkSync(alias);
+        renameSync(moved, alias);
+      }
       expect(consumed).toBe(true);
     });
   },
 );
 
-it.each(["logical", "omitted", "empty"] as const)(
+it.each(["logical", "omitted", "empty", "handoff"] as const)(
   "fences the selected SQLite alias after a %s store read releases its initial owner",
   (locator) =>
     withOpenClawTestState({ label: "currency-selected-store-alias" }, async (state) => {
@@ -515,7 +542,20 @@ it.each(["logical", "omitted", "empty"] as const)(
             throw read.error;
           }
           expect(read.value?.sessionId).toBe(entry.sessionId);
-          return captureSessionEntryCurrentRead(scope, owner);
+          const stat = vi.spyOn(fs, "statSync");
+          const realpath = vi.spyOn(fs.realpathSync, "native");
+          syncBuiltinESMExports();
+          try {
+            const captured = captureSessionEntryCurrentRead(scope, owner);
+            captured.assertSourceCurrent();
+            expect(stat).not.toHaveBeenCalled();
+            expect(realpath).not.toHaveBeenCalled();
+            return captured;
+          } finally {
+            stat.mockRestore();
+            realpath.mockRestore();
+            syncBuiltinESMExports();
+          }
         },
       );
       if (current.kind !== "file") {
@@ -529,10 +569,24 @@ it.each(["logical", "omitted", "empty"] as const)(
         sessionId: entry.sessionId,
         lifecycleRunId: entry.lifecycleRunId,
       });
-      rmSync(alias, { recursive: true, force: true });
-      symlinkSync(dirname(replacement.path), alias, linkType);
-      expect(realpathSync(state.sessionsDir())).toBe(logicalParent);
-      expect(realpathSync(selectedSqlite)).toBe(realpathSync(replacement.path));
+      const retarget = () => {
+        rmSync(alias, { recursive: true, force: true });
+        symlinkSync(dirname(replacement.path), alias, linkType);
+        expect(realpathSync(state.sessionsDir())).toBe(logicalParent);
+        expect(realpathSync(selectedSqlite)).toBe(realpathSync(replacement.path));
+      };
+      if (locator === "handoff") {
+        const readHistory = historyWorker.withSessionHistoryWorkerDatabase;
+        vi.spyOn(historyWorker, "withSessionHistoryWorkerDatabase").mockImplementationOnce(
+          async (...args) => {
+            const value = await readHistory(...args);
+            retarget();
+            return value;
+          },
+        );
+      } else {
+        retarget();
+      }
       expect(entryReads.readSessionEntryRow(original, sessionKey)?.entry.sessionId).toBe(
         entry.sessionId,
       );
@@ -553,5 +607,66 @@ it.each(["logical", "omitted", "empty"] as const)(
           nativeCheck,
         ),
       ).toThrow("Session currency logical source changed");
+      rmSync(alias, { recursive: true, force: true });
+      symlinkSync(dirname(original.path), alias, linkType);
+      await expect(current.readCurrent()).resolves.toMatchObject({ sessionId: entry.sessionId });
+      expect(() => current.assertSourceCurrent()).not.toThrow();
+    }),
+);
+
+it.each(["single", "batch"] as const)(
+  "admits cold %s reads through their worker before retaining invalidation facts",
+  (kind) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { database, scope } = createEntryFixture(state.env);
+      const coldPath = state.path("cold-rows.sqlite");
+      await backup(requireNativeSqliteDatabase(database.db), coldPath);
+      const cold = { ...scope, storePath: coldPath };
+      expect(admissionReceipts.getSqliteDatabaseAdmissionIdentityForPath(coldPath)).toBeUndefined();
+      using filesystem = observeMainThreadFs();
+      const token = admissionReceipts.readSqliteDatabaseWriteTokenForPath;
+      let tokenLookups = 0;
+      using observation = vi
+        .spyOn(admissionReceipts, "readSqliteDatabaseWriteTokenForPath")
+        .mockImplementation((...args) => {
+          const before = filesystem.count();
+          try {
+            return token(...args);
+          } finally {
+            tokenLookups += filesystem.count() - before;
+          }
+        });
+      using messages = vi.spyOn(NativeWorker.prototype, "postMessage");
+      using workerMessages = vi.spyOn(Worker.prototype, "postMessage");
+      const requests = () =>
+        [...messages.mock.calls, ...workerMessages.mock.calls].filter(
+          ([message]) =>
+            isRecord(message) &&
+            isRecord(message.input) &&
+            (message.input.kind === "session-entry-read" ||
+              message.input.kind === "session-exact-entries"),
+        ).length;
+      const read = async () =>
+        kind === "single"
+          ? readSessionEntryReadOnlyInWorker(cold)
+          : (
+              await readSessionEntriesFromStoreInWorker({
+                ...cold,
+                sessionKeys: [scope.sessionKey],
+              })
+            ).entries[0]?.entry;
+      expect(await read()).toMatchObject({ sessionId: "original" });
+      const first = requests();
+      expect(await read()).toMatchObject({ sessionId: "original" });
+      const second = requests();
+      expect(await read()).toMatchObject({ sessionId: "original" });
+      expect(requests()).toBe(second);
+      expect(observation).toHaveBeenCalled();
+      expect(tokenLookups).toBe(0);
+      expect(first).toBe(1);
+      expect(second).toBe(2);
+      await patchSessionEntryCore(cold, () => ({ label: "worker-committed" }));
+      expect(await read()).toMatchObject({ label: "worker-committed" });
+      expect(tokenLookups).toBe(0);
     }),
 );

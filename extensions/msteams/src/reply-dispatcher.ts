@@ -9,6 +9,9 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { renderPresentationForDelivery } from "openclaw/plugin-sdk/interactive-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -36,6 +39,7 @@ import {
   sendMSTeamsMessages,
 } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import { MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
@@ -62,6 +66,8 @@ export function createMSTeamsReplyDispatcher(params: {
     cfg: params.cfg,
     resolveChannelLimitMb: () => msteamsCfg.mediaMaxMb,
   });
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
+  const mediaAccess = resolveOutboundMediaAccessForConfig(params.cfg);
   const feedbackLoopEnabled = msteamsCfg.feedbackEnabled !== false;
   const conversationType = normalizeOptionalLowercaseString(
     params.conversationRef.conversation?.conversationType,
@@ -273,6 +279,8 @@ export function createMSTeamsReplyDispatcher(params: {
             tokenProvider: params.tokenProvider,
             sharePointSiteId: params.sharePointSiteId,
             mediaMaxBytes,
+            mediaAccess,
+            mediaLocalRoots,
             feedbackLoopEnabled,
             serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
           });
@@ -338,7 +346,23 @@ export function createMSTeamsReplyDispatcher(params: {
       if (pendingSettlement) {
         await pendingSettlement;
       }
-      const preparedPayload = streamController.preparePayload(payload);
+      let resolvedPayload = payload;
+      if (payload.presentation) {
+        // Resolve fallback prose before streaming; retain native blocks for later rendering.
+        let nativePayload: ReplyPayload | undefined;
+        const fallbackPayload = await renderPresentationForDelivery(
+          {
+            presentationCapabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
+            renderPresentation: (adapted) => {
+              nativePayload = adapted;
+              return adapted;
+            },
+          },
+          payload,
+        );
+        resolvedPayload = nativePayload ?? fallbackPayload;
+      }
+      const preparedPayload = streamController.preparePayload(resolvedPayload);
       const native = streamController.claimNativeDelivery();
       if (preparedPayload && !native && findPendingNativeDelivery()) {
         // Close the earlier native segment before later blocks can overtake

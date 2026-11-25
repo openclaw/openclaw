@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { resolveGitHubHost, resolveGitHubApiBaseUrl } from "../agents/github-host-runtime.js";
 import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
@@ -30,10 +30,6 @@ export type FactoryGitHubProofVerdict = FactoryGitHubProofClaim & {
   profileId: string;
 };
 
-export function factoryGitHubRequestDigest(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
 /** Capture only handshake-authenticated Factory identity, never a request field. */
 export function factoryGitHubClientProof(input: {
   client: GatewayClient | null | undefined;
@@ -44,25 +40,31 @@ export function factoryGitHubClientProof(input: {
   const actorId = client?.authenticatedFactoryGitHubAccountId;
   const profileId = client?.authenticatedUserProfile?.profileId;
   const principal = `github:${resolveGitHubHost()}:${actorId}`;
+  if (
+    client?.connect.role !== "operator" ||
+    (!client.connect.scopes?.includes("operator.write") &&
+      !client.connect.scopes?.includes("operator.admin") &&
+      !client.connect.scopes?.includes("operator.read")) ||
+    client.internal?.authenticatedOperator !== true
+  ) {
+    throw new Error("Factory GitHub requires an authenticated operator connection.");
+  }
   const assertCurrent = () => {
     input.assertCurrent();
     if (
       client?.invalidated ||
-      client?.connect.role !== "operator" ||
-      (!client.connect.scopes?.includes("operator.write") &&
-        !client.connect.scopes?.includes("operator.admin") &&
-        !client.connect.scopes?.includes("operator.read")) ||
-      !client.connId ||
+      !client?.connId ||
       client.connectionSignal?.aborted ||
-      client.internal?.authenticatedOperator !== true ||
-      client.internal.syntheticClient ||
-      client.internal.agentRuntimeIdentity ||
-      client.internal.agentToolCaller ||
+      client.internal?.syntheticClient ||
+      client.internal?.agentRuntimeIdentity ||
+      client.internal?.agentToolCaller ||
       client.authenticatedUserId !== principal ||
       client.authenticatedFactoryGitHubAccountId !== actorId ||
       client.authenticatedUserProfile?.profileId !== profileId
     ) {
-      throw new Error("Factory GitHub caller authority changed.");
+      throw new Error(
+        "Factory GitHub caller connection or identity changed. Reconnect and try again.",
+      );
     }
   };
   assertCurrent();
@@ -159,7 +161,6 @@ export function redeemFactoryGitHubProof(proof: string): FactoryGitHubProofVerdi
 /** Retain original caller, profile bindings and issuer through one broker-owned operation. */
 export async function withFactoryGitHubProof<T>(
   input: {
-    env?: NodeJS.ProcessEnv;
     actorId: number;
     profileId: string;
     claim: FactoryGitHubProofClaim;
@@ -199,7 +200,7 @@ export async function withFactoryGitHubProof<T>(
       assertCurrent,
     });
     const env = {
-      ...(input.env ?? process.env),
+      ...process.env,
       GH_TOKEN: undefined,
       GH_ENTERPRISE_TOKEN: undefined,
       GITHUB_TOKEN: undefined,

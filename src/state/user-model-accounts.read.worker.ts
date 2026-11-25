@@ -45,9 +45,7 @@ export function readUserModelAccountCommand(
   if (command.type === "userModelAccounts.links") {
     return {
       type: command.type,
-      links: runSqliteDeferredTransactionSync(db, () =>
-        listUserProfileAuthLinksInDatabase(db, command.profileId),
-      ),
+      links: listUserProfileAuthLinksInDatabase(db, command.profileId),
     };
   }
   return {

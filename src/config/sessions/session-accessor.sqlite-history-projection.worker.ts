@@ -18,7 +18,7 @@ import {
 } from "./session-accessor.sqlite-projection-read.js";
 import { prepareSessionTranscriptProjectionAppend } from "./session-transcript-projection-append.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { transcriptEventResetNavigationSql } from "./transcript-payload.js";
+import { transcriptEventResetNavigationSql, transcriptPredicateSql } from "./transcript-payload.js";
 
 type CachedHistoryProjection = {
   generation: string;
@@ -72,15 +72,15 @@ function extendVisibleHistoryProjection(
       )
       .select((eb) => [
         "event.seq",
-        "event.navigation_valid",
+        transcriptPredicateSql(database.db, "navigation_valid", "event").as("navigation_valid"),
         "active.message_position",
         "identity.event_id",
         transcriptEventResetNavigationSql(database.db, "event").as("event_json"),
         isVisibleHistoryNonMessageEventSql(
           eb.ref("identity.event_type"),
-          eb.ref("event.navigation_display"),
-          eb.ref("event.navigation_custom_type"),
-          eb.ref("event.navigation_valid"),
+          transcriptPredicateSql(database.db, "navigation_display", "event"),
+          transcriptPredicateSql(database.db, "navigation_custom_type", "event"),
+          transcriptPredicateSql(database.db, "navigation_valid", "event"),
         ).as("visible"),
         /* kysely-allow-raw: retain the original byte cap without loading new message bodies. */
         sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),

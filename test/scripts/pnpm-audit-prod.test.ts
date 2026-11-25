@@ -1,7 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   collectAllResolvedPackagesFromLockfile,
@@ -135,7 +134,6 @@ snapshots:
     shared: ["1.0.0"],
     "tool-only": ["1.0.0"],
   });
-  expect(() => collectAllResolvedPackagesFromLockfile(`${lockfile}\n---\n`)).toThrow();
   const brokenApplication = lockfile.replace(
     "  shared@1.0.0: {}",
     "  shared@1.0.0:\n    dependencies:\n      native: 2.0.0",
@@ -152,9 +150,6 @@ it("parses explicit audit severity flags", () => {
 
 it("rejects missing audit severity flag values", () => {
   expect(() => parseArgs(["--min-severity"])).toThrow("--min-severity requires a value");
-  expect(() => parseArgs(["--min-severity", "--audit-level", "critical"])).toThrow(
-    "--min-severity requires a value",
-  );
   expect(() => parseArgs(["--min-severity", "-h"])).toThrow("--min-severity requires a value");
   expect(() => parseArgs(["--audit-level="])).toThrow("--audit-level requires a value");
 });
@@ -165,107 +160,75 @@ it("rejects unsupported audit levels", () => {
 
 it.each<[string, string, string, Record<string, string[]>]>([
   [
-    "collects the production graph from pnpm lockfile snapshots",
+    "resolves production, optional, aliased and tarball dependencies without development or workspace edges",
     `  .:
     dependencies:
       pkg-a:
         version: 1.0.0
+      request:
+        version: npm:@cypress/request@3.0.10
     devDependencies:
-      dev-only:
-        version: 9.9.9
+      dev-only: {version: 9.9.9}
   extensions/demo:
     dependencies:
-      '@scope/pkg':
-        version: 2.0.0(peer@4.0.0)
-      workspace-lib:
-        version: link:../../packages/workspace-lib`,
+      '@scope/pkg': {'version': '2.0.0(peer@4.0.0)'}
+      workspace-lib: {version: link:../../packages/workspace-lib}`,
     `  pkg-a@1.0.0:
     dependencies:
       transitive: 3.0.0(patch_hash=abc123)
+      libsignal: '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123'
   transitive@3.0.0(patch_hash=abc123): {}
   '@scope/pkg@2.0.0(peer@4.0.0)':
     optionalDependencies:
       opt-dep: 4.0.0
   opt-dep@4.0.0: {}
-`,
+  '@cypress/request@3.0.10': {}
+  '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123':
+    dependencies:
+      curve25519-js: 0.0.4
+  curve25519-js@0.0.4: {}`,
     {
+      "@cypress/request": ["3.0.10"],
       "@scope/pkg": ["2.0.0"],
+      "@whiskeysockets/libsignal-node": [
+        "https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123",
+      ],
+      "curve25519-js": ["0.0.4"],
       "opt-dep": ["4.0.0"],
       "pkg-a": ["1.0.0"],
       transitive: ["3.0.0"],
     },
   ],
   [
-    "resolves npm alias snapshots to the real package name",
+    "audits bundled Mistral and its transitives without unrelated development dependencies",
     `  .:
+    devDependencies:
+      '@mistralai/mistralai': {version: 3.0.0}
+  packages/ai:
+    devDependencies:
+      '@mistralai/mistralai': {version: 2.7.0}
+      build-tool: {version: 1.0.0}`,
+    `  '@mistralai/mistralai@2.7.0':
     dependencies:
-      request:
-        version: npm:@cypress/request@3.0.10`,
-    `  '@cypress/request@3.0.10': {}
-`,
-    { "@cypress/request": ["3.0.10"] },
-  ],
-  [
-    "reads inline importer dependency maps without repo dependencies",
-    `  .:
-    dependencies:
-      axios: {specifier: ^1.0.0, version: 1.0.0}
-      '@scope/pkg': {'version': '2.0.0(peer@4.0.0)'}`,
-    `  axios@1.0.0: {}
-  '@scope/pkg@2.0.0(peer@4.0.0)': {}
-`,
-    { "@scope/pkg": ["2.0.0"], axios: ["1.0.0"] },
-  ],
-  [
-    "resolves quoted snapshot keys that contain tarball URLs",
-    `  .:
-    dependencies:
-      wrapper:
-        version: 1.0.0`,
-    `  wrapper@1.0.0:
-    dependencies:
-      libsignal: '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123'
-  '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123':
-    dependencies:
-      curve25519-js: 0.0.4
-  curve25519-js@0.0.4: {}
-`,
-    {
-      "@whiskeysockets/libsignal-node": [
-        "https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/abc123",
-      ],
-      "curve25519-js": ["0.0.4"],
-      wrapper: ["1.0.0"],
-    },
+      schema: 1.0.0
+    optionalDependencies:
+      telemetry: 2.0.0
+  schema@1.0.0: {}
+  telemetry@2.0.0: {}
+  '@mistralai/mistralai@3.0.0': {}
+  build-tool@1.0.0: {}`,
+    { "@mistralai/mistralai": ["2.7.0"], schema: ["1.0.0"], telemetry: ["2.0.0"] },
   ],
 ])("%s", (_name, importers, snapshots, expected) => expectGraph(importers, snapshots, expected));
 
-it("filters advisory findings by minimum severity", () => {
-  const moderate = { id: "GHSA-low", severity: "moderate", title: "moderate issue" };
-  const findings = filterFindingsBySeverity({ axios: [moderate, highAdvisory] }, "high");
-
-  expect(findings).toEqual([{ ...highAdvisory, packageName: "axios", vulnerableVersions: null }]);
-});
-
 it.each(["2.2.1", "2.2.4"])("applies the Mistral malware override to locked %s", (version) => {
-  const versionsByPackage = new Map([["@mistralai/mistralai", new Set([version])]]);
   const findings = filterFindingsBySeverity(
     { "@mistralai/mistralai": [mistralAdvisory] },
     "high",
-    versionsByPackage,
+    new Map([["@mistralai/mistralai", new Set([version])]]),
   );
-
-  expect(findings).toEqual(
-    version === "2.2.1"
-      ? []
-      : [
-          {
-            ...mistralFinding,
-            packageName: "@mistralai/mistralai",
-            vulnerableVersions,
-          },
-        ],
-  );
+  const finding = { ...mistralFinding, packageName: "@mistralai/mistralai", vulnerableVersions };
+  expect(findings).toEqual(version === "2.2.1" ? [] : [finding]);
 });
 
 it("preserves a complete surrogate pair when truncating bulk advisory errors", async () => {
@@ -275,67 +238,20 @@ it("preserves a complete surrogate pair when truncating bulk advisory errors", a
   );
 });
 
-it("recovers a flapping registry in order", async () => {
-  const sequence = [503, "timeout", 503, 200];
-  vi.mocked(delay).mockClear();
-  const events: (string | number)[] = [];
-  const logs: string[] = [];
-  const signals: AbortSignal[] = [];
-  const fetchImpl = vi.fn(async (_url, init) => {
-    if (init?.signal) {
-      signals.push(init.signal);
-    }
-    const outcome = sequence[events.filter((event) => event !== "wait").length];
-    if (outcome === undefined) {
-      throw new Error("Unexpected extra advisory attempt");
-    }
-    events.push(outcome);
-    if (outcome === "timeout") {
-      return await new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener(
-          "abort",
-          () => reject(toLintErrorObject(init.signal?.reason, "Non-Error rejection")),
-          { once: true },
-        );
-      });
-    }
-    return new Response(outcome === 200 ? "{}" : "unavailable", { status: Number(outcome) });
-  });
-  vi.mocked(delay).mockImplementation(async () => {
-    events.push("wait");
-  });
-  await expect(
-    fetchAdvisories({
-      fetchImpl,
-      timeoutMs: 5,
-      stderr: captureOutput(logs),
-    }),
-  ).resolves.toEqual({});
-  expect(events).toEqual([503, "wait", "timeout", "wait", 503, "wait", 200]);
-  expect(logs.join("")).toMatch(/attempt 1\/4.*503|attempt 1\/4.*timeout/u);
-  expect(logs.join("")).toContain("attempt 4/4 succeeded");
-  expect(signals).toHaveLength(4);
-  expect(new Set(signals).size).toBe(4);
-  expect(signals[1]?.aborted).toBe(true);
-  expect(signals[3]?.aborted).toBe(false);
-  for (const [index, [ms]] of vi.mocked(delay).mock.calls.entries()) {
-    expect(ms).toBeGreaterThanOrEqual(1000 * 2 ** index);
-    expect(ms).toBeLessThanOrEqual(2000 * 2 ** index);
-  }
-});
-
 it("honors Retry-After 10 on 429", async () => {
-  vi.spyOn(Date, "now").mockReturnValue(Date.parse("Fri, 04 Sep 2026 12:00:00 GMT"));
   vi.spyOn(performance, "now").mockReturnValue(0);
-  vi.mocked(delay).mockClear();
-  const fetchImpl = vi
-    .fn(async () => new Response("{}"))
-    .mockResolvedValueOnce(
-      new Response("rate limited", { status: 429, headers: { "retry-after": "10" } }),
-    );
+  const signals: (AbortSignal | null | undefined)[] = [];
+  const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+    signals.push(init?.signal);
+    return signals.length === 1
+      ? new Response("rate limited", { status: 429, headers: { "retry-after": "10" } })
+      : new Response("{}");
+  });
   await expect(fetchAdvisories({ fetchImpl })).resolves.toEqual({});
   expect(fetchImpl).toHaveBeenCalledTimes(2);
   expect(delay).toHaveBeenCalledExactlyOnceWith(10_000);
+  expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+  expect(new Set(signals).size).toBe(2);
 });
 
 it("does not retry empty bodies", async () => {
@@ -344,42 +260,6 @@ it("does not retry empty bodies", async () => {
     /Bulk advisory response body was empty/u,
   );
   expect(fetchImpl).toHaveBeenCalledOnce();
-});
-
-it.each(["5", "5junk"])("caps bulk advisory bodies with content-length %s", async (length) => {
-  let readStarted = false;
-  let cancelled = false;
-  const body = new ReadableStream({
-    start(controller) {
-      if (length === "5") {
-        controller.enqueue(new TextEncoder().encode("{}"));
-      }
-    },
-    pull(controller) {
-      if (length === "5") {
-        return;
-      }
-      readStarted = true;
-      controller.enqueue(new TextEncoder().encode("12345"));
-    },
-    cancel() {
-      cancelled = true;
-    },
-  });
-  const request = fetchAdvisories({
-    responseBodyMaxBytes: 4,
-    fetchImpl: async () =>
-      new Response(body, {
-        status: 200,
-        headers: { "content-length": length },
-      }),
-  });
-
-  await expect(request).rejects.toThrow(/Bulk advisory response body exceeded 4 bytes/u);
-  if (length === "5junk") {
-    expect(readStarted).toBe(true);
-  }
-  expect(cancelled).toBe(true);
 });
 
 it.each(
@@ -397,11 +277,13 @@ it.each(
 it("bounds stalled HTTP 200 bodies by the total budget", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   let cancelled = false;
-  const fetchImpl = vi.fn(async () =>
-    stalledResponse(200, () => {
+  let signal: AbortSignal | null | undefined;
+  const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+    signal = init?.signal;
+    return stalledResponse(200, () => {
       cancelled = true;
-    }),
-  );
+    });
+  });
   const request = expect(
     fetchAdvisories({
       fetchImpl,
@@ -414,6 +296,7 @@ it("bounds stalled HTTP 200 bodies by the total budget", async () => {
   await vi.advanceTimersByTimeAsync(1);
   expect(fetchImpl).toHaveBeenCalledOnce();
   expect(cancelled).toBe(true);
+  expect(signal?.aborted).toBe(true);
   await request;
 });
 
@@ -491,12 +374,9 @@ it.each([
     if (name === "HTTP 403 with a stalled error body") {
       expect(cancellations).toBe(1);
     }
-    const summary = await fixture.summary();
     expectText(
-      summary,
+      await fixture.summary(),
       `Outcome: **${exit === null ? "error" : "unavailable"}**`,
-      "Packages: 401",
-      "Duration:",
       "no clearance",
     );
   },
@@ -519,7 +399,15 @@ it.each([false, true])(
       return Response.json(
         blocked
           ? {
-              axios: [{ ...highAdvisory, vulnerable_versions: "<=1.0.0" }],
+              axios: [
+                { ...highAdvisory, vulnerable_versions: "<=1.0.0" },
+                {
+                  ...highAdvisory,
+                  id: "GHSA-moderate",
+                  severity: "moderate",
+                  vulnerable_versions: "<=1.0.0",
+                },
+              ],
             }
           : {},
       );

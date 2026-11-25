@@ -46,12 +46,14 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -91,6 +93,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -137,11 +140,11 @@ fun ShellScreen(
     FoldAwareContent(
       features = features,
       modifier = modifier.background(ClawTheme.colors.canvas),
-      bookPanesEnabled = !commandOpen && pendingTrust == null,
+      sidebarPanesEnabled = !commandOpen && pendingTrust == null,
       tabletopEnabled = nav.activeTab == Tab.Chat && !commandOpen && pendingTrust == null,
     ) { foldBounds ->
-      val bookPanes = foldBounds.book
-      val permanentSidebar = bookPanes != null
+      val sidebarPanes = foldBounds.sidebar
+      val permanentSidebar = sidebarPanes != null
       // Mode changes discard modal operations and their drag state, not the two content slots.
       val sidebarDrawerState = key(permanentSidebar) { rememberDrawerState(initialValue = DrawerValue.Closed) }
       var sidebarRowDragging by remember(sidebarDrawerState) { mutableStateOf(false) }
@@ -169,17 +172,19 @@ fun ShellScreen(
         val destination = requestedHomeDestination ?: return@LaunchedEffect
         // HomeDestination is a one-shot command from launch intents and settings
         // actions; consume it after translating to local shell state.
-        nav.selectTab(
-          when (destination) {
-            HomeDestination.Connect -> Tab.Overview
-            HomeDestination.Chat, HomeDestination.Voice -> Tab.Chat
-            HomeDestination.Settings -> Tab.Settings
-          },
-        )
-        // Screenshot scenes can target a settings detail route alongside the tab.
-        viewModel.requestedSettingsRoute.value?.let { route ->
+        val route = viewModel.requestedSettingsRoute.value
+        if (route != null) {
+          // Detail requests must retain their origin before any top-level tab selection.
           nav.openSettingsRoute(route)
           viewModel.clearRequestedSettingsRoute()
+        } else {
+          nav.selectTab(
+            when (destination) {
+              HomeDestination.Connect -> Tab.Overview
+              HomeDestination.Chat, HomeDestination.Voice -> Tab.Chat
+              HomeDestination.Settings -> Tab.Settings
+            },
+          )
         }
         closeSidebar()
         viewModel.clearRequestedHomeDestination()
@@ -211,6 +216,19 @@ fun ShellScreen(
         commandOpen = false
       }
 
+      val keyboardController = LocalSoftwareKeyboardController.current
+
+      @OptIn(ExperimentalLayoutApi::class)
+      val keyboardOpen = WindowInsets.isImeVisible
+
+      // Back closes an open keyboard before it navigates. The keyboard's own Back callback wins
+      // only if it registered after ours; navigation that enables while the keyboard is open, or
+      // a keyboard that registers none, would otherwise leave the screen. Joining when the
+      // keyboard opens makes this the newest app callback.
+      if (keyboardOpen) {
+        BackHandler { keyboardController?.hide() }
+      }
+
       LaunchedEffect(commandOpen, pendingTrust, sidebarDrawerState) {
         if (commandOpen || pendingTrust != null) closeSidebar()
       }
@@ -233,7 +251,7 @@ fun ShellScreen(
       Box(modifier = Modifier.fillMaxSize().background(ClawTheme.colors.canvas)) {
         SidebarNavigationShell(
           drawerState = sidebarDrawerState,
-          bookPanes = bookPanes,
+          sidebarPanes = sidebarPanes,
           sidebarBand = foldBounds.sidebarBand,
           gesturesEnabled = !sidebarRowDragging,
           drawerContent = {
@@ -521,6 +539,10 @@ private fun OverviewScreen(
             sessionCount = overviewSessionCount,
             cronJobCount = cronStatus.jobs,
             onOpenChat = { onSelectTab(Tab.Chat) },
+            onNewChat = {
+              viewModel.startNewChat(worktree = false)
+              onSelectTab(Tab.Chat)
+            },
             onOpenAgent = { onOpenSettingsRoute(SettingsRoute.Agents) },
             onOpenGateway = { onOpenSettingsRoute(SettingsRoute.Gateway) },
           )
@@ -650,6 +672,7 @@ private fun OverviewPrimaryPanel(
   sessionCount: Int,
   cronJobCount: Int,
   onOpenChat: () -> Unit,
+  onNewChat: () -> Unit,
   onOpenAgent: () -> Unit,
   onOpenGateway: () -> Unit,
 ) {
@@ -659,9 +682,7 @@ private fun OverviewPrimaryPanel(
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         OverviewAgentBadge(text = agentBadge, active = isConnected, avatarSource = agentAvatarSource)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(text = if (pendingRunCount > 0) nativeString("\$agentName is working", agentName) else agentName, style = ClawTheme.type.title, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-          }
+          Text(text = if (pendingRunCount > 0) nativeString("\$agentName is working", agentName) else agentName, style = ClawTheme.type.title, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
           Text(text = overviewAgentActivityText(isConnected = isConnected, pendingRunCount = pendingRunCount, sessionCount = sessionCount, cronJobCount = cronJobCount, statusText = statusText), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         ClawSecondaryButton(text = nativeString("View"), onClick = onOpenAgent)
@@ -674,6 +695,7 @@ private fun OverviewPrimaryPanel(
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         ClawPrimaryButton(text = nativeString("Chat"), icon = Icons.Outlined.ChatBubbleOutline, onClick = onOpenChat, modifier = Modifier.weight(1f))
         ClawSecondaryButton(text = nativeString("Talk"), icon = Icons.Outlined.MicNone, onClick = onOpenChat, modifier = Modifier.weight(1f))
+        ClawSecondaryButton(text = nativeString("New chat"), onClick = onNewChat, modifier = Modifier.weight(1f))
       }
       if (!isConnected) {
         ClawSecondaryButton(text = nativeString("Reconnect gateway"), icon = SettingsRoute.Gateway.icon, onClick = onOpenGateway, modifier = Modifier.fillMaxWidth())
@@ -841,11 +863,25 @@ internal fun overviewHeaderState(
 
 internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): SettingsRoute = attentionRows.firstOrNull()?.settingsRoute ?: SettingsRoute.Gateway
 
-internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> =
-  sessions
-    .sortedWith(compareByDescending<ChatSessionEntry> { it.lastActivityAt ?: it.updatedAtMs ?: Long.MIN_VALUE }.thenBy { it.key })
-    .distinctBy(ChatSessionEntry::key)
+/** Top-level sessions only, ranked by their newest child; child sessions are reached through their parent. */
+internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> {
+  val parentByKey = navigationParentLinks(sessions)
+  val threadActivity = mutableMapOf<String, Long>()
+  sessions.forEach { session ->
+    val activity = session.lastActivityAt ?: session.updatedAtMs ?: Long.MIN_VALUE
+    var root = session.key
+    while (true) root = parentByKey[root] ?: break
+    threadActivity[root] = maxOf(threadActivity[root] ?: Long.MIN_VALUE, activity)
+  }
+  return sessions
+    .filter { it.key !in parentByKey }
+    .sortedWith(
+      compareByDescending<ChatSessionEntry> { threadActivity[it.key] ?: Long.MIN_VALUE }
+        .thenByDescending { it.lastActivityAt ?: it.updatedAtMs ?: Long.MIN_VALUE }
+        .thenBy { it.key },
+    ).distinctBy(ChatSessionEntry::key)
     .take(overviewRecentSessionLimit)
+}
 
 internal data class OverviewMetricCardSpec(
   val title: String,

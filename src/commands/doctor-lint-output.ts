@@ -10,6 +10,7 @@ import { formatUpdateDoctorLintFinding } from "../infra/update-doctor-lint.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
+import type { RecoveryDiskUsage } from "./recovery-disk-usage.js";
 
 const DOCTOR_LINT_JSON_SCHEMA_VERSION = 1;
 
@@ -19,6 +20,8 @@ function formatJsonResult(result: {
   checksSkipped: number;
   findings: readonly HealthFinding[];
   warnings?: readonly HealthFinding[];
+  databaseStores?: readonly Record<string, unknown>[];
+  recoveryCopies?: RecoveryDiskUsage;
 }) {
   return {
     schemaVersion: DOCTOR_LINT_JSON_SCHEMA_VERSION,
@@ -26,6 +29,8 @@ function formatJsonResult(result: {
     checksRun: result.checksRun,
     checksSkipped: result.checksSkipped,
     findings: result.findings.map(toJsonFinding),
+    ...(result.databaseStores ? { databaseStores: result.databaseStores } : {}),
+    ...(result.recoveryCopies ? { recoveryCopies: result.recoveryCopies } : {}),
     // Shipped updater gates require findings to be empty on success.
     ...(result.warnings?.length ? { warnings: result.warnings.map(toJsonFinding) } : {}),
   };
@@ -48,6 +53,7 @@ export function formatDoctorLintFailure(error: unknown) {
   const failure = formatCliJsonFailure(error);
   return {
     ...failure,
+    status: "blocked",
     ...formatJsonResult({
       ok: false,
       checksRun: 0,
@@ -79,6 +85,7 @@ function toJsonFinding(f: HealthFinding): Record<string, unknown> {
     ...(f.target !== undefined ? { target: f.target } : {}),
     ...(f.requirement !== undefined ? { requirement: f.requirement } : {}),
     ...(f.fixHint !== undefined ? { fixHint: f.fixHint } : {}),
+    ...(f.details !== undefined ? { details: f.details } : {}),
   };
 }
 
@@ -86,6 +93,8 @@ export type DoctorLintExecution = {
   checksRun: number;
   checksSkipped: number;
   cleanupWarnings?: readonly HealthFinding[];
+  databaseStores?: readonly Record<string, unknown>[];
+  recoveryCopies?: RecoveryDiskUsage;
   exitCode: number;
   findings: readonly HealthFinding[];
   warnings?: readonly HealthFinding[];
@@ -156,6 +165,8 @@ export async function createStateSnapshotFailureExecution(
     exitCode: exitCodeFromFindings(visible, sevMin),
     findings: visible,
     cleanupWarnings: completed?.cleanupWarnings,
+    databaseStores: completed?.databaseStores,
+    recoveryCopies: completed?.recoveryCopies,
     warnings: completed?.warnings,
     writeOutput() {
       if (detectDoctorLintOutputMode(opts) === "json") {
@@ -164,6 +175,8 @@ export async function createStateSnapshotFailureExecution(
           checksRun,
           checksSkipped,
           findings: visible,
+          databaseStores: completed?.databaseStores,
+          recoveryCopies: completed?.recoveryCopies,
           warnings: [...(completed?.warnings ?? []), ...(completed?.cleanupWarnings ?? [])],
         });
         return;

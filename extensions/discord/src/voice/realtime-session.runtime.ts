@@ -94,7 +94,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       assertCurrent: () => this.assertOpen(),
     });
     this.idleTimer = setInterval(() => this.releaseIdleSpeakers(), REALTIME_SPEAKER_IDLE_MS);
-    this.idleTimer.unref?.();
+    this.idleTimer.unref();
   }
 
   close(

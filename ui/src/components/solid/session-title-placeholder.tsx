@@ -9,7 +9,7 @@ export function SessionTitlePlaceholder() {
       aria-label={t("common.loading")}
       aria-busy="true"
     >
-      <span aria-hidden="true" />
+      <span class="skeleton" aria-hidden="true" />
     </span>
   );
 }

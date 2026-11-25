@@ -20,6 +20,10 @@ when `gateway.publicOrigin` is configured, including its
 `gateway.controlUi.basePath`. This keeps links shareable when the desktop app
 connects through a local SSH tunnel. Without a public origin, copied links use
 the connected Gateway's HTTP(S) address; a tunnel-only address remains local.
+When you reach the claw through OpenClaw ID remote access, **Copy link** uses the
+claw's own address instead, so it opens for members who reach it the same way.
+Preview and public links keep the public address, because only members can use
+the claw's address.
 Normal navigation and **Open in** continue using the current UI. Copied links
 contain no connection credentials. Recipients need Gateway access unless the
 thread has [public access](/web/urls#public-session-transcripts) enabled.
@@ -168,10 +172,13 @@ Standard links do not use `?session=` or `?face=`. Released links such as
 migration aid and immediately rewritten, without adding browser history, to the
 standard path. The released `?face=dashboard` companion selects the
 `/dashboard` namespace during that rewrite. Loaders and page code never read the
-query-form identity, and new links must not emit it. The Sessions list keeps its
-own `?session=` parameter because that parameter expands a row; it is not a
-session deep link. The one-shot composer value `?draft=` remains supported on
-chat and dashboard session paths.
+query-form identity, and new links must not emit it. In chat, an older link opens
+the session without reloading the Control UI if it points to this Gateway and
+contains a full `agent:` session key.
+
+The Sessions list keeps its own `?session=` parameter because that parameter
+expands a row; it is not a session deep link. The one-shot composer value
+`?draft=` remains supported on chat and dashboard session paths.
 
 ### Native catalog links
 
@@ -198,13 +205,52 @@ social card. It opens a small public landing page; **Open dashboard** or
 For example, `/share/dashboard/main/deploy-monitor-6db92d48` previews
 `/dashboard/main/deploy-monitor-6db92d48`. A configured Control UI base path
 prefixes both paths. The preview serves Open Graph metadata and a 1200 × 630 PNG
-at `/share/card.png`, without requiring JavaScript or a Gateway connection.
+at `/share/card.png`, plus a generic, silent five-second H.264 video at
+`/share/preview-v1.mp4`, without requiring JavaScript or a Gateway connection.
+The landing page starts with the still image. Expand **Play animation** for
+native video controls. It does not autoplay, including for people who request
+reduced motion. Playback is optional; the still image and destination link work
+without JavaScript or video support.
 
 The card shows generic OpenClaw branding, not the session's title, messages,
 dashboard widgets, or screenshots. Preview requests never look up session state,
 so the page does not reveal whether the target exists. The link itself still
 contains the session route and, for catalog sessions, the catalog routing fields.
 Treat those URLs as information you are choosing to share.
+
+### Animated cards and platform support
+
+The preview advertises the MP4 with [Open Graph video metadata](https://ogp.me/#structured)
+and retains the PNG as both `og:image` and `twitter:image`. X still receives a
+`summary_large_image` card. Some clients may use the video; others show only the
+still. Open Graph metadata does **not** guarantee inline playback, animation,
+looping, or autoplay on X. Client settings, data-saving behavior, and platform
+policy remain outside OpenClaw's control.
+
+X Player Cards are a separate integration, not a synonym for `og:video`. The
+[official Player Card sample](https://github.com/twitterdev/cards) uses HTTPS
+player/container and stream URLs plus `twitter:player` metadata. OpenClaw does
+not add an embeddable player or change its frame restrictions for a decorative
+brand animation. Test an actual posted preview on the intended X clients before
+claiming animated-card support; metadata validation alone is not playback proof.
+
+Chat platforms cache previews independently of the Gateway's HTTP cache headers.
+After deployment, use a fresh preview URL when testing, and allow for platform
+recrawling. Existing posts may continue showing old artwork. Published video
+artwork has a versioned path; replacing it requires a new asset name and matching
+Gateway route/metadata changes. The PNG remains a usable fallback.
+
+The artwork is fixed branding, not a recording of a conversation. Public
+transcripts retain their session-specific static cards; this animation applies
+to the generic `/share/chat/*` and `/share/dashboard/*` preview pages. The
+`openclaw.ai` marketing site is a separate deployment and is not changed by the
+Gateway's Control UI build.
+
+To revise the artwork, edit `ui/config/control-ui-social-preview.ts` and run
+`node scripts/generate-social-preview.mts` with system ffmpeg/libx264 available.
+The generator uses bundled fonts and the existing mascot to author the shipped
+MP4; ordinary UI builds do not need ffmpeg. `pnpm ui:build` creates the matching
+poster and copies the MP4 from `ui/public`.
 
 ### Behind a login proxy
 
@@ -224,8 +270,8 @@ terminates at the proxy, so the image and standard URLs use the public HTTPS
 address. Without it, previews use the request's Host and direct connection
 protocol; forwarded headers are not trusted for public preview URLs.
 
-Verify both the preview URL and its `/share/card.png` return `200` without
-cookies, then check that opening the dashboard still requires login. If a chat
+Verify the preview URL, `/share/card.png`, and `/share/preview-v1.mp4` return
+`200` without cookies (the MP4 must use `Content-Type: video/mp4`), then check that opening the dashboard still requires login. If a chat
 app shows the login page or no image, check for proxy redirects on both preview
 requests. Ordinary dashboard URLs remain protected and do not gain crawler
 access from this feature.
@@ -253,7 +299,12 @@ continue into the Control UI when reopening, reloading, or following a chat link
 The browser uses its session token or paired-device credential; passwords remain
 in memory only. This also works on loopback HTTP, which permits public readers. Chat links remain
 reloadable during Gateway updates; the temporary recovery marker is removed when
-the app starts.
+the app starts. In-app session-key, preferred-face, and composer-focus hints also
+survive reload. The pathname still determines the conversation and its access
+checks; a hint cannot select another conversation or grant access.
+With Tailscale Serve identity authentication enabled, the same-origin handoff
+verifies the viewer through Tailscale and checks access to the requested conversation.
+No saved browser token or extra **Log in** click is needed.
 In trusted-proxy deployments, browsers controlled by the installed Control UI service worker request the
 protected session-entry app document directly when reopening a chat deep link,
 without first loading the public reader or probing access. Registration is only
@@ -264,6 +315,8 @@ The handoff rechecks that conversation's current access after preparing the app
 document. Activity in other conversations does not restart navigation. If access
 changes during preparation, the handoff stops with a visible error and offers
 reload or login; it does not redirect back into another automatic probe.
+An agent's main chat, `/chat/<agentId>`, opens the same way for a signed-in
+operator before the agent's first message, as it does when the app opens from `/`.
 The anonymous private-thread document initially returns `404`, then an admitted
 browser opens the app through the session-entry handoff with a `200` response. No extra
 **Log in** click is needed. Without a saved credential, **Log in** opens the normal
@@ -277,16 +330,25 @@ and you are its creator or a Gateway admin. See
 
 Public access is separate from teammate visibility and editing permissions.
 The public reader does not open a Gateway WebSocket, subscribe to the session
-roster, send messages, invoke tools, or open private dashboards. It shows every user and assistant text message, including progress updates, with Markdown formatting and code-copy controls. Adjacent tool calls appear in collapsed steps with tool names and short command, path, or query summaries; tool result text stays private. User, assistant, and tool-result images open at full size through a public media route bound to the same publication and transcript entry. Only size-capped PNG, JPEG, GIF, and WebP images are served after checking their bytes. Other attachments appear as filename chips without download links. Reasoning, executable widgets, internal metadata, and hidden messages are omitted. Included text is not secret-masked. Review the conversation for credentials and other sensitive content before publishing; future messages become public too.
+roster, send messages, invoke tools, or open private dashboards. It shows every user and assistant text message, including progress updates, with Markdown formatting and code-copy controls. Adjacent tool calls appear in collapsed steps with tool names and short command, path, or query summaries; tool result text stays private. User, assistant, and tool-result images open at full size through a public media route bound to the same publication and transcript entry. Only size-capped PNG, JPEG, GIF, and WebP images are served after checking their bytes. Other attachments appear as filename chips without download links. Saved inline widgets shown in the conversation render in sandboxed frames with scripts allowed, restricted network access, and no Gateway access. Each frame uses a link scoped to that widget document; the link cannot read the conversation. A widget is served only when its inline widget result is itself publicly visible in the shared conversation. Other `[embed ...]` content, including YouTube videos and external pages, appears as a plain link to its HTTPS or HTTP address; the reader does not load the page, player, or thumbnail. Embeds of other Gateway pages are omitted. Shortcodes inside code stay literal. Pinned dashboard widgets are not part of the public reader. Reasoning, internal metadata, and hidden messages stay omitted. Included text is not secret-masked. Review the conversation for credentials and other sensitive content before publishing; future messages become public too.
 
 The latest public view checks for updates approximately every 15 seconds while
 visible and catches up when the tab returns or the connection comes back online.
 Updates follow the conversation when you are at its latest message, but preserve
-your place and expanded tool steps when you scroll back. **Top** and **Latest**
-let you jump without reloading; **Refresh now** checks in place and shows retry
-status if the connection fails. **Older messages** opens earlier pages without
+your place and expanded tool steps when you scroll back. The circular down-arrow
+button jumps to the end of the displayed conversation without reloading.
+**Refresh now** appears when updates are delayed or fail and retries in place. **Older messages** opens earlier pages without
 automatic refresh; **Back to latest** returns to the live view. Pages contain approximately 50 visible messages and tool-step groups, newest pages first and chronological within each page. Read and message size limits still apply, with visible omission notices. The initial conversation and social metadata
 work without JavaScript.
+
+The reader uses the saved Control UI language preference on the same origin, or
+your browser language when no supported preference is saved. Navigation, status,
+copy controls, and reader notices are localized, with right-to-left layout for
+Arabic and Persian. Conversation titles, messages, code, tool names, and filenames
+are never translated. Missing translations fall back to English; without
+JavaScript the initial document remains in English. Reader translations are
+packaged at build time from the same generated catalog as the Control UI, without
+loading the operator app or fetching a translation service.
 
 Public session links include a 1200 × 630 preview card with the session title and
 opening public request. When recorded worktree changes are already available,
@@ -342,6 +404,8 @@ OpenClaw does not change Cloudflare Access or other proxy policies automatically
 Public pages share bounded rendered representations and in-flight work.
 Committed session and transcript changes invalidate affected pages; every
 response, including `304 Not Modified`, still checks live publication authority.
+If a change overtakes an in-flight read, the public reader prepares the current
+representation before responding, without requiring a browser retry.
 Representations are retained only on the server, not in a shared browser/CDN
 cache. Eight distinct builds may run at once, two for one publication, with
 32 additional builds queued. Overload returns `503` and `Retry-After`.
@@ -512,53 +576,54 @@ With `gateway.controlUi.basePath: "/openclaw"`, use
 This table lists every Control UI application route. A dash means the route has
 no route-specific URL parameters.
 
-| Page                | Primary path                                   | Aliases                   | Parameters or dynamic forms                                                       |
-| ------------------- | ---------------------------------------------- | ------------------------- | --------------------------------------------------------------------------------- |
-| Chat                | `/chat`                                        | -                         | Key-backed session forms above; `?draft=<text>`                                   |
-| Dashboard           | `/dashboard`                                   | -                         | Key-backed session forms above; `?draft=<text>`                                   |
-| Beam transcript     | `/beam/<title>-<beam-id>`                      | `/beam/<beam-id>`         | Optional title slug and 12-32 lowercase hexadecimal id characters                 |
-| Dashboards          | `/dashboards`                                  | -                         | -                                                                                 |
-| Ask OpenClaw        | `/custodian`                                   | -                         | `?intent=new-agent`, `?onboarding=1`                                              |
-| New session         | `/new`                                         | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`                                        |
-| Activity            | `/activity`                                    | -                         | `?view=run&run=<run-id>`, `?view=run&execution=<execution-id>`                    |
-| Person activity     | `/activity/<name>-<profile-id>`                | -                         | Optional name slug and 8-32 lowercase hexadecimal id characters                   |
-| Apps                | `/apps`                                        | -                         | -                                                                                 |
-| Portals             | `/portals`                                     | -                         | -                                                                                 |
-| Agents              | `/settings/agents`                             | `/agents`                 | `/settings/agents/<agentId>[/<panel>]`                                            |
-| Channels            | `/settings/channels`                           | `/channels`               | Shared settings parameters below                                                  |
-| Connection          | `/settings/connection`                         | -                         | Shared settings parameters below                                                  |
-| Legacy General      | `/settings/general`                            | `/config`                 | Redirects to Appearance → Language                                                |
-| Profile             | `/settings/profile`                            | `/profile`                | Shared settings parameters below                                                  |
-| Communications      | `/settings/communications`                     | `/communications`         | Shared settings parameters below                                                  |
-| Appearance          | `/settings/appearance`                         | `/appearance`             | Shared settings parameters below                                                  |
-| Notifications       | `/settings/notifications`                      | -                         | Shared settings parameters below                                                  |
-| Security            | `/settings/security`                           | -                         | Shared settings parameters below                                                  |
-| Secrets             | `/settings/secrets`                            | -                         | Shared settings parameters below                                                  |
-| Advanced            | `/settings/advanced`                           | -                         | Shared settings parameters below                                                  |
-| Approvals           | `/settings/approvals`                          | -                         | Shared settings parameters below                                                  |
-| Automation settings | `/settings/automation`                         | `/automation`             | Shared settings parameters below                                                  |
-| MCP                 | `/settings/mcp`                                | `/mcp`                    | Shared settings parameters below                                                  |
-| Memory              | `/settings/memory`                             | -                         | `/settings/memory/memories\|dreams\|settings`                                     |
-| Infrastructure      | `/settings/infrastructure`                     | `/infrastructure`         | Shared settings parameters below                                                  |
-| Labs                | `/settings/labs`                               | -                         | Shared settings parameters below                                                  |
-| About               | `/settings/about`                              | -                         | Shared settings parameters below                                                  |
-| AI and agents       | `/settings/ai-agents`                          | `/ai-agents`              | Shared settings parameters below                                                  |
-| Model setup         | `/settings/model-setup`                        | `/model-setup`            | `?firstRun=1`                                                                     |
-| Model providers     | `/settings/model-providers`                    | `/model-providers`        | Shared settings parameters below                                                  |
-| Import memory       | `/memory-import`                               | `/settings/memory-import` | -                                                                                 |
-| Workboard           | `/workboard`                                   | -                         | `/workboard/<boardId>`                                                            |
-| Worktrees           | `/worktrees`                                   | `/settings/worktrees`     | -                                                                                 |
-| Sessions            | `/sessions`                                    | `/settings/sessions`      | `?session=<sessionKey>`, `?status=archived\|all`                                  |
-| Usage               | `/usage`                                       | -                         | -                                                                                 |
-| Debug               | `/debug`                                       | -                         | -                                                                                 |
-| Logs                | `/logs`                                        | -                         | -                                                                                 |
-| Skill Workshop      | `/skills/workshop`                             | -                         | -                                                                                 |
-| Skills              | `/skills`                                      | -                         | -                                                                                 |
-| Plugins             | `/plugins`                                     | -                         | -                                                                                 |
-| Plugin settings     | `/settings/plugins`                            | -                         | `?tab=advanced`, `/settings/plugins/<pluginId>`                                   |
-| Automations         | `/automations`                                 | `/cron`                   | `?job=<jobId>`, `?job=<jobId>&run=<runId>`                                        |
-| Devices             | `/settings/devices`                            | `/nodes`                  | Shared settings parameters below                                                  |
-| Plugin tab host     | `/<slug>` when advertised; `/plugin` otherwise | -                         | Generic host: `?plugin=<pluginId>&id=<tabId>`; tab parameters: `?p.<key>=<value>` |
+| Page                | Primary path                                   | Aliases                   | Parameters or dynamic forms                                                                      |
+| ------------------- | ---------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------ |
+| Chat                | `/chat`                                        | -                         | Key-backed session forms above; `?draft=<text>`                                                  |
+| Dashboard           | `/dashboard`                                   | -                         | Key-backed session forms above; `?draft=<text>`                                                  |
+| Beam transcript     | `/beam/<title>-<beam-id>`                      | `/beam/<beam-id>`         | Optional title slug and 12-32 lowercase hexadecimal id characters                                |
+| Dashboards          | `/dashboards`                                  | -                         | -                                                                                                |
+| Ask OpenClaw        | `/custodian`                                   | -                         | `?intent=new-agent`, `?onboarding=1`                                                             |
+| New session         | `/new`                                         | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`                                                       |
+| Activity            | `/activity`                                    | -                         | `?view=run&run=<run-id>`, `?view=run&execution=<execution-id>`                                   |
+| Person activity     | `/activity/<name>-<profile-id>`                | -                         | Optional name slug and 8-32 lowercase hexadecimal id characters                                  |
+| Apps                | `/apps`                                        | -                         | -                                                                                                |
+| Portals             | `/portals`                                     | -                         | -                                                                                                |
+| Agents              | `/settings/agents`                             | -                         | `/settings/agents/<agentId>[/<panel>]`                                                           |
+| Templates           | `/templates`                                   | -                         | `/templates/packages/<encoded-package>`; available by default; advanced config opt-out supported |
+| Channels            | `/settings/channels`                           | `/channels`               | Shared settings parameters below                                                                 |
+| Connection          | `/settings/connection`                         | -                         | Shared settings parameters below                                                                 |
+| Legacy General      | `/settings/general`                            | `/config`                 | Redirects to Appearance → Language                                                               |
+| Profile             | `/settings/profile`                            | `/profile`                | Shared settings parameters below                                                                 |
+| Communications      | `/settings/communications`                     | `/communications`         | Shared settings parameters below                                                                 |
+| Appearance          | `/settings/appearance`                         | `/appearance`             | Shared settings parameters below                                                                 |
+| Notifications       | `/settings/notifications`                      | -                         | Shared settings parameters below                                                                 |
+| Security            | `/settings/security`                           | -                         | Shared settings parameters below                                                                 |
+| Secrets             | `/settings/secrets`                            | -                         | Shared settings parameters below                                                                 |
+| Advanced            | `/settings/advanced`                           | -                         | Shared settings parameters below                                                                 |
+| Approvals           | `/settings/approvals`                          | -                         | Shared settings parameters below                                                                 |
+| Automation settings | `/settings/automation`                         | `/automation`             | Shared settings parameters below                                                                 |
+| MCP                 | `/settings/mcp`                                | `/mcp`                    | Shared settings parameters below                                                                 |
+| Memory              | `/settings/memory`                             | -                         | `/settings/memory/memories\|dreams\|settings`                                                    |
+| Infrastructure      | `/settings/infrastructure`                     | `/infrastructure`         | Shared settings parameters below                                                                 |
+| Labs                | `/settings/labs`                               | -                         | Shared settings parameters below                                                                 |
+| About               | `/settings/about`                              | -                         | Shared settings parameters below                                                                 |
+| AI and agents       | `/settings/ai-agents`                          | `/ai-agents`              | Shared settings parameters below                                                                 |
+| Models              | `/settings/model-setup`                        | `/model-setup`            | `?firstRun=1`                                                                                    |
+| Model providers     | `/settings/model-providers`                    | `/model-providers`        | Shared settings parameters below                                                                 |
+| Import memory       | `/memory-import`                               | `/settings/memory-import` | -                                                                                                |
+| Workboard           | `/workboard`                                   | -                         | `/workboard/<boardId>`                                                                           |
+| Worktrees           | `/worktrees`                                   | `/settings/worktrees`     | -                                                                                                |
+| Sessions            | `/sessions`                                    | `/settings/sessions`      | `?session=<sessionKey>`, `?status=archived\|all`                                                 |
+| Usage               | `/usage`                                       | -                         | -                                                                                                |
+| Debug               | `/debug`                                       | -                         | -                                                                                                |
+| Logs                | `/logs`                                        | -                         | -                                                                                                |
+| Skill Workshop      | `/skills/workshop`                             | -                         | -                                                                                                |
+| Skills              | `/skills`                                      | -                         | -                                                                                                |
+| Plugins             | `/plugins`                                     | -                         | -                                                                                                |
+| Plugin settings     | `/settings/plugins`                            | -                         | `?tab=advanced`, `/settings/plugins/<pluginId>`                                                  |
+| Automations         | `/automations`                                 | `/cron`                   | `?job=<jobId>`, `?job=<jobId>&run=<runId>`                                                       |
+| Devices             | `/settings/devices`                            | `/nodes`                  | Shared settings parameters below                                                                 |
+| Plugin tab host     | `/<slug>` when advertised; `/plugin` otherwise | -                         | Generic host: `?plugin=<pluginId>&id=<tabId>`; tab parameters: `?p.<key>=<value>`                |
 
 Once plugin tabs are known, a generic `/plugin?plugin=<pluginId>&id=<tabId>` link
 for a tab with an available slug is replaced once in browser history with

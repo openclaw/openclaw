@@ -1,8 +1,12 @@
 import { sql } from "kysely";
 import { beginEngineStoreReadSnapshot } from "../../infra/database-engine/adapters.js";
 import { jsonPickObject, jsonValid } from "../../infra/database-engine/json-values.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { EngineConnection } from "../../infra/sql-connection.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -30,6 +34,7 @@ const RESPONSE_KEYS = [
   "completionStatus",
   "error",
   "summary",
+  "result",
   "errorReason",
   "delivered",
   "deliveryError",
@@ -88,6 +93,43 @@ function decodeHistoryRow(row: HistoryRow): CronRunRecord {
   });
 }
 
+function* readHistoryCandidateRows(
+  db: EngineConnection,
+  select: ReturnType<typeof historyQuery>,
+): IterableIterator<HistoryRow> {
+  if (!isPostgresSqlConnection(db)) {
+    // One native statement owns the snapshot and releases each row's search payload.
+    yield* iterateSqliteQuerySync(db, select);
+    return;
+  }
+  // The PostgreSQL bridge buffers each result; keep large search details batch-bounded.
+  const bounded = select.limit(CANDIDATE_BATCH_SIZE);
+  const snapshot = beginEngineStoreReadSnapshot(db);
+  try {
+    let cursor: { createdAt: number; id: string } | undefined;
+    for (;;) {
+      const after = cursor;
+      const rows = executeSqliteQuerySync(
+        db,
+        after
+          ? bounded.where((eb) =>
+              eb(eb.refTuple("created_at", "task_id"), ">", eb.tuple(after.createdAt, after.id)),
+            )
+          : bounded,
+      ).rows;
+      yield* rows;
+      if (rows.length < CANDIDATE_BATCH_SIZE) {
+        return;
+      }
+      const last = rows[rows.length - 1]!;
+      // The cursor uses stored index values; the released codec can normalize createdAt.
+      cursor = { createdAt: last.created_at, id: last.task_id };
+    }
+  } finally {
+    snapshot.close();
+  }
+}
+
 /** Exact totals and completion-time ordering need metadata, never every response payload. */
 export function readCronRunHistoryCandidatesInDatabase(
   db: EngineConnection,
@@ -99,60 +141,33 @@ export function readCronRunHistoryCandidatesInDatabase(
   const keys = search?.trim() ? [...SELECTION_KEYS, ...SEARCH_KEYS] : SELECTION_KEYS;
   let select = historyQuery(db, keys, Boolean(search?.trim()))
     .orderBy("created_at", "asc")
-    .orderBy("task_id", "asc")
-    .limit(CANDIDATE_BATCH_SIZE);
+    .orderBy("task_id", "asc");
   if (jobId !== undefined) {
     select = select.where("source_id", "=", jobId);
   }
-  const snapshot = beginEngineStoreReadSnapshot(db);
-  try {
-    const records: CronRunRecord[] = [];
-    const queryMatches: string[] | undefined = search?.trim() ? [] : undefined;
-    let cursor: { createdAt: number; id: string } | undefined;
-    for (;;) {
-      const after = cursor;
-      const rows = executeSqliteQuerySync(
-        db,
-        after
-          ? select.where((eb) =>
-              eb(eb.refTuple("created_at", "task_id"), ">", eb.tuple(after.createdAt, after.id)),
-            )
-          : select,
-      ).rows;
-      for (const row of rows) {
-        const record = decodeHistoryRow(row);
-        if (cronRunRecordStoreKey(record) === storeKey) {
-          if (queryMatches) {
-            const entry = cronRunRecordToRunLogEntry(record);
-            if (entry && cronRunHistoryMatchesQuery(entry, search!, jobNameById)) {
-              queryMatches.push(record.id);
-            }
-            // Keep identities for alias ambiguity, but release this batch's search payload.
-            if (
-              record.detail &&
-              typeof record.detail === "object" &&
-              !Array.isArray(record.detail)
-            ) {
-              for (const key of SEARCH_KEYS) {
-                delete record.detail[key];
-              }
-            }
-            delete record.error;
-            delete record.summary;
-          }
-          records.push(record);
+  const records: CronRunRecord[] = [];
+  const queryMatches: string[] | undefined = search?.trim() ? [] : undefined;
+  for (const row of readHistoryCandidateRows(db, select)) {
+    const record = decodeHistoryRow(row);
+    if (cronRunRecordStoreKey(record) === storeKey) {
+      if (queryMatches) {
+        const entry = cronRunRecordToRunLogEntry(record);
+        if (entry && cronRunHistoryMatchesQuery(entry, search!, jobNameById)) {
+          queryMatches.push(record.id);
         }
+        // Keep identities for alias ambiguity, but release this row's search payload.
+        if (record.detail && typeof record.detail === "object" && !Array.isArray(record.detail)) {
+          for (const key of SEARCH_KEYS) {
+            delete record.detail[key];
+          }
+        }
+        delete record.error;
+        delete record.summary;
       }
-      if (rows.length < CANDIDATE_BATCH_SIZE) {
-        return { records, queryMatches };
-      }
-      const last = rows[rows.length - 1]!;
-      // The cursor uses stored index values; the released codec can normalize createdAt.
-      cursor = { createdAt: last.created_at, id: last.task_id };
+      records.push(record);
     }
-  } finally {
-    snapshot.close();
   }
+  return { records, queryMatches };
 }
 
 /** Only the selected page crosses the driver; recovery state never enters a history response. */

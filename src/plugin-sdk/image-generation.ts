@@ -1,5 +1,3 @@
-// Public image-generation helpers and types for provider plugins.
-
 export {
   createOpenAiCompatibleImageGenerationProvider,
   type OpenAiCompatibleImageProviderRequestBody,
@@ -17,6 +15,7 @@ export {
   parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
+  resolveImageSourceUrl,
   sniffImageMimeType,
   toImageDataUrl,
   type ImageMimeTypeDetection,
@@ -26,11 +25,15 @@ export {
 
 export type {
   GeneratedImageAsset,
-  ImageGenerationOpenAIBackground,
-  ImageGenerationOutputFormat,
+  ImageGenerationSourceImage,
+} from "../image-generation/asset-types.js";
+export type {
   ImageGenerationProvider,
   ImageGenerationProviderConfiguredContext,
   ImageGenerationRequest,
+} from "../image-generation/provider-types.js";
+export type {
+  ImageGenerationOpenAIBackground,
+  ImageGenerationOutputFormat,
   ImageGenerationResult,
-  ImageGenerationSourceImage,
 } from "../image-generation/types.js";

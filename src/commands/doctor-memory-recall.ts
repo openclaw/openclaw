@@ -1,6 +1,8 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CronJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
@@ -17,16 +19,27 @@ import {
   type ShortTermAuditSummary,
 } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
+import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import {
   getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
 } from "../plugins/memory-runtime.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import {
   formatMemoryDoctorAgentMessage,
   resolveMemoryDoctorAgentScopes,
 } from "./doctor-memory-scope.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { maybeRepairWorkspaceMemoryHealth } from "./doctor-workspace.js";
+
+type DreamingStatusApi = {
+  readMemoryCoreDreamingRuns: (params: {
+    workspaceDir: string;
+    dreamingEnabled: boolean;
+    cronEnabled: boolean;
+    readCronJobs: () => Promise<CronJob[]>;
+  }) => Promise<string[]>;
+};
 
 async function resolveRuntimeMemoryWorkspaceDir(
   cfg: OpenClawConfig,
@@ -76,6 +89,15 @@ async function runMemoryRecallHealth(
   const dreaming = prompter
     ? undefined
     : resolveMemoryDreamingConfig({ cfg, pluginConfig: resolveMemoryDreamingPluginConfig(cfg) });
+  let cronJobs: Promise<CronJob[]> | undefined;
+  const readCronJobs = () =>
+    (cronJobs ??= (async () => {
+      const { resolveCronJobsStorePathFromConfigAsync } = await import("../cron/store/paths.js");
+      const { loadCronJobsStoreWithConfigJobsReadOnly } =
+        await import("../cron/store/read-only.js");
+      const storePath = await resolveCronJobsStorePathFromConfigAsync(cfg);
+      return (await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store.jobs;
+    })());
   for (const scope of scopes) {
     const agentMessage = (message: string) =>
       formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, message);
@@ -188,6 +210,11 @@ async function runMemoryRecallHealth(
           dreaming.enabled &&
           loadPluginRegistryHandle({
             config: cfg,
+            registrationConfigOrigin: cfg,
+            manifestRegistry: loadPluginManifestRegistryCore({
+              config: cfg,
+              workspaceDir: scope.workspaceDir,
+            }),
             workspaceDir: scope.workspaceDir,
             loadModules: false,
             onlyPluginIds: [resolveMemoryDreamingPluginId(cfg)],
@@ -195,7 +222,28 @@ async function runMemoryRecallHealth(
             (plugin) =>
               plugin.id === DEFAULT_MEMORY_DREAMING_PLUGIN_ID && plugin.status === "loaded",
           );
-        report(`Dreaming: ${enabled ? "enabled" : "disabled"} (cadence ${dreaming.frequency}).`);
+        const lines = [
+          `Dreaming: ${enabled ? "enabled" : "disabled"} (cadence ${dreaming.frequency}).`,
+        ];
+        try {
+          const status = loadBundledPluginPublicArtifactModuleSync<DreamingStatusApi>({
+            dirName: "memory-core",
+            artifactBasename: "dreaming-status-api.js",
+          });
+          lines.push(
+            ...(await status.readMemoryCoreDreamingRuns({
+              workspaceDir: scope.workspaceDir,
+              dreamingEnabled: enabled,
+              cronEnabled:
+                process.env.OPENCLAW_SKIP_CRON !== "1" &&
+                (cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED),
+              readCronJobs,
+            })),
+          );
+        } catch (error) {
+          lines.push(`Dreaming run telemetry unavailable: ${formatErrorMessage(error)}`);
+        }
+        report(lines.join("\n"));
       }
     }
   }

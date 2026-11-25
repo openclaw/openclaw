@@ -6,14 +6,16 @@ import {
   ACTIVITY_SUMMARY_FORMAT_REVISION,
   type SessionActivitySummary,
 } from "./activity-summary.js";
+import { buildCreatedSessionGoal } from "./goals-transitions.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionActorPendingFinalDelivery,
   SessionActorReducer,
 } from "./session-actor-contract.js";
-import { withActor, type Mutation } from "./session-actor-worker.test-support.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -36,17 +38,61 @@ const usageReducer = {
   },
 } satisfies SessionActorReducer;
 
-it("commits final custody, recap, usage, and claim cleanup together across rollback and restart", async () => {
+type Completion = Extract<Mutation, { type: "session.actor.completeTurn" }>;
+
+function completion(
+  f: Fixture,
+  commandId: string,
+  input: Pick<Completion["input"], "reducers" | "activitySummary" | "pendingFinalDelivery"> & {
+    phaseId?: string;
+  },
+): Completion {
+  const before = f.read();
+  return {
+    type: "session.actor.completeTurn",
+    input: {
+      target: f.target,
+      commandId,
+      phaseId: "completion",
+      expected: before.version,
+      bookkeeping: {
+        sessionId: f.scope.sessionId,
+        lifecycleRevision: before.entry!.lifecycleRevision ?? null,
+        writerRunId: before.entry!.activeWriterRunId,
+        expectedState: buildSessionTranscriptTurnExpectedState(before.entry!),
+      },
+      ...input,
+    },
+  };
+}
+
+function recap(
+  f: Fixture,
+  text: string,
+  leafEntryId: string | null = null,
+): SessionActivitySummary {
+  const source = f.read();
+  return {
+    version: 1,
+    formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
+    text,
+    updatedAt: 50,
+    sessionId: f.scope.sessionId,
+    lifecycleRevision: source.entry!.lifecycleRevision,
+    ...source.transcript.watermark,
+    leafEntryId,
+    coveredMessages: leafEntryId ? 1 : 0,
+    totalMessages: leafEntryId ? 1 : 0,
+    omittedContent: false,
+  };
+}
+
+it("commits final custody, recap, usage, together across rollback and restart", async () => {
   await withActor(async (f) => {
-    runSqliteImmediateTransactionSync(f.database.db, () => {
-      writeSessionEntry(f.database, f.target.sessionKey, {
-        ...f.nativeEntry()!,
-        lifecycleRevision: "completion-lifecycle",
-        activeWriterRunId: "writer",
-        restartRecoveryDeliveryRunId: "recovery",
-        restartRecoveryDeliverySourceRunId: "source",
-        restartRecoveryRuns: [{ runId: "writer", lifecycleGeneration: "generation" }],
-      });
+    f.writeEntry({
+      ...f.nativeEntry()!,
+      lifecycleRevision: "completion-lifecycle",
+      activeWriterRunId: "writer",
     });
     f.read();
     f.patchEntry({
@@ -59,19 +105,7 @@ it("commits final custody, recap, usage, and claim cleanup together across rollb
     });
     const before = f.read();
     expect(before.entry?.label).toBe("entry owner committed");
-    const activitySummary: SessionActivitySummary = {
-      version: 1,
-      formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
-      text: "Completed the synthetic task",
-      updatedAt: 50,
-      sessionId: f.scope.sessionId,
-      lifecycleRevision: before.entry!.lifecycleRevision,
-      ...before.transcript.watermark,
-      leafEntryId: null,
-      coveredMessages: 0,
-      totalMessages: 0,
-      omittedContent: false,
-    };
+    const activitySummary = recap(f, "Completed the synthetic task");
     const pending: SessionActorPendingFinalDelivery = {
       kind: "replayable",
       text: "recoverable final",
@@ -79,36 +113,11 @@ it("commits final custody, recap, usage, and claim cleanup together across rollb
       intentId: "intent",
       deliveries: [{ id: "payload", state: "prepared" }],
     };
-    const command: Mutation = {
-      type: "session.actor.completeTurn",
-      input: {
-        target: f.target,
-        commandId: "complete-with-cleanup",
-        phaseId: "completion",
-        expected: before.version,
-        bookkeeping: {
-          sessionId: f.scope.sessionId,
-          lifecycleRevision: before.entry!.lifecycleRevision ?? null,
-          writerRunId: "writer",
-          expectedState: buildRestartRecoveryExpectedState(before.entry!),
-        },
-        activitySummary,
-        pendingFinalDelivery: pending,
-        restartClaimCleanup: {
-          kind: "restart-claim-clear",
-          expected: {
-            sessionId: f.scope.sessionId,
-            lifecycleRevision: before.entry!.lifecycleRevision,
-          },
-          sessionId: f.scope.sessionId,
-          recoveryRunId: "recovery",
-          recoverySourceRunId: "source",
-          executionRunId: "writer",
-          executionGeneration: "generation",
-        },
-        reducers: [{ kind: "group-intro", needsSystemIntro: false }, usageReducer],
-      },
-    };
+    const command = completion(f, "complete-with-cleanup", {
+      activitySummary,
+      pendingFinalDelivery: pending,
+      reducers: [{ kind: "group-intro", needsSystemIntro: false }, usageReducer],
+    });
     await f.prepare(command);
     f.hooks.admit = (stage) => {
       if (stage === "commit") {
@@ -142,14 +151,10 @@ it("commits final custody, recap, usage, and claim cleanup together across rollb
       pendingFinalDelivery: pending,
       label: "entry owner committed",
       groupActivationNeedsSystemIntro: false,
-      restartRecoveryTerminalRunIds: ["source"],
       activitySummary,
       inputTokens: 12,
       outputTokens: 4,
     });
-    expect(after?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(after?.restartRecoveryDeliverySourceRunId).toBeUndefined();
-    expect(after?.restartRecoveryRuns).toBeUndefined();
   });
 });
 
@@ -164,42 +169,21 @@ it("retains stale recap text but skips another session's recap without losing co
         {
           type: "session",
           id: f.scope.sessionId,
-          version: 3,
           timestamp: "2026-01-01T00:00:00Z",
-          cwd: "/synthetic",
         },
-        {
-          type: "message",
-          id: "recapped-message",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01Z",
-          message: { role: "user", content: "Summarize this input" },
-        },
+        timedMessageEvent("recapped-message", null, "2026-01-01T00:00:01Z", {
+          role: "user",
+          content: "Summarize this input",
+        }),
       ]);
     });
-    const source = f.read();
-    const activitySummary: SessionActivitySummary = {
-      version: 1,
-      formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
-      text: "The original input",
-      updatedAt: 50,
-      sessionId: f.scope.sessionId,
-      lifecycleRevision: source.entry!.lifecycleRevision,
-      ...source.transcript.watermark,
-      leafEntryId: "recapped-message",
-      coveredMessages: 1,
-      totalMessages: 1,
-      omittedContent: false,
-    };
+    const activitySummary = recap(f, "The original input", "recapped-message");
     runSqliteImmediateTransactionSync(f.database.db, () =>
       appendTranscriptEventsInTransaction(f.database, f.scope, [
-        {
-          type: "message",
-          id: "newer-message",
-          parentId: "recapped-message",
-          timestamp: "2026-01-01T00:00:02Z",
-          message: { role: "assistant", content: "New content after the recap started" },
-        },
+        timedMessageEvent("newer-message", "recapped-message", "2026-01-01T00:00:02Z", {
+          role: "assistant",
+          content: "New content after the recap started",
+        }),
       ]),
     );
     const candidates = [
@@ -208,29 +192,15 @@ it("retains stale recap text but skips another session's recap without losing co
       { ...activitySummary, lifecycleRevision: "replaced-lifecycle", text: "Old lifecycle text" },
     ];
     for (const [index, candidate] of candidates.entries()) {
-      const before = f.read();
-      const command: Mutation = {
-        type: "session.actor.completeTurn",
-        input: {
-          target: f.target,
-          commandId: `complete-recap-${index}`,
-          phaseId: "completion",
-          expected: before.version,
-          bookkeeping: {
-            sessionId: f.scope.sessionId,
-            lifecycleRevision: before.entry!.lifecycleRevision ?? null,
-            writerRunId: before.entry!.activeWriterRunId,
-            expectedState: buildRestartRecoveryExpectedState(before.entry!),
+      const command = completion(f, `complete-recap-${index}`, {
+        activitySummary: candidate,
+        reducers: [
+          {
+            ...usageReducer,
+            update: { ...usageReducer.update, usage: { input: 12 + index, output: 4 } },
           },
-          activitySummary: candidate,
-          reducers: [
-            {
-              ...usageReducer,
-              update: { ...usageReducer.update, usage: { input: 12 + index, output: 4 } },
-            },
-          ],
-        },
-      };
+        ],
+      });
       await f.prepare(command);
       expect(f.mutate(command)).toMatchObject({ kind: "committed" });
       const after = f.read();
@@ -252,3 +222,47 @@ it("retains stale recap text but skips another session's recap without losing co
     }
   });
 });
+
+it.each(["active", "complete", "replaced", "cleared"] as const)(
+  "preserves %s Goal identity and status while accounting a continuation across actor restart",
+  async (state) => {
+    await withActor(async (f) => {
+      const entry = f.nativeEntry()!;
+      f.writeEntry({
+        ...entry,
+        goal:
+          state === "cleared"
+            ? undefined
+            : {
+                ...buildCreatedSessionGoal(entry, { objective: "Verify the synthetic fixture" }, 1),
+                id: state === "replaced" ? "other-goal" : "admitted-goal",
+                status: state === "complete" ? "complete" : "active",
+                tokenStart: 0,
+                tokenStartFresh: true,
+                tokensUsed: 12,
+                continuationTurns: 2,
+              },
+      });
+      const before = f.read();
+      const command = completion(f, "goal-turn-complete", {
+        phaseId: "goal-turn",
+        reducers: [{ kind: "goal-continuation", goalId: "admitted-goal" }],
+      });
+      await f.prepare(command);
+      expect(f.mutate(command)).toMatchObject({ kind: "committed" });
+      f.restartActor();
+      await f.prepare(command);
+      const replay = f.mutate(command);
+      expect(replay).toMatchObject({ kind: "stale-version" });
+      const goal = f.read().entry?.goal;
+      if (state === "cleared") {
+        expect(goal).toBeUndefined();
+      } else {
+        expect(goal).toEqual({
+          ...before.entry!.goal,
+          continuationTurns: state === "replaced" ? 2 : 3,
+        });
+      }
+    });
+  },
+);

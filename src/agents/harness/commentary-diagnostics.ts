@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import {
@@ -10,7 +9,6 @@ import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnost
 import { isCompleteAgentPreamble } from "../agent-activity-presentation.js";
 
 const MAX_COMMENTARY_CHARS = 16_384;
-const MAX_RECENT_COMMENTARY = 256;
 
 /** Observe accepted, completed preambles for one harness attempt. */
 export function subscribeAgentCommentaryDiagnostics(
@@ -18,7 +16,6 @@ export function subscribeAgentCommentaryDiagnostics(
   base: Omit<DiagnosticHarnessRunStartedEvent, "type" | "seq" | "ts">,
 ): () => void {
   const capture = resolveDiagnosticModelContentCapturePolicy(config).outputMessages;
-  const recent = new Set<string>();
   return onAgentEventForRun(base.runId, (evt) => {
     if (
       !areDiagnosticsEnabledForProcess() ||
@@ -33,16 +30,6 @@ export function subscribeAgentCommentaryDiagnostics(
       return;
     }
     const itemId = typeof evt.data.itemId === "string" ? evt.data.itemId : "";
-    // Replay may repeat a completed item. Keep only bounded hashes, never raw
-    // commentary in dedupe state when content capture is disabled.
-    const signature = createHash("sha256").update(itemId).update("\0").update(text).digest("hex");
-    if (recent.has(signature)) {
-      return;
-    }
-    recent.add(signature);
-    if (recent.size > MAX_RECENT_COMMENTARY) {
-      recent.delete(recent.values().next().value!);
-    }
     const event = {
       ...base,
       type: "agent.commentary" as const,

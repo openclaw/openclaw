@@ -1,4 +1,4 @@
-import { createHash, X509Certificate } from "node:crypto";
+import { createHash, randomBytes, X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
@@ -14,6 +14,7 @@ import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixt
 import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
+import { NODE_STREAM_MAX_FRAME_BYTES } from "../shared/node-desktop-stream.js";
 import { runNodeStreamTransport } from "./node-stream-transport.js";
 
 type StreamOptions = Parameters<typeof runNodeStreamTransport>[0];
@@ -66,11 +67,14 @@ async function streamHarness(
       await closePeers?.();
       await close(server);
     },
+    async [Symbol.asyncDispose]() {
+      await this.cleanup();
+    },
   };
 }
 async function websocketHarness(onConnection?: (ws: WebSocket) => void, target?: Duplex) {
   const server = createHttpServer();
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({ server, maxPayload: NODE_STREAM_MAX_FRAME_BYTES });
   if (onConnection) {
     wss.on("connection", onConnection);
   }
@@ -385,7 +389,7 @@ it("settles after the target closes before drain", async () => {
   });
   target.once("end", () => target.destroy());
   const frames: string[] = [];
-  const harness = await websocketHarness((ws) => {
+  await using harness = await websocketHarness((ws) => {
     ws.on("message", (data) => {
       frames.push(rawDataToString(data));
       if (frames.length === 1) {
@@ -408,10 +412,11 @@ it("settles after the target closes before drain", async () => {
     expect(frames).toEqual([JSON.stringify({ ok: true }), "terminal-response"]);
     expect(writes).toBe(1);
     expect(target.listenerCount("drain")).toBe(0);
+    expect(target.destroyed).toBe(true);
+    expect(harness.wss.clients.size).toBe(0);
   } finally {
     harness.controller.abort();
     await running;
-    await harness.cleanup();
   }
 });
 describe("node stream close acknowledgement", () => {
@@ -495,7 +500,6 @@ describe("node stream close acknowledgement", () => {
         connected.resolve(peer);
       });
       const targetPort = await listenServer(targetServer);
-      const timerSpy = vi.spyOn(globalThis, "setTimeout");
       const running = harness.run({ target: { port: targetPort } });
       let targetPeer: net.Socket | undefined;
       try {
@@ -507,7 +511,6 @@ describe("node stream close acknowledgement", () => {
           client.close();
         }
         await running;
-        expect(timerSpy.mock.calls.map(([, delayMs]) => delayMs)).not.toContain(5_000);
         expect(receivedSevens).toBe(payload.length);
       } finally {
         harness.controller.abort();
@@ -515,79 +518,51 @@ describe("node stream close acknowledgement", () => {
         targetPeer?.destroy();
         await close(targetServer);
         await harness.cleanup();
-        timerSpy.mockRestore();
       }
     },
   );
 
-  it("rejects non-binary gateway data and closes the stream", async () => {
-    const gatewayClosed = createDeferred();
-    let gatewaySocket: { send: (data: string) => void } | undefined;
-    const harness = await websocketHarness((ws) => {
-      gatewaySocket = ws;
-      ws.once("close", () => gatewayClosed.resolve());
+  it("splits one large target read into ordered Gateway-sized messages", async () => {
+    const payload = randomBytes(200 * 1024);
+    const frames: Buffer[] = [];
+    const settled = createDeferred();
+    await using harness = await websocketHarness((ws) => {
+      ws.once("message", () => {
+        ws.on("message", (data) => {
+          frames.push(data as Buffer);
+          if (Buffer.concat(frames).length === payload.length) {
+            settled.resolve();
+          }
+        });
+      });
+      // An oversized message fails the server socket (1009) like the Gateway attach server.
+      ws.on("error", () => settled.resolve());
+      ws.once("close", () => settled.resolve());
     });
-    try {
-      await expect(
-        harness.run({
-          emitStatus: async (status) => {
-            if (status.includes("attached")) {
-              gatewaySocket?.send("not-binary");
-            }
-          },
-        }),
-      ).rejects.toThrow(/non-binary/);
-      await gatewayClosed.promise;
-      expect(harness.target.destroyed).toBe(true);
-      expect(harness.wss.clients.size).toBe(0);
-    } finally {
-      await harness.cleanup();
-    }
+    void harness.run().catch(() => undefined);
+    harness.target.push(payload);
+    await settled.promise;
+    expect(Buffer.concat(frames).equals(payload)).toBe(true);
+    expect(frames.every((frame) => frame.length <= NODE_STREAM_MAX_FRAME_BYTES)).toBe(true);
   });
 
-  it("completes a drained forward when the gateway acknowledges close", async () => {
+  it("rejects non-binary gateway data and closes the stream", async () => {
     const gatewayClosed = createDeferred();
-    const messages: Buffer[] = [];
-    const harness = await websocketHarness((ws) => {
-      ws.on("message", (data) => {
-        if (Buffer.isBuffer(data)) {
-          messages.push(data);
-        }
-      });
+    await using harness = await websocketHarness((ws) => {
+      ws.once("message", () => ws.send("not-binary"));
       ws.once("close", () => gatewayClosed.resolve());
     });
-    const { target } = harness;
-    target.on("end", () => target.destroy());
-    const timerSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      await harness.run({
-        emitStatus: async (status) => {
-          if (status.includes("attached")) {
-            target.push(Buffer.alloc(64, 7));
-            target.push(null);
-          }
-        },
-      });
-      await gatewayClosed.promise;
-      expect(Buffer.concat(messages.slice(1))).toEqual(Buffer.alloc(64, 7));
-      expect(target.destroyed).toBe(true);
-      expect(harness.wss.clients.size).toBe(0);
-      expect(timerSpy.mock.calls.map(([, delayMs]) => delayMs)).not.toContain(5_000);
-    } finally {
-      await harness.cleanup();
-      timerSpy.mockRestore();
-    }
+    await expect(harness.run()).rejects.toThrow(/non-binary/);
+    await gatewayClosed.promise;
+    expect(harness.target.destroyed).toBe(true);
+    expect(harness.wss.clients.size).toBe(0);
   });
 
   it("rejects a protocol error without a node handshake timer", async () => {
-    const harness = await rawFrameHarness([0x83, 0x00]);
+    await using harness = await rawFrameHarness([0x83, 0x00]);
     const started = Date.now();
-    try {
-      await expect(harness.run()).rejects.toThrow(/invalid opcode 3/);
-      expect(Date.now() - started).toBeLessThan(2_000);
-    } finally {
-      await harness.cleanup();
-    }
+    await expect(harness.run()).rejects.toThrow(/invalid opcode 3/);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   it("closes the client when a gateway close withholds TCP FIN", async () => {

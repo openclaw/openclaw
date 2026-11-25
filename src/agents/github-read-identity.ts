@@ -1,17 +1,16 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { resolveExecutablePath } from "../infra/executable-path.js";
+import { resolveExecutablePathAsync } from "../infra/executable-path.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.js";
 import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { GitHubCredentialReader } from "./github-credential-reader.js";
 import { resolveGitHubHost } from "./github-host-runtime.js";
 
@@ -28,14 +27,40 @@ const nativeTokens = createStaleWhileRevalidateCache<string | undefined>({
   cacheable: (token) => token !== undefined,
 });
 
-const identityChanges = new Set<() => void>();
-export function subscribeGitHubIdentityChanges(listener: () => void): () => void {
-  return registerListener(identityChanges, listener);
+type NativeGitHubConfiguration = "configured" | "unconfigured" | "unknown";
+let nativeConfiguration: { host: string; state: NativeGitHubConfiguration } | undefined;
+
+/** Gateway-process selection only; caller environment overlays never share this fact. */
+export function readNativeGitHubConfiguration(host: string): NativeGitHubConfiguration {
+  return nativeConfiguration?.host === host ? nativeConfiguration.state : "unknown";
 }
+
+/** The GitHub lifecycle samples local configuration off the turn path, without API verification. */
+export async function refreshNativeGitHubConfiguration(): Promise<void> {
+  const host = resolveGitHubHost();
+  const current = { host, state: readNativeGitHubConfiguration(host) };
+  nativeConfiguration = current;
+  let state: NativeGitHubConfiguration = "unknown";
+  try {
+    state = (await readNativeGitHubToken({}, true, host)) ? "configured" : "unconfigured";
+  } catch {
+    // Rejected, locked, offline, or unreadable accounts are not proof of absence.
+  }
+  if (nativeConfiguration === current) {
+    current.state = state;
+  }
+}
+
+export const githubIdentityChanges: { onChange?: () => void } = {};
 
 export function clearNativeGitHubTokenCache(): void {
   nativeTokens.clear();
-  notifyListeners(identityChanges, undefined);
+  nativeConfiguration = undefined;
+  try {
+    githubIdentityChanges.onChange?.();
+  } catch {
+    // Discovery is best effort; cache retirement must still succeed.
+  }
 }
 
 function ambientGitHubCredential(env: NodeJS.ProcessEnv, host = resolveGitHubHost()) {
@@ -67,16 +92,14 @@ export async function readCachedNativeGitHubToken(
   }
   // Include the complete command context: operators can provide gh wrappers,
   // and relative config/executable paths depend on the current directory.
-  const key = createHash("sha256")
-    .update(
-      JSON.stringify([
-        host,
-        process.cwd(),
-        Object.entries(effectiveEnv).toSorted(([left], [right]) => left.localeCompare(right)),
-        requireAbsentProof,
-      ]),
-    )
-    .digest("hex");
+  const key = sha256Hex(
+    JSON.stringify([
+      host,
+      process.cwd(),
+      Object.entries(effectiveEnv).toSorted(([left], [right]) => left.localeCompare(right)),
+      requireAbsentProof,
+    ]),
+  );
   const { value, stale } = await nativeTokens.read(
     key,
     () => readNativeGitHubToken(env, requireAbsentProof, host),
@@ -199,7 +222,7 @@ export async function readNativeGitHubToken(
       if (
         !hasErrnoCode(result.error, "ENOENT") ||
         !(await fs.stat(cwd)).isDirectory() ||
-        resolveExecutablePath("gh", { env: effectiveEnv, cwd, useCache: false })
+        (await resolveExecutablePathAsync("gh", { env: effectiveEnv, cwd, useCache: false }))
       ) {
         throw new GitHubIdentityError("unverified");
       }
@@ -350,11 +373,9 @@ export function createGitHubReadIdentity(
     cacheScope:
       selection.source === "anonymous"
         ? "anonymous"
-        : createHash("sha256")
-            .update(
-              JSON.stringify([selection.source, selection.profileId, selection.accountId, token]),
-            )
-            .digest("hex"),
+        : sha256Hex(
+            JSON.stringify([selection.source, selection.profileId, selection.accountId, token]),
+          ),
     assertSelected,
     revalidate: () => start(() => undefined),
     start,

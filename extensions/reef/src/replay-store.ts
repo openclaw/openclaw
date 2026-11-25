@@ -59,13 +59,9 @@ function parseReplayRecord(value: ReefReplayRecord | undefined): ReefReplayRecor
   return value;
 }
 
-function encryptReplayBody(
-  body: MessageBody,
-  key: Uint8Array,
-  rng: (length: number) => Uint8Array,
-): { enc: string } {
+function encryptReplayBody(body: MessageBody, key: Uint8Array): { enc: string } {
   validateMessageBody(body);
-  const nonce = rng(12);
+  const nonce = randomBytes(12);
   if (nonce.length !== 12) {
     throw new Error("replay body rng returned invalid nonce");
   }
@@ -98,25 +94,18 @@ type ReplayMutation<T> = {
 
 export class ReefSqliteReplayStore implements ReplayStore {
   readonly #bodyKey: Uint8Array;
-  readonly #rng: (length: number) => Uint8Array;
   readonly #store: PluginStateKeyedStore<ReefReplayRecord, 2>;
   readonly #claimOwners = new Map<string, string>();
   readonly #enqueue = createAsyncLock();
 
-  constructor(
-    runtime: PluginRuntime,
-    bodyKey: Uint8Array,
-    rng: (length: number) => Uint8Array = randomBytes,
-    maxEntries = REEF_REPLAY_MAX_ENTRIES,
-  ) {
+  constructor(runtime: PluginRuntime, bodyKey: Uint8Array) {
     if (bodyKey.length !== 32) {
       throw new Error("replay body key must be 32 bytes");
     }
     this.#bodyKey = bodyKey.slice();
-    this.#rng = rng;
     const options = {
       namespace: REEF_REPLAY_NAMESPACE,
-      maxEntries,
+      maxEntries: REEF_REPLAY_MAX_ENTRIES,
       overflowPolicy: "reject-new" as const,
       // Once this expires, the protocol rejects the original envelope by age.
       // The margin covers clock skew and delayed local processing.
@@ -242,7 +231,7 @@ export class ReefSqliteReplayStore implements ReplayStore {
           const { claimOwner: _claimOwner, claimExpiresAt: _claimExpiresAt, ...rest } = existing;
           completion ??= {
             receipt,
-            ...(body ? { body: encryptReplayBody(body, this.#bodyKey, this.#rng) } : {}),
+            ...(body ? { body: encryptReplayBody(body, this.#bodyKey) } : {}),
           };
           return { value: { ...rest, state: "completed", ...completion }, result: true };
         },

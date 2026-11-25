@@ -1,6 +1,9 @@
-import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  asFiniteNumber,
+  isRecord,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { sanitizeTerminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import type { CodexThreadTurnsListResponse } from "./app-server/protocol.js";
 import {
   CODEX_INTERACTIVE_CUSTOM_THREAD_SOURCES,
@@ -74,28 +77,25 @@ export function boundedCatalogString(
     : undefined;
 }
 
-/** Select a bounded input only for the canonical terminal sanitizer. */
-export function selectCodexCatalogPreviewInput(value: string): string {
-  if (value.length <= SESSION_PREVIEW_PREFIX_LENGTH) {
-    return value;
-  }
-  const prefix = value.slice(0, SESSION_PREVIEW_PREFIX_LENGTH).replace(/\s+/g, " ").trim();
-  // Without controls the sanitizer is identity; the extra unit preserves trim
-  // and surrogate lookahead at the output boundary, regardless of the raw tail.
-  return prefix.length > MAX_SESSION_PREVIEW_LENGTH && !/\p{Cc}/u.test(prefix) ? prefix : value;
-}
-
 /** Detach the small preview from V8's potentially large sliced-string backing store. */
 export function truncateCodexCatalogPreview(
   value: string,
   sanitize: typeof sanitizeTerminalText,
 ): string {
-  const preview = boundedCatalogString(
-    sanitize(value.replace(/\s+/g, " ")),
+  let normalized: string | undefined;
+  if (value.length > SESSION_PREVIEW_PREFIX_LENGTH) {
+    const prefix = value.slice(0, SESSION_PREVIEW_PREFIX_LENGTH).replace(/\s+/g, " ").trim();
+    // Without controls the canonical sanitizer is identity. This already-trimmed
+    // prefix also retains lookahead across the UTF-16 output boundary.
+    if (prefix.length > MAX_SESSION_PREVIEW_LENGTH && !/\p{Cc}/u.test(prefix)) {
+      normalized = prefix;
+    }
+  }
+  const preview = truncateUtf16Safe(
+    normalized ?? sanitize(value.replace(/\s+/g, " ")).trim(),
     MAX_SESSION_PREVIEW_LENGTH,
-    "truncate",
   );
-  return Buffer.from(preview ?? "", "utf8").toString("utf8");
+  return Buffer.from(preview, "utf8").toString("utf8");
 }
 
 function normalizeInteractiveThreadSource(source: unknown) {
@@ -430,15 +430,14 @@ export function filterCatalogPageByTitle(
   page: CodexSessionCatalogPage,
   searchTerm: string | undefined,
 ): CodexSessionCatalogPage {
-  if (!searchTerm) {
+  const search = searchTerm?.toLocaleLowerCase().normalize("NFC");
+  if (!search) {
     return page;
   }
   return {
     ...page,
     sessions: page.sessions.filter((session) =>
-      (session.name ?? session.fallbackName)
-        ?.toLocaleLowerCase()
-        .includes(searchTerm.toLocaleLowerCase()),
+      (session.name ?? session.fallbackName)?.toLocaleLowerCase().normalize("NFC").includes(search),
     ),
   };
 }
@@ -497,10 +496,13 @@ export function parseTranscriptPage(value: unknown): CodexThreadTurnsListRespons
         !isRecord(turn) || !Array.isArray(turn.items) || turn.items.some((item) => !isRecord(item)),
     )
   ) {
-    throw new Error("Codex app-server returned an invalid transcript page");
+    throw new Error("Codex app-server returned an invalid chat history page");
   }
-  const nextCursor = readControlCursor(value.nextCursor, "transcript next response");
-  const backwardsCursor = readControlCursor(value.backwardsCursor, "transcript backwards response");
+  const nextCursor = readControlCursor(value.nextCursor, "chat history next response");
+  const backwardsCursor = readControlCursor(
+    value.backwardsCursor,
+    "chat history backwards response",
+  );
   const page: CodexThreadTurnsListResponse = {
     data: value.data as CodexThreadTurnsListResponse["data"],
     ...(nextCursor ? { nextCursor } : {}),
@@ -509,7 +511,7 @@ export function parseTranscriptPage(value: unknown): CodexThreadTurnsListRespons
   // A bounded item count does not bound tool output embedded in one item. Keep
   // the page below node.invoke and Gateway WebSocket payload ceilings.
   if (Buffer.byteLength(JSON.stringify(page), "utf8") > MAX_TRANSCRIPT_PAGE_BYTES) {
-    throw new Error("Codex app-server transcript page exceeds the safe response size");
+    throw new Error("Codex app-server chat history page exceeds the safe response size");
   }
   return page;
 }

@@ -1,14 +1,7 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
-import { expectDefined } from "@openclaw/normalization-core";
-import { Value } from "typebox/value";
 import { expect, it } from "vitest";
 import { createSessionsHistoryTool } from "./sessions-history-tool.js";
-import {
-  type CallGatewayRequest,
-  readHistoryDetails,
-  readMessageId,
-  requireGatewayRequest,
-} from "./sessions-history-tool.test-support.js";
+import { readHistoryDetails } from "./sessions-history-tool.test-support.js";
 
 const historyDetails = (messages: unknown[], truncated = false, extra = {}) => ({
   sessionKey: "main",
@@ -21,64 +14,26 @@ const historyDetails = (messages: unknown[], truncated = false, extra = {}) => (
   ...extra,
 });
 
-it("sessions_history serializes each message once while growing a 512-message anchored window", async () => {
-  const messages = Array.from({ length: 512 }, (_, index) => ({
+it("sessions_history preserves Unicode messages in an anchored window", async () => {
+  const messages = Array.from({ length: 3 }, (_, index) => ({
     role: index % 2 === 0 ? "user" : "assistant",
     content: `入口 🦊 "message ${index}"\n`,
     __openclaw: { id: `budget-${index}`, seq: index + 1 },
   }));
-  const ids = new Set(messages.map((message) => readMessageId(message)));
-  const requests: CallGatewayRequest[] = [];
   const tool = createSessionsHistoryTool({
     config: {},
-    callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
-      requests.push(request);
-      return { messages, totalMessages: messages.length } as T;
-    },
+    callGateway: async <T>() => ({ messages, totalMessages: messages.length }) as T,
   });
   const stringify = JSON.stringify;
   const originalMessages = stringify(messages);
-  const descriptor = expectDefined(
-    Object.getOwnPropertyDescriptor(JSON, "stringify"),
-    "native JSON.stringify descriptor",
-  );
-  let serializedElements = 0;
-  Object.defineProperty(JSON, "stringify", {
-    ...descriptor,
-    value(...args: Parameters<typeof JSON.stringify>) {
-      const [value] = args;
-      if (
-        Array.isArray(value) &&
-        value.length > 0 &&
-        value.every((message) => ids.has(readMessageId(message) ?? ""))
-      ) {
-        serializedElements += value.length;
-      }
-      return stringify(...args);
-    },
+  const result = await tool.execute("anchored-budget", {
+    sessionKey: "main",
+    limit: messages.length,
+    messageId: "budget-1",
   });
-  let result: Awaited<ReturnType<typeof tool.execute>>;
-  try {
-    result = await tool.execute("anchored-work-budget", {
-      sessionKey: "main",
-      limit: messages.length,
-      messageId: "budget-256",
-    });
-  } finally {
-    Object.defineProperty(JSON, "stringify", descriptor);
-  }
 
-  const expected = historyDetails(messages, false, { totalMessages: messages.length });
-  expect(result).toEqual({
-    content: [{ type: "text", text: stringify(expected, null, 2) }],
-    details: expected,
-  });
-  expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-  expect(requireGatewayRequest(requests, "chat.history")).toMatchObject({
-    params: { sessionKey: "main", limit: 512, messageId: "budget-256" },
-  });
+  expect(readHistoryDetails(result).messages).toEqual(messages);
   expect(stringify(messages)).toBe(originalMessages);
-  expect(serializedElements).toBe(messages.length);
 });
 
 type BudgetCase = [

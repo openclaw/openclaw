@@ -1,6 +1,9 @@
 import { createSignal, onCleanup } from "solid-js";
 import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
 
+// Cached items hold their decoded image; browsers may drop an unreferenced one and refetch it.
+const decodedImages = new WeakMap<ImageLightboxItem, HTMLImageElement>();
+
 async function decodeImage(item: ImageLightboxItem | null): Promise<ImageLightboxItem | null> {
   if (!item || item.kind === "video") {
     return item;
@@ -10,6 +13,7 @@ async function decodeImage(item: ImageLightboxItem | null): Promise<ImageLightbo
   image.src = item.src;
   try {
     await image.decode();
+    decodedImages.set(item, image);
     return item;
   } catch {
     item.release?.();
@@ -243,13 +247,20 @@ export function exitLightboxVideoFullscreen(video: HTMLVideoElement | undefined,
   return true;
 }
 
-export function trapLightboxTabFocus(event: KeyboardEvent, focusables: NodeListOf<HTMLElement>) {
+export function trapLightboxTabFocus(event: KeyboardEvent, focusables: Iterable<HTMLElement>) {
   if (event.key !== "Tab") {
     return;
   }
-  const actions = [...focusables].filter(
-    (action) => !(action instanceof HTMLButtonElement && action.disabled),
-  );
+  const actions = [...focusables]
+    .filter(
+      (action) =>
+        action.isConnected &&
+        action.tabIndex >= 0 &&
+        !(action instanceof HTMLButtonElement && action.disabled),
+    )
+    .toSorted((left, right) =>
+      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    );
   const first = actions[0];
   const last = actions.at(-1);
   if (!first || !last) {

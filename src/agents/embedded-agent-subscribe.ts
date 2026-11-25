@@ -1,7 +1,3 @@
-import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-/**
- * Subscribes to embedded-agent sessions and streams formatted replies/events.
- */
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -14,18 +10,14 @@ import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runn
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { installToolAuthoredSourceReplyTerminalHook } from "./embedded-agent-runner/run/message-tool-terminal.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
-import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import { cleanupRunToolStartData } from "./embedded-agent-subscribe.handlers.tools.start.js";
-import type {
-  EmbeddedAgentSubscribeContext,
-  EmbeddedAgentSubscribeState,
-} from "./embedded-agent-subscribe.handlers.types.js";
+import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createEmbeddedModelState } from "./embedded-agent-subscribe.model-state.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
-import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
+import { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
 import { createEmbeddedToolLifecycleRunner } from "./embedded-agent-subscribe.tool-lifecycle.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
@@ -39,6 +31,7 @@ import {
 } from "./embedded-agent-utils.js";
 import { sessionManagerReadTranscriptStart } from "./sessions/session-manager-current-turn.js";
 import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
+import { ToolActivityPresentation } from "./tool-activity-presentation.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
 
@@ -77,7 +70,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
-  const state: EmbeddedAgentSubscribeState = createEmbeddedAgentSubscribeState(params);
+  const state = new EmbeddedAgentSubscribeState(params);
   const {
     captureModelEvent,
     recordAuxiliaryUsage,
@@ -290,6 +283,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
+    state.toolActivityPresentation = new ToolActivityPresentation();
     state.liveEditDiffStateById.clear();
     state.itemActiveIds.clear();
     state.itemStartedCount = 0;
@@ -383,10 +377,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     captureModelEvent,
     incrementCompactionCount,
     noteCompactionTokensAfter,
-    getUsageTotals,
-    getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
-    getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
 
   const removeSourceReplyTerminalHook = installToolAuthoredSourceReplyTerminalHook({
@@ -447,37 +438,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
       state.latestMcpConnectAction ? { ...state.latestMcpConnectAction } : undefined,
     runToolLifecycle: createEmbeddedToolLifecycleRunner(ctx),
     unsubscribe,
-    setTerminalLifecycleMeta: (meta: {
-      replayInvalid?: boolean;
-      livenessState?: EmbeddedRunLivenessState;
-      stopReason?: string;
-      yielded?: boolean;
-      timeoutPhase?: AgentRunTimeoutPhase;
-      providerStarted?: boolean;
-      aborted?: boolean;
-    }) => {
-      if (meta.replayInvalid !== undefined) {
-        state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
-      }
-      if (meta.livenessState) {
-        state.livenessState = meta.livenessState;
-      }
-      if (meta.stopReason !== undefined) {
-        state.terminalStopReason = meta.stopReason;
-      }
-      if (meta.yielded !== undefined) {
-        state.yielded = meta.yielded;
-      }
-      if (meta.timeoutPhase) {
-        state.timeoutPhase = meta.timeoutPhase;
-      }
-      if (meta.providerStarted !== undefined) {
-        state.providerStarted = meta.providerStarted;
-      }
-      if (meta.aborted !== undefined) {
-        state.terminalAborted = meta.aborted;
-      }
-    },
+    setTerminalLifecycleMeta: state.setTerminalLifecycleMeta.bind(state),
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
     isCompactionInFlight: () => state.compactionInFlight,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
@@ -487,8 +448,6 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     getSourceReplyDelivered: () => state.sourceReplyDelivered,
     getSourceReplyDeliveryState: () => state.sourceReplyDeliveryState,
     endsWithSourceProgress: () => state.lastToolTurnOnlySourceProgress === true,
-    getHeartbeatToolResponse: () =>
-      state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
     getToolAutoDeliveryMediaUrls: () => [...state.toolAutoDeliveryMediaUrls],
     hasToolMediaBlockReply: () => state.hasToolMediaBlockReply,

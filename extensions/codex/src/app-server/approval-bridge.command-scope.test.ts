@@ -15,6 +15,9 @@ type HostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
 const authStorage = AuthStorage.inMemory();
 const model = createCodexTestModel("openai");
 const modelRegistry = ModelRegistry.inMemory(authStorage);
+const networkAmendment = (action: "allow" | "deny"): JsonValue => ({
+  applyNetworkPolicyAmendment: { network_policy_amendment: { host: "registry.npmjs.org", action } },
+});
 
 function createParams(overrides: Partial<HostCapabilities> = {}): EmbeddedRunAttemptParams {
   return {
@@ -119,21 +122,9 @@ describe("Codex native command approval scopes", () => {
   });
 
   it("describes operator-selected network amendments as persistent native policy", async () => {
-    const decision: JsonValue = {
-      applyNetworkPolicyAmendment: {
-        network_policy_amendment: { host: "registry.npmjs.org", action: "allow" },
-      },
-    };
+    const decision = networkAmendment("allow");
     const { result, request, resolved } = await requestCommandApproval({
-      availableDecisions: [
-        {
-          applyNetworkPolicyAmendment: {
-            network_policy_amendment: { host: "registry.npmjs.org", action: "deny" },
-          },
-        },
-        decision,
-        "cancel",
-      ],
+      availableDecisions: [networkAmendment("deny"), decision, "cancel"],
       decision: "allow-always",
       network: true,
     });

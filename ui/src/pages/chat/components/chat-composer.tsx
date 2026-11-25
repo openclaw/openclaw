@@ -4,29 +4,44 @@ import {
   createProjection,
   createSignal,
   merge,
-  onCleanup,
   onSettled,
+  Show,
   untrack,
 } from "solid-js";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { navigateToModelProvider } from "../../model-providers/navigation.ts";
+import { isChatRunWorking } from "../chat-run-working.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
-import {
-  createChatComposerContext,
-  createComposerDictationOptions,
-} from "./chat-composer-frame.ts";
+import { navigateToSpeechSettings } from "../voice-api-key-navigation.ts";
+import { createComposerDictationOptions } from "./chat-composer-dictation-options.ts";
+import { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
 import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
-import { composerDraftKey, getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
+import type { ComposerQuestions } from "./chat-composer-questions.ts";
+import { composerDraftKey, getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.tsx";
 
-export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
+export { resetChatComposerState } from "./chat-composer-state.ts";
 
-export function ChatComposer(props: ChatComposerProps) {
-  const state = getChatComposerState(untrack(() => props.paneId));
+export function ChatComposer(props: ChatComposerProps & { questions: ComposerQuestions }) {
+  // Native pane inputs can acquire their final presentation identity after mount.
+  // A new identity needs its own retained state and native textarea binding.
+  return (
+    <Show when={props.paneId} keyed>
+      {(paneId) => <PaneComposer {...props} paneId={paneId} />}
+    </Show>
+  );
+}
+
+function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions }) {
+  // A pane owns this component's lifetime; a different pane mounts a different composer.
+  const initialPaneId = untrack(() => props.paneId);
+  const state = getChatComposerState(initialPaneId);
   // Unrelated prop updates must preserve the native input's uncommitted IME preview.
   const compositionDraftKey = createMemo(() => composerDraftKey(props));
   const [composition, setComposition] = createSignal<{ key: string; value: string } | null>(() => {
@@ -55,13 +70,33 @@ export function ChatComposer(props: ChatComposerProps) {
   );
   const goalComposer = createGoalComposer(() => currentProps, state);
   const microphonePicker = (state.microphonePicker ??= new ComposerMicrophoneOwner());
-  state.dictation ??= new ComposerDictationOwner(
-    untrack(() =>
+  if (!state.dictation) {
+    // Seed this retained owner once; later configuration is admitted by update(), not recreation.
+    const initialDictationOptions = untrack(() =>
       createComposerDictationOptions(currentProps, state, microphonePicker, interaction.setError),
-    ),
-  );
-  const voice = { dictation: state.dictation, picker: microphonePicker };
-  onCleanup(
+    );
+    state.dictation = new ComposerDictationOwner(initialDictationOptions);
+  }
+  const application = useOptionalApplication();
+  const voice = {
+    dictation: state.dictation,
+    picker: microphonePicker,
+    configureApiKey: application
+      ? (modelProvider: string | undefined) => {
+          if (modelProvider) {
+            navigateToModelProvider(
+              application,
+              currentProps.currentAgentId || null,
+              modelProvider,
+            );
+          } else {
+            navigateToSpeechSettings(application);
+          }
+        }
+      : undefined,
+  };
+  // Dictation admission invalidates edits and dismisses errors before the next input event.
+  onSettled(() =>
     voice.dictation.subscribe(() => {
       if (voice.dictation.locksComposer) {
         state.editRevision += 1;
@@ -71,7 +106,7 @@ export function ChatComposer(props: ChatComposerProps) {
   );
   const dictation = projectOwner(voice.dictation, (owner) => owner);
   const microphone = projectOwner(voice.picker, (owner) => owner);
-  const prediction = createComposerPrediction(() => {
+  const readPredictionSource = () => {
     const options = currentProps.composerPredictions;
     const client = currentProps.gatewayClient;
     if (!options || !client) {
@@ -101,8 +136,13 @@ export function ChatComposer(props: ChatComposerProps) {
         document.visibilityState !== "hidden",
       idle: !isChatRunWorking(currentProps) && !currentProps.sending && !currentProps.queue.length,
     };
-  });
-  const questionPanel = createComposerQuestionPanel(() => currentProps, state, composition);
+  };
+  const prediction = createComposerPrediction(readPredictionSource);
+  const questionPanel = createComposerQuestionPanel(
+    () => props.questions,
+    () => props.getTranscriptElement,
+  );
+  const streaming = createMemo(() => currentProps.stream !== null);
   const context = createMemo(() => {
     draftState();
     dictation.read();
@@ -114,38 +154,101 @@ export function ChatComposer(props: ChatComposerProps) {
       voice,
       prediction,
       questionPanel(),
+      streaming(),
     );
   });
   createEffect(
-    () =>
-      [
-        context().mentionDirectory,
-        context().emojiEnabled,
-        context().draftKey,
-        context().clearSlashMenu,
-        context().clearSkillMenu,
-      ] as const,
-    ([directory, emojiEnabled, draftKey, clearSlash, clearSkill], previous) => {
-      state.mentionMenu.syncDirectory(directory);
-      if (clearSlash) {
+    () => ({ context: context(), predictions: readPredictionSource() }),
+    ({ context: current, predictions }, previous) => {
+      state.mentionMenu.syncDirectory(current.mentionDirectory);
+      if (current.clearSlashMenu) {
         state.slashMenu.reset();
       }
-      if (clearSkill) {
+      if (current.clearSkillMenu) {
         state.skillMenu.reset();
       }
-      if (!emojiEnabled || draftKey !== previous?.[2]) {
+      if (!current.emojiEnabled || current.draftKey !== previous?.context.draftKey) {
         state.emojiMenu.close();
+      }
+      // A proposal belongs to the draft it was offered for; another chat never shows it.
+      if (previous && current.draftKey !== previous.context.draftKey) {
+        state.tasks()?.dismiss();
+      }
+      state.tasks()?.syncDraft(current.visibleDraft);
+      const options = current.dictationOptions;
+      voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
+      voice.dictation.update(options);
+      prediction.sync(predictions);
+      if (current.queuedSubmitDue) {
+        // Submission reads live composer state; run it after this commit.
+        queueMicrotask(current.flushQueuedSubmit);
       }
     },
   );
-  createEffect(
-    () => [context().dictationOptions, currentProps.composerPredictions] as const,
-    ([options]) => {
-      voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
-      voice.dictation.update(options);
-      untrack(() => prediction.sync());
-    },
+  onSettled(() => {
+    const register = currentProps.registerHumanMentionAccess;
+    if (!register) {
+      return undefined;
+    }
+    let active = true;
+    const access = state.mentionMenu.externalAccess(() => {
+      if (!active) {
+        return undefined;
+      }
+      const current = context();
+      return {
+        directory: current.mentionDirectory,
+        host:
+          current.mentionDirectory &&
+          !state.composerComposing &&
+          !state.dictation?.locksComposer &&
+          state.composerTextarea?.isConnected
+            ? current.mentionMenuHost
+            : undefined,
+      };
+    });
+    const release = register(access);
+    return () => {
+      active = false;
+      release();
+    };
+  });
+  onSettled(() =>
+    listen(document, "visibilitychange", () => prediction.sync(readPredictionSource())),
   );
-  onSettled(() => listen(document, "visibilitychange", () => prediction.sync()));
-  return renderChatComposerView(context, currentProps);
+  onSettled(() => {
+    const stop = () => context().stopRunFromEscape();
+    const send = () => context().runControlsProps.onSend();
+    state.stopRunFromEscape = stop;
+    state.sendDraft = send;
+    return () => {
+      if (state.stopRunFromEscape === stop) {
+        state.stopRunFromEscape = null;
+      }
+      if (state.sendDraft === send) {
+        state.sendDraft = null;
+      }
+    };
+  });
+
+  // Owners and handlers retain live reads; only scalar presentation values filter updates.
+  const scalarContext = createProjection(() => {
+    const current = context();
+    return {
+      attachmentReadRevision: current.attachmentReadRevision,
+      canCompose: current.canCompose,
+      showAbortableUi: current.showAbortableUi,
+      visibleDraft: current.visibleDraft,
+      submitQueued: current.submitQueued,
+      predictionText: current.predictionText,
+      runStatusAnnouncement: current.runStatusAnnouncement,
+      cancellationCaveat: current.cancellationCaveat,
+      sendShortcut: current.sendShortcut,
+      showComposerProgress: current.showComposerProgress,
+      draftKey: current.draftKey,
+      mentionError: current.mentionError,
+    };
+  });
+  const viewContext = merge(context, scalarContext);
+  return renderChatComposerView(() => viewContext, currentProps, state);
 }

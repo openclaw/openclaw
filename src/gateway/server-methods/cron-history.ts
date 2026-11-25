@@ -2,7 +2,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import {
   ErrorCodes,
-  errorShape,
   validateCronHistoryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CronHistoryResultSchema } from "../../../packages/gateway-protocol/src/schema/cron.js";
@@ -15,6 +14,7 @@ import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { cronJobMatchesCallerScope, readCronCallerScope } from "./cron-caller-scope.js";
 import { assertCronReadCurrent } from "./cron-job-access.js";
 import { createCronSessionVisibility, cronJobIsVisible } from "./cron-visibility.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandler } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -26,26 +26,19 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
     return;
   }
   if (!params.runId && params.runAtMs === undefined) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "cron.history requires an id and exact runId or runAtMs",
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      "cron.history requires an id and exact runId or runAtMs",
     );
     return;
   }
   const fail = () =>
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        "The recorded cron transcript is unavailable. Refresh the run and try again.",
-      ),
+    respondError(
+      respond,
+      ErrorCodes.UNAVAILABLE,
+      "The chat for this run is unavailable. Refresh the run and try again.",
     );
-  const storeKey = cronStoreKey(context.cronStorePath);
   const sessionVisibility = createCronSessionVisibility(client, context);
   const assertAllowed = (sessionKey?: string, agentId?: string) => {
     assertCronReadCurrent(opts);
@@ -67,11 +60,12 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
       throw new Error("Cron job not found");
     }
     if (sessionKey && visibility && !visibility(sessionKey, agentId)) {
-      throw new Error("Cron transcript not found");
+      throw new Error("Chat for this run not found");
     }
   };
   try {
     await context.cron.readJob(params.id);
+    const storeKey = context.cron.getStoreKey?.() ?? cronStoreKey(context.cronStorePath);
     await sessionVisibility.prepare();
     const select = () =>
       readCronRunHistoryBinding(storeKey, params.id, {
@@ -108,7 +102,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
     };
     const assertCurrent = (transcriptSessionKey?: string) => {
       if (
-        cronStoreKey(context.cronStorePath) !== storeKey ||
+        (context.cron.getStoreKey?.() ?? cronStoreKey(context.cronStorePath)) !== storeKey ||
         resolveSessionStorePathCore(context.getRuntimeConfig().session?.store, { agentId }) !==
           scope.storePath
       ) {
@@ -172,7 +166,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
           !Value.Check(CronHistoryResultSchema, result) ||
           Buffer.byteLength(JSON.stringify(result)) > MAX_CRON_HISTORY_BYTES
         ) {
-          throw new Error("Invalid cron transcript page");
+          throw new Error("Invalid run chat history page");
         }
         // The shared retained-transcript owner still holds current sharing facts here.
         assertCurrent(physical.sessionKey);

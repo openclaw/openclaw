@@ -26,6 +26,12 @@ export type RequestClientOptions = {
   /** Complete versioned REST base supplied by the Discord endpoint override. */
   apiBaseUrl?: string;
   signal?: AbortSignal;
+  /**
+   * Originating invocation cancellation. Drops queued work that was never
+   * issued and stops retry waits; requests already dispatched settle normally
+   * so a successful write is never reported as unsent.
+   */
+  callerSignal?: AbortSignal;
   timeout?: number;
   queueRequests?: boolean;
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -103,7 +109,6 @@ export class RequestClient {
   protected token: string;
   protected customFetch: DiscordEndpointRuntime["fetch"] | undefined;
   private readonly guardedEndpoint: boolean;
-  protected requestControllers = new Set<AbortController>();
   private scheduler: RestScheduler<RequestDispatchData>;
 
   constructor(token: string, options?: RequestClientOptions) {
@@ -169,6 +174,8 @@ export class RequestClient {
           assertReadAuthority?.();
         }
       : assertReadAuthority;
+    const callerSignal = this.options.callerSignal;
+    callerSignal?.throwIfAborted();
     assertCurrent?.();
     if (!this.options.queueRequests) {
       return await this.executeRequest(method, path, params, routeKey, assertCurrent, effect);
@@ -179,6 +186,7 @@ export class RequestClient {
       priority: getRequestPriority(method, path),
       query: params.query,
       data: { data: params.data, assertCurrent, effect },
+      ...(callerSignal ? { signal: callerSignal } : {}),
     });
   }
 
@@ -199,12 +207,10 @@ export class RequestClient {
     }
     const body = serializeRequestBody(params.data, headers);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.timeout);
-    timeout.unref?.();
+    const timeout = setTimeout(() => controller.abort(), this.options.timeout).unref();
     const signal = this.options.signal
       ? AbortSignal.any([this.options.signal, controller.signal])
       : controller.signal;
-    this.requestControllers.add(controller);
     try {
       assertCurrent?.();
       const init = { method, headers, body, signal };
@@ -234,7 +240,7 @@ export class RequestClient {
         const rateLimitBody = isDiscordRateLimitBody(parsed) ? parsed : undefined;
         throw new RateLimitError(response, {
           message: readDiscordMessage(rateLimitBody, "Rate limited"),
-          retry_after: readRetryAfter(rateLimitBody, response, 1),
+          retry_after: readRetryAfter(rateLimitBody, response),
           code: readDiscordCode(rateLimitBody),
           global: Boolean(rateLimitBody?.global),
         });
@@ -245,24 +251,7 @@ export class RequestClient {
       return parsed;
     } finally {
       clearTimeout(timeout);
-      this.requestControllers.delete(controller);
     }
-  }
-
-  clearQueue(): void {
-    this.scheduler.clearQueue();
-  }
-
-  get queueSize(): number {
-    return this.scheduler.queueSize;
-  }
-
-  abortAllRequests(): void {
-    this.scheduler.abortPending();
-    for (const controller of this.requestControllers) {
-      controller.abort();
-    }
-    this.requestControllers.clear();
   }
 }
 

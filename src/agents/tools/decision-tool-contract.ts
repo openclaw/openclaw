@@ -1,134 +1,50 @@
 import { createHash } from "node:crypto";
+import { isProxy } from "node:util/types";
 import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
-import { Type } from "typebox";
-import type { DecisionOutcomeV2 } from "../../decisions/types-v2.js";
-import type { DecisionBatch } from "../../decisions/types.js";
-import { validateDecisionBatch } from "../../decisions/validation.js";
+import { decisionBatchV1ToV2 } from "../../decisions/compatibility.js";
+import type { DecisionOutcomeV2 } from "../../decisions/host-outcomes.js";
+import { validateDecisionBatchV2 } from "../../decisions/input-validation.js";
+import type { DecisionBatchV2 } from "../../decisions/types-v2.js";
+import { isPlainDecisionRecord } from "../../decisions/validation-common.js";
 import { textResult } from "./tool-results.js";
 
-const entry = {
-  anyOf: [
-    { type: "string" },
-    { type: "object", additionalProperties: true },
-    { type: "array", items: {} },
-    { type: "null" },
-  ],
-} as const;
-
-const criteriaByQuestionType = {
-  boolean: {
-    anyOf: [
-      { type: "null" },
-      {
-        type: "object",
-        properties: { true: entry, false: entry },
-        additionalProperties: false,
-      },
-    ],
-  },
-  choice: { type: "object", minProperties: 2, additionalProperties: entry },
-  score: { type: "array", minItems: 2, items: entry },
-};
-
-/** Provider-neutral request contract. Provider-specific translation stays in the provider plugin. */
-export const DecisionEvaluateInput = Type.Unsafe({
-  type: "object",
-  additionalProperties: false,
-  required: ["state", "questions"],
-  properties: {
-    state: entry,
-    questions: {
-      type: "object",
-      minProperties: 1,
-      additionalProperties: {
-        anyOf: Object.entries(criteriaByQuestionType).map(([type, criteria]) => ({
-          type: "object",
-          additionalProperties: false,
-          required: type === "boolean" ? ["type"] : ["type", "criteria"],
-          properties: { type: { const: type }, instructions: entry, criteria },
-        })),
-      },
-    },
-  },
-});
-
-export const DecisionEvaluateOutput = Type.Unsafe({
-  type: "object",
-  required: ["status"],
-  properties: {
-    status: { enum: ["ok", "unavailable"] },
-    result: {
-      type: "object",
-      properties: {
-        model: { type: "string" },
-        answers: {
-          type: "object",
-          additionalProperties: {
-            type: "object",
-            properties: {
-              type: { enum: ["boolean", "choice", "score", "error"] },
-              answer: { type: ["boolean", "null"] },
-              probabilityTrue: { type: "number" },
-              choice: { type: ["string", "null"] },
-              score: { type: "number" },
-              probabilities: {
-                anyOf: [
-                  { type: "object", additionalProperties: { type: "number" } },
-                  { type: "array", items: { type: "number" } },
-                ],
-              },
-              probability: { type: ["number", "null"] },
-              confidence: { type: ["number", "null"] },
-              code: { enum: ["unsupported-input", "invalid-input", "provider-error"] },
-              providerCode: { type: "string" },
-              metadata: { type: "object", additionalProperties: true },
-            },
-          },
-        },
-        usage: {
-          type: "object",
-          properties: {
-            inputTokens: { type: "number" },
-            outputTokens: { type: "number" },
-            costUsd: { type: "number" },
-            units: {
-              type: "object",
-              properties: {
-                unit: { enum: ["decision-units", "requests"] },
-                amount: { type: "number" },
-              },
-            },
-            raw: {},
-          },
-        },
-        metadata: { type: "object", additionalProperties: true },
-      },
-    },
-    provenance: { type: "object" },
-    reason: { type: "string" },
-    guidance: { type: "string" },
-  },
-});
-
 /** Validate before traversing the rubric; null means the shared resource guard rejected it. */
-export function parseDecisionEvaluateInput(value: unknown): DecisionBatch | null {
+export function parseDecisionEvaluateInput(value: unknown): DecisionBatchV2 | null {
   try {
-    if (!validateDecisionBatch(value)) {
-      return null;
-    }
-    if (Object.keys(value).some((key) => key !== "state" && key !== "questions")) {
+    if (isProxy(value) || !isPlainDecisionRecord(value)) {
       throw new Error("Unexpected decision argument");
     }
-    return value;
+    // Inspect data descriptors before stripping the tool-only discriminator.
+    // Getters, proxies and hidden arguments must not run or disappear before validation.
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (
+      Reflect.ownKeys(descriptors).some(
+        (key) =>
+          typeof key !== "string" || !["state", "questions", "contractVersion"].includes(key),
+      ) ||
+      Object.values(descriptors).some(
+        (descriptor) => !descriptor.enumerable || !Object.hasOwn(descriptor, "value"),
+      )
+    ) {
+      throw new Error("Unexpected decision argument");
+    }
+    if (!descriptors.contractVersion) {
+      return decisionBatchV1ToV2(value) ?? null;
+    }
+    if (descriptors.contractVersion.value !== 2) {
+      throw new Error("Unexpected decision version");
+    }
+    const batch = { state: descriptors.state?.value, questions: descriptors.questions?.value };
+    return validateDecisionBatchV2(batch) ? batch : null;
   } catch {
     throw new Error(
-      "Invalid decision_evaluate input: provide state and a nonempty questions map with boolean, choice, or score questions; no evidence was sent.",
+      "Invalid decision_evaluate input: provide state and a nonempty questions map. Use contractVersion 2 with tagged state for image, box, sort, or tags; no evidence was sent.",
     );
   }
 }
 
 /** Identify the complete admitted rubric without including evidence in provenance. */
-export function rubricVersion(batch: DecisionBatch): string {
+export function rubricVersion(batch: DecisionBatchV2): string {
   const canonical = JSON.stringify(canonicalize(batch.questions));
   return `decision-v1-${createHash("sha256").update(canonical).digest("hex").slice(0, 24)}`;
 }
@@ -150,11 +66,16 @@ function canonicalize(value: unknown): unknown {
 
 /** Describe only declared provider limits; missing metadata never means unlimited. */
 export function capabilityGuidance(capabilities: ModelDecisionCapabilities): string {
-  const questionTypes = (["boolean", "choice", "score"] as const).filter(
+  const questionTypes = (["boolean", "choice", "score", "sort", "tags", "box"] as const).filter(
     (kind) => capabilities.questions?.[kind],
   );
   const declared = capabilities.limits;
   const limits = [
+    ...(declared?.image
+      ? [
+          `images up to ${declared.image.maxBytes} decoded bytes in ${declared.image.mimeTypes.join(", ")}`,
+        ]
+      : []),
     declared?.maxQuestions === undefined ? undefined : `at most ${declared.maxQuestions} questions`,
     ...(["choice", "score"] as const).flatMap((kind) => {
       const bounds = capabilities.questions?.[kind];
@@ -188,8 +109,8 @@ export function capabilityGuidance(capabilities: ModelDecisionCapabilities): str
       ? "The selected model's question types are undeclared."
       : questionTypes.length
         ? `The selected provider supports ${questionTypes.join(", ")} questions.`
-        : "The selected model declares no Boolean, Choice or Score support.";
-  return `${supported}${limits.length ? ` Limits: ${limits.join(", ")}.` : ""}${boolean}${confidence}`;
+        : "The selected model declares no supported question types.";
+  return `${supported} Supported input modalities: ${capabilities.input.join(", ")}.${limits.length ? ` Limits: ${limits.join(", ")}.` : ""}${boolean}${confidence}`;
 }
 
 const unavailableGuidance: Record<
@@ -209,7 +130,7 @@ const unavailableGuidance: Record<
   transport:
     "The selected provider could not be reached. Check its service or endpoint before trying again.",
   "unsupported-input":
-    "Shorten the state or rubric, reduce question counts, and check the selected model's declared limits. Host bounds are 256 questions, 1 MiB of JSON, 20000 JSON nodes, and depth 32. No evidence was truncated or sent on a host-bound rejection.",
+    "Shorten the state or rubric, reduce question counts, and check the selected model's declared limits. Host bounds are 256 questions for legacy input or 400 with contractVersion 2, 1 MiB of JSON, 20000 JSON nodes, and depth 32. No evidence was truncated or sent on a host-bound rejection.",
   "invalid-response":
     "The selected provider returned an invalid result. No answers were accepted; ask the operator to check its adapter or service.",
   retiring:

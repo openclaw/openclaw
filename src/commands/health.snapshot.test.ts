@@ -2,11 +2,9 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
-import type { HealthSummary } from "../gateway/health/types.js";
 import {
   loadFreshHealthModulesForTest,
   type HealthTestPlugin,
-  type LegacyHealthSnapshotParams,
 } from "./health.snapshot.test-support.js";
 import { channelRuntime } from "./health.test-fixtures.js";
 
@@ -19,7 +17,7 @@ let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePlu
 let setActiveDegradedPlugins: typeof import("../plugins/runtime-degraded-state.js").setActiveDegradedPlugins;
 let createChannelTestPluginBase: typeof import("../test-utils/channel-plugins.js").createChannelTestPluginBase;
 let createTestRegistry: typeof import("../test-utils/channel-plugins.js").createTestRegistry;
-let getHealthSnapshot: (params?: LegacyHealthSnapshotParams) => Promise<HealthSummary>;
+let collectGatewayHealthSnapshot: typeof import("../gateway/health/collector.js").collectGatewayHealthSnapshot;
 let buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
 let probeTelegramAccountForTestOverride:
   | ((account: TelegramHealthAccount, timeoutMs: number) => Promise<Record<string, unknown>>)
@@ -205,11 +203,10 @@ describe("collectGatewayHealthSnapshot", () => {
       setActiveDegradedPlugins,
       createChannelTestPluginBase,
       createTestRegistry,
-      getHealthSnapshot,
+      collectGatewayHealthSnapshot,
     } = await loadFreshHealthModulesForTest({
       getConfig: () => testConfig,
       getSessionStorePath: () => sessionStorePath,
-      getSessions: () => ({}),
       getPlugins: () => healthPluginsForTest,
     }));
   });
@@ -238,7 +235,7 @@ describe("collectGatewayHealthSnapshot", () => {
     tempDirs.cleanup();
   });
 
-  it("does not let callers widen the gateway probe deadline", async () => {
+  it("bounds probes by the fixed gateway collection deadline", async () => {
     testConfig = {
       session: { store: "/tmp/x" },
       channels: { telegram: { botToken: "123:test" } },
@@ -249,7 +246,7 @@ describe("collectGatewayHealthSnapshot", () => {
       return { ok: true };
     };
 
-    await getHealthSnapshot({ timeoutMs: Number.MAX_SAFE_INTEGER });
+    await collectGatewayHealthSnapshot({ audience: "admin", probe: true });
 
     expect(timeouts).toHaveLength(1);
     expect(timeouts[0]).toBeGreaterThan(0);
@@ -267,8 +264,9 @@ describe("collectGatewayHealthSnapshot", () => {
       bot: { username: "runtime_bot" },
     });
 
-    const snap = await getHealthSnapshot({
-      timeoutMs: 25,
+    const snap = await collectGatewayHealthSnapshot({
+      audience: "admin",
+      probe: true,
       runtimeSnapshot: channelRuntime("telegram", {
         accountId: "default",
         running: true,
@@ -315,9 +313,9 @@ describe("collectGatewayHealthSnapshot", () => {
       testConfig = { channels: { discord: { token } } };
       healthPluginsForTest = [createDiscordHealthPlugin()];
 
-      const snap = await getHealthSnapshot({
+      const snap = await collectGatewayHealthSnapshot({
+        audience: "public",
         probe: false,
-        includeSensitive: false,
         runtimeSnapshot: channelRuntime("discord", {
           accountId: "default",
           running: true,
@@ -353,7 +351,7 @@ describe("collectGatewayHealthSnapshot", () => {
     };
     healthPluginsForTest = [plugin];
 
-    const snap = await getHealthSnapshot({ probe: false, includeSensitive: false });
+    const snap = await collectGatewayHealthSnapshot({ audience: "public", probe: false });
     const expected = { baseUrl: "https://chat.example.test/?token=***" };
     expect(snap.channels.discord).toMatchObject({ ...expected, accounts: { default: expected } });
   });
@@ -371,9 +369,9 @@ describe("collectGatewayHealthSnapshot", () => {
       token: "test-token",
     });
 
-    const snap = await getHealthSnapshot({
-      timeoutMs: 25,
-      includeSensitive: false,
+    const snap = await collectGatewayHealthSnapshot({
+      audience: "public",
+      probe: true,
       runtimeSnapshot: channelRuntime("telegram", {
         accountId: "default",
         connected: true,
@@ -399,9 +397,9 @@ describe("collectGatewayHealthSnapshot", () => {
     healthPluginsForTest = [createIMessageHealthPlugin()];
     testConfig = { channels: { imessage: { enabled: true } } };
 
-    const snap = await getHealthSnapshot({
-      timeoutMs: 25,
-      includeSensitive: false,
+    const snap = await collectGatewayHealthSnapshot({
+      audience: "public",
+      probe: true,
     });
     const imessage = snap.channels.imessage!;
     const expectedProbe = {
@@ -423,9 +421,9 @@ describe("collectGatewayHealthSnapshot", () => {
       elapsedMs: 0,
     });
 
-    const snap = await getHealthSnapshot({
-      timeoutMs: 25,
-      includeSensitive: false,
+    const snap = await collectGatewayHealthSnapshot({
+      audience: "public",
+      probe: true,
     });
     const telegram = snap.channels.telegram!;
 

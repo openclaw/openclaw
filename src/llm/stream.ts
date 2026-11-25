@@ -1,11 +1,12 @@
-// Streams LLM responses through registered providers and normalizes events.
 // This facade owns the process-default AI runtime wiring: it installs the
 // OpenClaw host policy ports and registers built-in providers exactly once,
 // before any caller imports the stream API.
 import { defaultApiRegistry, defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
+import { POSTGRES_QUERY_CANCELED_ERROR_NAME } from "../infra/postgres-sync/protocol.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-error.js";
 import { assertProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
@@ -27,12 +28,21 @@ import { createAssistantMessageEventStream } from "./utils/event-stream.js";
 registerBuiltInApiProviders(defaultApiRegistry);
 
 // The process host outlives requests; only provider invocation carries caller authority.
-const ensureTransportRuntimeHost = createLazyPromise(
+const loadTransportRuntimeHost = createLazyPromise(
   () => runInDetachedAsyncContext(() => import("../agents/ai-transport-runtime-host.js")),
   { cacheRejections: true },
 );
 
+async function ensureTransportRuntimeHost(): Promise<void> {
+  const runtime = await loadTransportRuntimeHost();
+  runInDetachedAsyncContext(runtime.configureAiTransportRuntimeHost);
+}
+
 function createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantMessage {
+  // A message cannot retain the error graph, so preserve its strongest continuation fence.
+  const storageFailure = hasSqliteWorkerOutcomeUnknown(error)
+    ? "session_actor_reconciliation"
+    : classifyGatewayStorageFailure(error);
   return {
     role: "assistant",
     content: [],
@@ -42,7 +52,13 @@ function createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantM
     usage: makeZeroUsageSnapshot(),
     stopReason: "error",
     errorMessage: error instanceof Error ? error.message : String(error),
-    errorCode: classifyGatewayStorageFailure(error),
+    errorCode: storageFailure,
+    errorType:
+      storageFailure === "57014"
+        ? POSTGRES_QUERY_CANCELED_ERROR_NAME
+        : storageFailure === "unavailable"
+          ? "SqliteWorkerError"
+          : undefined,
     timestamp: Date.now(),
   };
 }
@@ -63,7 +79,7 @@ function deferUntilTransportRuntimeHost<T extends SimpleStreamOptions>(
       options?.signal?.throwIfAborted();
       for await (const event of start(admission.options)) {
         if (event.type === "error") {
-          admission.observe(event.error);
+          admission.observe?.(event.error);
         }
         output.push(event);
       }
@@ -107,7 +123,7 @@ export async function complete<TApi extends Api>(
   assertProviderAuthAuthority(model);
   options?.signal?.throwIfAborted();
   const result = await resolveRuntime(model).complete(model, context, admission.options);
-  admission.observe(result);
+  admission.observe?.(result);
   return result;
 }
 
@@ -138,6 +154,6 @@ export async function completeSimple<TApi extends Api>(
   assertProviderAuthAuthority(model);
   options?.signal?.throwIfAborted();
   const result = await resolveRuntime(model).completeSimple(model, context, admission.options);
-  admission.observe(result);
+  admission.observe?.(result);
   return result;
 }

@@ -16,6 +16,7 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat.js";
+import { createSessionGoalFixture } from "./session-goal.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: vi.fn(() => ({})) }));
@@ -98,17 +99,10 @@ describe("agent event goal lifecycle", () => {
         sessionId: "session-terminal",
         updatedAt: 1_000,
         startedAt: 1_000,
-        goal: {
-          schemaVersion: 1,
-          id: "terminal-goal",
-          objective: "Finish the requested work",
-          status: "active",
+        goal: createSessionGoalFixture("terminal-goal", "Finish the requested work", {
           createdAt: 1_000,
           updatedAt: 1_000,
-          tokenStart: 0,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
+        }),
       });
       vi.mocked(loadSessionEntryAsync).mockImplementation(async () => ({
         cfg: {},

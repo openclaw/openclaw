@@ -2,21 +2,27 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { hasExplicitModelPolicyAllow } from "../config/model-policy-allowlist-migration.js";
 import { resolveStateDir } from "../config/paths.js";
-import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
 } from "../config/types.agent-defaults.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import {
+  classifySessionKeyShape,
+  LEGACY_IMPLICIT_AGENT_ID,
+  normalizeAgentId,
+  normalizeAgentIdStrict,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { registerResolvedAgentDir } from "./agent-dir-registry.js";
 import {
@@ -24,6 +30,7 @@ import {
   listAgentEntriesWithSource,
   listAgentIds,
   readAgentRosterProperty,
+  readAgentRosterFacts,
   tryResolveLegacyDataOwner,
   tryResolveRawLegacyDefaultAgentId,
   tryResolveSoleAgentId,
@@ -38,6 +45,7 @@ export {
   readAgentRosterProperty,
   tryResolveDefaultAgentId,
   tryResolveSoleAgentId,
+  withAgentRosterFactsBatch,
   type ListedAgentEntry,
 } from "./agent-roster.js";
 
@@ -52,7 +60,6 @@ export type AgentSelectionContext = {
 export class AgentSelectionRequiredError extends Error {
   readonly code = "AGENT_SELECTION_REQUIRED";
   readonly agentIds: string[];
-  readonly surface: string;
   readonly hint: string;
 
   constructor(agentIds: string[], context?: AgentSelectionContext) {
@@ -63,7 +70,6 @@ export class AgentSelectionRequiredError extends Error {
     super(`Multiple agents are configured, but ${surface} has no explicit owner. ${hint}`);
     this.name = "AgentSelectionRequiredError";
     this.agentIds = agentIds;
-    this.surface = surface;
     this.hint = hint;
   }
 }
@@ -71,7 +77,10 @@ export class AgentSelectionRequiredError extends Error {
 /** Per-agent config after applying agent defaults and normalizing scalar fields. */
 export type ResolvedAgentConfig = {
   name?: string;
+  description?: string;
+  recommendedPrompts?: AgentEntry["recommendedPrompts"];
   workspace?: string;
+  workspaceFileMode?: AgentEntry["workspaceFileMode"];
   agentDir?: string;
   model?: AgentEntry["model"];
   models?: AgentEntry["models"];
@@ -85,6 +94,7 @@ export type ResolvedAgentConfig = {
   toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
+  newSessionPermissionMode?: AgentEntry["newSessionPermissionMode"];
   contextInjection?: AgentEntry["contextInjection"];
   bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
@@ -94,6 +104,7 @@ export type ResolvedAgentConfig = {
   humanDelay?: AgentEntry["humanDelay"];
   typingMode?: AgentEntry["typingMode"];
   tts?: AgentEntry["tts"];
+  compaction?: AgentEntry["compaction"];
   contextLimits?: AgentContextLimitsConfig;
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
@@ -142,52 +153,6 @@ export function resolveNativeModelPrimary(
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
   return s.replaceAll("\0", "");
-}
-
-type AgentRosterFacts = {
-  compatibilityAgentId?: { value: string | undefined };
-  legacyDataOwnerAgentId?: { value: string | undefined };
-  entryByNormalizedId?: Map<string, { clone: boolean; entry: AgentEntry }>;
-};
-
-type AgentRosterFactsBatch = {
-  config: OpenClawConfig;
-  facts: AgentRosterFacts;
-};
-
-let activeAgentRosterFactsBatch: AgentRosterFactsBatch | undefined;
-const agentRosterFacts = new WeakMap<
-  OpenClawConfig,
-  { publication: object | undefined; facts: AgentRosterFacts }
->();
-
-/** Share roster reads synchronously; unbound mutable configs expire when the callback returns. */
-export function withAgentRosterFactsBatch<T>(config: OpenClawConfig, callback: () => T): T {
-  const parent = activeAgentRosterFactsBatch;
-  activeAgentRosterFactsBatch =
-    parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
-  try {
-    return callback();
-  } finally {
-    activeAgentRosterFactsBatch = parent;
-  }
-}
-
-function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined {
-  if (activeAgentRosterFactsBatch?.config === cfg) {
-    return activeAgentRosterFactsBatch.facts;
-  }
-  const current = runtimeConfigPublication.current;
-  const publication = current?.config === cfg ? current.revision : undefined;
-  if (publication === undefined && !isDeeplyFrozenPlainData(cfg)) {
-    return undefined;
-  }
-  let cached = agentRosterFacts.get(cfg);
-  if (!cached || cached.publication !== publication) {
-    cached = { publication, facts: {} };
-    agentRosterFacts.set(cfg, cached);
-  }
-  return cached.facts;
 }
 
 /** Converts either supported roster representation into the canonical keyed shape. */
@@ -313,6 +278,96 @@ export function resolveDefaultAgentId(
   return tryResolveRawLegacyDefaultAgentId(cfg) ?? resolveSoleAgentId(cfg, context);
 }
 
+type SessionAgentResolutionParams = {
+  sessionKey?: string;
+  config?: OpenClawConfig;
+  agentId?: string | undefined;
+  fallbackAgentId?: string;
+};
+
+const SESSION_AGENT_SELECTION_CONTEXT = {
+  surface: "session agent resolution",
+  hint: "Pass an agentId, an agent-scoped session key, or a prepared fallbackAgentId.",
+};
+
+function resolveSelectedSessionAgentId(params: SessionAgentResolutionParams): string | undefined {
+  if (classifySessionKeyShape(params.sessionKey) === "malformed_agent") {
+    throw new Error("Malformed agent session key; refusing default-agent resolution.");
+  }
+  const explicit = params.agentId === undefined ? null : normalizeAgentIdStrict(params.agentId);
+  if (explicit && !explicit.ok) {
+    throw new Error("Invalid explicit agent id; refusing default-agent resolution.");
+  }
+  const explicitAgentId = explicit?.value;
+  const fallbackAgentIdRaw = normalizeLowercaseStringOrEmpty(params.fallbackAgentId);
+  const fallbackAgentId = fallbackAgentIdRaw ? normalizeAgentId(fallbackAgentIdRaw) : null;
+  const sessionKey = params.sessionKey?.trim();
+  const parsed = parseAgentSessionKey(sessionKey);
+  const sessionKeyAgentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : null;
+  const cfg = params.config ?? {};
+  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey);
+  if (sessionKeyAgentId && explicitAgentId && explicitAgentId !== sessionKeyAgentId) {
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: "session agent resolution",
+      hint: `The agent-scoped session key belongs to "${sessionKeyAgentId}", not "${explicitAgentId}".`,
+    });
+  }
+  const requestedUnscopedAgentId = explicitAgentId ?? fallbackAgentId;
+  if (!sessionKeyAgentId && persistedStoreOwner.kind === "retired") {
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: "session agent resolution",
+      hint: `The shared fixed-store row belongs to retired agent "${persistedStoreOwner.agentId}".`,
+    });
+  }
+  if (
+    !sessionKeyAgentId &&
+    persistedStoreOwner.kind === "configured" &&
+    requestedUnscopedAgentId &&
+    requestedUnscopedAgentId !== persistedStoreOwner.agentId
+  ) {
+    throw new AgentSelectionRequiredError(listAgentIds(cfg), {
+      surface: "session agent resolution",
+      hint: `The shared fixed-store row belongs to "${persistedStoreOwner.agentId}", not "${requestedUnscopedAgentId}".`,
+    });
+  }
+  return (
+    sessionKeyAgentId ??
+    (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
+    requestedUnscopedAgentId ??
+    undefined
+  );
+}
+
+/** Strict session selection uses explicit context and legacy data ownership. */
+export function resolveSessionAgentIdsStrict(params: SessionAgentResolutionParams): {
+  defaultAgentId: string;
+  sessionAgentId: string;
+} {
+  const selectedAgentId = resolveSelectedSessionAgentId(params);
+  const cfg = params.config ?? {};
+  const compatibilityAgentId = tryResolveLegacyDataOwnerAgentId(cfg);
+  const sessionAgentId =
+    selectedAgentId ??
+    compatibilityAgentId ??
+    resolveDefaultAgentId(cfg, SESSION_AGENT_SELECTION_CONTEXT);
+  const defaultAgentId = compatibilityAgentId ?? sessionAgentId;
+  return { defaultAgentId, sessionAgentId };
+}
+
+export const resolveSessionAgentIds = resolveSessionAgentIdsStrict;
+
+export function resolveSessionAgentIdStrict(params: SessionAgentResolutionParams): string {
+  const selectedAgentId = resolveSelectedSessionAgentId(params);
+  const cfg = params.config ?? {};
+  return (
+    selectedAgentId ??
+    tryResolveLegacyDataOwnerAgentId(cfg) ??
+    resolveDefaultAgentId(cfg, SESSION_AGENT_SELECTION_CONTEXT)
+  );
+}
+
+export const resolveSessionAgentId = resolveSessionAgentIdStrict;
+
 export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
   const id = normalizeAgentId(agentId);
   const facts = readAgentRosterFacts(cfg);
@@ -385,22 +440,37 @@ export function resolveMutableAgentEntry(
   return undefined;
 }
 
+/** Borrow the roster owner's prepared entry; mutable public callers keep clone-on-read. */
+export function readAgentConfigEntry(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Readonly<AgentEntry> | undefined {
+  const id = normalizeAgentId(agentId);
+  const facts = readAgentRosterFacts(cfg);
+  const entry = facts
+    ? (facts.entryByNormalizedId ??= buildAgentEntryIndex(cfg)).get(id)?.entry
+    : resolveAgentEntry(cfg, id);
+  return (
+    entry ?? (!hasAgentRosterProperty(cfg) && id === LEGACY_IMPLICIT_AGENT_ID ? { id } : undefined)
+  );
+}
+
 /** Resolves merged config for one agent id. */
 export function resolveAgentConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedAgentConfig | undefined {
-  const id = normalizeAgentId(agentId);
-  const entry: AgentEntry | undefined =
-    resolveAgentEntry(cfg, id) ??
-    (!hasAgentRosterProperty(cfg) && id === LEGACY_IMPLICIT_AGENT_ID ? { id } : undefined);
+  const entry = readAgentConfigEntry(cfg, agentId);
   if (!entry) {
     return undefined;
   }
   const agentDefaults = cfg.agents?.defaults;
   return {
     name: entry.name,
+    description: entry.description,
+    recommendedPrompts: entry.recommendedPrompts,
     workspace: entry.workspace,
+    workspaceFileMode: entry.workspaceFileMode ?? agentDefaults?.workspaceFileMode,
     agentDir: entry.agentDir,
     model: entry.model,
     ...(entry.models ? { models: entry.models } : {}),
@@ -414,6 +484,7 @@ export function resolveAgentConfig(
     toolProgressDetail: entry.toolProgressDetail ?? agentDefaults?.toolProgressDetail,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault ?? agentDefaults?.fastModeDefault,
+    newSessionPermissionMode: entry.newSessionPermissionMode,
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
     bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,
@@ -425,6 +496,7 @@ export function resolveAgentConfig(
     humanDelay: entry.humanDelay,
     typingMode: entry.typingMode ?? agentDefaults?.typingMode,
     tts: entry.tts,
+    ...(entry.compaction ? { compaction: entry.compaction } : {}),
     contextLimits: entry.contextLimits
       ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }
       : agentDefaults?.contextLimits,
@@ -436,6 +508,11 @@ export function resolveAgentConfig(
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+/** The agent's verbose default; agents without an entry inherit the global default. */
+export function resolveAgentVerboseDefault(cfg: OpenClawConfig, agentId: string) {
+  return resolveAgentConfig(cfg, agentId)?.verboseDefault ?? cfg.agents?.defaults?.verboseDefault;
 }
 
 export function resolveAgentContextLimits(
@@ -455,7 +532,7 @@ export function resolveAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
+  const configured = readAgentConfigEntry(cfg, id)?.workspace?.trim();
   if (configured) {
     return stripNullBytes(resolveUserPath(configured, env));
   }

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readAgentStorePathsFromConfig } from "../config/agent-store-source.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { resolveOpenClawAgentDatabaseDiscoveryPaths } from "./openclaw-agent-db-discovery-paths.js";
 import {
@@ -43,9 +43,7 @@ export function prepareStateDatabaseInitialization(
     try {
       entries = fs.readdirSync(agentsDir, { withFileTypes: true });
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+      ignoreMissingPath(error);
     }
     for (const entry of entries) {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) {

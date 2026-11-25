@@ -1,7 +1,7 @@
 import type { ControlUiLinkReaderDetailParams } from "openclaw/plugin-sdk/control-ui-link-reader";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type GitHubItemTarget = {
+type GitHubItemTarget = {
   kind: "issue" | "pull";
   owner: string;
   repo: string;
@@ -10,6 +10,73 @@ export type GitHubItemTarget = {
 export type GitHubTarget =
   | GitHubItemTarget
   | { kind: "commit"; owner: string; repo: string; sha: string };
+
+export type GitHubJobTarget = {
+  kind: "job";
+  owner: string;
+  repo: string;
+  runId: number;
+  jobId: number;
+};
+export type GitHubReadTarget = GitHubTarget | GitHubJobTarget;
+
+export function parseGitHubReadTarget(value: unknown): GitHubReadTarget | null {
+  if (!isRecord(value) || value.kind !== "job") {
+    return parseGitHubTarget(value);
+  }
+  const { owner, repo, runId, jobId } = value;
+  return typeof owner === "string" &&
+    isValidOwner(owner) &&
+    typeof repo === "string" &&
+    isValidRepo(repo) &&
+    typeof runId === "number" &&
+    Number.isSafeInteger(runId) &&
+    runId > 0 &&
+    typeof jobId === "number" &&
+    Number.isSafeInteger(jobId) &&
+    jobId > 0 &&
+    value.sha === undefined &&
+    value.number === undefined
+    ? { kind: "job", owner, repo, runId, jobId }
+    : null;
+}
+
+/** Job URLs are model-reader inputs; existing UI descriptors keep opening them externally. */
+export function parseGitHubReadParams(value: unknown): {
+  target: GitHubReadTarget;
+  refresh: boolean;
+} | null {
+  const item = parseGitHubLinkParams(value);
+  if (item) {
+    return item;
+  }
+  if (
+    !isRecord(value) ||
+    typeof value.url !== "string" ||
+    value.url.length > 4096 ||
+    (value.refresh !== undefined && typeof value.refresh !== "boolean")
+  ) {
+    return null;
+  }
+  const url = URL.parse(value.url);
+  if (!url || url.origin !== "https://github.com" || url.username || url.password) {
+    return null;
+  }
+  const match =
+    /^\/([^/]+)\/([^/]+)\/actions\/runs\/([1-9]\d{0,15})\/job\/([1-9]\d{0,15})\/?$/u.exec(
+      url.pathname,
+    );
+  const target =
+    match &&
+    parseGitHubReadTarget({
+      kind: "job",
+      owner: match[1],
+      repo: match[2],
+      runId: Number(match[3]),
+      jobId: Number(match[4]),
+    });
+  return target ? { target, refresh: value.refresh === true } : null;
+}
 
 export function isValidOwner(value: string): boolean {
   return /^(?=.{1,39}$)[a-z\d](?:[a-z\d-]*[a-z\d])?$/iu.test(value);
@@ -60,11 +127,6 @@ export function parseGitHubTarget(value: unknown): GitHubTarget | null {
     return null;
   }
   return { kind, number, owner, repo };
-}
-
-export function parseGitHubItemTarget(value: unknown): GitHubItemTarget | null {
-  const target = parseGitHubTarget(value);
-  return target && target.kind !== "commit" ? target : null;
 }
 
 // Descriptor matches only supported document pages; source/download/check links

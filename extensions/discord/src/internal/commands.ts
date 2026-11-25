@@ -78,7 +78,6 @@ export function resolveFocusedCommandOptionAutocompleteHandler(
 
 export abstract class BaseCommand {
   abstract readonly commandKind: "leaf" | "group";
-  id?: string;
   abstract name: string;
   description?: string;
   descriptionLocalizations?: Record<string, string>;

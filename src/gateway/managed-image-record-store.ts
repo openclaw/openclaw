@@ -8,6 +8,7 @@ import {
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { captureChannelReadAuthority } from "../shared/channel-read-authority.js";
 import { createKeyedFifoLeaseRegistry } from "../shared/keyed-fifo-lease.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { ManagedImageRecordMutation } from "./managed-image-record-store.kernel.js";
@@ -43,11 +44,13 @@ export async function readManagedImageRecord(
   stateDir?: string,
   context = captureManagedImageContext(stateDir),
 ): Promise<ManagedImageRecord | null> {
-  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "managedImages.read",
-    input: { attachmentId },
-  });
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "managedImages.read", input: { attachmentId } },
+    { context, current: true },
+  );
+  context.admission.assertCurrent();
+  return reply?.record ?? null;
 }
 
 export async function listManagedImageRecordEntries(params: {
@@ -56,20 +59,24 @@ export async function listManagedImageRecordEntries(params: {
 }): Promise<ManagedImageRecordEntry[]> {
   const context = captureManagedImageContext(params.stateDir);
   const sessionKey = params.sessionKey;
-  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "managedImages.entries",
-    input: { sessionKey },
-  });
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "managedImages.entries", input: { sessionKey } },
+    { context, current: true },
+  );
+  context.admission.assertCurrent();
+  return reply?.entries ?? [];
 }
 
 export async function listManagedImageOriginalMediaIds(stateDir?: string): Promise<string[]> {
   const context = captureManagedImageContext(stateDir);
-  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "managedImages.originalMediaIds",
-    input: undefined,
-  });
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "managedImages.originalMediaIds", input: undefined },
+    { context, current: true },
+  );
+  context.admission.assertCurrent();
+  return reply?.mediaIds ?? [];
 }
 
 function mutateManagedImageRecords(

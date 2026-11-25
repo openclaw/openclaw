@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CoreTsgoGraph } from "../../scripts/check-tsgo-core-boundary.mts";
 import {
+  expandTsgoExecutionGraphs,
   selectChangedCiTsgoGraphs,
   resolveCiTsgoGraphs,
   TSGO_CI_GRAPHS,
@@ -19,8 +20,8 @@ vi.mock("../../scripts/check-tsgo-core-boundary.mts", () => ({
 afterEach(() => inspectGraphs.mockReset());
 
 const source = "src/value.ts";
+const allocation = "config/test-lines-allocations/ci-example.txt";
 const extension = "extensions/example/value.ts";
-const sharedType = "packages/example/src/types.ts";
 function workspace(files = [source]) {
   const cwd = tempDirs.make("ci-type-");
   for (const file of files) {
@@ -30,10 +31,17 @@ function workspace(files = [source]) {
   return cwd;
 }
 const fullPlan = { mode: "full", graphs: TSGO_CI_GRAPHS };
-const graphs = (files: (name: string) => string[] = () => []) =>
-  TSGO_CI_GRAPHS.map(({ name, config }) => ({ name, config, roots: [], files: files(name) }));
-const additionalInventory = (files: string[]) =>
-  TSGO_CI_ADDITIONAL_GRAPHS.map((graph) => ({ ...graph, roots: [], files }));
+const graphs = (
+  files: (name: string) => string[] = () => [],
+  scope: Parameters<typeof expandTsgoExecutionGraphs>[0] = TSGO_CI_GRAPHS,
+) =>
+  expandTsgoExecutionGraphs(scope).map(({ name, config }) => ({
+    name,
+    config,
+    roots: [],
+    files: files(name),
+  }));
+const additionalInventory = (files: string[]) => graphs(() => files, TSGO_CI_ADDITIONAL_GRAPHS);
 const noncoreInventory = additionalInventory([extension]);
 type PlanOptions = Parameters<typeof createChangedCiTypeCheckPlan>[1];
 async function expectFull(paths: string[], options: PlanOptions = {}, discovers = false) {
@@ -46,44 +54,25 @@ async function expectFull(paths: string[], options: PlanOptions = {}, discovers 
   }
 }
 
-it("preserves canonical graph order and rejects unowned graphs", () => {
-  expect(resolveCiTsgoGraphs(["test-root", "core-test-agents-tools", "ui"])).toEqual([
-    { name: "test-root", config: "test/tsconfig/tsconfig.test.root.json" },
-    {
-      name: "core-test-agents-tools",
-      config: "test/tsconfig/tsconfig.core.test.agents-tools.json",
-    },
-    { name: "ui", config: "tsconfig.ui.json" },
-  ]);
-  for (const names of [[], ["core", "core"], ["unknown"], ["core", "../../unowned.json"]]) {
+it("rejects empty, unowned, duplicate and overlapping graphs", () => {
+  for (const names of [
+    [],
+    ["core", "core"],
+    ["unknown"],
+    ["test-root", "test-root-e2e"],
+    ["test-root-e2e", "test-root"],
+  ]) {
     expect(() => resolveCiTsgoGraphs(names)).toThrow("canonical");
   }
-});
-
-it("keeps type-only consumers in every compiler family", () => {
-  const consumers = [
-    "core",
-    "ui",
-    "core-test-agents-tools",
-    "extensions",
-    "extensions-test",
-    "scripts",
-    "test-root",
-  ];
-  expect(
-    selectChangedCiTsgoGraphs(
-      [sharedType, "docs/plugins/sdk-subpaths.md", "docs/example.mdx", "ui/src/styles/chat.css"],
-      graphs((name) => (consumers.includes(name) ? [sharedType] : [])),
-    )?.map((graph) => graph.name),
-  ).toEqual(consumers);
 });
 
 it.for([
   [],
   ["src/types/runtime.d.ts"],
   ["package.json"],
+  [allocation],
   [source, "src/deleted.ts"],
-  [source, "src/deleted.js"],
+  [allocation, "src/deleted.ts"],
 ])("keeps uncertain or deleted input full: %j", async (paths) => {
   if (paths.length !== 2) {
     expect(selectChangedCiTsgoGraphs(paths, graphs())).toBeUndefined();
@@ -91,26 +80,13 @@ it.for([
   await expectFull(paths, paths.length === 2 ? { cwd: workspace() } : {});
 });
 
-it.each([undefined, "additional-checks"] as const)(
-  "discovers core consumers with owner %s",
-  async (coreBoundaryOwner) => {
-    const cwd = workspace();
-    inspectGraphs.mockResolvedValue(graphs((name) => (name === "ui" ? [source] : [])));
-    expect(await createChangedCiTypeCheckPlan([source], { cwd, coreBoundaryOwner })).toEqual({
-      mode: "changed",
-      graphs: [{ name: "ui", config: "tsconfig.ui.json" }],
-    });
-    expect(inspectGraphs).toHaveBeenCalledOnce();
-  },
-);
-
 it("requires a parallel owner for noncore-only discovery", async () => {
   const paths = [extension, "docs/value.md", "ui/styles/value.css"];
   const cwd = workspace(paths);
   inspectGraphs.mockResolvedValue(additionalInventory([extension]));
   expect(
     await createChangedCiTypeCheckPlan(paths, { cwd, coreBoundaryOwner: "additional-checks" }),
-  ).toEqual({ mode: "changed", graphs: TSGO_CI_ADDITIONAL_GRAPHS });
+  ).toEqual({ mode: "changed", graphs: expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS) });
   await expectFull(paths, { cwd }, true);
 });
 
@@ -153,4 +129,20 @@ it.each([
   ["mixed", noncoreInventory, [extension, source]],
 ] as const)("rejects incomplete noncore discovery: %s", (_kind, inventory, paths) => {
   expect(selectChangedCiTsgoGraphs(paths, inventory, { scope: "noncore" })).toBeUndefined();
+});
+
+it.each([false, true])("checks all root consumers with allocation=%s", async (withAllocation) => {
+  const file = "test/helpers/shared-type.ts";
+  const paths = withAllocation ? [file, allocation] : [file];
+  const consumers = ["test-root-tooling", "test-root-e2e"];
+  const cwd = workspace([file]);
+  const inventory = graphs((name) =>
+    consumers.some((consumer) => consumer === name) ? [file] : [],
+  );
+  inspectGraphs.mockResolvedValue(inventory);
+  const plan = await createChangedCiTypeCheckPlan(paths, { cwd });
+  expect(plan.mode).toBe("changed");
+  expect(plan.graphs.map(({ name }) => name)).toEqual(consumers);
+  inspectGraphs.mockResolvedValue(inventory.slice(0, -1));
+  await expectFull(paths, { cwd }, true);
 });

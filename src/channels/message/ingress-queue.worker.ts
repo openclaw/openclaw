@@ -10,6 +10,7 @@ import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
+import { pruneChannelIngressInDatabase } from "./ingress-queue-prune.kernel.js";
 import * as kernel from "./ingress-queue.kernel.js";
 import type { ChannelIngressListInput } from "./ingress-queue.types.js";
 
@@ -98,6 +99,7 @@ export const channelIngressOperations = {
     { open },
   ) => kernel.listStaleChannelIngressClaimsInDatabase(open().db, input),
   "channelIngress.enqueue": write(kernel.enqueueChannelIngressInDatabase),
+  "channelIngress.enqueueAndClaim": write(kernel.enqueueChannelIngressInDatabase, true),
   "channelIngress.claim": write(kernel.claimChannelIngressInDatabase, true),
   "channelIngress.claimNext": write(kernel.claimNextChannelIngressInDatabase, true),
   "channelIngress.recover": write(kernel.recoverChannelIngressClaimInDatabase),
@@ -107,6 +109,6 @@ export const channelIngressOperations = {
   "channelIngress.fail": write(kernel.failChannelIngressInDatabase),
   "channelIngress.delete": write(kernel.deleteChannelIngressInDatabase),
   "channelIngress.resubmit": write(kernel.resubmitChannelIngressInDatabase),
-  "channelIngress.prune": write(kernel.pruneChannelIngressInDatabase),
+  "channelIngress.prune": write(pruneChannelIngressInDatabase),
   "channelIngress.purge": write(kernel.purgeChannelIngressInDatabase),
 } satisfies WorkerOperationHandlers;

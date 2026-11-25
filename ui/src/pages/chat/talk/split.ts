@@ -86,7 +86,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     }
     this.callbacks.onStatus?.("thinking");
     try {
-      const text = await capture.finish(true);
+      const text = await capture.finish();
       if (this.closed || this.capture !== capture) {
         return;
       }

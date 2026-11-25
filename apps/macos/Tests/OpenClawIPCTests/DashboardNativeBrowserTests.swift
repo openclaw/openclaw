@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import QuartzCore
 import Testing
 import WebKit
 @testable import OpenClaw
@@ -314,7 +315,54 @@ struct DashboardNativeBrowserContractTests {
 @Suite(.serialized)
 @MainActor
 struct DashboardNativeBrowserHostTests {
-    @Test func `navigation clears only the navigating tab's favicon from state`() throws {
+    @Test(.testWaitLimit, arguments: [NSEvent.ModifierFlags.command, .control])
+    func `find stays in the focused Mac tab`(_ modifier: NSEvent.ModifierFlags) async throws {
+        _ = AppKitTestSupport.application
+        let fixture = self.fixture()
+        let window = NSWindow(
+            contentRect: fixture.container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = fixture.container
+        window.orderFront(nil)
+        defer {
+            fixture.host.dispose()
+            window.close()
+        }
+        let blank = try #require(URL(string: "about:blank"))
+        try fixture.host.open(tabId: "mac-source", url: blank, sessionKey: "")
+        try fixture.host.present(
+            scope: "panel", tabId: "mac-source", rect: .init(x: 0, y: 0, width: 600, height: 400), visible: true)
+        let page = try #require(fixture.host.webView(for: "mac-source"))
+        page.loadHTMLString("<title>Source</title><pre>First line</pre>", baseURL: nil)
+        try await TestWait.state("reading tab document") { page.title == "Source" && !page.isLoading }
+
+        @MainActor func key(_ code: UInt16, _ key: String, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: modifiers,
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, characters: modifiers == .control ? "\u{6}" : key,
+                charactersIgnoringModifiers: key, isARepeat: false, keyCode: code))
+        }
+        let find = try key(3, "f", modifiers: modifier)
+        try #require(window.makeFirstResponder(fixture.dashboard))
+        _ = window.performKeyEquivalent(with: find)
+        #expect(window.firstResponder === fixture.dashboard)
+
+        let fullPage = fixture.container.convert(page.bounds, from: page)
+        try #require(window.makeFirstResponder(page))
+        _ = window.performKeyEquivalent(with: find)
+        let editor = try #require(window.firstResponder as? NSTextView)
+        let field = fixture.container.convert(editor.bounds, from: editor)
+        #expect(!field.isEmpty && fullPage.contains(field))
+        #expect(fixture.container.convert(page.bounds, from: page).maxY <= field.minY)
+
+        let escape = try key(53, "\u{1b}")
+        if !window.performKeyEquivalent(with: escape) { window.sendEvent(escape) }
+        #expect(window.firstResponder === page)
+        #expect(fixture.container.convert(page.bounds, from: page) == fullPage)
+    }
+
+    @Test func `a committed document clears only its tab's favicon from state`() throws {
         let fixture = self.fixture()
         defer { fixture.host.dispose() }
         let blank = try #require(URL(string: "about:blank"))
@@ -327,7 +375,7 @@ struct DashboardNativeBrowserHostTests {
         }
         #expect(fixture.host.state.tabs.map(\.favicon) == [favicon, favicon])
         let first = try #require(fixture.host.webView(for: "mac-first"))
-        try fixture.host.navigationWillStart(#require(URL(string: "https://example.test/next")), in: first)
+        fixture.host.navigationDidCommit(in: first)
         #expect(fixture.host.state.tabs.map(\.favicon) == [nil, favicon])
     }
 
@@ -345,16 +393,16 @@ struct DashboardNativeBrowserHostTests {
         #expect(first.configuration.websiteDataStore === second.configuration.websiteDataStore)
         #expect(!first.configuration.websiteDataStore.isPersistent)
         #expect(fixture.host.state.tabs.map(\.id) == ["mac-first", "mac-second"])
-        #expect(first.isHidden)
+        #expect(first.isHiddenOrHasHiddenAncestor)
         try fixture.host.present(
             scope: "panel-one", tabId: "mac-first",
             rect: .init(x: 100, y: 40, width: 300, height: 200), visible: true)
-        #expect(!first.isHidden)
+        #expect(!first.isHiddenOrHasHiddenAncestor)
         #expect(fixture.container.convert(first.bounds, from: first) ==
             CGRect(x: 120, y: 390, width: 300, height: 200))
-        #expect(second.isHidden)
+        #expect(second.isHiddenOrHasHiddenAncestor)
         fixture.host.releaseScope("panel-one")
-        #expect(first.isHidden)
+        #expect(first.isHiddenOrHasHiddenAncestor)
         #expect(fixture.host.state.tabs.count == 2)
         try fixture.host.close(tabId: "mac-first")
         #expect(first.superview == nil)
@@ -364,6 +412,40 @@ struct DashboardNativeBrowserHostTests {
         try fixture.host.close(tabId: "mac-second")
         #expect(!fixture.host.hasTabs)
         #expect(second.superview == nil)
+    }
+
+    @Test func `toast cutouts preserve browser frame and route clicks to the dashboard until removed`() throws {
+        let fixture = self.fixture()
+        defer { fixture.host.dispose() }
+        try fixture.host.open(tabId: "mac-first", url: #require(URL(string: "about:blank")), sessionKey: "")
+        let tab = try #require(fixture.host.webView(for: "mac-first"))
+        let view = try #require(tab.superview)
+        try fixture.host.present(
+            scope: "panel", tabId: "mac-first", rect: .init(x: 50, y: 80, width: 600, height: 400), visible: true)
+        let frame = view.frame
+        let first = DashboardBrowserCutout(rect: .init(x: 100, y: 65, width: 100, height: 44), radius: 22)
+        let second = DashboardBrowserCutout(rect: .init(x: 170, y: 75, width: 120, height: 48), radius: 14)
+        let overlap = CGPoint(x: 205, y: 535) // Dashboard viewport (185, 95).
+        let clear = CGPoint(x: 400, y: 400)
+        func hit(_ point: CGPoint) -> NSView? { fixture.container.hitTest(point) }
+        func belongs(_ hit: NSView?, to webView: WKWebView) -> Bool {
+            hit === webView || hit?.isDescendant(of: webView) == true
+        }
+        #expect(belongs(hit(overlap), to: tab))
+
+        fixture.host.setOverlayCutouts([first, second])
+        #expect(view.frame == frame)
+        #expect(!tab.isHidden)
+        let mask = try #require(view.layer?.mask as? CAShapeLayer)
+        let visible = try #require(mask.path)
+        #expect(!visible.contains(view.convert(overlap, from: fixture.container)))
+        #expect(visible.contains(view.convert(clear, from: fixture.container)))
+        #expect(belongs(hit(overlap), to: fixture.dashboard))
+        #expect(belongs(hit(clear), to: tab))
+
+        fixture.host.setOverlayCutouts([])
+        #expect(view.layer?.mask == nil)
+        #expect(belongs(hit(overlap), to: tab))
     }
 
     @Test func `most recent scope wins and releasing it restores the surviving presentation`() throws {
@@ -381,15 +463,15 @@ struct DashboardNativeBrowserHostTests {
             CGRect(x: 320, y: 330, width: 300, height: 250))
         fixture.host.releaseScope("panel-two")
         #expect(fixture.host.presentationScope(for: tab) == "panel-one")
-        #expect(!tab.isHidden)
+        #expect(!tab.isHiddenOrHasHiddenAncestor)
         #expect(fixture.container.convert(tab.bounds, from: tab) ==
             CGRect(x: 30, y: 510, width: 200, height: 100))
         try fixture.host.present(scope: "panel-one", tabId: "mac-first", rect: firstRect, visible: false)
         #expect(fixture.host.presentationScope(for: tab) == nil)
-        #expect(tab.isHidden)
+        #expect(tab.isHiddenOrHasHiddenAncestor)
         try fixture.host.present(scope: "panel-one", tabId: "mac-first", rect: firstRect, visible: true)
         fixture.host.releaseAllScopes()
-        #expect(tab.isHidden)
+        #expect(tab.isHiddenOrHasHiddenAncestor)
         #expect(fixture.host.hasTabs)
     }
 
@@ -432,7 +514,7 @@ struct DashboardNativeBrowserHostTests {
         #expect(fixture.host.state.tabs.count == 2)
 
         try fixture.host.close(tabId: current.id)
-        fixture.host.navigationDidFail(for: original)
+        fixture.host.navigationDidFail(nil, for: original, error: URLError(.cannotConnectToHost))
         #expect(try fixture.host.open(tabId: "mac-retry", url: requested, sessionKey: "") == "mac-retry")
         #expect(fixture.host.state.tabs.map(\.id) == ["mac-original", "mac-retry"])
 
@@ -513,7 +595,7 @@ struct DashboardNativeBrowserHostTests {
         tab.updateRepresentedURL(redirected)
         switch transition {
         case "replacement": tab.startNavigation(NSObject())
-        case "failure": tab.failNavigation()
+        case "failure": tab.failNavigation(nil)
         default:
             tab.finishNavigation(navigation, at: redirected, title: nil)
             tab.updateRepresentedURL(replacement)
@@ -557,5 +639,474 @@ struct DashboardNativeBrowserHostTests {
             dashboardWebView: dashboard, container: container,
             websiteDataStore: store, onStateChange: onStateChange)
         return (host, container, dashboard)
+    }
+}
+
+@MainActor
+private enum DashboardArticleFixture {
+    static let favicon = "data:image/png;base64," +
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+
+    static func server(port: UInt16 = 0) async throws -> DashboardHTTPFixture {
+        try await DashboardHTTPFixture.start(
+            port: port,
+            html: """
+            <!doctype html><html><head><title>Article</title><link rel="icon" href="\(self.favicon)"></head>
+            <body><a id="jump" href="#section">Section</a><h2 id="section">Section</h2></body></html>
+            """,
+            contentSecurityPolicy: "default-src 'none'; img-src data:; connect-src data:",
+            rawResponseHandler: { request in
+                let responses = [
+                    "/archive.bin": ("application/octet-stream", "PK\u{3}\u{4}"),
+                    "/plain": ("text/html", "<!doctype html><title>Plain</title>"),
+                ]
+                guard let (type, body) = responses.first(where: { request.hasPrefix("GET \($0.key) ") })?.value
+                else { return nil }
+                return .init(data: Data((
+                    "HTTP/1.1 200 OK\r\nContent-Type: \(type)\r\nContent-Length: \(body.utf8.count)\r\n" +
+                        "Connection: close\r\n\r\n\(body)").utf8))
+            })
+    }
+}
+
+@Suite(.serialized, .timeLimit(.minutes(1)))
+@MainActor
+struct DashboardNativeBrowserFaviconTests {
+    @Test func `tabs follow the dashboard appearance without reloading`() async throws {
+        func icon(_ fill: String) -> String {
+            let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>" +
+                "<circle cx='8' cy='8' r='8' fill='\(fill)'/></svg>"
+            return "data:image/svg+xml;base64," + Data(svg.utf8).base64EncodedString()
+        }
+        let light = icon("black")
+        let dark = icon("white")
+        let server = try await DashboardHTTPFixture.start(html: """
+        <!doctype html><html data-theme-mode="light"><title>Theme fixture</title><link rel="icon">
+        <script>
+          const preference = matchMedia('(prefers-color-scheme: dark)');
+          const icon = document.querySelector('link');
+          const update = () => { icon.href = preference.matches ? '\(dark)' : '\(light)'; };
+          preference.addEventListener('change', update);
+          update();
+        </script>
+        """, contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'; img-src data:; connect-src data:")
+        defer { server.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        controller.show(url: controller.currentURL, auth: controller.auth)
+        let window = try #require(controller.window)
+        window.appearance = NSAppearance(named: .darkAqua)
+        try await waitForNativeDashboardDocument(controller)
+
+        let browser = controller.nativeBrowser
+        try browser.open(tabId: "mac-theme", url: server.url("/article"), sessionKey: "")
+        let webView = try #require(browser.webView(for: "mac-theme"))
+        try await TestWait.state("light favicon on a dark system appearance") {
+            browser.state.tabs.first?.favicon == light
+        }
+        let dashboardStillDark = try await controller.webView.evaluateJavaScript(
+            "matchMedia('(prefers-color-scheme: dark)').matches")
+        #expect(dashboardStillDark as? Bool == true)
+        _ = try await webView.evaluateJavaScript("window.openclawFixtureLoaded = true")
+
+        _ = try await controller.webView.evaluateJavaScript("document.documentElement.dataset.themeMode = 'dark'")
+        try await TestWait.state("dark favicon after a dashboard theme change") {
+            browser.state.tabs.first?.favicon == dark
+        }
+        let sameDocument = try await webView.evaluateJavaScript("window.openclawFixtureLoaded === true")
+        #expect(sameDocument as? Bool == true)
+
+        let requestReceived = AsyncTestGate()
+        let stalled = try await DashboardHTTPFixture.start(beforeResponse: {
+            requestReceived.open()
+            await AsyncTestGate().wait()
+        })
+        defer { stalled.stop() }
+        try browser.navigate(tabId: "mac-theme", url: stalled.url("/pending"))
+        try await requestReceived.wait("the navigation is waiting for its response")
+        _ = try await controller.webView.evaluateJavaScript("document.documentElement.dataset.themeMode = 'light'")
+        try await TestWait.state("the reading view adopts light while loading") {
+            webView.appearance?.name == .aqua && webView.isLoading
+        }
+        try browser.perform(.stop, tabId: "mac-theme")
+        try await TestWait.state("the retained page gets the new favicon when navigation stops") {
+            !webView.isLoading && browser.state.tabs.first?.favicon == light
+        }
+        let retainedDocument = try await webView.evaluateJavaScript("window.openclawFixtureLoaded === true")
+        #expect(retainedDocument as? Bool == true)
+
+        controller.hideForExperience()
+        try #require(controller.isHiddenForExperience)
+        let closeAllowed = try await controller.webView.callAsyncJavaScript(
+            """
+            document.documentElement.dataset.themeMode = 'dark';
+            const reply = await window.webkit.messageHandlers.openclawBrowser
+              .postMessage({type: 'close', tabId: 'mac-theme'});
+            return reply.ok;
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page)
+        #expect(closeAllowed as? Bool == false)
+        try await TestWait.state("the native tab adopts the appearance while hidden") {
+            browser.state.tabs.first?.favicon == dark
+        }
+        controller.show()
+        try await TestWait.state("the reopened dashboard receives the retained tab’s current favicon") {
+            let favicon = try await controller.webView.evaluateJavaScript(
+                "window.__OPENCLAW_NATIVE_BROWSER__?.tabs.find(tab => tab.id === 'mac-theme')?.favicon ?? null")
+            return favicon as? String == dark
+        }
+        let reopenedDocument = try await webView.evaluateJavaScript("window.openclawFixtureLoaded === true")
+        #expect(reopenedDocument as? Bool == true)
+    }
+
+    @Test func `navigations that keep the displayed page keep its favicon`() async throws {
+        let unreachable = try await DashboardHTTPFixture.start()
+        let unreachableURL = unreachable.url("/gone")
+        unreachable.stop()
+        let server = try await DashboardArticleFixture.server()
+        defer { server.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        try controller.nativeBrowser.open(tabId: "mac-article", url: server.url("/article"), sessionKey: "")
+        let article = try #require(controller.nativeBrowser.webView(for: "mac-article"))
+
+        for trigger in ["fragment", "unreachable", "cancelled"] {
+            try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/article"))
+            try await TestWait.state("article favicon before \(trigger)") {
+                !article.isLoading && controller.nativeBrowser.state.tabs.first?.favicon == DashboardArticleFixture
+                    .favicon
+            }
+            if trigger == "fragment" {
+                _ = try await article.evaluateJavaScript("document.getElementById('jump').click(); true")
+                try await TestWait.state("fragment navigation") { article.url?.fragment == "section" }
+            } else {
+                try controller.nativeBrowser.navigate(
+                    tabId: "mac-article",
+                    url: trigger == "unreachable" ? unreachableURL : server.url("/archive.bin"))
+                try #require(article.isLoading)
+                try await TestWait.state("\(trigger) navigation ends") { !article.isLoading }
+                #expect(article.url?.path == "/article")
+            }
+            #expect(controller.nativeBrowser.state.tabs.first?.favicon == DashboardArticleFixture.favicon, "\(trigger)")
+        }
+    }
+
+    @Test func `replacement documents drop the previous page's favicon, including history restores`() async throws {
+        let server = try await DashboardArticleFixture.server()
+        defer { server.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        try controller.nativeBrowser.open(tabId: "mac-article", url: server.url("/article"), sessionKey: "")
+        let article = try #require(controller.nativeBrowser.webView(for: "mac-article"))
+        try await TestWait.state("article favicon") {
+            controller.nativeBrowser.state.tabs.first?.favicon == DashboardArticleFixture.favicon
+        }
+
+        try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/plain"))
+        try await TestWait.state("plain page") { !article.isLoading && article.url?.path == "/plain" }
+        #expect(controller.nativeBrowser.state.tabs.first?.favicon == nil)
+
+        article.goBack()
+        try await TestWait.state("article favicon after back") {
+            !article.isLoading && controller.nativeBrowser.state.tabs.first?.favicon == DashboardArticleFixture.favicon
+        }
+        article.goForward()
+        try await TestWait.state("plain page after forward") { !article.isLoading && article.url?.path == "/plain" }
+        #expect(controller.nativeBrowser.state.tabs.first?.favicon == nil)
+    }
+
+    private static func controller(_ server: DashboardHTTPFixture) -> DashboardWindowController {
+        DashboardWindowController(
+            url: server.url("/control/"),
+            auth: DashboardWindowAuth.unauthenticated,
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+    }
+}
+
+@Suite(.serialized, .timeLimit(.minutes(1)))
+@MainActor
+struct DashboardNativeBrowserFailureTests {
+    @Test func `a failed first load explains the failure and Reload retries the attempted URL`() async throws {
+        let (port, attempted) = try await Self.releasedEndpoint("/article")
+        let dashboard = try await DashboardHTTPFixture.start()
+        defer { dashboard.stop() }
+        let controller = Self.controller(dashboard)
+        defer { controller.closeDashboard() }
+        try controller.nativeBrowser.open(tabId: "mac-offline", url: attempted, sessionKey: "")
+        let webView = try #require(controller.nativeBrowser.webView(for: "mac-offline"))
+        let browser = try #require(controller.nativeBrowser.browserTab(for: webView))
+
+        try await TestWait.state("failed first load") { !webView.isLoading && browser.failureView != nil }
+        let failure = try #require(browser.failureView)
+        #expect(failure.superview === webView)
+        #expect(!failure.titleLabel.stringValue.isEmpty)
+        #expect(!failure.messageLabel.stringValue.isEmpty)
+        #expect(!failure.messageLabel.stringValue.contains("127.0.0.1"))
+        #expect(webView.url == nil)
+        #expect(controller.nativeBrowser.state.tabs.first?.url == attempted.absoluteString)
+
+        let revived = try await Self.reclaim(port)
+        defer { revived.stop() }
+        failure.reloadButton.performClick(nil)
+        try await TestWait.state("retried first load") {
+            !webView.isLoading && webView.url == attempted && webView.title == "Article"
+        }
+        #expect(browser.failureView == nil)
+        #expect(failure.superview == nil)
+        #expect(controller.nativeBrowser.state.tabs.first?.url == attempted.absoluteString)
+    }
+
+    @Test func `a failed navigation from a loaded page keeps its favicon and toolbar Reload retries it`() async throws {
+        let (port, attempted) = try await Self.releasedEndpoint("/article")
+        let server = try await DashboardArticleFixture.server()
+        defer { server.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        try controller.nativeBrowser.open(tabId: "mac-article", url: server.url("/article"), sessionKey: "")
+        let webView = try #require(controller.nativeBrowser.webView(for: "mac-article"))
+        let browser = try #require(controller.nativeBrowser.browserTab(for: webView))
+        try await TestWait.state("loaded article") {
+            !webView.isLoading && controller.nativeBrowser.state.tabs.first?.favicon == DashboardArticleFixture.favicon
+        }
+
+        try controller.nativeBrowser.navigate(tabId: "mac-article", url: attempted)
+        try await TestWait.state("failed navigation") { !webView.isLoading && browser.failureView != nil }
+        #expect(webView.url == server.url("/article"))
+        let failed = try #require(controller.nativeBrowser.state.tabs.first)
+        #expect(failed.url == attempted.absoluteString)
+        #expect(failed.favicon == DashboardArticleFixture.favicon)
+
+        let revived = try await Self.reclaim(port)
+        defer { revived.stop() }
+        try controller.nativeBrowser.perform(.reload, tabId: "mac-article")
+        try await TestWait.state("retried navigation") {
+            !webView.isLoading && webView.url == attempted && webView.title == "Article"
+        }
+        #expect(browser.failureView == nil)
+        #expect(webView.canGoBack)
+    }
+
+    @Test(arguments: ["download", "stop", "stop-before-start", "stop-after-fragment", "replacement"])
+    func `deliberate interruptions keep the page without failure UI`(_ trigger: String) async throws {
+        let server = try await DashboardArticleFixture.server()
+        defer { server.stop() }
+        let requestReceived = AsyncTestGate()
+        let stalled = try await DashboardHTTPFixture.start(beforeResponse: {
+            requestReceived.open()
+            await AsyncTestGate().wait()
+        })
+        defer { stalled.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        try controller.nativeBrowser.open(tabId: "mac-article", url: server.url("/article"), sessionKey: "")
+        let webView = try #require(controller.nativeBrowser.webView(for: "mac-article"))
+        let browser = try #require(controller.nativeBrowser.browserTab(for: webView))
+        try await TestWait.state("loaded article") { !webView.isLoading && webView.title == "Article" }
+
+        let expectedPath = trigger == "replacement" ? "/plain" : "/article"
+        switch trigger {
+        case "download": try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/archive.bin"))
+        default:
+            if trigger == "stop-after-fragment" {
+                try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/article#section"))
+                try await TestWait
+                    .state("fragment navigation") { webView.url?.fragment == "section" && !webView.isLoading }
+                _ = try await webView.evaluateJavaScript("location.href = '\(stalled.url("/pending"))'; true")
+            } else {
+                try controller.nativeBrowser.navigate(tabId: "mac-article", url: stalled.url("/pending"))
+            }
+            if trigger != "stop-before-start" { try await requestReceived.wait("request reaches the stalled server") }
+            switch trigger {
+            case "replacement": try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/plain"))
+            default: try controller.nativeBrowser.perform(.stop, tabId: "mac-article")
+            }
+        }
+        try await TestWait.state("\(trigger) settles") {
+            !webView.isLoading && webView.url?.path == expectedPath &&
+                controller.nativeBrowser.state.tabs.first?.url == webView.url?.absoluteString
+        }
+        #expect(browser.failureView == nil, "\(trigger)")
+        #expect(controller.nativeBrowser.state.tabs.first?.url == webView.url?.absoluteString, "\(trigger)")
+    }
+
+    @Test func `repeated content process exits stop automatic reloads in only that tab until the user reloads`() async throws {
+        var loads: [String: Int] = [:]
+        let server = try await DashboardHTTPFixture.start(
+            html: "<!doctype html><title>Article</title>",
+            requestHandler: { request in
+                let path = request.split(separator: " ").dropFirst().first.map(String.init) ?? ""
+                loads[path, default: 0] += 1
+                return nil
+            })
+        defer { server.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        let crashingURL = server.url("/crashing")
+        // A different host keeps the second tab out of the first tab's content process.
+        let otherURL = try #require(URL(string: "http://localhost:\(server.port)/other"))
+        try controller.nativeBrowser.open(tabId: "mac-crashing", url: crashingURL, sessionKey: "")
+        try controller.nativeBrowser.open(tabId: "mac-other", url: otherURL, sessionKey: "")
+        let crashing = try #require(controller.nativeBrowser.webView(for: "mac-crashing"))
+        let other = try #require(controller.nativeBrowser.webView(for: "mac-other"))
+        let browser = try #require(controller.nativeBrowser.browserTab(for: crashing))
+        try await TestWait.state("both tabs loaded") {
+            !crashing.isLoading && crashing.title == "Article" && !other.isLoading && other.title == "Article"
+        }
+        try #require(Self.contentProcess(of: crashing) != Self.contentProcess(of: other))
+
+        for exit in 1...DashboardBrowserTab.automaticReloadLimit {
+            let before = loads["/crashing", default: 0]
+            try Self.terminateContentProcess(of: crashing)
+            try await TestWait.state("automatic reload \(exit)") {
+                loads["/crashing", default: 0] > before && !crashing.isLoading && crashing.title == "Article"
+            }
+        }
+        let before = loads["/crashing", default: 0]
+        try Self.terminateContentProcess(of: crashing)
+        try await TestWait.state("exhausted budget") {
+            browser.failureView != nil || crashing.isLoading || loads["/crashing", default: 0] > before
+        }
+        #expect(browser.failureView != nil)
+        #expect(!crashing.isLoading)
+        #expect(loads["/crashing", default: 0] == before)
+        #expect(controller.nativeBrowser.state.tabs.first?.url == crashingURL.absoluteString)
+
+        // The other tab still recovers on its own budget.
+        let otherBefore = loads["/other", default: 0]
+        try Self.terminateContentProcess(of: other)
+        try await TestWait.state("other tab reload") {
+            loads["/other", default: 0] > otherBefore && !other.isLoading && other.title == "Article"
+        }
+
+        // Explicit Reload recovers the page and restores automatic recovery.
+        try controller.nativeBrowser.perform(.reload, tabId: "mac-crashing")
+        try await TestWait.state("manual reload") {
+            loads["/crashing", default: 0] > before && !crashing.isLoading && crashing.title == "Article"
+        }
+        #expect(browser.failureView == nil)
+        let reloaded = loads["/crashing", default: 0]
+        try Self.terminateContentProcess(of: crashing)
+        try await TestWait.state("automatic reload after manual reload") {
+            loads["/crashing", default: 0] > reloaded && !crashing.isLoading && crashing.title == "Article"
+        }
+
+        // Navigate menu Back and Forward (Command-[ and Command-]) restore the full budget too.
+        let secondURL = server.url("/second")
+        crashing.load(URLRequest(url: secondURL))
+        try await TestWait.state("second page") {
+            crashing.url?.path == "/second" && !crashing.isLoading && crashing.title == "Article"
+        }
+        let window = try #require(controller.window)
+        let rect = DashboardBrowserRect(x: 0, y: 0, width: 300, height: 200)
+        try controller.nativeBrowser.present(scope: "panel", tabId: "mac-crashing", rect: rect, visible: true)
+        #expect(window.makeFirstResponder(crashing))
+        for back in [true, false] {
+            let path = back ? crashingURL.path : secondURL.path
+            if back { controller.navigateBack() } else { controller.navigateForward() }
+            try await TestWait.state("menu history to \(path)") {
+                crashing.url?.path == path && !crashing.isLoading
+            }
+            for exit in 1...DashboardBrowserTab.automaticReloadLimit {
+                let before = loads[path, default: 0]
+                try Self.terminateContentProcess(of: crashing)
+                try await TestWait.state("automatic reload \(exit) at \(path)") {
+                    browser.failureView != nil ||
+                        (loads[path, default: 0] > before && !crashing.isLoading && crashing.title == "Article")
+                }
+                try #require(browser.failureView == nil, "exit \(exit) at \(path) after menu history")
+            }
+        }
+    }
+
+    private static func contentProcess(of webView: WKWebView) -> pid_t {
+        (webView.value(forKey: "_webProcessIdentifier") as? NSNumber)?.int32Value ?? 0
+    }
+
+    /// Kills only the content process WebKit reports for this test-owned tab.
+    private static func terminateContentProcess(of webView: WKWebView) throws {
+        let pid = self.contentProcess(of: webView)
+        try #require(pid > 1 && pid != getpid())
+        try #require(Darwin.kill(pid, SIGKILL) == 0)
+    }
+
+    /// Reserves a loopback port and releases it, so loads fail with a refused connection.
+    private static func releasedEndpoint(_ path: String) async throws -> (UInt16, URL) {
+        let fixture = try await DashboardHTTPFixture.start()
+        defer { fixture.stop() }
+        return (fixture.port, fixture.url(path))
+    }
+
+    private static func reclaim(_ port: UInt16) async throws -> DashboardHTTPFixture {
+        var revived: DashboardHTTPFixture?
+        try await TestWait.state("released endpoint accepts again") {
+            revived = try? await DashboardArticleFixture.server(port: port)
+            return revived != nil
+        }
+        return try #require(revived)
+    }
+
+    private static func controller(_ server: DashboardHTTPFixture) -> DashboardWindowController {
+        DashboardWindowController(
+            url: server.url("/control/"),
+            auth: DashboardWindowAuth.unauthenticated,
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+    }
+}
+
+@Suite(.serialized, .timeLimit(.minutes(1)))
+@MainActor
+struct DashboardNativeBrowserInspectTests {
+    @Test func `inspection reports the real element when the page replaces the DOM lookups`() async throws {
+        let server = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><html><body style="margin:0">
+            <div id="real" style="width:600px;height:400px">Real content</div>
+            <script>
+            window.hookCalls = 0;
+            document.elementFromPoint = () => {
+              window.hookCalls += 1;
+              const fake = document.createElement("button");
+              fake.id = "spoofed";
+              return fake;
+            };
+            const getAttribute = Element.prototype.getAttribute;
+            Element.prototype.getAttribute = function (name) {
+              window.hookCalls += 1;
+              return getAttribute.call(this, name);
+            };
+            </script></body></html>
+            """,
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
+        defer { server.stop() }
+        let controller = DashboardWindowController(
+            url: server.url("/control/"),
+            auth: DashboardWindowAuth.unauthenticated,
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        try controller.nativeBrowser.open(tabId: "mac-page", url: server.url("/page"), sessionKey: "")
+        try controller.nativeBrowser.present(
+            scope: "panel", tabId: "mac-page", rect: DashboardBrowserRect(x: 0, y: 0, width: 600, height: 400),
+            visible: true)
+        let page = try #require(controller.nativeBrowser.webView(for: "mac-page"))
+        try await TestWait.state("hooked page") { !page.isLoading && page.url?.path == "/page" }
+        let pageWorld = try await page.evaluateJavaScript("(\(BrowserInspectScript.source))(10, 10)") as? [String: Any]
+        #expect(pageWorld?["id"] as? String == "spoofed")
+        _ = try await page.evaluateJavaScript("window.hookCalls = 0")
+
+        let reply = try await controller.nativeBrowser.inspect(tabId: "mac-page", x: 10, y: 10)
+
+        let node = try #require(reply["node"] as? [String: Any])
+        #expect(node["id"] as? String == "real")
+        #expect(node["tag"] as? String == "div")
+        let hookCalls = try await page.evaluateJavaScript("window.hookCalls") as? Int
+        #expect(hookCalls == 0)
     }
 }

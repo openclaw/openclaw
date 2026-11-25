@@ -19,15 +19,12 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { withEnvAsync } from "../../test-utils/env.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
-import * as environmentServiceModule from "./service.js";
 import { registerWorkerDelegationPolicyTests } from "./worker-session-tool-executor.delegation.suite.js";
 import { registerWorkerGatewayToolExecutionTests } from "./worker-session-tool-executor.gateway-tools.suite.js";
+import { registerWorkerSpawnStartupTests } from "./worker-session-tool-executor.startup.suite.js";
 const {
   workerSessionToolTestMocks,
   SOURCE,
@@ -109,16 +106,16 @@ describe("worker session tool topology", () => {
     async ({ allow, deny, promptAllow, expected }) => {
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       const config = { tools: { allow, deny } };
-      const inheritedPublicationToolRef: { current?: AnyAgentTool } = {};
+      const additionalInheritedToolNamesRef: string[] = [];
       const runtime = getFixture().createToolRuntime({
-        inheritedPublicationToolRef,
+        additionalInheritedToolNamesRef,
         prepareTools: (adapters) =>
           createOpenClawCodingToolsInternal(
             {
               config,
               sessionKey: SOURCE.sessionKey,
               githubPublicationAvailable: false,
-              inheritedPublicationToolRef,
+              additionalInheritedToolNamesRef,
               wrapBeforeToolCallHook: false,
               toolConstructionPlan: {
                 includeBaseCodingTools: false,
@@ -150,7 +147,7 @@ describe("worker session tool topology", () => {
       ).toEqual(policy.allow);
       expect(placements.isWorkerTurnToolAuthorized(sourceClaim, "github_publish")).toBe(false);
       await runtime.close();
-      expect(() => runtime.getInheritedPublicationToolName()).toThrow("Worker tool surface closed");
+      expect(() => runtime.getAdditionalInheritedToolNames()).toThrow("Worker tool surface closed");
     },
   );
 
@@ -167,11 +164,11 @@ describe("worker session tool topology", () => {
     await started.promise;
     getFixture().closeSourceRun();
     prepared.resolve([]);
-    await expect(pending).rejects.toThrow(/source worker run ended|worker turn authority changed/);
+    await expect(pending).rejects.toThrow(/source worker run ended|worker turn ended/);
   });
 
-  it.each(["active", "run-ended", "operator-revoked"] as const)(
-    "reads presence as the original operator only while its authority is live (%s)",
+  it.each(["active", "run-ended"] as const)(
+    "reads presence as the original operator until its run ends (%s)",
     async (authorityState) => {
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       await placements.authorizeWorkerTurnTools(sourceClaim, ["presence"]);
@@ -203,21 +200,15 @@ describe("worker session tool topology", () => {
       await entered.promise;
       if (authorityState === "run-ended") {
         getFixture().closeSourceRun();
-      } else if (authorityState === "operator-revoked") {
-        getFixture().revokeOperatorAuthority();
       }
       release.resolve();
       if (authorityState === "run-ended") {
-        await expect(pending).rejects.toThrow(
-          /source worker run ended|agent tool caller authority is no longer/,
-        );
-      } else if (authorityState === "operator-revoked") {
-        await expect(pending).rejects.toThrow(/operator.*(revoked|no longer active)/);
+        await expect(pending).rejects.toThrow(/source worker run ended|The agent run ended/);
       } else {
         expect((await pending).details).toEqual(snapshot);
         await placements.authorizeWorkerTurnTools(sourceClaim, []);
         await expect(tool.execute("revoked-presence", {})).rejects.toThrow(
-          "Worker tool authority changed",
+          "Worker turn ended or lacks this tool",
         );
       }
       expect(gatewayRequest).toHaveBeenCalledOnce();
@@ -305,16 +296,16 @@ describe("worker session tool topology", () => {
     },
   );
 
-  it("retains Workshop replay, update, call-cap, and live-authority behavior in the generic surface", async () => {
+  it("retains skill library replay, update, call-cap, and live-authority behavior in the generic surface", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    await placements.authorizeWorkerTurnTools(sourceClaim, ["skill_workshop"]);
+    await placements.authorizeWorkerTurnTools(sourceClaim, ["skill_library"]);
     const update = vi.fn();
     const beforeToolCall = vi.fn();
     const afterToolCall = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([
-        { hookName: "before_tool_call", matcher: ["skill_workshop"], handler: beforeToolCall },
-        { hookName: "after_tool_call", matcher: ["skill_workshop"], handler: afterToolCall },
+        { hookName: "before_tool_call", matcher: ["skill_library"], handler: beforeToolCall },
+        { hookName: "after_tool_call", matcher: ["skill_library"], handler: afterToolCall },
       ]),
     );
     const executeWorkshop = vi.fn<AnyAgentTool["execute"]>(
@@ -325,13 +316,13 @@ describe("worker session tool topology", () => {
       },
     );
     const tools = await getFixture().createTools({
-      name: "skill_workshop",
-      label: "Workshop",
+      name: "skill_library",
+      label: "Skill Library",
       description: "Library",
       parameters: SkillLibraryWorkshopSchema,
       execute: executeWorkshop,
     });
-    const tool = tools.find((candidate) => candidate.name === "skill_workshop")!;
+    const tool = tools.find((candidate) => candidate.name === "skill_library")!;
     const first = await tool.execute("call-0", { action: "list" }, undefined, update);
     expect(await tool.execute("call-0", { action: "list" })).toEqual(first);
     expect(executeWorkshop).toHaveBeenCalledOnce();
@@ -354,13 +345,13 @@ describe("worker session tool topology", () => {
     "revalidates tool grants after awaited %s work",
     async (revokedAt) => {
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-      await placements.authorizeWorkerTurnTools(sourceClaim, ["skill_workshop"]);
+      await placements.authorizeWorkerTurnTools(sourceClaim, ["skill_library"]);
       if (revokedAt === "policy") {
         initializeGlobalHookRunner(
           createMockPluginRegistry([
             {
               hookName: "before_tool_call",
-              matcher: ["skill_workshop"],
+              matcher: ["skill_library"],
               handler: async () => {
                 await Promise.resolve();
                 await placements.authorizeWorkerTurnTools(sourceClaim, []);
@@ -376,15 +367,15 @@ describe("worker session tool topology", () => {
       });
       const tool = (
         await getFixture().createTools({
-          name: "skill_workshop",
-          label: "Workshop",
+          name: "skill_library",
+          label: "Skill Library",
           description: "Library",
           parameters: SkillLibraryWorkshopSchema,
           execute: executeWorkshop,
         })
-      ).find((candidate) => candidate.name === "skill_workshop")!;
+      ).find((candidate) => candidate.name === "skill_library")!;
       await expect(tool.execute("revoked-call", { action: "list" })).rejects.toThrow(
-        "tool authority changed",
+        "Worker turn ended or lacks this tool",
       );
       expect(executeWorkshop).toHaveBeenCalledTimes(revokedAt === "policy" ? 0 : 1);
     },
@@ -830,114 +821,14 @@ describe.each([
       expect(gatewayRequest).toHaveBeenCalledOnce();
       if (source.admissionSource === "operator-schedule") {
         getFixture().closeSourceRun();
-        await expect(tool.execute("closed-schedule", {})).rejects.toThrow(
-          "worker turn authority changed",
-        );
+        await expect(tool.execute("closed-schedule", {})).rejects.toThrow("worker turn ended");
         expect(gatewayRequest).toHaveBeenCalledOnce();
       }
     }
   });
 });
 
-describe("worker spawn startup composition", () => {
-  const getFixture = installWorkerSessionToolTestFixture(fixtureMocks);
-
-  it.each([false, true])(
-    "retains parent authority across runtime-bound provisioning (closed=%s)",
-    async (closed) => {
-      const { root, placements, identity, setEntry, activate, closeSourceRun } = getFixture();
-      setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-      const { createDesktopSessionRegistry } = await import("../desktop/session-registry.js");
-      const { createGatewayWorkerEnvironmentRuntime, loadGatewayWorkerEnvironmentStartupState } =
-        await import("../server-worker-environment-startup.js");
-      const factory = vi.spyOn(environmentServiceModule, "createWorkerEnvironmentService");
-      try {
-        await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-          const startup = await loadGatewayWorkerEnvironmentStartupState();
-          const registry = createEmptyPluginRegistry();
-          const runtime = await createGatewayWorkerEnvironmentRuntime({
-            scheduler: createTestGatewayScheduler(),
-            getPluginRegistry: () => registry,
-            getPortalRuntime: () => undefined,
-            resolveGatewayContext,
-            desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
-            startup: { ...startup, placementStore: placements },
-            log: { child: () => ({ info: () => {}, warn: () => {} }) },
-          });
-          const service = runtime.workerEnvironmentService;
-          const createTools = factory.mock.calls.at(-1)?.[0].createGatewayTools;
-          if (!service || !createTools || !runtime.bindWorkerSessionDispatch) {
-            throw new Error("worker session-tool runtime was not composed");
-          }
-          const base = service.get(SOURCE.environmentId);
-          if (!base) {
-            throw new Error("source environment fixture was not created");
-          }
-          const getEnvironment = vi.spyOn(service, "get").mockImplementation((environmentId) => {
-            const owner = environmentId === SOURCE.environmentId ? SOURCE : CHILD;
-            return {
-              ...base,
-              environmentId,
-              providerId: "fake",
-              profileId: "cloud-profile",
-              profileSnapshot: { install: "bundle", settings: { region: "source" } },
-              state: "attached",
-              leaseId: `lease-${environmentId}`,
-              ownerEpoch: owner.ownerEpoch,
-              attachedSessionIds: [owner.sessionId],
-            };
-          });
-          const provisioning = createDeferred();
-          const finishProvisioning = createDeferred();
-          runtime.bindWorkerSessionDispatch(async (request, _onTransition, authorize) => {
-            provisioning.resolve();
-            await finishProvisioning.promise;
-            authorize?.();
-            await activate({ ...CHILD, sessionKey: request.sessionKey });
-            const placement = placements.get(CHILD.sessionId);
-            if (placement?.state !== "active") {
-              throw new Error("child fixture did not activate");
-            }
-            return placement;
-          });
-          try {
-            const tools = await createTools({ identity });
-            const spawnTool = tools.find((tool) => tool.name === "sessions_spawn");
-            if (!spawnTool) {
-              throw new Error("Worker spawn tool was not composed");
-            }
-            const pending = spawnTool.execute("startup-parent-closure", {
-              task: "start the child",
-            });
-            await Promise.race([
-              provisioning.promise,
-              pending.then(() => {
-                throw new Error("worker spawn completed before provisioning");
-              }),
-            ]);
-            if (closed) {
-              closeSourceRun();
-            }
-            finishProvisioning.resolve();
-            if (closed) {
-              await expect(pending).rejects.toThrow();
-            } else {
-              expect(JSON.stringify(await pending)).not.toContain('"status":"error"');
-            }
-            expect(placements.get(CHILD.sessionId)?.state).toBe(closed ? undefined : "active");
-            expect(gatewayRequest).toHaveBeenCalledTimes(closed ? 0 : 1);
-          } finally {
-            finishProvisioning.resolve();
-            getEnvironment.mockRestore();
-            await service.stop();
-          }
-        });
-      } finally {
-        factory.mockRestore();
-      }
-    },
-  );
-});
+registerWorkerSpawnStartupTests(fixtureMocks);
 
 registerWorkerDelegationPolicyTests(fixtureMocks);
 

@@ -154,7 +154,10 @@ harness keeps its own defaults.
 Changing a configured model or thinking value updates the existing session
 before its next turn without replacing the conversation. Each option is saved
 only after the harness accepts it; a rejected option returns an error and keeps
-that option's previous selection. Model and thinking changes are independent,
+that option's previous selection. The exception is a configured thinking level
+that the harness refuses by value, such as `adaptive` for an adapter whose
+effort values do not include it: the binding stays online on its previous
+thinking selection. Model and thinking changes are independent,
 not an atomic batch. Removing a default
 uses any remaining configured policy; if none remains, OpenClaw retains the
 session's last selection. Omission is not a backend reset. To change thinking

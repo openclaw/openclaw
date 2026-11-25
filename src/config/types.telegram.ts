@@ -10,6 +10,7 @@ import type {
   ChannelReactionConfig,
   CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
+  MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
 import type { ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
@@ -97,6 +98,11 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
      * Default: false.
      */
     richMessages?: boolean;
+    /**
+     * Opt into Bot API 10.4 message widgets in private chats (show_widget).
+     * Older Telegram clients cannot render widgets. Default: false.
+     */
+    widgets?: boolean;
     network?: TelegramNetworkConfig;
     proxy?: string;
     webhookUrl?: string;
@@ -170,8 +176,4 @@ export type TelegramDirectConfig = Omit<CommonChannelGroupConfig, "requireMentio
   autoTopicLabel?: AutoTopicLabelConfig;
 };
 
-export type TelegramConfig = {
-  accounts?: Record<string, TelegramAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & TelegramAccountConfig;
+export type TelegramConfig = MultiAccountChannelConfig<TelegramAccountConfig>;

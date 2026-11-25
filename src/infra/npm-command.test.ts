@@ -18,35 +18,44 @@ afterEach(() => {
   Object.defineProperty(process, "versions", { value: originalVersions });
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.resetModules();
 });
 
 describe("npm invocation", () => {
-  it("uses the standalone sidecar and self-as-Bun environment without host npm", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-npm-command-"));
-    try {
-      const entry = path.join(root, "npm", "bin", "npm-cli.js");
-      fs.mkdirSync(path.dirname(entry), { recursive: true });
-      fs.writeFileSync(entry, "// packaged npm entry");
-      vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(root + path.sep).href);
-      Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.3" } });
-      const env = {
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-        NPM_CONFIG_REGISTRY: "https://registry.example",
-      };
-      expect(resolveNpmCommand(["install", "--ignore-scripts"])).toEqual([
-        process.execPath,
-        entry,
-        "install",
-        "--ignore-scripts",
-      ]);
-      expect(resolveRuntimeScriptEnv(env)).toEqual({ ...env, BUN_BE_BUN: "1" });
-      expect(env).not.toHaveProperty("BUN_BE_BUN");
-      fs.rmSync(entry);
-      expect(() => resolveNpmCommand(["install"])).toThrow(entry);
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
+  it.each(["jit", "aot"] as const)(
+    "resolves standalone npm and its Bun environment for %s artifacts",
+    async (mode) => {
+      vi.resetModules();
+      vi.stubGlobal("__openclawStandaloneBuildInfo", { mode });
+      const { resolveNpmCommand: resolveStandaloneNpmCommand } = await import("./npm-command.js");
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-npm-command-"));
+      try {
+        const entry = path.join(root, "npm", "bin", "npm-cli.js");
+        fs.mkdirSync(path.dirname(entry), { recursive: true });
+        fs.writeFileSync(entry, "// packaged npm entry");
+        vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(root + path.sep).href);
+        Object.defineProperty(process, "versions", {
+          value: { ...originalVersions, bun: "1.4.3" },
+        });
+        const env = {
+          NPM_CONFIG_IGNORE_SCRIPTS: "true",
+          NPM_CONFIG_REGISTRY: "https://registry.example",
+        };
+        expect(resolveStandaloneNpmCommand(["install", "--ignore-scripts"])).toEqual([
+          process.execPath,
+          entry,
+          "install",
+          "--ignore-scripts",
+        ]);
+        expect(resolveRuntimeScriptEnv(env)).toEqual({ ...env, BUN_BE_BUN: "1" });
+        expect(env).not.toHaveProperty("BUN_BE_BUN");
+        fs.rmSync(entry);
+        expect(() => resolveStandaloneNpmCommand(["install"])).toThrow(entry);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     { bun: undefined, args: ["view", "@openclaw/irc", "version"], command: ["npm"] },

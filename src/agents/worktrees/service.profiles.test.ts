@@ -1,24 +1,15 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as commandExec from "../../process/exec.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { resolveWorktreeSourceProfile } from "./checkout-profiles.js";
 import { addManagedWorktree } from "./checkout.js";
+import { git } from "./git-fixture.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
-const execFileAsync = promisify(execFile);
 const realRunCommand = commandExec.runCommandWithTimeout;
-async function git(cwd: string, ...args: string[]) {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
 
 function read(root: string, file: string) {
   return fs.readFile(path.join(root, file), "utf8");
@@ -30,14 +21,7 @@ function failed(stderr: string) {
 
 describe("repository source profile creation", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
-  const roots = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      vi.restoreAllMocks();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      cleanup();
-    }),
-  );
+  const roots = useStateDatabaseTempDirs();
   let repo: string;
   let service: ManagedWorktreeService;
   let env: NodeJS.ProcessEnv;
@@ -52,6 +36,12 @@ describe("repository source profile creation", () => {
     await git(repo, "add", ".");
     await git(repo, "commit", "-m", "profile inputs");
     return await git(repo, "rev-parse", "HEAD");
+  }
+  const create = (name: string, profiles: string[], baseRef = "HEAD") =>
+    service.create({ repoRoot: repo, name, baseRef, profiles });
+  async function expectUnregistered(name: string) {
+    expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
+    expect(await service.listRegistryRecords()).toEqual([]);
   }
   async function profileTarget(destination: string) {
     return {
@@ -92,16 +82,8 @@ describe("repository source profile creation", () => {
     async (definition) => {
       await write(".openclaw/worktree-profiles/bad", definition);
       await save();
-      await expect(
-        service.create({
-          repoRoot: repo,
-          name: "invalid",
-          baseRef: "HEAD",
-          profiles: ["bad"],
-        }),
-      ).rejects.toThrow(/directory/);
-      expect(await git(repo, "branch", "--list", "openclaw/invalid")).toBe("");
-      expect(await service.listRegistryRecords()).toEqual([]);
+      await expect(create("invalid", ["bad"])).rejects.toThrow(/directory/);
+      await expectUnregistered("invalid");
       expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("/invalid");
     },
   );
@@ -258,16 +240,8 @@ describe("repository source profile creation", () => {
   });
 
   it("rejects an escaping profile name before source registration", async () => {
-    await expect(
-      service.create({
-        repoRoot: repo,
-        name: "invalid-name",
-        baseRef: commit,
-        profiles: ["../alpha"],
-      }),
-    ).rejects.toThrow(/lowercase name/);
-    expect(await git(repo, "branch", "--list", "openclaw/invalid-name")).toBe("");
-    expect(await service.listRegistryRecords()).toEqual([]);
+    await expect(create("invalid-name", ["../alpha"], commit)).rejects.toThrow(/lowercase name/);
+    await expectUnregistered("invalid-name");
   });
 
   it("rejects invalid UTF-8 and oversized definitions instead of reading a valid prefix", async () => {
@@ -298,7 +272,6 @@ describe("repository source profile creation", () => {
       service.create({ repoRoot: repo, name: "retry", profiles: ["alpha"] }),
     ).rejects.toThrow("remote checkout failed");
     expect(attemptedBases).toEqual([commit]);
-    expect(await service.listRegistryRecords()).toEqual([]);
-    expect(await git(repo, "branch", "--list", "openclaw/retry")).toBe("");
+    await expectUnregistered("retry");
   });
 });

@@ -4,12 +4,10 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  OPENAI_GPT_56_SOL_MODEL_ID,
-  OPENAI_GPT_56_TERRA_MODEL_ID,
-  OPENAI_GPT_56_LUNA_MODEL_ID,
+  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
+  OPENAI_GPT_56_VARIANT_MODEL_IDS,
   resolveOpenAICodexReasoningEfforts,
 } from "./model-route-contract.js";
-import { OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS } from "./shared.js";
 
 const OPENAI_CODEX_GPT_56_CONTEXT_WINDOW = 372_000;
 
@@ -82,11 +80,7 @@ export function normalizeOpenAICodexCatalogModel(
   model: ModelDefinitionConfig,
 ): ModelDefinitionConfig {
   const modelId = normalizeLowercaseStringOrEmpty(model.id);
-  if (
-    modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
-    modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
-    modelId === OPENAI_GPT_56_LUNA_MODEL_ID
-  ) {
+  if (OPENAI_GPT_56_VARIANT_MODEL_IDS.some((id) => id === modelId)) {
     const supportedReasoningEfforts = resolveOpenAICodexReasoningEfforts(
       modelId,
       model.compat?.supportedReasoningEfforts?.filter((effort) => effort !== "none"),

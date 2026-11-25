@@ -5,7 +5,7 @@ import { projectSessionEntryPatch } from "../config/sessions/session-entry-patch
 import type { SessionLifecyclePatchEffects } from "../config/sessions/session-run-lifecycle-projection.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
-export type UpdateSessionEntry =
+type UpdateSessionEntry =
   typeof import("../config/sessions/session-accessor.sqlite-entry.js").applySessionEntryTargetOperation;
 export type LifecycleEvent = Parameters<typeof persistGatewaySessionLifecycleEvent>[0]["event"];
 
@@ -45,7 +45,7 @@ export function createPreparedLifecycleWriteTracker() {
 /** Persists one lifecycle event against an in-memory row served by the test file's store mocks. */
 export async function persistLifecycleThroughMockedStore(
   mocks: { loadSessionEntry: Mock; updateSessionEntry: Mock },
-  params: { sessionKey: string; entry: SessionEntry; event: LifecycleEvent },
+  params: { sessionKey: string; entry: SessionEntry; event: LifecycleEvent; clientRunId?: string },
 ): Promise<SessionEntry> {
   let currentEntry = structuredClone(params.entry);
   mocks.loadSessionEntry.mockReset().mockReturnValue({
@@ -74,6 +74,10 @@ export async function persistLifecycleThroughMockedStore(
       }
       return currentEntry;
     });
-  await persistGatewaySessionLifecycleEvent({ sessionKey: params.sessionKey, event: params.event });
+  await persistGatewaySessionLifecycleEvent({
+    sessionKey: params.sessionKey,
+    event: params.event,
+    clientRunId: params.clientRunId,
+  });
   return currentEntry;
 }

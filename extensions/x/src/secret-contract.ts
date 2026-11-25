@@ -1,3 +1,4 @@
+import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-helpers";
 import {
   collectNestedChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
@@ -10,6 +11,9 @@ export const channelSecrets = createChannelSecretContract({
   channelKey: "x",
   account: [...fields, "verifiedFromGitHub.token"],
   channel: [...fields, "verifiedFromGitHub.token"],
+  // Mirrors the implicit default that account listing starts from these root keys.
+  hasImplicitDefaultAccount: ({ channel }) =>
+    ["userId", "clientId", "refreshToken"].some((key) => hasConfiguredAccountValue(channel[key])),
   collect(params) {
     for (const field of fields) {
       collectSimpleChannelFieldAssignments({

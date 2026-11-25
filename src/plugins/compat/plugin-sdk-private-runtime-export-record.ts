@@ -8,7 +8,6 @@ export const PLUGIN_SDK_PRIVATE_RUNTIME_EXPORT_COMPAT_RECORD = {
   code: "plugin-sdk-private-runtime-shipped-exports",
   status: "deprecated",
   owner: "sdk",
-  introduced: "2026-10-15",
   deprecated: "2026-10-15",
   warningStarts: "2026-10-15",
   removeAfter: "2027-01-15",
@@ -49,10 +48,4 @@ export const PLUGIN_SDK_PRIVATE_RUNTIME_EXPORT_COMPAT_RECORD = {
   diagnostics: [
     "TypeScript @deprecated annotations and the private runtime shipped-export contract test",
   ],
-  tests: [
-    "src/plugin-sdk/private-runtime-shipped-exports.test.ts",
-    "src/plugins/compat/registry.test.ts",
-  ],
-  releaseNote:
-    "Runtime exports that published plugins import from JavaScript-only `openclaw/plugin-sdk/*` facades, such as `readApprovalReactionDeliveryMetadata`, are restored after 2026.10.5 betas removed them; they remain deprecated through 2027-01-15.",
 } as const satisfies PluginCompatRecord;

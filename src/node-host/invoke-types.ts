@@ -1,5 +1,5 @@
 import type { SystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
-import type { SkillBinTrustEntry, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 
 export type NodeInvokeRequestPayload = {
   id: string;
@@ -51,8 +51,4 @@ export type ExecEventPayload = {
   output?: string;
   reason?: string;
   suppressNotifyOnExit?: boolean;
-};
-
-export type SkillBinsProvider = {
-  current(): Promise<SkillBinTrustEntry[]>;
 };

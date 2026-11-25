@@ -16,8 +16,12 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
-import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
+import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import {
+  spyOnSessionPrLoader,
+  type SessionPrLoader,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
@@ -44,15 +48,15 @@ export const snapshot: ControlUiSessionPullRequests = {
 export const readerChanges = [
   "unchanged",
   "role",
+  "assignment",
   "connection",
   "profile",
   "visibility",
   "grant",
+  "grant without abort",
   "replacement grant",
 ] as const;
-export type Load = NonNullable<
-  Parameters<typeof createControlUiSessionPullRequestSubscriptions>[0]["load"]
->;
+export type Load = SessionPrLoader;
 
 function authority(access = new AbortController()) {
   return { signal: access.signal, assertCurrent: () => access.signal.throwIfAborted() };
@@ -72,10 +76,14 @@ export async function createFixture(
   const profile = ensureProfileForEmail(readerEmail);
   const other = ensureProfileForEmail(`publication-owner-${fixtureId}@example.test`);
   const seeded = new Set<string>();
-  const sessionId = `${sessionKey}-${fixtureId}`;
   const readerRole = { agents: ["main"], sessions: { others: "view" as const }, scopes: [scope] };
   const cfg: OpenClawConfig = {
-    gateway: { roles: { default: "reader", definitions: { reader: readerRole } } },
+    gateway: {
+      roles: {
+        default: "reader",
+        definitions: { reader: readerRole, revoked: { ...readerRole, scopes: [] } },
+      },
+    },
   };
   setUserProfileRole(profile.id, "reader");
   setRuntimeConfigSnapshot(cfg);
@@ -121,7 +129,10 @@ export async function createFixture(
     connections.clients.add(client);
     return { client, socket, access };
   };
-  const load = vi.fn<Load>(async () => snapshot);
+  const load = vi.fn<SessionPrLoader>(async () => snapshot);
+  if (!useDefaultLoader) {
+    spyOnSessionPrLoader(load);
+  }
   const subscriptions = createControlUiSessionPullRequestSubscriptions({
     scheduler,
     getSessionRowProjection: () => getSessionRowProjection(context),
@@ -130,7 +141,8 @@ export async function createFixture(
     prepareRead: async (connId, session) => {
       const client = connections.clients.getByConnectionId(connId);
       return client
-        ? await prepareControlUiSessionPrRead({
+        ? createControlUiSessionPrRead({
+            allowOwnImportedPullRequest: true,
             client,
             ...session,
             getRuntimeConfig,
@@ -139,7 +151,6 @@ export async function createFixture(
           })
         : undefined;
     },
-    ...(useDefaultLoader ? {} : { load }),
   });
   const context = createGatewayRequestContext(makeContextParams(connections));
   context.getRuntimeConfig = getRuntimeConfig;
@@ -156,8 +167,9 @@ export async function createFixture(
     clock,
     addReader,
     profile,
+    readerEmail,
     other,
-    sessionId,
+    sessionId: `${sessionKey}-${fixtureId}`,
     cfg,
     seed,
     load,
@@ -168,6 +180,9 @@ export async function createFixture(
         const revoked = structuredClone(cfg);
         revoked.gateway!.roles!.definitions!.reader!.scopes = [];
         setRuntimeConfigSnapshot(revoked);
+      } else if (change === "assignment") {
+        setUserProfileRole(profile.id, "revoked");
+        prepareGatewayRecipientProfile(reader.client);
       } else if (change === "connection") {
         reader.client.invalidated = true;
       } else if (change === "profile") {
@@ -176,6 +191,13 @@ export async function createFixture(
         await seed(key, other.id, { visibility: "draft", updatedAt: 2 });
       } else if (change === "grant") {
         reader.access.abort(new Error("Original access retired"));
+      } else if (change === "grant without abort") {
+        vi.spyOn(
+          reader.client.internal!.operatorAccessAuthority!,
+          "assertCurrent",
+        ).mockImplementation(() => {
+          throw new Error("Original access retired without aborting its signal");
+        });
       } else if (change === "replacement grant") {
         reader.client.internal = {
           ...reader.client.internal,

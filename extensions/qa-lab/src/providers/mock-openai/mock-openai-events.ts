@@ -346,7 +346,6 @@ export function buildReasoningOnlyEvents(summaryText: string, id: string): Strea
 export function buildReasoningAndAssistantEvents(params: {
   reasoningId: string;
   answerText: string;
-  answerId?: string;
 }): StreamEvent[] {
   const reasoningItem = {
     type: "reasoning",
@@ -356,7 +355,7 @@ export function buildReasoningAndAssistantEvents(params: {
   const stream = new MockResponseStream(`resp_${params.reasoningId}`);
   stream.item(reasoningItem);
   stream.message({
-    id: params.answerId ?? "msg_mock_reasoned_answer",
+    id: "msg_mock_reasoned_answer",
     phase: "final_answer",
     streamDeltas: [params.answerText],
     text: params.answerText,

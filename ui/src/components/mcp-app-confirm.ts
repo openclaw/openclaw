@@ -1,3 +1,5 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
+
 type Confirmation = {
   frame: HTMLIFrameElement;
   title: string;
@@ -6,47 +8,42 @@ type Confirmation = {
   isCurrent: () => boolean;
 };
 
-/** One pending decision shared by all App requests in the owning pane. */
-export class McpAppConfirm {
-  private pending: (Confirmation & { resolve: (accepted: boolean) => void }) | null = null;
-
-  constructor(private readonly requestUpdate: () => void) {}
-
-  request(confirmation: Confirmation): Promise<boolean> {
-    if (this.pending || !confirmation.isCurrent()) {
-      return Promise.resolve(false);
-    }
-    return new Promise<boolean>((resolve) => {
-      this.pending = { ...confirmation, resolve };
-      this.requestUpdate();
-    });
-  }
-
-  cancel(): void {
-    this.finish(false, false);
-  }
-
-  update(): void {
-    if (this.pending && !this.pending.isCurrent()) {
-      this.cancel();
-    }
-  }
-
-  finish(accepted: boolean, restoreFocus = true): void {
-    const pending = this.pending;
-    if (!pending) {
+/** One synchronous admission owner for pending App decisions. */
+export function createMcpAppConfirm() {
+  let pending: (Confirmation & { resolve: (accepted: boolean) => void }) | null = null;
+  const listeners = createChangeListeners();
+  function finish(accepted: boolean, restoreFocus = true): void {
+    const decision = pending;
+    if (!decision) {
       return;
     }
-    this.pending = null;
-    this.requestUpdate();
-    const current = pending.isCurrent() && pending.frame.isConnected;
+    pending = null;
+    listeners.publish();
+    const current = decision.isCurrent() && decision.frame.isConnected;
     if (restoreFocus && current) {
-      pending.frame.focus({ preventScroll: true });
+      decision.frame.focus({ preventScroll: true });
     }
-    pending.resolve(accepted && current);
+    decision.resolve(accepted && current);
   }
-
-  get current() {
-    return this.pending;
-  }
+  return {
+    read: () => pending,
+    subscribe: listeners.subscribe,
+    request(confirmation: Confirmation): Promise<boolean> {
+      if (pending || !confirmation.isCurrent()) {
+        return Promise.resolve(false);
+      }
+      return new Promise<boolean>((resolve) => {
+        pending = { ...confirmation, resolve };
+        listeners.publish();
+      });
+    },
+    cancel: () => finish(false, false),
+    update() {
+      if (pending && !pending.isCurrent()) {
+        finish(false, false);
+      }
+    },
+    finish,
+  };
 }
+export type McpAppConfirm = ReturnType<typeof createMcpAppConfirm>;

@@ -1,7 +1,11 @@
 import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { t } from "../i18n/index.ts";
+import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
 import type { SessionProgressCardRefreshState } from "../lib/session-progress-cards.ts";
+import type { SessionProgressCardRuntime } from "../lib/session-progress-runtime.ts";
+
+registerSessionProgressEnglish();
 
 export const REFRESH_STATUS_LABEL_KEYS: Record<
   SessionProgressCardRefreshState,
@@ -26,10 +30,7 @@ export const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<ty
   pending: "sessionProgressCard.status.pending",
 };
 
-export const TERMINAL_RUN_OUTCOMES: Partial<
-  Record<SessionRunStatus, "completed" | "failed" | "stopped">
-> = {
-  done: "completed",
+export const TERMINAL_RUN_OUTCOMES: Partial<Record<SessionRunStatus, "failed" | "stopped">> = {
   failed: "failed",
   killed: "stopped",
   timeout: "failed",
@@ -66,14 +67,37 @@ function isProgressCardStaleForRun(card: ProgressCard, startedAt?: number): bool
   return runStart !== undefined && cardUpdate !== undefined && cardUpdate < runStart;
 }
 
+/** A session outcome only describes a plan written during that same run. */
+function progressCardRunOutcome(
+  card: ProgressCard | null | undefined,
+  sessionStatus?: SessionRunStatus,
+  startedAt?: number,
+  endedAt?: number,
+) {
+  const start = asDateTimestampMs(startedAt);
+  const end = asDateTimestampMs(endedAt);
+  const updated = asDateTimestampMs(card?.updatedAt);
+  return sessionStatus &&
+    start !== undefined &&
+    end !== undefined &&
+    updated !== undefined &&
+    end >= start &&
+    updated >= start &&
+    updated <= end
+    ? TERMINAL_RUN_OUTCOMES[sessionStatus]
+    : undefined;
+}
+
 export function progressCardHeadsUp(
   card: ProgressCard | null | undefined,
   sessionStatus?: SessionRunStatus,
   startedAt?: number,
   hasActiveRun = true,
+  hasActiveSubagentRun = false,
+  endedAt?: number,
 ): ProgressCardHeadsUp | null {
   const staleForRun = card ? isProgressCardStaleForRun(card, startedAt) : false;
-  if (sessionStatus && TERMINAL_RUN_OUTCOMES[sessionStatus] && !staleForRun) {
+  if (!hasActiveSubagentRun && progressCardRunOutcome(card, sessionStatus, startedAt, endedAt)) {
     return null;
   }
   const counts = card ? progressCounts(card) : null;
@@ -85,7 +109,10 @@ export function progressCardHeadsUp(
     return null;
   }
   const status =
-    step.status === "in_progress" && (staleForRun || !hasActiveRun) ? "paused" : step.status;
+    step.status === "in_progress" &&
+    (staleForRun || (!hasActiveSubagentRun && (!hasActiveRun || sessionStatus === "done")))
+      ? "paused"
+      : step.status;
   return { ...counts, status, step: step.step };
 }
 
@@ -93,38 +120,31 @@ function currentProgressStep(steps: readonly ProgressCardStep[]): ProgressCardSt
   return unfinishedProgressStep(steps) ?? steps.findLast((step) => step.status === "completed");
 }
 
-export function promoteFirstProgressBar(sanitizedHtml: string): string {
+function parseProgressMarkup(sanitizedHtml: string) {
   const template = document.createElement("template");
   template.innerHTML = sanitizedHtml;
-  const progress = template.content.querySelector("progress");
-  if (!progress) {
-    return sanitizedHtml;
+  return { template, bars: template.content.querySelectorAll("progress") };
+}
+
+/** Compact previews share the full note parser but omit progress-bar fallback text. */
+export function progressCardNoteSummary(sanitizedHtml: string): string {
+  const { template, bars } = parseProgressMarkup(sanitizedHtml);
+  for (const bar of bars) {
+    bar.remove();
   }
-  const value = progress.getAttribute("value")?.trim();
-  const max = progress.getAttribute("max")?.trim();
-  const label =
-    progress.getAttribute("aria-label")?.trim() ||
-    (value && max
-      ? `${t("sessionProgressCard.title")} · ${value}/${max}`
-      : t("sessionProgressCard.title"));
-  progress.setAttribute("aria-label", label);
-  const originalParent = progress.parentElement;
-  const wrapper = document.createElement("div");
-  wrapper.className = "session-progress-card__progress";
-  const visibleLabel = document.createElement("span");
-  visibleLabel.className = "session-progress-card__progress-label";
-  visibleLabel.textContent = label;
-  wrapper.append(visibleLabel, progress);
-  if (
-    originalParent?.tagName === "P" &&
-    originalParent.children.length === 0 &&
-    !originalParent.textContent?.trim()
-  ) {
-    originalParent.remove();
+  return template.content.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+}
+
+/** Commentary-only surfaces keep the note copy and drop its progress bars. */
+export function removeProgressBars(sanitizedHtml: string): string {
+  const { template, bars } = parseProgressMarkup(sanitizedHtml);
+  for (const bar of bars) {
+    const parent = bar.parentElement;
+    bar.remove();
+    if (parent?.tagName === "P" && parent.children.length === 0 && !parent.textContent?.trim()) {
+      parent.remove();
+    }
   }
-  // Reorder only the already-sanitized tree; generated copy uses textContent so
-  // promoting a bar cannot reintroduce authored markup or event handlers.
-  template.content.prepend(wrapper);
   return template.innerHTML;
 }
 
@@ -134,6 +154,7 @@ export function progressCardPresentation(
   startedAt?: number,
   endedAt?: number,
   hasActiveRun = true,
+  runtime?: SessionProgressCardRuntime,
 ) {
   const counts = progressCounts(card);
   const countLabel = counts
@@ -145,25 +166,24 @@ export function progressCardPresentation(
   const validStartedAt = asDateTimestampMs(startedAt);
   const validEndedAt = asDateTimestampMs(endedAt);
   const validUpdatedAt = asDateTimestampMs(card.updatedAt);
-  const hasValidRunWindow =
-    validStartedAt !== undefined &&
-    validEndedAt !== undefined &&
-    validEndedAt >= validStartedAt &&
-    validUpdatedAt !== undefined &&
-    validUpdatedAt >= validStartedAt &&
-    validUpdatedAt <= validEndedAt;
+  const runOutcome = progressCardRunOutcome(card, sessionStatus, startedAt, endedAt);
   // A refreshed snapshot written after a run ended belongs to the new status
   // check, not that run’s old completion time or outcome.
   // A later run does not own durable progress last updated before it starts.
   // Queued runs can retain the previous run's timestamps, but do not own its progress.
   const hasCurrentRunActivity =
-    hasActiveRun &&
+    runtime?.connected !== false &&
+    runtime?.known !== false &&
+    (runtime?.hasActiveSubagentRun === true || (hasActiveRun && sessionStatus !== "done")) &&
     !isProgressCardStaleForRun(card, startedAt) &&
     (validUpdatedAt === undefined ||
       (sessionStatus !== "queued" &&
         (validStartedAt !== undefined || sessionStatus === undefined)));
   const terminalTimestamp =
-    sessionStatus && TERMINAL_RUN_OUTCOMES[sessionStatus] && hasValidRunWindow
+    runOutcome &&
+    !runtime?.hasActiveSubagentRun &&
+    runtime?.connected !== false &&
+    runtime?.known !== false
       ? validEndedAt
       : undefined;
   const effectiveSessionStatus =
@@ -194,10 +214,10 @@ export function progressCardPresentation(
     effectiveSessionStatus,
     activityTimestamp,
     activityKey,
-    currentStep,
     currentPosition,
     complete,
     stepLabel,
+    runOutcome,
     terminalOutcome,
     outcomeLabel,
     presentedCurrentStatus,

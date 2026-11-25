@@ -54,6 +54,13 @@ import {
   type SetupProviderAuthMethod,
 } from "./setup-provider-method.js";
 
+// CLI setup stays off the Gateway runtime graph; only Gateway setup loads node access.
+async function loadGatewayProviderAuthNodes(surface: "cli" | "gateway") {
+  return surface === "gateway"
+    ? (await import("../gateway/server-plugins.js")).createProviderAuthNodes()
+    : undefined;
+}
+
 function assertUtilitySeparation(ctx: StageContext, modelTarget: "utility" | undefined): void {
   if (modelTarget !== "utility") {
     return;
@@ -311,9 +318,7 @@ export async function stageSavedAuthCandidate(
     };
   }
   const saved = credential.setup;
-  const choices = (
-    ctx.deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
-  )({
+  const choices = resolveManifestProviderAuthChoices({
     config: ctx.cfg,
     workspaceDir: ctx.workspace,
     includeUntrustedWorkspacePlugins: false,
@@ -384,15 +389,12 @@ export async function stageProviderAutoCandidate(
   ctx: StageContext,
   choiceId: string,
 ): Promise<StagedCandidate | StageFailure> {
-  const choice = (ctx.deps.resolveManifestProviderAuthChoice ?? resolveManifestProviderAuthChoice)(
-    choiceId,
-    {
-      config: ctx.cfg,
-      workspaceDir: ctx.workspace,
-      includeUntrustedWorkspacePlugins: false,
-      includeWorkspacePlugins: false,
-    },
-  );
+  const choice = resolveManifestProviderAuthChoice(choiceId, {
+    config: ctx.cfg,
+    workspaceDir: ctx.workspace,
+    includeUntrustedWorkspacePlugins: false,
+    includeWorkspacePlugins: false,
+  });
   if (
     !choice ||
     choice.appGuidedDiscovery !== true ||
@@ -486,15 +488,12 @@ export async function stageProviderAuthCandidate(
     });
   }
   const choice = authChoice
-    ? (ctx.deps.resolveManifestProviderAuthChoice ?? resolveManifestProviderAuthChoice)(
-        authChoice,
-        {
-          config: ctx.cfg,
-          workspaceDir: ctx.workspace,
-          includeUntrustedWorkspacePlugins: false,
-          includeWorkspacePlugins: false,
-        },
-      )
+    ? resolveManifestProviderAuthChoice(authChoice, {
+        config: ctx.cfg,
+        workspaceDir: ctx.workspace,
+        includeUntrustedWorkspacePlugins: false,
+        includeWorkspacePlugins: false,
+      })
     : undefined;
   const installEntry = authChoice
     ? resolveProviderInstallCatalogEntry(authChoice, {
@@ -538,6 +537,7 @@ export async function stageProviderAuthCandidate(
         signal: params.signal,
         assertCurrent: () => throwIfSetupInferenceCancelled(params),
         isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
+        nodes: await loadGatewayProviderAuthNodes(params.surface),
         beforePersistentEffect: ctx.beforePersistentEffect,
       },
       async (prepared, provider) => {
@@ -612,6 +612,7 @@ export async function stageProviderAuthCandidate(
             signal: params.signal,
             assertCurrent: () => throwIfSetupInferenceCancelled(params),
             isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
+            nodes: await loadGatewayProviderAuthNodes(params.surface),
             ...(!interactive
               ? {
                   secretInputMode: "plaintext" as const,

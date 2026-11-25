@@ -14,6 +14,21 @@ function canonical(
 ): ProjectionCase {
   return { raw, expected: { kind: "canonical", hasParentId, entry } };
 }
+function messageFacts(
+  message: unknown,
+  facts: { assistantResponseId?: string; assistantRunId?: string } = {},
+) {
+  return canonical({ ...base, type: "message", message }, { ...base, type: "message", ...facts });
+}
+const assistant = { role: "assistant", content: [] };
+const linked = (raw: object): ProjectionCase => ({
+  raw: { ...base, ...raw },
+  expected: { kind: "link", id: base.id, parentId: base.parentId },
+});
+const withBody = (
+  entry: Extract<SessionTranscriptReportFacts, { kind: "canonical" }>["entry"],
+  body: object,
+) => canonical({ ...entry, ...body }, entry);
 
 it.each<ProjectionCase>([
   ...(
@@ -21,26 +36,16 @@ it.each<ProjectionCase>([
       { type: "message", message: { role: "user", content: "large body" } },
       { type: "compaction", summary: "summary", firstKeptEntryId: "parent", tokensBefore: 1 },
       { type: "custom", customType: "plugin.metadata", data: { large: "body" } },
-      {
-        type: "custom_message",
-        customType: "report",
-        content: "large report body",
-        display: true,
-        details: { privateToBody: true },
-      },
     ] as const
-  ).map((entry) =>
-    canonical(
-      { ...base, ...entry },
-      entry.type === "custom_message"
-        ? { ...base, type: entry.type, customType: "report" }
-        : { ...base, type: entry.type },
-    ),
+  ).map((entry) => canonical({ ...base, ...entry }, { ...base, type: entry.type })),
+  withBody(
+    { ...base, type: "custom_message", customType: "report" },
+    { content: "body", display: true, details: { privateToBody: true } },
   ),
   ...["branch label", "", undefined].map((label) =>
-    canonical(
-      { ...base, type: "label", targetId: "parent", label },
+    withBody(
       { ...base, type: "label", targetId: "parent", ...(label !== undefined ? { label } : {}) },
+      { label },
     ),
   ),
   ...(
@@ -51,31 +56,17 @@ it.each<ProjectionCase>([
       [42, "  ", {}],
     ] as const
   ).map(([responseId, runId, expected]) =>
-    canonical(
-      {
-        ...base,
-        type: "message",
-        message: { role: "assistant", content: [], responseId, __openclaw: { runId } },
-      },
-      { ...base, type: "message", ...expected },
-    ),
+    messageFacts({ ...assistant, responseId, __openclaw: { runId } }, expected),
   ),
-  canonical(
-    {
-      ...base,
-      type: "message",
-      message: {
-        role: "toolResult",
-        content: [],
-        toolCallId: "call",
-        toolName: "read",
-        isError: false,
-        responseId: "response",
-        __openclaw: { runId: "run" },
-      },
-    },
-    { ...base, type: "message" },
-  ),
+  messageFacts({
+    role: "toolResult",
+    content: [],
+    toolCallId: "call",
+    toolName: "read",
+    isError: false,
+    responseId: "response",
+    __openclaw: { runId: "run" },
+  }),
   ...[undefined, "side", { mode: "side" }].flatMap((appendMode): ProjectionCase[] => {
     const entry = {
       id: "hook",
@@ -88,16 +79,11 @@ it.each<ProjectionCase>([
       canonical({ ...entry, message, parentId: null }, { ...entry, parentId: null }),
     ];
   }),
-  ...[
-    {
-      type: "message",
-      message: { role: "assistant", content: [{}], responseId: "must-not-suppress" },
-    },
-    { type: "future", payload: "body" },
-  ].map((raw): ProjectionCase => ({
-    raw: { ...base, ...raw },
-    expected: { kind: "link", id: base.id, parentId: base.parentId },
-  })),
+  linked({
+    type: "message",
+    message: { role: "assistant", content: [{}], responseId: "must-not-suppress" },
+  }),
+  linked({ type: "future", payload: "body" }),
   ...[
     null,
     { ...base, type: "session", version: 3 },
@@ -132,9 +118,8 @@ it.each<ProjectionCase>([
   expect(decodeSessionTranscriptReportFacts(facts)).toStrictEqual(facts);
   const serializedFacts = JSON.stringify(facts);
   const stored: unknown = JSON.parse(serializedFacts);
-  const decoded = decodeSessionTranscriptReportFacts(stored);
-  expect(decoded).toStrictEqual(stored);
-  expect(decoded).toStrictEqual(expected);
+  expect(decodeSessionTranscriptReportFacts(stored)).toStrictEqual(stored);
+  expect(stored).toStrictEqual(expected);
 });
 
 it.each([

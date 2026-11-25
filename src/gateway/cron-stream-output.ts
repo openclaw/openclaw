@@ -4,7 +4,7 @@ import {
   truncateCronStreamBatch,
   type CronStreamSchedule,
 } from "../cron/stream-schedule.js";
-import type { CronJob } from "../cron/types.js";
+import type { CronJob, CronStoredJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
@@ -36,7 +36,7 @@ type Log = (obj: unknown, msg?: string) => void;
 type CronStreamOutputStopState = { sourceBatchLost: boolean; pendingBatchLost: boolean };
 type FireOutcome = { disposition: CronStreamFireDisposition } | { error: unknown };
 
-export type CronStreamJob = CronJob & { schedule: CronStreamSchedule };
+export type CronStreamJob = CronStoredJob & { schedule: CronStreamSchedule };
 export type CronStreamFireDisposition =
   | "fired"
   | "disabled"

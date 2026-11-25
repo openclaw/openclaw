@@ -6,7 +6,7 @@ import { parseOcPath } from "../../oc-path.js";
 
 describe("setJsoncOcPath — value replacement", () => {
   const config = `{
-  "plugins": {
+  "plugins": {"entries":{"shadowed":true}}, "plugins": {
     "entries": {
       "github": {
         "token": "old"
@@ -15,8 +15,8 @@ describe("setJsoncOcPath — value replacement", () => {
   }
 }`;
 
-  it("replaces nested objects", () => {
-    const { ast } = parseJsonc(config);
+  it("replaces the effective nested object", () => {
+    const ast = parseJsonc(config);
     const r = setJsoncOcPath(ast, parseOcPath("oc://config/plugins.entries"), {
       kind: "object",
       entries: [{ key: "gitlab", line: 0, value: { kind: "string", value: "tok" } }],
@@ -27,7 +27,7 @@ describe("setJsoncOcPath — value replacement", () => {
   });
 
   it("reports no-root on empty AST", () => {
-    const { ast } = parseJsonc("");
+    const ast = parseJsonc("");
     expect(() =>
       setJsoncOcPath(ast, parseOcPath("oc://config/x"), {
         kind: "string",
@@ -38,8 +38,8 @@ describe("setJsoncOcPath — value replacement", () => {
 });
 
 describe("setJsoncOcPath — $last positional", () => {
-  it("edits the last array element via $last", () => {
-    const { ast } = parseJsonc('{ "items": [10, 20, 30] }');
+  it("edits the last effective array element via $last", () => {
+    const ast = parseJsonc('{ "items": [0], "items": [10, 20, 30] }');
     const r = setJsoncOcPath(ast, parseOcPath("oc://config.jsonc/items/$last"), {
       kind: "number",
       value: 99,
@@ -48,7 +48,7 @@ describe("setJsoncOcPath — $last positional", () => {
   });
 
   it("reports unresolved for $last against an empty array", () => {
-    const { ast } = parseJsonc('{ "items": [] }');
+    const ast = parseJsonc('{ "items": [] }');
     expect(() =>
       setJsoncOcPath(ast, parseOcPath("oc://config.jsonc/items/$last"), {
         kind: "number",
@@ -74,7 +74,7 @@ describe("setJsoncOcPath — quoted segments (regression: resolve↔edit symmetr
   }
 }
 `;
-    const { ast } = parseJsonc(raw);
+    const ast = parseJsonc(raw);
     const before = JSON.stringify(ast);
     const r = setJsoncOcPath(
       ast,

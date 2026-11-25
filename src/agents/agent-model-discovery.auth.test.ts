@@ -8,7 +8,10 @@ import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
 } from "./agent-auth-credentials.js";
-import { addEnvBackedAgentCredentials } from "./agent-auth-discovery-core.js";
+import {
+  prepareAmbientAgentCredentialsForDiscovery,
+  resolveAmbientAgentCredentialsForDiscovery,
+} from "./agent-auth-discovery.js";
 import { discoverAuthStorageFacts } from "./agent-model-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
@@ -304,17 +307,48 @@ describe("discoverAuthStorageFacts auth storage", () => {
   });
 
   it("includes workspace-scoped auth evidence in agent discovery credentials", () => {
-    const credentials = addEnvBackedAgentCredentials(
-      {},
-      {
-        env: {},
-        workspaceDir: "/tmp/workspace",
-      },
-    );
+    const credentials = resolveAmbientAgentCredentialsForDiscovery({
+      env: {},
+      workspaceDir: "/tmp/workspace",
+      syntheticAuthProviderRefs: [],
+    });
 
     expect(credentials["workspace-cloud"]).toEqual({
       type: "api_key",
       key: "workspace-cloud-local-credentials",
     });
+  });
+
+  it("keeps sibling synthetic credentials when one provider's auth hook throws", async () => {
+    const options = { env: {}, syntheticAuthProviderRefs: ["broken", "healthy"] };
+    const auth = (provider: string) => {
+      if (provider === "broken") {
+        throw new Error("plugin auth hook bug");
+      }
+      return { apiKey: "healthy-key" };
+    };
+    const expected = { healthy: { type: "api_key", key: "healthy-key" } };
+
+    expect(
+      resolveAmbientAgentCredentialsForDiscovery({ ...options, resolveSyntheticAuth: auth }),
+    ).toEqual(expected);
+    await expect(
+      prepareAmbientAgentCredentialsForDiscovery({
+        ...options,
+        resolveSyntheticAuth: async (provider) => auth(provider),
+      }),
+    ).resolves.toEqual(expected);
+
+    const controller = new AbortController();
+    await expect(
+      prepareAmbientAgentCredentialsForDiscovery({
+        ...options,
+        signal: controller.signal,
+        resolveSyntheticAuth: async () => {
+          controller.abort();
+          throw new Error("request cancelled");
+        },
+      }),
+    ).rejects.toThrow("request cancelled");
   });
 });

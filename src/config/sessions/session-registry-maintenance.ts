@@ -2,9 +2,15 @@
 import fs from "node:fs";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
+  sessionChanges,
+  sessionChangeScopeAffectsStoredRows,
+} from "../../sessions/session-row-changes.js";
+import {
   applySessionEntryLifecycleMutation,
   type SessionEntryLifecycleRemoval,
+  type SessionEntrySummary,
 } from "./session-accessor.js";
+import { listSessionChildEntriesReadOnly } from "./session-entry-children-read.js";
 import { withSessionRegistryEntriesInWorker } from "./session-entry-read-maintenance.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { collectActiveSessionWorkAdmissionKeys } from "./store-maintenance-preserve.js";
@@ -25,53 +31,78 @@ type SessionRegistryMaintenanceStoreOptions = SessionStoreTarget & {
   retentionMs: number;
   /** Currently running cron job ids, normalized to lowercase. */
   runningCronJobIds: ReadonlySet<string>;
+  /** All discovered stores, including children spawned into another agent. */
+  childStores?: readonly SessionStoreTarget[];
   assertCurrent?: () => void;
 };
 
-function parseCronRunSessionJobId(sessionKey: string): string | undefined {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return undefined;
-  }
-  return /^cron:([^:]+):run:[^:]+(?:$|:)/u.exec(parsed.rest)?.[1];
-}
-
-function pruneSessionRegistryStore(params: {
-  retentionMs: number;
-  removals?: SessionEntryLifecycleRemoval[];
-  runningCronJobIds: ReadonlySet<string>;
-  storePath: string;
-  store: Record<string, SessionEntry>;
-}): SessionRegistryMaintenanceStoreSummary {
+async function pruneSessionRegistryStore(
+  params: SessionRegistryMaintenanceStoreOptions & { store: Record<string, SessionEntry> },
+) {
+  const { store, storePath, agentId } = params;
   const preserveKeys =
-    collectActiveSessionWorkAdmissionKeys({
-      storePath: params.storePath,
-      store: params.store,
-    }) ?? new Set<string>();
+    collectActiveSessionWorkAdmissionKeys({ storePath, store }) ?? new Set<string>();
   let preservedRunning = 0;
-  for (const key of Object.keys(params.store)) {
-    const jobId = parseCronRunSessionJobId(key);
+  for (const key of Object.keys(store)) {
+    const parsed = parseAgentSessionKey(key);
+    const jobId = /^cron:([^:]+):run:[^:]+(?:$|:)/u.exec(parsed?.rest ?? "")?.[1];
     if (jobId && params.runningCronJobIds.has(jobId)) {
       preserveKeys.add(key);
       preservedRunning += 1;
     }
   }
-  const pruned = pruneStaleEntries(params.store, params.retentionMs, {
+  const candidates: SessionEntrySummary[] = [];
+  pruneStaleEntries(store, params.retentionMs, {
     log: false,
-    onPruned: params.removals
-      ? ({ key, entry }) => {
-          params.removals?.push({
-            sessionKey: key,
-            expectedEntry: entry,
-            archiveRemovedTranscript: true,
-          });
-        }
-      : undefined,
+    onPruned: ({ key, entry }) => candidates.push({ sessionKey: key, entry }),
     preserveKeys,
   });
+  const pending = candidates.map(({ sessionKey }) => sessionKey);
+  const seen = new Set(pending);
+  const parents = new Map<string, string>();
+  for (let offset = 0; offset < pending.length;) {
+    const keys = pending.slice(offset, offset + 32);
+    offset += keys.length;
+    for (const target of params.childStores ?? [{ agentId, storePath }]) {
+      const children = await listSessionChildEntriesReadOnly(
+        { ...target, sessionKey: "", projection: "list" },
+        keys,
+      );
+      params.assertCurrent?.();
+      // Lookup excludes its input keys, so include links among the candidates too.
+      for (const { sessionKey, entry } of [...candidates, ...children]) {
+        const parent = entry.spawnedBy;
+        if (!parent || !keys.includes(parent)) {
+          continue;
+        }
+        parents.set(sessionKey, parent);
+        if (entry.archivedAt === undefined) {
+          preserveKeys.add(parent);
+        } else if (!seen.has(sessionKey)) {
+          seen.add(sessionKey);
+          pending.push(sessionKey);
+        }
+      }
+    }
+  }
+  // Admission follows archived intermediates; retain every ancestor of a live descendant.
+  for (const key of preserveKeys) {
+    const parent = parents.get(key);
+    if (parent) {
+      preserveKeys.add(parent);
+    }
+  }
+  const removals: SessionEntryLifecycleRemoval[] = [];
+  for (const { sessionKey, entry } of candidates) {
+    if (preserveKeys.has(sessionKey)) {
+      store[sessionKey] = entry;
+    } else {
+      removals.push({ sessionKey, expectedEntry: entry, archiveRemovedTranscript: true });
+    }
+  }
   const now = Date.now();
   let nextSweepAtMs: number | null = null;
-  for (const [key, entry] of Object.entries(params.store)) {
+  for (const [key, entry] of Object.entries(store)) {
     if (
       shouldPreserveMaintenanceEntry({ key, entry }) ||
       typeof entry.updatedAt !== "number" ||
@@ -79,16 +110,12 @@ function pruneSessionRegistryStore(params: {
     ) {
       continue;
     }
-    // Expired active rows retry after their running job or session admission settles.
+    // Expired protected rows retry after running work or child dependencies settle.
     const expiresAt = entry.updatedAt + params.retentionMs + 1;
     const deadline = expiresAt <= now ? now + 60_000 : expiresAt;
     nextSweepAtMs = Math.min(nextSweepAtMs ?? Infinity, deadline);
   }
-  return {
-    preservedRunning,
-    pruned,
-    nextSweepAtMs,
-  };
+  return { preservedRunning, pruned: removals.length, nextSweepAtMs, removals };
 }
 
 /**
@@ -101,56 +128,73 @@ export async function runSessionRegistryMaintenanceForStore(
 ): Promise<SessionRegistryMaintenanceStoreSummary> {
   params.assertCurrent?.();
   const { agentId, storePath } = params;
-  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
-  if (sqliteTarget.path && !fs.existsSync(sqliteTarget.path)) {
-    return {
-      preservedRunning: 0,
-      pruned: 0,
-      nextSweepAtMs: null,
-    };
-  }
   const summary: SessionRegistryMaintenanceStoreSummary = {
     preservedRunning: 0,
     pruned: 0,
     nextSweepAtMs: null,
   };
-  await withSessionRegistryEntriesInWorker(
-    { agentId, storePath },
-    async (entries, assertReaderCurrent) => {
-      const assertCurrent = () => {
-        params.assertCurrent?.();
-        assertReaderCurrent();
-      };
-      assertCurrent();
-      const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
-      const removals: SessionEntryLifecycleRemoval[] = [];
-      const planned = pruneSessionRegistryStore({
-        retentionMs: params.retentionMs,
-        removals: params.apply ? removals : undefined,
-        runningCronJobIds: params.runningCronJobIds,
-        storePath,
-        store,
-      });
-      if (removals.length > 0) {
-        const mutation = await applySessionEntryLifecycleMutation({
-          agentId,
-          storePath,
-          removals,
-          skipMaintenance: true,
-          commitGuard: assertCurrent,
-        });
+  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath, { agentId });
+  if (sqliteTarget.path && !fs.existsSync(sqliteTarget.path)) {
+    return summary;
+  }
+  let rowRevision = 0;
+  const unsubscribe = sessionChanges.subscribeFacts((change) => {
+    if (
+      sessionChangeScopeAffectsStoredRows(change) &&
+      ("all" in change ||
+        change.factsInvalidated === true ||
+        change.facts?.kind === "entry" ||
+        change.facts?.kind === "replacement" ||
+        change.facts?.kind === "removed")
+    ) {
+      rowRevision += 1;
+    }
+  });
+  try {
+    await withSessionRegistryEntriesInWorker(
+      { agentId, storePath },
+      async (entries, assertReaderCurrent) => {
+        const assertCurrent = () => {
+          params.assertCurrent?.();
+          assertReaderCurrent();
+        };
         assertCurrent();
-        if (mutation.removedEntries !== planned.pruned) {
-          planned.nextSweepAtMs = Date.now() + 60_000;
+        const store = Object.fromEntries(
+          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
+        const revision = rowRevision;
+        const planned = await pruneSessionRegistryStore({ ...params, store, assertCurrent });
+        const { removals, preservedRunning } = planned;
+        let { pruned, nextSweepAtMs } = planned;
+        if (params.apply && removals.length > 0) {
+          const mutation = await applySessionEntryLifecycleMutation({
+            agentId,
+            storePath,
+            removals,
+            skipMaintenance: true,
+            commitGuard() {
+              assertCurrent();
+              // Child creation/restoration and store discovery must still match the read.
+              if (rowRevision !== revision) {
+                throw new Error("Session ancestry changed before cron registry cleanup");
+              }
+            },
+          });
+          assertCurrent();
+          if (mutation.removedEntries !== pruned) {
+            nextSweepAtMs = Date.now() + 60_000;
+          }
+          pruned = mutation.removedEntries;
         }
-        planned.pruned = mutation.removedEntries;
-      }
-      summary.preservedRunning += planned.preservedRunning;
-      summary.pruned += planned.pruned;
-      if (planned.nextSweepAtMs !== null) {
-        summary.nextSweepAtMs = Math.min(summary.nextSweepAtMs ?? Infinity, planned.nextSweepAtMs);
-      }
-    },
-  );
-  return summary;
+        summary.preservedRunning += preservedRunning;
+        summary.pruned += pruned;
+        if (nextSweepAtMs !== null) {
+          summary.nextSweepAtMs = Math.min(summary.nextSweepAtMs ?? Infinity, nextSweepAtMs);
+        }
+      },
+    );
+    return summary;
+  } finally {
+    unsubscribe();
+  }
 }

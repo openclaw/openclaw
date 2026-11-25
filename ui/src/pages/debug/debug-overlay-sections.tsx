@@ -128,7 +128,7 @@ function Status(props: {
           </For>
         </div>
       </Show>
-      <Show when={typeof props.status.uptimeMs === "number"}>
+      <Show when={props.status.uptimeMs !== undefined}>
         <div class="debug-overlay__vitals-footer mono">
           {t("debug.overlay.uptime")} {formatDurationHuman(props.status.uptimeMs)}
         </div>

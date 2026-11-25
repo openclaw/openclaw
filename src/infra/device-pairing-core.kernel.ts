@@ -8,18 +8,16 @@ import type {
   PairedDeviceMetadataPatch,
   PrunedSupersededPairedDevice,
 } from "./device-pairing-core.types.js";
-// Manages device pairing requests, records, metadata, and node pairing state.
 import {
   listApprovedPairedDeviceRoles,
   resolveNodePairingGeneration,
   type NodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
+import { mergeDevicePairingRoles, normalizeDevicePairingRole } from "./device-pairing-roles.js";
 import {
   loadDevicePairingStateForMutation,
-  mergeDevicePairingRoles,
   mergeDevicePairingScopes,
-  normalizeDevicePairingRole,
   preserveDeviceRoleScopes,
   resolvePairingRequestExpiry,
   resolveRequestedDeviceRoles,

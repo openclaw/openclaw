@@ -2,25 +2,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { buildSecretRefCredentialMatrix } from "./credential-matrix.test-support.js";
 
-const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-const previousTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+const bundledPluginEnv = captureEnv([
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+]);
 
 process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ??= "extensions";
 process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR ??= "1";
 
 afterAll(() => {
-  if (previousBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-  }
-  if (previousTrustBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = previousTrustBundledPluginsDir;
-  }
+  bundledPluginEnv.restore();
 });
 
 describe("secret target registry docs", () => {

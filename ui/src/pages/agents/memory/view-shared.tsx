@@ -1,6 +1,29 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { JSX } from "@solidjs/web";
-import { Show } from "solid-js";
+import { Errored, Loading, Show } from "solid-js";
+import { formatUiError } from "../../../lib/format-error.ts";
+import type { DreamingProps } from "./view-types.ts";
+
+export function DreamingRead(props: {
+  read?: DreamingProps["readStatus"];
+  on?: unknown;
+  fallback?: JSX.Element;
+  errorClass?: string;
+  children?: JSX.Element;
+}) {
+  return (
+    <Errored
+      fallback={(error) =>
+        props.errorClass ? <div class={props.errorClass}>{formatUiError(error())}</div> : undefined
+      }
+    >
+      <Loading on={props.on} fallback={props.fallback}>
+        {props.read?.() && undefined}
+        {props.children}
+      </Loading>
+    </Errored>
+  );
+}
 
 export function formatCompactDateTime(value: string): string {
   const parsed = parseDateStringTimestampMs(value);
@@ -13,22 +36,6 @@ export function formatCompactDateTime(value: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
-}
-
-export function DreamingAction(props: {
-  label: string;
-  disabled: boolean;
-  onClick: (event: Event) => void;
-}) {
-  return (
-    <button
-      class="btn btn--subtle btn--sm"
-      disabled={props.disabled}
-      onClick={(event) => props.onClick(event)}
-    >
-      {props.label}
-    </button>
-  );
 }
 
 export function DiaryEmpty(props: { message: string; hint?: string; children?: JSX.Element }) {

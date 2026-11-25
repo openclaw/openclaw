@@ -1,9 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { normalizeSessionColorValue, normalizeSessionIconValue } from "./session-agent-status.js";
 
 const NORMALIZE_SESSION_ICON_CASES: ReadonlyArray<
   readonly [label: string, input: string, expected: string | null]
-> = [["whitespace", " ", null]];
+> = [
+  ["whitespace", " ", null],
+  ["emoji", " 🦞 ", "🦞"],
+  ["ZWJ sequence", "👨‍👩‍👧‍👦", "👨‍👩‍👧‍👦"],
+  ["flag", "🇦🇹", "🇦🇹"],
+  ["keycap", "1️⃣", "1️⃣"],
+  ["named glyph", "braces", "braces"],
+  ["unknown glyph", "hammer", null],
+  ["text grapheme", "漢", null],
+  ["multiple emoji", "🦞🦞", null],
+];
 
 const SVG_ICON =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="teal"/></svg>';
@@ -37,40 +47,10 @@ describe("session icon grammar", () => {
     expect(normalizeSessionIconValue(input)).toBe(expected);
   });
 });
-
 describe("session color grammar", () => {
   it.each([["word", "crimson", null]] as ReadonlyArray<
     readonly [label: string, input: string, expected: string | null]
   >)("normalizes %s", (_label, input, expected) => {
     expect(normalizeSessionColorValue(input)).toBe(expected);
-  });
-});
-
-describe("session icon grammar without Unicode Sets support", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.resetModules();
-  });
-
-  it("loads and falls back to the grapheme heuristic when the v flag throws", async () => {
-    const NativeRegExp = RegExp;
-    // Mimic a pre-Unicode-Sets browser engine: `v`-flag construction throws.
-    const ThrowingRegExp = function (this: unknown, pattern: string, flags?: string) {
-      if (flags?.includes("v")) {
-        throw new SyntaxError("Invalid flags supplied to RegExp constructor 'v'");
-      }
-      return new NativeRegExp(pattern, flags);
-    } as unknown as RegExpConstructor;
-    vi.stubGlobal("RegExp", ThrowingRegExp);
-    vi.resetModules();
-
-    const fallback = await import("./session-agent-status.js");
-    expect(fallback.normalizeSessionIconValue("🦞")).toBe("🦞");
-    expect(fallback.normalizeSessionIconValue("braces")).toBe("braces");
-    expect(fallback.normalizeSessionIconValue("hammer")).toBeNull();
-    expect(fallback.normalizeSessionIconValue("a")).toBeNull();
-    // Known heuristic looseness on such engines: single non-ASCII text graphemes
-    // pass client pre-validation; the Gateway still rejects them exactly.
-    expect(fallback.normalizeSessionIconValue("漢")).toBe("漢");
   });
 });

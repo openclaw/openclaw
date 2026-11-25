@@ -94,7 +94,6 @@ export function createToolPolicyMatcher(
   };
 }
 
-/** Return whether one tool name is allowed by a single sandbox policy. */
 export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
   return createToolPolicyMatcher(policy)(name);
 }
@@ -131,7 +130,6 @@ export function filterToolsByPolicy<TTool extends { name: string }>(
   return tools.filter((tool) => matches(tool.name));
 }
 
-/** Return whether one tool name is allowed by every active sandbox policy. */
 export function isToolAllowedByPolicies(
   name: string,
   policies: Array<SandboxToolPolicy | undefined>,

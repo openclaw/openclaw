@@ -3,7 +3,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as snapshot from "../../infra/sqlite-snapshot-source.js";
+import * as cleanup from "../../commands/update-automatic-cleanup.js";
+import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import { createRetainedCheckpointFixture } from "../../infra/update-retained-checkpoint.test-support.js";
 import {
@@ -17,6 +18,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import {
   resultFixture,
   stepFixture,
@@ -24,10 +26,8 @@ import {
 } from "./update-command-fixtures.test-support.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import { captureUpdateCommandTerminalRecord } from "./update-command-terminal-record.js";
-import {
-  publishUpdateCommandTerminalResult,
-  resolveSettledUpdateCommandResult,
-} from "./update-command-terminal.js";
+import { resolveSettledUpdateCommandResult } from "./update-command-terminal.js";
+import { publishUpdateCommandTerminalResultForTest as publishUpdateCommandTerminalResult } from "./update-command-terminal.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const after = { version: "2026.9.5", buildId: "synthetic-verified-candidate" };
@@ -37,11 +37,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
 });
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 function fixture(
   existingRunId?: string,
@@ -77,12 +73,8 @@ function fixture(
     },
     databasePath: resolveOpenClawStateSqlitePath(env),
     write(sql: string, ...values: (string | number)[]) {
-      const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
-      try {
-        db.prepare(sql).run(...values);
-      } finally {
-        db.close();
-      }
+      using db = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+      db.prepare(sql).run(...values);
     },
     capture: (candidate = result) =>
       captureUpdateCommandTerminalRecord(params, candidate, assertCurrent),
@@ -178,7 +170,7 @@ describe("owned completed update publication", () => {
     expect(output).toHaveBeenCalledTimes(1);
   });
 
-  it("publishes the durable verified build without snapshots when history omits its Git SHA", async () => {
+  it("publishes the durable verified build when fresh-owned cleanup fails", async () => {
     const f = fixture();
     f.result.after = { ...after, sha: "a".repeat(40) };
     const captured = await f.capture();
@@ -186,10 +178,12 @@ describe("owned completed update publication", () => {
     expect(captured?.record.status).toBe("succeeded");
     const before = fs.readFileSync(f.databasePath);
     f.release();
-    const takeSnapshot = vi
-      .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
+    const cleanupOwners: Array<string | undefined> = [];
+    const cleanupAttempt = vi
+      .spyOn(cleanup, "cleanupCompletedUpdateRecovery")
       .mockImplementation(() => {
-        throw new Error("live database is changing");
+        cleanupOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
+        return Promise.reject(new Error("synthetic cleanup failure"));
       });
     const reportPath = path.join(root, "update-reports", `${f.run.runId}.md`);
     let savedAtPublication: string | undefined;
@@ -204,7 +198,10 @@ describe("owned completed update publication", () => {
     });
     expect(result.status).toBe("ok");
     expect(savedAtPublication).toContain(after.version);
-    expect(takeSnapshot).not.toHaveBeenCalled();
+    // Publication still uses captured facts when separately admitted cleanup fails.
+    expect(cleanupOwners.length).toBeGreaterThan(0);
+    expect(cleanupOwners.every((role) => role === "agent-embedded")).toBe(true);
+    expect(result.steps.at(-1)?.advisory?.message).toContain("synthetic cleanup failure");
     expect(fs.readFileSync(f.databasePath)).toEqual(before);
     expect(jsonOutput).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -215,9 +212,16 @@ describe("owned completed update publication", () => {
     );
     expect(jsonOutput.mock.calls[0]?.[0]).not.toHaveProperty("captured");
     // A historical report is not permission for the next update to skip admission.
-    await expect(assertUpdateRecoveryAdmission({ env: f.run.env })).rejects.toThrow(
-      "live database is changing",
+    cleanupAttempt.mockRestore();
+    f.write(
+      "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES(?, ?, ?)",
+      `update.recovery.${f.run.runId}`,
+      "{}",
+      Date.now(),
     );
+    await expect(assertUpdateRecoveryAdmission({ env: f.run.env })).rejects.toMatchObject({
+      name: "ZodError",
+    });
   });
 
   it.each([

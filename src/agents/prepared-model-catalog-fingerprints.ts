@@ -1,15 +1,15 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import type { PreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.types.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 
 function fingerprintPreparedModelCatalogPlugins(
   snapshot: PreparedModelCatalogWorkerInput["pluginMetadataSnapshot"],
+  installedIndexFingerprint: string,
 ): string {
   return fingerprintPreparedRuntimeFacts({
     config: snapshot.configFingerprint ?? null,
-    index: resolveInstalledManifestRegistryIndexFingerprint(snapshot.index),
+    index: installedIndexFingerprint,
     pluginIds: snapshot.pluginIds ?? null,
     policy: snapshot.policyHash,
     workspaceDir: snapshot.workspaceDir ?? null,
@@ -37,8 +37,6 @@ export function fingerprintPreparedModelCatalogPluginContext(
   value: PreparedModelCatalogWorkerInput,
 ): string {
   return fingerprintPreparedRuntimeFacts({
-    remoteCatalogSource: value.remoteCatalog?.sourceUrl,
-    remoteCatalogRevision: value.remoteCatalog?.revision,
     config: fingerprintPreparedModelCatalogConfig(value.input.config),
     sourceConfigForSecrets: fingerprintPreparedModelCatalogConfig(value.sourceConfigForSecrets),
     configResolutionFacts: value.configResolutionFacts,
@@ -47,6 +45,23 @@ export function fingerprintPreparedModelCatalogPluginContext(
     workspaceDir: value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir,
     allowGatewaySubagentBinding: value.input.allowGatewaySubagentBinding === true,
     preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
-    pluginFingerprint: fingerprintPreparedModelCatalogPlugins(value.pluginMetadataSnapshot),
+    pluginFingerprint: fingerprintPreparedModelCatalogPlugins(
+      value.pluginMetadataSnapshot,
+      value.installedIndexFingerprint,
+    ),
   });
+}
+
+/** Transport reuse includes catalog data; registrations follow only their loader inputs. */
+export function prepareModelCatalogWorkerContext(value: PreparedModelCatalogWorkerInput) {
+  const registrationFingerprint = fingerprintPreparedModelCatalogPluginContext(value);
+  return {
+    workspaceDir: value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir,
+    registrationFingerprint,
+    fingerprint: fingerprintPreparedRuntimeFacts({
+      registrationFingerprint,
+      remoteCatalogSource: value.remoteCatalog?.sourceUrl,
+      remoteCatalogRevision: value.remoteCatalog?.revision,
+    }),
+  };
 }

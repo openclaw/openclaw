@@ -1,14 +1,18 @@
 import type { JSX } from "@solidjs/web";
 import { children, createMemo, onSettled, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { registerDebugEnglish } from "../../i18n/locales/en-debug.ts";
 import "../../styles/debug.css";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { createDebugOverlayLayout } from "./debug-overlay-layout.runtime.ts";
 import type { DebugOverlayMode } from "./debug-overlay-state.ts";
+
+registerEnglishCatalog(registerDebugEnglish);
 
 export function DebugOverlayFrame(props: {
   mode: DebugOverlayMode;
   body: JSX.Element;
+  ref?: (element: HTMLElement) => void;
   onToggleMode: () => void;
   onClose: () => void;
 }) {
@@ -43,6 +47,7 @@ export function DebugOverlayFrame(props: {
     <aside
       ref={(node) => {
         element = node;
+        props.ref?.(node);
       }}
       class={["debug-overlay", { "debug-overlay--minimized": mode() === "minimized" }]}
       aria-label={t("debug.overlay.title")}

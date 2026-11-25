@@ -1,8 +1,8 @@
 // OpenRouter transport tests cover real provider-http request policy enforcement.
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 
 const resolveApiKeyForProviderMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -39,34 +39,16 @@ async function startPrivateMusicServer(): Promise<{
     response.end();
   });
   openServers.push(server);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/api/v1`,
+    baseUrl: `http://127.0.0.1:${port}/api/v1`,
     requestCount: () => requests,
   };
 }
 
-async function closeOpenServers() {
-  await Promise.all(
-    openServers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        }),
-    ),
-  );
-}
-
 describe("openrouter music generation provider transport", () => {
   afterEach(async () => {
-    await closeOpenServers();
+    await Promise.all(openServers.splice(0).map((server) => server[Symbol.asyncDispose]()));
   });
 
   it("denies private destinations even when the configured request policy opts in", async () => {

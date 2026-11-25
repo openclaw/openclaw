@@ -36,7 +36,15 @@ const {
 
 // mock-isolation: OAuth fetch is fixture-owned; never read real credentials in transport tests.
 vi.mock("./mcp-oauth-fetch.js", () => ({ withMcpOAuthBearer: oauthBearerMock }));
-vi.mock("node:dns/promises", () => ({ lookup: lookupMock }));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: lookupMock,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 // mock-isolation: Keep transport requests on the synthetic fetch and agent fixtures.
 vi.mock("../infra/net/undici-runtime.js", () => ({
@@ -46,12 +54,10 @@ vi.mock("../infra/net/undici-runtime.js", () => ({
   loadUndiciRuntimeDeps: () => ({ fetch: runtimeFetchMock }),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: streamableTransportConstructorMock,
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: sseTransportConstructorMock,
+// mock-isolation: These tests inspect transport selection and guarded fetch options.
+vi.mock("./mcp-http-transport.js", () => ({
+  OpenClawStreamableHTTPClientTransport: streamableTransportConstructorMock,
+  OpenClawSSEClientTransport: sseTransportConstructorMock,
 }));
 
 function redirectResponse(location: string, status = 302): Response {

@@ -1,6 +1,7 @@
 import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   createDefaultModelsPresetAppliers,
+  applyProviderConfigWithDefaultModelPreset,
   type ModelDefinitionConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
@@ -27,6 +28,37 @@ export function buildLitellmModelDefinition(): ModelDefinitionConfig {
     contextWindow: LITELLM_DEFAULT_CONTEXT_WINDOW,
     maxTokens: LITELLM_DEFAULT_MAX_TOKENS,
   };
+}
+
+export async function applyLitellmModelConfig(
+  cfg: OpenClawConfig,
+  modelId: string,
+): Promise<OpenClawConfig> {
+  const {
+    SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+    SELF_HOSTED_DEFAULT_COST,
+    SELF_HOSTED_DEFAULT_MAX_TOKENS,
+  } = await import("openclaw/plugin-sdk/provider-setup");
+  const modelRef = `litellm/${modelId}`;
+  return applyProviderConfigWithDefaultModelPreset(cfg, {
+    providerId: "litellm",
+    api: "openai-completions",
+    baseUrl: cfg.models?.providers?.litellm?.baseUrl ?? LITELLM_BASE_URL,
+    defaultModel:
+      modelId === LITELLM_DEFAULT_MODEL_ID
+        ? buildLitellmModelDefinition()
+        : {
+            id: modelId,
+            name: modelId,
+            reasoning: false,
+            input: ["text"],
+            cost: SELF_HOSTED_DEFAULT_COST,
+            contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+            maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+          },
+    aliases: [{ modelRef, alias: "LiteLLM" }],
+    primaryModelRef: modelRef,
+  });
 }
 
 export const { applyConfig: applyLitellmConfig, applyProviderConfig: applyLitellmProviderConfig } =

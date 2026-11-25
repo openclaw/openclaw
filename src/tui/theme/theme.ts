@@ -99,11 +99,6 @@ const palette = {
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);
 
-// Keep code blocks parser-free on the base TUI path.
-function highlightCode(code: string): string[] {
-  return code.split("\n").map((line) => fg(palette.code)(line));
-}
-
 export const tuiTheme = {
   fg: fg(palette.text),
   assistantText: (text: string) => text,
@@ -141,7 +136,8 @@ export const markdownTheme: MarkdownTheme = {
   italic: tuiTheme.italic,
   strikethrough: (text) => chalk.strikethrough(text),
   underline: (text) => chalk.underline(text),
-  highlightCode,
+  // Keep code blocks parser-free on the base TUI path.
+  highlightCode: (code) => code.split("\n").map((line) => fg(palette.code)(line)),
 };
 
 export const selectListTheme: SelectListTheme = {

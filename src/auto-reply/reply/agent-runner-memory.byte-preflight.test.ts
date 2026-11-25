@@ -1,6 +1,9 @@
 import { expect, it, vi } from "vitest";
 import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry,
+} from "../../config/sessions/types.js";
 import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 
@@ -12,22 +15,23 @@ vi.mock("../../agents/embedded-agent.js", () => ({ compactEmbeddedAgentSession: 
 vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({}));
 // mock-isolation: Keep byte-pressure admission independent of token estimates and database workers.
 vi.mock("./agent-runner-memory-transcript-context.js", () => ({
-  estimatePromptTokensFromSessionTranscript: async () => undefined,
-  readSessionLogSnapshot: async () => ({ byteSize: 102_400 }),
+  estimateContextTokensFromSessionTranscript: async () => undefined,
+  readSessionLogSnapshot: async () => ({}),
+}));
+// mock-isolation: Supply raw accounting at the transcript reader boundary.
+vi.mock("../../gateway/session-transcript-readers.js", () => ({
+  readSessionTranscriptAccountingAsync: async () => ({ byteSize: 102_400 }),
 }));
 // mock-isolation: Observe admission accounting without starting database workers.
 vi.mock("./session-updates.js", () => ({ incrementCompactionCount: account }));
 
 it.each([
-  { runtime: "codex", ok: false, compacted: false },
-  { runtime: "codex", ok: true, compacted: false },
-  { runtime: "codex", ok: true, compacted: false, reason: "already under target" },
   { runtime: "openclaw", ok: false, compacted: false },
   { runtime: "openclaw", ok: true, compacted: true },
 ])(
-  "continues byte preflight with bounded context after $runtime compaction (ok=$ok, compacted=$compacted)",
-  async ({ runtime, ok, compacted, reason = "fixture declines compaction" }) => {
-    compact.mockReset().mockResolvedValue({ ok, compacted, reason });
+  "continues built-in byte preflight with bounded context (ok=$ok, compacted=$compacted)",
+  async ({ runtime, ok, compacted }) => {
+    compact.mockReset().mockResolvedValue({ ok, compacted, reason: "fixture declines compaction" });
     account
       .mockReset()
       .mockImplementation(
@@ -59,10 +63,10 @@ it.each([
         updatedAt: 1,
         totalTokens: 100,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       },
       agentHarnessId: runtime,
-      isHeartbeat: false,
+
       onCompactionNotice: notice,
     };
     const entry = await runSessionCompactionIfNeeded(params);

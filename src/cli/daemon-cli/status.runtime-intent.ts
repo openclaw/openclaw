@@ -56,13 +56,6 @@ export async function inspectServiceRuntimeIntent(params: {
       env: params.env,
       environment: params.serviceEnv,
     });
-    const currentPin = readDaemonRuntimePin(
-      { kind: params.kind, env: params.serviceEnv },
-      params.command,
-    );
-    if (currentPin.revision !== pin.revision) {
-      return { runtimeIntent: { status: "unknown" } };
-    }
     const { command } = projectDaemonServiceForJson(
       { command: params.command },
       { includeDefinitionPaths: false },

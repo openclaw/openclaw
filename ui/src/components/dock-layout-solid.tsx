@@ -12,7 +12,10 @@ export function DockResizer<TDock extends DockPanelPlacement>(props: {
     <Show when={props.controller.resizer}>
       {(resizer) => (
         <resizable-divider
-          class={`${props.classPrefix}-resizer ${props.classPrefix}-resizer--${props.controller.dock}`}
+          class={[
+            `${props.classPrefix}-resizer`,
+            `${props.classPrefix}-resizer--${props.controller.dock}`,
+          ]}
           prop:orientation={resizer().orientation}
           prop:label={props.label}
           prop:splitRatio={resizer().splitRatio}

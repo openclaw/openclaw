@@ -3,15 +3,12 @@ import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 
 const loading = vi.hoisted(() => {
-  let release!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { promise, release, started: false };
+  const { promise, resolve: release } = Promise.withResolvers<void>();
+  return { promise, release: () => release(), started: false };
 });
 vi.mock("./chat-tool-expanded.solid.tsx", async (original) => {
   loading.started = true;
@@ -55,5 +52,7 @@ it("loads details on expansion and leaves a collapsed card closed when loading f
   flush();
   await vi.dynamicImportSettled();
   flush();
-  expect(root.container.querySelector(".chat-tool-term__out code")?.textContent).toBe("after");
+  await waitForSolid(() =>
+    expect(root.container.querySelector(".chat-tool-term__out code")?.textContent).toBe("after"),
+  );
 });

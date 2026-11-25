@@ -28,7 +28,6 @@ type BrowserPanelInvocation = {
   readonly client: BrowserRequestClient;
   epoch: number;
   readonly id: number;
-  readonly mutationId: number;
   isCurrent(): boolean;
 };
 
@@ -140,20 +139,8 @@ export function createBrowserPanelOperations(host: BrowserPanelHost) {
       // Invalidate the previous capture without discarding its visible screenshot.
       requestedCapture += 1;
       capturePending = false;
-      const invocation: BrowserPanelInvocation = {
-        client,
-        epoch: lifecycleEpoch,
-        id: ++requestedMutation,
-        mutationId: requestedMutation,
-        isCurrent: () =>
-          operations.isLive(invocation.epoch, client) && invocation.id === requestedMutation,
-      };
-      return invocation;
-    },
-
-    /** A queued predecessor can commit even if the newest navigation later fails. */
-    hasQueuedNavigation(client: BrowserRequestClient, targetId: string): boolean {
-      return navigationQueues.get(client)?.has(targetId) ?? false;
+      requestedMutation += 1;
+      return operations.beginSnapshot(client);
     },
 
     /** A committed document still needs its first owner-authoritative screenshot. */
@@ -171,7 +158,7 @@ export function createBrowserPanelOperations(host: BrowserPanelHost) {
       return Boolean(
         client &&
         targetId &&
-        (operations.hasQueuedNavigation(client, targetId) ||
+        (navigationQueues.get(client)?.has(targetId) ||
           operations.hasUnreconciledNavigation(client, targetId)),
       );
     },
@@ -259,14 +246,12 @@ export function createBrowserPanelOperations(host: BrowserPanelHost) {
 
     /** Passive refreshes never revoke ownership of an in-flight navigation. */
     beginSnapshot(client: BrowserRequestClient): BrowserPanelInvocation {
-      const mutationId = requestedMutation;
       const invocation: BrowserPanelInvocation = {
         client,
         epoch: lifecycleEpoch,
-        id: mutationId,
-        mutationId,
+        id: requestedMutation,
         isCurrent: () =>
-          operations.isLive(invocation.epoch, client) && mutationId === requestedMutation,
+          operations.isLive(invocation.epoch, client) && invocation.id === requestedMutation,
       };
       return invocation;
     },
@@ -284,14 +269,6 @@ export function createBrowserPanelOperations(host: BrowserPanelHost) {
       }
       // Same-tab refreshes are best effort; input still checks the live document at dispatch.
       return true;
-    },
-
-    /** Older snapshots may capture the same tab unless a user mutation owns it. */
-    canCaptureSnapshot(invocation: BrowserPanelInvocation): boolean {
-      return (
-        operations.isLive(invocation.epoch, invocation.client) &&
-        invocation.mutationId === requestedMutation
-      );
     },
 
     /** A superseded open may reconcile its created tab, but never own the selected view. */

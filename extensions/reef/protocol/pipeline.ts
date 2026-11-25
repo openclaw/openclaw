@@ -6,7 +6,6 @@ import {
   bodyHash,
   openClaimed,
   ReplayedError,
-  seal,
   validateEnvelopeMetadata,
   validateMessageBody,
   type Envelope,
@@ -71,18 +70,12 @@ interface GuardedPipelineOptions {
   reviewGate?: ReviewGate;
 }
 
-export interface ComposeOutboundOptions extends GuardedPipelineOptions, SealOptions {}
-
-export interface OutboundResult {
-  envelope: Envelope;
-  verdict: Verdict;
-}
-
 export function prepareOutboundProposal(
   options: Pick<
-    ComposeOutboundOptions,
-    "id" | "from" | "to" | "body" | "ts" | "recipientEncryptionPublicKey" | "policyVersion"
-  >,
+    SealOptions,
+    "id" | "from" | "to" | "body" | "ts" | "recipientEncryptionPublicKey"
+  > &
+    Pick<GuardedPipelineOptions, "policyVersion">,
   senderSigningKeyLength: number,
 ) {
   validateEnvelopeMetadata(
@@ -116,43 +109,6 @@ export function prepareOutboundProposal(
     options.policyVersion,
   );
   return { checks, proposalHash, approvalDigest };
-}
-
-export async function composeOutbound(options: ComposeOutboundOptions): Promise<OutboundResult> {
-  const { checks, proposalHash, approvalDigest } = prepareOutboundProposal(
-    options,
-    fromBase64url(options.senderSigningSecretKey).length,
-  );
-  await options.audit.appendEvent("proposal", {
-    id: options.id,
-    from: options.from,
-    to: options.to,
-    bodyHash: proposalHash,
-    approvalDigest,
-    body: options.body,
-  });
-  if (!checks.allowed) {
-    await options.audit.appendEvent("deterministic_verdict", {
-      id: options.id,
-      approvalDigest,
-      decision: "deny",
-      findings: checks.findings,
-    });
-    throw new PipelineError("deterministic", "rule-based checks denied message");
-  }
-  const verdict = await classifyWithReview(
-    options,
-    "outbound",
-    options.id,
-    proposalHash,
-    approvalDigest,
-    options.from,
-    options.to,
-    options.body.text,
-  );
-  const envelope = seal(options);
-  await options.audit.appendEvent("envelope", { id: options.id, approvalDigest, envelope });
-  return { envelope, verdict };
 }
 
 export interface ComposeInboundOptions extends GuardedPipelineOptions, OpenOptions {
@@ -230,7 +186,6 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
     try {
       verdict = await classifyWithReview(
         options,
-        "inbound",
         options.envelope.id,
         proposalHash,
         approvalDigest,
@@ -339,7 +294,6 @@ async function completeRejection(
 
 async function classifyWithReview(
   options: GuardedPipelineOptions,
-  direction: GuardDirection,
   id: string,
   proposalHash: string,
   approvalDigest: string,
@@ -348,7 +302,7 @@ async function classifyWithReview(
   text: string,
 ): Promise<Verdict> {
   const request: GuardRequest = {
-    direction,
+    direction: "inbound",
     source,
     destination,
     text,
@@ -358,7 +312,7 @@ async function classifyWithReview(
     id,
     from: source,
     to: destination,
-    direction,
+    direction: "inbound" as const,
     bodyHash: proposalHash,
     approvalDigest,
   };
@@ -376,11 +330,7 @@ async function classifyWithReview(
     if (verdict.decision === "deny") {
       throw new PipelineError(
         "guard",
-        afterApproval
-          ? "guard denied approved message"
-          : direction === "outbound"
-            ? "Reef outbound guard denied the message. Do not retry or rephrase it automatically; ask the owner before sending related content."
-            : "guard denied message",
+        afterApproval ? "guard denied approved message" : "guard denied message",
         verdict,
       );
     }

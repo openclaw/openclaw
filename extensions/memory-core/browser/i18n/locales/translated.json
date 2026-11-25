@@ -25,7 +25,8 @@
           "keywordSearch": "关键词搜索 (无嵌入向量)",
           "openSettings": "打开设置",
           "retry": "重试",
-          "refresh": "刷新状态"
+          "refresh": "刷新状态",
+          "unavailable": "记忆功能不可用"
         },
         "schedule": {
           "title": "睡眠计划",
@@ -36,7 +37,9 @@
           "lastRun": "上次 {time}",
           "notScheduled": "未安排",
           "learnMore": "梦境机制的工作原理",
-          "openDocs": "打开梦境指南"
+          "openDocs": "打开梦境指南",
+          "sweep": "清理",
+          "guide": "引导"
         },
         "activity": {
           "title": "活动",
@@ -45,7 +48,10 @@
           "shortTermCount": "待处理的短期条目",
           "phaseHitCount": "阶段信号",
           "lightPhaseHitCount": "浅睡阶段命中次数",
-          "remPhaseHitCount": "快速眼动阶段命中次数"
+          "remPhaseHitCount": "快速眼动阶段命中次数",
+          "promoted": "已提升",
+          "promotedValue": "今日 {today} · 累计 {total}",
+          "phaseHitValue": "浅睡眠 {light} · 快速眼动睡眠 {rem}"
         },
         "health": {
           "title": "引擎健康状况",
@@ -79,6 +85,28 @@
             "title": "REM 阶段"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "搜索记忆",
+        "searchPlaceholder": "搜索此智能体的记忆",
+        "searchButton": "搜索",
+        "idle": "搜索此智能体记得的人物、项目、决策或其他任何内容。",
+        "searching": "正在搜索记忆…",
+        "results": "{count} 条结果",
+        "empty": "没有与“{query}”匹配的记忆。",
+        "error": "记忆搜索失败：{message}",
+        "retry": "重试",
+        "gatewayUpdateRequired": "更新 Gateway 以从 Control UI 搜索记忆。",
+        "hybridSearch": "混合搜索",
+        "keywordSearch": "关键词搜索",
+        "lineRange": "第 {start}–{end} 行",
+        "score": "评分 {score}",
+        "sourceMemory": "记忆",
+        "sourceSessions": "会话",
+        "fileLoading": "正在加载完整的记忆文件…",
+        "fileError": "无法加载此记忆文件: {message}",
+        "fileUnsupported": "此记忆文件无法以文本形式显示。",
+        "resultOne": "{count} 条结果"
       }
     }
   },
@@ -108,7 +136,8 @@
           "keywordSearch": "關鍵字搜尋 (無嵌入向量)",
           "openSettings": "開啟設定",
           "retry": "重試",
-          "refresh": "重新整理狀態"
+          "refresh": "重新整理狀態",
+          "unavailable": "記憶功能無法使用"
         },
         "schedule": {
           "title": "睡眠排程",
@@ -119,7 +148,9 @@
           "lastRun": "上次 {time}",
           "notScheduled": "尚未排程",
           "learnMore": "夢境運作方式",
-          "openDocs": "開啟夢境指南"
+          "openDocs": "開啟夢境指南",
+          "sweep": "清理",
+          "guide": "引導"
         },
         "activity": {
           "title": "活動",
@@ -128,7 +159,10 @@
           "shortTermCount": "待處理的短期記憶項目",
           "phaseHitCount": "階段訊號",
           "lightPhaseHitCount": "淺眠階段命中數",
-          "remPhaseHitCount": "快速動眼期命中數"
+          "remPhaseHitCount": "快速動眼期命中數",
+          "promoted": "已提升",
+          "promotedValue": "今日 {today} 筆 · 共 {total} 筆",
+          "phaseHitValue": "{light} 次淺眠 · {rem} 次快速動眼期"
         },
         "health": {
           "title": "引擎健康狀態",
@@ -162,6 +196,28 @@
             "title": "REM 階段"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "搜尋記憶",
+        "searchPlaceholder": "搜尋此代理的記憶",
+        "searchButton": "搜尋",
+        "idle": "搜尋此代理記得的人物、專案、決策或任何其他事物。",
+        "searching": "正在搜尋記憶…",
+        "results": "{count} 筆結果",
+        "empty": "沒有符合 “{query}” 的記憶。",
+        "error": "記憶搜尋失敗: {message}",
+        "retry": "重試",
+        "gatewayUpdateRequired": "更新 Gateway，即可從 Control UI 搜尋記憶。",
+        "hybridSearch": "混合搜尋",
+        "keywordSearch": "關鍵字搜尋",
+        "lineRange": "第 {start}–{end} 行",
+        "score": "分數 {score}",
+        "sourceMemory": "記憶",
+        "sourceSessions": "工作階段",
+        "fileLoading": "正在載入完整記憶檔案…",
+        "fileError": "無法載入此記憶檔案: {message}",
+        "fileUnsupported": "此記憶檔案無法以文字顯示。",
+        "resultOne": "{count} 筆結果"
       }
     }
   },
@@ -191,7 +247,8 @@
           "keywordSearch": "busca por palavras-chave (sem embeddings)",
           "openSettings": "Abrir Configurações",
           "retry": "Tentar novamente",
-          "refresh": "Atualizar status"
+          "refresh": "Atualizar status",
+          "unavailable": "A memória está indisponível"
         },
         "schedule": {
           "title": "Programação de sono",
@@ -202,7 +259,9 @@
           "lastRun": "última {time}",
           "notScheduled": "Não agendado",
           "learnMore": "Como os sonhos funcionam",
-          "openDocs": "Abrir guia de sonhos"
+          "openDocs": "Abrir guia de sonhos",
+          "sweep": "Varredura",
+          "guide": "Guia"
         },
         "activity": {
           "title": "Atividade",
@@ -211,7 +270,10 @@
           "shortTermCount": "Entradas de curto prazo pendentes",
           "phaseHitCount": "Sinais de fase",
           "lightPhaseHitCount": "Ocorrências na fase leve",
-          "remPhaseHitCount": "Ocorrências na fase REM"
+          "remPhaseHitCount": "Ocorrências na fase REM",
+          "promoted": "Promovidas",
+          "promotedValue": "{today} hoje · {total} no total",
+          "phaseHitValue": "{light} leve · {rem} REM"
         },
         "health": {
           "title": "Integridade do mecanismo",
@@ -245,6 +307,28 @@
             "title": "Fase REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Buscar memórias",
+        "searchPlaceholder": "Buscar nas memórias deste agente",
+        "searchButton": "Buscar",
+        "idle": "Busque uma pessoa, um projeto, uma decisão ou qualquer outra coisa de que este agente se lembre.",
+        "searching": "Buscando memórias…",
+        "results": "{count} resultados",
+        "empty": "Nenhuma memória corresponde a “{query}”.",
+        "error": "Falha na busca de memórias: {message}",
+        "retry": "Tentar novamente",
+        "gatewayUpdateRequired": "Atualize o Gateway para buscar memórias pela Control UI.",
+        "hybridSearch": "busca híbrida",
+        "keywordSearch": "busca por palavra-chave",
+        "lineRange": "linhas {start}–{end}",
+        "score": "pontuação {score}",
+        "sourceMemory": "memória",
+        "sourceSessions": "sessões",
+        "fileLoading": "Carregando o arquivo de memória completo…",
+        "fileError": "Não foi possível carregar este arquivo de memória: {message}",
+        "fileUnsupported": "Este arquivo de memória não pode ser exibido como texto.",
+        "resultOne": "{count} resultado"
       }
     }
   },
@@ -274,7 +358,8 @@
           "keywordSearch": "Stichwortsuche (ohne Einbettungen)",
           "openSettings": "Einstellungen öffnen",
           "retry": "Erneut versuchen",
-          "refresh": "Status aktualisieren"
+          "refresh": "Status aktualisieren",
+          "unavailable": "Erinnerungen sind nicht verfügbar"
         },
         "schedule": {
           "title": "Schlafplan",
@@ -285,7 +370,9 @@
           "lastRun": "letzter Lauf {time}",
           "notScheduled": "Nicht geplant",
           "learnMore": "So funktioniert das Träumen",
-          "openDocs": "Anleitung zum Träumen öffnen"
+          "openDocs": "Anleitung zum Träumen öffnen",
+          "sweep": "Bereinigung",
+          "guide": "Anleitung"
         },
         "activity": {
           "title": "Aktivität",
@@ -294,7 +381,10 @@
           "shortTermCount": "Ausstehende Kurzzeiteinträge",
           "phaseHitCount": "Phasensignale",
           "lightPhaseHitCount": "Treffer in der Leichtschlafphase",
-          "remPhaseHitCount": "Treffer in der REM-Phase"
+          "remPhaseHitCount": "Treffer in der REM-Phase",
+          "promoted": "Hochgestuft",
+          "promotedValue": "{today} heute · {total} insgesamt",
+          "phaseHitValue": "{light} Leichtschlaf · {rem} REM"
         },
         "health": {
           "title": "Engine-Zustand",
@@ -328,6 +418,28 @@
             "title": "REM-Phase"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Erinnerungen durchsuchen",
+        "searchPlaceholder": "Erinnerungen dieses Agenten durchsuchen",
+        "searchButton": "Suchen",
+        "idle": "Suchen Sie nach einer Person, einem Projekt, einer Entscheidung oder etwas anderem, woran sich dieser Agent erinnert.",
+        "searching": "Erinnerungen werden durchsucht…",
+        "results": "{count} Ergebnisse",
+        "empty": "Keine Erinnerungen stimmen mit “{query}” überein.",
+        "error": "Suche nach Erinnerungen fehlgeschlagen: {message}",
+        "retry": "Erneut versuchen",
+        "gatewayUpdateRequired": "Aktualisieren Sie das Gateway, um Erinnerungen über die Control UI zu durchsuchen.",
+        "hybridSearch": "hybride Suche",
+        "keywordSearch": "Stichwortsuche",
+        "lineRange": "Zeilen {start}–{end}",
+        "score": "Bewertung {score}",
+        "sourceMemory": "Gedächtnis",
+        "sourceSessions": "Sitzungen",
+        "fileLoading": "Vollständige Gedächtnisdatei wird geladen…",
+        "fileError": "Diese Gedächtnisdatei konnte nicht geladen werden: {message}",
+        "fileUnsupported": "Diese Gedächtnisdatei kann nicht als Text angezeigt werden.",
+        "resultOne": "{count} Ergebnis"
       }
     }
   },
@@ -357,7 +469,8 @@
           "keywordSearch": "búsqueda por palabras clave (sin representaciones vectoriales)",
           "openSettings": "Abrir Configuración",
           "retry": "Reintentar",
-          "refresh": "Actualizar estado"
+          "refresh": "Actualizar estado",
+          "unavailable": "La memoria no está disponible"
         },
         "schedule": {
           "title": "Horario de sueño",
@@ -368,7 +481,9 @@
           "lastRun": "última {time}",
           "notScheduled": "Sin programar",
           "learnMore": "Cómo funciona el sueño",
-          "openDocs": "Abrir la guía del sueño"
+          "openDocs": "Abrir la guía del sueño",
+          "sweep": "Barrido",
+          "guide": "Guía"
         },
         "activity": {
           "title": "Actividad",
@@ -377,7 +492,10 @@
           "shortTermCount": "Entradas pendientes a corto plazo",
           "phaseHitCount": "Señales de fase",
           "lightPhaseHitCount": "Coincidencias en la fase ligera",
-          "remPhaseHitCount": "Coincidencias en la fase REM"
+          "remPhaseHitCount": "Coincidencias en la fase REM",
+          "promoted": "Promovidos",
+          "promotedValue": "{today} hoy · {total} en total",
+          "phaseHitValue": "{light} ligero · {rem} REM"
         },
         "health": {
           "title": "Estado del motor",
@@ -411,6 +529,28 @@
             "title": "Fase REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Buscar recuerdos",
+        "searchPlaceholder": "Buscar en los recuerdos de este agente",
+        "searchButton": "Buscar",
+        "idle": "Busca una persona, un proyecto, una decisión o cualquier otra cosa que este agente recuerde.",
+        "searching": "Buscando recuerdos…",
+        "results": "{count} resultados",
+        "empty": "Ningún recuerdo coincide con “{query}”.",
+        "error": "Error al buscar recuerdos: {message}",
+        "retry": "Reintentar",
+        "gatewayUpdateRequired": "Actualiza el Gateway para buscar recuerdos desde la Control UI.",
+        "hybridSearch": "búsqueda híbrida",
+        "keywordSearch": "búsqueda por palabras clave",
+        "lineRange": "líneas {start}–{end}",
+        "score": "puntuación {score}",
+        "sourceMemory": "memoria",
+        "sourceSessions": "sesiones",
+        "fileLoading": "Cargando el archivo de memoria completo…",
+        "fileError": "No se pudo cargar este archivo de memoria: {message}",
+        "fileUnsupported": "Este archivo de memoria no se puede mostrar como texto.",
+        "resultOne": "{count} resultado"
       }
     }
   },
@@ -440,7 +580,8 @@
           "keywordSearch": "キーワード検索 (埋め込みなし)",
           "openSettings": "設定を開く",
           "retry": "再試行",
-          "refresh": "状態を更新"
+          "refresh": "状態を更新",
+          "unavailable": "メモリは利用できません"
         },
         "schedule": {
           "title": "スリープスケジュール",
@@ -451,7 +592,9 @@
           "lastRun": "前回 {time}",
           "notScheduled": "スケジュール未設定",
           "learnMore": "夢を見る仕組み",
-          "openDocs": "夢のガイドを開く"
+          "openDocs": "夢のガイドを開く",
+          "sweep": "スイープ",
+          "guide": "ガイド"
         },
         "activity": {
           "title": "アクティビティ",
@@ -460,7 +603,10 @@
           "shortTermCount": "保留中の短期記憶エントリ",
           "phaseHitCount": "フェーズのシグナル数",
           "lightPhaseHitCount": "浅い睡眠フェーズのヒット数",
-          "remPhaseHitCount": "レム睡眠フェーズのヒット数"
+          "remPhaseHitCount": "レム睡眠フェーズのヒット数",
+          "promoted": "昇格済み",
+          "promotedValue": "今日{today}件 · 合計{total}件",
+          "phaseHitValue": "浅い睡眠{light}回 · REM睡眠{rem}回"
         },
         "health": {
           "title": "エンジンの稼働状態",
@@ -494,6 +640,28 @@
             "title": "REMフェーズ"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "メモリを検索",
+        "searchPlaceholder": "このエージェントのメモリを検索",
+        "searchButton": "検索",
+        "idle": "人物、プロジェクト、決定事項など、このエージェントが記憶している情報を検索できます。",
+        "searching": "メモリを検索中…",
+        "results": "{count} 件の結果",
+        "empty": "“{query}”に一致するメモリはありませんでした。",
+        "error": "メモリの検索に失敗しました: {message}",
+        "retry": "再試行",
+        "gatewayUpdateRequired": "Control UI からメモリを検索するには、Gateway を更新してください。",
+        "hybridSearch": "ハイブリッド検索",
+        "keywordSearch": "キーワード検索",
+        "lineRange": "{start}–{end} 行",
+        "score": "スコア {score}",
+        "sourceMemory": "メモリ",
+        "sourceSessions": "セッション",
+        "fileLoading": "メモリファイル全体を読み込み中…",
+        "fileError": "このメモリファイルを読み込めませんでした: {message}",
+        "fileUnsupported": "このメモリファイルはテキストとして表示できません。",
+        "resultOne": "{count}件の結果"
       }
     }
   },
@@ -523,7 +691,8 @@
           "keywordSearch": "키워드 검색 (임베딩 없음)",
           "openSettings": "설정 열기",
           "retry": "다시 시도",
-          "refresh": "상태 새로고침"
+          "refresh": "상태 새로고침",
+          "unavailable": "메모리를 사용할 수 없습니다"
         },
         "schedule": {
           "title": "수면 일정",
@@ -534,7 +703,9 @@
           "lastRun": "마지막 실행 {time}",
           "notScheduled": "예약되지 않음",
           "learnMore": "꿈꾸기 작동 방식",
-          "openDocs": "꿈꾸기 가이드 열기"
+          "openDocs": "꿈꾸기 가이드 열기",
+          "sweep": "정리",
+          "guide": "안내"
         },
         "activity": {
           "title": "활동",
@@ -543,7 +714,10 @@
           "shortTermCount": "대기 중인 단기 기억 항목",
           "phaseHitCount": "단계별 신호",
           "lightPhaseHitCount": "얕은 수면 단계 적중 횟수",
-          "remPhaseHitCount": "REM 단계 적중 횟수"
+          "remPhaseHitCount": "REM 단계 적중 횟수",
+          "promoted": "승격됨",
+          "promotedValue": "오늘 {today}개 · 총 {total}개",
+          "phaseHitValue": "얕은 수면 {light}회 · REM {rem}회"
         },
         "health": {
           "title": "엔진 상태",
@@ -577,6 +751,28 @@
             "title": "REM 단계"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "메모리 검색",
+        "searchPlaceholder": "이 에이전트의 메모리 검색",
+        "searchButton": "검색",
+        "idle": "사람, 프로젝트, 결정 사항 등 이 에이전트가 기억하는 내용을 검색하세요.",
+        "searching": "메모리 검색 중…",
+        "results": "결과 {count}개",
+        "empty": "“{query}”와 일치하는 메모리가 없습니다.",
+        "error": "메모리 검색 실패: {message}",
+        "retry": "다시 시도",
+        "gatewayUpdateRequired": "Control UI에서 메모리를 검색하려면 Gateway를 업데이트하세요.",
+        "hybridSearch": "하이브리드 검색",
+        "keywordSearch": "키워드 검색",
+        "lineRange": "{start}–{end}행",
+        "score": "점수 {score}",
+        "sourceMemory": "메모리",
+        "sourceSessions": "세션",
+        "fileLoading": "전체 메모리 파일을 불러오는 중…",
+        "fileError": "이 메모리 파일을 불러올 수 없습니다: {message}",
+        "fileUnsupported": "이 메모리 파일은 텍스트로 표시할 수 없습니다.",
+        "resultOne": "결과 {count}개"
       }
     }
   },
@@ -606,7 +802,8 @@
           "keywordSearch": "recherche par mots-clés (sans plongements vectoriels)",
           "openSettings": "Ouvrir les Paramètres",
           "retry": "Réessayer",
-          "refresh": "Actualiser l’état"
+          "refresh": "Actualiser l’état",
+          "unavailable": "La mémoire n’est pas disponible"
         },
         "schedule": {
           "title": "Horaires de sommeil",
@@ -617,7 +814,9 @@
           "lastRun": "dernière {time}",
           "notScheduled": "Non planifié",
           "learnMore": "Comment fonctionne le rêve",
-          "openDocs": "Ouvrir le guide du rêve"
+          "openDocs": "Ouvrir le guide du rêve",
+          "sweep": "Balayage",
+          "guide": "Guide"
         },
         "activity": {
           "title": "Activité",
@@ -626,7 +825,10 @@
           "shortTermCount": "Entrées à court terme en attente",
           "phaseHitCount": "Signaux de phase",
           "lightPhaseHitCount": "Détections en phase de sommeil léger",
-          "remPhaseHitCount": "Détections en phase de sommeil paradoxal"
+          "remPhaseHitCount": "Détections en phase de sommeil paradoxal",
+          "promoted": "Promus",
+          "promotedValue": "{today} aujourd’hui · {total} au total",
+          "phaseHitValue": "{light} léger · {rem} paradoxal"
         },
         "health": {
           "title": "État du moteur",
@@ -660,6 +862,28 @@
             "title": "Phase de sommeil paradoxal"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Rechercher des souvenirs",
+        "searchPlaceholder": "Rechercher dans les souvenirs de cet agent",
+        "searchButton": "Rechercher",
+        "idle": "Recherchez une personne, un projet, une décision ou tout autre élément dont cet agent se souvient.",
+        "searching": "Recherche de souvenirs…",
+        "results": "{count} résultats",
+        "empty": "Aucun souvenir ne correspond à “{query}”.",
+        "error": "La recherche de souvenirs a échoué : {message}",
+        "retry": "Réessayer",
+        "gatewayUpdateRequired": "Mettez à jour le Gateway pour rechercher des souvenirs depuis la Control UI.",
+        "hybridSearch": "recherche hybride",
+        "keywordSearch": "recherche par mots-clés",
+        "lineRange": "lignes {start}–{end}",
+        "score": "score {score}",
+        "sourceMemory": "mémoire",
+        "sourceSessions": "sessions",
+        "fileLoading": "Chargement du fichier mémoire complet…",
+        "fileError": "Impossible de charger ce fichier mémoire : {message}",
+        "fileUnsupported": "Ce fichier mémoire ne peut pas être affiché sous forme de texte.",
+        "resultOne": "{count} résultat"
       }
     }
   },
@@ -689,7 +913,8 @@
           "keywordSearch": "कीवर्ड खोज (एम्बेडिंग के बिना)",
           "openSettings": "सेटिंग्स खोलें",
           "retry": "फिर से प्रयास करें",
-          "refresh": "स्थिति रीफ़्रेश करें"
+          "refresh": "स्थिति रीफ़्रेश करें",
+          "unavailable": "मेमोरी उपलब्ध नहीं है"
         },
         "schedule": {
           "title": "नींद की समय-सारणी",
@@ -700,7 +925,9 @@
           "lastRun": "पिछला {time}",
           "notScheduled": "निर्धारित नहीं है",
           "learnMore": "स्वप्न प्रक्रिया कैसे काम करती है",
-          "openDocs": "स्वप्न प्रक्रिया की मार्गदर्शिका खोलें"
+          "openDocs": "स्वप्न प्रक्रिया की मार्गदर्शिका खोलें",
+          "sweep": "सफ़ाई",
+          "guide": "मार्गदर्शन"
         },
         "activity": {
           "title": "गतिविधि",
@@ -709,7 +936,10 @@
           "shortTermCount": "लंबित अल्पकालिक प्रविष्टियाँ",
           "phaseHitCount": "चरण संकेत",
           "lightPhaseHitCount": "हल्के चरण के संकेत",
-          "remPhaseHitCount": "REM चरण के संकेत"
+          "remPhaseHitCount": "REM चरण के संकेत",
+          "promoted": "उन्नत",
+          "promotedValue": "आज {today} · कुल {total}",
+          "phaseHitValue": "{light} हल्की नींद · {rem} REM"
         },
         "health": {
           "title": "इंजन की स्थिति",
@@ -743,6 +973,28 @@
             "title": "REM चरण"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "स्मृतियाँ खोजें",
+        "searchPlaceholder": "इस एजेंट की स्मृतियाँ खोजें",
+        "searchButton": "खोजें",
+        "idle": "किसी व्यक्ति, प्रोजेक्ट, निर्णय या इस एजेंट को याद रहने वाली किसी भी अन्य चीज़ को खोजें.",
+        "searching": "स्मृतियाँ खोजी जा रही हैं…",
+        "results": "{count} परिणाम",
+        "empty": "“{query}” से मेल खाने वाली कोई स्मृति नहीं मिली.",
+        "error": "स्मृति खोज विफल रही: {message}",
+        "retry": "फिर से प्रयास करें",
+        "gatewayUpdateRequired": "Control UI से स्मृतियाँ खोजने के लिए Gateway अपडेट करें.",
+        "hybridSearch": "हाइब्रिड खोज",
+        "keywordSearch": "कीवर्ड खोज",
+        "lineRange": "पंक्तियाँ {start}–{end}",
+        "score": "स्कोर {score}",
+        "sourceMemory": "मेमोरी",
+        "sourceSessions": "सत्र",
+        "fileLoading": "पूरी मेमोरी फ़ाइल लोड हो रही है…",
+        "fileError": "यह मेमोरी फ़ाइल लोड नहीं हो सकी: {message}",
+        "fileUnsupported": "यह मेमोरी फ़ाइल टेक्स्ट के रूप में नहीं दिखाई जा सकती.",
+        "resultOne": "{count} परिणाम"
       }
     }
   },
@@ -772,7 +1024,8 @@
           "keywordSearch": "بحث بالكلمات المفتاحية (بدون تضمينات)",
           "openSettings": "فتح الإعدادات",
           "retry": "إعادة المحاولة",
-          "refresh": "تحديث الحالة"
+          "refresh": "تحديث الحالة",
+          "unavailable": "الذاكرة غير متاحة"
         },
         "schedule": {
           "title": "جدول النوم",
@@ -783,7 +1036,9 @@
           "lastRun": "الأخير {time}",
           "notScheduled": "غير مجدول",
           "learnMore": "كيف يعمل الحلم",
-          "openDocs": "فتح دليل الحلم"
+          "openDocs": "فتح دليل الحلم",
+          "sweep": "مسح",
+          "guide": "دليل"
         },
         "activity": {
           "title": "النشاط",
@@ -792,7 +1047,10 @@
           "shortTermCount": "إدخالات الذاكرة قصيرة المدى المعلّقة",
           "phaseHitCount": "إشارات المراحل",
           "lightPhaseHitCount": "تطابقات مرحلة النوم الخفيف",
-          "remPhaseHitCount": "تطابقات مرحلة نوم حركة العين السريعة"
+          "remPhaseHitCount": "تطابقات مرحلة نوم حركة العين السريعة",
+          "promoted": "تمت الترقية",
+          "promotedValue": "{today} اليوم · {total} إجمالًا",
+          "phaseHitValue": "{light} نوم خفيف · {rem} نوم حركة العين السريعة"
         },
         "health": {
           "title": "سلامة المحرك",
@@ -826,6 +1084,28 @@
             "title": "مرحلة حركة العين السريعة"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "البحث في الذكريات",
+        "searchPlaceholder": "ابحث في ذكريات هذا الوكيل",
+        "searchButton": "بحث",
+        "idle": "ابحث عن شخص أو مشروع أو قرار أو أي شيء آخر يتذكره هذا الوكيل.",
+        "searching": "جارٍ البحث في الذكريات…",
+        "results": "{count} نتيجة",
+        "empty": "لا توجد ذكريات تطابق “{query}”.",
+        "error": "فشل البحث في الذاكرة: {message}",
+        "retry": "إعادة المحاولة",
+        "gatewayUpdateRequired": "حدّث Gateway للبحث في الذكريات من Control UI.",
+        "hybridSearch": "بحث هجين",
+        "keywordSearch": "بحث بالكلمات المفتاحية",
+        "lineRange": "الأسطر {start}–{end}",
+        "score": "الدرجة {score}",
+        "sourceMemory": "الذاكرة",
+        "sourceSessions": "الجلسات",
+        "fileLoading": "جارٍ تحميل ملف الذاكرة بالكامل…",
+        "fileError": "تعذّر تحميل ملف الذاكرة هذا: {message}",
+        "fileUnsupported": "لا يمكن عرض ملف الذاكرة هذا كنص.",
+        "resultOne": "{count} نتيجة"
       }
     }
   },
@@ -855,7 +1135,8 @@
           "keywordSearch": "ricerca per parole chiave (senza embedding)",
           "openSettings": "Apri Impostazioni",
           "retry": "Riprova",
-          "refresh": "Aggiorna stato"
+          "refresh": "Aggiorna stato",
+          "unavailable": "La memoria non è disponibile"
         },
         "schedule": {
           "title": "Orario del sonno",
@@ -866,7 +1147,9 @@
           "lastRun": "ultima {time}",
           "notScheduled": "Non pianificata",
           "learnMore": "Come funziona il processo onirico",
-          "openDocs": "Apri la guida al processo onirico"
+          "openDocs": "Apri la guida al processo onirico",
+          "sweep": "Scansione",
+          "guide": "Guida"
         },
         "activity": {
           "title": "Attività",
@@ -875,7 +1158,10 @@
           "shortTermCount": "Voci a breve termine in attesa",
           "phaseHitCount": "Segnali delle fasi",
           "lightPhaseHitCount": "Riscontri nella fase leggera",
-          "remPhaseHitCount": "Riscontri nella fase REM"
+          "remPhaseHitCount": "Riscontri nella fase REM",
+          "promoted": "Promossi",
+          "promotedValue": "{today} oggi · {total} in totale",
+          "phaseHitValue": "{light} leggero · {rem} REM"
         },
         "health": {
           "title": "Stato del motore",
@@ -909,6 +1195,28 @@
             "title": "Fase REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Cerca nei ricordi",
+        "searchPlaceholder": "Cerca nei ricordi di questo agente",
+        "searchButton": "Cerca",
+        "idle": "Cerca una persona, un progetto, una decisione o qualsiasi altra cosa questo agente ricordi.",
+        "searching": "Ricerca nei ricordi in corso…",
+        "results": "{count} risultati",
+        "empty": "Nessun ricordo corrisponde a “{query}”.",
+        "error": "Ricerca nei ricordi non riuscita: {message}",
+        "retry": "Riprova",
+        "gatewayUpdateRequired": "Aggiorna il gateway per cercare nei ricordi dalla Control UI.",
+        "hybridSearch": "ricerca ibrida",
+        "keywordSearch": "ricerca per parole chiave",
+        "lineRange": "righe {start}–{end}",
+        "score": "punteggio {score}",
+        "sourceMemory": "memoria",
+        "sourceSessions": "sessioni",
+        "fileLoading": "Caricamento del file di memoria completo…",
+        "fileError": "Impossibile caricare questo file di memoria: {message}",
+        "fileUnsupported": "Questo file di memoria non può essere visualizzato come testo.",
+        "resultOne": "{count} risultato"
       }
     }
   },
@@ -938,7 +1246,8 @@
           "keywordSearch": "anahtar kelime araması (vektör gömmeleri yok)",
           "openSettings": "Ayarlar'ı aç",
           "retry": "Yeniden dene",
-          "refresh": "Durumu yenile"
+          "refresh": "Durumu yenile",
+          "unavailable": "Bellek kullanılamıyor"
         },
         "schedule": {
           "title": "Uyku programı",
@@ -949,7 +1258,9 @@
           "lastRun": "son {time}",
           "notScheduled": "Planlanmadı",
           "learnMore": "Rüya görme nasıl çalışır",
-          "openDocs": "Rüya görme kılavuzunu aç"
+          "openDocs": "Rüya görme kılavuzunu aç",
+          "sweep": "Tarama",
+          "guide": "Rehber"
         },
         "activity": {
           "title": "Etkinlik",
@@ -958,7 +1269,10 @@
           "shortTermCount": "Bekleyen kısa süreli kayıtlar",
           "phaseHitCount": "Evre sinyalleri",
           "lightPhaseHitCount": "Hafif uyku evresi eşleşmeleri",
-          "remPhaseHitCount": "REM evresi eşleşmeleri"
+          "remPhaseHitCount": "REM evresi eşleşmeleri",
+          "promoted": "Yükseltilen",
+          "promotedValue": "Bugün {today} · toplam {total}",
+          "phaseHitValue": "{light} hafif · {rem} REM"
         },
         "health": {
           "title": "Motor sağlığı",
@@ -992,6 +1306,28 @@
             "title": "REM evresi"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Anılarda ara",
+        "searchPlaceholder": "Bu ajanın anılarında ara",
+        "searchButton": "Ara",
+        "idle": "Bir kişiyi, projeyi, kararı veya bu ajanın hatırladığı başka herhangi bir şeyi arayın.",
+        "searching": "Anılarda aranıyor…",
+        "results": "{count} sonuç",
+        "empty": "“{query}” ile eşleşen anı bulunamadı.",
+        "error": "Anı araması başarısız oldu: {message}",
+        "retry": "Yeniden dene",
+        "gatewayUpdateRequired": "Control UI üzerinden anılarda arama yapmak için Gateway'i güncelleyin.",
+        "hybridSearch": "hibrit arama",
+        "keywordSearch": "anahtar kelime araması",
+        "lineRange": "satırlar {start}–{end}",
+        "score": "puan {score}",
+        "sourceMemory": "bellek",
+        "sourceSessions": "oturumlar",
+        "fileLoading": "Bellek dosyasının tamamı yükleniyor…",
+        "fileError": "Bu bellek dosyası yüklenemedi: {message}",
+        "fileUnsupported": "Bu bellek dosyası metin olarak gösterilemiyor.",
+        "resultOne": "{count} sonuç"
       }
     }
   },
@@ -1021,7 +1357,8 @@
           "keywordSearch": "пошук за ключовими словами (без ембедингів)",
           "openSettings": "Відкрити налаштування",
           "retry": "Повторити спробу",
-          "refresh": "Оновити стан"
+          "refresh": "Оновити стан",
+          "unavailable": "Пам’ять недоступна"
         },
         "schedule": {
           "title": "Розклад сну",
@@ -1032,7 +1369,9 @@
           "lastRun": "останній {time}",
           "notScheduled": "Не заплановано",
           "learnMore": "Як працюють сновидіння",
-          "openDocs": "Відкрити посібник зі сновидінь"
+          "openDocs": "Відкрити посібник зі сновидінь",
+          "sweep": "Очищення",
+          "guide": "Спрямування"
         },
         "activity": {
           "title": "Активність",
@@ -1041,7 +1380,10 @@
           "shortTermCount": "Короткострокові записи в очікуванні",
           "phaseHitCount": "Сигнали фаз",
           "lightPhaseHitCount": "Спрацювання легкої фази",
-          "remPhaseHitCount": "Спрацювання REM-фази"
+          "remPhaseHitCount": "Спрацювання REM-фази",
+          "promoted": "Підвищено",
+          "promotedValue": "{today} сьогодні · {total} загалом",
+          "phaseHitValue": "{light} легкий сон · {rem} REM"
         },
         "health": {
           "title": "Стан рушія",
@@ -1075,6 +1417,28 @@
             "title": "Фаза швидкого сну"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Пошук спогадів",
+        "searchPlaceholder": "Пошук у спогадах цього агента",
+        "searchButton": "Шукати",
+        "idle": "Шукайте людину, проєкт, рішення або будь-що інше, що пам’ятає цей агент.",
+        "searching": "Пошук спогадів…",
+        "results": "Результатів: {count}",
+        "empty": "Немає спогадів, що відповідають запиту “{query}”.",
+        "error": "Не вдалося виконати пошук спогадів: {message}",
+        "retry": "Повторити",
+        "gatewayUpdateRequired": "Оновіть Gateway, щоб шукати спогади в Control UI.",
+        "hybridSearch": "гібридний пошук",
+        "keywordSearch": "пошук за ключовими словами",
+        "lineRange": "рядки {start}–{end}",
+        "score": "оцінка {score}",
+        "sourceMemory": "пам’ять",
+        "sourceSessions": "сеанси",
+        "fileLoading": "Завантаження повного файлу пам’яті…",
+        "fileError": "Не вдалося завантажити цей файл пам’яті: {message}",
+        "fileUnsupported": "Цей файл пам’яті неможливо відобразити як текст.",
+        "resultOne": "{count} результат"
       }
     }
   },
@@ -1104,7 +1468,8 @@
           "keywordSearch": "pencarian kata kunci (tanpa penyematan)",
           "openSettings": "Buka Pengaturan",
           "retry": "Coba lagi",
-          "refresh": "Segarkan status"
+          "refresh": "Segarkan status",
+          "unavailable": "Memori tidak tersedia"
         },
         "schedule": {
           "title": "Jadwal tidur",
@@ -1115,7 +1480,9 @@
           "lastRun": "terakhir {time}",
           "notScheduled": "Tidak dijadwalkan",
           "learnMore": "Cara kerja proses bermimpi",
-          "openDocs": "Buka panduan proses bermimpi"
+          "openDocs": "Buka panduan proses bermimpi",
+          "sweep": "Penyisiran",
+          "guide": "Panduan"
         },
         "activity": {
           "title": "Aktivitas",
@@ -1124,7 +1491,10 @@
           "shortTermCount": "Entri jangka pendek yang tertunda",
           "phaseHitCount": "Sinyal fase",
           "lightPhaseHitCount": "Temuan fase ringan",
-          "remPhaseHitCount": "Temuan fase REM"
+          "remPhaseHitCount": "Temuan fase REM",
+          "promoted": "Dipromosikan",
+          "promotedValue": "{today} hari ini · {total} total",
+          "phaseHitValue": "{light} ringan · {rem} REM"
         },
         "health": {
           "title": "Kesehatan mesin",
@@ -1158,6 +1528,28 @@
             "title": "Fase REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Cari memori",
+        "searchPlaceholder": "Cari memori agen ini",
+        "searchButton": "Cari",
+        "idle": "Cari orang, proyek, keputusan, atau apa pun yang diingat agen ini.",
+        "searching": "Mencari memori…",
+        "results": "{count} hasil",
+        "empty": "Tidak ada memori yang cocok dengan “{query}”.",
+        "error": "Pencarian memori gagal: {message}",
+        "retry": "Coba lagi",
+        "gatewayUpdateRequired": "Perbarui Gateway untuk mencari memori dari Control UI.",
+        "hybridSearch": "pencarian hibrida",
+        "keywordSearch": "pencarian kata kunci",
+        "lineRange": "baris {start}–{end}",
+        "score": "skor {score}",
+        "sourceMemory": "memori",
+        "sourceSessions": "sesi",
+        "fileLoading": "Memuat seluruh file memori…",
+        "fileError": "Tidak dapat memuat file memori ini: {message}",
+        "fileUnsupported": "File memori ini tidak dapat ditampilkan sebagai teks.",
+        "resultOne": "{count} hasil"
       }
     }
   },
@@ -1187,7 +1579,8 @@
           "keywordSearch": "wyszukiwanie według słów kluczowych (bez osadzeń wektorowych)",
           "openSettings": "Otwórz Ustawienia",
           "retry": "Ponów próbę",
-          "refresh": "Odśwież stan"
+          "refresh": "Odśwież stan",
+          "unavailable": "Pamięć jest niedostępna"
         },
         "schedule": {
           "title": "Harmonogram snu",
@@ -1198,7 +1591,9 @@
           "lastRun": "ostatnie {time}",
           "notScheduled": "Nie zaplanowano",
           "learnMore": "Jak działa śnienie",
-          "openDocs": "Otwórz przewodnik po śnieniu"
+          "openDocs": "Otwórz przewodnik po śnieniu",
+          "sweep": "Przegląd",
+          "guide": "Przewodnik"
         },
         "activity": {
           "title": "Aktywność",
@@ -1207,7 +1602,10 @@
           "shortTermCount": "Oczekujące wpisy krótkoterminowe",
           "phaseHitCount": "Sygnały faz",
           "lightPhaseHitCount": "Trafienia w fazie snu płytkiego",
-          "remPhaseHitCount": "Trafienia w fazie REM"
+          "remPhaseHitCount": "Trafienia w fazie REM",
+          "promoted": "Awansowane",
+          "promotedValue": "{today} dzisiaj · {total} łącznie",
+          "phaseHitValue": "{light} lekki · {rem} REM"
         },
         "health": {
           "title": "Stan silnika",
@@ -1241,6 +1639,28 @@
             "title": "Faza REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Szukaj wspomnień",
+        "searchPlaceholder": "Przeszukaj wspomnienia tego agenta",
+        "searchButton": "Szukaj",
+        "idle": "Wyszukaj osobę, projekt, decyzję lub cokolwiek innego, co pamięta ten agent.",
+        "searching": "Wyszukiwanie wspomnień…",
+        "results": "Liczba wyników: {count}",
+        "empty": "Żadne wspomnienia nie pasują do “{query}”.",
+        "error": "Wyszukiwanie w pamięci nie powiodło się: {message}",
+        "retry": "Spróbuj ponownie",
+        "gatewayUpdateRequired": "Zaktualizuj Gateway, aby wyszukiwać wspomnienia w Control UI.",
+        "hybridSearch": "wyszukiwanie hybrydowe",
+        "keywordSearch": "wyszukiwanie według słów kluczowych",
+        "lineRange": "wiersze {start}–{end}",
+        "score": "ocena {score}",
+        "sourceMemory": "pamięć",
+        "sourceSessions": "sesje",
+        "fileLoading": "Ładowanie pełnego pliku pamięci…",
+        "fileError": "Nie udało się załadować tego pliku pamięci: {message}",
+        "fileUnsupported": "Tego pliku pamięci nie można wyświetlić jako tekstu.",
+        "resultOne": "{count} wynik"
       }
     }
   },
@@ -1270,7 +1690,8 @@
           "keywordSearch": "การค้นหาด้วยคำสำคัญ (ไม่มีเวกเตอร์ฝังตัว)",
           "openSettings": "เปิดการตั้งค่า",
           "retry": "ลองอีกครั้ง",
-          "refresh": "รีเฟรชสถานะ"
+          "refresh": "รีเฟรชสถานะ",
+          "unavailable": "ไม่สามารถใช้งานหน่วยความจำได้"
         },
         "schedule": {
           "title": "ตารางเวลานอน",
@@ -1281,7 +1702,9 @@
           "lastRun": "ครั้งล่าสุด {time}",
           "notScheduled": "ยังไม่ได้กำหนดเวลา",
           "learnMore": "การฝันทำงานอย่างไร",
-          "openDocs": "เปิดคู่มือการฝัน"
+          "openDocs": "เปิดคู่มือการฝัน",
+          "sweep": "กวาดล้าง",
+          "guide": "แนะนำ"
         },
         "activity": {
           "title": "กิจกรรม",
@@ -1290,7 +1713,10 @@
           "shortTermCount": "รายการความจำระยะสั้นที่รอดำเนินการ",
           "phaseHitCount": "สัญญาณของแต่ละระยะ",
           "lightPhaseHitCount": "จำนวนครั้งที่พบในระยะหลับตื้น",
-          "remPhaseHitCount": "จำนวนครั้งที่พบในระยะ REM"
+          "remPhaseHitCount": "จำนวนครั้งที่พบในระยะ REM",
+          "promoted": "ยกระดับแล้ว",
+          "promotedValue": "วันนี้ {today} · ทั้งหมด {total}",
+          "phaseHitValue": "หลับตื้น {light} · REM {rem}"
         },
         "health": {
           "title": "สถานะการทำงานของเอนจิน",
@@ -1324,6 +1750,28 @@
             "title": "ระยะ REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "ค้นหาความทรงจำ",
+        "searchPlaceholder": "ค้นหาความทรงจำของเอเจนต์นี้",
+        "searchButton": "ค้นหา",
+        "idle": "ค้นหาบุคคล โครงการ การตัดสินใจ หรือสิ่งอื่นใดที่เอเจนต์นี้จดจำไว้.",
+        "searching": "กำลังค้นหาความทรงจำ…",
+        "results": "{count} ผลลัพธ์",
+        "empty": "ไม่พบความทรงจำที่ตรงกับ “{query}”.",
+        "error": "ค้นหาความทรงจำไม่สำเร็จ: {message}",
+        "retry": "ลองอีกครั้ง",
+        "gatewayUpdateRequired": "อัปเดต Gateway เพื่อค้นหาความทรงจำจาก Control UI.",
+        "hybridSearch": "การค้นหาแบบผสม",
+        "keywordSearch": "การค้นหาด้วยคำสำคัญ",
+        "lineRange": "บรรทัด {start}–{end}",
+        "score": "คะแนน {score}",
+        "sourceMemory": "ความจำ",
+        "sourceSessions": "เซสชัน",
+        "fileLoading": "กำลังโหลดไฟล์ความจำฉบับเต็ม…",
+        "fileError": "ไม่สามารถโหลดไฟล์ความจำนี้ได้: {message}",
+        "fileUnsupported": "ไม่สามารถแสดงไฟล์ความจำนี้เป็นข้อความได้",
+        "resultOne": "{count} ผลลัพธ์"
       }
     }
   },
@@ -1353,7 +1801,8 @@
           "keywordSearch": "tìm kiếm theo từ khóa (không có vectơ nhúng)",
           "openSettings": "Mở Cài đặt",
           "retry": "Thử lại",
-          "refresh": "Làm mới trạng thái"
+          "refresh": "Làm mới trạng thái",
+          "unavailable": "Bộ nhớ không khả dụng"
         },
         "schedule": {
           "title": "Lịch ngủ",
@@ -1364,7 +1813,9 @@
           "lastRun": "lần cuối {time}",
           "notScheduled": "Chưa lên lịch",
           "learnMore": "Cách giấc mơ hoạt động",
-          "openDocs": "Mở hướng dẫn về giấc mơ"
+          "openDocs": "Mở hướng dẫn về giấc mơ",
+          "sweep": "Quét",
+          "guide": "Hướng dẫn"
         },
         "activity": {
           "title": "Hoạt động",
@@ -1373,7 +1824,10 @@
           "shortTermCount": "Các mục ngắn hạn đang chờ",
           "phaseHitCount": "Tín hiệu theo giai đoạn",
           "lightPhaseHitCount": "Lượt khớp trong giai đoạn ngủ nông",
-          "remPhaseHitCount": "Lượt khớp trong giai đoạn REM"
+          "remPhaseHitCount": "Lượt khớp trong giai đoạn REM",
+          "promoted": "Đã nâng cấp",
+          "promotedValue": "{today} hôm nay · {total} tổng cộng",
+          "phaseHitValue": "{light} ngủ nông · {rem} REM"
         },
         "health": {
           "title": "Tình trạng bộ máy",
@@ -1407,6 +1861,28 @@
             "title": "Giai đoạn REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Tìm kiếm ký ức",
+        "searchPlaceholder": "Tìm kiếm ký ức của tác nhân này",
+        "searchButton": "Tìm kiếm",
+        "idle": "Tìm kiếm một người, dự án, quyết định hoặc bất cứ điều gì khác mà tác nhân này ghi nhớ.",
+        "searching": "Đang tìm kiếm ký ức…",
+        "results": "{count} kết quả",
+        "empty": "Không có ký ức nào khớp với “{query}”.",
+        "error": "Tìm kiếm ký ức thất bại: {message}",
+        "retry": "Thử lại",
+        "gatewayUpdateRequired": "Cập nhật Gateway để tìm kiếm ký ức từ Control UI.",
+        "hybridSearch": "tìm kiếm kết hợp",
+        "keywordSearch": "tìm kiếm theo từ khóa",
+        "lineRange": "dòng {start}–{end}",
+        "score": "điểm {score}",
+        "sourceMemory": "bộ nhớ",
+        "sourceSessions": "phiên",
+        "fileLoading": "Đang tải toàn bộ tệp bộ nhớ…",
+        "fileError": "Không thể tải tệp bộ nhớ này: {message}",
+        "fileUnsupported": "Không thể hiển thị tệp bộ nhớ này dưới dạng văn bản.",
+        "resultOne": "{count} kết quả"
       }
     }
   },
@@ -1436,7 +1912,8 @@
           "keywordSearch": "zoeken op trefwoorden (zonder embeddings)",
           "openSettings": "Instellingen openen",
           "retry": "Opnieuw proberen",
-          "refresh": "Status vernieuwen"
+          "refresh": "Status vernieuwen",
+          "unavailable": "Geheugen is niet beschikbaar"
         },
         "schedule": {
           "title": "Slaapschema",
@@ -1447,7 +1924,9 @@
           "lastRun": "laatste {time}",
           "notScheduled": "Niet gepland",
           "learnMore": "Hoe dromen werkt",
-          "openDocs": "Droomhandleiding openen"
+          "openDocs": "Droomhandleiding openen",
+          "sweep": "Opschonen",
+          "guide": "Begeleiden"
         },
         "activity": {
           "title": "Activiteit",
@@ -1456,7 +1935,10 @@
           "shortTermCount": "Kortetermijnitems in afwachting",
           "phaseHitCount": "Fasesignalen",
           "lightPhaseHitCount": "Treffers in de lichte fase",
-          "remPhaseHitCount": "Treffers in de REM-fase"
+          "remPhaseHitCount": "Treffers in de REM-fase",
+          "promoted": "Gepromoveerd",
+          "promotedValue": "{today} vandaag · {total} totaal",
+          "phaseHitValue": "{light} licht · {rem} REM"
         },
         "health": {
           "title": "Enginestatus",
@@ -1490,6 +1972,28 @@
             "title": "REM-fase"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "Herinneringen doorzoeken",
+        "searchPlaceholder": "Doorzoek de herinneringen van deze agent",
+        "searchButton": "Zoeken",
+        "idle": "Zoek naar een persoon, project, beslissing of iets anders dat deze agent zich herinnert.",
+        "searching": "Herinneringen doorzoeken…",
+        "results": "{count} resultaten",
+        "empty": "Geen herinneringen gevonden voor “{query}”.",
+        "error": "Zoeken in het geheugen mislukt: {message}",
+        "retry": "Opnieuw proberen",
+        "gatewayUpdateRequired": "Werk de Gateway bij om herinneringen te doorzoeken vanuit de Control UI.",
+        "hybridSearch": "hybride zoeken",
+        "keywordSearch": "zoeken op trefwoorden",
+        "lineRange": "regels {start}–{end}",
+        "score": "score {score}",
+        "sourceMemory": "geheugen",
+        "sourceSessions": "sessies",
+        "fileLoading": "Het volledige geheugenbestand wordt geladen…",
+        "fileError": "Dit geheugenbestand kon niet worden geladen: {message}",
+        "fileUnsupported": "Dit geheugenbestand kan niet als tekst worden weergegeven.",
+        "resultOne": "{count} resultaat"
       }
     }
   },
@@ -1519,7 +2023,8 @@
           "keywordSearch": "جستجوی کلیدواژه‌ای (بدون بردارهای تعبیه)",
           "openSettings": "باز کردن تنظیمات",
           "retry": "تلاش مجدد",
-          "refresh": "تازه‌سازی وضعیت"
+          "refresh": "تازه‌سازی وضعیت",
+          "unavailable": "حافظه در دسترس نیست"
         },
         "schedule": {
           "title": "برنامهٔ خواب",
@@ -1530,7 +2035,9 @@
           "lastRun": "قبلی {time}",
           "notScheduled": "زمان‌بندی نشده",
           "learnMore": "رؤیاپردازی چگونه کار می‌کند",
-          "openDocs": "باز کردن راهنمای رؤیاپردازی"
+          "openDocs": "باز کردن راهنمای رؤیاپردازی",
+          "sweep": "پاک‌سازی",
+          "guide": "راهنما"
         },
         "activity": {
           "title": "فعالیت",
@@ -1539,7 +2046,10 @@
           "shortTermCount": "ورودی‌های کوتاه‌مدت در انتظار",
           "phaseHitCount": "نشانه‌های مرحله",
           "lightPhaseHitCount": "موارد شناسایی‌شده در مرحله خواب سبک",
-          "remPhaseHitCount": "موارد شناسایی‌شده در مرحله REM"
+          "remPhaseHitCount": "موارد شناسایی‌شده در مرحله REM",
+          "promoted": "ارتقایافته",
+          "promotedValue": "{today} امروز · {total} در مجموع",
+          "phaseHitValue": "{light} خواب سبک · {rem} خواب با حرکت سریع چشم"
         },
         "health": {
           "title": "سلامت موتور",
@@ -1573,6 +2083,28 @@
             "title": "مرحلهٔ REM"
           }
         }
+      },
+      "memories": {
+        "searchLabel": "جستجوی خاطرات",
+        "searchPlaceholder": "جستجو در خاطرات این عامل",
+        "searchButton": "جستجو",
+        "idle": "شخص، پروژه، تصمیم یا هر چیز دیگری را که این عامل به خاطر دارد جستجو کنید.",
+        "searching": "در حال جستجوی خاطرات…",
+        "results": "{count} نتیجه",
+        "empty": "هیچ خاطره‌ای با “{query}” مطابقت نداشت.",
+        "error": "جستجوی خاطرات ناموفق بود: {message}",
+        "retry": "تلاش مجدد",
+        "gatewayUpdateRequired": "برای جستجوی خاطرات از طریق Control UI، Gateway را به‌روزرسانی کنید.",
+        "hybridSearch": "جستجوی ترکیبی",
+        "keywordSearch": "جستجوی کلیدواژه‌ای",
+        "lineRange": "خطوط {start}–{end}",
+        "score": "امتیاز {score}",
+        "sourceMemory": "حافظه",
+        "sourceSessions": "نشست‌ها",
+        "fileLoading": "در حال بارگذاری فایل کامل حافظه…",
+        "fileError": "بارگذاری این فایل حافظه ممکن نشد: {message}",
+        "fileUnsupported": "این فایل حافظه را نمی‌توان به‌صورت متن نمایش داد.",
+        "resultOne": "{count} نتیجه"
       }
     }
   },
@@ -1602,7 +2134,8 @@
           "keywordSearch": "поиск по ключевым словам (без эмбеддингов)",
           "openSettings": "Открыть настройки",
           "retry": "Повторить",
-          "refresh": "Обновить статус"
+          "refresh": "Обновить статус",
+          "unavailable": "Память недоступна"
         },
         "schedule": {
           "title": "Расписание сна",
@@ -1613,7 +2146,9 @@
           "lastRun": "последний запуск {time}",
           "notScheduled": "Не запланировано",
           "learnMore": "Как работают сновидения",
-          "openDocs": "Открыть руководство по сновидениям"
+          "openDocs": "Открыть руководство по сновидениям",
+          "sweep": "Очистка",
+          "guide": "Руководство"
         },
         "activity": {
           "title": "Активность",
@@ -1622,7 +2157,10 @@
           "shortTermCount": "Краткосрочные записи в ожидании",
           "phaseHitCount": "Сигналы фаз",
           "lightPhaseHitCount": "Срабатывания лёгкой фазы",
-          "remPhaseHitCount": "Срабатывания фазы быстрого сна"
+          "remPhaseHitCount": "Срабатывания фазы быстрого сна",
+          "promoted": "Повышено",
+          "promotedValue": "{today} сегодня · {total} всего",
+          "phaseHitValue": "{light} лёгкий сон · {rem} быстрый сон"
         },
         "health": {
           "title": "Состояние движка",
@@ -1654,6 +2192,250 @@
           },
           "rem": {
             "title": "Фаза быстрого сна"
+          }
+        }
+      },
+      "memories": {
+        "searchLabel": "Поиск воспоминаний",
+        "searchPlaceholder": "Поиск в воспоминаниях этого агента",
+        "searchButton": "Найти",
+        "idle": "Найдите человека, проект, решение или что-либо ещё, что помнит этот агент.",
+        "searching": "Поиск воспоминаний…",
+        "results": "Результатов: {count}",
+        "empty": "По запросу “{query}” воспоминаний не найдено.",
+        "error": "Не удалось выполнить поиск воспоминаний: {message}",
+        "retry": "Повторить",
+        "gatewayUpdateRequired": "Обновите Gateway, чтобы искать воспоминания через Control UI.",
+        "hybridSearch": "гибридный поиск",
+        "keywordSearch": "поиск по ключевым словам",
+        "lineRange": "строки {start}–{end}",
+        "score": "оценка {score}",
+        "sourceMemory": "память",
+        "sourceSessions": "сеансы",
+        "fileLoading": "Загрузка полного файла памяти…",
+        "fileError": "Не удалось загрузить этот файл памяти: {message}",
+        "fileUnsupported": "Этот файл памяти нельзя отобразить как текст.",
+        "resultOne": "{count} результат"
+      }
+    }
+  },
+  "sv": {
+    "common": {
+      "loading": "Läser in…",
+      "enabled": "Aktiverad",
+      "disabled": "Inaktiverad",
+      "na": "ej tillämpligt",
+      "unknown": "Okänd"
+    },
+    "memoryPage": {
+      "memories": {
+        "searchLabel": "Sök i minnen",
+        "searchPlaceholder": "Sök i den här agentens minnen",
+        "searchButton": "Sök",
+        "idle": "Sök efter en person, ett projekt, ett beslut eller något annat som den här agenten minns.",
+        "searching": "Söker i minnen…",
+        "results": "{count} resultat",
+        "empty": "Inga minnen matchade ”{query}”.",
+        "error": "Sökningen i minnen misslyckades: {message}",
+        "retry": "Försök igen",
+        "gatewayUpdateRequired": "Uppdatera Gateway för att söka i minnen från Control UI.",
+        "hybridSearch": "hybridsökning",
+        "keywordSearch": "nyckelordssökning",
+        "lineRange": "rader {start}–{end}",
+        "score": "poäng {score}",
+        "sourceMemory": "minne",
+        "sourceSessions": "sessioner",
+        "fileLoading": "Läser in hela minnesfilen…",
+        "fileError": "Kunde inte läsa in den här minnesfilen: {message}",
+        "fileUnsupported": "Den här minnesfilen kan inte visas som text.",
+        "resultOne": "{count} resultat"
+      },
+      "overview": {
+        "hero": {
+          "awake": "Minnet är vaket",
+          "waking": "Väcker minnet…",
+          "hibernating": "Minnet är i viloläge",
+          "needsAttention": "Minnet behöver uppmärksamhet",
+          "noSearchRuntime": "Minnesökning på värden är inte tillgänglig",
+          "noSearchRuntimeDescription": "{engine} tillhandahåller ingen körmiljö för minnesökning på värden. Andra minnesintegrationer kan köras oberoende.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Kontrollerar den här agentens minnesmotor och drömcykel.",
+          "offDescription": "Välj en minnesmotor i Inställningar för att väcka minnet.",
+          "disabledDescription": "Den valda minnesmotorn är inaktiverad. Aktivera den igen i Inställningar.",
+          "gatewayOffline": "Gateway är offline, så minnets status är inte tillgänglig.",
+          "hybridSearch": "hybridsökning",
+          "keywordSearch": "nyckelordssökning (utan inbäddningar)",
+          "openSettings": "Öppna inställningar",
+          "retry": "Försök igen",
+          "refresh": "Uppdatera status",
+          "unavailable": "Minnet är inte tillgängligt"
+        },
+        "schedule": {
+          "title": "Sömnschema",
+          "lightDescription": "Sorterar nya korttidsanteckningar och förbereder lovande kandidater utan att ändra långtidsminnet.",
+          "remDescription": "Reflekterar över teman och återkommande idéer i den senaste aktiviteten för att förbättra rangordningen utan att ändra långtidsminnet.",
+          "deepDescription": "Poängsätter förberedda kandidater, för över de som är värda att behålla till långtidsminnet (MEMORY.md) och skriver drömdagboken.",
+          "nextRun": "nästa {time}",
+          "lastRun": "senaste {time}",
+          "notScheduled": "Inte schemalagt",
+          "learnMore": "Så fungerar drömmar",
+          "openDocs": "Öppna drömguiden",
+          "sweep": "Svep",
+          "guide": "Guide"
+        },
+        "activity": {
+          "title": "Aktivitet",
+          "promotedToday": "Överförda till långtidsminnet idag",
+          "promotedTotal": "Överförda till långtidsminnet totalt",
+          "shortTermCount": "Väntande korttidsposter",
+          "phaseHitCount": "Fassignaler",
+          "lightPhaseHitCount": "Träffar i lättsömnfasen",
+          "remPhaseHitCount": "Träffar i REM-fasen",
+          "promoted": "Uppflyttade",
+          "promotedValue": "{today} idag · {total} totalt",
+          "phaseHitValue": "{light} lätt · {rem} REM"
+        },
+        "health": {
+          "title": "Motorns hälsostatus",
+          "provider": "Leverantör",
+          "embeddings": "Vektorinbäddningar",
+          "runtime": "Körmiljö för vektorinbäddningar",
+          "healthy": "Redo",
+          "unavailable": "Inte tillgänglig",
+          "notChecked": "Inte kontrollerad",
+          "notCheckedDescription": "Det har ännu inte kontrollerats om inbäddningar är redo att användas.",
+          "checking": "Kontrollerar…",
+          "test": "Testa",
+          "testing": "Testar…"
+        },
+        "shortcuts": {
+          "title": "Utforska minnet",
+          "memories": "Sök bland minnen",
+          "diary": "Läs drömdagboken",
+          "settings": "Konfigurera minnet"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Lätt sömnfas"
+          },
+          "deep": {
+            "title": "Djup sömnfas"
+          },
+          "rem": {
+            "title": "REM-fas"
+          }
+        }
+      }
+    }
+  },
+  "ca": {
+    "common": {
+      "loading": "S'està carregant…",
+      "enabled": "Activat",
+      "disabled": "Desactivat",
+      "na": "n/d",
+      "unknown": "Desconegut"
+    },
+    "memoryPage": {
+      "memories": {
+        "searchLabel": "Cerca de records",
+        "searchPlaceholder": "Cerca als records d'aquest agent",
+        "searchButton": "Cerca",
+        "idle": "Cerca una persona, un projecte, una decisió o qualsevol altra cosa que aquest agent recordi.",
+        "searching": "S'estan cercant records…",
+        "results": "{count} resultats",
+        "empty": "No s'ha trobat cap record que coincideixi amb «{query}».",
+        "error": "La cerca a la memòria ha fallat: {message}",
+        "retry": "Torna-ho a provar",
+        "gatewayUpdateRequired": "Actualitza la Passarel·la per cercar records des de la Control UI.",
+        "hybridSearch": "cerca híbrida",
+        "keywordSearch": "cerca per paraules clau",
+        "lineRange": "línies {start}–{end}",
+        "score": "puntuació {score}",
+        "sourceMemory": "memòria",
+        "sourceSessions": "sessions",
+        "fileLoading": "S'està carregant el fitxer de memòria complet…",
+        "fileError": "No s'ha pogut carregar aquest fitxer de memòria: {message}",
+        "fileUnsupported": "Aquest fitxer de memòria no es pot mostrar com a text.",
+        "resultOne": "{count} resultat"
+      },
+      "overview": {
+        "hero": {
+          "awake": "La memòria està desperta",
+          "waking": "S'està despertant la memòria…",
+          "hibernating": "La memòria està hibernant",
+          "needsAttention": "La memòria necessita atenció",
+          "noSearchRuntime": "La cerca a la memòria de l'amfitrió no està disponible",
+          "noSearchRuntimeDescription": "{engine} no proporciona un entorn d'execució de cerca a la memòria de l'amfitrió. Altres integracions de memòria poden funcionar de manera independent.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "S'estan comprovant el motor de memòria i el cicle de somnis d'aquest agent.",
+          "offDescription": "Trieu un motor de memòria a Configuració per despertar-la.",
+          "disabledDescription": "El motor de memòria seleccionat està desactivat. Torneu-lo a activar a Configuració.",
+          "gatewayOffline": "La passarel·la està fora de línia, de manera que l'estat de la memòria no està disponible.",
+          "hybridSearch": "cerca híbrida",
+          "keywordSearch": "cerca per paraules clau (sense incrustacions vectorials)",
+          "openSettings": "Obre Configuració",
+          "retry": "Torna-ho a provar",
+          "refresh": "Actualitza l'estat",
+          "unavailable": "La memòria no està disponible"
+        },
+        "schedule": {
+          "title": "Programació del son",
+          "lightDescription": "Ordena les notes recents a curt termini i prepara les candidates prometedores sense modificar la memòria a llarg termini.",
+          "remDescription": "Reflexiona sobre temes i idees recurrents de l'activitat recent per millorar-ne la classificació sense modificar la memòria a llarg termini.",
+          "deepDescription": "Puntua les candidates preparades, incorpora les seleccionades a la memòria a llarg termini (MEMORY.md) i escriu el diari de somnis.",
+          "nextRun": "propera {time}",
+          "lastRun": "última {time}",
+          "notScheduled": "Sense programar",
+          "learnMore": "Com funciona el procés de somni",
+          "openDocs": "Obre la guia del procés de somni",
+          "sweep": "Escombratge",
+          "guide": "Guia"
+        },
+        "activity": {
+          "title": "Activitat",
+          "promotedToday": "Incorporades avui",
+          "promotedTotal": "Total d'incorporades",
+          "shortTermCount": "Entrades a curt termini pendents",
+          "phaseHitCount": "Senyals de fase",
+          "lightPhaseHitCount": "Coincidències de la fase lleugera",
+          "remPhaseHitCount": "Coincidències de la fase REM",
+          "promoted": "Promoguts",
+          "promotedValue": "{today} avui · {total} en total",
+          "phaseHitValue": "{light} lleuger · {rem} REM"
+        },
+        "health": {
+          "title": "Estat del motor",
+          "provider": "Proveïdor",
+          "embeddings": "Representacions vectorials",
+          "runtime": "Entorn d'execució de representacions vectorials",
+          "healthy": "A punt",
+          "unavailable": "No disponible",
+          "notChecked": "Cap comprovació recent",
+          "notCheckedDescription": "Els resultats caduquen al cap de 30 segons. Feu clic a Prova per comprovar si està a punt.",
+          "checking": "S'està comprovant…",
+          "test": "Prova",
+          "testing": "S'està provant…"
+        },
+        "shortcuts": {
+          "title": "Explora la memòria",
+          "memories": "Cerca records",
+          "diary": "Llegeix el diari de somnis",
+          "settings": "Configura la memòria"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Fase lleugera"
+          },
+          "deep": {
+            "title": "Fase profunda"
+          },
+          "rem": {
+            "title": "Fase REM"
           }
         }
       }

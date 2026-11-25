@@ -4,6 +4,7 @@ import type {
   SearchSchema,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
+  DatabaseSearchCapabilityUnavailableError,
   isPostgresSqlConnection,
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_STATE_TABLE,
@@ -13,15 +14,20 @@ import {
   bindSqliteWorkerDatabase,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabaseWriteRevision,
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
+import { retirePublishedMemoryEmbeddingCacheRows } from "./manager-embedding-cache-retire.js";
 import {
   clearMemoryEmbeddingCacheIdentities,
   countMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
+  type MemoryEmbeddingCacheSize,
 } from "./manager-embedding-cache.js";
 import {
   upgradeMemoryIndexProviderKey,
@@ -34,6 +40,7 @@ import type {
   MemoryPublicationOperations,
   MemoryPublicationResult,
 } from "./manager-publication-task.js";
+import { MEMORY_EMBEDDING_CACHE_WRITE_SCOPE } from "./manager-publication-task.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { readMemoryDatabaseFacts, type MemoryDatabaseFacts } from "./manager-retrieval-read.js";
 import { memoryTextSearchSchema, memoryVectorSearchSchema } from "./manager-search-schema.js";
@@ -57,13 +64,20 @@ type StagingState = {
   metadata: MemoryIndexMeta | undefined;
 };
 const reindexStages = new WeakMap<EngineConnection, Map<string, StagingState>>();
+const embeddingCacheSizes = new WeakMap<
+  EngineConnection,
+  MemoryEmbeddingCacheSize & { token: string }
+>();
 
 /** A connection-local spool bounds transfer memory and disappears with its owning worker. */
 export function bindPostgresMemoryPublication(
   context: {
     database: EngineConnection;
     admit(stage: "transaction" | "commit"): void;
-    admitSearchExtensions?: (definitions: Readonly<Record<string, SearchSchema>>) => void;
+    admitSearchExtensions?: (
+      definitions: Readonly<Record<string, SearchSchema>>,
+      options?: { rebuild: true },
+    ) => void;
   },
   stageId?: string,
 ) {
@@ -94,17 +108,46 @@ export function bindPostgresMemoryPublication(
   if (stageId && stages.has(stageId)) {
     restore(stages.get(stageId)!);
   }
-  const write = <T>(run: () => T): MemoryPublicationResult<T> => {
+  let cacheSize: MemoryEmbeddingCacheSize | undefined;
+  const readCacheSize = () => (cacheSize ??= { size: countMemoryEmbeddingCache(db), exact: true });
+  const retainCacheSize = (
+    size: MemoryEmbeddingCacheSize | undefined,
+    expectedRevision: number | undefined,
+  ) => {
+    if (size === undefined || expectedRevision === undefined) {
+      embeddingCacheSizes.delete(db);
+      return;
+    }
+    const token = readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE);
+    // Read the token before checking the revision so a later writer cannot certify this count.
+    if (token === undefined || readSqliteDatabaseWriteRevision(db) !== expectedRevision) {
+      embeddingCacheSizes.delete(db);
+    } else {
+      embeddingCacheSizes.set(db, { ...size, token });
+    }
+  };
+  const write = <T>(
+    run: () => T,
+    options?: { publishFacts: boolean },
+  ): MemoryPublicationResult<T> => {
     let entered = false;
     let committed = false;
     const previousFacts = rebuilding && { ...rebuilding };
     const previousMetadata = metadata;
     const previousCreated = created;
+    let previousCacheSize: MemoryEmbeddingCacheSize | undefined;
+    let cacheRevision: number | undefined;
     try {
       const value = db.runTransaction(
         () => {
           context.admit("transaction");
           entered = true;
+          // Another owner may commit while this transaction waits for the store's writer lock.
+          cacheRevision = readSqliteDatabaseWriteRevision(db);
+          const retained = embeddingCacheSizes.get(db);
+          const token = readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE);
+          cacheSize = retained?.token === token ? retained : undefined;
+          previousCacheSize = cacheSize;
           return run();
         },
         {
@@ -115,12 +158,21 @@ export function bindPostgresMemoryPublication(
           },
         },
       );
-      return { ok: true, value, facts: rebuilding ?? readMemoryDatabaseFacts(db) };
+      if (options?.publishFacts) {
+        return { ok: true, value, facts: rebuilding ?? readMemoryDatabaseFacts(db) };
+      }
+      return { ok: true, value };
     } catch (error) {
       if (!committed) {
         rebuilding = previousFacts;
         metadata = previousMetadata;
         created = previousCreated;
+        cacheSize = previousCacheSize;
+      }
+      if (error instanceof DatabaseSearchCapabilityUnavailableError) {
+        // Deferred search admission must retain the same actionable capability
+        // error as eager admission, after the publication transaction rolls back.
+        throw Object.assign(error, { entered, committed });
       }
       return {
         ok: false,
@@ -131,8 +183,25 @@ export function bindPostgresMemoryPublication(
           message: error instanceof Error ? error.message : String(error),
         },
       };
+    } finally {
+      // A PG commit advances the broad receipt once. Any other advance invalidates our snapshot.
+      retainCacheSize(
+        cacheSize,
+        cacheRevision === undefined ? undefined : (cacheRevision + Number(committed)) | 0,
+      );
     }
   };
+  const writeChangedIndex = (run: () => boolean): MemoryPublicationResult<boolean> =>
+    write(
+      () => {
+        const changed = run();
+        if (changed) {
+          advanceMemoryIndexRevision(db);
+        }
+        return changed;
+      },
+      { publishFacts: true },
+    );
   const ensureSpool = () => {
     if (created) {
       return;
@@ -141,6 +210,17 @@ export function bindPostgresMemoryPublication(
       `CREATE TEMP TABLE ${spool} (ordinal BIGINT GENERATED ALWAYS AS IDENTITY, lane TEXT NOT NULL, header TEXT, json TEXT, last INTEGER, PRIMARY KEY (lane, ordinal))`,
     );
     created = true;
+  };
+  const dropSpool = (name: string) => {
+    const revision = readSqliteDatabaseWriteRevision(db);
+    const retained = embeddingCacheSizes.get(db);
+    const token = readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE);
+    const commits = Number(!db.isTransaction);
+    db.exec(`DROP TABLE ${name}`);
+    retainCacheSize(
+      retained?.token === token ? retained : undefined,
+      revision === undefined ? undefined : (revision + commits) | 0,
+    );
   };
   const append = (
     lane: string,
@@ -154,13 +234,13 @@ export function bindPostgresMemoryPublication(
         JSON.stringify(source),
       );
     }
-    // The transfer owner caps each request at 512 KiB; booleans never cross the SQL boundary.
-    for (const fragment of fragments) {
-      db.prepare(`INSERT INTO ${spool} (lane, json, last) VALUES (?, ?, ?)`).run(
-        lane,
-        fragment.json,
-        Number(fragment.last),
-      );
+    // Transfer batches cap bytes at 512 KiB; also bound the three binds per row to PostgreSQL's limit.
+    const maxRows = Math.floor(65_535 / 3);
+    for (let offset = 0; offset < fragments.length; offset += maxRows) {
+      const batch = fragments.slice(offset, offset + maxRows);
+      db.prepare(
+        `INSERT INTO ${spool} (lane, json, last) VALUES ${batch.map(() => "(?, ?, ?)").join(", ")}`,
+      ).run(...batch.flatMap((fragment) => [lane, fragment.json, Number(fragment.last)]));
     }
   };
   function* records(lane: string) {
@@ -230,12 +310,9 @@ export function bindPostgresMemoryPublication(
     typeof bindSqliteWorkerDatabase<MemoryPublicationOperations>
   >[1]["execute"] = (command) => {
     if (command.type === "database.reset") {
-      return write(() => {
-        const query = getNodeSqliteKysely<
-          Record<(typeof MEMORY_INDEX_DERIVED_TABLES)[number], unknown> & {
-            memory_index_state: { id: number; revision: number };
-          }
-        >(db);
+      return writeChangedIndex(() => {
+        const query =
+          getNodeSqliteKysely<Record<(typeof MEMORY_INDEX_DERIVED_TABLES)[number], unknown>>(db);
         let changed = false;
         // Admitted facts include optional vector projections; generated text columns
         // disappear with their source rows while the index definitions stay admitted.
@@ -246,15 +323,7 @@ export function bindPostgresMemoryPublication(
           const result = executeSqliteQuerySync(db, query.deleteFrom(table));
           changed ||= (result.numAffectedRows ?? 0n) > 0n;
         }
-        if (changed) {
-          executeSqliteQuerySync(
-            db,
-            query
-              .updateTable(MEMORY_INDEX_STATE_TABLE)
-              .set((eb) => ({ revision: eb("revision", "+", 1) }))
-              .where("id", "=", 1),
-          );
-        }
+        cacheSize = { size: 0, exact: true };
         return changed;
       });
     }
@@ -264,7 +333,7 @@ export function bindPostgresMemoryPublication(
     if (command.type === "database.stage.discard") {
       const retained = stages.get(command.input.stageId);
       if (retained?.created) {
-        db.exec(`DROP TABLE ${retained.spool}`);
+        dropSpool(retained.spool);
       }
       stages.delete(command.input.stageId);
       if (bindingStageId === command.input.stageId) {
@@ -283,9 +352,12 @@ export function bindPostgresMemoryPublication(
     }
     if (command.type === "schema.admit") {
       if (command.input.ftsEnabled) {
-        admitSearch({
-          "memory.text": memoryTextSearchSchema(command.input.ftsTokenizer ?? "unicode61"),
-        });
+        // Text rows remain canonical for this projection; changing tokenizer mode
+        // only replaces its optional trigram indexes, without re-embedding content.
+        admitSearch(
+          { "memory.text": memoryTextSearchSchema(command.input.ftsTokenizer ?? "unicode61") },
+          { rebuild: true },
+        );
       }
       const facts = rebuilding ?? readMemoryDatabaseFacts(db);
       return {
@@ -304,9 +376,12 @@ export function bindPostgresMemoryPublication(
       };
     }
     if (command.type === "vector.ensure") {
-      admitSearch({ "memory.vector": memoryVectorSearchSchema(command.input.dimensions) });
       if (rebuilding) {
+        // The stage contains the new embeddings. Keep the published projection
+        // until publication replaces its source rows and dimensions atomically.
         rebuilding.hasVectorTable = true;
+      } else {
+        admitSearch({ "memory.vector": memoryVectorSearchSchema(command.input.dimensions) });
       }
       return { ok: true, value: undefined, facts: rebuilding ?? readMemoryDatabaseFacts(db) };
     }
@@ -321,57 +396,74 @@ export function bindPostgresMemoryPublication(
     }
     if (command.type === "database.stage.start") {
       retainState = stageId !== undefined;
-      return write(() => {
-        ensureSpool();
-        rebuilding = {
-          ...readMemoryDatabaseFacts(db),
-          meta: null,
-          serialized: null,
-          hasIndexedChunks: false,
-          hasSemanticChunks: false,
-          invalidatedSources: [],
-          vectorState: { state: "empty" },
-        };
-      });
+      return write(
+        () => {
+          ensureSpool();
+          rebuilding = {
+            ...readMemoryDatabaseFacts(db),
+            meta: null,
+            serialized: null,
+            hasIndexedChunks: false,
+            hasSemanticChunks: false,
+            invalidatedSources: [],
+            vectorState: { state: "empty" },
+          };
+        },
+        { publishFacts: true },
+      );
     }
     if (command.type === "database.stage.publish") {
-      return write(() => {
-        if (!rebuilding || !metadata) {
-          throw new Error("Memory reindex stage is incomplete");
-        }
-        if (readMemoryDatabaseFacts(db).revision !== command.input.expectedRevision) {
-          throw new MemoryIndexRevisionConflictError(
-            "Memory index changed while full reindex was building; retry the full reindex.",
-          );
-        }
-        db.exec("DELETE FROM memory_index_chunks; DELETE FROM memory_index_sources");
-        const rows = records("reindex");
-        let next = rows.next();
-        while (!next.done) {
-          if (typeof next.value.header !== "string") {
-            throw new Error("Memory reindex source header is missing");
+      return write(
+        () => {
+          if (!rebuilding || !metadata) {
+            throw new Error("Memory reindex stage is incomplete");
           }
-          // SAFETY: Only stageSource writes headers into the reindex lane.
-          const source = JSON.parse(next.value.header) as MemorySourceIndexHeader;
-          checkSource(source);
-          next = rows.next();
-          function* fragments() {
-            while (!next.done && next.value.header === null) {
-              yield next.value;
+          if (readMemoryDatabaseFacts(db).revision !== command.input.expectedRevision) {
+            throw new MemoryIndexRevisionConflictError(
+              "Memory index changed while full reindex was building; retry the full reindex.",
+            );
+          }
+          db.exec("DELETE FROM memory_index_chunks; DELETE FROM memory_index_sources");
+          if (rebuilding.hasVectorTable && metadata.vectorDims) {
+            admitSearch(
+              { "memory.vector": memoryVectorSearchSchema(metadata.vectorDims) },
+              { rebuild: true },
+            );
+          }
+          function* sources() {
+            const rows = records("reindex");
+            let next = rows.next();
+            while (!next.done) {
+              if (typeof next.value.header !== "string") {
+                throw new Error("Memory reindex source header is missing");
+              }
+              // SAFETY: Only stageSource writes headers into the reindex lane.
+              const source = JSON.parse(next.value.header) as MemorySourceIndexHeader;
+              checkSource(source);
               next = rows.next();
+              function* fragments() {
+                while (!next.done && next.value.header === null) {
+                  yield next.value;
+                  next = rows.next();
+                }
+              }
+              // The kernel consumes each source before requesting the next header.
+              yield { header: source, rows: decode<MemorySourceIndexRow>(fragments()) };
             }
           }
           new MemorySourceIndexKernel(db, {
             vector: { enabled: true, available: true },
             fts: { enabled: true, available: true },
-          }).replaceRows(source, decode<MemorySourceIndexRow>(fragments()));
-        }
-        writeMemoryIndexMetadata(db, metadata);
-        if (command.input.vectorIndexComplete) {
-          markMemoryVectorIndexClean(db);
-        }
-        rebuilding = undefined;
-      });
+          }).replaceGroup(sources());
+          writeMemoryIndexMetadata(db, metadata);
+          if (command.input.vectorIndexComplete) {
+            markMemoryVectorIndexClean(db);
+          }
+          advanceMemoryIndexRevision(db);
+          rebuilding = undefined;
+        },
+        { publishFacts: true },
+      );
     }
     if (command.type === "index.facts") {
       return rebuilding ?? readMemoryDatabaseFacts(db);
@@ -382,7 +474,7 @@ export function bindPostgresMemoryPublication(
     if (command.type === "source.hash") {
       return rebuilding ? undefined : readMemoryIndex(db, command).value;
     }
-    if (command.type === "cache.read" || command.type === "session.current") {
+    if (command.type === "cache.read") {
       return readMemoryIndex(db, command).value;
     }
     if (command.type === "stage.start" || command.type === "cache.stage.start") {
@@ -415,44 +507,74 @@ export function bindPostgresMemoryPublication(
     if (command.type === "index.upgradeProviderKey") {
       return rebuilding
         ? { ok: true, value: false }
-        : write(() => upgradeMemoryIndexProviderKey(db, command.input));
+        : write(
+            () => {
+              const changed = upgradeMemoryIndexProviderKey(db, command.input);
+              if (changed) {
+                cacheSize = undefined;
+              }
+              return changed;
+            },
+            { publishFacts: true },
+          );
     }
     if (command.type === "index.writeMetadata") {
-      return write(() => {
-        if (rebuilding) {
-          metadata = command.input;
-          rebuilding.meta = metadata;
-          rebuilding.serialized = JSON.stringify(metadata);
-        } else {
-          writeMemoryIndexMetadata(db, command.input);
-        }
-      });
+      return write(
+        () => {
+          if (rebuilding) {
+            metadata = command.input;
+            rebuilding.meta = metadata;
+            rebuilding.serialized = JSON.stringify(metadata);
+          } else {
+            writeMemoryIndexMetadata(db, command.input);
+          }
+        },
+        { publishFacts: true },
+      );
     }
-    if (command.type === "source.refresh") {
+    if (command.type === "source.refresh" || command.type === "source.delete") {
       return rebuilding
         ? { ok: true, value: false }
-        : write(() => refreshMemorySessionSourceState(db, command.input));
-    }
-    if (command.type === "source.delete") {
-      return rebuilding
-        ? { ok: true, value: false }
-        : write(() =>
-            new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
+        : writeChangedIndex(() =>
+            command.type === "source.refresh"
+              ? refreshMemorySessionSourceState(db, command.input)
+              : new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
           );
     }
     if (command.type === "cache.clear") {
       return write(() => {
-        clearMemoryEmbeddingCacheIdentities(db, command.input.identities);
+        const removed = clearMemoryEmbeddingCacheIdentities(db, command.input.identities);
+        if (cacheSize !== undefined) {
+          cacheSize = { ...cacheSize, size: cacheSize.size - removed };
+        }
         return true;
+      });
+    }
+    if (command.type === "cache.retire") {
+      return write(() => {
+        const page = retirePublishedMemoryEmbeddingCacheRows(db, command.input);
+        if (cacheSize !== undefined) {
+          cacheSize = { ...cacheSize, size: cacheSize.size - page.removed };
+        }
+        return page.next ?? null;
       });
     }
     if (command.type === "cache.prune") {
       return write(() => {
-        const size = countMemoryEmbeddingCache(db);
-        if (size <= command.input.maxEntries) {
+        const size = readCacheSize();
+        if (size.size <= command.input.maxEntries) {
+          if (command.input.recount) {
+            cacheSize = { size: countMemoryEmbeddingCache(db), exact: true };
+            return cacheSize.size > command.input.maxEntries;
+          }
           return false;
         }
-        pruneMemoryEmbeddingCache(db, size, command.input.maxEntries);
+        cacheSize = pruneMemoryEmbeddingCache(
+          db,
+          size,
+          command.input.maxEntries,
+          command.input.unreferencedFirst,
+        );
         return true;
       });
     }
@@ -479,38 +601,54 @@ export function bindPostgresMemoryPublication(
             }
           }
         }
-        upsertMemoryEmbeddingCache({
+        const bounded =
+          typeof cacheHeader.maxEntries === "number" &&
+          Number.isFinite(cacheHeader.maxEntries) &&
+          cacheHeader.maxEntries > 0;
+        const nextSize = upsertMemoryEmbeddingCache({
           ...cacheHeader,
           db,
-          cacheSize: countMemoryEmbeddingCache(db),
+          cacheSize: bounded ? readCacheSize() : { size: 0, exact: false },
           entries,
         });
+        // Reserved inserts retain an exact count; ordinary replacements retain an upper bound.
+        // Unbounded writes started from zero, so invalidate instead of retaining a partial count.
+        cacheSize = bounded ? nextSize : undefined;
         return true;
       });
     }
-    return write(() => {
-      const sources =
-        command.type === "source.replace.group"
-          ? command.input.sources
-          : command.type === "source.replace.inline"
-            ? [command.input]
-            : [{ header: header as MemorySourceIndexHeader, fragments: undefined }]; // SAFETY: Paired source stage.start header.
-      for (const source of sources) {
-        if (!source.header) {
-          throw new Error("Memory source staging was not started");
+    return write(
+      () => {
+        const sources =
+          command.type === "source.replace.group"
+            ? command.input.sources
+            : command.type === "source.replace.inline"
+              ? [command.input]
+              : [{ header: header as MemorySourceIndexHeader, fragments: undefined }]; // SAFETY: Paired source stage.start header.
+        function* replacements() {
+          for (const source of sources) {
+            if (!source.header) {
+              throw new Error("Memory source staging was not started");
+            }
+            if (rebuilding) {
+              stageSource(source.header, source.fragments);
+            } else {
+              checkSource(source.header);
+              yield {
+                header: source.header,
+                rows: decode<MemorySourceIndexRow>(source.fragments ?? records("source")),
+              };
+            }
+          }
         }
-        if (rebuilding) {
-          stageSource(source.header, source.fragments);
-        } else {
-          checkSource(source.header);
-          new MemorySourceIndexKernel(db, command.input.state).replaceRows(
-            source.header,
-            decode<MemorySourceIndexRow>(source.fragments ?? records("source")),
-          );
+        new MemorySourceIndexKernel(db, command.input.state).replaceGroup(replacements());
+        if (!rebuilding) {
+          advanceMemoryIndexRevision(db);
         }
-      }
-      return true;
-    });
+        return true;
+      },
+      { publishFacts: true },
+    );
   };
   return bindSqliteWorkerDatabase<MemoryPublicationOperations>(db, {
     execute(command) {
@@ -524,7 +662,7 @@ export function bindPostgresMemoryPublication(
     },
     close() {
       if (!bindingStageId && created && db.isOpen) {
-        db.exec(`DROP TABLE ${spool}`);
+        dropSpool(spool);
       }
     },
   });

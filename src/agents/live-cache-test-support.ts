@@ -278,3 +278,23 @@ export function withLiveDirectModelApiKey(
 ): LiveResolvedModel {
   return { ...fixture, apiKey };
 }
+
+export function resolveLiveCacheModel(
+  provider: "openai" | "anthropic",
+): Promise<LiveResolvedModel> {
+  return resolveLiveDirectModel(
+    provider === "openai"
+      ? {
+          provider: "openai",
+          api: "openai-responses",
+          envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
+          preferredModelIds: ["gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
+        }
+      : {
+          provider: "anthropic",
+          api: "anthropic-messages",
+          envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
+          preferredModelIds: ["claude-sonnet-5", "claude-haiku-4-5"],
+        },
+  );
+}

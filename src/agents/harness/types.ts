@@ -1,5 +1,6 @@
 // Harness contracts depend on the model-ref data shape, not its runtime normalization.
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { NativeSubagentsSnapshot } from "../../../packages/gateway-protocol/src/schema/native-subagents.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 /**
@@ -10,12 +11,13 @@ import type {
   ProviderModelRouteRuntimePolicy,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
-import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
+import type { McpToolCatalog } from "../agent-bundle-mcp-catalog.types.js";
 import type { PreparedAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
+type AgentHarnessNativeSubagents = NativeSubagentsSnapshot;
 
 /** Private native ownership, not execution authority or credential readiness. */
 export type AgentHarnessSessionRuntimeOwnership = {
@@ -34,6 +36,8 @@ export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
   modelProvider?: {
+    /** Configured native command route admitted by the host; not a credential health probe. */
+    nativeCommandAuth?: { runtimeId: string };
     api?: string;
     baseUrl?: string;
     azureApiVersion?: string;
@@ -103,6 +107,7 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "admittedRunContext"
   | "disableToolSearch"
   | "sessionReadScopeKey"
+  | "blindPrompt"
   | "assistantErrorTranscript"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
@@ -161,8 +166,8 @@ type AgentHarnessSettledTurnFinalizationParams<
   settledAttempt: AgentHarnessCanonicalAttemptResult;
 };
 export type AgentHarnessSettledTurnFinalizationResult = {
-  /** The single completed assistant answer produced by the isolated operation. */
-  assistant: import("../../llm/types.js").AssistantMessage;
+  /** Completed answer projected from the isolated attempt; stored usage may lack a price. */
+  assistant: import("../../llm/types.js").AssistantHistoryMessage;
   preparedTerminalReply?: PreparedAgentRunTerminalReply;
   /** Normalized usage for the finalization model call only. */
   usage?: import("../usage.js").NormalizedUsage;
@@ -201,6 +206,8 @@ type AgentHarnessIsolatedCompletionParams = {
   outputTextPolicy?: "strict-visible";
   /** Report inference dispatch through settlement, excluding preparation and cleanup. */
   onRequestComplete?: (durationMs: number) => void;
+  /** Observe the returned assistant before cancellation/output rejection; never grants acceptance. */
+  onResult?: (result: AgentHarnessIsolatedCompletionResult) => void;
   streamParams?: {
     maxTokens?: number;
     temperature?: number;
@@ -227,6 +234,8 @@ export type AgentHarnessIsolatedCompletionParamsV2 = Omit<
   "model" | "auth" | "sourceAuthFingerprint"
 > & {
   authorization: AgentHarnessIsolatedCompletionAuthorization;
+  /** Advisory final-output schema; harnesses without native support may ignore it. */
+  outputSchema?: import("../../shared/json-schema.types.js").JsonSchemaObject;
 };
 export type AgentHarnessIsolatedCompletionResult = {
   /** The single assistant completion. Core rejects tool-shaped or failed results. */
@@ -308,6 +317,10 @@ export type AgentHarnessSideQuestionParams = {
 /** Current side-question contract for hosts that always provide closure-bound authority. */
 export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & {
   hostCapabilities: AgentHarnessHostCapabilities;
+  /** Non-authorizing native ownership captured before model and auth preparation. */
+  expectedSessionRuntimeOwnership?: InternalEmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"];
+  /** Core-prepared search policy, bound to the side question's model and requester facts. */
+  preparedWebSearchPolicy?: InternalEmbeddedRunAttemptParams["preparedWebSearchPolicy"];
 };
 export type AgentHarnessSideQuestionResult = {
   text: string;
@@ -555,7 +568,7 @@ type AgentHarnessContract<
   verifySetup?(ctx: AgentHarnessSetupVerificationContext): Promise<void>;
   /**
    * Synchronous private ownership read; no discovery, auth loading, or native connection setup.
-   * @deprecated Implement resolveSessionRuntimeOwnershipAsync. Supported through 2026-12-31.
+   * @deprecated Implement resolveSessionRuntimeOwnershipAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    */
   resolveSessionRuntimeOwnership?(params: {
     config?: OpenClawConfig;
@@ -580,6 +593,15 @@ type AgentHarnessContract<
     /** Revalidate the retained caller after awaited work and before returning ownership. */
     assertCurrent: () => void;
   }): Promise<AgentHarnessSessionRuntimeOwnership | undefined>;
+  /** Read retained native-child observations without starting or adopting native work. */
+  readNativeSubagents?(params: {
+    agentId: string;
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+    storePath: string;
+    assertCurrent: () => void;
+  }): Promise<AgentHarnessNativeSubagents | undefined>;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   /**

@@ -297,7 +297,7 @@ describe("Control UI service worker notification scope", () => {
     },
   );
 
-  it("preserves a quiet shared tag for approval terminal replacements", async () => {
+  it("requests sound while preserving quiet same-tag approval replacements", async () => {
     const worker = createNotificationServiceWorker(nestedScope, []);
     const tag = "openclaw-approval-exec:replacement";
 
@@ -314,8 +314,8 @@ describe("Control UI service worker notification scope", () => {
       renotify: false,
     });
 
-    expect(requested.options).toMatchObject({ tag, renotify: false });
-    expect(terminal.options).toMatchObject({ tag, renotify: false });
+    expect(requested.options).toMatchObject({ tag, renotify: false, silent: false });
+    expect(terminal.options).toMatchObject({ tag, renotify: false, silent: false });
   });
 });
 
@@ -342,6 +342,7 @@ type ServiceWorkerPushPayload = {
   renotify?: boolean;
   tag?: string;
   url?: string;
+  icon?: string;
 };
 
 type ServiceWorkerNotificationOptions = {
@@ -470,3 +471,17 @@ function createNotificationServiceWorker(
     },
   };
 }
+
+describe("notification avatars", () => {
+  it.each([
+    ["data:image/png;base64,iVBORw0KGgo=", true],
+    ["https://example.test/avatar.png", false],
+    ["data:image/svg+xml,<svg/>", false],
+    [`data:image/png;base64,${"A".repeat(2_400)}`, false],
+  ])("accepts only bounded inline raster icons (%s)", async (icon, accepted) => {
+    const worker = createNotificationServiceWorker("https://gateway.example.test/control/", []);
+    const notification = await worker.dispatchPush({ title: "Agent finished", body: "Done", icon });
+    expect(notification.options.icon).toBe(accepted ? icon : "./apple-touch-icon.png");
+    expect(notification.options.badge).toBe("./favicon-32.png");
+  });
+});

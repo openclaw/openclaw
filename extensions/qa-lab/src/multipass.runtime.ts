@@ -7,13 +7,13 @@ import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import type { RuntimeId } from "./runtime-id.js";
-import { shellQuote } from "./shell-quote.js";
 
 const MULTIPASS_MOUNTED_REPO_PATH = "/workspace/openclaw-host";
 const MULTIPASS_GUEST_REPO_PATH = "/workspace/openclaw";
@@ -309,7 +309,7 @@ function renderQaMultipassGuestScript(plan: QaMultipassPlan, redactSecrets = fal
     '    aarch64|arm64) node_arch="arm64" ;;',
     '    *) echo "unsupported guest architecture for node bootstrap: $(uname -m)" >&2; return 1 ;;',
     "  esac",
-    "  local node_tmp_dir tarball_name extract_dir base_url",
+    "  local node_tmp_dir tarball_name extract_dir base_url node_binary",
     '  node_tmp_dir="$(mktemp -d)"',
     "  trap 'rm -rf \"${node_tmp_dir}\"' RETURN",
     '  base_url="https://nodejs.org/dist/latest-v24.x"',
@@ -322,10 +322,9 @@ function renderQaMultipassGuestScript(plan: QaMultipassPlan, redactSecrets = fal
     '  sudo mkdir -p /usr/local/lib/nodejs >>"$BOOTSTRAP_LOG" 2>&1',
     '  sudo rm -rf "/usr/local/lib/nodejs/${extract_dir}" >>"$BOOTSTRAP_LOG" 2>&1',
     '  sudo tar -xJf "${node_tmp_dir}/${tarball_name}" -C /usr/local/lib/nodejs >>"$BOOTSTRAP_LOG" 2>&1',
-    '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/node" /usr/local/bin/node >>"$BOOTSTRAP_LOG" 2>&1',
-    '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/npm" /usr/local/bin/npm >>"$BOOTSTRAP_LOG" 2>&1',
-    '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/npx" /usr/local/bin/npx >>"$BOOTSTRAP_LOG" 2>&1',
-    '  sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/corepack" /usr/local/bin/corepack >>"$BOOTSTRAP_LOG" 2>&1',
+    "  for node_binary in node npm npx corepack; do",
+    '    sudo ln -sf "/usr/local/lib/nodejs/${extract_dir}/bin/${node_binary}" "/usr/local/bin/${node_binary}" >>"$BOOTSTRAP_LOG" 2>&1',
+    "  done",
     '  export PATH="/usr/local/bin:$PATH"',
     "  hash -r",
     `  node --input-type=module -e ${shellQuote(nodeVersionCheck)}`,

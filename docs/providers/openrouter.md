@@ -3,7 +3,7 @@ summary: "Use OpenRouter's unified API to access many models in OpenClaw"
 read_when:
   - You want a single API key for many LLMs
   - You want to run models via OpenRouter in OpenClaw
-  - You want to use Jev for typed decisions through OpenRouter
+  - You want to use Jev or Parallel for typed decisions through OpenRouter
   - You want to use OpenRouter for image generation
   - You want to use OpenRouter for music generation
   - You want to use OpenRouter for video generation
@@ -11,7 +11,7 @@ title: "OpenRouter"
 ---
 
 OpenRouter routes requests to many models behind one API and one key. Chat uses
-the OpenAI-compatible `openai-completions` transport. Typed Jev decisions use the
+the OpenAI-compatible `openai-completions` transport. Typed decisions use the
 separate System One API.
 
 ## Getting started
@@ -22,8 +22,7 @@ to chat. OpenClaw receives the browser callback and saves the credential before
 reporting success. Use `/login cancel` to cancel a pending sign-in.
 
 Login saves access without choosing a starter model. If current model restrictions
-hide OpenRouter models, choose **Show all OpenRouter models** or **Keep current
-restrictions**. The credential stays saved either way. In the Control UI, use
+hide every OpenRouter model, login adds `openrouter/*` to them. In the Control UI, use
 **Settings → Models → Connect** for the same credential-only flow, then use the
 model menu to choose a model from the Gateway's catalog.
 
@@ -124,7 +123,48 @@ Discovered models use OpenRouter's advertised tool support. When a model's
 definitions or tool choice. Models without that metadata keep the default tool
 behavior.
 
-## Typed decisions with Jev
+On public `openrouter.ai` chat-completions routes, OpenClaw sends
+`function.strict: false` for tool definitions and preserves the schema's required
+fields, so optional inputs stay optional. Custom proxy endpoints keep their
+existing compatibility policy. An explicit `compat.supportsStrictMode: false`
+omits the strict field.
+
+## Typed decisions
+
+### Parallel Decisions Fast
+
+Parallel Decisions Fast answers typed questions using live web evidence; it is
+not a chat or tool-calling model. Select it as your [decision model](/concepts/decision-models)
+with your existing OpenRouter API key, without a separate Parallel account:
+
+```json5
+{
+  agents: {
+    defaults: { decisionModel: "openrouter/parallel/decisions-fast" },
+  },
+}
+```
+
+The plugin also supports `openrouter/parallel/decisions-fast:free` when that
+route is available on your OpenRouter account. Availability and trial pricing
+are controlled by OpenRouter; OpenClaw does not assume a permanent free tier.
+
+Both routes use OpenRouter's typed Decisions API, not chat completions. They accept
+text or JSON state, up to 100 related Boolean, choice, or score questions, and
+up to 32,000 input tokens per question including the shared state. Choice
+questions support 2–255 options; score questions support 2–10 ordered levels.
+Images, bounding boxes, sorting, and tagging are not supported. Responses
+preserve probabilities and per-question refusals; request-level web sources
+are returned in `result.metadata.annotations` as OpenRouter URL citations.
+Native web research happens on every request, so use this route only for
+decisions whose context may be sent to Parallel for web-grounded evaluation.
+
+See [Parallel on OpenRouter](https://parallel.ai/blog/decisions-openrouter),
+[Parallel question types](https://docs.parallel.ai/decisions/question-types), and
+[OpenRouter Decisions adapters](https://openrouter.ai/docs/guides/community/multimodal-decisions#what-each-endpoint-accepts)
+for the upstream contracts.
+
+### Jev
 
 Select Jev as the [decision model](/concepts/decision-models), using your existing
 OpenRouter connection and auth profiles. No separate TypeSafe login is needed:
@@ -132,21 +172,23 @@ OpenRouter connection and auth profiles. No separate TypeSafe login is needed:
 ```json5
 {
   agents: {
-    defaults: { decisionModel: "openrouter/typesafe/jev-1.13" },
+    defaults: { decisionModel: "openrouter/typesafe/jev-1.14" },
   },
 }
 ```
 
-The canonical catalog includes `openrouter/typesafe/jev-1.13` and
+The canonical catalog includes `openrouter/typesafe/jev-1.13`, `openrouter/typesafe/jev-1.14`, and
 `openrouter/~typesafe/jev-latest` as **decision-only** routes. They do not appear as chat
 choices, and selecting a decision model does not change your primary or utility
-model. The latest alias follows future releases; it is not a version pin. Pin 1.13 for
+model. The latest alias follows future releases; it is not a version pin. Pin 1.14 for
 reproducible model selection.
 
-The OpenClaw adapter accepts text or structured JSON objects/arrays and Boolean,
-Choice, and Score questions. Supply instructions for every question. Choice
+The OpenClaw adapter accepts text, structured JSON objects/arrays, or one inline
+PNG/JPEG image with optional text. Both versions support Boolean, Choice, and Score
+questions. Jev 1.14 and the latest alias also support Box questions. Supply
+instructions for every question. Choice
 supports 2–255 options; Score supports 2–10 non-null levels. Boolean criteria are optional, but when
-provided must describe both true and false. Images, sorting, tags and explicit
+provided must describe both true and false. Sorting, tags and explicit
 reasoning controls are rejected before inference. Omit reasoning or use `auto`.
 Jev returns no free-form prose or reasoning trace.
 
@@ -159,7 +201,10 @@ auth and provider routing preferences (including privacy restrictions). Unsuppor
 chat-only parameters are rejected rather than silently dropped. No session IDs,
 user identity or trace fields are added to the request body.
 
-This integration declares a 32,000-token state-plus-questions budget. Jev 1.13's
+This integration declares a 262,144-token state-plus-questions budget. Images are
+limited to 4 MiB decoded and must meet TypeSafe's current dimension requirements;
+OpenClaw does not fetch remote images or resize them. Image and Box support are
+experimental upstream. Jev's
 published input price is $0.042 per million tokens; output tokens are free.
 The adapter preserves reported token
 counts and actual `usage.cost`, including explicit zero. Missing actual cost stays
@@ -175,9 +220,13 @@ The legacy V1 adapter succeeds only when the response is representable without
 losing billing or metadata; otherwise it returns `unsupported-input` rather than
 silently discarding those facts.
 
-OpenRouter also offers `/api/alpha/decisions` and Jev 1.14. This adapter keeps the
-System One endpoint and the text decision subset above; it does not add image
-inputs, Box questions, or the larger context limits of those newer surfaces.
+For an image, pass tagged state `{ type: "image", dataUri: "data:image/png;base64,...", text: "Listing photo" }`
+and a question such as `{ type: "box", instructions: "the product in the listing photo" }`.
+Box answers contain `box: { top, bottom, left, right }`, measured from the top-left
+corner and normalized to image width and height. A Box answer does not mean the
+target exists: ask a Boolean presence question in the same batch. See
+[Multimodal Decisions](https://openrouter.ai/docs/guides/community/multimodal-decisions)
+and [Box](https://docs.typesafe.ai/primitives/box) for upstream behavior.
 
 The known Jev routes are bounded canonical manifest declarations. The ordinary
 live text catalog does not turn `decisions` output rows into synthetic chat
@@ -330,6 +379,36 @@ OpenClaw sends OpenRouter STT requests as JSON with base64 audio under
 `input_audio` (OpenRouter's STT contract), not as multipart OpenAI form
 uploads.
 
+`providerOptions.openrouter` on `tools.media.audio` or an audio entry in
+`tools.media.models[]` sets `temperature` on the request; every other key is
+sent to the upstream provider as OpenRouter `provider.options.<slug>`, where
+`<slug>` is the model's prefix (`elevenlabs` for `elevenlabs/scribe-v2`).
+OpenRouter drops options when a different provider serves the model. For
+example, to turn off ElevenLabs Scribe's audio-event tags such as
+`(laughter)`:
+
+```json5
+{
+  tools: {
+    media: {
+      models: [
+        {
+          provider: "openrouter",
+          model: "elevenlabs/scribe-v2",
+          capabilities: ["audio"],
+        },
+      ],
+      audio: {
+        enabled: true,
+        providerOptions: {
+          openrouter: { tag_audio_events: false },
+        },
+      },
+    },
+  },
+}
+```
+
 ## Fusion router
 
 OpenRouter Fusion sends one OpenClaw model ref to several OpenRouter models in
@@ -428,7 +507,7 @@ provider and to custom provider ids whose `baseUrl` points at OpenRouter:
 
 <Warning>
 If you repoint the OpenRouter provider at some other proxy or base URL, OpenClaw
-does **not** inject those OpenRouter-specific headers or Anthropic cache markers.
+does **not** inject those OpenRouter-specific headers or prompt-cache markers.
 </Warning>
 
 ## Advanced configuration
@@ -463,7 +542,7 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     TTL values are truncated and clamped to 1–86400 seconds; non-finite values are ignored.
 
     This is separate from provider prompt caching and from OpenRouter's
-    Anthropic `cache_control` markers. It only applies on verified
+    `cache_control` prompt-cache markers. It only applies on verified
     `openrouter.ai` routes, not custom proxy base URLs.
 
   </Accordion>
@@ -471,7 +550,9 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
   <Accordion title="Anthropic cache markers">
     On verified OpenRouter routes, Anthropic model refs keep OpenRouter's
     Anthropic `cache_control` markers for better prompt-cache reuse on
-    system/developer prompt blocks.
+    system/developer prompt blocks. Opening turns also checkpoint session-shared
+    guidance before producer-delimited Runtime facts; later turns reserve the
+    fourth marker for conversation history.
   </Accordion>
 
   <Accordion title="Anthropic reasoning prefill">
@@ -496,6 +577,10 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     without a scalar effort. Omitting a thinking request leaves their native
     reasoning default unchanged; configured reasoning budgets are preserved.
 
+    Streamed `reasoning.summary` details count as hidden thinking progress during
+    compaction, just like `reasoning.text`. They do not become visible summary
+    text or change the silence timeout, cancellation, or overall deadline.
+
   </Accordion>
 
   <Accordion title="DeepSeek V4 reasoning replay">
@@ -519,6 +604,18 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
     Gemini-backed OpenRouter refs stay on the proxy-Gemini path: OpenClaw keeps
     Gemini thought-signature sanitation there, but does not enable native
     Gemini replay validation or bootstrap rewrites.
+
+    On verified OpenRouter routes, `google/gemini*` refs (including `~google/`
+    aliases and `:variant` suffixes) receive one `cache_control: { type:
+    "ephemeral" }` marker on the complete system/developer message. OpenClaw
+    moves only producer-delimited Runtime facts to the first eligible user turn;
+    other instructions remain in the system message. Without a user carrier,
+    the complete prompt stays there. Gemini caches the whole `systemInstruction`,
+    so OpenClaw does not mark tools or history. `cacheRetention: "none"` disables
+    the marker; `"short"` and `"long"` keep the provider's default cache window.
+    The model's minimum cacheable prompt size still applies. See
+    [Prompt caching](/reference/prompt-caching#openrouter).
+
   </Accordion>
 
   <Accordion title="Provider routing metadata">

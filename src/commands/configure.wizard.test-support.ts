@@ -1,7 +1,8 @@
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ConfigFileSnapshot, ConfigMutationIO, OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { committedConfigFiles } from "./committed-config.test-support.js";
+import { createTestConfigSnapshot } from "./test-runtime-config-helpers.js";
 
 const wizardTestMocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn<(config: OpenClawConfig) => Promise<void>>();
@@ -93,71 +94,53 @@ vi.mock("../flows/memory-setup.js", async (importOriginal) => ({
   runMemorySetupFlow: wizardTestMocks.runMemorySetupFlow,
 }));
 
-vi.mock("../config/config.js", () => ({
-  CONFIG_PATH: "~/.openclaw/openclaw.json",
-  createConfigIO: () => ({
-    readConfigFileSnapshotForWrite: async () => ({
-      snapshot: await wizardTestMocks.readConfigFileSnapshot(),
-      writeOptions: {
-        assertConfigPathForWrite: wizardTestMocks.assertConfigPathForWrite,
-        expectedConfigPath: "/tmp/openclaw.json",
-        ownedConfigPathForWrite: "/tmp/openclaw.json",
-      },
-    }),
-  }),
-  readConfigFileSnapshot: wizardTestMocks.readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite: async () => ({
-    snapshot: await wizardTestMocks.readConfigFileSnapshot(),
-    writeOptions: {
-      assertConfigPathForWrite: wizardTestMocks.assertConfigPathForWrite,
-      envSnapshotForRestore: { SECRET: "resolved-secret" },
-      expectedConfigPath: "/tmp/openclaw.json",
-      includeFileHashesForWrite: { "/tmp/plugins.json5": "stale-hash" },
-      ownedConfigPathForWrite: "/tmp/openclaw.json",
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  const io: ConfigMutationIO = {
+    readConfigFileSnapshotForWrite: async () => {
+      const snapshot: Partial<ConfigFileSnapshot> & Pick<ConfigFileSnapshot, "config"> =
+        await wizardTestMocks.readConfigFileSnapshot();
+      return {
+        snapshot: {
+          ...createTestConfigSnapshot(
+            snapshot.sourceConfig ?? snapshot.config,
+            snapshot.runtimeConfig ?? snapshot.config,
+          ),
+          ...snapshot,
+        },
+        writeOptions: {
+          assertConfigPathForWrite: wizardTestMocks.assertConfigPathForWrite,
+          expectedConfigPath: "/tmp/openclaw.json",
+          ownedConfigPathForWrite: "/tmp/openclaw.json",
+        },
+      };
     },
-  }),
-  resolveConfigWriteAfterWrite: (afterWrite?: { mode: string }) => afterWrite ?? { mode: "auto" },
-  transformConfigFileWithRetry: async (
-    params: Parameters<typeof import("../config/config.js").transformConfigFileWithRetry>[0],
-  ) => {
-    const maxAttempts = params.maxAttempts ?? 5;
-    for (let attempt = 0; ; attempt += 1) {
-      const snapshot = await wizardTestMocks.readConfigFileSnapshot();
-      const previousHash = snapshot.hash ?? null;
-      const config =
-        params.base === "runtime"
-          ? (snapshot.runtimeConfig ?? snapshot.config)
-          : (snapshot.sourceConfig ?? snapshot.config);
-      try {
-        const transformed = await params.transform(config, { snapshot, previousHash, attempt }, {});
-        const committed = await params.commit!({
-          nextConfig: transformed.nextConfig,
-          snapshot,
-          ...(previousHash ? { baseHash: previousHash } : {}),
-          writeOptions: params.writeOptions,
-          afterWrite: { mode: "auto" },
-        });
-        return {
-          ...committedConfigFiles.write(committed.config),
-          result: transformed.result,
-          attempts: attempt + 1,
-        };
-      } catch (error) {
-        if (
-          !(error instanceof Error) ||
-          error.name !== "ConfigMutationConflictError" ||
-          (error as { retryable?: boolean }).retryable === false ||
-          attempt === maxAttempts - 1
-        ) {
-          throw error;
-        }
-      }
-    }
-  },
-  writeConfigFile: wizardTestMocks.writeConfigFile,
-  replaceConfigFile: wizardTestMocks.replaceConfigFile,
-  resolveGatewayPort: wizardTestMocks.resolveGatewayPort,
-}));
+    writeConfigFile: wizardTestMocks.writeConfigFile,
+  };
+  return {
+    ...actual,
+    CONFIG_PATH: "~/.openclaw/openclaw.json",
+    createConfigIO: () => io,
+    readConfigFileSnapshot: wizardTestMocks.readConfigFileSnapshot,
+    readConfigFileSnapshotForWrite: async () => {
+      const prepared = await io.readConfigFileSnapshotForWrite();
+      return {
+        ...prepared,
+        writeOptions: {
+          ...prepared.writeOptions,
+          envSnapshotForRestore: { SECRET: "resolved-secret" },
+          includeFileHashesForWrite: { "/tmp/plugins.json5": "stale-hash" },
+        },
+      };
+    },
+    transformConfigFileWithRetry: (
+      params: Parameters<typeof actual.transformConfigFileWithRetry>[0],
+    ) => actual.transformConfigFileWithRetry({ ...params, io }),
+    writeConfigFile: wizardTestMocks.writeConfigFile,
+    replaceConfigFile: wizardTestMocks.replaceConfigFile,
+    resolveGatewayPort: wizardTestMocks.resolveGatewayPort,
+  };
+});
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
   inspectWindowsGatewayFirewall: wizardTestMocks.inspectWindowsGatewayFirewall,
@@ -287,10 +270,6 @@ export const EMPTY_CONFIG_SNAPSHOT = {
   config: {},
   issues: [],
 };
-
-export function createWizardTestRuntime() {
-  return wizardTestMocks.runtime;
-}
 
 export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
   wizardTestMocks.runMemorySetupFlow.mockImplementation(async (candidate) => candidate);

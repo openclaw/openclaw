@@ -20,22 +20,21 @@ generic contracts; Plan Mode can use them, but so can approval workflows,
 workspace policy gates, background monitors, setup wizards, and UI companion
 plugins.
 
-| Method                                                                               | Contract it owns                                                                                                                                           |
-| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                                             |
-| `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                                             |
-| `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                                                        |
-| `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                                                     |
-| `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true` or `suppressReply: true`; Discord native commands support `descriptionLocalizations` |
-| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors; the `tab`, `widget`, and `link-reader` surfaces are rendered                                                          |
-| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                                          |
-| `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                                              |
-| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                             |
-| `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                                            |
-| `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
-| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
-| `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
-| `api.registerBoardWidgetContentKind(...)`                                            | Sandboxed board widget source validation, renderer resources, and document composition                                                                     |
+| Method                                                                               | Contract it owns                                                                                                                                     |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                                       |
+| `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                                       |
+| `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                                                  |
+| `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                                               |
+| `api.registerCommand(...)`                                                           | Scoped plugin commands; results set `continueAgent` (`true` or `{ prompt }`) or `suppressReply`; Discord native commands: `descriptionLocalizations` |
+| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors; the `tab`, `widget`, and `link-reader` surfaces are rendered                                                    |
+| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                                    |
+| `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                                        |
+| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                       |
+| `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                                      |
+| `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                      |
+| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                              |
+| `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                       |
 
 Runtime lifecycle registrations can also supply `dispose()` for resources captured
 by that registration. Explicitly owned, uncached plugin inspections invoke it on
@@ -146,30 +145,6 @@ Standalone programmatic CLI calls and caller-owned Commander programs retain
 their existing lifecycle. `cli-metadata` remains inert and accepts CLI descriptors
 only; keep its `machineOutput` resolver pure and synchronous.
 
-`registerBoardWidgetContentKind(...)` is for plugins that own a declarative
-widget source format. The registration supplies a globally unique lowercase
-`kind`, a short label, one capability-scoped plugin surface plus its renderer
-resource paths, a synchronous `validateSource(source)` callback, and a
-synchronous `composeDocument(...)` callback. Core adds the document shell,
-sandbox, theme, and ticket-bound action bridge. Registrations exist only while
-their plugin is active; invalid, reserved, or duplicate kinds fail plugin load.
-Use `dashboard.dataBindings` and `dashboard.actionVerbs` for host capabilities,
-not for renderer registration.
-
-For inline rendering, `resources.readPublicResource(path)` can optionally return
-`{ body: Uint8Array, contentType: string }` for the registered resource paths.
-These bytes are public: the isolated sandbox listener serves them with no
-Gateway credentials. Return only static renderer assets, never user data or
-secrets. Unregistered paths and registrations without this callback stay private.
-Opting in reserves every declared path in one global sandbox namespace: no other
-content kind may declare the same path, even without a public reader. Registration
-rejects these collisions regardless of order; only private registrations may
-share paths. Public paths must already be normalized URL pathnames, without dot
-segments, backslashes, query strings, or fragments. The sandbox host endpoint
-`/mcp-app-sandbox` is reserved. These additional path restrictions apply only to
-registrations with `readPublicResource`; private paths retain their capability
-URL encoding.
-
 A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
 plugins' tab descriptors are advertised to dashboard clients in the gateway
 hello (`controlUiTabs`), so the tab appears only while the plugin is enabled.
@@ -179,6 +154,11 @@ plugins can set `path` to a plugin HTTP route (see
 `icon` is a dashboard icon name hint, `group` picks the sidebar section
 (`control` or `agent`), `order` sorts among plugin tabs, and `requiredScopes`
 hides the tab from connections lacking those operator scopes:
+
+For access management and other settings pages, set `placement: "settings"`. The
+page appears in the Settings navigation and search instead of Pages, and direct
+links open it with the Settings shell. Its URL, plugin renderer, and required
+scopes stay unchanged.
 
 Bundled plugins whose page already has a matching native Control UI route can set
 `placement: "route:<pluginId>"`. The host rejects native-route claims from external
@@ -248,7 +228,10 @@ normal session navigation. This message grants no session access, accepts no
 arbitrary URL, and returns no credentials or session content. Standalone pages
 should retain an ordinary Control UI link as their non-embedded path. Use
 `buildControlUiSessionPath` from `openclaw/plugin-sdk/session-discussion` to build
-that path.
+that path. For stored sessions, await `prepareStoredSessionControlUiPathResolver()`
+once, then use its synchronous resolver with the current config at disclosure. It
+returns a path only when normal read routing preserves the stored agent and key.
+`parseControlUiSessionPath` validates a received path without choosing an origin.
 
 ```typescript
 api.session.controls.registerControlUiDescriptor({
@@ -266,6 +249,7 @@ Use the grouped namespaces for new plugin code:
 
 - `api.session.state.registerSessionExtension(...)`
 - `api.session.workflow.enqueueNextTurnInjection(...)`
+- `api.session.workflow.steerActiveRun(...)`
 - `api.session.workflow.registerSessionSchedulerJob(...)`
 - `api.session.workflow.sendSessionAttachment(...)`
 - `api.session.workflow.scheduleSessionTurn(...)`
@@ -277,18 +261,16 @@ Use the grouped namespaces for new plugin code:
 - `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`
 - `api.lifecycle.registerRuntimeLifecycle(...)`
 
-The equivalent flat methods remain available as deprecated compatibility
-aliases for existing plugins. The compatibility registry deprecated them on
+The flat aliases `api.emitAgentEvent`, `api.setRunContext`, `api.getRunContext`,
+`api.clearRunContext`, `api.registerSessionAction`, `api.sendSessionAttachment`,
+`api.scheduleSessionTurn`, and `api.unscheduleSessionTurnsByTag` have been removed.
+Use their grouped replacements above. These aliases were deprecated on
 2026-07-25 with a `removeAfter` date of 2026-10-01; see the
-[removal timeline](/plugins/sdk-migration/removal-timeline). Do not add new
-plugin code that calls
-`api.registerSessionExtension`, `api.enqueueNextTurnInjection`,
-`api.registerControlUiDescriptor`, `api.registerRuntimeLifecycle`,
-`api.registerAgentEventSubscription`, `api.emitAgentEvent`,
-`api.setRunContext`, `api.getRunContext`, `api.clearRunContext`,
-`api.registerSessionSchedulerJob`, `api.registerSessionAction`,
-`api.sendSessionAttachment`, `api.scheduleSessionTurn`, or
-`api.unscheduleSessionTurnsByTag` directly.
+[removal timeline](/plugins/sdk-migration/removal-timeline).
+
+The other equivalent flat methods remain deprecated compatibility aliases for
+existing plugins. New plugin code should use the grouped namespaces. Steering
+is exposed only through `api.session.workflow.steerActiveRun(...)`.
 
 `api.agent.events.registerAgentEventSubscription(...)` accepts optional `streams`
 and `phases` filters:
@@ -355,7 +337,7 @@ The contracts intentionally split authority:
   are scoped to the registering plugin.
 - Reserved command ownership is bundled-only. External plugins should use their
   own command names or aliases.
-- `allowPromptInjection=false` disables prompt-mutating hooks including
+- `allowPromptModification=false` disables prompt-mutating hooks including
   `agent_turn_prepare`, `before_prompt_build`, `heartbeat_prompt_contribution`,
   and `enqueueNextTurnInjection`.
 
@@ -453,7 +435,12 @@ after completion or failure; optional `formatFailure(stderr, exitCode)` customiz
 command failure messages. Remote PTY requests affect the command built by the
 adapter; the local transport still runs with piped input.
 
-Pass the reserved `assertRuntimeCurrent` as the session's `assertCurrent`. The
+Pass the reserved `assertRuntimeCurrent` as the session's `assertCurrent`. Optional
+`prepareCurrent` performs asynchronous physical selection checks before the final
+synchronous assertion; supply it on both the session and returned
+`SandboxBackendExecSpec` when deferred execution needs that preparation. Core
+exec consumers await it at process admission, after approval and transport setup.
+The assertion still owns immediate in-process revocation. The
 shared owner checks it around asynchronous preparation, and uploads recheck after
 local traversal immediately before spawning. Provider authority remains with the
 transport command: preparing local argv or retaining connection credentials does
@@ -513,13 +500,13 @@ The UI clears removed contributions and ignores stale request results.
 
 The `linkReader` fields are:
 
-| Field           | Contract                                                                                                                                                                                  |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                               |
-| `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable.    |
-| `detailMethod`  | Same-plugin read method receiving `{ url, agentId?, refresh?, section? }` and returning a `ControlUiLinkReaderDocument`.                                                                  |
-| `previewMethod` | Optional same-plugin read method receiving `{ url, agentId? }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews. |
-| `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                                  |
+| Field           | Contract                                                                                                                                                                                            |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hosts`         | One to sixteen exact lowercase DNS hostnames; no scheme, wildcard, or port.                                                                                                                         |
+| `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable.              |
+| `detailMethod`  | Same-plugin read method receiving `{ url, agentId?, refresh?, section? }` and returning a `ControlUiLinkReaderDocument`.                                                                            |
+| `previewMethod` | Optional same-plugin read method receiving `{ url, agentId?, refresh? }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews. |
+| `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                                            |
 
 A reader may opt into progressive detail loading with `progressive: true`.
 The host requests `section: "overview"` first; that response is a normal document
@@ -546,8 +533,12 @@ method must authorize the current operator and exact session before reading priv
 data. Hovercard caches and seeds retire when that pane changes sessions. Readers
 without this flag retain the public request shape.
 
-Preview and detail requests include the selected `agentId` when available; detail
-requests also accept `refresh: true`. The receiving owner must authorize identity
+Preview and detail requests include the selected `agentId` when available and
+accept `refresh: true` to wait for fresh metadata. An explicitly `stale` preview
+gets one refresh attempt; a still-stale or failed refresh retains a labeled cached
+preview with short backoff. Fresh reader details update matching hovercards in
+the same connection, agent, and pane session without waiting for their browser cache
+to expire. The receiving owner must authorize identity
 selection rather than treating this hint as access authority.
 
 Method names are bounded to 128 characters. Credentials in URLs and non-HTTPS

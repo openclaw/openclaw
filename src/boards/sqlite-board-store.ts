@@ -8,11 +8,9 @@ import type {
   BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
-import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
@@ -27,12 +25,10 @@ import {
   type DatabaseFileIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { assertAgentDatabaseReadAdmitted } from "../state/agent-database-admission.js";
 import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
-import {
-  resolveOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseRuntime,
-} from "../state/openclaw-agent-db.js";
-import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { openOpenClawAgentSqliteWorkerStoreV2 } from "../state/openclaw-agent-worker-store.js";
 import {
   runOpenClawAgentBoardReadAdmission,
   runOpenClawAgentWriteAdmission,
@@ -75,17 +71,15 @@ type PreparedBoardSession = ResolvedBoardSession & { env: NodeJS.ProcessEnv };
 export class SqliteBoardStore implements BoardStore {
   constructor(private readonly options: SqliteBoardStoreOptions) {}
 
-  private async prepareSession(target: BoardSessionTarget): Promise<PreparedBoardSession> {
+  private async withSession<T>(
+    target: BoardSessionTarget,
+    memoryConsumer: (store: BoardStore) => Promise<T>,
+    durableConsumer: (resolved: PreparedBoardSession) => Promise<T>,
+    missing?: () => T | Promise<T>,
+  ): Promise<T> {
     const env = cloneEnvWithPlatformSemantics(this.options.env ?? process.env);
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-    return { ...(await this.options.resolveSession({ ...target })), env };
-  }
-
-  private useMemory<T>(
-    resolved: PreparedBoardSession,
-    consume: (store: BoardStore) => Promise<T>,
-    missing?: () => T | Promise<T>,
-  ): Promise<{ value: T }> | undefined {
+    const resolved = { ...(await this.options.resolveSession({ ...target })), env };
     const assertCurrent = () => resolved.assertCurrent?.();
     const authority = { assertCurrent, authorize: assertCurrent };
     const scope = {
@@ -95,28 +89,26 @@ export class SqliteBoardStore implements BoardStore {
     };
     const memory = captureSessionActorStorageOwner(scope, authority);
     if (!memory) {
-      return undefined;
+      return durableConsumer(resolved);
     }
-    return withSessionActorStorage(
+    const result = await withSessionActorStorage(
       scope,
       {
         authority: memory.authority,
         lifetime: { assertCurrent, assertReadable: assertCurrent },
       },
-      async (binding) => ({ value: await consume(createSessionActorBoardStore(() => binding)) }),
-    ).then(async (result) => {
-      if (result) {
-        return result;
-      }
-      assertCurrent();
-      if (missing) {
-        return { value: await missing() };
-      }
-      throw new BoardValidationError(
-        "not_found",
-        `board session not found: ${resolved.sessionKey}`,
-      );
-    });
+      async (binding) => ({
+        value: await memoryConsumer(createSessionActorBoardStore(() => binding)),
+      }),
+    );
+    if (result) {
+      return result.value;
+    }
+    assertCurrent();
+    if (missing) {
+      return missing();
+    }
+    throw new BoardValidationError("not_found", `board session not found: ${resolved.sessionKey}`);
   }
 
   private write<T>(
@@ -155,7 +147,7 @@ export class SqliteBoardStore implements BoardStore {
               snapshotFields: [],
               expectedIdentity: identity,
             }),
-          targetDiscoveryLane,
+          sessionStoreLane,
         );
         assertDatabaseCurrent();
         assertCurrent();
@@ -174,77 +166,69 @@ export class SqliteBoardStore implements BoardStore {
           assertDatabaseCurrent();
           assertCurrent();
         };
-        return withOpenClawAgentDatabaseRuntime(
+        options?.assertCurrent?.();
+        if (prepare) {
+          await prepare();
+        }
+        assertPreparedCurrent();
+        const publication = await openOpenClawAgentSqliteWorkerStoreV2<BoardWriteOperations>(
           databaseOptions,
-          async (database) => {
-            if (prepare) {
-              await prepare();
-            }
-            assertPreparedCurrent();
-            const publication = await openOpenClawAgentSqliteWorkerStore<BoardWriteOperations>(
-              databaseOptions,
-              database.db,
-              {
-                moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.boardStore),
-                input: {
-                  agentId: databaseOptions.agentId,
-                  sessionKey: resolved.sessionKey,
-                  expectedSession,
-                } satisfies BoardWorkerInput,
-              },
-            );
-            let outcome: Result<T, unknown>;
-            try {
-              const value = await publication.run(async (scope) => {
-                // Source revocation blocks new admissions; admitted writes may finish their commit.
-                options?.assertCurrent?.();
-                let committed: BoardWriteOutcome<T>;
-                try {
-                  committed = await worker(scope, resolved.sessionKey);
-                } catch (error) {
-                  if (hasUnknownBoardWriteOutcome(error)) {
-                    sessionChanges.emit({
-                      sessionKey: resolved.sessionKey,
-                      storePath: database.path,
-                    });
-                  }
-                  throw error;
-                }
-                // Committed invalidation belongs to the original store, even after caller revocation.
-                sessionChanges.emitBatch(committed.changes);
-                return committed.value;
-              }, assertPreparedCurrent);
-              outcome = { ok: true, value };
-            } catch (error) {
-              outcome = { ok: false, error: restoreBoardError(error) };
-            }
-            let cleanup: Result<void, unknown>;
-            try {
-              await publication.close();
-              cleanup = { ok: true, value: undefined };
-            } catch (error) {
-              cleanup = { ok: false, error };
-            }
-            if (!outcome.ok) {
-              if (!cleanup.ok) {
-                throw new AggregateError(
-                  [outcome.error, cleanup.error],
-                  "Board publication and cleanup failed",
-                  { cause: outcome.error },
-                );
-              }
-              throw outcome.error;
-            }
-            if (!cleanup.ok) {
-              reportBoardCleanupFailure(cleanup.error);
-            }
-            return outcome.value;
-          },
-          () => {
-            options?.assertCurrent?.();
-            assertPreparedCurrent();
+          { version: 2, assertCurrent: assertPreparedCurrent },
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.boardStore),
+            input: {
+              agentId: databaseOptions.agentId,
+              sessionKey: resolved.sessionKey,
+              expectedSession,
+            } satisfies BoardWorkerInput,
           },
         );
+        let outcome: Result<T, unknown>;
+        try {
+          const value = await publication.run(async (scope) => {
+            // Source revocation blocks new admissions; admitted writes may finish their commit.
+            options?.assertCurrent?.();
+            let committed: BoardWriteOutcome<T>;
+            try {
+              committed = await worker(scope, resolved.sessionKey);
+            } catch (error) {
+              if (hasUnknownBoardWriteOutcome(error)) {
+                sessionChanges.emit({
+                  sessionKey: resolved.sessionKey,
+                  storePath: identity.canonicalPath,
+                });
+              }
+              throw error;
+            }
+            // Committed invalidation belongs to the original store, even after caller revocation.
+            sessionChanges.emitBatch(committed.changes);
+            return committed.value;
+          }, assertPreparedCurrent);
+          outcome = { ok: true, value };
+        } catch (error) {
+          outcome = { ok: false, error: restoreBoardError(error) };
+        }
+        let cleanup: Result<void, unknown>;
+        try {
+          await publication.close();
+          cleanup = { ok: true, value: undefined };
+        } catch (error) {
+          cleanup = { ok: false, error };
+        }
+        if (!outcome.ok) {
+          if (!cleanup.ok) {
+            throw new AggregateError(
+              [outcome.error, cleanup.error],
+              "Board publication and cleanup failed",
+              { cause: outcome.error },
+            );
+          }
+          throw outcome.error;
+        }
+        if (!cleanup.ok) {
+          reportBoardCleanupFailure(cleanup.error);
+        }
+        return outcome.value;
       },
       true,
     );
@@ -257,19 +241,16 @@ export class SqliteBoardStore implements BoardStore {
   async getSnapshotWithHtmlViewMetadata(
     target: BoardSessionTarget,
   ): Promise<BoardSnapshotWithHtmlViewMetadata> {
-    const resolved = await this.prepareSession(target);
-    const memory = this.useMemory<BoardSnapshotWithHtmlViewMetadata>(
-      resolved,
+    return this.withSession<BoardSnapshotWithHtmlViewMetadata>(
+      target,
       (store) => store.getSnapshotWithHtmlViewMetadata(target),
+      (resolved) =>
+        this.consumeSnapshotWithHtmlViewMetadata(resolved, (snapshot) => snapshot, true),
       () => ({
         snapshot: { sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] },
         htmlViewMetadata: new Map(),
       }),
     );
-    if (memory) {
-      return (await memory).value;
-    }
-    return this.consumeSnapshotWithHtmlViewMetadata(resolved, (snapshot) => snapshot);
   }
 
   private async consumeRead<Value, T>(
@@ -281,6 +262,7 @@ export class SqliteBoardStore implements BoardStore {
       expectedIdentity: DatabaseFileIdentity,
     ) => Promise<Value | undefined>,
     consume: (value: Value | undefined, sessionKey: string) => T,
+    snapshotOnly = false,
   ): Promise<Awaited<T>> {
     if (resolved.absent) {
       resolved.assertCurrent?.();
@@ -301,6 +283,9 @@ export class SqliteBoardStore implements BoardStore {
     const runInCallerContext = AsyncLocalStorage.snapshot();
     const accept = (value: Value | undefined) => {
       resolved.assertCurrent?.();
+      if (snapshotOnly) {
+        assertAgentDatabaseReadAdmitted(captured.agentId, { env });
+      }
       const result = runInCallerContext(consume, value, captured.sessionKey);
       // Cleanup may await the worker after consumption has already rejected.
       if (isPromise(result)) {
@@ -319,13 +304,17 @@ export class SqliteBoardStore implements BoardStore {
     const result = await withSessionHistoryWorkerDatabase(
       { ...captured, path: identity.canonicalPath, requestedPaths: [captured.path] },
       (reader) =>
-        runOpenClawAgentBoardReadAdmission(captured, async () => {
-          resolved.assertCurrent?.();
-          const value = await worker(reader, captured.sessionKey, env, identity);
-          reader.assertCurrent();
-          return accept(value);
-        }),
-      targetDiscoveryLane,
+        runOpenClawAgentBoardReadAdmission(
+          captured,
+          async () => {
+            resolved.assertCurrent?.();
+            const value = await worker(reader, captured.sessionKey, env, identity);
+            reader.assertCurrent();
+            return accept(value);
+          },
+          snapshotOnly,
+        ),
+      sessionStoreLane,
     ).catch((error: unknown) => {
       throw restoreBoardError(error);
     });
@@ -337,18 +326,13 @@ export class SqliteBoardStore implements BoardStore {
     target: BoardSessionTarget,
     consume: (snapshot: BoardSnapshot) => T,
   ): Promise<Awaited<T>> {
-    const resolved = await this.prepareSession(target);
-    const memory = this.useMemory(
-      resolved,
+    return await this.withSession(
+      target,
       (store) => store.useSnapshot(target, consume),
+      (resolved) =>
+        this.consumeSnapshotWithHtmlViewMetadata(resolved, ({ snapshot }) => consume(snapshot)),
       async () => consume({ sessionKey: target.sessionKey, revision: 0, tabs: [], widgets: [] }),
     );
-    if (memory) {
-      return await (
-        await memory
-      ).value;
-    }
-    return this.consumeSnapshotWithHtmlViewMetadata(resolved, ({ snapshot }) => consume(snapshot));
   }
 
   async useWidgetDocument<T>(
@@ -356,23 +340,18 @@ export class SqliteBoardStore implements BoardStore {
     name: string,
     consume: (document: BoardWidgetDocument | undefined) => T,
   ): Promise<Awaited<T>> {
-    const resolved = await this.prepareSession(target);
-    const memory = this.useMemory(
-      resolved,
+    return await this.withSession(
+      target,
       (store) => store.useWidgetDocument(target, name, consume),
+      (resolved) => this.consumeWidgetDocument(resolved, name, consume),
       async () => consume(undefined),
     );
-    if (memory) {
-      return await (
-        await memory
-      ).value;
-    }
-    return this.consumeWidgetDocument(resolved, name, consume);
   }
 
   private consumeSnapshotWithHtmlViewMetadata<T>(
     resolved: PreparedBoardSession,
     consume: (snapshot: BoardSnapshotWithHtmlViewMetadata) => T,
+    snapshotOnly = false,
   ): Promise<Awaited<T>> {
     return this.consumeRead(
       resolved,
@@ -385,6 +364,7 @@ export class SqliteBoardStore implements BoardStore {
             htmlViewMetadata: new Map(),
           },
         ),
+      snapshotOnly,
     );
   }
 
@@ -397,52 +377,51 @@ export class SqliteBoardStore implements BoardStore {
       return this.getSnapshot(target);
     }
     const capturedOps = structuredClone(ops);
-    const resolved = await this.prepareSession(target);
-    const memory = this.useMemory(resolved, (store) =>
-      store.applyOps(target, capturedOps, options),
-    );
-    if (memory) {
-      return (await memory).value;
-    }
-    return this.write(resolved, options, (scope, sessionKey) =>
-      scope.execute({
-        type: "boards.applyOps",
-        input: { sessionKey, ops: capturedOps },
-      }),
+    return this.withSession(
+      target,
+      (store) => store.applyOps(target, capturedOps, options),
+      (resolved) =>
+        this.write(resolved, options, (scope, sessionKey) =>
+          scope.execute({
+            type: "boards.applyOps",
+            input: { sessionKey, ops: capturedOps },
+          }),
+        ),
     );
   }
 
   async putWidget(params: BoardWidgetMaterializedPutParams, options?: BoardWidgetWriteOptions) {
     let preparedParams = structuredClone(params);
-    const resolved = await this.prepareSession(params);
-    const memory = this.useMemory(resolved, (store) => store.putWidget(preparedParams, options));
-    if (memory) {
-      return (await memory).value;
-    }
-    const viewGeneration = randomBytes(16).toString("hex");
-    const content = preparedParams.content;
-    const resolveInteraction = options?.resolveMcpAppInteraction;
-    const prepare =
-      content.kind === "mcp-app" && content.interactive && resolveInteraction
-        ? async () => {
-            if (!(await resolveInteraction())) {
-              preparedParams = {
-                ...preparedParams,
-                content: { ...content, interactive: false },
-                declared: undefined,
-              };
-            }
-          }
-        : undefined;
-    return this.write(
-      resolved,
-      options,
-      (scope, sessionKey) =>
-        scope.execute({
-          type: "boards.putWidget",
-          input: { sessionKey, params: preparedParams, viewGeneration },
-        }),
-      prepare,
+    return this.withSession(
+      params,
+      (store) => store.putWidget(preparedParams, options),
+      (resolved) => {
+        const viewGeneration = randomBytes(16).toString("hex");
+        const content = preparedParams.content;
+        const resolveInteraction = options?.resolveMcpAppInteraction;
+        const prepare =
+          content.kind === "mcp-app" && content.interactive && resolveInteraction
+            ? async () => {
+                if (!(await resolveInteraction())) {
+                  preparedParams = {
+                    ...preparedParams,
+                    content: { ...content, interactive: false },
+                    declared: undefined,
+                  };
+                }
+              }
+            : undefined;
+        return this.write(
+          resolved,
+          options,
+          (scope, sessionKey) =>
+            scope.execute({
+              type: "boards.putWidget",
+              input: { sessionKey, params: preparedParams, viewGeneration },
+            }),
+          prepare,
+        );
+      },
     );
   }
 
@@ -454,18 +433,16 @@ export class SqliteBoardStore implements BoardStore {
     instanceId?: string,
     options?: BoardWriteOptions,
   ): Promise<BoardSnapshot> {
-    const resolved = await this.prepareSession(target);
-    const memory = this.useMemory(resolved, (store) =>
-      store.grant(target, name, decision, revision, instanceId, options),
-    );
-    if (memory) {
-      return (await memory).value;
-    }
-    return this.write(resolved, options, (scope, sessionKey) =>
-      scope.execute({
-        type: "boards.grant",
-        input: { sessionKey, name, decision, revision, instanceId },
-      }),
+    return this.withSession(
+      target,
+      (store) => store.grant(target, name, decision, revision, instanceId, options),
+      (resolved) =>
+        this.write(resolved, options, (scope, sessionKey) =>
+          scope.execute({
+            type: "boards.grant",
+            input: { sessionKey, name, decision, revision, instanceId },
+          }),
+        ),
     );
   }
 
@@ -487,20 +464,17 @@ export class SqliteBoardStore implements BoardStore {
     target: BoardSessionTarget,
     name: string,
   ): Promise<BoardWidgetMcpAppDocument | undefined> {
-    const resolved = await this.prepareSession(target);
-    const memory = this.useMemory(
-      resolved,
+    return this.withSession(
+      target,
       (store) => store.readWidgetMcpApp(target, name),
+      (resolved) =>
+        this.consumeWidgetDocument(
+          resolved,
+          name,
+          (document) => (document && "descriptor" in document ? document : undefined),
+          "mcp-app",
+        ),
       () => undefined,
-    );
-    if (memory) {
-      return (await memory).value;
-    }
-    return this.consumeWidgetDocument(
-      resolved,
-      name,
-      (document) => (document && "descriptor" in document ? document : undefined),
-      "mcp-app",
     );
   }
 }

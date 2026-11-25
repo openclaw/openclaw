@@ -1,4 +1,6 @@
+import { HTTPError } from "matrix-js-sdk/lib/http-api/index.js";
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixReplacementContent } from "../media-text.js";
 import { fetchMatrixPollMessageSummary, resolveMatrixPollRootEventId } from "../poll-summary.js";
@@ -15,6 +17,8 @@ import {
 } from "./types.js";
 
 const MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX = "openclaw.matrix.thread-relations-start:";
+const MATRIX_READ_CURSOR_HINT =
+  "Matrix read before/after take a pagination token from a previous read's nextBatch or prevBatch, not an event id; use messageId to read one event.";
 
 function resolveMatrixReplacementTarget(event: MatrixRawEvent): string | undefined {
   const relation = event.content["m.relates_to"];
@@ -120,11 +124,14 @@ export async function readMatrixMessages(
   nextBatch?: string | null;
   prevBatch?: string | null;
 }> {
+  const rawBefore = normalizeOptionalString(opts.before);
+  const rawAfter = normalizeOptionalString(opts.after);
+  if (rawBefore && rawAfter) {
+    throw new Error("Matrix read accepts either before or after, not both.");
+  }
   return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
     const limit = resolveMatrixActionLimit(opts.limit, 20);
-    const rawBefore = normalizeOptionalString(opts.before);
-    const rawAfter = normalizeOptionalString(opts.after);
-    const dir = opts.after ? "f" : "b";
+    const dir = rawAfter ? "f" : "b";
     const threadId = normalizeOptionalString(opts.threadId);
     const isThreadRelationsStartCursor = threadId
       ? rawBefore === encodeMatrixThreadRelationsStartCursor(threadId)
@@ -145,21 +152,25 @@ export async function readMatrixMessages(
     }
     let page;
     if (threadId) {
-      page = await client.getRelations(resolvedRoom, threadId, "m.thread", undefined, {
-        dir: dir as Direction,
-        from: token,
-        limit: relationLimit,
-      });
+      page = await withMatrixReadCursorHint(token, () =>
+        client.getRelations(resolvedRoom, threadId, "m.thread", undefined, {
+          dir: dir as Direction,
+          from: token,
+          limit: relationLimit,
+        }),
+      );
     } else {
       // Unlike SDK relations, the raw history endpoint still needs mapping and decryption.
-      const rawPage = (await client.doRequest(
-        "GET",
-        `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/messages`,
-        {
-          dir,
-          limit,
-          from: token,
-        },
+      const rawPage = (await withMatrixReadCursorHint(token, () =>
+        client.doRequest(
+          "GET",
+          `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/messages`,
+          {
+            dir,
+            limit,
+            from: token,
+          },
+        ),
       )) as { chunk: MatrixRawEvent[]; start?: string; end?: string };
       page = {
         events: await client.hydrateEvents(resolvedRoom, rawPage.chunk ?? []),
@@ -253,6 +264,30 @@ export async function readMatrixMessages(
       prevBatch: page.prevBatch,
     };
   });
+}
+
+// Homeservers reject a malformed `from` token inconsistently (Synapse: 400, tuwunel: 500
+// M_UNKNOWN), so keep the server error and add the next step for caller-supplied tokens.
+async function withMatrixReadCursorHint<T>(
+  token: string | undefined,
+  request: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await request();
+  } catch (err) {
+    // Room history fails with the plugin HTTP client's statusCode; thread relations fail with
+    // matrix-js-sdk's HTTPError.
+    const status =
+      err instanceof HTTPError
+        ? err.httpStatus
+        : err instanceof Error && "statusCode" in err
+          ? err.statusCode
+          : undefined;
+    if (token === undefined || (status !== 400 && status !== 500)) {
+      throw err;
+    }
+    throw new Error(`${formatErrorMessage(err)}. ${MATRIX_READ_CURSOR_HINT}`, { cause: err });
+  }
 }
 
 function encodeMatrixThreadRelationsStartCursor(threadId: string): string {

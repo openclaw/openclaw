@@ -1,5 +1,6 @@
 /** Appends channel-supplied prompt context to the user-role body under a marked label. */
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { mapNestedStrings } from "../../shared/map-nested-strings.js";
 import type { TemplateContext } from "../templating.js";
 import { resolvePromptHistoryLimit } from "./history-limit.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
@@ -30,29 +31,23 @@ export function neutralizeMarkdownFences(value: string): string {
   return value.replaceAll("```", "`\u200b``");
 }
 
-function sanitizeContextJsonValue(value: unknown): unknown {
-  if (typeof value === "string") {
-    return neutralizeMarkdownFences(
-      truncateWithMarker(value, MAX_CONTEXT_JSON_STRING_CHARS, {
-        marker: "…[truncated]",
-        reserve: 14,
-        trimEnd: true,
-      }),
-    );
-  }
-  if (Array.isArray(value)) {
-    return value.map(sanitizeContextJsonValue);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, sanitizeContextJsonValue(entry)]),
+function sanitizeContextJsonString(value: string): string {
+  return neutralizeMarkdownFences(
+    truncateWithMarker(value, MAX_CONTEXT_JSON_STRING_CHARS, {
+      marker: "…[truncated]",
+      reserve: 14,
+      trimEnd: true,
+    }),
   );
 }
 
 export function formatContextJsonBlock(label: string, payload: unknown): string {
-  return [label, "```json", JSON.stringify(sanitizeContextJsonValue(payload)), "```"].join("\n");
+  return [
+    label,
+    "```json",
+    JSON.stringify(mapNestedStrings(payload, sanitizeContextJsonString)),
+    "```",
+  ].join("\n");
 }
 
 /** Preserve a platform-selected window; legacy pending buffers keep their defensive tail cap. */

@@ -4,8 +4,7 @@
  * This module turns normalized MCP server config into stdio, SSE, or
  * streamable-HTTP SDK transports with OpenClaw auth, redirect, and logging rules.
  */
-import type { SSEClientTransportOptions } from "@modelcontextprotocol/sdk/client/sse.js";
-import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { SSEClientTransportOptions, FetchLike } from "@modelcontextprotocol/client";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
@@ -26,20 +25,19 @@ import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 type ResolvedMcpTransport = {
-  transport: Transport;
   description: string;
-  transportType: "stdio" | "sse" | "streamable-http";
   connectionTimeoutMs: number;
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
   detachStderr?: () => void;
-};
+} & (
+  | { transportType: "stdio"; transport: OpenClawStdioClientTransport }
+  | { transportType: "sse"; transport: OpenClawSSEClientTransport }
+  | { transportType: "streamable-http"; transport: OpenClawStreamableHTTPClientTransport }
+);
 
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
   const stderr = transport.stderr;
-  if (!stderr) {
-    return undefined;
-  }
   let reported = false;
   const onData = () => {
     if (!reported) {
@@ -102,7 +100,6 @@ export function resolveMcpTransport(
   }
   const metadata = {
     description: resolved.description,
-    transportType: resolved.transportType,
     connectionTimeoutMs: resolved.connectionTimeoutMs,
     requestTimeoutMs: resolved.requestTimeoutMs,
     supportsParallelToolCalls: resolved.supportsParallelToolCalls,
@@ -114,10 +111,10 @@ export function resolveMcpTransport(
       env: resolved.env,
       cwd: resolved.cwd,
       prepareDataDir: options?.prepareDataDir,
-      stderr: "pipe",
     });
     return {
       transport,
+      transportType: "stdio",
       ...metadata,
       detachStderr: attachStderrLogging(serverName, transport),
     };
@@ -131,7 +128,7 @@ export function resolveMcpTransport(
     }
     oauthIdentity = requesterMcpOAuthIdentity(serverName, resolved.url, requesterScope);
   } else {
-    oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url);
+    oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url, options?.cfg);
   }
   // The SDK reuses one fetch for OAuth and long-lived SSE/streamable bodies.
   // Per-RPC deadlines belong to client calls, not this transport fetch.
@@ -197,6 +194,7 @@ export function resolveMcpTransport(
         requestInit,
         fetch: httpFetch,
       }),
+      transportType: "streamable-http",
       ...metadata,
     };
   }
@@ -210,6 +208,7 @@ export function resolveMcpTransport(
         fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),
       },
     }),
+    transportType: "sse",
     ...metadata,
   };
 }

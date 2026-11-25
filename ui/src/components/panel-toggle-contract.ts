@@ -3,7 +3,6 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
-import type { BrowserTabTarget } from "./browser/browser-target.ts";
 
 export const TERMINAL_PANEL_TOGGLE_EVENT = "openclaw:terminal-toggle";
 export const TERMINAL_PANEL_DOCK_BOTTOM_EVENT = "openclaw:terminal-dock-bottom";
@@ -32,6 +31,7 @@ export type PluginPanelToggleDetail = {
   agentId?: string;
   open: boolean;
   dock?: "bottom" | "right";
+  expanded?: boolean;
 };
 
 export const UI_COMMAND_EVENT = "openclaw:ui-command";
@@ -41,6 +41,7 @@ export type UiCommandDetail = UiCommandParams;
 export type TerminalPanelToggleDetail = {
   agentId?: string | null;
   dock?: "bottom" | "right";
+  expanded?: boolean;
   newSession?: boolean;
   open?: boolean;
   terminalSessionId?: string;
@@ -49,10 +50,9 @@ export type TerminalPanelToggleDetail = {
 
 export type BrowserPanelToggleDetail = {
   dock?: "bottom" | "right";
+  expanded?: boolean;
   newTab?: boolean;
   open?: boolean;
-  /** Existing tab to focus when the panel opens (browser-tab chat cards). */
-  browserTab?: BrowserTabTarget;
   url?: string;
   /** User-opened WKWebView tab on the native macOS host. */
   native?: boolean;
@@ -60,6 +60,7 @@ export type BrowserPanelToggleDetail = {
 
 export type DesktopPanelToggleDetail = {
   dock?: "bottom" | "right";
+  expanded?: boolean;
   open?: boolean;
   environmentId?: string;
 };
@@ -67,6 +68,7 @@ export type DesktopPanelToggleDetail = {
 export type PortalPanelToggleDetail = {
   requestId?: string;
   dock?: "bottom" | "right";
+  expanded?: boolean;
   open?: boolean;
   portalId?: string;
   environmentId?: string;

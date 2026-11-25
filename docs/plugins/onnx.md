@@ -84,6 +84,10 @@ Verification and cached-download checks stream the files, so checking a large
 graph does not require a graph-sized memory buffer. Inference still loads
 verified graph bytes into its worker.
 
+Manifests and model artifacts must be regular files; operator symlinks and
+hardlinks to regular files remain supported. FIFOs and other special files
+fail integrity verification without waiting for a writer.
+
 ## Models
 
 | Model ID                        | Source                                         | Preparation  |

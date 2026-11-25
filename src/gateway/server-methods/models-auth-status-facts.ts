@@ -8,28 +8,42 @@ import { DEFAULT_OAUTH_REFRESH_MARGIN_MS } from "../../agents/auth-profiles/cred
 import { isExternalCliAuthProfileInScope } from "../../agents/auth-profiles/external-cli-sync.js";
 import { getRuntimeAuthProfileStoreSnapshotsRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
+import {
+  listProviderEnvAuthLookupKeys,
+  resolveProviderEnvAuthLookupMaps,
+} from "../../agents/model-auth-env-vars.js";
+import { resolveProviderEnvAuthEvidence } from "../../agents/model-auth-env.js";
+import {
+  isKnownEnvApiKeyMarker,
+  isNonSecretApiKeyMarker,
+} from "../../agents/model-auth-markers.js";
+import { resolveProviderConfigSecretInput } from "../../agents/model-auth-provider-config.js";
+import {
+  resolveProviderEntryApiKeyProfileReference,
+  resolveUsableCustomProviderApiKey,
+} from "../../agents/model-auth.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "../server-model-catalog-auth.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
-import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
 import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
+import type { ModelAuthStatusProvider } from "./models-auth-status.types.js";
 
 const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
 
 type ModelAuthStatusFacts = ReturnType<typeof buildModelAuthStatusFacts>;
 const authStatusFacts = new WeakMap<
-  OpenClawConfig,
+  PreparedGatewayModelCatalogSnapshot["isCurrent"],
   Map<
     string,
     {
       profiles: AuthProfileStore["profiles"];
-      owner: PreparedGatewayModelCatalogSnapshot["isCurrent"];
+      config: OpenClawConfig;
       metadata: PreparedGatewayModelCatalogSnapshot["metadataSnapshot"];
       agentDir: string;
       workspaceDir: string;
@@ -38,6 +52,11 @@ const authStatusFacts = new WeakMap<
     }
   >
 >();
+
+function resolveEnvVarName(source: string): string | undefined {
+  const match = /^(?:shell env|env): ([A-Z][A-Z0-9_]*)$/u.exec(source);
+  return match?.[1];
+}
 
 function buildModelAuthStatusFacts(
   preparedSnapshot: PreparedGatewayModelCatalogSnapshot,
@@ -52,7 +71,65 @@ function buildModelAuthStatusFacts(
     metadataSnapshot: preparedSnapshot.metadataSnapshot,
     includeUntrustedWorkspacePlugins: false,
   };
-  const apiKeys = resolveProviderApiKeys(cfg, store, authAliasLookupParams);
+  const lookupMaps = resolveProviderEnvAuthLookupMaps({
+    ...authAliasLookupParams,
+    config: cfg,
+    env: process.env,
+  });
+  const providerIds = new Set<string>([
+    ...Object.keys(cfg.models?.providers ?? {}),
+    ...Object.values(cfg.auth?.profiles ?? {})
+      .map((profile) => profile?.provider)
+      .filter((provider): provider is string => typeof provider === "string"),
+    ...listProviderEnvAuthLookupKeys(lookupMaps),
+  ]);
+  const apiKeys = new Map<string, ModelAuthStatusProvider["apiKey"]>();
+  for (const rawProvider of providerIds) {
+    const provider = normalizeProviderId(rawProvider);
+    if (!provider) {
+      continue;
+    }
+    const { providerConfig, ref } = resolveProviderConfigSecretInput(cfg, provider);
+    if (hasConfiguredSecretInput(providerConfig?.apiKey, cfg.secrets?.defaults)) {
+      const profileReference = resolveProviderEntryApiKeyProfileReference({
+        cfg,
+        authAliasLookupParams,
+        provider,
+        store,
+      });
+      if (profileReference.kind !== "profile" && profileReference.kind !== "profile-incompatible") {
+        if (ref && ref.source !== "env") {
+          apiKeys.set(provider, { source: "config" });
+          continue;
+        }
+        const available = resolveUsableCustomProviderApiKey({ cfg, provider, env: process.env });
+        if (available) {
+          const rawKey =
+            typeof providerConfig?.apiKey === "string" ? providerConfig.apiKey.trim() : "";
+          if (rawKey && isNonSecretApiKeyMarker(rawKey, { includeEnvVarName: false })) {
+            continue;
+          }
+          const envVar =
+            ref?.source === "env"
+              ? ref.id
+              : profileReference.kind === "marker" && isKnownEnvApiKeyMarker(rawKey)
+                ? rawKey
+                : resolveEnvVarName(available.source);
+          apiKeys.set(provider, envVar ? { source: "env", envVar } : { source: "config" });
+          continue;
+        }
+      }
+    }
+    const envEvidence = resolveProviderEnvAuthEvidence(provider, process.env, {
+      aliasMap: lookupMaps.aliasMap,
+      candidateMap: lookupMaps.envCandidateMap,
+      authEvidenceMap: lookupMaps.authEvidenceMap,
+    });
+    if (envEvidence?.mode === "api-key") {
+      const envVar = resolveEnvVarName(envEvidence.source);
+      apiKeys.set(provider, { source: "env", ...(envVar ? { envVar } : {}) });
+    }
+  }
   const statusProviderIds = new Set<string>();
   const expectsOAuth = new Set<string>();
   const includeConfiguredAuthProvider = (provider: string, mode: string | undefined) => {
@@ -198,11 +275,7 @@ export function readModelAuthStatusFacts(
   refresh: boolean,
   now: number,
 ) {
-  let agents = authStatusFacts.get(snapshot.config);
-  if (!agents) {
-    agents = new Map();
-    authStatusFacts.set(snapshot.config, agents);
-  }
+  const agents = getOrCreateWeakOwnerMap(authStatusFacts, snapshot.isCurrent);
   const revision = getRuntimeAuthProfileStoreSnapshotsRevision();
   const cached = agents.get(snapshot.agentId);
   if (
@@ -210,7 +283,7 @@ export function readModelAuthStatusFacts(
     cached &&
     cached.revision === revision &&
     cached.profiles === snapshot.authStore.profiles &&
-    cached.owner === snapshot.isCurrent &&
+    cached.config === snapshot.config &&
     cached.metadata === snapshot.metadataSnapshot &&
     cached.agentDir === snapshot.agentDir &&
     cached.workspaceDir === snapshot.workspaceDir &&
@@ -225,7 +298,7 @@ export function readModelAuthStatusFacts(
   const facts = buildModelAuthStatusFacts(snapshot, now);
   agents.set(snapshot.agentId, {
     profiles: snapshot.authStore.profiles,
-    owner: snapshot.isCurrent,
+    config: snapshot.config,
     metadata: snapshot.metadataSnapshot,
     agentDir: snapshot.agentDir,
     workspaceDir: snapshot.workspaceDir,

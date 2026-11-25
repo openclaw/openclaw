@@ -4,7 +4,6 @@ import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-ope
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
   observeSessionUpstreamPresence,
@@ -16,13 +15,11 @@ import type { SessionUpstreamSettlement } from "./session-upstream-links.worker-
 export type SessionUpstreamLinkReadSource = ReturnType<typeof captureSessionUpstreamLinkReadSource>;
 
 /** Missing-path admissions may later promote; this read keeps its original physical source. */
-export function captureSessionUpstreamLinkReadSource(
-  context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
-) {
-  const identity = { ...context.admission.identity };
+export function captureSessionUpstreamLinkReadSource() {
+  const context = captureOpenClawStateWorkerContext();
   return {
     context,
-    present: identity.key.startsWith("file:"),
+    present: context.admission.identity.key.startsWith("file:"),
     assertCurrent() {
       context.admission.assertCurrent();
     },
@@ -45,7 +42,7 @@ export async function prepareSessionUpstreamLink(
     { context, current: true },
   );
   source.assertCurrent();
-  if (!result?.ok || result.type !== "sessionUpstream.read") {
+  if (!result) {
     throw new Error("Session upstream source is unavailable");
   }
   return result.link;
@@ -82,11 +79,11 @@ export function settleSessionUpstreamLink(
 ): Promise<boolean> {
   const context = captureOpenClawStateWorkerContext(options);
   const { assertCurrent, sessionEntryCurrent } = options;
-  const input = structuredClone({
+  const input = {
     expected,
     settlement,
     sessionEntryCurrentSource: sessionEntryCurrent?.source,
-  });
+  };
   return runOpenClawStateWorkerOperation(
     context,
     (scope) => scope.execute({ type: "sessionUpstream.settle", input }),

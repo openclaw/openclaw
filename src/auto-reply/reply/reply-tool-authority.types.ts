@@ -6,8 +6,6 @@ export type ReplyToolAuthorityInput = {
   originatingChannel?: FollowupRun["originatingChannel"];
   toolsAllow?: string[];
   disableTools?: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
   run: Partial<
     Pick<
       FollowupRun["run"],
@@ -19,6 +17,9 @@ export type ReplyToolAuthorityInput = {
       | "agentAccountId"
       | "messageProvider"
       | "chatType"
+      | "requesterOrigin"
+      | "conversationId"
+      | "messageThreadId"
       | "conversationToolPolicy"
       | "groupId"
       | "groupChannel"
@@ -30,6 +31,7 @@ export type ReplyToolAuthorityInput = {
       | "senderUsername"
       | "senderE164"
       | "senderIsOwner"
+      | "gitContributorProfileId"
       | "cwd"
       | "inputProvenance"
       | "trustedInternalHandoff"
@@ -48,6 +50,8 @@ export type ReplyToolAuthorityInput = {
       | "gatewayUiCommandTarget"
       | "toolBindings"
     >
-  > &
-    Pick<FollowupRun["run"], "sessionId" | "sessionFile" | "workspaceDir" | "provider" | "model">;
+  > & { operatorProfileId?: string } & Pick<
+      FollowupRun["run"],
+      "sessionId" | "sessionFile" | "workspaceDir" | "provider" | "model"
+    >;
 };

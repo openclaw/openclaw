@@ -1,6 +1,8 @@
 import type { UpdateRecoveryRecord } from "./update-run-recovery-schema.js";
 /** Current executor-held exclusion, never deserialized. CAS does not authorize effects. */
 export type UpdateRecoveryFence = { assertCurrent: () => void };
+/** Only the current admitted executor may continue its own bounded plugin intent. */
+export type PluginCohortRecoveryContinuation = { runId: string; fence: UpdateRecoveryFence };
 type UpdateRecoveryRevision = Pick<
   UpdateRecoveryRecord,
   "runId" | "transactionId" | "revision" | "claimId"

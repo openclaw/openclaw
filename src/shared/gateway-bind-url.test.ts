@@ -1,122 +1,53 @@
-// Gateway bind URL tests cover host and port normalization for gateway listeners.
 import { describe, expect, it, vi } from "vitest";
 import { resolveGatewayBindUrl } from "./gateway-bind-url.js";
 
-describe("shared/gateway-bind-url", () => {
-  it("returns null for loopback/default binds", () => {
-    const pickTailnetHost = vi.fn(() => "100.64.0.1");
-    const pickLanHost = vi.fn(() => "192.168.1.2");
-
-    expect(
-      resolveGatewayBindUrl({
-        scheme: "ws",
-        port: 18789,
-        pickTailnetHost,
-        pickLanHost,
-      }),
-    ).toBeNull();
+function setup() {
+  const pickTailnetHost = vi.fn((): string | null => "100.64.0.1");
+  const pickLanHost = vi.fn((): string | null => "192.168.1.2");
+  const resolve = (options: Partial<Parameters<typeof resolveGatewayBindUrl>[0]> = {}) =>
+    resolveGatewayBindUrl({ scheme: "ws", port: 18789, pickTailnetHost, pickLanHost, ...options });
+  const expectNoProbes = () => {
     expect(pickTailnetHost).not.toHaveBeenCalled();
     expect(pickLanHost).not.toHaveBeenCalled();
+  };
+  return { resolve, pickTailnetHost, pickLanHost, expectNoProbes };
+}
+
+describe("shared/gateway-bind-url", () => {
+  it.each([undefined, "loopbackish"])("does not probe hosts for bind=%s", (bind) => {
+    const { resolve, expectNoProbes } = setup();
+    expect(resolve({ bind })).toBeNull();
+    expectNoProbes();
   });
 
   it("resolves custom binds only when custom host is present after trimming", () => {
-    const pickTailnetHost = vi.fn();
-    const pickLanHost = vi.fn();
-
+    const { resolve, expectNoProbes } = setup();
     expect(
-      resolveGatewayBindUrl({
-        bind: "custom",
-        customBindHost: " gateway.local ",
-        scheme: "wss",
-        port: 443,
-        pickTailnetHost,
-        pickLanHost,
-      }),
-    ).toEqual({
-      url: "wss://gateway.local:443",
-      source: "gateway.bind=custom",
-    });
-
-    expect(
-      resolveGatewayBindUrl({
-        bind: "custom",
-        customBindHost: "   ",
-        scheme: "ws",
-        port: 18789,
-        pickTailnetHost,
-        pickLanHost,
-      }),
-    ).toEqual({
+      resolve({ bind: "custom", customBindHost: " gateway.local ", scheme: "wss", port: 443 }),
+    ).toEqual({ url: "wss://gateway.local:443", source: "gateway.bind=custom" });
+    expect(resolve({ bind: "custom", customBindHost: "   " })).toEqual({
       error: "gateway.bind=custom requires gateway.customBindHost.",
     });
-    expect(pickTailnetHost).not.toHaveBeenCalled();
-    expect(pickLanHost).not.toHaveBeenCalled();
+    expectNoProbes();
   });
 
   it("resolves tailnet and lan binds or returns clear errors", () => {
-    expect(
-      resolveGatewayBindUrl({
-        bind: "tailnet",
-        scheme: "ws",
-        port: 18789,
-        pickTailnetHost: () => "100.64.0.1",
-        pickLanHost: vi.fn(),
-      }),
-    ).toEqual({
+    const { resolve, pickTailnetHost, pickLanHost } = setup();
+    expect(resolve({ bind: "tailnet" })).toEqual({
       url: "ws://100.64.0.1:18789",
       source: "gateway.bind=tailnet",
     });
-    expect(
-      resolveGatewayBindUrl({
-        bind: "tailnet",
-        scheme: "ws",
-        port: 18789,
-        pickTailnetHost: () => null,
-        pickLanHost: vi.fn(),
-      }),
-    ).toEqual({
+    pickTailnetHost.mockReturnValue(null);
+    expect(resolve({ bind: "tailnet" })).toEqual({
       error: "gateway.bind=tailnet set, but no tailnet IP was found.",
     });
-
-    expect(
-      resolveGatewayBindUrl({
-        bind: "lan",
-        scheme: "wss",
-        port: 8443,
-        pickTailnetHost: vi.fn(),
-        pickLanHost: () => "192.168.1.2",
-      }),
-    ).toEqual({
+    expect(resolve({ bind: "lan", scheme: "wss", port: 8443 })).toEqual({
       url: "wss://192.168.1.2:8443",
       source: "gateway.bind=lan",
     });
-    expect(
-      resolveGatewayBindUrl({
-        bind: "lan",
-        scheme: "ws",
-        port: 18789,
-        pickTailnetHost: vi.fn(),
-        pickLanHost: () => null,
-      }),
-    ).toEqual({
+    pickLanHost.mockReturnValue(null);
+    expect(resolve({ bind: "lan" })).toEqual({
       error: "gateway.bind=lan set, but no private LAN IP was found.",
     });
-  });
-
-  it("returns null for unrecognized bind values without probing pickers", () => {
-    const pickTailnetHost = vi.fn(() => "100.64.0.1");
-    const pickLanHost = vi.fn(() => "192.168.1.2");
-
-    expect(
-      resolveGatewayBindUrl({
-        bind: "loopbackish",
-        scheme: "ws",
-        port: 18789,
-        pickTailnetHost,
-        pickLanHost,
-      }),
-    ).toBeNull();
-    expect(pickTailnetHost).not.toHaveBeenCalled();
-    expect(pickLanHost).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 // Controlled service/compiler responses; the published shell, candidate CLI and transaction stay real.
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { registerHooks } from "node:module";
+import nodeModule from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -242,7 +242,8 @@ const memoryUrl = pathToFileURL(path.join(source, "scripts/lib/process-memory.mt
 // The compiler is synthetic; its capacity must not depend on other CI workers.
 modules.set(
   "scripts/lib/process-memory",
-  `import { readProcessMemoryCapacity as actual } from ${JSON.stringify(memoryUrl + "?original")};
+  `export * from ${JSON.stringify(memoryUrl + "?original")};
+  import { readProcessMemoryCapacity as actual } from ${JSON.stringify(memoryUrl + "?original")};
   export function readProcessMemoryCapacity() {
     const bytes = 16 * 1024 ** 3;
     return actual({
@@ -282,7 +283,14 @@ const compilerResponse = `
     return ${JSON.stringify(mode)}.startsWith('failure') ? 17 : 0;
   }`;
 modules.set("scripts/lib/managed-child-process", compilerResponse);
-registerHooks({
+// The synthetic compiler has no declaration program or outputs to cache.
+const cacheUrl = pathToFileURL(path.join(source, "scripts/lib/build-artifact-cache.mts")).href;
+modules.set(
+  "scripts/lib/build-artifact-cache",
+  `export * from ${JSON.stringify(cacheUrl + "?original")};
+  export const resolveBuildStepCacheState = () => ({cacheable: false, fresh: false, reason: 'fixture compiler'});`,
+);
+nodeModule.registerHooks({
   resolve(specifier, context, next) {
     if (specifier.includes("?original")) {
       return next(specifier, context);

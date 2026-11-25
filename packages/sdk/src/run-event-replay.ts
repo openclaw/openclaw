@@ -1,19 +1,14 @@
 import { mergeChatStreamMessage, recoverTerminalReply } from "@openclaw/gateway-client";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { computeBackoff, sleepWithAbort } from "@openclaw/retry";
 import {
-  isTerminalRunEvent,
-  projectAssistantRunEvent,
-  readChatProjection,
-  type AssistantProjection,
-} from "./chat-projection.js";
+  normalizeSessionKeyPreservingOpaquePeerIds,
+  parseAgentSessionKey,
+} from "@openclaw/session-url-contract/session-key-normalization";
+import { isTerminalRunEvent, readChatProjection } from "./chat-projection.js";
 import { EventHub } from "./event-hub.js";
 import { normalizeGatewayEvent } from "./normalize.js";
-import {
-  matchesUnsubscribedSession,
-  readUnsubscribedSession,
-  type ReplaySessionScope,
-} from "./replay-scope.js";
 import { resolveSdkRunWaitStatus } from "./run-terminal.js";
 import {
   readGatewayEventReceipt,
@@ -23,9 +18,106 @@ import {
 } from "./transport.js";
 import type { GatewayEvent, OpenClawEvent } from "./types.js";
 
+type AssistantProjection = { itemId?: string; text: string };
+
+function projectAssistantRunEvent(
+  event: OpenClawEvent,
+  previous: AssistantProjection | undefined,
+): { event: OpenClawEvent; assistant: AssistantProjection | undefined } | undefined {
+  if (event.raw?.event !== "agent" || asRecord(event.raw.payload).stream !== "assistant") {
+    return undefined;
+  }
+  const data = asRecord(event.data);
+  if (typeof data.text !== "string" && typeof data.delta !== "string") {
+    return undefined;
+  }
+  const itemId = typeof data.itemId === "string" ? data.itemId : undefined;
+  let text = typeof data.text === "string" ? data.text : undefined;
+  if (
+    text === undefined &&
+    typeof data.delta === "string" &&
+    (data.replace === true || (previous && previous.itemId === itemId))
+  ) {
+    text = (data.replace === true ? "" : (previous?.text ?? "")) + data.delta;
+  }
+  return {
+    event: text === undefined ? event : { ...event, data: { ...data, text } },
+    assistant: text === undefined ? undefined : { itemId, text },
+  };
+}
+
 const MAX_REPLAY_RUNS = 100;
 const MAX_REPLAY_EVENTS_PER_RUN = 500;
 const MAX_UNAVAILABLE_RECOVERY_OBSERVATIONS = 4;
+
+type ReplaySessionScope = { sessionKey?: string; agentId?: string; sessionId?: string };
+type UnsubscribedSession = {
+  key: string;
+  requestKey: string;
+  agentId?: string;
+  requestedAgentId?: string;
+};
+
+function readUnsubscribedSession(
+  params: unknown,
+  response: unknown,
+): UnsubscribedSession | undefined {
+  const result = asRecord(response);
+  if (result.subscribed !== false || typeof result.key !== "string") {
+    return undefined;
+  }
+  const request = asRecord(params);
+  const key = normalizeSessionKeyPreservingOpaquePeerIds(result.key);
+  const owner = parseAgentSessionKey(key)?.agentId;
+  const requestedAgentId =
+    typeof request.agentId === "string" ? normalizeAgentId(request.agentId) : undefined;
+  const requestKey = normalizeSessionKeyPreservingOpaquePeerIds(
+    typeof request.key === "string" ? request.key : undefined,
+  );
+  return {
+    key,
+    requestKey,
+    agentId:
+      owner ??
+      requestedAgentId ??
+      (key === "global" ? parseAgentSessionKey(requestKey)?.agentId : undefined),
+    requestedAgentId,
+  };
+}
+
+function matchesUnsubscribedSession(
+  scope: ReplaySessionScope,
+  subscription: UnsubscribedSession,
+): boolean {
+  const key = normalizeSessionKeyPreservingOpaquePeerIds(scope.sessionKey);
+  const owner = scope.agentId ?? parseAgentSessionKey(key)?.agentId;
+  if (owner && normalizeAgentId(owner) !== subscription.agentId) {
+    return false;
+  }
+  if (subscription.agentId && !owner) {
+    // An ACK can bind the same default-agent address, but cannot infer an owner
+    // for a differently addressed request or a qualified sentinel literal.
+    return (
+      subscription.requestedAgentId === undefined &&
+      key === subscription.requestKey &&
+      key !== "global" &&
+      key !== "unknown" &&
+      !key.startsWith("agent:")
+    );
+  }
+  if (key === subscription.key || key === subscription.requestKey) {
+    return true;
+  }
+  // Main aliases depend on Gateway config; the acknowledgment binds its exact
+  // request alias. Raw global/unknown remain distinct from qualified literals.
+  return (
+    key !== "global" &&
+    key !== "unknown" &&
+    !key.startsWith("agent:") &&
+    (key === parseAgentSessionKey(subscription.key)?.rest ||
+      key === parseAgentSessionKey(subscription.requestKey)?.rest)
+  );
+}
 
 function recoveryRetryDelay(attempt: number): number {
   const base = computeBackoff({ initialMs: 1_000, maxMs: 25_000, factor: 2, jitter: 0 }, attempt);

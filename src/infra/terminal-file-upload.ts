@@ -28,6 +28,7 @@ import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { hasErrnoCode } from "./errno.js";
 import { createFileLockManager } from "./file-lock-manager.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -54,17 +55,9 @@ type CleanupState = {
 const cleanupRoots = new Map<string, CleanupState>();
 const cleanupRecoveries = new Map<string, Promise<void>>();
 
-type TerminalUploadRootOptions = {
-  platform?: NodeJS.Platform;
-  homeDir?: string;
-  tempDir?: string;
-};
-
 /** Windows temp variables can point at a shared directory; inherit the user's profile ACL instead. */
-function resolveTerminalUploadRoot(options?: TerminalUploadRootOptions): string {
-  return (options?.platform ?? process.platform) === "win32"
-    ? path.join(options?.homeDir ?? homedir(), ".openclaw", "tmp")
-    : (options?.tempDir ?? tmpdir());
+function resolveTerminalUploadRoot(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? path.join(homedir(), ".openclaw", "tmp") : tmpdir();
 }
 
 export type TerminalUploadFile = {
@@ -111,21 +104,20 @@ function scheduleCleanup(root: string, state: CleanupState, at: number): void {
   if (state.timer && state.nextAt !== undefined && state.nextAt <= at) {
     return;
   }
-  if (state.timer) {
-    clearTimeout(state.timer);
-  }
+  clearTimeout(state.timer);
   state.nextAt = at;
   state.timer = runInDetachedAsyncContext(() =>
     setTimeout(
       () => {
         state.timer = undefined;
         state.nextAt = undefined;
-        void ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs });
+        void runWithMainThreadTask("terminal-upload:cleanup", () =>
+          ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs }),
+        );
       },
       Math.max(0, at - Date.now()),
     ),
-  );
-  state.timer.unref?.();
+  ).unref();
 }
 
 async function withUploadLock<T>(
@@ -240,9 +232,9 @@ async function scanUploads(
   root: string,
   state: CleanupState,
   assertHeld: () => Promise<void>,
-  options: { nowMs?: number; incomingBytes?: number } = {},
+  options: { incomingBytes?: number } = {},
 ): Promise<{ bytes: number; directories: number }> {
-  const nowMs = options.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const unseen = new Set(state.deadlines.keys());
   let bytes = 0;
   let directories = 0;
@@ -333,9 +325,7 @@ async function scanUploads(
     if (Number.isFinite(nextAt)) {
       scheduleCleanup(root, state, nextAt);
     } else {
-      if (state.timer) {
-        clearTimeout(state.timer);
-      }
+      clearTimeout(state.timer);
       state.timer = undefined;
       state.nextAt = undefined;
       cleanupRoots.delete(root);
@@ -352,7 +342,7 @@ async function runTerminalUploadCleanupRecovery(
   try {
     root = await realpath(root);
     await withUploadLock(root, async (assertHeld) => {
-      await scanUploads(root, cleanupState(root, options?.retentionMs), assertHeld, options);
+      await scanUploads(root, cleanupState(root, options?.retentionMs), assertHeld);
     });
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
@@ -371,7 +361,6 @@ async function runTerminalUploadCleanupRecovery(
 export function ensureTerminalUploadCleanup(options?: {
   tempRoot?: string;
   retentionMs?: number;
-  nowMs?: number;
 }): Promise<void> {
   const root = path.resolve(options?.tempRoot ?? resolveTerminalUploadRoot());
   const existing = cleanupRecoveries.get(root);
@@ -388,14 +377,14 @@ export function ensureTerminalUploadCleanup(options?: {
 /** Stages one browser-selected file in a private, expiring temporary directory. */
 export async function stageTerminalUpload(
   file: TerminalUploadFile,
-  options?: TerminalUploadRootOptions & { tempRoot?: string; cleanupAfterMs?: number },
+  options?: { platform?: NodeJS.Platform; tempRoot?: string },
 ): Promise<TerminalUploadResult> {
   const { name, contentBase64, assertCommitAllowed } = file;
   const size = validateTerminalUpload(contentBase64);
   const admitted = uploadQueue.enqueue(
     async () => {
       assertCommitAllowed?.();
-      const tempRoot = options?.tempRoot ?? resolveTerminalUploadRoot(options);
+      const tempRoot = options?.tempRoot ?? resolveTerminalUploadRoot(options?.platform);
       if ((options?.platform ?? process.platform) === "win32" && !options?.tempRoot) {
         // The user profile supplies the restrictive DACL, including for the root lock.
         await mkdir(tempRoot, { recursive: true, mode: 0o700 });
@@ -427,7 +416,7 @@ export async function stageTerminalUpload(
             flag: "wx",
             mode: 0o600,
           });
-          const expiresAt = Date.now() + (options?.cleanupAfterMs ?? TERMINAL_UPLOAD_RETENTION_MS);
+          const expiresAt = Date.now() + TERMINAL_UPLOAD_RETENTION_MS;
           state.deadlines.set(directory, { ...identity, expiresAt });
           cleanupRoots.set(root, state);
           scheduleCleanup(root, state, expiresAt);

@@ -9,6 +9,7 @@ import {
 import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import type { AssistantMessage, Context } from "../llm/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
@@ -72,14 +73,7 @@ function assistantWithReplay(
     provider: "openai",
     model: "gpt-5.6-luna",
     ...(replay ? { providerReplay: replay } : {}),
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createUsageFixture(1, 1, 2),
     stopReason: "stop",
     timestamp: 1,
   };

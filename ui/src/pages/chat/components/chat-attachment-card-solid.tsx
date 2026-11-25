@@ -1,5 +1,7 @@
-import { createMemo } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { attachmentAdmissionRef } from "./chat-attachment-admission-ref.ts";
@@ -8,7 +10,10 @@ import {
   prepareAttachmentCardHeader,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
+import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
@@ -26,26 +31,112 @@ export function CompactAttachmentCard(
   props: AttachmentCardHeaderOptions & {
     elementRef?: (element: Element | undefined) => void;
     onFocus?: () => void;
+    downloadRef?: (element: HTMLAnchorElement) => void;
   },
 ) {
   const ref = attachmentAdmissionRef(() => props.elementRef);
+  const copyRef = attachmentContextCopyRef(() => ({
+    name: props.label,
+    href: props.onDownload || props.downloadPending ? undefined : props.downloadHref,
+  }));
   return (
     <div
-      ref={ref}
+      ref={[ref, copyRef]}
       onFocusIn={() => props.onFocus?.()}
       class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
-      data-openable={props.onExpand ? "" : undefined}
-      onClick={(event) => openAttachmentCardFromClick(event, props.onExpand)}
+      data-openable={props.onPlay || props.onExpand ? "" : undefined}
+      onClick={(event) => openAttachmentCardFromClick(event, props.onPlay ?? props.onExpand)}
     >
       <AttachmentCardHeader {...props} visualMode="large-placeholder" />
     </div>
   );
 }
 
+export function AttachmentStateCard(
+  props: AttachmentCardHeaderOptions & {
+    imagePreview: boolean;
+    children?: JSX.Element;
+    previewRatio?: string;
+    error?: string;
+    onRetry?: () => void;
+  },
+) {
+  const copyRef = attachmentContextCopyRef(() => ({
+    name: props.label,
+    href: props.onDownload || props.downloadPending ? undefined : props.downloadHref,
+  }));
+  return (
+    <div
+      ref={copyRef}
+      class={[
+        "chat-assistant-attachment-card",
+        `chat-assistant-attachment-card--${props.kind}`,
+        "sidebar-attachment-preview__state-card",
+      ]}
+      aria-busy={props.downloadPending ? "true" : undefined}
+    >
+      <AttachmentCardHeader {...props} visualMode="preview-with-favicon" />
+      <div
+        class="sidebar-attachment-preview__state"
+        style={{ "--preview-ratio": props.previewRatio }}
+      >
+        <Show when={props.downloadPending || props.imagePreview}>
+          <AttachmentPreviewSkeleton />
+        </Show>
+        <Show when={props.imagePreview && props.downloadHref} keyed>
+          {(src) => (
+            <img
+              class="sidebar-attachment-preview__image"
+              src={src}
+              alt={props.label}
+              onLoad={(event) => {
+                event.currentTarget.dataset.preview = "ready";
+              }}
+              onError={(event) => {
+                event.currentTarget.dataset.preview = "error";
+              }}
+            />
+          )}
+        </Show>
+        <Show when={!props.downloadPending}>
+          <div class="sidebar-attachment-preview__unavailable">
+            {t("chat.attachments.previewUnavailable")}
+            <Show when={props.error}>{(error) => <span>{error()}</span>}</Show>
+            <Show when={props.onRetry}>
+              {(retry) => (
+                <button class="btn btn--sm" type="button" onClick={() => retry()()}>
+                  {t("common.retry")}
+                </button>
+              )}
+            </Show>
+          </div>
+        </Show>
+      </div>
+      {props.children}
+    </div>
+  );
+}
+
 export function AttachmentCardHeader(
-  props: AttachmentCardHeaderOptions & { expandRef?: (element: HTMLButtonElement) => void },
+  props: AttachmentCardHeaderOptions & {
+    expandRef?: (element: HTMLButtonElement) => void;
+    downloadRef?: (element: HTMLAnchorElement) => void;
+  },
 ) {
   const view = createMemo(() => prepareAttachmentCardHeader(props, t));
+  const downloadContent = () => (
+    <>
+      {view().downloadLabel ? (
+        <span class="chat-assistant-attachment-card__action-label">{view().downloadLabel}</span>
+      ) : null}
+      <Icon
+        name="download"
+        class={
+          view().downloadLabel ? "chat-assistant-attachment-card__mobile-action-icon" : undefined
+        }
+      />
+    </>
+  );
   return (
     <div
       class={[
@@ -101,12 +192,12 @@ export function AttachmentCardHeader(
             title={view().downloadTitle}
             onClick={() => props.onDownload?.()}
           >
-            <Icon name="download" />
-            {view().downloadLabel ? <span>{view().downloadLabel}</span> : null}
+            {downloadContent()}
           </button>
         ) : props.downloadHref || props.downloadPending ? (
           <a
             class={view().downloadClass}
+            ref={(element) => props.downloadRef?.(element)}
             href={props.downloadPending ? undefined : props.downloadHref}
             aria-disabled={props.downloadPending ? "true" : undefined}
             tabindex={props.downloadPending && props.downloadPendingFocusable ? 0 : undefined}
@@ -117,10 +208,22 @@ export function AttachmentCardHeader(
             aria-label={view().downloadTitle}
             title={view().downloadTitle}
           >
-            <Icon name="download" />
-            {view().downloadLabel ? <span>{view().downloadLabel}</span> : null}
+            {downloadContent()}
           </a>
         ) : null}
+        <Show when={props.onPlay}>
+          <button
+            type="button"
+            class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled"
+            aria-label={t("chat.mediaPlayer.play") + ": " + props.label}
+            onClick={() => props.onPlay?.()}
+          >
+            <Icon name="play" />
+            <span class="chat-assistant-attachment-card__action-label">
+              {t("chat.mediaPlayer.play")}
+            </span>
+          </button>
+        </Show>
         {props.onExpand !== undefined ? (
           <button
             type="button"
@@ -139,7 +242,15 @@ export function AttachmentCardHeader(
             {view().compactPreview ? (
               <Icon name="chevronsUpDown" />
             ) : (
-              <span>{t("chat.attachments.open")}</span>
+              <>
+                <span class="chat-assistant-attachment-card__action-label">
+                  {t("chat.attachments.open")}
+                </span>
+                <Icon
+                  name="chevronRight"
+                  class="chat-assistant-attachment-card__mobile-action-icon"
+                />
+              </>
             )}
           </button>
         ) : null}

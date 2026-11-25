@@ -36,10 +36,6 @@ type SlackDataTableBlock = Block & {
   row_header_column_index?: number;
 };
 
-type SlackDataTableBuildOptions = {
-  cellCharacterCountOffset?: number;
-};
-
 type ParsedSlackDataTable = {
   caption: string;
   headers: string[];
@@ -175,7 +171,7 @@ export function countSlackDataTableBlocksCellCharacters(
 
 export function buildSlackDataTableBlock(
   block: MessagePresentationTableBlock,
-  options: SlackDataTableBuildOptions = {},
+  options: { cellCharacterCountOffset?: number } = {},
 ): SlackDataTableBlock | undefined {
   const cellCharacterCountOffset = options.cellCharacterCountOffset ?? 0;
   if (!Number.isSafeInteger(cellCharacterCountOffset) || cellCharacterCountOffset < 0) {

@@ -576,10 +576,14 @@ struct ChatSessionSidebarCatalogsTests {
             menuActions: ChatSessionSidebarActions(),
             catalogData: fixture.owner)
         let catalogID = OpenClawChatSessionSidebarData.identity(catalog)
-        #expect(sidebar.batchSelectionBinding.wrappedValue == [catalogID])
-        sidebar.batchSelectionBinding.wrappedValue = [catalogID, OpenClawChatSessionSidebarData.identity(ordinary)]
-        #expect(sidebar.selectedBatchRows.map(\.key) == [ordinary.key])
-        #expect(!sidebar.batchSelectionBinding.wrappedValue.contains(catalogID))
+        let sections = sidebar.interactionSections()
+        let binding = sidebar.batchSelectionBinding(
+            visibleRows: sidebar.visibleInteractionRows(sections),
+            renderedRows: sidebar.renderedInteractionRows(sections.flatMap(\.nodes).flatMap(\.previewSessions)))
+        #expect(binding.wrappedValue == [catalogID])
+        binding.wrappedValue = [catalogID, OpenClawChatSessionSidebarData.identity(ordinary)]
+        #expect(sidebar.batch.selection.keys == [OpenClawChatSessionSidebarData.identity(ordinary)])
+        #expect(!binding.wrappedValue.contains(catalogID))
     }
 
     @Test func `read only catalog connections refuse source deletion before issuing an RPC`() async throws {

@@ -1,7 +1,10 @@
 import path from "node:path";
+import {
+  claimConversationProviderState,
+  type ProviderStateScope,
+} from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { assertRequiredWorkerSelection } from "../../../config/required-worker-profile.js";
 import {
   resolveSessionStorePathCore,
@@ -33,6 +36,7 @@ import {
 } from "../../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
+import { readSessionDelegatedParticipation } from "../../../gateway/session-delegated-operator-source.js";
 import {
   emitAgentEventIfCurrent,
   getAgentEventLifecycleGeneration,
@@ -40,15 +44,23 @@ import {
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import { isCurrentSessionControllerOperation } from "../../../sessions/session-controller.identity.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
+import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
+import { supersedeReplyRunByRunId } from "../../../sessions/session-controller.stop-runtime.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import {
+  resolveAdmittedRunActiveAssertion,
+  readAdmittedRunOperatorAuthority,
+  readPreparedRunOperatorAuthority,
+} from "../../admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import {
   resolveSessionKeyForRequestCore,
   resolveStoredSessionKeyForSessionId,
 } from "../../command/session.js";
+import { intersectParticipationCeilings } from "../../participation-ceiling.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -57,14 +69,15 @@ import {
   AGENT_RUN_SUPERSEDED_ERROR,
   AGENT_RUN_SUPERSEDED_STOP_REASON,
 } from "../../run-termination.js";
+import { captureSessionManagerIncognitoBinding } from "../../sessions/session-manager-incognito-scope.js";
 import { redactRunIdentifier } from "../../workspace-run.js";
 import { log } from "../logger.js";
-import { supersedeEmbeddedAgentRunByRunId } from "../runs.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
 } from "./internal-params.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import { revokeAgentSessionWriterClaim } from "./session-writer-revocation.js";
 import { resolveAgentHarnessRunAdmissionError } from "./setup.js";
 
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
@@ -215,6 +228,7 @@ export async function resetNoRealConversationTokenSnapshot(params: {
         },
       },
       {
+        result: "none",
         skipMaintenance: true,
         takeCacheOwnership: true,
         ...sessionEntryCommitGuardOptions(params.assertActive),
@@ -232,13 +246,16 @@ export async function resetNoRealConversationTokenSnapshot(params: {
 
 /** Best-effort identity lookup retains the agent that owns an unqualified stored key. */
 async function backfillSessionIdentity(
-  params: Pick<RunEmbeddedAgentParams, "config" | "sessionId" | "sessionKey" | "agentId">,
+  params: Pick<
+    RunEmbeddedAgentParams,
+    "config" | "sessionId" | "sessionKey" | "agentId" | "sessionPersistence"
+  >,
 ): Promise<Pick<RunEmbeddedAgentInternalParams, "agentId" | "sessionKey">> {
   const trimmed = normalizeOptionalString(params.sessionKey);
   if (trimmed) {
     return { sessionKey: trimmed };
   }
-  if (!params.config || !params.sessionId) {
+  if (params.sessionPersistence === "detached" || !params.config || !params.sessionId) {
     return {};
   }
   try {
@@ -387,7 +404,7 @@ export async function prepareInitialSessionWriter(params: {
   // Existing-row callers can be inside their creation lifecycle; reject before
   // attempting to acquire an admission that their enclosing mutation excludes.
   await assertAbsent();
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     agentId: ownerTarget.agentId,
     scope: presence.storePath,
     identities: [ownerTarget.sessionKey, presence.sessionKey, ownerTarget.sessionId],
@@ -448,6 +465,13 @@ type AgentSessionWriterAdmissionSnapshot = {
   storePath: string;
 };
 
+type AgentSessionWriterFence = {
+  expectedLifecycleRevision: string | undefined;
+  expectedWriterRunId: string;
+  entry: InternalSessionEntry;
+  revoke(isCurrent?: () => boolean, options?: { persistTerminal?: true }): Promise<boolean>;
+};
+
 export async function assertAgentHarnessRunAdmission(
   params: RunEmbeddedAgentParams,
   runtimeScope?: SessionTranscriptRuntimeScope,
@@ -483,6 +507,17 @@ export async function assertAgentHarnessRunAdmission(
     runtimeTarget?: SessionTranscriptRuntimeTarget,
   ) => {
     assertCurrent();
+    const childCeiling = readSessionDelegatedParticipation(entry);
+    if (childCeiling) {
+      const authority =
+        readAdmittedRunOperatorAuthority(params.admittedRunContext) ??
+        readPreparedRunOperatorAuthority(params.preparedRunAdmission);
+      if (!authority?.participationCeiling?.source) {
+        throw new Error("Participant child requires current original-source admission.");
+      }
+      authority.signal?.throwIfAborted();
+      intersectParticipationCeilings(childCeiling, authority.participationCeiling);
+    }
     const admissionError = resolveAgentHarnessRunAdmissionError({
       agentHarnessId: params.agentHarnessId,
       entry,
@@ -526,20 +561,23 @@ export async function assertAgentHarnessRunAdmission(
   return consume(await readSessionEntryInWorker(scope, assertCurrent));
 }
 
-export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): Promise<
-  | {
-      expectedLifecycleRevision: string | undefined;
-      expectedWriterRunId: string;
-      entry: InternalSessionEntry;
-    }
-  | undefined
-> {
-  const snapshot = await assertAgentHarnessRunAdmission(params);
-  if (!snapshot) {
-    return undefined;
-  }
+async function claimPersistedAgentSessionWriter(
+  params: RunEmbeddedAgentParams,
+  snapshot: AgentSessionWriterAdmissionSnapshot,
+): Promise<AgentSessionWriterFence | undefined> {
   const expectedSessionId = params.sessionId;
   const expectedLifecycleRevision = snapshot.entry.lifecycleRevision;
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const operation = params.replyOperation;
+  const memory = captureSessionManagerIncognitoBinding(
+    {
+      agentId: snapshot.agentId ?? resolveSessionTargetAgentId(params, snapshot.sessionKey),
+      sessionId: expectedSessionId,
+      sessionKey: snapshot.sessionKey,
+      storePath: snapshot.storePath,
+    },
+    params.sessionManager,
+  );
   if (snapshot.entry.sessionId !== expectedSessionId) {
     throw new Error(`Session changed before writer admission: ${snapshot.sessionKey}`);
   }
@@ -569,13 +607,13 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
   ) {
     throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
   }
-  if (!claimed || (claimed as InternalSessionEntry).activeWriterRunId !== params.runId) {
+  if (!claimed || claimed.activeWriterRunId !== params.runId) {
     throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
   }
   if (previousWriterRunId && previousWriterRunId !== params.runId) {
     // The replacement must own the durable row before the incumbent is made
     // terminal. A failed claim leaves the still-authoritative run untouched.
-    const superseded = supersedeEmbeddedAgentRunByRunId(previousWriterRunId, () => {
+    const superseded = supersedeReplyRunByRunId(previousWriterRunId, () => {
       const previousLifecycleGeneration =
         getAgentRunContext(previousWriterRunId)?.lifecycleGeneration;
       const recorded = emitAgentEventIfCurrent({
@@ -612,5 +650,36 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
     expectedLifecycleRevision,
     expectedWriterRunId: params.runId,
     entry: claimed,
+    revoke: (isCurrent, options) =>
+      revokeAgentSessionWriterClaim({
+        snapshot,
+        sessionId: expectedSessionId,
+        runId: params.runId,
+        memory,
+        persistTerminal: options?.persistTerminal,
+        isCurrent: () =>
+          (isCurrent?.() ?? true) &&
+          getAgentEventLifecycleGeneration() === lifecycleGeneration &&
+          (!operation || isCurrentSessionControllerOperation(operation)),
+      }),
   };
+}
+
+export async function claimAgentSessionWriter(
+  params: RunEmbeddedAgentParams,
+): Promise<AgentSessionWriterFence | undefined> {
+  const snapshot = await assertAgentHarnessRunAdmission(params);
+  return snapshot ? claimPersistedAgentSessionWriter(params, snapshot) : undefined;
+}
+
+/**
+ * The run that writes the conversation owns its provider state (continuation, pooled sockets).
+ * Detached runs (forks, memory flush) share its affinity but never write, so they own none.
+ */
+export function claimRunProviderState(
+  params: Pick<RunEmbeddedAgentParams, "sessionId" | "sessionPersistence">,
+): ProviderStateScope | undefined {
+  return params.sessionPersistence === "detached"
+    ? undefined
+    : claimConversationProviderState(params.sessionId);
 }

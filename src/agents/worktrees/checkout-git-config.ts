@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import {
   gitNullConfigPath,
-  normalizeGitPathForFilesystem,
+  quoteGitConfig,
   requireGitCommandOutput,
 } from "../../infra/git-exec.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
@@ -12,6 +13,7 @@ import {
   commandError,
   gitEnvironment,
   requireGit,
+  requireGitPath,
   runGit,
   runGitBytes,
   runGitBuffered,
@@ -33,9 +35,9 @@ const native: WorktreeGitPolicy = {
 };
 type GitConfigOptions = Pick<
   NonNullable<Parameters<typeof runGit>[2]>,
-  "baseEnv" | "env" | "signal" | "beforeRun"
+  "baseEnv" | "env" | "signal" | "beforeRun" | "stateOwnerPath" | "idleIoPriority"
 >;
-type Guard = Pick<GitConfigOptions, "signal" | "beforeRun" | "env">;
+type Guard = Omit<GitConfigOptions, "baseEnv">;
 const sharedDirectories = ["objects", "refs", "logs", "worktrees", "reftable"] as const;
 const sharedFiles = ["packed-refs", "shallow", "info/exclude"] as const;
 
@@ -81,9 +83,7 @@ export async function withWorktreeGitConfig<T>(
   const configOptions: Parameters<typeof runGit>[2] = { ...guard, operation: "worktree.config" };
   const common = path.resolve(
     cwd,
-    normalizeGitPathForFilesystem(
-      await requireGit(cwd, ["rev-parse", "--git-common-dir"], configOptions),
-    ),
+    await requireGitPath(cwd, ["rev-parse", "--git-common-dir"], configOptions),
   );
   const format = await requireGit(cwd, ["rev-parse", "--show-object-format"], configOptions);
   if (format !== "sha1" && format !== "sha256") {
@@ -115,7 +115,7 @@ export async function withWorktreeGitConfig<T>(
   if (settings.code !== 0 && settings.code !== 1) {
     throw commandError("git config layout", settings);
   }
-  const layout = new Map<string, string>();
+  const layout = new Map<string, string>([["core.symlinks", String(process.platform !== "win32")]]);
   for (const field of settings.stdout.split("\0").filter(Boolean)) {
     const separator = field.indexOf("\n");
     layout.set(
@@ -127,12 +127,13 @@ export async function withWorktreeGitConfig<T>(
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-config-"));
   let active = true;
   const pending = new Set<Promise<unknown>>();
-  const assertActive = () => {
-    check();
+  const assertActive = composeSessionSourceAssertion([guard.beforeRun], (assertSource) => {
+    guard.signal?.throwIfAborted();
+    assertSource();
     if (!active) {
       throw new Error("Git configuration scope closed");
     }
-  };
+  });
   const prepareMetadata = async (target: string) => {
     for (const name of sharedDirectories) {
       assertActive();
@@ -164,19 +165,13 @@ export async function withWorktreeGitConfig<T>(
   };
   try {
     await prepareMetadata(directory);
+    // Serialize only the selected filesystem/ignore settings; never program drivers.
     // Windows cannot represent executable bits; POSIX content checks remain strict.
     await fs.writeFile(
       path.join(directory, "config"),
-      `[core]\nrepositoryformatversion=${format === "sha256" || refStorage === "reftable" ? 1 : 0}\nbare=false\nfilemode=${process.platform !== "win32"}\nsymlinks=${process.platform !== "win32"}\n[gc]\nauto=0\n[maintenance]\nauto=false\n[extensions]\n${format === "sha256" ? "objectFormat=sha256\n" : ""}${refStorage === "reftable" ? "refStorage=reftable\n" : ""}`,
+      `[core]\nrepositoryformatversion=${format === "sha256" || refStorage === "reftable" ? 1 : 0}\nbare=false\nfilemode=${process.platform !== "win32"}\n${[...layout].map(([key, value]) => `${key.slice("core.".length)}=${quoteGitConfig(value)}\n`).join("")}[gc]\nauto=0\n[maintenance]\nauto=false\n[extensions]\n${format === "sha256" ? "objectFormat=sha256\n" : ""}${refStorage === "reftable" ? "refStorage=reftable\n" : ""}`,
     );
-    // Preserve filesystem/ignore behavior, never program drivers or relaxed path protections.
-    for (const [key, value] of layout) {
-      await requireGit(
-        cwd,
-        ["config", "--file", path.join(directory, "config"), key, value],
-        configOptions,
-      );
-    }
+    assertActive();
     const optionsFor = async <Options extends GitConfigOptions>(
       args: string[],
       options: Options,
@@ -184,11 +179,13 @@ export async function withWorktreeGitConfig<T>(
       assertActive();
       const guarded = {
         ...options,
+        idleIoPriority: options.idleIoPriority ?? guard.idleIoPriority,
         refMutationDirectory: common,
-        beforeRun: () => {
-          assertActive();
-          options.beforeRun?.();
-        },
+        stateOwnerPath: options.stateOwnerPath ?? guard.stateOwnerPath,
+        beforeRun: composeSessionSourceAssertion([
+          assertActive,
+          options.beforeRun === guard.beforeRun ? undefined : options.beforeRun,
+        ]),
       };
       if (usesCanonicalMetadata(args)) {
         return guarded;
@@ -205,11 +202,13 @@ export async function withWorktreeGitConfig<T>(
       const env = Object.fromEntries(
         Object.entries(inherited).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
       );
-      // Only the operation owner may supply a private snapshot index or commit identity.
+      // Only the operation owner may supply an index, optional-lock policy or commit identity.
       for (const [key, value] of Object.entries(options.env ?? {})) {
         if (
           value !== undefined &&
-          /^(?:GIT_INDEX_FILE|GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL|DATE))$/u.test(key)
+          /^(?:GIT_INDEX_FILE|GIT_OPTIONAL_LOCKS|GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL|DATE))$/u.test(
+            key,
+          )
         ) {
           env[key] = value;
         }

@@ -95,6 +95,7 @@ describe("exec approval forwarder", () => {
     let stopped = false;
     try {
       await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+      await flushPendingDelivery();
       await forwarder.handleResolved({
         id: baseRequest.id,
         decision: "allow-once",
@@ -114,6 +115,7 @@ describe("exec approval forwarder", () => {
       await stopping;
       expect(deliveryOrder).toEqual(["pending", "resolved"]);
       await expect(forwarder.handleRequested({ ...baseRequest, id: "late" })).resolves.toBe(false);
+      await flushPendingDelivery();
       await forwarder.handleResolved({
         id: "late",
         decision: "deny",
@@ -167,6 +169,7 @@ describe("exec approval forwarder", () => {
         }
         target.resolve({ channel: "slack", to: "U1" });
         await expect(requested).resolves.toBe(true);
+        await flushPendingDelivery();
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(deliveryOrder).toEqual(["pending"]);
         if (terminal === "expiry") {
@@ -212,6 +215,7 @@ describe("exec approval forwarder", () => {
       stopping = forwarder.stop();
       target.resolve({ channel: "slack", to: "U1" });
       await expect(requested).resolves.toBe(true);
+      await flushPendingDelivery();
       await vi.advanceTimersByTimeAsync(10_000);
       delivery.resolve();
       await stopping;
@@ -248,6 +252,7 @@ describe("exec approval forwarder", () => {
     });
 
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    await flushPendingDelivery();
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
@@ -324,6 +329,7 @@ describe("exec approval forwarder", () => {
       const { deliver, forwarder } = createForwarder({ cfg, resolveSessionTarget, nativeRoutes });
 
       await expect(forwarder.handleRequested(telegramRequest)).resolves.toBe(true);
+      await flushPendingDelivery();
       expect(requireFirstCallArg(deliver, "delivery params")).toMatchObject({ to: "-100999" });
     });
 
@@ -335,6 +341,7 @@ describe("exec approval forwarder", () => {
         nativeRoutes: [{ channel: "telegram", accountId: "default" }],
       });
       await expect(forwarder.handleRequested(telegramRequest)).resolves.toBe(false);
+      await flushPendingDelivery();
       expect(deliver).not.toHaveBeenCalled();
 
       await Promise.all(nativeRoutes.map((route) => route.stop()));
@@ -342,6 +349,7 @@ describe("exec approval forwarder", () => {
       await expect(
         forwarder.handleRequested({ ...telegramRequest, id: "req-after-stop" }),
       ).resolves.toBe(true);
+      await flushPendingDelivery();
       expect(deliver).toHaveBeenCalledTimes(1);
     });
 
@@ -375,6 +383,7 @@ describe("exec approval forwarder", () => {
             },
           }),
         ).resolves.toBe(forwarded);
+        await flushPendingDelivery();
         expect(deliver).toHaveBeenCalledTimes(forwarded ? 1 : 0);
       },
     );
@@ -421,6 +430,7 @@ describe("exec approval forwarder", () => {
           await expect(
             forwarder.handleSystemAgentApprovalRequested?.(systemAgentRequest),
           ).resolves.toBe(true);
+          await flushPendingDelivery();
           expect(requireFirstCallArg(deliver, "delivery params")).toMatchObject({ to: "-100999" });
           const text = getFirstDeliveryText(deliver);
           expect(text).toContain("set agents.defaults.memorySearch.provider to openai");
@@ -478,6 +488,7 @@ describe("exec approval forwarder", () => {
               },
             }),
           ).resolves.toBe(false);
+          await flushPendingDelivery();
           expect(deliver).not.toHaveBeenCalled();
         },
       );
@@ -506,6 +517,7 @@ describe("exec approval forwarder", () => {
           },
         }),
       ).resolves.toBe(true);
+      await flushPendingDelivery();
       expect(resolveSessionTarget).toHaveBeenCalledWith(
         expect.objectContaining({
           request: expect.objectContaining({
@@ -539,6 +551,7 @@ describe("exec approval forwarder", () => {
           request: { ...baseRequest.request, ...request },
         }),
       ).resolves.toBe(true);
+      await flushPendingDelivery();
       await Promise.resolve();
       expect(deliver).toHaveBeenCalledTimes(1);
       const execApproval = requireRecord(
@@ -591,6 +604,7 @@ describe("exec approval forwarder", () => {
           request: { ...baseRequest.request, sessionKey },
         }),
       ).resolves.toBe(accepted);
+      await flushPendingDelivery();
       expect(deliver).toHaveBeenCalledTimes(accepted ? 1 : 0);
     },
   );
@@ -624,6 +638,7 @@ describe("exec approval forwarder", () => {
           },
         }),
       ).resolves.toBe(!enabled);
+      await flushPendingDelivery();
       expect(deliver).toHaveBeenCalledTimes(enabled ? 0 : 1);
     },
   );

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
@@ -8,31 +8,34 @@ import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
-import { runOpenClawAgentPathWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import * as directoryWatch from "../../infra/directory-watch-host.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   authProfileSourceExists,
-  captureAuthProfileFileIdentity,
+  captureAuthProfileFileIdentityAsync,
   readAuthProfileDatabaseIdentity,
+  readAuthProfileDatabaseIdentityAsync,
   noteAuthProfileFileWrite,
   refreshAuthProfileFileState,
-  registerAuthProfileFileChangeListener,
+  authProfileFileChanges,
 } from "./file-state.js";
 import { runtimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
-const subscriptions: Array<() => void> = [];
+const publishFileChange = authProfileFileChanges.onChange;
 vi.mock("node:worker_threads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:worker_threads")>()),
   isMainThread: true,
 }));
 
 afterEach(async () => {
-  subscriptions.splice(0).forEach((unsubscribe) => unsubscribe());
+  authProfileFileChanges.onChange = publishFileChange;
   runtimeAuthProfileRowsCache.clear();
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   vi.useRealTimers();
 });
 
@@ -49,16 +52,22 @@ it.skipIf(process.platform === "win32")(
       const { DatabaseSync } = require("node:sqlite");
       const { parentPort, workerData } = require("node:worker_threads");
       let spawned = 0;
-      require("node:child_process").spawn = () => {
-        spawned += 1;
+      let watchArgv;
+      require("node:child_process").spawn = (_command, args) => {
+        if (watchArgv && args.length === watchArgv.length && args.every((arg, index) => arg === watchArgv[index])) {
+          throw new Error("synthetic unavailable watcher");
+        }
+        spawned++;
         throw new Error("Worker auth observation requested a row child");
       };
-      fs.watch = () => { throw new Error("synthetic unavailable watcher"); };
       syncBuiltinESMExports();
       (async () => {
         const { register } = await import(workerData.loader);
         const unregister = register();
         const load = (relative) => import(new URL(relative, workerData.base).href);
+        const { resolveRuntimeProcessEntrypointUrl } = await load("../../infra/runtime-process-url.ts");
+        const { resolveRuntimeWorkerArgv } = await load("../../infra/runtime-worker-url.ts");
+        watchArgv = [...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("directoryWatchHost")), String(process.pid)];
         const files = await load("./file-state.ts");
         const snapshots = await load("./runtime-snapshots.ts");
         const { runtimeAuthProfileRowsCache } = await load("./runtime-persisted-rows.ts");
@@ -83,19 +92,14 @@ it.skipIf(process.platform === "win32")(
           return db;
         };
         const writer = create(databasePath, "worker-original");
-        const changes = [];
-        let unsubscribe = () => {};
         try {
           writer.exec("PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)");
-          const acquired = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
-          assert.equal(acquired.status, "readable");
-          const reader = acquired.db;
+          const { db: reader } = acquireAuthProfileReadDatabase(databasePath, openSqliteReadOnlyDatabase);
           const owner = { databasePath, sharedDatabasePath: databasePath, location: "legacy-main" };
           snapshots.setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
             store("worker-original"), databasePath, workerData.directory, owner
           );
           snapshots.recordRuntimeAuthProfilePersistedStore(databasePath, store("worker-original"));
-          unsubscribe = files.registerAuthProfileFileChangeListener((change) => changes.push(change));
           writer.prepare("UPDATE auth_profile_state SET state_json = ?").run('{"lastGood":{"fixture":"fixture"}}');
           assert.ok(fs.statSync(databasePath + "-wal").size > 0);
           await runInDetachedAsyncContext(files.refreshAuthProfileFileState);
@@ -108,13 +112,11 @@ it.skipIf(process.platform === "win32")(
           create(replacement, "worker-replacement").close();
           fs.renameSync(replacement, databasePath);
           await runInDetachedAsyncContext(files.refreshAuthProfileFileState);
-          assert.ok(changes.some((change) => change.identityChanged));
           assert.deepEqual([reader.isOpen, snapshots.getRuntimeAuthProfileStoreSnapshotAtDatabasePath(databasePath), spawned], [false, undefined, 0]);
           assert.deepEqual(readAuthProfileRowsReadOnly(databasePath, openSqliteReadOnlyDatabase).store, {
             status: "readable", raw: store("worker-replacement")
           });
         } finally {
-          unsubscribe();
           if (writer.isOpen) writer.close();
           snapshots.clearRuntimeAuthProfileStoreSnapshots();
           await closeOpenClawStateDatabaseAsync();
@@ -159,35 +161,33 @@ function fixture(options: { timers?: boolean; fallback?: boolean; existing?: boo
   return { directory, databasePath, legacyPath: path.join(directory, "auth.json") };
 }
 function useObservationTimers() {
+  const access = fs.accessSync;
+  vi.spyOn(fs.promises, "access").mockImplementation(async (...args) => access(...args));
   vi.useFakeTimers({
     toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
 }
 function disableWatcher() {
-  vi.spyOn(fs, "watch").mockImplementation(() => {
-    throw new Error("synthetic unavailable watcher");
-  });
+  vi.spyOn(directoryWatch, "watchDirectory").mockImplementation(() =>
+    Object.assign(new EventEmitter(), { close() {} }),
+  );
 }
 function nextChange(directory: string) {
   return new Promise<void>((resolve) => {
-    const unsubscribe = listen(directory, () => {
-      unsubscribe();
+    listen(directory, () => {
+      authProfileFileChanges.onChange = publishFileChange;
       resolve();
     });
   });
 }
 
-function listen(
-  directory: string,
-  listener: Parameters<typeof registerAuthProfileFileChangeListener>[0],
-) {
-  const unsubscribe = registerAuthProfileFileChangeListener((change) => {
+function listen(directory: string, listener: NonNullable<typeof authProfileFileChanges.onChange>) {
+  authProfileFileChanges.onChange = async (change) => {
+    await publishFileChange?.(change);
     if (change.directory === directory) {
       return listener(change);
     }
-  });
-  subscriptions.push(unsubscribe);
-  return unsubscribe;
+  };
 }
 
 function replaceFile(databasePath: string) {
@@ -209,19 +209,31 @@ function closeFiles(paths: string[], retainedPaths?: string[]) {
   });
 }
 
-it("rejects a swapped database before a privileged write even before observation runs", async () => {
+it("ignores content and sidecar events but observes replacement and nameless invalidation", async () => {
   const { databasePath } = fixture({ existing: true });
-  captureAuthProfileFileIdentity(databasePath);
-  const write = vi.fn();
-  await runOpenClawAgentPathWriteAdmission(databasePath, async (_identity, assertCurrent) => {
-    replaceFile(databasePath);
-    await Promise.resolve();
-    expect(() => {
-      assertCurrent();
-      write();
-    }).toThrow("database target changed");
-  });
-  expect(write).not.toHaveBeenCalled();
+  const watcher = Object.assign(new EventEmitter(), { close() {} });
+  const watch = vi.spyOn(directoryWatch, "watchDirectory").mockReturnValue(watcher);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
+  const changed = watch.mock.calls[0]![1];
+  const stat = vi.spyOn(fs.promises, "stat");
+  syncBuiltinESMExports();
+  for (let index = 0; index < 100; index++) {
+    changed("change", path.basename(databasePath));
+    changed("rename", `${path.basename(databasePath)}-wal`);
+  }
+  await Promise.resolve();
+  expect(stat).not.toHaveBeenCalled();
+  replaceFile(databasePath);
+  const replaced = nextChange(path.dirname(databasePath));
+  changed("rename", path.basename(databasePath));
+  await replaced;
+  expect(() => captured.assertCurrent()).toThrow("database file identity changed");
+  const replacement = await captureAuthProfileFileIdentityAsync(databasePath);
+  fs.unlinkSync(databasePath);
+  const deleted = nextChange(path.dirname(databasePath));
+  changed("change");
+  await deleted;
+  expect(() => replacement.assertCurrent()).toThrow("database file identity changed");
 });
 
 it("publishes a first owner write immediately and keeps same-file writes from revoking identity", async () => {
@@ -229,7 +241,7 @@ it("publishes a first owner write immediately and keeps same-file writes from re
   expect(readAuthProfileDatabaseIdentity(databasePath)?.key).toMatch(/^path:/);
   fs.writeFileSync(databasePath, "created synthetic database");
   noteAuthProfileFileWrite(databasePath);
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   expect(captured.identity?.key).toMatch(/^file:/);
   const changed = nextChange(directory);
   fs.writeFileSync(databasePath, "session-only write in the same file");
@@ -237,7 +249,7 @@ it("publishes a first owner write immediately and keeps same-file writes from re
   expect(() => captured.assertCurrent()).not.toThrow();
 });
 
-it("publishes a first owner write to previously admitted directory aliases", () => {
+it("publishes a first owner write to previously admitted directory aliases", async () => {
   const root = temporary.make("auth-file-alias-write-through-");
   const directory = path.join(root, "owner");
   const alias = path.join(root, "alias");
@@ -248,8 +260,14 @@ it("publishes a first owner write to previously admitted directory aliases", () 
   const before = readAuthProfileDatabaseIdentity(aliasPath);
   expect(before?.key).toMatch(/^path:/);
   fs.writeFileSync(databasePath, "created synthetic database");
-  noteAuthProfileFileWrite(fs.realpathSync(databasePath));
-  const current = captureAuthProfileFileIdentity(aliasPath);
+  const identity = readDatabasePathIdentitySync(databasePath);
+  const stat = vi.spyOn(fs, "statSync");
+  const realpath = vi.spyOn(fs.realpathSync, "native");
+  syncBuiltinESMExports();
+  noteAuthProfileFileWrite(identity.canonicalPath, identity);
+  expect(stat).not.toHaveBeenCalled();
+  expect(realpath).not.toHaveBeenCalled();
+  const current = await captureAuthProfileFileIdentityAsync(aliasPath);
   expect(current.identity?.key).toMatch(/^file:/);
   expect(current.identity?.canonicalPath).toBe(before?.canonicalPath);
   expect(() => current.assertCurrent()).not.toThrow();
@@ -259,22 +277,17 @@ it("keeps first-write authority when publication overtakes an observed file read
   const { databasePath } = fixture();
   readAuthProfileDatabaseIdentity(databasePath);
   const original = fs.promises.stat;
-  let published: ReturnType<typeof captureAuthProfileFileIdentity> | undefined;
-  const stat = vi.spyOn(fs.promises, "stat").mockImplementationOnce((...args) => {
+  let published: Awaited<ReturnType<typeof captureAuthProfileFileIdentityAsync>> | undefined;
+  vi.spyOn(fs.promises, "stat").mockImplementationOnce(async (...args) => {
     fs.writeFileSync(databasePath, "created synthetic database");
     noteAuthProfileFileWrite(databasePath);
-    published = captureAuthProfileFileIdentity(databasePath);
+    published = await captureAuthProfileFileIdentityAsync(databasePath);
     return original(...args);
   });
   syncBuiltinESMExports();
-  try {
-    await refreshAuthProfileFileState();
-    expect(published?.identity?.key).toMatch(/^file:/);
-    expect(() => published!.assertCurrent()).not.toThrow();
-  } finally {
-    stat.mockRestore();
-    syncBuiltinESMExports();
-  }
+  await refreshAuthProfileFileState();
+  expect(published?.identity?.key).toMatch(/^file:/);
+  expect(() => published!.assertCurrent()).not.toThrow();
 });
 
 it("reports first-file creation on explicit refresh without retiring unchanged authority", async () => {
@@ -293,7 +306,7 @@ it("reports first-file creation on explicit refresh without retiring unchanged a
     expect.objectContaining({ identityChanged: false, createdPaths: [databasePath] }),
   );
 
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   expect(captured.identity?.key).toMatch(/^file:/);
   expect(authProfileSourceExists(legacyPath)).toBe(true);
   await Promise.all([refreshAuthProfileFileState(), refreshAuthProfileFileState()]);
@@ -345,17 +358,22 @@ it("joins a fallback observation received while a prior refresh is pending", asy
 it("invalidates admitted auth facts after a separate process replaces their files", async () => {
   const { directory, databasePath } = fixture({ timers: true, existing: true });
   const legacyPath = path.join(directory, "auth-profiles.json");
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   const before = captured.identity;
   expect(authProfileSourceExists(legacyPath)).toBe(false);
-  const changed = nextChange(directory);
+  const changed = Promise.withResolvers<void>();
+  listen(directory, (change) => {
+    if (change.identityChanged) {
+      changed.resolve();
+    }
+  });
   await promisify(execFile)(process.execPath, [
     "-e",
     'const fs = require("node:fs"); const [db, legacy] = process.argv.slice(1); fs.writeFileSync(db + ".replacement", "replacement synthetic database"); fs.renameSync(db + ".replacement", db); fs.writeFileSync(legacy, "{}");',
     databasePath,
     legacyPath,
   ]);
-  await observe(changed);
+  await observe(changed.promise);
   expect(() => captured.assertCurrent()).toThrow("database file identity changed");
   const stat = vi.spyOn(fs, "statSync");
   const exists = vi.spyOn(fs, "existsSync");
@@ -376,7 +394,7 @@ it("periodically invalidates when directory events are unavailable", async () =>
 
 it("keeps an absent database readable as missing after fallback revalidation", async () => {
   const { directory, databasePath } = fixture({ timers: true });
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   const changed = nextChange(directory);
   await observe(changed);
   expect(readAuthProfileDatabaseIdentity(databasePath)).toEqual(captured.identity);
@@ -385,15 +403,16 @@ it("keeps an absent database readable as missing after fallback revalidation", a
 
 it("retires observations with the database owner", async () => {
   const { databasePath } = fixture({ existing: true });
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   await closeFiles([databasePath]);
   expect(() => captured.assertCurrent()).toThrow("database file identity changed");
-  expect(() => captureAuthProfileFileIdentity(databasePath).assertCurrent()).not.toThrow();
+  const replacement = await captureAuthProfileFileIdentityAsync(databasePath);
+  expect(() => replacement.assertCurrent()).not.toThrow();
 });
 
 it("keeps physical file authority through logical snapshot reset", async () => {
   const { databasePath } = fixture({ existing: true });
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   clearRuntimeAuthProfileStoreSnapshots();
   expect(() => captured.assertCurrent()).not.toThrow();
   await closeOpenClawStateDatabaseAsync();
@@ -406,13 +425,13 @@ it("keeps sibling file authority when another database is replaced or retired", 
   const second = path.join(directory, "second.sqlite");
   fs.writeFileSync(first, "first synthetic database");
   fs.writeFileSync(second, "second synthetic database");
-  const retained = captureAuthProfileFileIdentity(first);
-  const replaced = captureAuthProfileFileIdentity(second);
+  const retained = await captureAuthProfileFileIdentityAsync(first);
+  const replaced = await captureAuthProfileFileIdentityAsync(second);
   replaceFile(second);
   await refreshAuthProfileFileState();
   expect(() => retained.assertCurrent()).not.toThrow();
   expect(() => replaced.assertCurrent()).toThrow("database file identity changed");
-  const retired = captureAuthProfileFileIdentity(second);
+  const retired = await captureAuthProfileFileIdentityAsync(second);
   await closeFiles([first, second], [first]);
   expect(() => retained.assertCurrent()).not.toThrow();
   expect(() => retired.assertCurrent()).toThrow("database file identity changed");
@@ -425,3 +444,49 @@ it("retires legacy source observations when their agent database closes", async 
   fs.writeFileSync(legacyPath, "{}");
   expect(authProfileSourceExists(legacyPath)).toBe(true);
 });
+
+it.each(["publish", "retire"] as const)(
+  "settles cold file admission against an overtaking owner %s",
+  async (action) => {
+    const { databasePath } = fixture();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const original = fs.promises.stat;
+    vi.spyOn(fs.promises, "stat").mockImplementationOnce(async (...args) => {
+      const result = await original(...args).then(
+        (value) => ({ ok: true, value }) as const,
+        (error: unknown) => ({ ok: false, error }) as const,
+      );
+      entered.resolve();
+      await release.promise;
+      if (!result.ok) {
+        throw result.error;
+      }
+      return result.value;
+    });
+    syncBuiltinESMExports();
+    const admitting = readAuthProfileDatabaseIdentityAsync(databasePath);
+    const settled = Promise.allSettled([admitting]);
+    let published;
+    try {
+      await entered.promise;
+      if (action === "publish") {
+        fs.writeFileSync(databasePath, "created synthetic database");
+        published = readDatabasePathIdentitySync(databasePath);
+        noteAuthProfileFileWrite(databasePath, published);
+      } else {
+        await closeOpenClawStateDatabaseAsync();
+      }
+    } finally {
+      release.resolve();
+    }
+    expect(await settled).toEqual([
+      action === "publish"
+        ? { status: "fulfilled", value: published }
+        : {
+            status: "rejected",
+            reason: new Error("Auth profile file owner retired during admission"),
+          },
+    ]);
+  },
+);

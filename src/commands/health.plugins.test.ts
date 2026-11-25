@@ -26,7 +26,7 @@ let startPluginServices: typeof import("../plugins/services.test-support.js").st
 let pluginServicesHandle: PluginServicesHandle | undefined;
 let inventoryPlugins: ChannelPlugin[] = [];
 const collect = (options: Partial<Parameters<typeof collectGatewayHealthSnapshot>[0]> = {}) =>
-  collectGatewayHealthSnapshot({ audience: "admin", timeoutMs: 10, probe: false, ...options });
+  collectGatewayHealthSnapshot({ audience: "admin", probe: false, ...options });
 const serviceEntry = (id: string, start: () => void, serviceId = id) => ({
   pluginId: "service-plugin",
   pluginName: "Service Plugin",
@@ -169,7 +169,6 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
     );
     setActivePluginRegistry(registry);
     const snap = await collect({
-      timeoutMs: 1000,
       probe: true,
       runtimeSnapshot: channelRuntime(
         "broken-channel",

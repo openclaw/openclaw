@@ -5,11 +5,10 @@ import { measureDiagnosticsTimelineSpan } from "../../../infra/diagnostics-timel
 export function measureEmbeddedAgentPreparation<T>(
   stage: string,
   run: () => Promise<T> | T,
-  options: EmbeddedAgentPreparationTimingOptions = {},
+  options: Pick<EmbeddedAgentPreparationTimingOptions, "config"> = {},
 ): Promise<T> {
   return measureDiagnosticsTimelineSpan("agent.prepare", run, {
     config: options.config,
-    env: options.env,
     phase: "agent.prepare",
     attributes: { stage },
   });

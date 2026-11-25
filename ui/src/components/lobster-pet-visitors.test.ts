@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { beforeEach, afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import * as artworkLoader from "../pages/plugins/icon-loader.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getLobsterdex } from "./lobster-dex.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 import { planLobsterPasser, resolveLobsterPasserCrossMs } from "./lobster-pet-plans.ts";
@@ -37,18 +39,16 @@ afterEach(() => {
   localStorage.clear();
 });
 
-it.each([true, false])("brings an upgrade bindle (resident=%s)", async (residentEnabled) => {
+it("defers the upgrade bindle until the resident arrives", async () => {
   vi.setSystemTime(new Date("2026-07-09T12:00:00"));
   localStorage.setItem(versionKey, "2026.6.1");
   const element = createPet(42);
-  element.residentEnabled = residentEnabled;
+  element.residentEnabled = false;
   element.gatewayVersion = "2026.7.1";
-  if (!residentEnabled) {
-    await element.updateComplete;
-    expect(localStorage.getItem(versionKey)).toBe("2026.6.1");
-    expect(element.querySelector(".lob-bindle")).toBeNull();
-    element.residentEnabled = true;
-  }
+  await element.updateComplete;
+  expect(localStorage.getItem(versionKey)).toBe("2026.6.1");
+  expect(element.querySelector(".lob-bindle")).toBeNull();
+  element.residentEnabled = true;
   await arrive(element);
 
   expect(element.querySelector(".lob-bindle")).not.toBeNull();
@@ -99,10 +99,8 @@ it.each(["penguin", "fedora"] as const)("refreshes a crossing's pool to %s", asy
   await tick(element, 13_000);
   expect(element.querySelector(passerSelector)).toBeNull();
 
-  for (let refresh = 0; refresh < 2; refresh++) {
-    await updatePet(element, { critters: visitorPool() }, 10_000);
-    expect(element.querySelector(passerSelector)).toBeNull();
-  }
+  await updatePet(element, { critters: visitorPool() }, 20_000);
+  expect(element.querySelector(passerSelector)).toBeNull();
 
   const parent = element.parentElement!;
   element.remove();
@@ -148,19 +146,12 @@ it("earns the golden ledge trim once the Lobsterdex is complete", async () => {
     expect(element.hasAttribute("data-dex-complete")).toBe(complete);
   }
 });
-it("plans plugin ids and resolves catalog, artwork, and default crossing durations", () => {
+it("plans plugin ids without strangers and defaults unknown crossing durations", () => {
   expect(planLobsterPasser(21, { critters: ["ferris"], strangers: false })?.kind).toBe("ferris");
-  const artwork = {
-    ferris: { url: "/ferris", crossMs: 5000 },
-    snail: { url: "/snail", crossMs: 5000 },
-  };
-  expect(resolveLobsterPasserCrossMs("snail", artwork)).toBe(90000);
-  expect(resolveLobsterPasserCrossMs("ferris", artwork)).toBe(5000);
   expect(resolveLobsterPasserCrossMs("constructor")).toBe(12000);
 });
 
 it.each([
-  ["crab", "a plugin visitor", 11000],
   ["stranger", "a plugin visitor", 11000],
   ["ferris", "a crab, allegedly", 5000],
 ] as const)(
@@ -178,14 +169,11 @@ it.each([
     await vi.dynamicImportSettled();
     const passer = element.querySelector<HTMLElement>(`.lobster-pet--${kind}`)!;
     expect(passer.title).toBe(title);
-    expect(passer.style.getPropertyValue("--lob-scale")).toBe("1.8");
     expect(passer.style.getPropertyValue("--lob-cross")).toBe(`${crossMs}ms`);
     expect(passer.querySelector(".lobster-pet__body img")?.getAttribute("src")).toBe(
       `blob:/${kind}?v=1`,
     );
     expect(passer.querySelector("svg")).toBeNull();
-    await updatePet(element, { critters: [...element.critters] });
-    expect(element.querySelector(passerSelector)).toBe(passer);
 
     if (kind === "ferris") {
       await updatePet(element, {
@@ -200,3 +188,56 @@ it.each([
     }
   },
 );
+
+it("keeps a plugin visitor mounted while artwork loads or fails and retires pending artwork", async () => {
+  const first = createDeferred<string | null>();
+  const replacement = createDeferred<string | null>();
+  const retired = createDeferred<string | null>();
+  const fetchArtwork = vi
+    .spyOn(artworkLoader, "fetchPluginThemeArtworkBlobUrl")
+    .mockReturnValueOnce(first.promise)
+    .mockReturnValueOnce(replacement.promise)
+    .mockReturnValueOnce(retired.promise);
+  onTestFinished(() => fetchArtwork.mockRestore());
+  const element = await crossingPet(21, {
+    critters: ["ferris"],
+    critterArtwork: { ferris: { url: "/ferris?pending=first", crossMs: 5000 } },
+  });
+  await waitForSolid(() => expect(fetchArtwork).toHaveBeenCalledOnce());
+  const passer = element.querySelector<HTMLElement>(".lobster-pet--ferris")!;
+  expect(passer).not.toBeNull();
+  expect(passer.querySelector(".lobster-pet__body img, svg")).toBeNull();
+  first.resolve("blob:synthetic-first");
+  await waitForSolid(() =>
+    expect(passer.querySelector("img.lobster-pet__svg")?.getAttribute("src")).toBe(
+      "blob:synthetic-first",
+    ),
+  );
+  expect(passer.querySelector("img")?.getAttribute("alt")).toBe("");
+
+  await updatePet(element, {
+    critterArtwork: { ferris: { url: "/ferris?pending=replacement", crossMs: 5000 } },
+  });
+  await waitForSolid(() => {
+    expect(fetchArtwork).toHaveBeenCalledTimes(2);
+    expect(passer.querySelector("img, svg")).toBeNull();
+  });
+  replacement.reject(new Error("Synthetic artwork unavailable"));
+  await replacement.promise.catch(() => {});
+  await vi.dynamicImportSettled();
+  flush();
+  expect(element.querySelector(passerSelector)).toBe(passer);
+  expect(passer.querySelector("img, svg")).toBeNull();
+
+  await updatePet(element, {
+    critterArtwork: { ferris: { url: "/ferris?pending=retired", crossMs: 5000 } },
+  });
+  await waitForSolid(() => expect(fetchArtwork).toHaveBeenCalledTimes(3));
+  await updatePet(element, { critters: [] });
+  expect(element.querySelector(passerSelector)).toBeNull();
+  retired.resolve("blob:synthetic-retired");
+  await vi.dynamicImportSettled();
+  flush();
+  expect(element.querySelector(passerSelector)).toBeNull();
+  expect(element.querySelector('img[src="blob:synthetic-retired"]')).toBeNull();
+});

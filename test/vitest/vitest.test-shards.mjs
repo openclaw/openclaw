@@ -1,5 +1,20 @@
 // Full-suite Vitest shard definitions used by test-projects and CI planning.
 import { agentVitestProjectConfigs } from "./vitest.agents-paths.mjs";
+import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
+import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
+import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
+
+export const infraTestOwner = {
+  root: ".",
+  include: ["src/infra/**/*.test.ts", ...databaseWorkerCoreTestFiles],
+  exclude: [...boundaryTestFiles, ...cliProcessTestFiles],
+};
+
+export const runtimeConfigTestOwner = {
+  root: "src/config",
+  include: ["src/config/**/*.test.ts"],
+  exclude: databaseWorkerCoreTestFiles,
+};
 
 export const autoReplyCoreTestInclude = [
   "src/auto-reply/*.test.ts",
@@ -13,6 +28,7 @@ export const autoReplyTopLevelReplyTestInclude = ["src/auto-reply/reply*.test.ts
 export const autoReplyReplySubtreeTestInclude = ["src/auto-reply/reply/**/*.test.ts"];
 
 export const tuiPtyTestFiles = [
+  "src/tui/tui-console-pty.e2e.test.ts",
   "src/tui/tui-auth-child-pty.e2e.test.ts",
   "src/tui/tui-pty-harness.e2e.test.ts",
   "src/tui/tui-session-identity-pty.e2e.test.ts",
@@ -22,10 +38,16 @@ export const tuiPtyTestFiles = [
   "src/tui/tui-hyperlinks-pty.e2e.test.ts",
   "src/tui/tui-picker-cancel-pty.e2e.test.ts",
   "src/tui/tui-text-wrap-pty.e2e.test.ts",
+  "src/tui/tui-program-status-pty.e2e.test.ts",
   "src/tui/tui-pty-local.e2e.test.ts",
 ];
 
 export const fullSuiteVitestShards = [
+  {
+    config: "test/vitest/vitest.markdown.config.ts",
+    name: "core-markdown",
+    projects: ["test/vitest/vitest.markdown.config.ts"],
+  },
   {
     config: "test/vitest/vitest.full-core-unit-fast.config.ts",
     name: "core-unit-fast",

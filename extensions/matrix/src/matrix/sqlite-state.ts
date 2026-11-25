@@ -5,7 +5,6 @@ import { getMatrixRuntime } from "../runtime.js";
 type MatrixSqliteStateOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
-  stateRootDir?: string;
 };
 
 function resolveStateDirOverride(
@@ -16,7 +15,6 @@ function resolveStateDirOverride(
   }
   return (
     options.stateDir ||
-    options.stateRootDir ||
     getMatrixRuntime().state.resolveStateDir(options.env ?? process.env, os.homedir)
   );
 }

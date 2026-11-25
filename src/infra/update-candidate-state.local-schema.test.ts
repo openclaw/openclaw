@@ -4,14 +4,24 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { UpdateCandidateStateSnapshotSchema } from "./update-candidate-state.js";
+import {
+  UpdateCandidateStateSnapshotSchema,
+  UpdateStateSchemaInspectionPlanSchema,
+} from "./update-candidate-state.js";
 import { inventoryUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const credential = {
+  socket_key: "current",
+  socket_path: "/synthetic/native.sock",
+  socket_token: "synthetic-socket-token",
+  updated_at_ms: 456,
+};
 
 async function runWorker(input: Record<string, unknown>): Promise<unknown> {
   const result = await runCommandBuffered(
@@ -27,24 +37,36 @@ async function runWorker(input: Record<string, unknown>): Promise<unknown> {
   return JSON.parse(result.stdout.toString("utf8"));
 }
 
-it.each(["legacy", "local-aware"] as const)(
+it.each(["legacy", "daemon-aware", "local-aware", "legacy-alias", "local-aware-alias"] as const)(
   "%s worker replies preserve local capture independently of schema visibility",
   async (caller) => {
     const root = await fs.realpath(dirs.make("update-local-schemas-"));
     const stateDir = path.join(root, "source");
+    if (caller.endsWith("-alias")) {
+      const physical = path.join(root, "physical");
+      await fs.mkdir(physical);
+      await fs.symlink(physical, stateDir, "junction");
+    }
     const targetStateDir = path.join(root, "snapshot");
     const shared = path.join(stateDir, "state", "openclaw.sqlite");
     const agent = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     const local = path.join(stateDir, "control", "services.sqlite");
     const client = path.join(stateDir, "client", "credentials.sqlite");
+    // Plugin stores keep their own schema; released verifiers read them as agents.
+    const workboard = path.join(stateDir, "plugins", "workboard", "workboard.sqlite");
     for (const [file, version] of [
       [shared, 7],
       [agent, 3],
+      [workboard, 0],
     ] as const) {
       await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
       using db = openNodeSqliteDatabase(file);
       db.exec(`PRAGMA user_version = ${version}; CREATE TABLE evidence(value TEXT);`);
     }
+    // Plugin discovery reports the physical path behind an aliased state root.
+    const discoveredWorkboard = caller.endsWith("-alias")
+      ? path.join(root, "physical", path.relative(stateDir, workboard))
+      : workboard;
     const env = { OPENCLAW_STATE_DIR: stateDir };
     await fs.mkdir(path.dirname(client), { recursive: true, mode: 0o700 });
     {
@@ -52,10 +74,7 @@ it.each(["legacy", "local-aware"] as const)(
       db.exec(CLIENT_CREDENTIAL_SCHEMA_SQL);
       db.exec("PRAGMA user_version = 1");
       db.prepare("INSERT INTO native_exec_socket_credentials VALUES (?, ?, ?, ?)").run(
-        "current",
-        "/synthetic/native.sock",
-        "synthetic-socket-token",
-        456,
+        ...Object.values(credential),
       );
     }
     const intent = {
@@ -64,52 +83,172 @@ it.each(["legacy", "local-aware"] as const)(
       updated_at_ms: 123,
     };
     withDaemonRuntimePinStore(env, true, (db) => {
-      db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(
-        intent.state_key,
-        intent.value_json,
-        intent.updated_at_ms,
-      );
+      db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(...Object.values(intent));
     });
+    const localAware = caller.startsWith("local-aware");
+    const daemonAware = !caller.startsWith("legacy");
     const input = {
       stateDir,
       targetStateDir,
       candidateRoot: root,
       config: {},
       env,
-      ...(caller === "local-aware" ? { includeLocalStoreVersions: true } : {}),
+      ...(daemonAware ? { includeLocalStoreVersions: true } : {}),
+      ...(localAware ? { includeClientCredentialStoreVersion: true } : {}),
     };
-    const admitted = await inventoryUpdateCandidateStateWorker(input);
-    expect(admitted.databaseInventory).toContain(local);
-    expect(admitted.databaseInventory).toContain(client);
-    const versions = UpdateCandidateStateSnapshotSchema.shape.versions.parse(
-      await runWorker({ ...input, mode: "versions" }),
-    );
-    const snapshot = UpdateCandidateStateSnapshotSchema.parse(
-      await runWorker({ ...input, ...admitted, mode: "snapshot" }),
-    );
+    const capture = caller !== "local-aware" && caller !== "legacy-alias";
+    const admitted = capture ? await inventoryUpdateCandidateStateWorker(input) : undefined;
+    const response = await runWorker({
+      ...input,
+      ...admitted,
+      mode: capture ? "snapshot" : "versions",
+    });
+    const versions = capture
+      ? UpdateCandidateStateSnapshotSchema.parse(response).versions
+      : UpdateCandidateStateSnapshotSchema.shape.versions.parse(response);
     const expected = [
       { path: agent, userVersion: 3 },
-      ...(caller === "local-aware" ? [{ path: client, userVersion: 1 }] : []),
-      ...(caller === "local-aware" ? [{ path: local, userVersion: 1 }] : []),
+      ...(localAware ? [{ path: client, userVersion: 1 }] : []),
+      ...(daemonAware ? [{ path: local, userVersion: 1 }] : []),
       { path: shared, userVersion: 7, contentVersion: 7 },
+      ...(daemonAware ? [{ path: discoveredWorkboard, userVersion: 0 }] : []),
     ];
     expect(versions).toEqual(expected);
-    expect(snapshot.versions).toEqual(expected);
-    using copied = openNodeSqliteDatabase(path.join(targetStateDir, "control", "services.sqlite"), {
-      readOnly: true,
-    });
+    if (!capture) {
+      return;
+    }
+    expect(admitted?.databaseInventory).toContain(discoveredWorkboard);
+    const openCopy = (file: string) =>
+      openNodeSqliteDatabase(path.join(targetStateDir, path.relative(stateDir, file)), {
+        readOnly: true,
+      });
+    using copied = openCopy(local);
     expect(copied.prepare("SELECT * FROM daemon_runtime_pins").all()).toEqual([intent]);
-    using copiedClient = openNodeSqliteDatabase(
-      path.join(targetStateDir, "client", "credentials.sqlite"),
-      { readOnly: true },
-    );
+    if (discoveredWorkboard === workboard) {
+      using copiedWorkboard = openCopy(workboard);
+      expect(copiedWorkboard.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
+    }
+    using copiedClient = openCopy(client);
     expect(copiedClient.prepare("SELECT * FROM native_exec_socket_credentials").all()).toEqual([
-      {
-        socket_key: "current",
-        socket_path: "/synthetic/native.sock",
-        socket_token: "synthetic-socket-token",
-        updated_at_ms: 456,
-      },
+      credential,
     ]);
   },
 );
+
+it("discovers absent shared state without creating a staging directory", async () => {
+  const root = await fs.realpath(dirs.make("update-missing-discovery-staging-"));
+  const stateDir = path.join(root, "source");
+  const stagingRoot = path.join(root, "staging");
+  const discovery = UpdateStateSchemaInspectionPlanSchema.parse(
+    await runWorker({
+      mode: "discover",
+      stateDir,
+      stagingRoot,
+      config: {},
+      additionalPaths: [],
+    }),
+  );
+  expect(discovery.sharedVersion).toEqual({
+    path: path.join(stateDir, "state", "openclaw.sqlite"),
+    userVersion: null,
+  });
+  await expect(fs.stat(stagingRoot)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.each([true, false])(
+  "2026.9.x stripped discovery plans preserve owned schema rows (discovery record: %s)",
+  async (hasDiscoveryRecord) => {
+    const root = await fs.realpath(dirs.make("update-stripped-schema-plan-"));
+    const stateDir = path.join(root, "source");
+    const shared = path.join(stateDir, "state", "openclaw.sqlite");
+    const main = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    const workboard = path.join(stateDir, "plugins", "workboard", "workboard.sqlite");
+    for (const [file, version] of [
+      [shared, 7],
+      [main, 3],
+      [workboard, 0],
+    ] as const) {
+      await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+      using db = openNodeSqliteDatabase(file);
+      db.exec(`PRAGMA user_version = ${version}; CREATE TABLE evidence(value TEXT);`);
+    }
+    const input = {
+      stateDir,
+      stagingRoot: path.join(root, "staging"),
+      config: {},
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    };
+    await fs.mkdir(input.stagingRoot, { mode: 0o700 });
+    const discovery = UpdateStateSchemaInspectionPlanSchema.parse(
+      await runWorker({ ...input, mode: "discover" }),
+    );
+    // Published 2026.9.x drivers strip ownership when parsing the candidate plan.
+    const inspectionPlan = UpdateStateSchemaInspectionPlanSchema.parse({
+      ...discovery,
+      files: discovery.files.map(([identity, { spellings }]) => [identity, { spellings }]),
+    });
+    const stagingRoot = hasDiscoveryRecord ? input.stagingRoot : path.join(root, "fresh-staging");
+    if (!hasDiscoveryRecord) {
+      await fs.mkdir(stagingRoot, { mode: 0o700 });
+    }
+    const versions = UpdateCandidateStateSnapshotSchema.shape.versions.parse(
+      await runWorker({ ...input, stagingRoot, mode: "versions", inspectionPlan }),
+    );
+    expect(versions).toContainEqual({ path: shared, userVersion: 7, contentVersion: 7 });
+    if (hasDiscoveryRecord) {
+      expect(versions).toContainEqual({ path: main, userVersion: 3 });
+    }
+    expect(versions).not.toContainEqual(expect.objectContaining({ path: workboard }));
+    expect(versions).toHaveLength(hasDiscoveryRecord ? 2 : 1);
+    // The released 2026.9.36 verifier treats every present non-shared row as an agent.
+    const flagged = versions
+      .filter((entry) => entry.path !== shared && entry.userVersion !== null)
+      .filter((entry) => entry.userVersion !== OPENCLAW_AGENT_SCHEMA_VERSION)
+      .map((entry) => entry.path);
+    expect(flagged).toEqual(hasDiscoveryRecord ? [main] : []);
+  },
+);
+
+it("legacy replies still expose wrong-schema agents to the released 2026.11.3 verifier", async () => {
+  const root = await fs.realpath(dirs.make("update-legacy-agent-schemas-"));
+  const stateDir = path.join(root, "source");
+  const shared = path.join(stateDir, "state", "openclaw.sqlite");
+  const main = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  const override = path.join(root, "override-agent", "openclaw-agent.sqlite");
+  const registered = path.join(root, "registered", "openclaw-agent.sqlite");
+  const workboard = path.join(stateDir, "plugins", "workboard", "workboard.sqlite");
+  for (const [file, version] of [
+    [shared, 7],
+    [main, 3],
+    [override, 3],
+    [registered, 3],
+    [workboard, 0],
+  ] as const) {
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    using db = openNodeSqliteDatabase(file);
+    db.exec(`PRAGMA user_version = ${version}; CREATE TABLE evidence(value TEXT);`);
+    if (file === shared) {
+      db.exec("CREATE TABLE agent_databases (path TEXT)");
+      db.prepare("INSERT INTO agent_databases VALUES (?)").run(registered);
+    }
+  }
+  const input = {
+    stateDir,
+    config: {},
+    env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: path.dirname(override) },
+    mode: "versions",
+  };
+  const parse = (response: unknown) =>
+    UpdateCandidateStateSnapshotSchema.shape.versions.parse(response);
+  const legacy = parse(await runWorker(input));
+  expect(legacy).not.toContainEqual(expect.objectContaining({ path: workboard }));
+  // The released verifier treats every non-shared, present row as an agent database
+  // (src/cli/update-cli/update-command-migrated.ts at 847611dcaa3b).
+  const flagged = legacy
+    .filter((entry) => entry.path !== shared && entry.userVersion !== null)
+    .filter((entry) => entry.userVersion !== OPENCLAW_AGENT_SCHEMA_VERSION)
+    .map((entry) => entry.path);
+  expect(flagged.toSorted()).toEqual([main, override, registered].toSorted());
+  const modern = parse(await runWorker({ ...input, includeLocalStoreVersions: true }));
+  expect(modern).toContainEqual({ path: workboard, userVersion: 0 });
+});

@@ -81,15 +81,6 @@ it("does not turn malformed or stale pin records into absence", async () => {
   });
 });
 
-it("rejects a pin changed while the service capability was being inspected", async () => {
-  vi.mocked(readDaemonRuntimePin)
-    .mockReturnValueOnce({ revision: "before", stored: false })
-    .mockReturnValueOnce({ revision: "after", stored: true });
-  expect(await inspectServiceRuntimeIntent(params)).toEqual({
-    runtimeIntent: { status: "unknown" },
-  });
-});
-
 it("reports pending migration without reading a pin or claiming it is unpinned", async () => {
   vi.mocked(readDaemonRuntimePinMigrationPending).mockReturnValueOnce(true);
   expect(await inspectServiceRuntimeIntent(params)).toEqual({

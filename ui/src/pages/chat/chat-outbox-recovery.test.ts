@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { t } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 
 afterEach(() => {
@@ -12,58 +13,71 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("shows a failed recovery module only for the owner still awaiting it", async () => {
+it("loads recovery storage only for an admitted owner and ignores retired import failures", async () => {
   vi.stubGlobal("sessionStorage", createStorageMock());
   const { createPageState } = await import("./chat-state-page.ts");
   // The plain state factory's composer store is separate from recovery's failed import.
   await import("../../lib/chat/composer-draft-store.runtime.ts");
   const loading = createDeferred();
   const release = createDeferred();
+  const initializeRuntime = vi.fn();
+  // mock-isolation: Hold recovery's failed import independently of the initialized state owner.
   vi.doMock("../../lib/chat/composer-draft-store.runtime.ts", async () => {
+    initializeRuntime();
     loading.resolve();
     await release.promise;
     throw new Error("Synthetic recovery module unavailable");
   });
-  const { createInitializationContext } = await import("./chat-pane.test-support.ts");
-  await import("./chat-outbox-recovery.tsx");
+  const { createInitializationContext } =
+    await import("./chat-application-context.test-support.ts");
+  const { PaneOutboxRecovery } = await import("./chat-outbox-recovery.tsx");
   const host = createPageState(
     createInitializationContext(),
-    { invalidate: () => {}, afterCommit: () => () => {} },
-    { dispatchEvent: () => true, querySelector: () => null },
+    { afterCommit: () => () => {} },
+    { dispatchEvent: () => true },
   );
   host.connected = true;
   host.client = createTestGatewayClient(async () => ({}));
   host.settings = { ...host.settings, gatewayUrl: "ws://recovery.test" };
-  const createRecovery = () =>
-    Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
-      host,
+  const createRecovery = (state: typeof host = host) => {
+    const view = mountSolid(PaneOutboxRecovery, {
+      state,
       identity: "connected-owner",
+      onRestored: () => {},
     });
-  const current = createRecovery();
-  const superseded = createRecovery();
-  document.body.append(current, superseded);
+    document.body.append(view.container);
+    return view;
+  };
   try {
-    await Promise.all([current.updateComplete, superseded.updateComplete, loading.promise]);
+    const unadmitted = createRecovery({ ...host, connected: false, client: null });
+    // Let module-import launch work run; an idle recovery has no storage operation to prepare.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(initializeRuntime).not.toHaveBeenCalled();
+    expect(unadmitted.container.querySelector(".chat-outbox-recovery")).toBeNull();
+    unadmitted.dispose();
+
+    const current = createRecovery();
+    const superseded = createRecovery();
+    await loading.promise;
     const disconnectedClient = createTestGatewayClient(async () => ({}));
-    superseded.host = {
-      ...host,
-      connected: false,
-      client: disconnectedClient,
-    };
     disconnectedClient.retireOfflineRecoveryScope();
-    superseded.identity = "disconnected-owner";
-    await superseded.updateComplete;
+    superseded.update({
+      state: { ...host, connected: false, client: disconnectedClient },
+      identity: "disconnected-owner",
+      onRestored: () => {},
+    });
     const failedImport = import("../../lib/chat/composer-draft-store.runtime.ts").catch(
       () => undefined,
     );
     release.resolve();
     await failedImport;
-    await Promise.all([current.updateComplete, superseded.updateComplete]);
     flush();
-    expect(current.querySelector('[role="alert"]')?.textContent).toBe(
+    expect(current.container.querySelector('[role="alert"]')?.textContent).toBe(
       t("chat.outboxRecoveryStorageFailed"),
     );
-    expect(superseded.querySelector('[role="alert"]')).toBeNull();
+    expect(superseded.container.querySelector('[role="alert"]')).toBeNull();
   } finally {
     release.resolve();
   }

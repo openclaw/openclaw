@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasNodeErrorCode } from "openclaw/plugin-sdk/path-existence-runtime";
 import {
   buildQaAgenticParityComparison,
   buildQaRuntimeParityReport,
@@ -18,11 +19,17 @@ import {
   renderQaCoverageMarkdownReport,
   renderQaScenarioMatchesMarkdownReport,
 } from "./coverage-report.js";
+import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import {
   QA_FRONTIER_PARITY_BASELINE_LABEL,
   QA_FRONTIER_PARITY_CANDIDATE_LABEL,
 } from "./providers/live-frontier/parity.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
+import {
+  buildQaScorecardGapReport,
+  renderQaScorecardGapMarkdownReport,
+} from "./scorecard-gap-report.js";
+import { readQaMaturityTaxonomySource } from "./scorecard-taxonomy.js";
 import { readCompletedQaSuiteSummaryFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
@@ -119,12 +126,33 @@ export async function runQaParityReportCommand(opts: {
   writeQaCommandVerdict("QA parity", comparison.pass);
 }
 
+async function assertCoverageOutputPreservesInput(
+  inputPath: string,
+  outputPath: string | undefined,
+  inputKind: "evidence" | "summary",
+) {
+  if (!outputPath) {
+    return;
+  }
+  const input = await fs.stat(inputPath);
+  const output = await fs.stat(outputPath).catch((error: unknown) => {
+    if (!hasNodeErrorCode(error, "ENOENT")) {
+      throw error;
+    }
+    return undefined;
+  });
+  if (output && input.dev === output.dev && input.ino === output.ino) {
+    throw new Error(`--output must not overwrite the input ${inputKind} artifact.`);
+  }
+}
+
 export async function runQaCoverageReportCommand(opts: {
   repoRoot?: string;
   output?: string;
   json?: boolean;
   tools?: boolean;
   summary?: string;
+  evidence?: string;
   match?: string[];
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
@@ -132,15 +160,36 @@ export async function runQaCoverageReportCommand(opts: {
   const scenarios = readQaScenarioPack().scenarios;
   let body: string;
   let outputLabel = "QA coverage report";
-  if (opts.tools === true) {
+  if (opts.evidence !== undefined) {
+    if (opts.tools || opts.summary !== undefined || opts.match?.length) {
+      throw new Error("--evidence cannot be combined with --tools, --summary, or --match.");
+    }
+    const evidencePath = path.resolve(repoRoot, opts.evidence);
+    await assertCoverageOutputPreservesInput(evidencePath, outputPath, "evidence");
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(evidencePath, "utf8")),
+    );
+    const report = buildQaScorecardGapReport({
+      taxonomy: readQaMaturityTaxonomySource(path.resolve(repoRoot, "taxonomy.yaml")),
+      scenarios,
+      evidence,
+    });
+    body = opts.json
+      ? `${JSON.stringify(report, null, 2)}\n`
+      : renderQaScorecardGapMarkdownReport(report);
+    outputLabel = "QA scorecard gap report";
+  } else if (opts.tools === true) {
     if (opts.match && opts.match.length > 0) {
       throw new Error("--match cannot be combined with --tools.");
     }
-    const summary = opts.summary?.trim()
-      ? ((await readCompletedQaSuiteSummaryFile(
-          path.resolve(repoRoot, opts.summary),
-        )) as QaParitySuiteSummary) // SAFETY: completed suite producers own this report shape.
-      : undefined;
+    let summary: QaParitySuiteSummary | undefined;
+    if (opts.summary?.trim()) {
+      const summaryPath = path.resolve(repoRoot, opts.summary);
+      const completed = await readCompletedQaSuiteSummaryFile(summaryPath);
+      await assertCoverageOutputPreservesInput(summaryPath, outputPath, "summary");
+      // SAFETY: --summary consumes buildQaSuiteSummaryJson's runtime-parity artifact; the reader checks completion only.
+      summary = completed as QaParitySuiteSummary;
+    }
     const report = buildQaToolCoverageReport({ scenarios, summary });
     body = opts.json
       ? `${JSON.stringify(report, null, 2)}\n`

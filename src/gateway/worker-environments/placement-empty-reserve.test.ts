@@ -1,16 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -19,8 +10,10 @@ import {
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 
@@ -44,10 +37,7 @@ describe("empty reserve production lifecycle", () => {
       "-m",
       "empty",
     ]);
-    const features = [
-      WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-      WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-    ];
+    const features = [...WORKER_PROTOCOL_FEATURES];
     vi.mocked(support.testState.prepareInstallation).mockResolvedValue({
       ...support.BUNDLE_ARTIFACT,
       protocolFeatures: features,
@@ -127,17 +117,12 @@ describe("empty reserve production lifecycle", () => {
         protocolFeatures: features,
       }),
     });
+    const availableReserves = () =>
+      support.testState.store
+        .list()
+        .filter((row) => row.preparation?.consumedAtMs === null && row.state === "ready");
     const unsubscribe = sessionChanges.subscribe(() => {
-      if (
-        support.testState.store
-          .list()
-          .some(
-            (row) =>
-              row.preparation?.consumedAtMs === null &&
-              row.state === "ready" &&
-              row.environmentId !== consumedEnvironmentId,
-          )
-      ) {
+      if (availableReserves().some((row) => row.environmentId !== consumedEnvironmentId)) {
         reserveReady.resolve();
       }
     });
@@ -149,14 +134,9 @@ describe("empty reserve production lifecycle", () => {
       bindDeviceWorkerAvailability(harness.environments, async (deviceId) => ({
         available: true,
         node: {
+          ...createNodeWorkerBundleTestNode(),
           nodeId: deviceId,
           connId: deviceId,
-          pairingIdentity: "fixture",
-          pairingGeneration: "fixture",
-          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-          clientMode: GATEWAY_CLIENT_MODES.NODE,
-          protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-          commands: [],
           workerHost: {
             enabled: true,
             capacity: { total: 1, available: 1 },
@@ -187,8 +167,10 @@ describe("empty reserve production lifecycle", () => {
       const reserve = support.testState.store
         .list()
         .find((row) => row.preparation && row.state === "ready")!;
-      expect(reserve.profileSnapshot).toMatchObject({ runtimePreparation: { source: "empty" } });
-      expect(reserve.attachedSessionIds).toEqual([]);
+      expect(reserve).toMatchObject({
+        profileSnapshot: { runtimePreparation: { source: "empty" } },
+        attachedSessionIds: [],
+      });
       const create = vi.spyOn(harness.environments, "createWithRequest");
       reserveReady = createDeferredCore();
       consumedEnvironmentId = reserve.environmentId;
@@ -203,11 +185,7 @@ describe("empty reserve production lifecycle", () => {
         support.testState.nowMs,
       );
       await reserveReady.promise;
-      expect(
-        support.testState.store
-          .list()
-          .filter((row) => row.state === "ready" && row.preparation?.consumedAtMs === null),
-      ).toHaveLength(1);
+      expect(availableReserves()).toHaveLength(1);
     } finally {
       releaseRetention.resolve();
       unsubscribe();

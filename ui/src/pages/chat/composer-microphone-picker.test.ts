@@ -1,4 +1,4 @@
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
@@ -42,12 +42,12 @@ it.each(["session", "dispose"] as const)(
       method === "talk.config" ? Promise.resolve({}) : readCatalog(),
     );
     let updated = createDeferred();
-    const requestUpdate = vi.fn(() => {
+    const onCatalogChange = vi.fn(() => {
       if (picker.realtimeStatus !== "checking") {
         updated.resolve();
       }
     });
-    const client = connect(request, requestUpdate, session ? "agent:first:main" : undefined);
+    const client = connect(request, onCatalogChange, session ? "agent:first:main" : undefined);
     await updated.promise;
     expectStatus(session ? "ready" : "unavailable");
     window.dispatchEvent(new Event("focus"));
@@ -68,12 +68,12 @@ it.each(["session", "dispose"] as const)(
     await updated.promise;
     const status = session ? "unavailable" : "ready";
     expectStatus(status);
-    requestUpdate.mockClear();
+    onCatalogChange.mockClear();
     stale.resolve(catalog(session));
     await stale.promise;
     await Promise.resolve();
     expectStatus(status);
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(onCatalogChange).not.toHaveBeenCalled();
     if (session) {
       picker.syncCatalog(client, true, "agent:second:main");
       expect(readCatalog).toHaveBeenCalledTimes(3);
@@ -127,7 +127,7 @@ it.each([
         speech: {
           activeProvider: talkProvider,
           providers: [
-            { id: "openai", configured: talkReady },
+            { id: "openai", configured: talkReady, apiKeyRequired: !talkReady },
             { id: "other", configured: true },
           ],
         },
@@ -143,6 +143,7 @@ it.each([
     expect(picker).toMatchObject({
       realtimeStatus: ready ? "ready" : "unavailable",
       dictationStatus: "ready",
+      apiKeyProviders: { speech: ready ? undefined : "openai" },
     });
     expect(request.mock.calls.some(([method]) => method === "tts.status")).toBe(!talkProvider);
   },
@@ -179,16 +180,11 @@ it.each(["close", "dispose", "replace", "remain open"] as const)(
       picker.handleOpen();
     }
     initial.resolve([]);
-    async function waitDiscovery(index: number) {
-      const result = discovery.mock.results[index];
-      assert.isDefined(result);
-      await result.value;
-    }
-    await waitDiscovery(0);
+    await discovery.mock.results[0]!.value;
     const staleProbes = getUserMedia.mock.calls.length;
     if (transition === "replace") {
       replacement.resolve([]);
-      await waitDiscovery(1);
+      await discovery.mock.results[1]!.value;
     }
     expect(staleProbes).toBe(transition === "remain open" ? 1 : 0);
     const permits = transition === "remain open" || transition === "replace";
@@ -197,5 +193,40 @@ it.each(["close", "dispose", "replace", "remain open"] as const)(
     expect(picker.open).toBe(permits);
     picker.dispose();
     expect(removeEventListener.mock.calls).toEqual(addEventListener.mock.calls);
+  },
+);
+
+it("loads only session-scoped dictation readiness for a guest", async () => {
+  const request = vi.fn().mockResolvedValue(catalog(true));
+  const client = {
+    request,
+    auth: { role: "operator", scopes: ["operator.sessions.write"] },
+  } as unknown as GatewayBrowserClient;
+  picker = new ComposerMicrophoneOwner();
+  picker.syncCatalog(client, true, "agent:roboclaw:guest-chat");
+  await vi.waitFor(() => expect(picker.dictationStatus).toBe("ready"));
+  expect(request.mock.calls).toEqual([
+    ["talk.catalog", { sessionKey: "agent:roboclaw:guest-chat" }],
+  ]);
+  expect(picker.realtimeStatus).toBe("unavailable");
+  expect(picker.canConfigure).toBe(false);
+});
+
+it.each([undefined, "agent:roboclaw:guest-chat"])(
+  "does not discover dictation without writable session authority (%s)",
+  async (sessionKey) => {
+    const request = vi.fn();
+    const client = {
+      request,
+      auth: {
+        role: "operator",
+        scopes: sessionKey ? ["operator.sessions.read"] : ["operator.sessions.write"],
+      },
+    } as unknown as GatewayBrowserClient;
+    picker = new ComposerMicrophoneOwner();
+    picker.syncCatalog(client, true, sessionKey);
+    expect(request).not.toHaveBeenCalled();
+    expectStatus("unavailable");
+    expect(picker.canConfigure).toBe(false);
   },
 );
