@@ -77,7 +77,10 @@ function indexDefinitions(database: DatabaseSync) {
 
 function retained(database: DatabaseSync) {
   return {
-    nodes: rows(database, "SELECT * FROM session_nodes ORDER BY session_key"),
+    // v45 adds the nullable Archive Undo marker after this step; compare the retained columns.
+    nodes: rows(database, "SELECT * FROM session_nodes ORDER BY session_key").map(
+      ({ archive_undo_marker: _archiveUndoMarker, ...node }) => node,
+    ),
     reactions: rows(database, "SELECT * FROM session_reactions ORDER BY identity_id"),
   };
 }

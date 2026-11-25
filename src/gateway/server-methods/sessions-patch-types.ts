@@ -7,7 +7,6 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryCanonicalReplacement } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
-import type { ArchiveUndoCaller } from "./sessions-patch-archive-undo.js";
 import type {
   SessionPatchArchivePreparation,
   SessionPatchArchiveTarget,
@@ -19,6 +18,14 @@ import type {
   GatewayRequestContext,
   SessionMutationAuthorization,
 } from "./types.js";
+
+/** Admitted Archive Undo issuer; checked again before each Archive drain and response. */
+export type ArchiveUndoCaller = {
+  profileId: string;
+  connId: string;
+  token?: string;
+  assertCurrent: () => void;
+};
 
 export type MutationTarget = SessionPatchTargetIdentity & {
   commitGuard: () => ErrorShape | undefined;

@@ -395,7 +395,7 @@ export function rewriteDoctorSessionEntries(
           let numericProjection: ReturnType<typeof bindSessionEntryNumericChanges> | undefined;
           let snapshots: ReturnType<typeof splitSessionEntrySnapshots>["snapshots"] | undefined;
           let entryValid = row.entry_valid;
-          let retiresArchiveUndo = false;
+          let retiresArchiveUndo: boolean;
           if (params.rawTransform) {
             const entry = safeParseJsonRecord(row.entry_json);
             if (!entry) {
@@ -491,11 +491,11 @@ export function rewriteDoctorSessionEntries(
             attachSessionEntrySnapshots(entry, row);
             const previousJson = JSON.stringify(entry);
             const previousStatus = entry.status;
-            const archiveFacts = (row: SessionEntry) => [
-              row.sessionId,
-              row.lifecycleRevision,
-              row.archivedAt,
-              row.pinnedAt,
+            const archiveFacts = (candidate: SessionEntry) => [
+              candidate.sessionId,
+              candidate.lifecycleRevision,
+              candidate.archivedAt,
+              candidate.pinnedAt,
             ];
             const previousArchive = archiveFacts(entry);
             const transformedEntry = params.transform(entry, sessionKey);

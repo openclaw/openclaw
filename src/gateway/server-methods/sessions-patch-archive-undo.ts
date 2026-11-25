@@ -20,6 +20,7 @@ import { invalidSessionRequest } from "../session-request-error.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
 import type {
+  ArchiveUndoCaller,
   GroupMutationOperation,
   MutationOutcome,
   PreparedPatchTarget,
@@ -37,13 +38,6 @@ const ALLOWED_FIELDS = new Set([
 ]);
 // Mac shows Undo for six seconds of unpaused time; abandoned capabilities have a separate hard bound.
 const UNDO_MAX_AGE_MS = 60 * 60_000;
-export type ArchiveUndoCaller = {
-  profileId: string;
-  connId: string;
-  token?: string;
-  assertCurrent: () => void;
-};
-
 export function admitArchiveUndo(
   options: GatewayRequestHandlerOptions,
   patch: Omit<SessionsPatchParams, "key">,
