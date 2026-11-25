@@ -18,6 +18,7 @@ type WidgetSandboxHostOptions = {
   allowScripts?: boolean;
   loadDocument: (signal: AbortSignal) => Promise<string>;
   onLoaded: () => void;
+  onProxyReload?: () => void;
   onRendered?: () => void;
   onError: (error: unknown) => void;
   onReadyTimeout: () => void;
@@ -137,7 +138,12 @@ export class WidgetSandboxHost {
     ) {
       return;
     }
-    // Readiness is one-shot, so retain it even while a mounted widget is hidden.
+    // Some browsers recreate the browsing context when chat moves an iframe.
+    // A new proxy has no inner document and cannot use the old bridge.
+    if (this.loaded && this.options.onProxyReload) {
+      this.reset();
+      this.options.onProxyReload();
+    }
     this.proxyReady = true;
     this.clearRetry();
     this.clearReadyTimeout();

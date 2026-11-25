@@ -3,11 +3,10 @@ import { listen } from "./listener.ts";
 type Subscription = {
   callback: (event: MessageEvent) => void;
   order: number;
-  source?: MessageEventSource;
 };
 type MessagePool = {
-  sources: Map<MessageEventSource, Set<Subscription>>;
-  frames: Map<HTMLIFrameElement, Set<Subscription>>;
+  subscriptions: Map<MessageEventSource | HTMLIFrameElement, Set<Subscription>>;
+  frames: Set<HTMLIFrameElement>;
   nextOrder: number;
   stop: () => void;
 };
@@ -22,36 +21,45 @@ export function observeWindowMessage(
 ): () => void {
   let pool = pools.get(view);
   if (!pool) {
-    const sources = new Map<MessageEventSource, Set<Subscription>>();
-    const frames = new Map<HTMLIFrameElement, Set<Subscription>>();
+    const subscriptions: MessagePool["subscriptions"] = new Map();
+    const frames = new Set<HTMLIFrameElement>();
+    const frameBySource = new WeakMap<MessageEventSource, HTMLIFrameElement>();
     pool = {
-      sources,
+      subscriptions,
       frames,
       nextOrder: 0,
       stop: listen(view, "message", (event) => {
-        if (!event.source) {
+        const sender = event.source;
+        if (!sender) {
           return;
         }
-        for (const [frame, pending] of frames) {
-          if (frame.contentWindow !== event.source) {
-            continue;
+        // A retained element can acquire a new WindowProxy. Cache the lookup,
+        // not the binding: only its current contentWindow can deliver messages.
+        let frame = frameBySource.get(sender);
+        if (!frame || !frames.has(frame) || frame.contentWindow !== sender) {
+          frame = undefined;
+          for (const candidate of frames) {
+            if (candidate.contentWindow === sender) {
+              frame = candidate;
+              frameBySource.set(sender, frame);
+              break;
+            }
           }
-          const merged = [...(sources.get(event.source) ?? []), ...pending].toSorted(
-            (left, right) => left.order - right.order,
-          );
-          for (const subscription of pending) {
-            subscription.source = event.source;
-          }
-          sources.set(event.source, new Set(merged));
-          frames.delete(frame);
         }
-        const subscribers = sources.get(event.source);
-        if (!subscribers) {
+        const direct = subscriptions.get(sender);
+        const current = frame && subscriptions.get(frame);
+        if (!direct && !current) {
           return;
         }
-        const delivery = [...subscribers];
+        const delivery =
+          direct && current
+            ? [...direct, ...current].toSorted((left, right) => left.order - right.order)
+            : [...(direct ?? current!)];
         for (const subscriber of delivery) {
-          if (!subscribers.has(subscriber)) {
+          if (
+            !direct?.has(subscriber) &&
+            !(current?.has(subscriber) && frame?.contentWindow === sender)
+          ) {
             continue;
           }
           try {
@@ -64,41 +72,23 @@ export function observeWindowMessage(
     };
     pools.set(view, pool);
   }
-  const subscription: Subscription = { callback, order: pool.nextOrder++ };
-  let frame: HTMLIFrameElement | undefined;
+  // Reading contentWindow at registration can initialize the child's context.
   if (source instanceof HTMLIFrameElement) {
-    frame = source;
-    // Reading contentWindow here can synchronously initialize the child's context.
-    // Its first message supplies the source after the child is running.
-    let pending = pool.frames.get(frame);
-    if (!pending) {
-      pending = new Set();
-      pool.frames.set(frame, pending);
-    }
-    pending.add(subscription);
-  } else {
-    subscription.source = source;
-    let subscribers = pool.sources.get(subscription.source);
-    if (!subscribers) {
-      subscribers = new Set();
-      pool.sources.set(subscription.source, subscribers);
-    }
-    subscribers.add(subscription);
+    pool.frames.add(source);
   }
+  const subscription: Subscription = { callback, order: pool.nextOrder++ };
+  const subscribers = pool.subscriptions.get(source) ?? new Set<Subscription>();
+  pool.subscriptions.set(source, subscribers);
+  subscribers.add(subscription);
   return () => {
-    const resolvedSource = subscription.source;
-    const subscribers = resolvedSource ? pool.sources.get(resolvedSource) : pool.frames.get(frame!);
-    if (!subscribers?.delete(subscription)) {
+    if (!subscribers.delete(subscription) || subscribers.size > 0) {
       return;
     }
-    if (subscribers.size === 0) {
-      if (resolvedSource) {
-        pool.sources.delete(resolvedSource);
-      } else {
-        pool.frames.delete(frame!);
-      }
+    pool.subscriptions.delete(source);
+    if (source instanceof HTMLIFrameElement) {
+      pool.frames.delete(source);
     }
-    if (pool.sources.size === 0 && pool.frames.size === 0) {
+    if (pool.subscriptions.size === 0) {
       pool.stop();
       pools.delete(view);
     }

@@ -82,8 +82,12 @@ it("keeps the receiving window scoped and skips subscriptions retired during del
 it("defers frame source lookup until delivery and promotes only the matching frame", () => {
   const frame = document.body.appendChild(document.createElement("iframe"));
   onTestFinished(() => frame.remove());
+  const sibling = document.body.appendChild(document.createElement("iframe"));
+  onTestFinished(() => sibling.remove());
   const source = frame.contentWindow!;
   const sourceRead = vi.spyOn(frame, "contentWindow", "get");
+  const siblingRead = vi.spyOn(sibling, "contentWindow", "get");
+  onTestFinished(observeWindowMessage(window, sibling, vi.fn()));
   const callback = vi.fn();
   onTestFinished(observeWindowMessage(window, frame, callback));
   expect(sourceRead).not.toHaveBeenCalled();
@@ -92,9 +96,32 @@ it("defers frame source lookup until delivery and promotes only the matching fra
   const event = new MessageEvent("message", { source });
   window.dispatchEvent(event);
   expect(callback).toHaveBeenCalledExactlyOnceWith(event);
-  sourceRead.mockClear();
+  siblingRead.mockClear();
   window.dispatchEvent(event);
-  expect(sourceRead).not.toHaveBeenCalled();
+  expect(siblingRead).not.toHaveBeenCalled();
+  expect(callback).toHaveBeenCalledTimes(2);
+});
+
+it("follows a retained iframe to its replacement window and ignores the old one", () => {
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  onTestFinished(() => frame.remove());
+  const original = frame.contentWindow!;
+  const replacement = sourceWindow();
+  const callback = vi.fn();
+  const release = observeWindowMessage(window, frame, callback);
+  onTestFinished(release);
+  const first = new MessageEvent("message", { source: original });
+  window.dispatchEvent(first);
+  expect(callback).toHaveBeenCalledExactlyOnceWith(first);
+
+  vi.spyOn(frame, "contentWindow", "get").mockReturnValue(replacement);
+  window.dispatchEvent(first);
+  expect(callback).toHaveBeenCalledOnce();
+  const reboot = new MessageEvent("message", { source: replacement });
+  window.dispatchEvent(reboot);
+  expect(callback).toHaveBeenLastCalledWith(reboot);
+  release();
+  window.dispatchEvent(reboot);
   expect(callback).toHaveBeenCalledTimes(2);
 });
 

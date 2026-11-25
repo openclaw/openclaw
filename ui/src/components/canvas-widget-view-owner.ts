@@ -239,7 +239,6 @@ export function createCanvasWidget(
   }
 
   function clearSandbox(): void {
-    inspect.reset();
     cancelFrameAdmission?.();
     cancelFrameAdmission = undefined;
     state.scriptFrameAdmitted = false;
@@ -248,13 +247,18 @@ export function createCanvasWidget(
     sandboxHost = undefined;
     releaseMessages?.();
     releaseMessages = undefined;
+    clearPromptPort();
+    releaseTheme?.();
+    releaseTheme = undefined;
+    reportedHeight = state.contentHeight = undefined;
+  }
+
+  function clearPromptPort(): void {
+    inspect.reset();
     releasePromptPort?.();
     releasePromptPort = undefined;
     promptPort?.close();
     promptPort = undefined;
-    releaseTheme?.();
-    releaseTheme = undefined;
-    reportedHeight = state.contentHeight = undefined;
   }
 
   function sameOwner(binding: ViewBinding | undefined): binding is ViewBinding {
@@ -470,6 +474,7 @@ export function createCanvasWidget(
       sandboxShellHtml: view.sandboxShellHtml,
       documentKey: `${binding.docId}\0${binding.generation}`,
       loadDocument: async () => view.html,
+      onProxyReload: clearPromptPort,
       onLoaded: () => {
         state.pending = false;
         postHostState();
