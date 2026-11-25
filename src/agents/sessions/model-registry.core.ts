@@ -27,6 +27,7 @@ import {
   type PersistedPluginModelCatalog,
   type PluginModelCatalogMetadataSnapshot,
 } from "../plugin-model-catalog.js";
+import { resolveProviderDisplayName } from "../provider-display-name.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.core.js";
 import {
@@ -683,6 +684,18 @@ export class ModelRegistry {
     }
 
     return { configured: true, source: "models_json_key" };
+  }
+
+  /** Released through plugin-sdk/agent-sessions; instance registrations keep their precedence. */
+  getProviderDisplayName(provider: string): string {
+    const registeredProvider = this.registeredProviders.get(provider);
+    const oauthProvider = this.authStorage.getOAuthProviders().find((p) => p.id === provider);
+    return (
+      registeredProvider?.name ??
+      registeredProvider?.oauth?.name ??
+      oauthProvider?.name ??
+      resolveProviderDisplayName(provider, { config: this.config ?? {}, owners: {} })
+    );
   }
 
   async getApiKeyForProvider(provider: string): Promise<string | undefined> {
