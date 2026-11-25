@@ -125,24 +125,9 @@ extension OpenClawChatViewModel {
                 model: defaults.model))
     }
 
-    /// The model the session runs on, the agent's own included, so the picker can mark it.
+    /// The model the session runs on right now, however it got there, so the picker can mark it.
     public func isCurrentPickerModel(_ model: OpenClawChatModelChoice) -> Bool {
         self.selectedModelChoice(for: self.currentSessionEntry())?.selectionID == model.selectionID
-    }
-
-    /// The agent's own model, as the composer chip writes it.
-    public var defaultModelShortLabel: String? {
-        let defaults = self.modelPickerDefault
-        guard let defaultModelID = normalizedModelSelectionID(defaults.model, provider: defaults.provider) else {
-            return nil
-        }
-        // An exact provider/model ref first: a router can list the same id under its own provider.
-        guard let choice = self.modelChoices.first(where: { $0.selectionID == defaultModelID })
-            ?? self.modelChoices.first(where: { $0.modelID == defaultModelID })
-        else {
-            return defaultModelID.split(separator: "/").last.map(String.init) ?? defaultModelID
-        }
-        return Self.shortModelLabel(name: choice.name, provider: choice.provider, modelID: choice.modelID)
     }
 
     /// Picking a model waits while settings save, and on the phone while a reply runs.
@@ -157,11 +142,7 @@ extension OpenClawChatViewModel {
 
     public var modelSelectionTargetDescription: String? {
         switch self.sessionDefaults?.modelSelectionTarget {
-        #if os(iOS)
-        case "agent": String(localized: "Changes this agent’s default")
-        #else
         case "agent": String(localized: "Changes this agent's default")
-        #endif
         case "global": String(localized: "Changes the global default")
         default: nil
         }
@@ -283,11 +264,6 @@ extension OpenClawChatViewModel {
               !provider.isEmpty
         else { return modelID }
         return "\(provider.lowercased())/\(modelID)"
-    }
-
-    /// Whether a chosen model is the agent's own one, so going back to it would change nothing.
-    func isDefaultModel(selection selectionID: String) -> Bool {
-        self.modelChoices.first { $0.selectionID == selectionID }.map(self.isDefaultModel) ?? false
     }
 
     public func isDefaultModel(_ model: OpenClawChatModelChoice) -> Bool {

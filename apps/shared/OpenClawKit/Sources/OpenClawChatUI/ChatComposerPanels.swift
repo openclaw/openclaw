@@ -109,23 +109,15 @@ struct ChatComposerSurfaceAnchorKey: PreferenceKey {
 }
 
 extension View {
-    /// Presents the phone composer's model picker sheet and floats its effort bar over this chat. `agentName` and
-    /// `agentAvatar` draw the way back to the agent's own model.
-    public func openClawChatComposerPanels(
-        viewModel: OpenClawChatViewModel,
-        agentName: String,
-        agentAvatar: UIImage?) -> some View
-    {
-        self.modifier(ChatComposerPanelHost(
-            viewModel: viewModel,
-            agent: ChatModelPickerAgent(name: agentName, avatar: agentAvatar)))
+    /// Presents the phone composer's model picker sheet and floats its effort bar over this chat.
+    public func openClawChatComposerPanels(viewModel: OpenClawChatViewModel) -> some View {
+        self.modifier(ChatComposerPanelHost(viewModel: viewModel))
     }
 }
 
 /// Hosts the composer's panels: the model picker as a system sheet and the effort bar above the composer.
 struct ChatComposerPanelHost: ViewModifier {
     let viewModel: OpenClawChatViewModel
-    let agent: ChatModelPickerAgent
 
     @State private var controller = ChatComposerPanelController()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -149,7 +141,6 @@ struct ChatComposerPanelHost: ViewModifier {
                 content: {
                     ChatModelPickerSheet(
                         viewModel: self.viewModel,
-                        agent: self.agent,
                         onPick: { self.controller.dismiss() },
                         onClose: { self.controller.dismiss() },
                         onSignIn: { self.controller.requestSignIn() })

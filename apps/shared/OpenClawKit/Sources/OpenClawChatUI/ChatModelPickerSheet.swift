@@ -6,15 +6,16 @@ import UIKit
 /// pushes its models; with one provider its models sit at the root. Search covers every provider.
 struct ChatModelPickerSheet: View {
     let viewModel: OpenClawChatViewModel
-    let agent: ChatModelPickerAgent
     let onPick: () -> Void
     let onClose: () -> Void
     let onSignIn: () -> Void
 
     @State private var detent: PresentationDetent?
-    /// Tall enough for the usual root (the agent's row, up to four providers and Model sign-in) to rest above
-    /// the search field; it follows the text size and stays one height through a push.
-    @ScaledMetric(relativeTo: .body) private var restingHeight: CGFloat = 560
+    /// Tall enough for up to four providers and Model sign-in to rest above the search field. It grows with
+    /// the text size but never shrinks below its default, since rows keep their minimum height at small sizes;
+    /// it stays one height through a push.
+    @ScaledMetric(relativeTo: .body) private var scaledRestingHeight: CGFloat = Self.restingHeight
+    private static let restingHeight: CGFloat = 456
     /// The floating search field at the bottom does not inset the list; this lets the last row scroll clear.
     @ScaledMetric(relativeTo: .body) private var searchClearance: CGFloat = 64
     @State private var query = ""
@@ -51,8 +52,8 @@ struct ChatModelPickerSheet: View {
         }
         .tint(.primary)
         .accessibilityIdentifier("chat-model-picker")
-        .presentationDetents([.height(self.restingHeight), .large], selection: Binding(
-            get: { self.detent ?? .height(self.restingHeight) },
+        .presentationDetents([self.restingDetent, .large], selection: Binding(
+            get: { self.detent ?? self.restingDetent },
             set: { self.detent = $0 }))
         .presentationDragIndicator(.visible)
         // Below full height iOS draws the sheet as glass, which lets the composer's red button tint it
@@ -67,6 +68,10 @@ struct ChatModelPickerSheet: View {
         .task {
             if self.viewModel.modelChoices.isEmpty { await self.viewModel.fetchModels() }
         }
+    }
+
+    private var restingDetent: PresentationDetent {
+        .height(max(Self.restingHeight, self.scaledRestingHeight))
     }
 
     @ViewBuilder
@@ -102,18 +107,6 @@ struct ChatModelPickerSheet: View {
                 self.signInRow
             }
         } else {
-            // What a pick changes, at the top where it is read before choosing.
-            if let target = self.viewModel.modelSelectionTargetDescription {
-                Section {} header: {
-                    Text(target)
-                        .font(OpenClawChatTypography.settingsFootnote)
-                        .textCase(nil)
-                        .accessibilityIdentifier("chat-composer-model-selection-target")
-                }
-            }
-            if let agentRow = self.agentDefaultRow {
-                Section { agentRow }
-            }
             // A model can sit in two sections at once; each section keeps its own row identities.
             if !catalog.favorites.isEmpty {
                 Section {
@@ -175,39 +168,6 @@ struct ChatModelPickerSheet: View {
         }
         .accessibilityValue(holdsCurrent ? Text("Current provider") : Text(verbatim: ""))
         .accessibilityIdentifier("chat-model-picker-provider-\(provider.id)")
-    }
-
-    /// The way back to the agent's own model, shown while the session uses another one.
-    private var agentDefaultRow: AnyView? {
-        guard self.viewModel.canSelectDefaultModel,
-              self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID,
-              !self.viewModel.isDefaultModel(selection: self.viewModel.modelSelectionID)
-        else { return nil }
-        let name = self.agent.name.trimmedNonEmpty ?? String(localized: "Agent")
-        let model = self.viewModel.defaultModelShortLabel
-        return AnyView(Button {
-            self.viewModel.selectModel(OpenClawChatViewModel.defaultModelSelectionID)
-            self.onPick()
-        } label: {
-            HStack(spacing: 12) {
-                ChatModelPickerAgentBadge(agent: self.agent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: name)
-                        .font(OpenClawChatTypography.settingsBody)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(Color.primary)
-                    if let model {
-                        Text(verbatim: model).font(OpenClawChatTypography.settingsFootnote).foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Text("Use").font(OpenClawChatTypography.settingsBody).foregroundStyle(.secondary)
-            }
-        }
-        .disabled(self.viewModel.composerModelChoicesLocked)
-        .accessibilityLabel(Text(verbatim: [name, model].compactMap(\.self).joined(separator: ", ")))
-        .accessibilityHint(Text("Switches back to the agent’s model."))
-        .accessibilityIdentifier("chat-model-picker-agent-default"))
     }
 
     private var signInRow: some View {
@@ -331,33 +291,6 @@ private struct ChatModelPickerCheck: View {
             .font(.body.weight(.semibold))
             .foregroundStyle(.tint)
             .accessibilityHidden(true)
-    }
-}
-
-/// The agent whose own model the picker offers to go back to.
-struct ChatModelPickerAgent {
-    let name: String
-    let avatar: UIImage?
-}
-
-private struct ChatModelPickerAgentBadge: View {
-    let agent: ChatModelPickerAgent
-    @ScaledMetric(relativeTo: .body) private var size: CGFloat = 28
-
-    var body: some View {
-        Group {
-            if let avatar = self.agent.avatar {
-                Image(uiImage: avatar).resizable().scaledToFill()
-            } else {
-                Image(systemName: "person.crop.circle")
-                    .resizable()
-                    .scaledToFit()
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(width: self.size, height: self.size)
-        .clipShape(Circle())
-        .accessibilityHidden(true)
     }
 }
 #endif
