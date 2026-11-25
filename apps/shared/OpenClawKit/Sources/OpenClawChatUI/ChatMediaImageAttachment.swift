@@ -131,13 +131,14 @@ struct ChatUserImageSource {
 struct ChatImageBox: Layout {
     let size: CGSize
 
-    init(pixelSize: CGSize?) {
+    init(pixelSize: CGSize?, maxWidth: CGFloat = .infinity) {
         guard let pixelSize, pixelSize.width > 0, pixelSize.height > 0 else {
-            self.size = CGSize(width: 400, height: 400 / 1.5)
+            let width = min(400, maxWidth)
+            self.size = CGSize(width: width, height: width / 1.5)
             return
         }
         let ratio = pixelSize.width / pixelSize.height
-        let width = min(max(pixelSize.width, 160), 400, 360 * ratio)
+        let width = min(max(pixelSize.width, 160), 400, 360 * ratio, maxWidth)
         self.size = CGSize(width: width, height: width / ratio)
     }
 
@@ -178,6 +179,8 @@ struct ChatMediaImageAttachment: View {
     let gatewaySize: CGSize?
     /// Set for a square gallery tile; the image fills it.
     let tileSide: CGFloat?
+    /// The widest the box may be, below the Control UI's 400 pt preview cap.
+    let maxWidth: CGFloat
     /// What VoiceOver reads while the bytes load, when the label alone would not say so.
     let loadingLabel: String?
     /// The viewer's loader, when the transcript's reads a smaller rendition than the original.
@@ -200,6 +203,7 @@ struct ChatMediaImageAttachment: View {
         width: Int?,
         height: Int?,
         tileSide: CGFloat? = nil,
+        maxWidth: CGFloat = .infinity,
         memoryAlias: String? = nil,
         loadingLabel: String? = nil,
         resolverReady: Bool,
@@ -214,6 +218,7 @@ struct ChatMediaImageAttachment: View {
         self.load = load
         #if os(iOS)
         self.tileSide = tileSide
+        self.maxWidth = maxWidth
         self.loadingLabel = loadingLabel
         self.viewerLoad = viewerLoad
         if let width, let height, width > 0, height > 0 {
@@ -254,7 +259,8 @@ struct ChatMediaImageAttachment: View {
         // The bubble's corner: the Control UI pairs 20 px images with 18 px bubbles
         // (ui/src/styles/chat/message-layout.css:546-553, grouped.css:2089-2097).
         let shape = RoundedRectangle(cornerRadius: ChatImageViewerThumbnail.cornerRadius, style: .continuous)
-        let box = self.tileSide.map { ChatImageBox(tile: $0) } ?? ChatImageBox(pixelSize: self.pixelSize)
+        let box = self.tileSide.map { ChatImageBox(tile: $0) }
+            ?? ChatImageBox(pixelSize: self.pixelSize, maxWidth: self.maxWidth)
         return box {
             ZStack {
                 shape.fill(OpenClawChatTheme.assistantText.opacity(0.07))

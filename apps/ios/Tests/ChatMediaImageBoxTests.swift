@@ -33,6 +33,23 @@ struct ChatMediaImageBoxTests {
         #expect(ChatImageBox(pixelSize: CGSize(width: 4000, height: 1000)).size == CGSize(width: 400, height: 100))
     }
 
+    @Test func `a sent photo is never wider than the text bubble can be`() {
+        // A 393 pt iPhone: a 361 pt column, a 296 pt bubble.
+        let column = ChatColumnLayout(paneWidth: 393)
+        let cap = column.userBubbleMaxWidth
+        let landscape = ChatImageBox(pixelSize: CGSize(width: 1600, height: 1200), maxWidth: cap).size
+        #expect(landscape.width == cap)
+        #expect(abs(landscape.width / landscape.height - 4.0 / 3.0) < 0.001)
+        let unknown = ChatImageBox(pixelSize: nil, maxWidth: cap).size
+        #expect(unknown.width == cap)
+        #expect(abs(unknown.width / unknown.height - 1.5) < 0.001)
+        // A narrow photo keeps its own box.
+        let tall = ChatImageBox(pixelSize: CGSize(width: 1179, height: 2556), maxWidth: cap).size
+        #expect(abs(tall.width - 166.06) < 0.01)
+        // Three tiles and two gaps fit the same measure.
+        #expect(3 * column.userImageTileSide + 2 * 4 <= cap)
+    }
+
     @Test func `a sent photo reads from the Control UI's inbound media route`() throws {
         let source = "media://inbound/photo-63DF6636---5553a37d.jpg"
         #expect(OpenClawChatInboundMedia.canonicalSource(" \(source) ") == source)

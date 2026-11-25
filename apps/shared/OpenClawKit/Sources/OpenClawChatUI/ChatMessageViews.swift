@@ -227,6 +227,14 @@ private enum ChatUIConstants {
 }
 
 #if os(iOS)
+extension ChatColumnLayout {
+    /// A gallery tile: three tiles and their gaps fit the user bubble's measure, at most 128 pt.
+    var userImageTileSide: CGFloat {
+        let gap = ChatUIConstants.userImageTileGap
+        return min(ChatUIConstants.userImageTileMax, ((self.userBubbleMaxWidth - 2 * gap) / 3).rounded(.down))
+    }
+}
+
 /// What the transcript attaches to a user bubble: its long-press menu, its reactions pill, and
 /// where it is on its way to the Gateway.
 struct ChatUserBubbleAccessories {
@@ -958,10 +966,11 @@ extension ChatMessageBubble {
     }
 
     /// Three tiles to a row, two for two or four images; the last row keeps to the trailing edge.
+    /// The rows fit the text bubble's measure, as every attachment above the bubble does.
     private func userImageTiles(_ images: [OpenClawChatMessageContent]) -> some View {
         let gap = ChatUIConstants.userImageTileGap
         let columns = images.count == 2 || images.count == 4 ? 2 : 3
-        let side = min(ChatUIConstants.userImageTileMax, ((self.column.columnWidth - 2 * gap) / 3).rounded(.down))
+        let side = self.column.userImageTileSide
         let rows = stride(from: 0, to: images.count, by: columns).map {
             Array(images[$0..<min($0 + columns, images.count)])
         }
@@ -1002,6 +1011,7 @@ extension ChatMessageBubble {
 /// updates attachments and not the row that holds them.
 private struct AttachmentRow: View {
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.openClawChatColumn) private var column
     @Environment(\.openClawChatGateway) private var gateway
 
     let att: OpenClawChatMessageContent
@@ -1033,6 +1043,8 @@ private struct AttachmentRow: View {
                 width: self.att.width,
                 height: self.att.height,
                 tileSide: self.imageTileSide,
+                // A sent photo is never wider than the text bubble can be.
+                maxWidth: self.column.userBubbleMaxWidth,
                 memoryAlias: image.memoryAlias,
                 loadingLabel: String(localized: "Loading photo"),
                 resolverReady: image.local != nil || self.gateway?.isResolverReady() == true,
@@ -1078,6 +1090,7 @@ private struct AttachmentRow: View {
                     width: self.att.width,
                     height: self.att.height,
                     tileSide: self.imageTileSide,
+                    maxWidth: self.isUser ? self.column.userBubbleMaxWidth : .infinity,
                     resolverReady: resolverReady,
                     gallery: self.imageGallery,
                     load: { try await self.loadMedia($0, .image, nil) })
