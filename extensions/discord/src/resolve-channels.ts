@@ -12,6 +12,7 @@ type DiscordChannelSummary = {
   id: string;
   name: string;
   guildId: string;
+  parentId?: string | null;
   type?: number;
   archived?: boolean;
 };
@@ -81,6 +82,7 @@ export async function fetchChannel(
       id: raw.id,
       name: typeof raw.name === "string" ? raw.name : "",
       guildId: raw.guild_id,
+      parentId: raw.parent_id,
       type: raw.type,
     },
   };

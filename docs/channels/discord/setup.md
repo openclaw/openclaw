@@ -216,7 +216,7 @@ Once DMs work, you can turn your server into a full workspace where each channel
 
     In guided setup (`openclaw channels add discord`), enter a server name, `Server/#channel`, or `#channel`. The wizard shows the match and saves numeric IDs. When it cannot identify one server, copy the intended Server ID from Discord and enter `guild:<id>`. A number on its own selects a channel.
 
-    You can retry or skip individual entries. The wizard keeps successful additions and existing rules. An empty allowlist blocks server messages.
+    You can retry or skip individual entries. The wizard keeps successful additions and existing rules. If a numeric entry would override an existing name or wildcard rule, the wizard asks you to keep or edit the existing rule. An empty allowlist blocks server messages. The wizard asks before finishing with one, even if you skip access configuration.
 
     <Tabs>
       <Tab title="Ask your agent">

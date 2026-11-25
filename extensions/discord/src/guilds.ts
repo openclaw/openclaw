@@ -17,6 +17,7 @@ export type DiscordGuildChannel = {
   name?: string | null;
   type?: number;
   guild_id?: string;
+  parent_id?: string | null;
   thread_metadata?: { archived?: boolean };
 };
 

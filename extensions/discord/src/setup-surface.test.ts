@@ -58,9 +58,10 @@ describe("Discord setup allowlist", () => {
     entries: string,
     discord: NonNullable<OpenClawConfig["channels"]>["discord"],
     retry?: string,
+    confirmValues = [true, true, true],
   ) {
     const prompts = createQueuedWizardPrompter({
-      confirmValues: [true, true, true], // Keep the token, configure guild access.
+      confirmValues,
       selectValues: ["allowlist", retry ? "retry" : "skip", "skip"],
       textValues: [entries, ...(retry ? [retry] : [])],
     });
@@ -101,6 +102,8 @@ describe("Discord setup allowlist", () => {
         { id: "44", name: "general", guild_id: "11" },
         { id: "55", name: "general", guild_id: "22" },
         { id: "66", name: "help", guild_id: "33" },
+        { id: "77", name: "2024", guild_id: "33" },
+        { id: "88", name: "topic", guild_id: "11", type: 11, parent_id: "44" },
       ];
       if (path.endsWith("/channels")) {
         return Response.json(
@@ -141,6 +144,7 @@ describe("Discord setup allowlist", () => {
     expect(notes).toContain("Workshop");
     expect(notes).toContain("66");
     expect(notes).toContain("Added 1");
+    expect(notes).not.toMatch(/empty.*server messages/i);
   });
 
   it.each([
@@ -192,6 +196,39 @@ describe("Discord setup allowlist", () => {
     });
     expect(discord?.accounts?.other).toEqual({ groupPolicy: "disabled" });
     expect(discord?.guilds).toBeUndefined();
+  });
+
+  it.each([
+    { entry: "44", guildKey: "Lab", channelKey: "44" },
+    { entry: "Workshop", guildKey: "*", channelKey: "66" },
+    { entry: "Lab/#general", guildKey: "11", channelKey: "general", retry: "guild:11" },
+    { entry: "44", guildKey: "11", channelKey: "*" },
+    { entry: "77", guildKey: "33", channelKey: "2024" },
+    { entry: "88", guildKey: "11", channelKey: "general" },
+  ])("preserves the existing $guildKey/$channelKey rule on selection of $entry", async (row) => {
+    directory();
+    const original = {
+      token: "fixture-token",
+      groupPolicy: "disabled" as const,
+      guilds: {
+        [row.guildKey]: { users: ["900"], channels: { [row.channelKey]: { enabled: false } } },
+      },
+    };
+    const { discord, notes } = await run(row.entry, original, row.retry);
+    expect(discord?.guilds).toEqual(original.guilds);
+    expect(discord?.groupPolicy).toBe("disabled");
+    expect(notes).toContain("Skipped 1");
+  });
+
+  it("warns when access configuration is skipped with an empty allowlist", async () => {
+    const { notes } = await run("", { token: "fixture-token" }, undefined, [true, false, true]);
+    expect(notes).toMatch(/empty.*server messages/i);
+  });
+
+  it("honors the choice to cancel fresh setup at the empty allowlist warning", async () => {
+    await expect(
+      run("", { token: "fixture-token" }, undefined, [true, true, false]),
+    ).rejects.toThrow(/cancel/i);
   });
 
   it("warns before finishing an empty allowlist", async () => {
