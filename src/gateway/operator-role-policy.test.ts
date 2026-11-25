@@ -437,6 +437,33 @@ describe("operator role policy", () => {
       expect(() => fresh.authority.assertCurrent()).not.toThrow();
       expectCurrent(original.authority);
     }));
+  it.each([
+    { role: "maintainer", identity: ["operator.write"], admin: false },
+    { role: "guest", identity: ["operator.admin"], admin: false },
+    { role: "maintainer", identity: undefined, admin: true },
+    { role: "maintainer", identity: ["operator.admin"], admin: true },
+  ] as const)(
+    "caps linked channel $role authority by verified identity scopes $identity",
+    ({ role, identity, admin }) =>
+      inState(async () => {
+        const profile = github(51, "Linked-Channel");
+        setUserProfileRole(profile.id, role);
+        const cfg = roleConfig();
+        if (identity) {
+          cfg.gateway!.auth = { identityScopes: { "linked-channel@github": [...identity] } };
+        }
+        const sender = { channelId: "discord", accountId: "default", senderId: "linked-sender" };
+        linkUserChannelIdentity(profile.id, sender);
+        expect(Boolean(resolveChannelOperatorAdminAuthority(cfg, sender))).toBe(admin);
+        const unlinked = {
+          channelId: "discord",
+          accountId: "default",
+          senderId: "unlinked-sender",
+        };
+        expect(resolveChannelOperatorAdminAuthority(cfg, unlinked)).toBeUndefined();
+      }),
+  );
+
   it("keeps admitted authority after a role downgrade while new admin requests are refused", () =>
     inState(async () => {
       const { profile, cfg, client: reader, capture } = roleFixture();
