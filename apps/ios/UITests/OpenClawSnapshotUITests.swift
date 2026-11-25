@@ -828,9 +828,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let model = self.inlineModelChip(in: app)
         XCTAssertTrue(model.waitForExistence(timeout: 8))
         model.tap()
-        let target = app.descendants(matching: .any)["chat-composer-model-selection-target"]
-        XCTAssertTrue(target.waitForExistence(timeout: 3))
-        XCTAssertEqual(target.label, "Changes the global default")
+        XCTAssertTrue(app.navigationBars["Model"].waitForExistence(timeout: 3))
         self.attachScreenshot(named: "model-menu-default-accessible")
         // The picker is SwiftUI content; this app's accessibility hit test answers with the hosting view for
         // any SwiftUI element (the base build does the same), so rows are checked for being enabled instead.
@@ -839,14 +837,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
         alternative.tap()
         self.waitForValue("Claude Opus 4.1", of: model)
         model.tap()
-        XCTAssertTrue(target.waitForExistence(timeout: 3))
-        XCTAssertEqual(target.label, "Changes the global default")
-        // Away from the agent's model, the picker offers the way back to it.
-        let agentDefault = app.buttons["chat-model-picker-agent-default"]
-        XCTAssertTrue(agentDefault.waitForExistence(timeout: 3))
-        XCTAssertTrue(agentDefault.isEnabled)
+        XCTAssertTrue(app.navigationBars["Model"].waitForExistence(timeout: 3))
+        // The session's model is the one in effect, picked or not: no row offers a way back to another.
+        XCTAssertFalse(app.buttons["chat-model-picker-agent-default"].exists)
         self.attachScreenshot(named: "model-menu-selected-accessible")
-        agentDefault.tap()
+        let original = self.pickerModelRow("openai/gpt-5.6-sol", provider: "openai", in: app)
+        XCTAssertTrue(original.isEnabled)
+        original.tap()
         self.waitForValue("GPT-5.6", of: model)
     }
 }
@@ -989,13 +986,8 @@ extension OpenClawSnapshotUITests {
     }
 
     func testModelSelectionTargetVariantsPersistInComposer() throws {
-        // A session-scoped pick needs no note; agent and global picks say what they change.
-        let variants: [(target: String, disclosure: String?)] = [
-            ("session", nil),
-            ("agent", "Changes this agent’s default"),
-            ("global", "Changes the global default"),
-        ]
-        for (target, disclosure) in variants {
+        // Whatever a pick changes on the Gateway, the picker only lists models: no scope note in any scope.
+        for target in ["session", "agent", "global"] {
             self.launchApp(
                 for: Self.chatScreenshotTarget,
                 additionalArguments: [
@@ -1007,24 +999,17 @@ extension OpenClawSnapshotUITests {
             let inlineModel = self.inlineModelChip(in: app)
             XCTAssertTrue(inlineModel.waitForExistence(timeout: 8))
             let note = app.descendants(matching: .any)["chat-composer-model-selection-target"]
-            let assertNote = {
-                XCTAssertTrue(app.navigationBars["Model"].waitForExistence(timeout: 3))
-                if let disclosure {
-                    XCTAssertTrue(note.exists, target)
-                    XCTAssertEqual(note.label, disclosure)
-                } else {
-                    XCTAssertFalse(note.exists, "A session-scoped pick shows no scope note")
-                }
-            }
             inlineModel.tap()
-            assertNote()
+            XCTAssertTrue(app.navigationBars["Model"].waitForExistence(timeout: 3))
+            XCTAssertFalse(note.exists, "No scope note for a \(target) pick")
 
             let alternateModel = self.pickerModelRow("anthropic/claude-opus-4-1", provider: "anthropic", in: app)
             alternateModel.tap()
             self.waitForValue("Claude Opus 4.1", of: inlineModel)
 
             inlineModel.tap()
-            assertNote()
+            XCTAssertTrue(app.navigationBars["Model"].waitForExistence(timeout: 3))
+            XCTAssertFalse(note.exists, "No scope note for a \(target) pick")
             let picked = self.pickerModelRow("anthropic/claude-opus-4-1", provider: "anthropic", in: app)
             XCTAssertTrue(picked.isSelected, "The picked model stays the current one")
             self.attachScreenshot(named: "chat-model-selection-target-\(target)")
