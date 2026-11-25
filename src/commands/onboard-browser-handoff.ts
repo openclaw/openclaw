@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
+import { READ_SCOPE } from "../gateway/operator-scopes.js";
 import { openUrlPrivately } from "../infra/browser-handoff.js";
 import { resolveControlUiBrowser } from "../infra/control-ui-browser.js";
 import type { SystemPresence } from "../infra/system-presence.js";
@@ -66,6 +67,8 @@ async function probeDashboardPresence(
     const presence = await callGateway<SystemPresence[]>({
       config: target.config,
       method: "system-presence",
+      // Session-only presence omits the connection identity needed for this probe.
+      scopes: [READ_SCOPE],
       timeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
