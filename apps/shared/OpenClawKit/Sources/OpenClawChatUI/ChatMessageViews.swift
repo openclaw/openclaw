@@ -196,12 +196,83 @@ private struct ChatSystemLine: View {
 private enum ChatUIConstants {
     #if os(iOS)
     static let bubbleCorner: CGFloat = 16
+    /// The gap between a user bubble and its timestamp.
+    static let userFooterSpacing: CGFloat = 4
+    /// How far a reactions pill reaches into the user bubble. Less than the bubble's 14-point
+    /// leading padding, so it never covers text.
+    static let reactionOverlap: CGFloat = 8
     #else
     /// Web `--radius-md` (ui/src/styles/base.css:366) on the user bubble.
     static let bubbleCorner: CGFloat = 10
     #endif
     static let onboardingBubbleCorner: CGFloat = 18
 }
+
+#if os(iOS)
+/// What the transcript attaches to a user bubble: its long-press menu and its reactions pill.
+struct ChatUserBubbleAccessories {
+    let menu: () -> AnyView
+    let reactions: () -> AnyView
+}
+
+/// The user bubble's long-press menu and reactions pill. The pill hangs on the bubble's lower-left
+/// corner: it reaches `reactionOverlap` into the bubble and grows outward, and its bottom stops at
+/// the timestamp's top, so it moves neither the timestamp nor the next message. Beside a bubble as
+/// wide as the column it grows inward instead. The menu lifts the bubble and its pill as one shape,
+/// like Messages lifts a bubble with its tapback: never the row's width or the timestamp.
+private struct ChatUserBubbleDecorations<Bubble: View>: View {
+    @Environment(\.openClawChatColumn) private var column
+    let bubble: Bubble
+    let shape: ChatBubbleShape
+    let accessories: ChatUserBubbleAccessories
+    @State private var bubbleWidth: CGFloat = 0
+    @State private var pill: CGSize = .zero
+
+    var body: some View {
+        let reach = self.pill == .zero ? 0
+            : min(self.pill.width - ChatUIConstants.reactionOverlap, max(0, self.column.columnWidth - self.bubbleWidth))
+        let drop = self.pill == .zero ? 0 : ChatUIConstants.userFooterSpacing
+        // Pad the bubble's frame out to the pill so the menu's preview holds all of it, then take the
+        // padding back so the layout stays the bubble's alone.
+        self.bubble
+            .onGeometryChange(for: CGFloat.self, of: \.size.width) { self.bubbleWidth = $0 }
+            .padding(.leading, reach)
+            .padding(.bottom, drop)
+            .overlay(alignment: .bottomLeading) {
+                self.accessories.reactions()
+                    .fixedSize()
+                    .onGeometryChange(for: CGSize.self, of: \.size) { self.pill = $0 }
+            }
+            .contentShape(
+                .contextMenuPreview,
+                ChatBubbleWithReactionsShape(bubble: self.shape, reach: reach, drop: drop, pill: self.pill))
+            .chatActionContextMenu { self.accessories.menu() }
+            .padding(.leading, -reach)
+            .padding(.bottom, -drop)
+    }
+}
+
+private struct ChatBubbleWithReactionsShape: Shape {
+    let bubble: ChatBubbleShape
+    let reach: CGFloat
+    let drop: CGFloat
+    let pill: CGSize
+
+    func path(in rect: CGRect) -> Path {
+        let bubble = self.bubble.path(in: CGRect(
+            x: rect.minX + self.reach,
+            y: rect.minY,
+            width: rect.width - self.reach,
+            height: rect.height - self.drop))
+        guard self.pill != .zero else { return bubble }
+        return bubble.union(Capsule().path(in: CGRect(
+            x: rect.minX,
+            y: rect.maxY - self.pill.height,
+            width: self.pill.width,
+            height: self.pill.height)))
+    }
+}
+#endif
 
 struct ChatAgentAvatar: View {
     let text: String?
@@ -402,6 +473,10 @@ struct ChatMessageBubble: View, @MainActor Equatable {
     let onToggleUserMessageExpanded: @MainActor () -> Void
     let inlineWidgetScope: ChatInlineWidgetScope
     let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
+    #if os(iOS)
+    /// Not compared: only user bubbles carry it, and the iOS render gate never holds those.
+    var userBubbleAccessories: ChatUserBubbleAccessories?
+    #endif
 
     var canUseIOSRenderGate: Bool {
         guard self.message.role.lowercased() == "assistant" else { return false }
@@ -521,7 +596,7 @@ extension ChatMessageBubble {
             if shouldRenderBubble {
                 if self.isUser {
                     #if os(iOS)
-                    VStack(alignment: .trailing, spacing: 4) {
+                    VStack(alignment: .trailing, spacing: ChatUIConstants.userFooterSpacing) {
                         self.userBubble(text: text, textColor: textColor)
                         self.footer
                             .padding(.trailing, self.style == .onboarding ? 8 : 0)
@@ -547,7 +622,7 @@ extension ChatMessageBubble {
     }
 
     private func userBubble(text: String, textColor: Color) -> some View {
-        self.messageContent(text: text, textColor: textColor)
+        let bubble = self.messageContent(text: text, textColor: textColor)
             .padding(self.bubblePadding)
             .background { ChatUserBubbleSurface() }
             .clipShape(self.bubbleShape)
@@ -559,7 +634,18 @@ extension ChatMessageBubble {
                         style: StrokeStyle(lineWidth: 0.5, lineJoin: .miter))
                 }
             }
-            .padding(.trailing, self.style == .onboarding ? 8 : 0)
+        #if os(iOS)
+        return Group {
+            if let accessories = self.userBubbleAccessories {
+                ChatUserBubbleDecorations(bubble: bubble, shape: self.bubbleShape, accessories: accessories)
+            } else {
+                bubble
+            }
+        }
+        .padding(.trailing, self.style == .onboarding ? 8 : 0)
+        #else
+        return bubble.padding(.trailing, self.style == .onboarding ? 8 : 0)
+        #endif
     }
 
     private var textColor: Color {

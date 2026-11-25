@@ -906,7 +906,8 @@ extension OpenClawChatView {
         let calls = self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : []
         return ChatRowPassInputs(
             contextWindowTokens: self.viewModel.contextUsage?.contextWindowTokens,
-            liveToolCalls: ChatRowPassInputs.liveToolCallsByRun(calls))
+            liveToolCalls: ChatRowPassInputs.liveToolCallsByRun(calls),
+            latestReplyID: ChatAgentFooterPlacement.latestReplyID(in: self.viewModel.transcriptMessages))
     }
 
     @ViewBuilder
@@ -919,7 +920,10 @@ extension OpenClawChatView {
         let actionMessage = msg.presentationBlockIndex == nil ? msg :
             self.viewModel.transcriptMessages.first(where: { $0.id == msg.id }) ?? msg
         let isUser = msg.role.lowercased() == "user"
-        let bubble = ChatMessageBubble(
+        #if os(iOS)
+        let isAssistant = msg.role.lowercased() == "assistant"
+        #endif
+        let bubble = self.attachingUserAccessories(to: ChatMessageBubble(
             message: msg,
             liveToolCalls: msg.workRunID.flatMap { inputs.liveToolCalls[$0] } ?? [],
             metadata: metadata,
@@ -941,7 +945,7 @@ extension OpenClawChatView {
                 modelID: ObjectIdentifier(self.viewModel),
                 sessionTarget: self.viewModel.currentSessionTarget,
                 sessionGeneration: self.viewModel.sessionGeneration),
-            mediaPlaybackAllowed: self.mediaPlaybackAllowed)
+            mediaPlaybackAllowed: self.mediaPlaybackAllowed), actionMessage: actionMessage)
         let row = VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
             Group {
                 #if os(iOS)
@@ -957,9 +961,35 @@ extension OpenClawChatView {
                 #endif
             }
             .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+            #if os(iOS)
+            if msg.presentationOwnsFooter {
+                if isAssistant {
+                    ChatAgentMessageFooter(
+                        viewModel: self.viewModel,
+                        message: msg,
+                        actionMessage: actionMessage,
+                        timestamp: metadata?.timestamp,
+                        showsActions: showsActions && (inputs.latestReplyID == nil || inputs.latestReplyID == msg.id),
+                        replySenderLabel: self.showsComposer ? self.replySenderLabel(forRole: "assistant") : nil,
+                        speech: self.isListenable(actionMessage) ? self.speech : nil,
+                        openFullMessage: {
+                            self.fullMessageRequest = ChatFullMessageReaderRequest(
+                                viewModel: self.viewModel,
+                                messageID: $0)
+                        },
+                        openPicker: { self.reactionPickerMessage = actionMessage })
+                } else if !isUser {
+                    ChatReactionPill(viewModel: self.viewModel, message: msg) {
+                        self.reactionPickerMessage = actionMessage
+                    }
+                }
+                ChatMessageReactionError(viewModel: self.viewModel, message: msg)
+            }
+            #else
             if msg.presentationOwnsFooter {
                 ChatMessageReactions(viewModel: self.viewModel, message: msg)
             }
+            #endif
             if let outboxState = self.viewModel.outboxState(for: msg.id) {
                 ChatOutboxStatusLabel(state: outboxState, queueMode: self.viewModel.outboxQueueMode(for: msg.id))
                     .padding(.trailing, 8)
@@ -1001,7 +1031,44 @@ extension OpenClawChatView {
                 self.hoveredMessageID = nil
             }
         }
+        #if os(iOS)
+        // A user bubble carries its own menu; an agent reply has none, so its text selects in place
+        // and its actions live in the row under it.
+        if isUser || isAssistant {
+            row
+        } else {
+            row.chatActionContextMenu { ChatDeferredContent { self.messageMenuActions(for: actionMessage) } }
+        }
+        #else
         row.chatActionContextMenu { ChatDeferredContent { self.messageMenuActions(for: actionMessage) } }
+        #endif
+    }
+
+    /// User bubbles carry their long-press menu and reactions pill (iOS), so both attach to the
+    /// bubble's own shape instead of the row.
+    private func attachingUserAccessories(
+        to bubble: ChatMessageBubble,
+        actionMessage: OpenClawChatMessage) -> ChatMessageBubble
+    {
+        #if os(iOS)
+        let msg = bubble.message
+        guard msg.role.lowercased() == "user" else { return bubble }
+        var bubble = bubble
+        bubble.userBubbleAccessories = ChatUserBubbleAccessories(
+            menu: { AnyView(ChatDeferredContent { self.messageMenuActions(for: actionMessage) }) },
+            reactions: {
+                AnyView(Group {
+                    if msg.presentationOwnsFooter {
+                        ChatReactionPill(viewModel: self.viewModel, message: msg) {
+                            self.reactionPickerMessage = actionMessage
+                        }
+                    }
+                })
+            })
+        return bubble
+        #else
+        return bubble
+        #endif
     }
 
     private func messageActionsMenu(for message: OpenClawChatMessage) -> some View {
@@ -1555,79 +1622,5 @@ extension OpenClawChatView {
     /// change the space available to chat independently of device orientation.
     private var columnLayout: ChatColumnLayout {
         ChatColumnLayout(paneWidth: self.contentWidth)
-    }
-}
-
-/// Row inputs read from the view model once per transcript pass, not once per row.
-struct ChatRowPassInputs {
-    let contextWindowTokens: Int?
-    /// Each row looks up its own run instead of filtering every live call.
-    let liveToolCalls: [String: [OpenClawChatPendingToolCall]]
-
-    static func liveToolCallsByRun(_ calls: [OpenClawChatPendingToolCall]) -> [String: [OpenClawChatPendingToolCall]] {
-        var byRun: [String: [OpenClawChatPendingToolCall]] = [:]
-        for call in calls {
-            guard let runID = call.runID else { continue }
-            byRun[runID, default: []].append(call)
-        }
-        return byRun
-    }
-}
-
-/// Applies drawer and scene visibility to the model. It reads `openClawChatIsObscured` itself, so
-/// opening or closing the sidebar drawer updates stream pacing and composer presentation without
-/// re-running the transcript.
-private struct ChatPresentationActivity: ViewModifier {
-    let viewModel: OpenClawChatViewModel
-    let isOnScreen: Bool
-    @Environment(\.openClawChatIsObscured) private var isObscured
-    #if os(macOS)
-    @Environment(\.appearsActive) private var appearsActive
-    #else
-    @Environment(\.scenePhase) private var scenePhase
-    #endif
-
-    /// A rejected message returns to the composer only while the user can see it.
-    private var isComposerPresentationActive: Bool {
-        #if os(macOS)
-        self.isOnScreen && self.appearsActive && !self.isObscured
-        #else
-        self.isOnScreen && self.scenePhase == .active && !self.isObscured
-        #endif
-    }
-
-    func body(content: Content) -> some View {
-        content
-            .onChange(of: ObjectIdentifier(self.viewModel)) { _, _ in
-                self.viewModel.streamPacing.interval = self.isObscured ? 0.5 : 0.15
-                self.viewModel.setComposerPresentationActive(self.isComposerPresentationActive)
-            }
-            .onChange(of: self.isComposerPresentationActive, initial: true) { _, active in
-                self.viewModel.setComposerPresentationActive(active)
-            }
-            .onChange(of: self.isObscured, initial: true) { _, obscured in
-                self.viewModel.streamPacing.interval = obscured ? 0.5 : 0.15
-            }
-    }
-}
-
-/// Keep frequently changing run telemetry outside the transcript's observation scope.
-private struct ChatRunStatusContent<Content: View>: View {
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        self.content()
-    }
-}
-
-/// Owns the observation of the paced words; its parent only observes live-content shape.
-private struct ChatLiveAssistantText<Content: View>: View {
-    let viewModel: OpenClawChatViewModel
-    @ViewBuilder var content: (String) -> Content
-
-    var body: some View {
-        if let text = self.viewModel.displayedStreamingAssistantText {
-            self.content(text)
-        }
     }
 }

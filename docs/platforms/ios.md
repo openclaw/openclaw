@@ -39,9 +39,9 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - Dictation shows when it is starting and listening, a live microphone waveform, and the words recognized so far. Tap **Done** to add the transcript to your draft or **Cancel** to discard it. Attachments show **Preparing attachments…** while loading and **Sending attachments…** during delivery; failed photo loads show an error so you can select them again.
 - Preserves Markdown paragraph breaks, including before lists and while responses are streaming.
 - Renders completed Mermaid code fences as inline diagrams, with source/copy controls and a full-screen zoomable preview. Diagram rendering uses bundled assets and works offline.
-- Long-press a message and choose **Select Text** to select and copy any span in a native text view; code fences show a copy button that copies the raw code.
+- Assistant replies select in place: press and hold a word, then drag the handles. A selection stays within one block (a run of paragraphs, a heading, or a code block); **Copy Message** under the reply copies the whole reply. For your own messages, long-press the bubble and choose **Select Text** to select any span in a native text view. Code fences show a copy button that copies the raw code.
 - **Settings** opens a native sheet over the current screen. **Advanced** opens the Dashboard settings with full Gateway access.
-- Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
+- Speaks assistant messages on demand: tap **Listen** in the row under a reply. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
 ## Chat text size
 
@@ -264,10 +264,14 @@ A colored session has a narrow leading stripe in session lists and a small dot b
 
 ## Reactions
 
-Saved prompts and assistant replies show emoji reaction chips with counts and
-reactor names for VoiceOver. Tap a chip to toggle your reaction, or long-press a
-message and choose **Add Reaction** for the quick palette. **More…** accepts one
-typed or pasted emoji. Reactions update live while the session is open and do
+Saved prompts and assistant replies show their reactions in one pill: up to three
+emoji, most used first, and the total once there is more than one reaction. On
+your own message the pill sits on the bubble's lower-left corner; under an
+assistant reply it starts the row with the time and the Reply, Copy, Add Reaction
+and Listen buttons. VoiceOver reads who reacted with what. Tap the pill to see
+each reaction with its count and toggle yours, or choose **Add Reaction** (in the
+row under a reply, or in the long-press menu of your own message) for the quick
+palette. **More…** accepts one typed or pasted emoji. Reactions update live while the session is open and do
 not create notifications. Reaction controls follow the Gateway's advertised
 methods, operator scopes, session cap, and current sharing role; sessions you
 can only view show the chips without reaction controls. Archived and catalog

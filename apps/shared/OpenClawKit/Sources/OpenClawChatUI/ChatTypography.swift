@@ -96,6 +96,15 @@ enum OpenClawChatTypography {
         body(size: 11, weight: .regular, relativeTo: .caption2)
     }
 
+    /// The reactions pill: emoji at footnote, the total at caption, so the pill keeps one height.
+    static var reactionEmoji: Font {
+        body(size: 13, weight: .regular, relativeTo: .footnote)
+    }
+
+    static var reactionCount: Font {
+        body(size: 12, weight: .medium, relativeTo: .caption)
+    }
+
     static func avatar(size: CGFloat) -> Font {
         self.body(size: size, weight: .bold, relativeTo: .caption)
     }
