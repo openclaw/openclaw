@@ -750,37 +750,7 @@ struct OpenClawChatComposer: View {
     }
     #endif
 
-    /// iMessage-style trailing control: the talk (mic) affordance while the
-    /// draft is empty, swapping to the send button once the user types.
-    @ViewBuilder
-    var cleanTrailingControl: some View {
-        if Self.showsCompactTalkControl(
-            hasDraftToSend: self.viewModel.hasDraftToSend,
-            hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
-            isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive),
-            let talkControl
-        {
-            ChatTalkButton(
-                control: talkControl,
-                sessionKey: self.viewModel.sessionKey,
-                helpText: self.talkHelpText(talkControl),
-                style: .compact(
-                    controlHeight: cleanControlHeight,
-                    iconControlSize: cleanIconControlSize))
-        } else {
-            sendButton
-                .frame(width: cleanControlHeight, height: cleanControlHeight)
-        }
-    }
-
-    private var isLocalVoiceCaptureActive: Bool {
-        self.dictationTask != nil ||
-            self.dictationControl?.isActive == true ||
-            self.voiceNoteControl?.recorder.isRecording == true ||
-            self.voiceNoteControl?.recorder.isRequestingPermission == true
-    }
-
-    private func talkHelpText(_ talkControl: OpenClawChatTalkControl) -> String {
+    func talkHelpText(_ talkControl: OpenClawChatTalkControl) -> String {
         if !talkControl.isGatewayConnected, !talkControl.isEnabled {
             return "Connect the gateway before starting realtime chat"
         }
@@ -1188,7 +1158,7 @@ extension OpenClawChatComposer {
             set: { self.inputModel?.input = $0 })
     }
 
-    private var inputModel: OpenClawChatViewModel? {
+    var inputModel: OpenClawChatViewModel? {
         // Resolve synchronous input at delivery time, including callbacks from the previous render.
         if let resolveInputModel {
             return resolveInputModel()
@@ -1197,7 +1167,7 @@ extension OpenClawChatComposer {
     }
 
     @ViewBuilder
-    private var sendButton: some View {
+    var sendButton: some View {
         if self.viewModel.pendingRunCount > 0 {
             Button {
                 self.viewModel.abort()
@@ -1369,7 +1339,7 @@ extension OpenClawChatComposer {
         self.composerChrome == .clean ? .leading : .topLeading
     }
 
-    private var stopButtonForeground: Color {
+    var stopButtonForeground: Color {
         #if os(iOS)
         let (red, green, blue) = self.colorScheme == .dark ? (248.0, 113.0, 113.0) : (185.0, 28.0, 28.0)
         return Color(.sRGB, red: red / 255, green: green / 255, blue: blue / 255)
@@ -1378,7 +1348,7 @@ extension OpenClawChatComposer {
         #endif
     }
 
-    private var stopButtonFill: Color {
+    var stopButtonFill: Color {
         #if os(iOS)
         self.stopButtonForeground.opacity(0.14)
         #else
@@ -1386,29 +1356,29 @@ extension OpenClawChatComposer {
         #endif
     }
 
-    private var sendButtonFill: Color {
+    var sendButtonFill: Color {
         self.userAccent ?? OpenClawChatTheme.userBubble
     }
 
-    private var disabledSendButtonFill: Color {
+    var disabledSendButtonFill: Color {
         self.composerChrome == .clean ? .clear : Color.secondary.opacity(0.32)
     }
 
-    private var sendButtonForeground: Color {
+    var sendButtonForeground: Color {
         // The enabled glyph sits on sendButtonFill (the user accent when set);
         // pick contrast-aware ink so light accents stay readable.
         let disabledInk: Color = self.composerChrome == .full ? .white : .secondary.opacity(0.55)
         return self.canSendMessage ? OpenClawChatTheme.userText(on: self.userAccent) : disabledInk
     }
 
-    private var sendButtonBorderOpacity: Double {
+    var sendButtonBorderOpacity: Double {
         if self.composerChrome == .clean, !self.canSendMessage {
             return 0
         }
         return self.canSendMessage ? 0.18 : 0.08
     }
 
-    private var canSendMessage: Bool {
+    var canSendMessage: Bool {
         guard let inputModel else { return false }
         return self.isComposerEnabled
             // Dictation appends when capture completes; sending mid-capture
@@ -1601,7 +1571,7 @@ extension OpenClawChatComposer {
     }
     #endif
 
-    private func sendDraftIfEnabled(queueMode: OpenClawChatQueueMode? = nil) {
+    func sendDraftIfEnabled(queueMode: OpenClawChatQueueMode? = nil) {
         guard self.canSendMessage else { return }
         ChatBehaviorProbe.mark("send")
         self.inputModel?.send(queueMode: queueMode)

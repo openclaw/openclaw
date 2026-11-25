@@ -70,42 +70,11 @@ struct ChatTalkButton: View {
         .buttonStyle(.plain)
         .disabled(!self.control.isGatewayConnected && !self.control.isEnabled)
         .accessibilityLabel(self.control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
-        .accessibilityValue(self.accessibilityValue)
+        .accessibilityValue(self.control.accessibilityStatus)
         .accessibilityIdentifier("chat-realtime-control")
         .help(self.helpText)
         .chatActionContextMenu {
-            if let selectInputDevice = self.control.selectInputDevice {
-                Button {
-                    selectInputDevice(nil)
-                } label: {
-                    self.menuLabel(
-                        String(localized: "System Default"),
-                        selected: self.control.selectedInputDeviceID == nil)
-                }
-                if !self.control.inputDevices.isEmpty {
-                    Divider()
-                    ForEach(self.control.inputDevices) { device in
-                        Button {
-                            selectInputDevice(device.id)
-                        } label: {
-                            self.menuLabel(
-                                device.name,
-                                selected: self.control.selectedInputDeviceID == device.id)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func menuLabel(_ text: String, selected: Bool) -> some View {
-        if selected {
-            Label(text, systemImage: "checkmark")
-                .font(OpenClawChatTypography.body)
-        } else {
-            Text(text)
-                .font(OpenClawChatTypography.body)
+            ChatTalkInputDeviceMenu(control: self.control)
         }
     }
 
@@ -167,11 +136,54 @@ struct ChatTalkButton: View {
         }
         return OpenClawChatTheme.composerBorder
     }
+}
 
-    private var accessibilityValue: String {
-        let status = self.control.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let provider = self.control.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+extension OpenClawChatTalkControl {
+    /// Read after the Talk control's label: its status and the voice provider.
+    var accessibilityStatus: String {
+        let status = self.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let provider = self.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         return [status, provider].filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+}
+
+/// The microphone choices behind a touch and hold on the Talk control.
+struct ChatTalkInputDeviceMenu: View {
+    let control: OpenClawChatTalkControl
+
+    var body: some View {
+        if let selectInputDevice = self.control.selectInputDevice {
+            Button {
+                selectInputDevice(nil)
+            } label: {
+                self.menuLabel(
+                    String(localized: "System Default"),
+                    selected: self.control.selectedInputDeviceID == nil)
+            }
+            if !self.control.inputDevices.isEmpty {
+                Divider()
+                ForEach(self.control.inputDevices) { device in
+                    Button {
+                        selectInputDevice(device.id)
+                    } label: {
+                        self.menuLabel(
+                            device.name,
+                            selected: self.control.selectedInputDeviceID == device.id)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func menuLabel(_ text: String, selected: Bool) -> some View {
+        if selected {
+            Label(text, systemImage: "checkmark")
+                .font(OpenClawChatTypography.body)
+        } else {
+            Text(text)
+                .font(OpenClawChatTypography.body)
+        }
     }
 }
 

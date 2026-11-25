@@ -134,7 +134,7 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "stop-guard-deliberate-stop-cancelled-response")
     }
 
-    func testTextDraftKeepsStopAvailableDuringActiveResponse() throws {
+    func testTextDraftKeepsOnePrimaryButtonDuringActiveResponse() throws {
         self.launchApp(
             for: ScreenshotTarget(
                 initialTab: "chat",
@@ -157,11 +157,11 @@ extension OpenClawSnapshotUITests {
         input.tap()
         input.typeText("Keep this follow-up draft")
         self.attachScreenshot(named: "text-draft-during-active-response")
+        // One primary button. This fixture has no outbox, so the draft waits for the reply and the
+        // button stays Stop; Send never appears beside it.
         XCTAssertTrue(stop.exists, "Drafting must keep the current response stoppable")
-        XCTAssertTrue(stop.isHittable)
-        XCTAssertTrue(send.exists)
+        XCTAssertFalse(send.exists, "Stop and Send must never show together")
         self.assertMinimumTouchTarget(stop)
-        self.assertNoHorizontalOverlap([stop, send])
 
         stop.tap()
         XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
