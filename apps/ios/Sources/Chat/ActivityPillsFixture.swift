@@ -1,9 +1,10 @@
 import Foundation
 import OpenClawChatUI
+import OpenClawKit
 import OpenClawProtocol
 
 /// `--openclaw-activity-fixture`: a chat with a Goal, a plan with steps, two working subagents and a finished
-/// one, so the activity row and every sheet have real content.
+/// one, and two PRs in different states, so the activity row and every sheet have real content.
 /// `--openclaw-activity-fixture-failures` makes every read behind the sheets fail; `-slow` holds them.
 enum ActivityPillsFixture {
     static var isEnabled: Bool {
@@ -147,5 +148,37 @@ enum ActivityPillsFixture {
         var rows = [OpenClawChatSessionEntry(key: parentKey)]
         self.decorate(sessions: &rows, parentKey: parentKey)
         return OpenClawChatChildSessionsResult(rows: Array(rows.dropFirst()), isComplete: true)
+    }
+
+    static func pullRequests() -> OpenClawSessionPullRequestSnapshot {
+        OpenClawSessionPullRequestSnapshot(
+            pullRequests: [
+                .init(
+                    number: 4182,
+                    owner: "lisbon-trip",
+                    repo: "itinerary",
+                    branch: "trip/may-outline",
+                    title: "Add the day-by-day outline for May",
+                    url: "https://github.com/lisbon-trip/itinerary/pull/4182",
+                    state: "open",
+                    additions: 214,
+                    deletions: 18,
+                    changedFiles: 6,
+                    checks: .init(state: "failing", passed: 11, failed: 1, skipped: 0, running: 0),
+                    author: .init(login: "molty")),
+                .init(
+                    number: 4170,
+                    owner: "lisbon-trip",
+                    repo: "itinerary",
+                    branch: "trip/hotel-shortlist",
+                    title: "Shortlist four quiet hotels near Alfama",
+                    url: "https://github.com/lisbon-trip/itinerary/pull/4170",
+                    state: "merged",
+                    additions: 96,
+                    deletions: 4,
+                    changedFiles: 2,
+                    author: .init(login: "molty")),
+            ],
+            status: self.failsReads ? "unavailable" : "ready")
     }
 }

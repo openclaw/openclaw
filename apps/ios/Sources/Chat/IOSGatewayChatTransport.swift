@@ -461,6 +461,25 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         return await self.gateway.supportsServerMethod(method, ifCurrentRoute: route)
     }
 
+    func watchSessionPullRequests(sessionKeys: [String]) async throws -> Bool? {
+        let method = "controlUi.sessionPullRequests.subscribe"
+        guard let route = await self.gateway.currentRoute(),
+              await self.gateway.supportsServerMethod(method, ifCurrentRoute: route) == true
+        else { return nil }
+        // The Gateway keys snapshots by the canonical agent-scoped key, as the Mac's hover cards send it.
+        let keys = sessionKeys.map { key in
+            let target = self.sessionTarget(for: key)
+            guard OpenClawChatSessionKey.agentID(from: target.sessionKey) == nil, let agent = target.agentID
+            else { return target.sessionKey }
+            return "agent:\(agent):\(target.sessionKey)"
+        }
+        let data = try await self.gateway.request(
+            OpenClawChatGatewayRequests.sessionPullRequestsSubscribe(sessionKeys: keys),
+            ifCurrentRoute: route)
+        struct Receipt: Decodable { let subscribed: Bool? }
+        return (try? JSONDecoder().decode(Receipt.self, from: data))?.subscribed ?? true
+    }
+
     func attachmentLimits() async -> GatewayAttachmentLimits? {
         guard let route = await self.currentSessionMutationRoute() else { return nil }
         return await self.gateway.currentAttachmentLimits(ifCurrentRoute: route)

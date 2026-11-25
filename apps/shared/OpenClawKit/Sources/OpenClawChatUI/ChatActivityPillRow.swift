@@ -7,6 +7,7 @@ enum ChatActivitySheet: Identifiable, Hashable {
     case progress
     case subagents
     case child(String)
+    case pullRequest(String)
 
     var id: Self {
         self

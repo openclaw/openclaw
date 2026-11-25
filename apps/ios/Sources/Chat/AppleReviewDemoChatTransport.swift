@@ -288,6 +288,19 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         return try await self.store.history(sessionKey: sessionKey)
     }
 
+    func watchSessionPullRequests(sessionKeys: [String]) async throws -> Bool? {
+        guard ActivityPillsFixture.isEnabled, !ActivityPillsFixture.goalOnly,
+              let key = sessionKeys.first else { return nil }
+        let store = self.store
+        Task {
+            // After the view model records the watch, as a Gateway's first push would arrive.
+            try? await Task.sleep(for: .milliseconds(300))
+            await store.publishPullRequests(OpenClawSessionPullRequestsChangedEvent(
+                sessions: [key: ActivityPillsFixture.pullRequests()]))
+        }
+        return true
+    }
+
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         guard ScreenshotFixtureMode.progressCardEnabled || ActivityPillsFixture.isEnabled,
               ["progressCard.get", "progressCard.refresh"].contains(method)
@@ -920,6 +933,10 @@ private actor LocalFixtureChatStore {
 
     private func removeEventContinuation(_ id: UUID) {
         self.eventContinuations[id] = nil
+    }
+
+    func publishPullRequests(_ event: OpenClawSessionPullRequestsChangedEvent) {
+        self.publish(.sessionPullRequestsChanged(event))
     }
 
     private func publish(_ event: OpenClawChatTransportEvent) {

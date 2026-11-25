@@ -321,6 +321,7 @@ public enum OpenClawChatGatewayPayloadCodec {
         case sessionMessage = "session.message"
         case agent
         case progressCardChanged = "progressCard.changed"
+        case sessionPullRequestsChanged = "controlUi.sessionPullRequests.changed"
         case questionRequested = "question.requested"
         case questionResolved = "question.resolved"
     }
@@ -392,6 +393,9 @@ public enum OpenClawChatGatewayPayloadCodec {
             return decode(OpenClawAgentEventPayload.self).map(OpenClawChatTransportEvent.agent)
         case .progressCardChanged:
             return decode(ProgressCardChangedEvent.self).map(OpenClawChatTransportEvent.progressCardChanged)
+        case .sessionPullRequestsChanged:
+            return decode(OpenClawSessionPullRequestsChangedEvent.self)
+                .map(OpenClawChatTransportEvent.sessionPullRequestsChanged)
         case .questionRequested:
             return decode(QuestionRecord.self).map(OpenClawChatTransportEvent.questionRequested)
         case .questionResolved:

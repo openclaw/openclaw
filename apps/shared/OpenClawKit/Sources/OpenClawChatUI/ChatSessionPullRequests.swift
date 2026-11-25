@@ -2,21 +2,29 @@ import Foundation
 
 /// The PRs a chat's working branch has on GitHub, as `controlUi.sessionPullRequests` pushes them
 /// (src/gateway/control-ui-contract.ts). The Mac's hover cards and the phone's activity row read the same shape.
-public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
-    public struct Repository: Codable, Sendable {
+public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable, Hashable {
+    public struct Repository: Codable, Sendable, Hashable {
         public let owner: String
         public let repo: String
     }
 
-    public struct Checks: Codable, Sendable {
+    public struct Checks: Codable, Sendable, Hashable {
         public let state: String
         public let passed: Int
         public let failed: Int
         public let skipped: Int
         public let running: Int
+
+        public init(state: String, passed: Int, failed: Int, skipped: Int, running: Int) {
+            self.state = state
+            self.passed = passed
+            self.failed = failed
+            self.skipped = skipped
+            self.running = running
+        }
     }
 
-    public struct PullRequest: Codable, Sendable {
+    public struct PullRequest: Codable, Sendable, Hashable {
         public let number: Int
         public let owner: String
         public let repo: String
@@ -28,9 +36,49 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         public let deletions: Int?
         public let changedFiles: Int?
         public let checks: Checks?
+        public let author: Author?
+        public let checksUrl: String?
+
+        public init(
+            number: Int,
+            owner: String,
+            repo: String,
+            branch: String,
+            title: String,
+            url: String,
+            state: String,
+            additions: Int? = nil,
+            deletions: Int? = nil,
+            changedFiles: Int? = nil,
+            checks: Checks? = nil,
+            author: Author? = nil,
+            checksUrl: String? = nil)
+        {
+            self.number = number
+            self.owner = owner
+            self.repo = repo
+            self.branch = branch
+            self.title = title
+            self.url = url
+            self.state = state
+            self.additions = additions
+            self.deletions = deletions
+            self.changedFiles = changedFiles
+            self.checks = checks
+            self.author = author
+            self.checksUrl = checksUrl
+        }
     }
 
-    public struct Branch: Codable, Sendable {
+    public struct Author: Codable, Sendable, Hashable {
+        public let login: String
+
+        public init(login: String) {
+            self.login = login
+        }
+    }
+
+    public struct Branch: Codable, Sendable, Hashable {
         public let owner: String
         public let repo: String
         public let branch: String
@@ -45,6 +93,14 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
     public var branch: Branch?
     public let rateLimited: Bool
     public let status: String
+
+    public init(pullRequests: [PullRequest], rateLimited: Bool = false, status: String = "ready") {
+        self.pullRequests = pullRequests
+        self.repository = nil
+        self.branch = nil
+        self.rateLimited = rateLimited
+        self.status = status
+    }
 
     private var repositoryID: String? {
         let owner = self.repository?.owner ?? self.branch?.owner ?? self.pullRequests.first?.owner
@@ -65,5 +121,14 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
             result.repository = self.repository ?? previous.repository
         }
         return result
+    }
+}
+
+/// `controlUi.sessionPullRequests.changed`: snapshots for the sessions this connection watches, by key.
+public struct OpenClawSessionPullRequestsChangedEvent: Codable, Sendable {
+    public let sessions: [String: OpenClawSessionPullRequestSnapshot]
+
+    public init(sessions: [String: OpenClawSessionPullRequestSnapshot]) {
+        self.sessions = sessions
     }
 }

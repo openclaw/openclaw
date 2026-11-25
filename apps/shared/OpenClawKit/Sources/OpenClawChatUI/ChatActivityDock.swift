@@ -49,7 +49,7 @@ struct ChatActivityDock: View {
                     self.sheet = working.count == 1 ? .child(working[0].key) : .subagents
                 case .goal: self.sheet = .goal
                 case .progress: self.sheet = .progress
-                case .pullRequest: break
+                case let .pullRequest(id): self.sheet = .pullRequest(id)
                 }
             }
             .chatColumn(self.column)

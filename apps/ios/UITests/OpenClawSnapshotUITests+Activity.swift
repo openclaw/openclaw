@@ -100,4 +100,21 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.buttons["chat-activity-try-again"].exists)
         attachScreenshot(named: "activity-sheet-child-failed")
     }
+
+    func testPullRequestPillsOpenTheirSheet() throws {
+        launchApp(for: Self.activityTarget, additionalArguments: ["--openclaw-activity-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let open = self.activityPill("pr-lisbon-trip/itinerary#4182", in: app)
+        let merged = self.activityPill("pr-lisbon-trip/itinerary#4170", in: app)
+        XCTAssertTrue(open.waitForExistence(timeout: 8))
+        XCTAssertTrue(merged.exists)
+        // Open before merged, after the other pills.
+        XCTAssertLessThan(open.frame.minX, merged.frame.minX)
+        XCTAssertTrue(open.label.hasPrefix("Pull request #4182 in lisbon-trip/itinerary"))
+        open.tap()
+        XCTAssertTrue(app.staticTexts["chat-activity-pr-title"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["chat-activity-pr-open"].exists)
+        attachScreenshot(named: "activity-sheet-pr")
+        app.buttons["chat-activity-sheet-close"].tap()
+    }
 }
