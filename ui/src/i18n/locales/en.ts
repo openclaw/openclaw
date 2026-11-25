@@ -1028,6 +1028,7 @@ const startupEnglish = {
     approvals: "Approvals",
     workboard: "Workboard",
     worktrees: "Worktrees",
+    projects: "Projects",
     channels: "Channels",
     connection: "Gateway",
     sessions: "Sessions",
