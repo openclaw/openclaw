@@ -45,6 +45,7 @@ export type CodexWorkspaceBootstrapContext = {
   personaInstructions?: string;
   sharedPersonaInstructions?: string;
   memoryInstructions?: string;
+  sessionProjectGuidance?: string;
 };
 
 /** A child baseline reads the bounded workspace snapshot without invoking admission hooks. */
@@ -165,6 +166,10 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       threadDeveloperInstructions: includeAgentWorkspaceInstructions
         ? instructionSnapshot.instructions || params.agentWorkspaceDeveloperInstructions || ""
         : undefined,
+      sessionProjectGuidance:
+        injectOpenClawContext && availableToolNames.has("session_project")
+          ? await params.params.prepareSessionProjectGuidance?.()
+          : undefined,
       personaInstructions: injectOpenClawContext ? prepared.personaInstructions : undefined,
       sharedPersonaInstructions: injectOpenClawContext
         ? prepared.sharedPersonaInstructions

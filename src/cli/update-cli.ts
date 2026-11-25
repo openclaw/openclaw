@@ -495,7 +495,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .command("wizard")
     .description("Interactive update wizard")
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
-    .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
+    .option(
+      "--full-integrity-check",
+      "Unavailable for prepared-release updates; use openclaw doctor --fix --full-integrity-check",
+      false,
+    )
     .option("--timeout <seconds>", "Set an overall update budget in seconds")
     .addHelpText(
       "after",

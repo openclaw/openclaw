@@ -11,12 +11,12 @@ import {
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
+import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
 } from "./subagent-registry-persistence.js";
-import { isSuspendedPendingFinalDelivery } from "./subagent-registry-suspended-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
@@ -81,7 +81,6 @@ export const sweptContext = (entry: SubagentRunRecord) => ({
 });
 
 export const isSessionCleanupDeferred = (entry: SubagentRunRecord) =>
-  entry.delivery?.disposition === "retryable" ||
   ((entry.delivery?.status === "pending" || entry.delivery?.status === "in_progress") &&
     entry.delivery.disposition === "session_queued") ||
   entry.pauseReason === "sessions_yield" ||
@@ -108,7 +107,7 @@ export function isCleanupCurrent(
     typeof current.execution.endedAt === "number" &&
     (subagentRuns.isCompletionAuthorityRetired(current) ||
       (!current.killIntent && !current.killReconciliation && !current.requesterSettleWake)) &&
-    !isSuspendedPendingFinalDelivery(current) &&
+    !isDeliverySuspended(current) &&
     !isSessionCleanupDeferred(current)
   );
 }

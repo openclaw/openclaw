@@ -4,7 +4,7 @@ import { registerSessionShareGatewayMethods } from "./src/gateway-methods.js";
 import {
   createSessionShareNodeCommands,
   SESSION_SHARE_COMMANDS,
-  SESSION_SHARE_LIST_WITH_LINKS_COMMAND,
+  SESSION_SHARE_CATALOG_COMMANDS,
 } from "./src/node-commands.js";
 import { createSessionShareCatalog } from "./src/session-catalog.js";
 
@@ -32,7 +32,7 @@ export default definePluginEntry({
       api.registerNodeHostCommand(command);
     }
     api.registerNodeInvokePolicy({
-      commands: [SESSION_SHARE_LIST_WITH_LINKS_COMMAND],
+      commands: SESSION_SHARE_CATALOG_COMMANDS,
       handle: (context) => context.invokeNode(),
     });
     api.registerNodeInvokePolicy({

@@ -81,7 +81,10 @@ export async function applyTemplateAddForGateway(
     return {
       ...context,
       config: withoutAdmission(context.config),
-      ...(admitted ? { admittedWorkspace: admitted.workspace } : {}),
+      // A receipt without a device zone keeps the declared zones, not the retrying device's.
+      ...(admitted
+        ? { admittedWorkspace: admitted.workspace, deviceTimeZone: admitted.deviceTimeZone }
+        : {}),
     };
   };
   // A first chat-based Add reads the registry while its agent and chat are admitted.
@@ -183,10 +186,14 @@ export async function applyTemplateAddForGateway(
                 chat,
                 workspaceIdentity: recoveredIdentity,
                 preparing: continuation.preparing,
+                deviceTimeZone: continuation.deviceTimeZone,
                 ...(configured ? { configured } : {}),
               };
               readySessionKey = sessionKey;
             } else {
+              const origin = preparedContext.value.deviceTimeZone
+                ? { deviceTimeZone: preparedContext.value.deviceTimeZone }
+                : {};
               let chat: PreparedAgentChat | undefined;
               let identity = "";
               const created = await createAgentConfigEntry(
@@ -202,6 +209,7 @@ export async function applyTemplateAddForGateway(
                       initializationPending: true,
                       templateInitialization: {
                         source: registrySource,
+                        ...origin,
                         agentConfig: structuredClone(prospective.agents!.entries![agentId]!),
                         workspaceIdentity: identity,
                       },
@@ -220,6 +228,7 @@ export async function applyTemplateAddForGateway(
                       workspaceIdentity: identity,
                       config: structuredClone(result.config.agents!.entries![agentId]!),
                       createdByRequest: true,
+                      ...origin,
                     };
                     readySessionKey = resolveAgentMainSessionKey({ cfg: result.config, agentId });
                   },

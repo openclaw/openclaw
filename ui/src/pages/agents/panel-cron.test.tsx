@@ -45,7 +45,7 @@ function pageOf(jobs: CronJob[], total = jobs.length, offset = 0): CronJobsListR
     jobs,
     total,
     offset,
-    limit: 50,
+    limit: 200,
     snapshotRevision: "cron-test",
     hasMore: nextOffset < total,
     nextOffset: nextOffset < total ? nextOffset : null,
@@ -129,11 +129,11 @@ describe("Agent Cron native reads and actions", () => {
     const status = createDeferred();
     let first = true;
     let failJobs = false;
-    const { page, container } = mount((method, params) => {
+    const { page, container } = mount((method) => {
       if (method === "cron.status") {
         return first ? status.promise : { enabled: true, jobs: 1, nextWakeAtMs: null };
       }
-      if (isRecord(params) && params.limit === 50 && failJobs) {
+      if (method === "cron.list" && failJobs) {
         throw new Error("Synthetic jobs unavailable");
       }
       return pageOf([job("ready")]);
@@ -199,26 +199,23 @@ describe("Agent Cron native reads and actions", () => {
     expect(container.textContent).toContain("No automations yet.");
   });
 
-  it("retains loaded rows during an admitted page append", async () => {
-    const more = createDeferred<CronJobsListResult>();
-    const { container } = mount((method, params) => {
+  it("retains loaded rows while revealing the next inventory window", async () => {
+    const jobs = Array.from({ length: 51 }, (_, index) => job(String(index).padStart(2, "0")));
+    const { container } = mount((method) => {
       if (method === "cron.status") {
-        return { enabled: true, jobs: 2, nextWakeAtMs: null };
+        return { enabled: true, jobs: 51, nextWakeAtMs: null };
       }
-      if (isRecord(params) && params.offset === 1) {
-        return more.promise;
-      }
-      return pageOf([job("first")], 2);
+      return pageOf(jobs);
     });
     await waitForSolid(() => expect(container.querySelector(".cron-load-more")).not.toBeNull());
-    const row = jobRow(container, "Job first");
+    const row = jobRow(container, "Job 00");
+    expect(container.textContent).not.toContain("Job 50");
     container.querySelector<HTMLButtonElement>(".cron-load-more")!.click();
     flush();
     expect(container.querySelector<HTMLButtonElement>(".cron-load-more")?.disabled).toBe(true);
-    expect(jobRow(container, "Job first")).toBe(row);
-    more.resolve(pageOf([job("second")], 2, 1));
-    await waitForSolid(() => expect(container.textContent).toContain("Job second"));
-    expect(jobRow(container, "Job first")).toBe(row);
+    expect(jobRow(container, "Job 00")).toBe(row);
+    await waitForSolid(() => expect(container.textContent).toContain("Job 50"));
+    expect(jobRow(container, "Job 00")).toBe(row);
   });
 
   it("reports a failed run, retries, and releases pending presentation when the selected agent changes", async () => {

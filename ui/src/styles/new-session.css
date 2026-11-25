@@ -1759,6 +1759,11 @@ span.new-session-page__select {
 .new-session-page__context-tray .new-session-page__trigger-label {
   min-inline-size: 8ch;
   max-width: 300px;
+
+  /* Checkout has no desktop loading placeholder to reserve label space for. */
+  &:where(#new-session-checkout-trigger > *) {
+    min-inline-size: 0;
+  }
 }
 
 .new-session-page__picker-chevron {

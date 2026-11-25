@@ -143,6 +143,7 @@ it.for([
           agentId: "main",
           sessionKey,
           sessionId: target.sessionId,
+          storePath: target.storePath,
           generation: "synthetic",
         },
       });

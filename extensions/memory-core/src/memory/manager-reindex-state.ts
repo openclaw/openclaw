@@ -173,7 +173,12 @@ export function resolveConfiguredScopeHash(params: {
       const path = entry.path.replaceAll("\\", "/");
       return entry.pattern ? { path, pattern: entry.pattern } : path;
     })
-    .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+    // Scope hashes persist across runtimes; locale collation can equate distinct paths.
+    .toSorted((left, right) => {
+      const leftKey = JSON.stringify(left);
+      const rightKey = JSON.stringify(right);
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    });
   return hashText(
     JSON.stringify({
       extraPaths,

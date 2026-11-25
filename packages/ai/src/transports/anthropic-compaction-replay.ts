@@ -1,4 +1,10 @@
-import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
+import type {
+  AssistantHistoryMessage,
+  AssistantMessage,
+  Context,
+  Model,
+  ProviderReplayState,
+} from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AnthropicContextManagementOptions } from "../provider-options.js";
 import { resolveNewestCompactionReplaySource } from "./provider-compaction-checkpoint.js";
@@ -199,7 +205,7 @@ export function resolveNewestAnthropicCompaction(
   options?: ReplayOpts,
 ):
   | {
-      owner: AssistantMessage;
+      owner: AssistantHistoryMessage;
       replayIndex: number;
       summary: string;
       encryptedContent?: string | null;

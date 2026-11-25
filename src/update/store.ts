@@ -22,6 +22,7 @@ export type Trial = {
   createdAt: number;
   attempts: number;
   config?: string;
+  acceptCapabilities?: boolean;
   restoring?: Array<{ suffix: string; files: string[] }>;
   outcome?: {
     status: "succeeded" | "rolled-back";
@@ -39,11 +40,8 @@ export function resolvePrefix(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "git-install");
 }
 
-export function releaseRootOf(id: string, kind: ReleaseKind, prefix = resolvePrefix()): string {
-  const base = path.join(prefix, "releases", id);
-  return kind === "git"
-    ? path.join(base, "openclaw")
-    : path.join(base, ...(process.platform === "win32" ? [] : ["lib"]), "node_modules", "openclaw");
+function releaseRootOf(id: string, prefix = resolvePrefix()): string {
+  return path.join(prefix, "releases", id, "openclaw");
 }
 
 export async function allocateStaging(
@@ -53,7 +51,7 @@ export async function allocateStaging(
   const staging = path.join(prefix, "releases", `.staging-${id}`);
   await fs.mkdir(path.dirname(staging), { recursive: true });
   await fs.mkdir(staging);
-  return { id, kind, path: staging, releaseRoot: releaseRootOf(`.staging-${id}`, kind, prefix) };
+  return { id, kind, path: staging, releaseRoot: releaseRootOf(`.staging-${id}`, prefix) };
 }
 
 export async function publishStaging(staging: Staging): Promise<string> {
@@ -98,7 +96,10 @@ export function writeTrial(trial: Trial, prefix = resolvePrefix()): Promise<void
 }
 
 export async function createTrialPending(
-  input: Pick<Trial, "runId" | "target" | "previous" | "version" | "buildId">,
+  input: Pick<
+    Trial,
+    "runId" | "target" | "previous" | "version" | "buildId" | "acceptCapabilities"
+  >,
   prefix = resolvePrefix(),
 ): Promise<Trial> {
   const previous = await readTrial(prefix);

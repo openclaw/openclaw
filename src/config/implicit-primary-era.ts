@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 import { compareOpenClawVersions } from "./version.js";
 
 /** The last release that ran an implicit model when config named none. */
-export const LAST_IMPLICIT_PRIMARY_RELEASE = "2026.11.6";
+const LAST_IMPLICIT_PRIMARY_RELEASE = "2026.11.6";
 
 /** True for a config last written by a release that ran an implicit model. */
 export function isImplicitPrimaryEraConfig(cfg: OpenClawConfig | undefined): boolean {
@@ -18,7 +18,7 @@ export function isImplicitPrimaryEraConfig(cfg: OpenClawConfig | undefined): boo
 }
 
 /** True while some agent still relies on the retired implicit model. */
-export function hasAgentWithoutPrimary(cfg: OpenClawConfig): boolean {
+function hasAgentWithoutPrimary(cfg: OpenClawConfig): boolean {
   if (resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)) {
     return false;
   }

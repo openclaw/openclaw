@@ -4,6 +4,7 @@ import type {
   ListResourceTemplatesResult,
   ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { SessionMcpStoreSource } from "../config/sessions/session-mcp-store-admission.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
@@ -139,6 +140,7 @@ export type RequesterScopedMcpRuntimeHandle = SessionMcpRuntimeLease & {
 /** Manager for session-scoped MCP runtimes and their idle lifecycle. */
 export type SessionMcpRuntimeManager = {
   acquire: (params: {
+    storeAdmission?: object;
     sessionId: string;
     sessionKey?: string;
     agentId?: string;
@@ -179,6 +181,9 @@ export type SessionMcpRuntimeManager = {
     sessionId?: string;
     sessionKey?: string;
   }) => { sessionId: string; retire: (assertCurrent: () => void) => Promise<void> } | undefined;
+  captureStoreRetirement: (
+    sessionId: string,
+  ) => ((source: SessionMcpStoreSource) => Promise<void>) | undefined;
   disposeSession: (sessionId: string) => Promise<void>;
   /** Required retirement stays armed when a stopping run creates or reuses a runtime. */
   deferRetirement: (sessionId: string, opts?: { retainAcrossReuse?: boolean }) => boolean;

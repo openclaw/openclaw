@@ -99,7 +99,7 @@ export function getStandaloneRuntimeProcessOutputOptions(name: string) {
   }
   const pluginPreparationEntry =
     runtimeProcessEntrypoints.pluginGenerationPreparation.distWorkerPath.replace(/\.js$/u, "");
-  const stateReadEntry = runtimeProcessEntrypoints.stateRead.distWorkerPath.replace(/\.js$/u, "");
+  // Keep optional read handlers lazy without sharing the main runtime graph.
   const sqliteReadEntry = runtimeProcessEntrypoints.sqliteReadOnly.distWorkerPath.replace(
     /\.js$/u,
     "",
@@ -109,21 +109,38 @@ export function getStandaloneRuntimeProcessOutputOptions(name: string) {
     // their resident cost; keep diagnostics lazy inside this private graph.
     return { codeSplitting: true, chunkFileNames: "plugins/plugin-preparation-[name]-[hash].mjs" };
   }
-  // Keep optional read handlers lazy without sharing the main runtime graph.
-  if (name === stateReadEntry) {
-    return { codeSplitting: true, chunkFileNames: "state/openclaw-state-read-[name]-[hash].mjs" };
-  }
   if (name === sqliteReadEntry) {
     return { codeSplitting: true, chunkFileNames: "infra/sqlite-readonly-[name]-[hash].mjs" };
   }
-  if (name === runtimeProcessEntrypoints.sharedWorkerHost.distWorkerPath.replace(/\.js$/u, "")) {
+  if (sharedWorkerHostGraph.has(name)) {
     // Lean hosts these core modules in one isolate; they must load one shared graph.
     return { codeSplitting: true, chunkFileNames: "infra/shared-worker-host-[name]-[hash].mjs" };
   }
-  if (name === runtimeProcessEntrypoints.sessionTranscript.distWorkerPath.replace(/\.js$/u, "")) {
-    return { codeSplitting: true, chunkFileNames: "config/sessions/transcript-[name]-[hash].mjs" };
-  }
   return { codeSplitting: false };
+}
+
+// The shared host imports the state reader and transcript worker. One build emits their
+// common modules once instead of a private copy per worker (#202495 added ~540 files).
+const sharedWorkerHostGraph = new Set(
+  [
+    runtimeProcessEntrypoints.sharedWorkerHost,
+    runtimeProcessEntrypoints.stateRead,
+    runtimeProcessEntrypoints.sessionTranscript,
+  ].map((entry) => entry.distWorkerPath.replace(/\.js$/u, "")),
+);
+
+/** Standalone entries, one record per build; the shared host graph builds together. */
+export function standaloneRuntimeProcessBuildGroups(entries: Record<string, string>) {
+  const standalone = Object.entries(entries).filter(([name]) =>
+    Object.hasOwn(standaloneRuntimeProcessBuildEntries, name),
+  );
+  const hosted = standalone.filter(([name]) => sharedWorkerHostGraph.has(name));
+  return [
+    ...(hosted.length ? [Object.fromEntries(hosted)] : []),
+    ...standalone
+      .filter(([name]) => !sharedWorkerHostGraph.has(name))
+      .map((entry) => Object.fromEntries([entry])),
+  ];
 }
 
 export function shouldBundleRuntimeSqliteDependency(id: string): boolean {

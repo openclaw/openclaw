@@ -130,6 +130,8 @@ export function resolveMessageActionDetails(
 }
 
 type MessageActionOptions = MessageReactionOptions & {
+  agentId?: string;
+  sessionKey?: string;
   onReply?: (target: MessageReplyTarget) => void;
 };
 
@@ -174,6 +176,7 @@ export function MessageActions(props: {
       </Show>
       <Show when={props.details?.readAloudText}>
         <ReadAloud
+          sessionKey={props.options.sessionKey}
           text={props.details!.readAloudText!}
           buttonRef={(element) => {
             elements.readAloud = element;

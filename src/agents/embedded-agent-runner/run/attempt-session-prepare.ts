@@ -1,4 +1,5 @@
 import { isAnthropicOAuthApiKey, isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
+import { isOpenAIResponsesApi } from "@openclaw/ai/transports";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { getOwnedSessionTranscriptReader } from "../../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
@@ -21,6 +22,7 @@ import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
+import { isLocalBaseUrl } from "../../model-catalog-route.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
@@ -34,8 +36,8 @@ import { SessionManager } from "../../sessions/session-manager.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { log } from "../logger.js";
-import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
-import { recordRuntimeContextProjection } from "../session-prompt-state.js";
+import { projectCompletedProjectMoves } from "../project-move-replay.js";
+import { recordRuntimeContextProjection } from "../prompt-cache-observability.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
@@ -64,6 +66,7 @@ import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 import {
   type InitialUserTurnReplayPreparation,
   prepareInitialPersistedUserTurnCohort,
+  persistCompactedCurrentUserTurnReplay,
   prepareForeignPendingUserTurns,
   preparePersistedCurrentUserTurn,
   reconcilePrePersistedCurrentUserTurn,
@@ -284,6 +287,11 @@ export async function prepareEmbeddedAttemptSessionBoundary(
         // A recovery resumes its admitted history, including accepted steering.
         // Its newer user tail is not an orphan to replace with the original input.
         if (attempt.replayCurrentTranscript) {
+          await persistCompactedCurrentUserTurnReplay({
+            activeSession,
+            sessionManager,
+            currentUserTurnMessage,
+          });
           return undefined;
         }
         // An adopted current user needs no orphan repair. Replay still refreshes at core entry.
@@ -408,6 +416,11 @@ export async function prepareEmbeddedAttemptSessionBoundary(
   };
 
   const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
+  // The tested local Chat Completions route accepts retired tools in history.
+  const replayCompletedMoves =
+    !preserveExactPrompt &&
+    attempt.model?.api === "openai-completions" &&
+    isLocalBaseUrl(attempt.model.baseUrl);
   activeSession.agent.convertToLlm = async (messages) => {
     let removedRuntimeContext: AgentMessage[] | undefined;
     const normalized = normalizeMessagesForLlmBoundary(
@@ -419,19 +432,17 @@ export async function prepareEmbeddedAttemptSessionBoundary(
         },
       },
     );
+    // Persisted carriers stay after their user turn, including during tool loops;
+    // moving one would change the prefix bound to later thinking signatures.
+    const history = input.appendOnlyRuntimeContext
+      ? normalized
+      : relocateCurrentRuntimeContextCarrierToTail(normalized);
     const converted = await baseConvertToLlm(
-      // Persisted carriers stay after their user turn, including during tool loops;
-      // moving one would change the prefix bound to later thinking signatures.
-      input.appendOnlyRuntimeContext
-        ? normalized
-        : relocateCurrentRuntimeContextCarrierToTail(normalized),
+      replayCompletedMoves ? projectCompletedProjectMoves(history) : history,
     );
     applyRuntimeContextCarrierRetention(converted, input.appendOnlyRuntimeContext);
-    if (
-      !input.appendOnlyRuntimeContext &&
-      recordRuntimeContextProjection(attempt.sessionId, removedRuntimeContext, converted)
-    ) {
-      declarePromptHistoryRewrite({ ...attempt, reason: "runtimeContextCarrier" });
+    if (!input.appendOnlyRuntimeContext) {
+      recordRuntimeContextProjection(removedRuntimeContext, converted);
     }
     return converted;
   };
@@ -482,10 +493,7 @@ export async function prepareEmbeddedAttemptSessionManager(
     config: attempt.config,
     env: process.env,
   });
-  const isOpenAIResponsesApi =
-    attempt.model.api === "openai-responses" ||
-    attempt.model.api === "azure-openai-responses" ||
-    attempt.model.api === "openai-chatgpt-responses";
+  const responsesApi = isOpenAIResponsesApi(attempt.model.api);
 
   const preparedUserTurnMessage =
     attempt.skipPreparedUserTurnMessage || attempt.replayCurrentTranscript
@@ -590,7 +598,7 @@ export async function prepareEmbeddedAttemptSessionManager(
       ? attempt.userTurnTranscriptRecorder
       : undefined,
     allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-    missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
+    missingToolResultText: responsesApi ? "aborted" : undefined,
     trigger: attempt.trigger,
     suppressNextUserMessagePersistence:
       prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence,
@@ -606,7 +614,11 @@ export async function prepareEmbeddedAttemptSessionManager(
       latestPersistedUserMessage = message;
       latestRuntimeUserMessage = runtimeMessage;
       if (runtimeMessage) {
-        userTranscriptContextRegistry.record(runtimeMessage, message);
+        userTranscriptContextRegistry.record(
+          runtimeMessage,
+          message,
+          latestUserTurnTranscriptRecorder,
+        );
       }
       attempt.onUserMessagePersisted?.(message);
     },
@@ -700,11 +712,15 @@ export async function prepareEmbeddedAttemptSessionManager(
         const runtimeMessage =
           latestRuntimeUserMessage ??
           (attempt.suppressNextUserMessagePersistence ? transcriptMessage : undefined);
-        return userTranscriptContextRegistry.list(runtimeMessage, transcriptMessage);
+        return userTranscriptContextRegistry.list(
+          runtimeMessage,
+          transcriptMessage,
+          latestUserTurnTranscriptRecorder,
+        );
       },
       preparedUserTurnMessage,
     },
-    isOpenAIResponsesApi,
+    isOpenAIResponsesApi: responsesApi,
     preparedUserTurnMessage,
     sessionManager,
     transcriptPolicy,

@@ -1,13 +1,9 @@
-import { createHash } from "node:crypto";
-import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import {
   createControlUiMockSameOriginGatewayScript,
   installMockGateway,
-  type MockGatewayWindow,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -23,7 +19,7 @@ type SendParams = {
   idempotencyKey: string;
 };
 
-async function failFiveImages(page: Page, imageOnly = false) {
+async function failFiveImages(page: Page) {
   const images = await page.evaluate(() =>
     ["#ece5d8", "#e1e8da", "#e8dfd3", "#e5e4db", "#e7e1d6"].map((background, i) => {
       const canvas = document.createElement("canvas");
@@ -51,27 +47,6 @@ async function failFiveImages(page: Page, imageOnly = false) {
 
   await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
   const gateway = await installMockGateway(page);
-  // Extend the typed fixture at its owning hook. Rewind must remove the inactive
-  // source from canonical history, not merely return copies to the composer.
-  await page.addInitScript(() => {
-    const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
-    mock.setRequestHandler("sessions.rewind", ({ respond }) => {
-      const sent = mock.findRequests("chat.send").at(0);
-      if (!sent) {
-        throw new Error("Rewind fixture requires an admitted user turn");
-      }
-      const original = sent.params as SendParams;
-      mock.setHistoryMessages([]);
-      respond({
-        editorText: original.message,
-        editorAttachments: (original.attachments ?? []).map((a) => ({
-          mimeType: a.mimeType,
-          data: a.content,
-          fileName: a.fileName,
-        })),
-      });
-    });
-  });
   await page.goto(new URL("chat", suite.server.baseUrl).href);
   const composer = page.locator(".agent-chat__composer-combobox textarea").first();
   const input = page.locator(".agent-chat__file-input").first();
@@ -84,9 +59,7 @@ async function failFiveImages(page: Page, imageOnly = false) {
     })),
   );
   await expectBrowser(page.locator(".chat-attachment-thumb")).toHaveCount(5);
-  if (!imageOnly) {
-    await composer.fill(prompt);
-  }
+  await composer.fill(prompt);
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   const first = await gateway.waitForRequest("chat.send");
   const params = first.params as SendParams;
@@ -94,12 +67,11 @@ async function failFiveImages(page: Page, imageOnly = false) {
   await expectBrowser(composer).toHaveValue("");
   const row = await gateway.getSessionRow(sessionKey);
   const now = Date.now();
-  const entryId = "persisted-failed-five-image-input";
   await gateway.setHistoryMessages([
     {
       role: "user",
       content: [
-        ...(imageOnly ? [] : [{ type: "text", text: prompt }]),
+        { type: "text", text: prompt },
         ...images.map((data, i) => ({
           type: "image",
           url: "data:image/png;base64," + data,
@@ -107,7 +79,7 @@ async function failFiveImages(page: Page, imageOnly = false) {
         })),
       ],
       timestamp: now,
-      __openclaw: { id: entryId, seq: 1, runId: params.idempotencyKey },
+      __openclaw: { id: "persisted-failed-five-image-input", seq: 1, runId: params.idempotencyKey },
     },
     {
       role: "custom",
@@ -150,150 +122,46 @@ async function failFiveImages(page: Page, imageOnly = false) {
   await expectBrowser(page.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
   await expectBrowser(page.locator(".chat-message-image")).toHaveCount(5);
   await expectBrowser(page.locator(".chat-attachment-thumb")).toHaveCount(0);
-  return { gateway, composer, input, images, params, entryId, row };
+  return { gateway, composer, params };
 }
 
 suite.define(() => {
-  for (const imageOnly of [false, true]) {
-    it(
-      imageOnly
-        ? "recovers an image-only failed input"
-        : "edits five failed images without overwriting an existing draft",
-      async () => {
-        await suite.withPage(
-          { viewport: { width: 1440, height: 1040 }, locale: "en-US", serviceWorkers: "block" },
-          async ({ page }) => {
-            let sawOptionalEditLoad = false;
-            if (!imageOnly) {
-              await page.route(
-                (url) =>
-                  url.pathname.includes("chat-failed-message-edit-button-") &&
-                  url.pathname.endsWith(".js"),
-                async (route) => {
-                  try {
-                    await expectBrowser(page.locator(".chat-run-failure__toggle")).toBeVisible();
-                    await expectBrowser(
-                      page.getByRole("button", { name: "Try again", exact: true }),
-                    ).toBeVisible();
-                    sawOptionalEditLoad = true;
-                  } finally {
-                    await route.continue();
-                  }
-                },
-              );
-            }
-            const { gateway, composer, input, images, params, entryId, row } = await failFiveImages(
-              page,
-              imageOnly,
-            );
-            const edit = page.getByRole("button", { name: "Edit message", exact: true });
-            await expectBrowser(edit).toBeEnabled();
-            if (!imageOnly) {
-              expect(sawOptionalEditLoad).toBe(true);
-            }
-            if (!imageOnly) {
-              await composer.fill("Keep my independent draft.");
-              await input.setInputFiles({
-                name: "draft-garden.png",
-                mimeType: "image/png",
-                buffer: Buffer.from(expectDefined(images[0], "draft image fixture"), "base64"),
-              });
-              await expectBrowser(page.locator(".chat-attachment-thumb")).toHaveCount(1);
-              await expectBrowser(edit).toBeDisabled();
-              await edit.hover({ force: true });
-              await expectBrowser(
-                page.locator(".tooltip-content").filter({
-                  hasText: "Send or clear your current draft before editing this message.",
-                }),
-              ).toBeVisible();
-              await expectBrowser(composer).toHaveValue("Keep my independent draft.");
-              expect(await gateway.getRequests("sessions.rewind")).toHaveLength(0);
-              await composer.fill("");
-              await expectBrowser(edit).toBeDisabled();
-              await page.locator(".chat-attachment-remove").click();
-              await expectBrowser(edit).toBeEnabled();
-            }
-            await edit.click();
-            const dialog = page.getByRole("dialog", { name: "Rewind to before this message?" });
-            await expectBrowser(dialog).toBeVisible();
-            expect(await gateway.getRequests("sessions.rewind")).toHaveLength(0);
-            await dialog.locator(".chat-confirm-popover__yes").click();
-            const rewind = await gateway.waitForRequest("sessions.rewind");
-            expect(rewind.params).toMatchObject({ sessionKey, entryId });
-            await expectBrowser(composer).toHaveValue(imageOnly ? "" : prompt);
-            await expectBrowser(page.locator(".chat-attachment-thumb")).toHaveCount(5);
-            await expectBrowser(page.locator(".chat-message-image")).toHaveCount(0);
-            if (!imageOnly) {
-              await page.screenshot({
-                path: path.join(suite.artifactDir, "after-restored-five-image-composer.png"),
-                animations: "disabled",
-              });
-            }
-            await page.locator(".chat-attachment-remove").nth(2).click();
-            await expectBrowser(page.locator(".chat-attachment-thumb")).toHaveCount(4);
-            await page.getByRole("button", { name: "Send message", exact: true }).click();
-            const resend = await gateway.waitForRequest("chat.send", { after: 1 });
-            const resent = resend.params as SendParams;
-            expect(resent.message).toBe(imageOnly ? "" : prompt);
-            const payloads = (attachments: NonNullable<SendParams["attachments"]>) =>
-              attachments.map(({ mimeType, content }) => ({
-                mimeType,
-                sha256: createHash("sha256").update(content).digest("hex"),
-              }));
-            expect(payloads(expectDefined(resent.attachments, "resend attachments"))).toEqual(
-              payloads(
-                expectDefined(params.attachments, "original attachments").filter((_, i) => i !== 2),
-              ),
-            );
-            expect(
-              await page.evaluate(() =>
-                (window as MockGatewayWindow)
-                  .openclawControlUiE2eGateway!.requests.filter(
-                    (r) => r.method === "chat.send" || r.method === "sessions.rewind",
-                  )
-                  .map((r) => r.method),
-              ),
-            ).toEqual(["chat.send", "sessions.rewind", "chat.send"]);
-            await gateway.setSessionsListResponse({
-              sessions: [
-                { ...row, key: sessionKey, status: "idle", hasActiveRun: false, activeRunIds: [] },
-              ],
-            });
-            await gateway.emitGatewayEvent("chat", {
-              sessionKey,
-              runId: resent.idempotencyKey,
-              state: "final",
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "Four courtyard options received." }],
-              },
-            });
-            // Reconnect reloads the canonical active transcript; a completed run
-            // need not issue a redundant history read while its receipt is held.
-            const subscriptionsBefore = (await gateway.getRequests("sessions.messages.subscribe"))
-              .length;
-            await gateway.setOnline(false);
-            await gateway.setOnline(true);
-            await gateway.waitForRequest("sessions.messages.subscribe", {
-              after: subscriptionsBefore,
-            });
-            await expectBrowser(page.locator(".chat-message-image")).toHaveCount(4);
-            await expectBrowser(page.locator(".chat-attachment-thumb")).toHaveCount(0);
-            await expectBrowser(edit).toHaveCount(0);
-            await expectBrowser(page.locator(".chat-run-failure")).toHaveCount(0);
-            if (!imageOnly) {
-              await page.screenshot({
-                path: path.join(suite.artifactDir, "after-retained-four-image-resend.png"),
-                animations: "disabled",
-              });
-              console.log("FAILED_IMAGE_RECOVERY_ARTIFACTS=" + suite.artifactDir);
-            }
-          },
-        );
+  it("rewinds a failed image message into a composer with an existing draft", async () => {
+    await suite.withPage(
+      { viewport: { width: 1440, height: 1040 }, locale: "en-US", serviceWorkers: "block" },
+      async ({ page }) => {
+        const { gateway, composer, params } = await failFiveImages(page);
+        const failureRow = page.locator(".chat-run-failure");
+        await composer.fill("An unsent draft.");
+        await gateway.deferNext("sessions.rewind");
+        await page.locator(".chat-bubble").filter({ hasText: prompt }).click({ button: "right" });
+        await page.getByRole("menuitem", { name: "Rewind to here", exact: true }).click();
+        await page
+          .locator(".chat-confirm-popover")
+          .getByRole("button", { name: "Rewind", exact: true })
+          .click();
+        const rewind = await gateway.waitForRequest("sessions.rewind");
+        expect(rewind.params).toMatchObject({
+          sessionKey,
+          entryId: "persisted-failed-five-image-input",
+        });
+        await gateway.setHistoryMessages([]);
+        await gateway.resolveDeferred("sessions.rewind", {
+          editorText: prompt,
+          editorAttachments: params.attachments?.map(({ mimeType, content, fileName }) => ({
+            mimeType,
+            data: content,
+            fileName,
+          })),
+        });
+        await expectBrowser(composer).toHaveValue(prompt);
+        await expectBrowser(page.locator(".chat-attachment-thumb")).toHaveCount(5);
+        await expectBrowser(failureRow).toHaveCount(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       },
-      90_000,
     );
-  }
+  }, 90_000);
+
   it("keeps Try again as an attachment-free continuation", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1040 }, locale: "en-US", serviceWorkers: "block" },

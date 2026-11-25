@@ -31,6 +31,8 @@ export interface PublicationDispatchEnvelope extends PublicationIntent {
   laneInputs?: {
     extension_test_exclude_patterns_json?: string;
     qualification_baselines_json?: string;
+    publication_artifact_source_json?: string;
+    preflight_first?: string;
   };
 }
 export interface PublicationSourceRequest extends PublicationIntent {
@@ -68,6 +70,9 @@ export function publicationIntentInputs(intent: PublicationIntent): {
   publicationSelectionJson: string;
 };
 export function decodePublicationDispatchEnvelope(raw: unknown): PublicationDispatchEnvelope;
+export function dispatchEnvelopeFromInputs(
+  inputs: Record<string, unknown>,
+): PublicationDispatchEnvelope;
 export function normalizePublicationLaneInputs(
   value: unknown,
 ): NonNullable<PublicationDispatchEnvelope["laneInputs"]>;

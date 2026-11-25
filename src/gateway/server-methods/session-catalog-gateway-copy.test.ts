@@ -445,7 +445,7 @@ describe("copySessionCatalogToGateway", () => {
     expect(mocks.createGatewaySession.mock.calls[0]![0]).toMatchObject({ model: "openai/gpt-5.4" });
   });
 
-  it.each(["ready", "missing", "pending", "foreign", "denied"])(
+  it.each(["ready", "missing", "missing-id", "pending", "foreign", "denied"])(
     "resolves %s receiver handoffs under read policy without adoption or creation",
     async (state) => {
       const { catalog, continuation } = continuationProvider(false);
@@ -455,7 +455,7 @@ describe("copySessionCatalogToGateway", () => {
         state === "missing"
           ? undefined
           : {
-              sessionId: "current-runtime-id",
+              sessionId: state === "missing-id" ? "" : "current-runtime-id",
               initializationPending: state === "pending",
               pluginExtensions: {
                 beam: {
@@ -481,7 +481,10 @@ describe("copySessionCatalogToGateway", () => {
       });
       expect(result).toMatchObject(
         state === "ready"
-          ? { ok: true, sessionKey: continuation.sessionKey }
+          ? {
+              ok: true,
+              destination: { sessionKey: continuation.sessionKey, sessionId: "current-runtime-id" },
+            }
           : { ok: false, error: { code: state === "denied" ? "FORBIDDEN" : "UNAVAILABLE" } },
       );
       expect(mocks.authorizeDestination).toHaveBeenCalledWith(
@@ -506,7 +509,7 @@ describe("copySessionCatalogToGateway", () => {
         context: params.context,
         assertCurrent() {},
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: true, destination: null });
     expect(params.provider.continueSession).not.toHaveBeenCalled();
     expect(params.provider.copyToGatewaySession).not.toHaveBeenCalled();
     expect(mocks.authorizeDestination).not.toHaveBeenCalled();

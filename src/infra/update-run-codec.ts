@@ -327,7 +327,10 @@ function boundedOriginJsonWithNamespaces(origin: UpdateRunRecord["origin"]): str
     return hasNamespaces ? undefined : throwOversizedReceipts();
   }
   const routing = { requester, sessionKey, deliveryContext, campaignId };
-  const hasAdmission = origin.admission !== undefined || origin.candidateAdmission !== undefined;
+  const hasAdmission =
+    origin.admission !== undefined ||
+    origin.candidateAdmission !== undefined ||
+    origin.releaseAdmission !== undefined;
   // Admission diagnostics cannot shorten routing; both yield to recovery receipts.
   const identities = hasAdmission
     ? JSON.stringify({

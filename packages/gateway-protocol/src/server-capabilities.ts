@@ -1,5 +1,6 @@
 // Named imports let the Control UI use these features without the full server catalog.
 export const BOARD_WIDGET_PUT_CANVAS_DOC = "board-widget-put-canvas-doc";
+export const SESSION_APPROVAL_RECIPIENTS = "session-approval-recipients-v1";
 export const SYSTEM_AGENT_WIZARD_CANCEL = "openclaw-chat-wizard-cancel";
 
 /** Stable feature names advertised in Gateway hello responses. */
@@ -30,6 +31,7 @@ export const GATEWAY_SERVER_CAPS = {
   NODE_WORKER_BUNDLE_RETENTION: "node-worker-bundle-retention-v1",
   NODE_WORKER_BUNDLE_STATUS: "node-worker-bundle-status-v1",
   NODE_WORKER_CAPTURED_EXEC_POLICY: "node-worker-captured-exec-policy",
+  NODE_WORKER_EXEC_MEMORY_BOUNDARY: "node-worker-exec-memory-boundary",
   NODE_WORKER_WORKSPACE_RESULT: "node-worker-workspace-result-v2",
   NODE_WORKER_WORKSPACE_QUIESCENCE: "node-worker-workspace-quiescence-v1",
   NODE_WORKER_DEVICE_FOLDERS: "node-worker-device-folders-v1",
@@ -44,6 +46,7 @@ export const GATEWAY_SERVER_CAPS = {
   PUBLISHED_MODEL_CATALOG: "published-model-catalog",
   PROFILE_BINDING: "profile-binding-v1",
   PROGRESS_CARD_AGENT_SCOPE: "progress-card-agent-scope-v1",
+  SESSION_APPROVAL_RECIPIENTS,
   SESSION_SCOPED_CHAT_METADATA: "session-scoped-chat-metadata",
   SESSION_SCOPED_MODEL_CATALOG: "session-scoped-model-catalog",
   SESSION_UNREAD_ACK_CONTRACT: "session-unread-ack-contract",
@@ -55,4 +58,5 @@ export const GATEWAY_SERVER_CAPS = {
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
   TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
   TALK_SESSION_CLOSE_DISPOSITION: "talk-session-close-disposition",
+  UPDATE_RUN_CONSENT_IDENTITY: "update-run-consent-identity-v1",
 } as const;

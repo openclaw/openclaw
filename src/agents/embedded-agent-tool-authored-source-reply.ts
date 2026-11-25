@@ -1,5 +1,5 @@
 import { resolveAgentAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
-import type { AssistantMessage } from "../llm/types.js";
+import type { AssistantHistoryMessage } from "../llm/types.js";
 import { extractToolAuthoredSourceReplyPayload } from "./embedded-agent-messaging-extraction.js";
 import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
 
@@ -36,7 +36,7 @@ export function captureToolAuthoredSourceReply(params: {
 /** Matches the final assistant for one input, never an attempt-wide presence flag. */
 export function isToolAuthoredSourceReplyForAssistant(
   payload: MessagingToolSourceReplyPayload,
-  assistant: AssistantMessage | null | undefined,
+  assistant: AssistantHistoryMessage | null | undefined,
 ): boolean {
   return (
     payload.toolAuthored === true &&

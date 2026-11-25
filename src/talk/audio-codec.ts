@@ -177,6 +177,11 @@ function createResamplePlan(inputSampleRate: number, outputSampleRate: number): 
   };
 }
 
+function countResampledSamples(inputSamples: number, plan: ResamplePlan): number {
+  // Dividing by a rounded rate ratio can drop a sample at an exact duration boundary.
+  return Math.floor((inputSamples * plan.outputSampleRate) / plan.inputSampleRate);
+}
+
 function renderResampledPcm(
   input: Buffer,
   inputStartSample: number,
@@ -231,7 +236,7 @@ export function resamplePcm(
   }
 
   const plan = createResamplePlan(inputSampleRate, outputSampleRate);
-  const outputSamples = Math.floor(inputSamples / plan.ratio);
+  const outputSamples = countResampledSamples(inputSamples, plan);
   return renderResampledPcm(input, 0, 0, outputSamples, plan);
 }
 
@@ -259,7 +264,7 @@ export function createStreamingPcmResampler(
   let flushed = false;
 
   const renderAvailable = (includeRightEdge: boolean): Buffer => {
-    const targetOutputCount = Math.floor(totalInputSamples / plan.ratio);
+    const targetOutputCount = countResampledSamples(totalInputSamples, plan);
     let endOutputIndex = nextOutputIndex;
     while (endOutputIndex < targetOutputCount) {
       const center = Math.floor((endOutputIndex * plan.inputSampleRate) / plan.outputSampleRate);

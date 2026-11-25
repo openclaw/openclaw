@@ -633,3 +633,21 @@ export function composeSessionSourceAssertion(
     get: () => sources.some((source) => source?.nativeSource),
   });
 }
+
+/** Direct call: Stop only. Prepared writes add the caller's session fences, which outlive run close. */
+export function composePreparedOnlySessionSource(caller?: {
+  operationalRunInstance?: object;
+  approvalSignals?: readonly AbortSignal[];
+  receiptAuthority?: SessionSourceAssertion;
+}) {
+  if (!caller?.operationalRunInstance) {
+    return undefined;
+  }
+  const assertNotStopped = () =>
+    caller.approvalSignals?.forEach((signal) => signal.throwIfAborted());
+  const fences = composeSessionSourceAssertion([caller.receiptAuthority], (assertSources) => {
+    assertNotStopped();
+    assertSources();
+  });
+  return Object.assign(assertNotStopped, fences);
+}

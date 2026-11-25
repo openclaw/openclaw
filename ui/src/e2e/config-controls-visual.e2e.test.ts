@@ -157,6 +157,24 @@ suite.define(() => {
           const { left, right } = element.getBoundingClientRect();
           return { left, right };
         });
+        // The first tab sits against two clipped strip edges. Focus must paint both inside it.
+        const box = (await gateway.boundingBox())!;
+        const edgePixels = () =>
+          Promise.all(
+            [
+              { x: Math.round(box.x + box.width / 2), y: Math.ceil(box.y), width: 3, height: 1 },
+              { x: Math.ceil(box.x), y: Math.round(box.y + box.height / 2), width: 1, height: 3 },
+            ].map((clip) => page.screenshot({ clip, animations: "disabled" })),
+          );
+        const resting = await edgePixels();
+        await gateway.focus();
+        await gateway.press("Shift+Tab");
+        await page.keyboard.press("Tab");
+        expect(await gateway.evaluate((tab) => tab.matches(":focus-visible"))).toBe(true);
+        const focused = await edgePixels();
+        expect(focused[0]).not.toEqual(resting[0]);
+        expect(focused[1]).not.toEqual(resting[1]);
+
         await gateway.press("End");
         expect(await acp.evaluate((tab) => tab === document.activeElement)).toBe(true);
         expect(await toolbar.evaluate((element) => element.getBoundingClientRect().left)).toBe(

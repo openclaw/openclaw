@@ -7,6 +7,7 @@ import { familyBudgetPopulation, populateFamilyBudget } from "./family-budget.te
 import { PROMETHEUS_FAMILY_LIMITS, type PrometheusMetricName } from "./prometheus-family-budget.js";
 import * as prometheusFormat from "./prometheus-format.js";
 import { createPrometheusMetricStore } from "./prometheus-metric-store.js";
+import { recordMemorySample } from "./service-memory.js";
 
 const runs = "openclaw_run_completed_total";
 const duration = "openclaw_run_duration_seconds";
@@ -21,6 +22,31 @@ function expectLines(text: string, ...lines: string[]) {
   }
 }
 afterEach(() => vi.restoreAllMocks());
+
+it("reuses prepared memory series and withdraws missing worker gauges", () => {
+  const store = createPrometheusMetricStore();
+  const memory = {
+    rssBytes: 1000,
+    heapUsedBytes: 300,
+    heapTotalBytes: 500,
+    externalBytes: 20,
+    arrayBuffersBytes: 10,
+  };
+  const worker = { script: 'sqlite"雪.worker.js', heapUsed: 100, heapTotal: 200 };
+  recordMemorySample(
+    store,
+    { ...memory, workerHeaps: [worker, { ...worker, script: "gone" }] },
+    [2000],
+  );
+  const format = vi.spyOn(prometheusFormat, "formatLabels");
+  const key = vi.spyOn(prometheusFormat, "metricKey");
+  recordMemorySample(store, { ...memory, workerHeaps: [{ ...worker, heapUsed: 123 }] }, [2000]);
+  expect(format.mock.calls.length).toBe(0);
+  expect(key.mock.calls.length).toBe(0);
+  const rendered = store.render().toString();
+  expectLines(rendered, 'openclaw_worker_heap_used_bytes{script="sqlite\\"雪.worker.js"} 123');
+  expect(rendered).not.toContain('script="gone"');
+});
 
 it.each([121, 257])("retains the full family mix with %s bounded reader operations", (readers) => {
   const store = createPrometheusMetricStore();
