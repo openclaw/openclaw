@@ -704,25 +704,7 @@ struct RootSidebar: View {
         isCollapsed: Binding<Bool>,
         id: String) -> some View
     {
-        Button {
-            isCollapsed.wrappedValue.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                Text(verbatim: title)
-                    .font(OpenClawType.captionMedium)
-                Image(systemName: isCollapsed.wrappedValue ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .accessibilityHidden(true)
-            }
-            .foregroundStyle(OpenClawSidebarPalette.muted)
-            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-            .padding(.horizontal, 10)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(.isHeader)
-        .accessibilityValue(isCollapsed.wrappedValue ? Text("Collapsed") : Text("Expanded"))
-        .accessibilityIdentifier(id)
+        SessionSectionHeader(title: title, isCollapsed: isCollapsed, id: id)
     }
 
     private var gatewayName: String {

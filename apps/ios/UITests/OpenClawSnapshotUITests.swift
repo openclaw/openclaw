@@ -117,7 +117,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(allSessions.waitForExistence(timeout: 5))
         if !allSessions.isHittable { app.swipeUp() }
         allSessions.tap()
-        XCTAssertTrue(app.segmentedControls["Sessions.StatusScope"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["Sessions.StatusScope"].waitForExistence(timeout: 8))
         let sessionsHeader = try XCTUnwrap(app.descendants(matching: .any)
             .matching(identifier: "SessionGroup.Header.Projects").allElementsBoundByIndex
             .filter(\.isHittable).max { $0.frame.minX < $1.frame.minX })

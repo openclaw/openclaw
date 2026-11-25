@@ -223,46 +223,98 @@ enum SessionStatusScope: String, CaseIterable {
 struct CommandSessionsScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
-    @State private var sessions: [OpenClawChatSessionEntry] = []
-    @State private var isLoading = false
+    /// Live roster owner: the sidebar model keeps the active list current from session events.
+    let sidebarModel: RootSidebarModel
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
+    let openChat: () -> Void
+    let openSearch: () -> Void
+
+    /// Archived rows are not in the live roster; this screen reads them when that filter is on.
+    @State private var archived: [OpenClawChatSessionEntry] = []
+    @State private var isLoadingArchived = false
     @State private var loadErrorText: String?
     @State private var actionErrorText: String?
-    /// Notice for a partially loaded roster; rendered alongside the retained rows, never instead of them.
+    /// Notice for a partially loaded archive; rendered alongside the retained rows, never instead of them.
     @State private var partialLoadText: String?
     /// Bumped by the partial-load retry button; part of `refreshID` so `.task(id:)` refetches.
     @State private var refreshNonce = 0
     @State private var statusScope: SessionStatusScope = .active
     @State private var now: Date = .now
-    let headerSidebarAction: OpenClawSidebarHeaderAction?
-    let openChat: () -> Void
+    @State private var scrollAnchor = RootSidebarScrollAnchor()
+    /// Where each row stood when a finger landed on the list; moves wait until it lifts.
+    @State private var heldPlacement: [String: SessionListSection.ID]?
+    @AppStorage(SessionListGroup.needsYou.collapsedStorageKey) private var needsYouCollapsed = false
+    @AppStorage(SessionListGroup.working.collapsedStorageKey) private var workingCollapsed = false
+    @AppStorage(SessionListGroup.pinned.collapsedStorageKey) private var pinnedCollapsed = false
+    @AppStorage(SessionListGroup.recent.collapsedStorageKey) private var recentCollapsed = false
 
     var body: some View {
-        ZStack {
-            OpenClawProBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    self.header
-                    self.sessionsPanel
+        let sections = self.sections
+        ScrollView {
+            // A plain stack, like the card it replaces: rows move between groups live, and a lazy stack
+            // drew group headers over the wrong rows when groups came and went.
+            VStack(alignment: .leading, spacing: 0) {
+                self.notices
+                if let loadErrorText = self.errorText {
+                    CommandEmptyStateRow(
+                        icon: "exclamationmark.triangle.fill",
+                        title: "Sessions unavailable",
+                        detail: .verbatim(loadErrorText))
+                } else if self.isLoading, self.visibleSessions.isEmpty {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, minHeight: 88)
+                } else if sections.isEmpty {
+                    CommandEmptyStateRow(
+                        icon: self.appModel
+                            .isCommandSessionListAvailable ? "bubble.left.and.text.bubble.right.fill" : "wifi.slash",
+                        title: .verbatim(self.emptyTitle),
+                        detail: .verbatim(self.appModel
+                            .isCommandSessionListAvailable
+                            ? self.emptyDetail
+                            : String(localized: "Connect to the gateway.")))
+                } else {
+                    ForEach(sections) { section in
+                        self.sectionView(section)
+                    }
                 }
-                .padding(.top, 16)
-                .padding(.bottom, 18)
             }
-            .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
+            .modifier(RootSidebarAnchoredContent(anchor: self.scrollAnchor))
         }
+        .scrollEdgeEffectStyle(.soft, for: .vertical)
+        // Rows change group live, but never under a finger: the scroll view's own touch state decides,
+        // since SwiftUI also reports scroll phases for offset changes nobody made.
+        .onScrollPhaseChange { _, _ in
+            self.updateHeldPlacement(sections)
+        }
+        .onChange(of: self.visibleSessions) { _, _ in
+            self.updateHeldPlacement(sections)
+        }
+        .safeAreaBar(edge: .top, spacing: 0) {
+            self.topBar
+        }
+        .safeAreaBar(edge: .bottom, spacing: 0) {
+            self.bottomBar
+        }
+        .background(OpenClawProBackground())
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
         .task(id: self.refreshID) {
-            await self.refreshSessions()
+            await self.appModel.sessionGroups.refresh(appModel: self.appModel)
+            if self.statusScope == .archived {
+                await self.loadArchived()
+            }
         }
         .onChange(of: self.availableStatusScopes, initial: true) { _, scopes in
             if !scopes.contains(self.statusScope) {
                 self.statusScope = .active
             }
         }
-        .task(id: self.sessions) {
+        .task(id: self.visibleSessions) {
             self.now = .now
-            while let wake = OpenClawChatSessionSnooze.nextWake(in: self.sessions, now: self.now) {
+            while let wake = OpenClawChatSessionSnooze.nextWake(in: self.visibleSessions, now: self.now) {
                 do {
                     try await Task.sleep(for: .seconds(max(0, wake.timeIntervalSinceNow) + 0.001))
                     try Task.checkCancellation()
@@ -274,176 +326,351 @@ struct CommandSessionsScreen: View {
         }
     }
 
-    private var header: some View {
-        OpenClawAdaptiveHeaderRow(
-            title: "Sessions",
-            subtitle: .verbatim(self.headerDetail),
-            titleFont: OpenClawType.title2,
-            subtitleFont: OpenClawType.captionMedium)
-        {
+    // MARK: Bars
+
+    private var topBar: some View {
+        HStack(spacing: 8) {
             if let headerSidebarAction {
                 OpenClawSidebarControlButton(action: headerSidebarAction)
             }
-        } accessory: {
+            Spacer(minLength: 8)
+            self.filterMenu
+        }
+        .overlay {
+            Text(verbatim: self.title)
+                .font(OpenClawType.headline)
+                .lineLimit(1)
+                .padding(.horizontal, 64)
+                .accessibilityAddTraits(.isHeader)
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+        .padding(.vertical, 6)
+    }
+
+    /// Only what the list really filters by today: the status scopes, in their own words.
+    private var filterMenu: some View {
+        let isFiltered = self.statusScope != .active
+        return Menu {
+            Picker(selection: self.$statusScope) {
+                ForEach(self.availableStatusScopes, id: \.self) { scope in
+                    Text(verbatim: scope.title)
+                        .font(OpenClawType.body)
+                        .tag(scope)
+                }
+            } label: {
+                Text("Session status")
+                    .font(OpenClawType.captionMedium)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(isFiltered ? OpenClawBrand.canvas : OpenClawBrand.textStrong)
+                .frame(width: 44, height: 44)
+                .background(isFiltered ? OpenClawBrand.textStrong : Color.clear, in: Circle())
+                .contentShape(Circle())
+        }
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .accessibilityLabel(String(localized: "Session status"))
+        .accessibilityValue(Text(verbatim: self.statusScope.title))
+        .accessibilityIdentifier("Sessions.StatusScope")
+    }
+
+    private var bottomBar: some View {
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
+                Button(action: self.openSearch) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(OpenClawBrand.textStrong)
+                        .frame(width: 48, height: 48)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: Circle())
+                .accessibilityLabel(String(localized: "Search"))
+                .accessibilityIdentifier("Sessions.Search")
+
+                Spacer(minLength: 8)
+
+                Button {
+                    self.appModel.requestNewChat()
+                    self.openChat()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 16, weight: .medium))
+                            .accessibilityHidden(true)
+                        Text(String(localized: "New chat"))
+                            .font(OpenClawType.subheadSemiBold)
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(OpenClawBrand.textStrong)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 48)
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: Capsule())
+                .disabled(!self.appModel.isOperatorGatewayConnected)
+                .accessibilityIdentifier("Sessions.NewChat")
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
+    }
+
+    // MARK: List
+
+    @ViewBuilder
+    private var notices: some View {
+        if let groupError = self.appModel.sessionGroups.failure {
+            self.noticeText(groupError)
+        }
+        if let actionErrorText {
+            self.noticeText(actionErrorText)
+        }
+        if let partial = self.partialNoticeText {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(OpenClawType.captionBold)
+                    .foregroundStyle(OpenClawBrand.warn)
+                // Identified for UI tests: the leading sidebar shows the same copy without an identifier.
+                Text(verbatim: partial)
+                    .font(OpenClawType.captionMedium)
+                    .foregroundStyle(OpenClawBrand.warn)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("Sessions.PartialLoad.Notice")
+                Button {
+                    self.refreshNonce += 1
+                    if self.statusScope != .archived {
+                        Task { await self.sidebarModel.refreshSessions(appModel: self.appModel) }
+                    }
+                } label: {
+                    Text(String(localized: "Refresh"))
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("Sessions.PartialLoad.Refresh")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+        }
+    }
+
+    private func noticeText(_ text: String) -> some View {
+        Text(verbatim: text)
+            .font(OpenClawType.captionMedium)
+            .foregroundStyle(OpenClawBrand.warn)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+    }
+
+    @ViewBuilder
+    private func sectionView(_ section: SessionListSection) -> some View {
+        switch section.id {
+        case let .group(group):
+            let collapsed = self.collapsedBinding(group)
+            Section {
+                if !collapsed.wrappedValue {
+                    ForEach(section.sessions) { session in
+                        self.sessionRow(session, group: group)
+                    }
+                }
+            } header: {
+                SessionSectionHeader(
+                    title: group.title,
+                    isCollapsed: collapsed,
+                    id: "Sessions.Group.\(group.rawValue)")
+                    .padding(.top, 8)
+            }
+        case let .category(name):
+            Section {
+                if !self.appModel.sessionGroups.collapsed.contains(name) {
+                    ForEach(section.sessions) { session in
+                        self.sessionRow(session, group: .recent)
+                    }
+                }
+            } header: {
+                CommandSessionGroupHeader(
+                    name: name,
+                    sessions: self.sourceSessions,
+                    refresh: self.refreshSessions,
+                    openSession: self.openSessionKey,
+                    accessory: { EmptyView() })
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
+            }
+        }
+    }
+
+    private func sessionRow(_ session: OpenClawChatSessionEntry, group: SessionListGroup) -> some View {
+        let needsApproval = self.needsApproval(session)
+        let mark = SessionListGrouping.mark(session, needsApproval: needsApproval, in: group)
+        let isUnread = session.unread == true
+        let mainSessionKey = self.resolvedMainSessionKey
+        return Button {
+            self.openSessionKey(session.key)
+        } label: {
+            HStack(spacing: 10) {
+                Text(verbatim: CommandCenterTab.sessionTitle(session))
+                    .font(isUnread ? OpenClawType.headline : OpenClawType.body)
+                    .foregroundStyle(OpenClawBrand.textStrong)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                self.markView(mark)
+            }
+            .padding(.vertical, 6)
+            .frame(minHeight: 44)
+            .padding(.horizontal, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: session.color)
+        }
+        .accessibilityIdentifier("SessionDashboard.Session.\(session.key)")
+        .accessibilityValue(RootSidebar.sessionAccessibilityValue(
+            isPinned: session.pinned == true, isUnread: isUnread, needsApproval: needsApproval))
+        .commandSessionActions(
+            session: session,
+            mainSessionKey: mainSessionKey,
+            categories: self.sessionCategories,
+            isArchived: session.archived == true,
+            isEnabled: self.sessionControlsAvailable,
+            canArchive: ChatSessionSidebarModel.canArchiveSession(session, mainSessionKey: mainSessionKey),
+            canDelete: ChatSessionSidebarModel.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey),
+            archivesSession: { self.statusScope != .archived && session.archived != true },
+            performMutation: self.performMutation,
+            fork: { self.forkSession(session) })
+        .modifier(RootSidebarAnchoredRow(id: session.key, anchor: self.scrollAnchor))
+    }
+
+    @ViewBuilder
+    private func markView(_ mark: SessionListMark) -> some View {
+        switch mark {
+        case .none:
             EmptyView()
+        case .working:
+            ProgressView()
+                .controlSize(.mini)
+                .tint(OpenClawBrand.textSecondary)
+                .accessibilityLabel(String(localized: "Working"))
+        case .unread:
+            Circle()
+                .fill(OpenClawBrand.accent)
+                .frame(width: 7, height: 7)
+                .accessibilityHidden(true)
+        case .needsApproval, .failed:
+            Text(verbatim: mark.label ?? "")
+                .font(OpenClawType.captionMedium)
+                .foregroundStyle(OpenClawBrand.textSecondary)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(OpenClawBrand.selection, in: Capsule())
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    private var sessionsPanel: some View {
-        let mainKey = self.resolvedMainSessionKey
-        let currentKey = self.resolvedCurrentSessionKey
-        return ProCard(padding: 0) {
-            VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    Text(verbatim: self.panelTitle)
-                        .font(OpenClawType.subheadBold)
-                    Spacer(minLength: 8)
-                    if self.isLoading {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.top, 10)
-                .padding(.bottom, 3)
+    // MARK: Data
 
-                if self.appModel.isCommandSessionListAvailable || !self.sessions.isEmpty {
-                    Picker(selection: self.$statusScope) {
-                        ForEach(self.availableStatusScopes, id: \.self) { scope in
-                            Text(verbatim: scope.title)
-                                .font(OpenClawType.captionMedium)
-                                .tag(scope)
-                                .accessibilityLabel(scope == .archived
-                                    ? String(localized: "Show Archived") : scope.title)
-                                .accessibilityIdentifier("Sessions.Status.\(scope.rawValue)")
-                        }
-                    } label: {
-                        Text("Session status")
-                            .font(OpenClawType.captionMedium)
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("Sessions.StatusScope")
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                }
-
-                if let groupError = self.appModel.sessionGroups.failure {
-                    Text(verbatim: groupError).font(OpenClawType.captionMedium).foregroundStyle(OpenClawBrand.warn)
-                }
-                if let actionErrorText {
-                    Text(verbatim: actionErrorText)
-                        .font(OpenClawType.captionMedium)
-                        .foregroundStyle(OpenClawBrand.warn)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                }
-
-                if let partialLoadText {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(OpenClawType.captionBold)
-                            .foregroundStyle(OpenClawBrand.warn)
-                        // Identified for UI tests: the leading sidebar shows the same copy
-                        // without an identifier, so the banner notice carries its own. A
-                        // container identifier here would clobber the Refresh button's.
-                        Text(verbatim: partialLoadText)
-                            .font(OpenClawType.captionMedium)
-                            .foregroundStyle(OpenClawBrand.warn)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityIdentifier("Sessions.PartialLoad.Notice")
-                        Button {
-                            self.refreshNonce += 1
-                        } label: {
-                            Text(String(localized: "Refresh"))
-                                .font(OpenClawType.subheadSemiBold)
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityIdentifier("Sessions.PartialLoad.Refresh")
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
-                }
-
-                if let loadErrorText {
-                    CommandEmptyStateRow(
-                        icon: "exclamationmark.triangle.fill",
-                        title: "Sessions unavailable",
-                        detail: .verbatim(loadErrorText))
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, 10)
-                } else if self.visibleSessions.isEmpty, self.sessionSections.isEmpty {
-                    CommandEmptyStateRow(
-                        icon: self.appModel
-                            .isCommandSessionListAvailable ? "bubble.left.and.text.bubble.right.fill" : "wifi.slash",
-                        title: .verbatim(self.emptyTitle),
-                        detail: .verbatim(self.appModel
-                            .isCommandSessionListAvailable
-                            ? self.emptyDetail
-                            : String(localized: "Connect to the gateway.")))
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, 10)
-                } else {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(self.sessionSections) { section in
-                            VStack(alignment: .leading, spacing: 6) {
-                                if section.showsHeader {
-                                    self.sectionHeader(section)
-                                }
-                                if !self.isCollapsed(section) {
-                                    ForEach(section.entries) { session in
-                                        self.sessionRow(session, currentSessionKey: currentKey, mainSessionKey: mainKey)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 10)
-                }
-            }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
-    private var headerDetail: String {
-        if self.isLoading, self.sessions.isEmpty {
-            switch self.statusScope {
-            case .active: return String(localized: "Loading recent sessions")
-            case .snoozed: return String(localized: "Loading snoozed sessions")
-            case .automations: return String(localized: "Loading automation sessions")
-            case .archived: return String(localized: "Loading archived sessions")
-            }
-        }
-        let count = self.visibleSessions.count
-        if count == 0 {
-            return self.emptyTitle
-        }
-        return String(
-            AttributedString(localized: "^[\(count) session](inflect: true)").characters)
+    private var sourceSessions: [OpenClawChatSessionEntry] {
+        self.statusScope == .archived ? self.archived : self.sidebarModel.sessions
     }
 
     private var visibleSessions: [OpenClawChatSessionEntry] {
         let mainKey = self.resolvedMainSessionKey
         let currentKey = self.resolvedCurrentSessionKey
-        return self.sessions
+        return self.sourceSessions
             .filter { CommandCenterTab.isListedChatSession(
                 $0.key,
                 mainSessionKey: mainKey,
                 defaultSessionKey: self.appModel.mainSessionKey) }
-            // A stale list must still obey the selected scope while its replacement loads.
-            .filter {
-                self.statusScope.includes(
-                    $0,
-                    at: self.now,
-                    currentSessionKey: currentKey)
+            .filter { self.statusScope.includes($0, at: self.now, currentSessionKey: currentKey) }
+    }
+
+    private var sections: [SessionListSection] {
+        SessionListGrouping.sections(
+            self.visibleSessions,
+            knownCategories: self.sessionCategories,
+            needsApproval: self.needsApproval,
+            held: self.heldPlacement)
+    }
+
+    private func updateHeldPlacement(_ shown: [SessionListSection]) {
+        if self.scrollAnchor.isScrolling {
+            if self.heldPlacement == nil {
+                self.heldPlacement = Self.placements(shown)
             }
+        } else {
+            self.heldPlacement = nil
+        }
+    }
+
+    static func placements(_ sections: [SessionListSection]) -> [String: SessionListSection.ID] {
+        var placement: [String: SessionListSection.ID] = [:]
+        for section in sections {
+            for session in section.sessions {
+                placement[session.key] = section.id
+            }
+        }
+        return placement
+    }
+
+    private func collapsedBinding(_ group: SessionListGroup) -> Binding<Bool> {
+        switch group {
+        case .needsYou: self.$needsYouCollapsed
+        case .working: self.$workingCollapsed
+        case .pinned: self.$pinnedCollapsed
+        case .recent: self.$recentCollapsed
+        }
+    }
+
+    private func needsApproval(_ session: OpenClawChatSessionEntry) -> Bool {
+        self.appModel.pendingApprovalAttentionRequests.contains { request in
+            self.appModel.approvalTargetsSession(
+                sourceSessionKey: request.sessionKey,
+                sourceAgentID: request.agentID,
+                sessionKey: session.key,
+                agentID: session.agentId ?? self.appModel.chatAgentId)
+        }
+    }
+
+    private var isLoading: Bool {
+        self.statusScope == .archived
+            ? self.isLoadingArchived
+            : self.sidebarModel.isRefreshing && self.sidebarModel.sessions.isEmpty
+    }
+
+    /// A roster that failed with nothing to show is an error; with rows kept, the same text is a notice.
+    private var errorText: String? {
+        if self.statusScope == .archived { return self.loadErrorText }
+        guard self.sidebarModel.sessions.isEmpty, !self.sidebarModel.isRefreshing else { return nil }
+        return self.sidebarModel.sessionErrorText
+    }
+
+    private var partialNoticeText: String? {
+        if self.statusScope == .archived { return self.partialLoadText }
+        return self.sidebarModel.sessions.isEmpty ? nil : self.sidebarModel.sessionErrorText
+    }
+
+    private var title: String {
+        switch self.statusScope {
+        case .active: String(localized: "Sessions")
+        case .snoozed: String(localized: "Snoozed sessions")
+        case .automations: String(localized: "Automation sessions")
+        case .archived: String(localized: "Archived sessions")
+        }
     }
 
     private var resolvedMainSessionKey: String {
         ChatSessionSidebarModel.selectedSessionKey(
-            sessions: self.sessions,
+            sessions: self.sourceSessions,
             currentSessionKey: self.appModel.mainSessionKey,
             mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
@@ -452,22 +679,15 @@ struct CommandSessionsScreen: View {
 
     private var resolvedCurrentSessionKey: String {
         ChatSessionSidebarModel.selectedSessionKey(
-            sessions: self.sessions,
+            sessions: self.sourceSessions,
             currentSessionKey: self.appModel.chatSessionKey,
             mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
             sessionRoutingContract: self.appModel.chatSessionRoutingContract)
     }
 
-    private var sessionSections: [CommandSessionSection] {
-        CommandSessionGrouping.sections(
-            from: self.visibleSessions,
-            knownGroups: self.appModel.sessionGroups.names(for: self.sessions),
-            preservesGroupOrder: true)
-    }
-
     private var sessionCategories: [String] {
-        self.appModel.sessionGroups.names(for: self.sessions)
+        self.appModel.sessionGroups.names(for: self.sourceSessions)
     }
 
     private var sessionControlsAvailable: Bool {
@@ -499,69 +719,8 @@ struct CommandSessionsScreen: View {
         }
     }
 
-    private var panelTitle: String {
-        switch self.statusScope {
-        case .active: String(localized: "Recent sessions")
-        case .snoozed: String(localized: "Snoozed sessions")
-        case .automations: String(localized: "Automation sessions")
-        case .archived: String(localized: "Archived sessions")
-        }
-    }
-
     private var refreshID: String {
         "\(self.appModel.chatViewModelIdentityID):\(self.statusScope.rawValue):\(self.refreshNonce)"
-    }
-
-    @ViewBuilder
-    private func sectionHeader(_ section: CommandSessionSection) -> some View {
-        if case let .category(group) = section.id {
-            CommandSessionGroupHeader(
-                name: group,
-                sessions: self.sessions,
-                refresh: self.refreshSessions,
-                openSession: self.openSessionKey,
-                accessory: { EmptyView() })
-                .foregroundStyle(.secondary)
-        } else {
-            Text(section.title).font(OpenClawType.captionSemiBold)
-                .foregroundStyle(.secondary).padding(.horizontal, 4)
-        }
-    }
-
-    private func isCollapsed(_ section: CommandSessionSection) -> Bool {
-        guard case let .category(name) = section.id else { return false }
-        return self.appModel.sessionGroups.collapsed.contains(name)
-    }
-
-    private func sessionRow(
-        _ session: OpenClawChatSessionEntry,
-        currentSessionKey: String,
-        mainSessionKey: String) -> some View
-    {
-        let item = CommandCenterTab.sessionWorkItem(
-            for: session,
-            currentSessionKey: currentSessionKey,
-            now: self.now)
-        return Button {
-            self.openSessionKey(session.key)
-        } label: {
-            CommandSessionRow(item: item)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("SessionDashboard.Session.\(session.key)")
-        .commandSessionActions(
-            session: session,
-            mainSessionKey: mainSessionKey,
-            categories: self.sessionCategories,
-            isArchived: session.archived == true,
-            isEnabled: self.sessionControlsAvailable,
-            canArchive: ChatSessionSidebarModel.canArchiveSession(
-                session,
-                mainSessionKey: mainSessionKey),
-            canDelete: ChatSessionSidebarModel.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey),
-            archivesSession: { self.statusScope != .archived && session.archived != true },
-            performMutation: self.performMutation,
-            fork: { self.forkSession(session) })
     }
 
     private func openSessionKey(_ key: String) {
@@ -602,38 +761,36 @@ struct CommandSessionsScreen: View {
     }
 
     private func refreshSessions() async {
-        // Pick up groups stored by other surfaces (for example the per-session
-        // New Group editor) alongside the fresh session list.
-        await self.appModel.sessionGroups.refresh(appModel: self.appModel)
-        let requestedScope = self.statusScope
-        let requestsArchived = requestedScope == .archived
-        let sourceGatewayID = self.appModel.chatTranscriptCacheGatewayID
-        let sourceAgentID = self.appModel.chatDeliveryAgentId
-        self.isLoading = true
-        self.loadErrorText = nil
         self.actionErrorText = nil
-        defer {
-            if requestedScope == self.statusScope { self.isLoading = false }
+        if self.statusScope == .archived {
+            await self.appModel.sessionGroups.refresh(appModel: self.appModel)
+            await self.loadArchived()
+        } else {
+            // The roster owner also refreshes the session groups.
+            await self.sidebarModel.refreshSessions(appModel: self.appModel)
         }
+    }
 
+    private func loadArchived() async {
+        let sourceGatewayID = self.appModel.chatTranscriptCacheGatewayID
+        self.isLoadingArchived = true
+        self.loadErrorText = nil
+        defer { self.isLoadingArchived = false }
         do {
             let roster = try await self.appModel.loadChatSessionRoster(
                 limit: CommandCenterTab.recentSessionsFetchLimit,
-                archived: requestsArchived)
-            guard !Task.isCancelled, requestedScope == self.statusScope else { return }
-            self.sessions = roster.sessions
+                archived: true)
+            guard !Task.isCancelled, self.statusScope == .archived,
+                  self.appModel.chatTranscriptCacheGatewayID == sourceGatewayID else { return }
+            self.archived = roster.sessions
             self.partialLoadText = roster.incompleteLoadMessage
         } catch is CancellationError {
             return
         } catch {
-            guard !Task.isCancelled, requestedScope == self.statusScope else { return }
+            guard !Task.isCancelled, self.statusScope == .archived else { return }
             self.partialLoadText = nil
-            let cached = requestsArchived ? [] : await self.appModel.loadCachedChatSessions(
-                gatewayID: sourceGatewayID,
-                agentID: sourceAgentID)
-            guard !Task.isCancelled, requestedScope == self.statusScope else { return }
-            self.sessions = cached
-            self.loadErrorText = self.sessions.isEmpty ? "Try again after the gateway reconnects." : nil
+            self.archived = []
+            self.loadErrorText = "Try again after the gateway reconnects."
         }
     }
 }

@@ -375,8 +375,10 @@ struct RootTabs: View {
                 .id(path)
         case .sessions:
             CommandSessionsScreen(
+                sidebarModel: self.sidebarModel,
                 headerSidebarAction: self.sidebarHeaderAction,
-                openChat: { self.selectSidebarDestination(.chat) })
+                openChat: { self.selectSidebarDestination(.chat) },
+                openSearch: { self.setSearchPresented(true) })
         case .files:
             AgentWorkspaceFilesTab(headerSidebarAction: self.sidebarHeaderAction)
                 .id(self.selectedSidebarDestination.id)
