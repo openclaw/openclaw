@@ -432,12 +432,14 @@ suite.define(() => {
           });
           await page.goto(suite.server.baseUrl + "new");
           await waitForControlUiRoute(page, { routeId: "new-session" });
-          const inventoryReads = await gateway.deferNext("environments.list");
+          // New Session can still be loading its catalog; hold only the Systems inventory.
+          const match = { includeDesktopSetup: true };
+          const inventoryReads = await gateway.deferNext("environments.list", match);
           const backupReads = await gateway.deferNext("backup.status");
           await page.evaluate(() => {
             window.openclawControlUi!.navigate("systems");
           });
-          await gateway.waitForRequest("environments.list", { after: inventoryReads });
+          await gateway.waitForRequest("environments.list", { after: inventoryReads, match });
           await gateway.waitForRequest("backup.status", { after: backupReads });
           await waitForControlUiRoute(page, { routeId: "systems" });
           await page.locator(".systems-body").waitFor();
@@ -466,7 +468,7 @@ suite.define(() => {
               ),
             )
             .toBe(true);
-          await gateway.resolveDeferred("environments.list");
+          await gateway.resolveDeferred("environments.list", undefined, { match });
           await page.locator(".systems-volume-summary").waitFor();
           await expect.poll(position).toBe(initialY);
           expect(await body.locator(".systems-state").isVisible()).toBe(true);
