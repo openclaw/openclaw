@@ -4,6 +4,9 @@ import { configForProviders } from "../agents/model-auth.fixtures.test-support.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
 
+const listenerMatch = vi.hoisted(() => vi.fn());
+vi.mock("../infra/ports-inspect.js", () => ({ localListenerHasArgument: listenerMatch }));
+
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -69,6 +72,21 @@ async function discoverModelContexts(
 }
 
 describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
+  it("requires a matching local app listener before probing a branded endpoint", async () => {
+    const argument = { flag: "--models-preset", value: "/fixture/app/models.ini" };
+    mockRouterModels(1);
+    listenerMatch.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const options = { ...routerDiscovery, localListenerArgument: argument };
+    expect((await discoverOpenAICompatibleLocalModels(options)).kind).toBe("unreachable");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    await expect(discoverOpenAICompatibleLocalModels(options)).resolves.toMatchObject({
+      kind: "success",
+      matchedLocalListener: true,
+      rows: [{ model: { id: "model-0" } }],
+    });
+    expect(listenerMatch).toHaveBeenCalledWith(new URL(rawDiscovery.baseUrl), argument, undefined);
+  });
+
   it("resolves only the configured provider's request secrets and preserves its transport policy", async () => {
     const config = configForProviders({
       litellm: {

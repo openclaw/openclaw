@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { hasLlamaServerAuthorizationHeader } from "./auth-policy.js";
 import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
-import { LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
+import { LLAMA_APP_SERVER, LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
 import { discoverLlamaServer } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig } from "./models.js";
@@ -43,6 +43,7 @@ export async function discoverLlamaServerProvider(
         signal: ctx.signal,
         useRuntimeDefaults: false,
         baseUrl: configured?.baseUrl,
+        requireAppListener: server.id === LLAMA_APP_SERVER.id && !configured,
         apiKey,
         headers,
         allowPrivateNetwork: configured?.request?.allowPrivateNetwork,

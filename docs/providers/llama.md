@@ -33,10 +33,10 @@ openclaw plugins install @openclaw/llama-cpp-provider
 Run `openclaw onboard` and choose **Llama**. Guided setup detects the running
 app and offers its models, preferring one already loaded in the app.
 
-To connect from the terminal instead:
+To open onboarding with Llama preselected:
 
 ```bash
-openclaw models auth login --provider llama-app
+openclaw onboard --auth-choice llama-app
 ```
 
 Accept the default URL and answer No when asked whether the server requires an

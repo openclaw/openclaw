@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
+  isProviderAuthError,
   removeAuthProfileConfig,
   removeProviderAuthProfilesWithLock,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -26,12 +27,18 @@ import { applyProviderDefaultModel } from "openclaw/plugin-sdk/provider-setup";
 import { buildLlamaCppAuthProfileRemovalPatch } from "../auth-config.js";
 import { hasLlamaServerAuthorizationHeader } from "./auth-policy.js";
 import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
-import { LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
+import { LLAMA_APP_SERVER, LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
 import { discoverLlamaServer, type LlamaServerDiscoveryResult } from "./discovery.js";
 import { normalizeLlamaServerProviderConfig, resolveLlamaServerEndpoint } from "./endpoint.js";
 
+function setupChatModels(discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>) {
+  return discovery.models.filter((model) => model.config.inference?.chat !== false);
+}
+
 function selectSetupModelId(discovery: Extract<LlamaServerDiscoveryResult, { kind: "success" }>) {
-  const candidates = discovery.models.filter((model) => !model.failed);
+  const candidates = setupChatModels(discovery).filter(
+    (model) => !model.failed && model.config.inference?.chatEvidence !== "unlikely",
+  );
   const ready = candidates.filter(
     (model) => model.status === "loaded" || model.status === "sleeping",
   );
@@ -144,7 +151,7 @@ function stripLlamaServerEndpointAuth(
 }
 
 type AuthPersistence<T> =
-  | { kind: "preserve" }
+  | { kind: "preserve"; keyless?: boolean }
   | { kind: "upsert"; credential: T }
   | { kind: "remove" };
 
@@ -172,6 +179,15 @@ function buildExistingProviderConfig(
     params.persistence.kind === "preserve"
       ? endpointSafe
       : stripAuthOverrides(endpointSafe, params.persistence.kind === "upsert");
+  // A refreshable connection saves no model rows. Persist successful keyless setup explicitly
+  // so inference does not depend on inferring a synthetic credential from a populated catalog.
+  const keyless =
+    params.persistence.kind === "remove"
+      ? !hasLlamaServerAuthorizationHeader(existing?.headers)
+      : params.persistence.kind === "preserve" &&
+        params.persistence.keyless &&
+        !existing?.auth &&
+        !existing?.apiKey;
   const baseUrl = params.discovery.endpoint.inferenceBaseUrl;
   const connection = applyProviderConnectionConfig(
     {
@@ -189,7 +205,12 @@ function buildExistingProviderConfig(
   );
   // The connection owner decides catalog seeding; auth fields stay with this owner.
   return normalizeLlamaServerProviderConfig(
-    { ...existing, baseUrl, models: connection.models?.providers?.[server.id]?.models ?? [] },
+    {
+      ...existing,
+      ...(keyless ? { auth: "none" as const } : {}),
+      baseUrl,
+      models: connection.models?.providers?.[server.id]?.models ?? [],
+    },
     server,
   );
 }
@@ -255,7 +276,7 @@ async function removeDefaultAuthProfile(
 async function discoverForSetup(
   ctx: ProviderAppGuidedSetupContext,
   server: LlamaServerIdentity = LLAMA_CPP_SERVER,
-): Promise<Extract<LlamaServerDiscoveryResult, { kind: "success" }> | null> {
+) {
   const provider = ctx.config.models?.providers?.[server.id];
   if (provider?.localService) {
     return null;
@@ -271,18 +292,35 @@ async function discoverForSetup(
       ? await resolveLlamaServerRuntimeApiKey({
           server,
           config: ctx.config,
+        }).catch((error: unknown) => {
+          // An unconfigured local server may accept anonymous discovery. Other auth failures
+          // (for example an unresolved SecretRef) still stop this candidate.
+          if (
+            !provider?.apiKey &&
+            !provider?.auth &&
+            !Object.values(ctx.config.auth?.profiles ?? {}).some(
+              (profile) => profile.provider === server.id,
+            ) &&
+            isProviderAuthError(error, "missing-provider-auth")
+          ) {
+            return undefined;
+          }
+          throw error;
         })
       : undefined;
     const discovery = await discoverLlamaServer({
       server,
       baseUrl: provider?.baseUrl ?? server.defaultOrigin,
+      requireAppListener: server.id === LLAMA_APP_SERVER.id && !provider,
       apiKey,
       headers,
       allowPrivateNetwork: provider?.request?.allowPrivateNetwork,
       signal: ctx.signal,
       useRuntimeDefaults: false,
     });
-    return discovery.kind === "success" ? discovery : null;
+    return discovery.kind === "success"
+      ? { ...discovery, keyless: !apiKey && !hasLlamaServerAuthorizationHeader(headers) }
+      : null;
   } catch {
     return null;
   }
@@ -318,7 +356,7 @@ export async function prepareLlamaServerSetup(
   }
   const prefix = `${server.id}/`;
   const modelId = ctx.modelRef.startsWith(prefix) ? ctx.modelRef.slice(prefix.length) : "";
-  if (!modelId || !discovery.models.some((model) => model.config.id === modelId)) {
+  if (!modelId || !setupChatModels(discovery).some((model) => model.config.id === modelId)) {
     return null;
   }
   return buildSetupResult(
@@ -327,7 +365,7 @@ export async function prepareLlamaServerSetup(
       discovery,
       modelId,
       resetEndpoint: false,
-      persistence: { kind: "preserve" },
+      persistence: { kind: "preserve", keyless: discovery.keyless },
     },
     server,
   );
@@ -526,8 +564,10 @@ async function validateNonInteractiveDiscovery(
   }
   const requestedModelId = normalizeOptionalSecretInput(ctx.opts.customModelId);
   const modelId = requestedModelId ?? selectSetupModelId(discovery);
-  if (!modelId || !discovery.models.some((model) => model.config.id === modelId)) {
-    const available = discovery.models.map((model) => model.config.id).join(", ");
+  if (!modelId || !setupChatModels(discovery).some((model) => model.config.id === modelId)) {
+    const available = setupChatModels(discovery)
+      .map((model) => model.config.id)
+      .join(", ");
     throw new Error(
       requestedModelId
         ? `${server.id === LLAMA_CPP_SERVER.id ? "llama-server" : server.label} model ${requestedModelId} was not found. Available models: ${available}`

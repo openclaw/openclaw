@@ -11,13 +11,7 @@ import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime
 import { LLAMA_CPP_SERVER, type LlamaServerIdentity } from "./defaults.js";
 import { normalizeLlamaServerProviderConfig, resolveLlamaServerEndpoint } from "./endpoint.js";
 
-type LlamaServerModelStatus =
-  | "unloaded"
-  | "loading"
-  | "loaded"
-  | "sleeping"
-  | "downloading"
-  | "unknown";
+type LlamaServerModelStatus = "unloaded" | "loading" | "loaded" | "sleeping" | "unknown";
 
 type LlamaServerModelWire = Record<string, unknown> & {
   id?: unknown;
@@ -61,7 +55,6 @@ function normalizeStatus(value: unknown): LlamaServerModelStatus {
     case "loading":
     case "loaded":
     case "sleeping":
-    case "downloading":
       return value;
     default:
       return "unknown";
@@ -114,6 +107,10 @@ export function mapLlamaServerModel(
 ): LlamaServerDiscoveredModel | null {
   const id = typeof row.id === "string" ? row.id.trim() : "";
   if (!id || (row.object !== undefined && row.object !== "model")) {
+    return null;
+  }
+  // The router lists unfinished downloads so its UI can resume them. They cannot serve requests.
+  if (row.status?.value === "downloading" || row.status?.value === "incomplete") {
     return null;
   }
   const nativeContextWindow =

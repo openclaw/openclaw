@@ -56,6 +56,7 @@ type OpenAICompatibleModelDiscoveryResult =
       health: "ready" | "loading" | "unknown";
       rows: OpenAICompatibleModelDiscoveryRow[];
       fetchedAt: number;
+      matchedLocalListener?: true;
     }
   | { kind: "unreachable"; error: unknown }
   | { kind: "http-error"; path: string; status: number }
@@ -188,6 +189,21 @@ async function discoverOpenAICompatibleModelRows(
   const inferredServerBaseUrl = inferenceBaseUrl.replace(/\/v1$/u, "");
   const serverBaseUrl = (params.serverBaseUrl ?? inferredServerBaseUrl).replace(/\/+$/, "");
   const timeoutMs = params.timeoutMs ?? 5_000;
+  if (params.localListenerArgument) {
+    const { localListenerHasArgument } = await import("../infra/ports-inspect.js");
+    if (
+      !(await localListenerHasArgument(
+        new URL(inferenceBaseUrl),
+        params.localListenerArgument,
+        params.signal,
+      ))
+    ) {
+      return {
+        kind: "unreachable",
+        error: new Error("Local provider listener does not match the requested app"),
+      };
+    }
+  }
   const requestPolicy = await resolveDiscoveryRequestPolicy(params, inferenceBaseUrl);
   const request = {
     ...params,
@@ -302,7 +318,13 @@ async function discoverOpenAICompatibleModelRows(
     });
   }
 
-  return { kind: "success", health, rows, fetchedAt: Date.now() };
+  return {
+    kind: "success",
+    health,
+    rows,
+    fetchedAt: Date.now(),
+    ...(params.localListenerArgument ? { matchedLocalListener: true as const } : {}),
+  };
 }
 
 type OpenAICompatibleLocalModelsParams = {
@@ -319,6 +341,8 @@ type OpenAICompatibleLocalModelsParams = {
   healthPath?: string;
   modelsPathOrder?: "inference" | "server-first";
   routerModelProps?: boolean;
+  /** Only discover a loopback server whose listening process has this exact flag and value. */
+  localListenerArgument?: { flag: string; value: string };
   contextWindow?: number;
   discoverRuntimeContext?: boolean;
   maxTokens?: number;

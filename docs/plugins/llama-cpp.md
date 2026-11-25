@@ -52,8 +52,10 @@ host or use an endpoint the Gateway can reach.
 
 ### Set up the app connection
 
-For fresh automatic setup, an available Llama model is preferred over other
-local server candidates. Existing configured models, saved sign-ins and supported
+Fresh automatic setup prefers a usable model served by the Llama desktop app
+on the Gateway host. A standalone llama-server on the same port keeps its
+llama.cpp identity. For remote, forwarded, or externally managed servers,
+choose **Llama** explicitly to use the app connection. Existing configured models, saved sign-ins and supported
 cloud credentials retain their earlier priority. This preference never installs
 Llama or replaces a configured default.
 

@@ -439,7 +439,10 @@ it.each(authPolicyCases)(
     expectDiscovery({ apiKey: expectedApiKey, headers: expectedHeaders });
     expect(provider?.headers).toEqual(expectedHeaders);
     if (action !== "preserve") {
-      expect(provider).toMatchObject({ auth: undefined, apiKey: undefined });
+      expect(provider).toMatchObject({
+        auth: action === "remove" && !expectedHeaders ? "none" : undefined,
+        apiKey: undefined,
+      });
     }
     if (action === "upsert") {
       expect(upsertProfileMock.mock.lastCall?.[0]).toMatchObject({
@@ -473,6 +476,18 @@ it("propagates unreachable discovery during setup without changing auth", async 
   expect(ctx.runtime.exit).not.toHaveBeenCalled();
   expectAuthUnchanged();
 });
+
+it.each([undefined, LLAMA_APP_SERVER])(
+  "saves an explicit keyless connection with a live catalog",
+  async (server) => {
+    const ctx = nonInteractiveContext();
+    const result = await configure(ctx, server);
+    expect(result?.models?.providers?.[server?.id ?? LLAMA_CPP_PROVIDER_ID]).toMatchObject({
+      auth: "none",
+      models: [],
+    });
+  },
+);
 
 it("rejects a requested model absent from discovery", async () => {
   const ctx = nonInteractiveContext({ customModelId: "missing" });
@@ -527,6 +542,7 @@ it("detects and rechecks Llama without changing installed llama.cpp or its prima
   expect(detected?.modelRef).toBe("llama-app/" + MODEL_ID);
   const prepared = await guided.prepare({ config, env: {}, modelRef: "llama-app/" + MODEL_ID });
   expect(prepared?.configPatch?.models?.providers?.["llama-app"]).toMatchObject({
+    auth: "none",
     baseUrl: "http://127.0.0.1:9931/v1",
     models: [],
   });
@@ -539,6 +555,7 @@ it("detects and rechecks Llama without changing installed llama.cpp or its prima
   expect(discoverMock).toHaveBeenCalledTimes(3);
   expectDiscovery({
     server: LLAMA_APP_SERVER,
+    requireAppListener: true,
     baseUrl: "http://127.0.0.1:9931",
     useRuntimeDefaults: false,
   });
