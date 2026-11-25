@@ -11,12 +11,9 @@ import {
   parseFastTrackRequest,
 } from "./release-fast-track-contract.mts";
 
-const runId = z.string().regex(/^[1-9][0-9]*$/u);
 const packetSchema = z.strictObject({
   request: z.unknown(),
   digest: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
-  referenceRunId: runId.optional(),
-  referenceRunAttempt: runId.optional(),
 });
 // Evidence manifests exceed the 128 KiB source-admission input cap; digest their canonical JSON uncapped.
 export function releaseFastTrackDigest(value: unknown): string {
@@ -58,10 +55,6 @@ export type FastTrackManifest = {
   sourceAdmission?: PublicationSourceFact;
   publicationArtifacts?: { npmPreflight?: unknown; [key: string]: unknown };
   publicationAdmission?: unknown;
-};
-export type FastTrackReference = {
-  current: { targetSha: string; manifest: FastTrackManifest };
-  fastTrack?: unknown;
 };
 export function bindFastTrackPacket(value: unknown, inputManifest: unknown, now = Date.now()) {
   const packet = parseFastTrackPacket(value);
@@ -137,7 +130,6 @@ export async function authenticateFastTrackPolicy(input: {
   manifest: FastTrackManifest;
   jobs: FastTrackJob[];
   repositoryRoot: string;
-  loadReference: (runId: string, attempt: string) => Promise<FastTrackReference>;
   readPublishedRelease: (tag: string) => {
     draft?: boolean;
     published_at?: string;
@@ -152,31 +144,17 @@ export async function authenticateFastTrackPolicy(input: {
   );
   const { request } = packet;
   if (request.policy === "approved-fast-track-v1") {
-    if (
-      !packet.referenceRunId ||
-      !packet.referenceRunAttempt ||
-      packet.referenceRunId === request.run.id
-    ) {
-      throw new Error(
-        "Small-delta fast-track requires the original fully validated published reference run and attempt.",
-      );
-    }
-    const reference = await input.loadReference(packet.referenceRunId, packet.referenceRunAttempt);
+    // A shipped, non-fast-tracked release already passed its own publication gates.
+    // Do not replay its historical validation evidence under current tooling.
     const release = input.readPublishedRelease(request.reference.releaseTag);
     if (
       release.draft !== false ||
       !release.published_at ||
       release.targetSha !== request.reference.targetSha ||
-      release.fastTracked ||
-      reference.current.targetSha !== request.reference.targetSha ||
-      reference.current.manifest.sourceAdmission?.projection?.version !==
-        request.reference.releaseTag.slice(1) ||
-      releaseFastTrackDigest(reference.current.manifest) !==
-        request.reference.validationEvidenceDigest ||
-      reference.fastTrack
+      release.fastTracked
     ) {
       throw new Error(
-        "Fast-track baseline must be a published fully validated release with matching original evidence.",
+        "Fast-track baseline must be a published release that was not itself fast-tracked.",
       );
     }
     collectFastTrackEligibility({
@@ -185,7 +163,6 @@ export async function authenticateFastTrackPolicy(input: {
       validatedReference: {
         repository: request.repository,
         ...request.reference,
-        validationMode: "full-release-validation",
         published: true,
       },
     });

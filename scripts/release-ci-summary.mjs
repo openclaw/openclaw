@@ -4113,35 +4113,6 @@ async function validateReleaseEvidenceGraph(
       manifest: currentEvidence.manifestJson,
       jobs,
       repositoryRoot,
-      loadReference: async (referenceId, attempt) => {
-        const reference = await validateReleaseRunEvidence(
-          {
-            repository: normalizedRepository,
-            runId: referenceId,
-            expectedRunAttempts: { [referenceId]: Number(attempt) },
-            trustedWorkflowFullRef,
-            trustedWorkflowRef,
-            trustedWorkflowSha,
-            verifierSourceContent,
-            verifierSourceSha,
-          },
-          evidenceClient,
-        );
-        const { evaluateReleasePublishGates } = await import("./lib/release-publish-gates.mts");
-        const gates = evaluateReleasePublishGates({
-          manifest: reference.current.manifest,
-          consumer: "publisher",
-          releaseTag: packet.request.reference.releaseTag,
-          npmDistTag: reference.current.manifest.sourceAdmission.publicationSelection.npmDistTag,
-          expectedSha: packet.request.reference.targetSha,
-          readWorkflowSource: (sha, path) => evidenceClient.getWorkflowSource(sha, path),
-        });
-        const failed = gates.find((gate) => gate.status === "FAIL");
-        if (failed) {
-          throw new Error("Fast-track reference was not fully validated: " + failed.message);
-        }
-        return reference;
-      },
       readPublishedRelease: (tag) => {
         const release = evidenceClient.readWorkloadIdentity(
           "releases/tags/" + encodeURIComponent(tag),

@@ -50,6 +50,8 @@ function context(rerunGroup: string, readiness: "success" | "skipped" | "failure
       coverage_policy: "",
       live_suite_filter: "",
       performance_exempt: "false",
+      npm_dist_tag: "beta",
+      publication_selection_json: JSON.stringify({ npmDistTag: "latest" }),
     },
     additionalNeeds: {
       plugin_compatibility_readiness: {
@@ -75,6 +77,11 @@ it("build-only schedules artifact preparation without dispatching any validation
       context("build-only"),
     ),
   ).toBe("build-only");
+});
+it("build-only seals stable npm artifacts for the exact publication channel, not the beta qualification channel", () => {
+  const distTag = workflow.jobs.prepare_npm_package.env.NPM_DIST_TAG;
+  expect(evaluateWorkflowExpression(distTag, context("build-only"))).toBe("latest");
+  expect(evaluateWorkflowExpression(distTag, context("all"))).toBe("beta");
 });
 it("ordinary all-group validation remains selected and artifact preparation fails closed on source readiness failure", () => {
   for (const id of [
