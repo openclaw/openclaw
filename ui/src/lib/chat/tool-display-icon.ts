@@ -1,7 +1,7 @@
-import { TOOL_DISPLAY_CONFIG } from "../../../../src/agents/tool-display-config.js";
+import { TOOL_DISPLAY_BASE } from "../../../../src/agents/tool-display-config.js";
 import { iconData, type IconName } from "../../components/icon-data.ts";
 
-const tools = new Map<string, { icon: string }>(Object.entries(TOOL_DISPLAY_CONFIG.tools));
+const tools = new Map<string, { icon: string }>(Object.entries(TOOL_DISPLAY_BASE.tools));
 
 const CHAT_TOOL_ICONS = new Map<string, IconName>([
   ["tool_search", "search"],
@@ -29,6 +29,6 @@ export function resolveToolDisplayIcon(name: string): IconName {
     return chatIcon;
   }
   const spec =
-    tools.get(key) ?? tools.get(TOOL_NAME_ALIASES.get(key) ?? "") ?? TOOL_DISPLAY_CONFIG.fallback;
+    tools.get(key) ?? tools.get(TOOL_NAME_ALIASES.get(key) ?? "") ?? TOOL_DISPLAY_BASE.fallback;
   return isIconName(spec.icon) ? spec.icon : "puzzle";
 }
