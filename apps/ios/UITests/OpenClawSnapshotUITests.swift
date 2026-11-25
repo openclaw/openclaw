@@ -1008,6 +1008,9 @@ extension OpenClawSnapshotUITests {
         // Provider accounts is a page of the model sheet, with the system back button.
         XCTAssertTrue(app.navigationBars["Provider accounts"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(app.buttons["model-auth-provider-openai"].waitForExistence(timeout: 5), app.debugDescription)
+        // A pushed page carries back, not close, as a provider's models page does.
+        app.buttons["BackButton"].tap()
+        XCTAssertTrue(app.buttons["chat-model-picker-close"].waitForExistence(timeout: 5), app.debugDescription)
         app.buttons["chat-model-picker-close"].tap()
     }
 

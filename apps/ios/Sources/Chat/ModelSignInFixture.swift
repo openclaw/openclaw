@@ -76,7 +76,7 @@ final class ModelSignInFixture {
             if let id = params["sessionId"]?.stringValue { self.sessions[id] = nil }
             return Data(#"{"status":"cancelled"}"#.utf8)
         case "models.authLogout":
-            try await Task.sleep(for: .milliseconds(800))
+            try await Task.sleep(for: .milliseconds(ScreenshotFixtureMode.modelSignInAnswerMilliseconds + 300))
             if let provider = params["provider"]?.stringValue {
                 self.signedIn.remove(provider)
                 self.signedOut.insert(provider)
@@ -96,7 +96,7 @@ final class ModelSignInFixture {
                 details: ["code": AnyCodable("WIZARD_NOT_FOUND")])
         }
         let answer = params["answer"]?.dictionaryValue?["value"]
-        try await Task.sleep(for: .milliseconds(500))
+        try await Task.sleep(for: .milliseconds(ScreenshotFixtureMode.modelSignInAnswerMilliseconds))
         let stage = session.stage + 1
         switch (session.login, session.stage) {
         case (.xaiKey, 0):

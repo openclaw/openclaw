@@ -27,6 +27,15 @@ enum ScreenshotFixtureMode {
         return arguments[index + 1]
     }
 
+    /// How long the sign-in fixture's server takes to answer a step; long enough to read a busy row when set.
+    static var modelSignInAnswerMilliseconds: Int {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-model-sign-in-answer-ms"),
+              arguments.indices.contains(index + 1)
+        else { return 500 }
+        return Int(arguments[index + 1]) ?? 500
+    }
+
     /// How long the sign-in fixture's server takes to hear back from a browser or a device code.
     static var modelSignInWaitSeconds: Int {
         let arguments = ProcessInfo.processInfo.arguments
