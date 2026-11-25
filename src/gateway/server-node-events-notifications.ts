@@ -31,8 +31,8 @@ import type {
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
-// Newest pending posted update per session, route and notification; an older update that
-// settles as cancelled before it started was replaced by it.
+// Newest pending posted update per session, route and notification. An older update that
+// settles as cancelled before it started lost its place to that newer one.
 const latestPostedUpdates = new Map<string, string | undefined>();
 
 export async function handleNodeNotificationEvent(
