@@ -173,7 +173,7 @@ installation through that other path.
 Explicit package versions, dist-tags, npm specs, and `--no-restart` keep their
 prepared-release behavior.
 
-Before conversion, a node-only installation with an installed node service, no
+Before conversion, a node-only package installation with an installed node service, no
 Gateway service definition, and no live local Gateway stays with its package installer.
 `openclaw update` uses the existing package update flow for that installation;
 it does not create a Gateway launcher, forwarding entry, or pending Gateway trial.
