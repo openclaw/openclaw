@@ -102,6 +102,40 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     },
   );
 
+  it.each([false, true])("restores an emoji completion with Caps Lock %s", async (capsLock) => {
+    const f = fixture(kind, "@Alex ", 230, [{ profileId: "alex-one", start: 0, end: 5 }]);
+    focusComposerInput(f.input);
+    selectComposerInput(f.input, 6, 6);
+    await userEvent.keyboard("arrives :smi");
+    f.view.dispatch({
+      changes: { from: 14, to: 18, insert: "😄" },
+      userEvent: "input.complete",
+    });
+    const historyKey = (shiftKey: boolean) =>
+      f.content.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: capsLock !== shiftKey ? "Z" : "z",
+          code: "KeyZ",
+          keyCode: 90,
+          ctrlKey: historyModifier === "Control",
+          metaKey: historyModifier === "Meta",
+          shiftKey,
+          modifierCapsLock: capsLock,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    expect(f.raw()).toBe("@Alex arrives 😄");
+    historyKey(false);
+    expect(f.raw()).toBe("@Alex arrives :smi");
+    historyKey(true);
+    expect(f.raw()).toBe("@Alex arrives 😄");
+    expect(f.inputEvents.at(-1)?.inputType).toBe("historyRedo");
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 0, end: 5 }]);
+    historyKey(true);
+    expect(f.raw()).toBe("@Alex arrives 😄");
+  });
+
   it("reuses mapped mention state on owner echoes while refreshing changed avatars", async () => {
     const avatarUrls = new Map<string, string>();
     const f = fixture(kind, "Ask @Alex after", 800, undefined, (input, mentions) =>
