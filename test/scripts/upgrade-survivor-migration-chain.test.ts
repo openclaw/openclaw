@@ -31,6 +31,9 @@ const { resolveOpenClawAgentSqlitePath } = await import("../../src/state/opencla
 const { getOpenClawAgentMigrationSchema } =
   await import("../../src/state/openclaw-agent-schema-history.js");
 const { seedVersion } = await import("../../src/state/schema-migration.test-support.js");
+const { normalizeSqliteText } = await import("../../src/state/openclaw-state-db-schema-repair.js");
+const { createOpenClawDatabaseMaintenanceScope, runOutsideOpenClawDatabaseMaintenanceScope } =
+  await import("../../src/state/openclaw-state-db-async-lifecycle.js");
 const original = {
   ...integrity,
   ...worker,
@@ -183,11 +186,23 @@ async function migrate(bulk: FixtureStep | undefined, baseline: number, schemaSq
     // Lease admission is outside SQL observation; the real migration retains that lease throughout.
     let observation: SqliteMigrationObservation;
     try {
-      ({ observation } = await withAgentDatabaseMaintenanceLease(options, (maintenance) =>
-        observer.observe(() =>
-          migrateOpenClawAgentDatabaseForMaintenance({ ...options, pathname }, maintenance),
-        ),
-      ));
+      ({ observation } = await withAgentDatabaseMaintenanceLease(options, async (maintenance) => {
+        const scope = createOpenClawDatabaseMaintenanceScope({
+          schemaMaintenance: true,
+          // The lease's own storage retains its independent custody, like Doctor's root lock.
+          assertOwnerCurrent: () =>
+            runOutsideOpenClawDatabaseMaintenanceScope(() => maintenance.assertOwned()),
+        });
+        try {
+          return await scope.run(() =>
+            observer.observe(() =>
+              migrateOpenClawAgentDatabaseForMaintenance({ ...options, pathname }, maintenance),
+            ),
+          );
+        } finally {
+          await scope.close();
+        }
+      }));
     } catch (error) {
       writeMigrationFailure(error, {
         stage: "migration",
@@ -237,6 +252,40 @@ it("enforces bulk-data access on the real main migration chain with its integrit
   writeMigrationReceipt({ ...range, ...receipt });
   assertMigrationBulkSafe(observation, range);
 });
+
+it.each([false, true])(
+  "normalizes historical typed BLOB keys and references atomically (conflict: %s)",
+  (conflict) => {
+    using db = new DatabaseSync(":memory:");
+    db.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE child (parent_id TEXT REFERENCES parent(id));
+      CREATE TABLE parent (id TEXT PRIMARY KEY, bytes BLOB);
+      INSERT INTO parent VALUES (CAST('retained' AS BLOB), X'00FF');
+      INSERT INTO child VALUES (CAST('retained' AS BLOB));
+      CREATE TABLE strict_payload (value ANY) STRICT;
+      INSERT INTO strict_payload VALUES (X'00FF');
+    `);
+    if (conflict) {
+      db.exec("INSERT INTO parent VALUES ('retained', X'01')");
+      expect(() => normalizeSqliteText(db)).toThrow(/UNIQUE constraint failed: parent.id/u);
+    } else {
+      normalizeSqliteText(db);
+    }
+    expect(
+      db.prepare("SELECT typeof(id) AS storage, hex(bytes) AS bytes FROM parent LIMIT 1").get(),
+    ).toEqual({ storage: conflict ? "blob" : "text", bytes: "00FF" });
+    expect(db.prepare("SELECT typeof(parent_id) AS storage FROM child").get()).toEqual({
+      storage: conflict ? "blob" : "text",
+    });
+    expect(
+      db.prepare("SELECT typeof(value) AS storage, hex(value) AS bytes FROM strict_payload").get(),
+    ).toEqual({ storage: "blob", bytes: "00FF" });
+    expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    expect(db.isTransaction).toBe(false);
+  },
+);
 it.each(["step", "callback"] as const)(
   "rejects a real WHERE 0 fixture %s around the finalizer",
   async (location) => {

@@ -12,7 +12,7 @@ import {
 } from "./openclaw-state-db.js";
 import * as stateWorker from "./openclaw-state-worker-store.js";
 import { preparePersonalSessionPins } from "./user-preferences-session-pins.js";
-import { setCanonicalUserPreferences } from "./user-preferences.js";
+import { readProfileSidebarOrder, setCanonicalUserPreferences } from "./user-preferences.js";
 import { selectPersonalPinnedSessionKeys } from "./user-preferences.store.js";
 import { setUserPreferences } from "./user-preferences.test-support.js";
 import { mergeCanonicalUserProfiles } from "./user-profile-writes.js";
@@ -94,6 +94,30 @@ it("shares one worker refresh after a preference change and retires a closed rea
   const reopenedReadOnly = await preparePersonalSessionPins(options);
   expect(reopenedReadOnly.sessionKeys).toEqual(["agent:main:second"]);
   expect(read).toHaveBeenCalledTimes(4);
+});
+
+it("reads only one profile and key, stays SQL-free across other saves, and refreshes its own sidebar", async () => {
+  const options = stateOptions();
+  const alice = ensureProfileForEmail("warm-alice@example.test", options).id;
+  const bob = ensureProfileForEmail("warm-bob@example.test", options).id;
+  const pref = UI_RAIL_SHORTCUTS_PREFERENCE_KEY;
+  const save = (id: string, key: string, value: unknown) =>
+    expect(setUserPreferences(id, { [key]: value }, options).ok).toBe(true);
+  save(alice, pref, ["session:one", "session-rail:two"]);
+  const reader = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  const read = () => readProfileSidebarOrder(alice, new Set([alice]), options);
+  expect(await read()).toEqual(["one"]);
+  expect(reader.mock.calls.map(([, op]) => op)).toEqual([
+    { type: "userPreferences.values", profileIds: [alice], key: pref },
+  ]);
+  save(bob, "ui.theme", "dark");
+  save(bob, pref, ["session:foreign"]);
+  save(alice, "ui.theme", "light");
+  expect(await read()).toEqual(["one"]);
+  expect(reader).toHaveBeenCalledTimes(1);
+  save(alice, pref, ["session:two"]);
+  expect(await read()).toEqual(["two"]);
+  expect(reader).toHaveBeenCalledTimes(2);
 });
 
 it.each([

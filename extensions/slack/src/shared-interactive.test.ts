@@ -1,6 +1,7 @@
 // Slack tests cover shared interactive plugin behavior.
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { describe, expect, it } from "vitest";
+import { buildSlackNativeDataAccessibilityText } from "./blocks-fallback.js";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
@@ -134,6 +135,7 @@ describe("buildSlackInteractiveBlocks", () => {
 
     expect(selectBlock.elements?.[0]?.options).toHaveLength(100);
     expect(selectBlock.elements?.[0]?.options?.at(-1)?.value).toBe("v100");
+    expect(buildSlackNativeDataAccessibilityText("", blocks)).toContain("Option 100");
   });
 
   it("drops value-only Slack buttons with values beyond Block Kit limits", () => {
