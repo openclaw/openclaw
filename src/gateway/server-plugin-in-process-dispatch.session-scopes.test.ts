@@ -13,6 +13,7 @@ import {
 import { createSessionsCreateTool } from "../agents/tools/sessions-create-tool.js";
 import { createSessionsSpawnTool } from "../agents/tools/sessions-spawn-tool.js";
 import { maybeSpawnVisibleSession } from "../agents/tools/sessions-spawn-visible.js";
+import { requireGit } from "../agents/worktrees/git.js";
 import { prepareChannelRunAdmission } from "../auto-reply/reply/channel-run-admission.js";
 import { getRequesterProfile, transferRequesterProfile } from "../auto-reply/requester-profile.js";
 import { readChannelContextAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
@@ -36,6 +37,7 @@ import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { registerProjectRegistry } from "../projects/project-registry.js";
 import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { linkUserChannelIdentity } from "../state/user-channel-identities.js";
@@ -52,6 +54,10 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { sessionCreateHandlers } from "./server-methods/sessions-create.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import {
+  initializeRepository,
+  removeOwnedSessionWorktree,
+} from "./server.sessions.create.projects.test-support.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 import { roleClient } from "./session-sharing.test-utils.js";
 
@@ -89,7 +95,7 @@ vi.mock("./server-methods/chat-send-external-entry.js", () => ({
   },
 }));
 
-type HostedSource = "operator" | "unidentified" | "scheduled" | "channel";
+type HostedSource = "writer" | "operator" | "unidentified" | "scheduled" | "channel";
 
 type ChannelCase =
   | "unlinked"
@@ -111,6 +117,8 @@ async function createHostedCreation(
   });
   kickoff.external.mockClear();
   const storePath = state.path("sessions.json");
+  const isOperator = source === "operator" || source === "writer";
+  const writeScope = source === "writer" ? "operator.write" : "operator.sessions.write";
   const cfg: OpenClawConfig = {
     session: { store: storePath },
     agents: {
@@ -127,7 +135,7 @@ async function createHostedCreation(
         definitions: {
           view: {
             agents: ["main"],
-            scopes: ["operator.sessions.write"],
+            scopes: [writeScope],
             sessions: { others: "none" },
             sandbox: "required",
           },
@@ -138,7 +146,7 @@ async function createHostedCreation(
   await state.writeConfig(cfg);
   setRuntimeConfigSnapshot(cfg);
   const client = roleClient("view", "native-session-scope");
-  client.connect.scopes = ["operator.sessions.write"];
+  client.connect.scopes = [writeScope];
   const profileId = expectDefined(client.authenticatedUserProfile, "original person").profileId;
   const person = { type: "human", source: "profile", id: profileId } as const;
   const parentScope = { agentId: "main", sessionKey: parentKey, storePath };
@@ -165,20 +173,19 @@ async function createHostedCreation(
   });
   context.resolveGatewayContext = () => context;
   const sourceController = new AbortController();
-  const captured =
-    source === "operator"
-      ? expectDefined(
-          await prepareGatewayOperatorRunAuthority({
-            client,
-            context,
-            sourceAuthority: {
-              signal: sourceController.signal,
-              assertCurrent: () => sourceController.signal.throwIfAborted(),
-            },
-          }),
-          "original source",
-        )
-      : undefined;
+  const captured = isOperator
+    ? expectDefined(
+        await prepareGatewayOperatorRunAuthority({
+          client,
+          context,
+          sourceAuthority: {
+            signal: sourceController.signal,
+            assertCurrent: () => sourceController.signal.throwIfAborted(),
+          },
+        }),
+        "original source",
+      )
+    : undefined;
   const scheduled =
     source === "scheduled"
       ? prepareCronRunAdmission({
@@ -262,8 +269,9 @@ async function createHostedCreation(
       admittedRunContext: admitted,
       // Operator scenarios start with a human request, not only an execution grant.
       // Keep those causal facts separate from the authority captured above.
-      requesterOrigin:
-        source === "operator" ? { sessionKey: parentKey, operatorProfileId: profileId } : undefined,
+      requesterOrigin: isOperator
+        ? { sessionKey: parentKey, operatorProfileId: profileId }
+        : undefined,
       agentId: "main",
       sessionKey: parentKey,
       approvalSignals: [sourceController.signal],
@@ -279,10 +287,10 @@ async function createHostedCreation(
     // Observe the real router admission, then call the real SQLite creation owner.
     expect(options.client?.internal?.syntheticClient).toBe(true);
     expect(options.client?.connect.scopes).not.toContain("operator.admin");
-    if (source === "operator") {
-      expect(options.client?.connect.scopes).toEqual(["operator.sessions.write"]);
+    if (isOperator) {
+      expect(options.client?.connect.scopes).toEqual([writeScope]);
       expect(readGatewayRequestMutationAuthority(options).sessionScope).toBe(
-        "operator.sessions.write",
+        source === "writer" ? undefined : writeScope,
       );
       const original = expectDefined(captured, "original source").authority;
       expect(options.client?.internal?.operatorRunAuthority?.source).toBe(original.source);
@@ -649,6 +657,65 @@ describe("independent session creation tool", () => {
         expect(kickoff.external).not.toHaveBeenCalled();
       }, source),
   );
+
+  it("creates a standalone session without storing the source as a parent", () =>
+    withHostedCreation(async ({ bindTool, read, profileId, workspaceDir }) => {
+      const repo = await initializeRepository(workspaceDir, "standalone-project");
+      const project = await registerProjectRegistry({ path: repo });
+      // Advance only the fixture remote so the default-base path has to fetch.
+      const remote = `${repo}.git`;
+      const base = await requireGit(remote, [
+        "-c",
+        "user.name=OpenClaw Tests",
+        "-c",
+        "user.email=tests@openclaw.invalid",
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        "HEAD",
+        "-m",
+        "Advance remote main",
+      ]);
+      await requireGit(remote, ["update-ref", "refs/heads/main", base]);
+      const { toolCreate } = await bindTool({
+        sessionPermissionPolicy: { root: "/workspace", mode: "read-only" },
+        inheritedToolDenylist: ["exec"],
+      });
+      const result = await toolCreate({
+        standalone: true,
+        label: "New root",
+        projectId: project.id,
+        worktree: true,
+      });
+      const { sessionKey } = result.details as { sessionKey: string };
+      try {
+        const entry = read(sessionKey);
+        expect(entry).toMatchObject({
+          spawnDepth: 0,
+          chatType: "direct",
+          sandbox: "required",
+          createdActor: { id: profileId },
+          permissionMode: "read-only",
+          inheritedToolDeny: ["exec"],
+          projectId: project.id,
+          worktree: { repoRoot: repo },
+        });
+        expect(entry?.parentSessionKey).toBeUndefined();
+        expect(entry?.spawnedBy).toBeUndefined();
+        expect(entry?.completionOwnerSessionKey).toBeUndefined();
+        const checkout = expectDefined(entry?.spawnedCwd, "prepared checkout");
+        expect(checkout).not.toBe(repo);
+        expect(await requireGit(checkout, ["rev-parse", "HEAD"])).toBe(base);
+      } finally {
+        await removeOwnedSessionWorktree(sessionKey);
+      }
+    }, "writer"));
+
+  it("refuses a standalone request from a session-only operator without creating a child", () =>
+    withHostedCreation(async ({ toolCreate, handler }) => {
+      await expect(toolCreate({ standalone: true })).rejects.toThrow(/direct operator request/);
+      expect(handler).not.toHaveBeenCalled();
+    }));
 
   it("creates a guest-owned idle visible session with spawn lineage and a bounded receipt", () =>
     withHostedCreation(async ({ tool, toolCreate, read, profileId }) => {

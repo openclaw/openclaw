@@ -21,6 +21,8 @@ export type TrustedSessionCreation = Partial<AgentRuntimeSessionSpawnContext> & 
   openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
   /** Exact spawning session retained separately from the stable actor identity. */
   requesterSessionKey?: string;
+  /** Retain live source policy during creation without making it a persisted parent. */
+  standaloneCreation?: true;
   /** Live host-only ingress intent; never accepted from wire arguments. */
   childSessionPublication?: import("../channels/message-access/child-session-publication.js").ChildSessionPublication;
 };

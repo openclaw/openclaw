@@ -81,7 +81,13 @@ do not yield expecting one.
   the new session. `user` selects the verified requester when needed, as described
   above. `agentId` defaults to the requesting agent; model selection follows a
   visible `sessions_spawn`. `group` selects a sidebar category, not execution parentage. The tool
-  does not accept creator identity, role, key, parent, fork, spawn, or adoption fields.
+  does not accept creator identity, role, a parent key, fork, spawn, or adoption fields.
+- Set `standalone: true` when the requester wants no parent. This requires a
+  direct request from an operator with write access. In this mode, select a
+  registered `projectId` and set `worktree: true` for a fresh checkout. Omit
+  `worktreeBaseRef` to check the remote default branch, or supply it to use an
+  exact local ref. The opening message waits for the checkout. If the request
+  is refused, the tool does not create a child instead.
 - The result identifies the new `sessionKey` and `sessionId`. `runStarted` reports
   whether the first turn started; `runId` is present when available. If creation
   succeeds but startup fails, `runError` reports the failure and the session remains
@@ -89,8 +95,8 @@ do not yield expecting one.
 
 `sessions_create` has the same authority as `sessions_spawn` with `visible: true`.
 Any turn that can start a visible spawn can create a session, including a channel
-turn from a sender without a linked operator profile. The new session records the
-requesting session as its parent. It inherits that turn's sandbox requirement, tool
+turn from a sender without a linked operator profile. Without `standalone: true`,
+the new session records the requesting session as its parent. It inherits that turn's sandbox requirement, tool
 policy, and permission mode, so it is never less contained than the turn that
 created it. Agent targets, spawn depth, and child limits follow the same
 `subagents` admission rules. Unlike a visible spawn, the session is not registered

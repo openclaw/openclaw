@@ -84,7 +84,7 @@ export async function maybeSpawnVisibleSession(
 ): Promise<Record<string, unknown> | undefined> {
   const promptedAt = Date.now();
   // sessions_create shares this owner's admission and containment, not its supervision.
-  const independent = params.options?.independent === true;
+  const independent = params.options?.independent;
   const worktree = params.raw.worktree === true;
   const requestedPlacement = params.raw.placement;
   if (
@@ -408,6 +408,7 @@ export async function maybeSpawnVisibleSession(
               creatorProfileId,
             ),
             requesterSessionKey: requesterKey,
+            ...(independent === "standalone" ? { standaloneCreation: true } : {}),
             ...(childSessionPublication ? { childSessionPublication } : {}),
             requesterSenderIsOwner: params.options?.senderIsOwner === true,
             gitContributorProfileId: params.options?.gitContributorProfileId,

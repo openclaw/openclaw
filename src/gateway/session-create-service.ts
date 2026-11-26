@@ -21,7 +21,6 @@ import {
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { SessionEntryCreationNotCommittedError } from "../config/sessions/session-creation-operation.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
-import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import {
@@ -64,9 +63,9 @@ import {
 } from "./session-create-existing-selection.js";
 import { prepareGatewaySessionFork } from "./session-create-fork.js";
 import {
-  inheritSessionCreateParentFields,
   isStandaloneSessionCreate,
   prepareSessionCreateParent,
+  projectSessionCreateParentFields,
   resolveSessionCreateInheritance,
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
@@ -196,6 +195,7 @@ async function createGatewaySessionInScope(
   const label = normalizeOptionalString(params.label);
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
+  const standaloneCreation = params.creation?.standaloneCreation === true;
   const projectId = normalizeOptionalString(params.projectId);
   const pendingProjectGitUrl = normalizeOptionalString(params.pendingProjectGitUrl);
   const requestedToolOverrides = params.toolOverrides !== undefined;
@@ -306,6 +306,9 @@ async function createGatewaySessionInScope(
   }
   const parentIncognito =
     parentSessionEntry?.incognito === true || isIncognitoSessionKey(canonicalParentSessionKey);
+  if (standaloneCreation && parentIncognito) {
+    return invalidSessionRequest("Standalone creation is unavailable from an incognito session.");
+  }
   const incognito = params.incognito === true || parentIncognito;
   const incognitoIntentError = resolveSessionCreateIncognitoIntentError({
     incognito,
@@ -350,7 +353,7 @@ async function createGatewaySessionInScope(
     }
   }
   const standaloneRoot = isStandaloneSessionCreate(params, {
-    parentSessionKey,
+    parentSessionKey: standaloneCreation ? undefined : parentSessionKey,
     incognito,
     targetSessionKey,
     mainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId }),
@@ -871,33 +874,23 @@ async function createGatewaySessionInScope(
                 },
               }
             : {}),
-          // Spawn lineage is declared, never inferred: spawn-owned creations pass
-          // spawnDepth explicitly; everything else (operator chats, forks, harness
-          // and plugin sessions) persists as a depth-0 root. Reused entries keep
-          // their stored depth.
-          ...(existingEntry === undefined ? { spawnDepth: params.spawnDepth ?? 0 } : {}),
+          // The policy-only source of a standalone tool request does not count as lineage.
+          // Reused entries keep their stored depth.
+          ...(existingEntry === undefined
+            ? { spawnDepth: standaloneCreation ? 0 : (params.spawnDepth ?? 0) }
+            : {}),
           ...(existingEntry === undefined ? spawnToolPolicy : {}),
           ...(existingEntry === undefined && incognito ? { incognito: true as const } : {}),
         };
-        const explicitParentSessionKey =
-          canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
-        const newStandaloneRoot = createdNewEntry && standaloneRoot && !explicitParentSessionKey;
         const entry: InternalSessionEntry = {
           ...initializedEntry,
-          ...inheritSessionCreateParentFields({
-            parent: currentParentSessionEntry,
-            overrides: params,
-            newExplicitChild: createdNewEntry && Boolean(canonicalParentSessionKey),
-            newStandaloneRoot,
-            newOperatorRoot: newStandaloneRoot && creation?.via === "operator",
-            selectedModel: initializedEntry.modelOverride,
-          }),
-          ...buildSessionParentLink({
-            parentSessionKey: explicitParentSessionKey,
-            parent: canonicalParentSessionKey ? currentParentSessionEntry : undefined,
-            captureSpawnAuthority:
-              createdNewEntry && params.creation?.via === "spawn" && Boolean(spawnToolPolicy),
-            requesterSenderIsOwner: params.creation?.requesterSenderIsOwner,
+          ...projectSessionCreateParentFields({
+            request: params,
+            entry: initializedEntry,
+            source: { key: canonicalParentSessionKey, entry: currentParentSessionEntry },
+            createdNewEntry,
+            standaloneRoot,
+            hasSpawnToolPolicy: Boolean(spawnToolPolicy),
           }),
         };
         let validateAccountModel: (() => ErrorShape | undefined) | undefined;

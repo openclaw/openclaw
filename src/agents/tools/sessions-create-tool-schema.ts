@@ -27,6 +27,14 @@ export const SessionsCreateToolSchema = Type.Object(
           "Absolute Gateway working directory, subject to existing workspace permissions. Omitted uses destination defaults.",
       }),
     ),
+    standalone: Type.Optional(
+      Type.Boolean({
+        description: "Create without a parent. Requires a live operator with write access.",
+      }),
+    ),
+    projectId: SessionsCreateParamsSchema.properties.projectId,
+    worktree: SessionsCreateParamsSchema.properties.worktree,
+    worktreeBaseRef: SessionsCreateParamsSchema.properties.worktreeBaseRef,
     group: SessionsCreateParamsSchema.properties.category,
     model: SessionsCreateParamsSchema.properties.model,
   },

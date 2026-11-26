@@ -101,7 +101,7 @@ export function prepareSessionCreateOpening(params: {
       systemInputProvenance: {
         kind: "inter_session" as const,
         sourceSessionKey: creation.requesterSessionKey,
-        sourceTool: spawn ? "sessions_spawn" : "sessions_create",
+        sourceTool: spawn && !creation.standaloneCreation ? "sessions_spawn" : "sessions_create",
       },
       suppressCommandInterpretation: true,
     },
@@ -147,7 +147,7 @@ export function validateSessionCreateSpawnRequest(
   creation: TrustedSessionCreation,
   params: Pick<
     SessionsCreateParams,
-    "parentSessionKey" | "fork" | "forkFrom" | "incognito" | "visibility"
+    "parentSessionKey" | "fork" | "forkFrom" | "incognito" | "visibility" | "key"
   >,
 ) {
   const parent = normalizeOptionalString(params.parentSessionKey);
@@ -157,6 +157,23 @@ export function validateSessionCreateSpawnRequest(
     return errorShape(
       ErrorCodes.INVALID_REQUEST,
       "spawn parent must match the trusted agent caller",
+    );
+  }
+  if (
+    creation.standaloneCreation &&
+    (!requester ||
+      !parent ||
+      !creation.inheritedToolPolicy ||
+      creation.completionOwnerSessionKey ||
+      creation.childSessionPublication ||
+      params.key !== undefined ||
+      params.fork === true ||
+      params.forkFrom !== undefined ||
+      params.incognito === true)
+  ) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "Standalone creation requires a fresh session without a fork or completion owner.",
     );
   }
   if (

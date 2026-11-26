@@ -50,6 +50,7 @@ import {
   normalizeToolModelOverride,
   readNonNegativeIntegerParam,
   readToolStringParam,
+  ToolAuthorizationError,
   ToolInputError,
 } from "./common.js";
 import {
@@ -63,6 +64,7 @@ import {
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
 } from "./sessions-helpers.js";
+import { hasSessionControlAuthority } from "./sessions-operator-authority.js";
 import {
   PlacedSessionsSpawnSchema,
   PLACED_SESSIONS_SPAWN_DESCRIPTION,
@@ -188,6 +190,21 @@ export function createSessionsSpawnTool(
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
         const operatorSelection = resolveGatewayToolOperatorSelection();
+        if (opts?.independent === "standalone") {
+          const caller = getGatewayToolCallerIdentity();
+          const { operatorAuthority } = operatorSelection;
+          if (
+            !operatorAuthority ||
+            !caller?.requesterOrigin ||
+            caller.requesterOrigin.sessionKey !== caller.sessionKey ||
+            caller.requesterOrigin.operatorProfileId !== operatorAuthority.profileId ||
+            !hasSessionControlAuthority(operatorAuthority)
+          ) {
+            throw new ToolAuthorizationError(
+              "Creating a session without a parent requires a direct operator request with write access.",
+            );
+          }
+        }
         const executionSignal =
           signal && opts?.signal
             ? AbortSignal.any([signal, opts.signal])
