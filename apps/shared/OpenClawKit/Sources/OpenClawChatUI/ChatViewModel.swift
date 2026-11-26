@@ -140,9 +140,7 @@ public final class OpenClawChatViewModel {
     public internal(set) var progressCard: ProgressCard?
     /// The current chat's PRs as the Gateway last pushed them, with the key they belong to.
     var sessionPullRequests: (key: String, snapshot: OpenClawSessionPullRequestSnapshot)?
-    /// The session key this connection watches for PRs; nil until the transport confirms a watch.
-    @ObservationIgnored var pullRequestWatchKey: String?
-    @ObservationIgnored var pullRequestWatchTask: Task<Void, Never>?
+    @ObservationIgnored var pullRequestWatch = ChatPullRequestWatch()
     var progressCardStoreAvailable: Bool?
     var progressCardRefreshAvailable = false
     var progressCardRefreshPending = false

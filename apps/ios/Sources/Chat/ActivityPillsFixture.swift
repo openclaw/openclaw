@@ -1,10 +1,10 @@
 import Foundation
 import OpenClawChatUI
-import OpenClawKit
 import OpenClawProtocol
 
 /// `--openclaw-activity-fixture`: a chat with a Goal, a plan with steps, two working subagents and a finished
-/// one, and two PRs in different states, so the activity row and every sheet have real content.
+/// one, and three linked PRs (open, merged, and one without details), so the activity row and every sheet have real
+/// content.
 /// `--openclaw-activity-fixture-failures` makes every read behind the sheets fail; `-slow` holds them.
 enum ActivityPillsFixture {
     static var isEnabled: Bool {
@@ -17,6 +17,11 @@ enum ActivityPillsFixture {
 
     static var holdsReads: Bool {
         ProcessInfo.processInfo.arguments.contains("--openclaw-activity-fixture-slow")
+    }
+
+    /// The first PR's checks fail instead of running, for the pill's red mark.
+    static var failingChecks: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-activity-fixture-failing-checks")
     }
 
     /// Only the Goal, for the row's smallest state.
@@ -164,7 +169,9 @@ enum ActivityPillsFixture {
                     additions: 214,
                     deletions: 18,
                     changedFiles: 6,
-                    checks: .init(state: "failing", passed: 11, failed: 1, skipped: 0, running: 0),
+                    checks: self.failingChecks
+                        ? .init(state: "failing", passed: 11, failed: 1, skipped: 0, running: 0)
+                        : .init(state: "pending", passed: 8, failed: 0, skipped: 0, running: 4),
                     author: .init(login: "molty")),
                 .init(
                     number: 4170,
@@ -178,6 +185,15 @@ enum ActivityPillsFixture {
                     deletions: 4,
                     changedFiles: 2,
                     author: .init(login: "molty")),
+            ],
+            // Published by a child; GitHub didn't answer for it, so it carries no details.
+            taskPullRequests: [
+                .init(
+                    url: "https://github.com/lisbon-trip/booking-notes/pull/4191",
+                    owner: "lisbon-trip",
+                    repo: "booking-notes",
+                    number: 4191,
+                    branch: "trip/booking"),
             ],
             status: self.failsReads ? "unavailable" : "ready")
     }

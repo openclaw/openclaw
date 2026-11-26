@@ -568,6 +568,8 @@ private struct ChatActivityChildPage: View {
 
 // MARK: - Pull request
 
+/// Sheet c: the title, one line with state, repository and size, the checks that aren't zero (failed first), and
+/// "Open on GitHub" as the sheet's button. A PR GitHub didn't answer for shows its title line and the link only.
 private struct ChatActivityPullRequestPage: View {
     let viewModel: OpenClawChatViewModel
     let pullRequestID: String
@@ -576,106 +578,119 @@ private struct ChatActivityPullRequestPage: View {
     var body: some View {
         let snapshot = self.viewModel.sessionPullRequests?.key == self.viewModel.sessionKey
             ? self.viewModel.sessionPullRequests?.snapshot : nil
-        let pr = snapshot?.pullRequests.first { ChatActivityRules.pullRequestID($0) == self.pullRequestID }
+        let pr = snapshot.flatMap { ChatActivityPullRequest.list($0).first { $0.id == self.pullRequestID } }
         List {
             if let pr, let snapshot {
                 Section {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(verbatim: pr.title)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(verbatim: pr.title ?? pr.repositoryLine)
                             .font(OpenClawChatTypography.settingsBody)
                             .fontWeight(.semibold)
                             .accessibilityIdentifier("chat-activity-pr-title")
-                        Text(verbatim: "\(pr.owner)/\(pr.repo) #\(pr.number)")
-                            .font(OpenClawChatTypography.settingsFootnote)
-                            .foregroundStyle(.secondary)
+                        if let line = pr.summaryLine {
+                            Text(verbatim: line)
+                                .font(OpenClawChatTypography.settingsFootnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(.vertical, 2)
-                }
-                Section {
-                    LabeledContent {
-                        Label {
-                            Text(verbatim: ChatActivityRules.pullRequestStateLabel(pr.state))
-                        } icon: {
-                            Image(systemName: ChatActivityRules.pullRequestSymbol(pr.state))
-                        }
-                        .labelStyle(.titleAndIcon)
-                    } label: {
-                        Text("State")
+                } footer: {
+                    if pr.details != nil, snapshot.status != "ready" {
+                        self.staleFooter(rateLimited: snapshot.status == "rate-limited")
                     }
-                    if let checks = pr.checks, ["open", "draft"].contains(pr.state) {
-                        LabeledContent {
-                            Text(verbatim: Self.checks(checks))
-                                .foregroundStyle(checks.state == "failing" ? Color(uiColor: .systemRed) : .secondary)
-                        } label: {
+                }
+                if let checks = pr.details?.checks, ["open", "draft"].contains(pr.details?.state ?? "") {
+                    let rows = ChatActivityCheckRow.rows(checks)
+                    if !rows.isEmpty {
+                        Section {
+                            ForEach(rows, id: \.kind) { row in
+                                ChatActivityCheckRowView(row: row)
+                            }
+                        } header: {
                             Text("Checks")
                         }
-                    }
-                    LabeledContent {
-                        Text(verbatim: pr.branch).lineLimit(1).truncationMode(.middle)
-                    } label: {
-                        Text("Branch")
-                    }
-                    if let changes = Self.changes(pr) {
-                        LabeledContent {
-                            Text(verbatim: changes).monospacedDigit()
-                        } label: {
-                            Text("Changes")
-                        }
-                    }
-                    if let author = pr.author?.login {
-                        LabeledContent {
-                            Text(verbatim: "@\(author)")
-                        } label: {
-                            Text("Author")
-                        }
-                    }
-                } footer: {
-                    if snapshot.status != "ready" {
-                        Text(snapshot.status == "rate-limited"
-                            ? "GitHub limited updates for now. These are the last details received."
-                            : "Couldn’t reach GitHub. These are the last details received.")
-                    }
-                }
-                .font(OpenClawChatTypography.settingsBody)
-                if let url = URL(string: pr.url) {
-                    Section {
-                        Button {
-                            self.openURL(url)
-                        } label: {
-                            Label {
-                                Text("Open on GitHub")
-                            } icon: {
-                                Image(systemName: "arrow.up.right.square")
-                            }
-                        }
-                        .font(OpenClawChatTypography.settingsBody)
-                        .accessibilityIdentifier("chat-activity-pr-open")
                     }
                 }
             } else {
                 ChatActivityEmptyRow(text: String(localized: "This pull request is no longer linked to the chat."))
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            if let url = pr.flatMap({ URL(string: $0.url) }) {
+                Button {
+                    self.openURL(url)
+                } label: {
+                    Text("Open on GitHub")
+                        .font(OpenClawChatTypography.settingsBody)
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .modifier(ChatActivityPullRequestButtonStyle())
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
+                .accessibilityIdentifier("chat-activity-pr-open")
+            }
+        }
         .navigationTitle(Text(verbatim: pr.map { "#\($0.number)" } ?? String(localized: "Pull request")))
     }
 
-    static func checks(_ checks: OpenClawSessionPullRequestSnapshot.Checks) -> String {
-        var parts: [String] = []
-        if checks.failed > 0 { parts.append(String(format: String(localized: "%lld failed"), checks.failed)) }
-        if checks.running > 0 { parts.append(String(format: String(localized: "%lld running"), checks.running)) }
-        if checks.passed > 0 { parts.append(String(format: String(localized: "%lld passed"), checks.passed)) }
-        return parts.isEmpty ? ChatActivityRules.checksLabel(checks) : parts.joined(separator: ", ")
+    private func staleFooter(rateLimited: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(rateLimited
+                ? LocalizedStringKey("GitHub limited updates for now. These are the last details received.")
+                : LocalizedStringKey("Couldn’t reach GitHub. These are the last details received."))
+            Spacer(minLength: 12)
+            Button("Try again") { self.viewModel.retrySessionPullRequests() }
+                .fontWeight(.medium)
+                .foregroundStyle(.primary)
+                .accessibilityIdentifier("chat-activity-try-again")
+        }
+    }
+}
+
+private struct ChatActivityCheckRowView: View {
+    let row: ChatActivityCheckRow
+
+    var body: some View {
+        LabeledContent {
+            Text(verbatim: "\(self.row.count)")
+                .monospacedDigit()
+                .foregroundStyle(self.row.kind == .failed ? Color(uiColor: .systemRed) : .secondary)
+        } label: {
+            Label {
+                Text(self.title)
+            } icon: {
+                switch self.row.kind {
+                case .failed:
+                    Image(systemName: "xmark").foregroundStyle(Color(uiColor: .systemRed))
+                case .running:
+                    ProgressView().controlSize(.small)
+                case .passed:
+                    Image(systemName: "checkmark").foregroundStyle(.secondary)
+                }
+            }
+        }
+        .font(OpenClawChatTypography.settingsBody)
+        .accessibilityElement(children: .combine)
     }
 
-    static func changes(_ pr: OpenClawSessionPullRequestSnapshot.PullRequest) -> String? {
-        var parts: [String] = []
-        if let additions = pr.additions, let deletions = pr.deletions { parts.append("+\(additions) −\(deletions)") }
-        if let files = pr.changedFiles {
-            parts.append(files == 1 ? String(localized: "1 file") : String(
-                format: String(localized: "%lld files"),
-                files))
+    private var title: LocalizedStringKey {
+        switch self.row.kind {
+        case .failed: "Failed"
+        case .running: "Running"
+        case .passed: "Passed"
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+/// The sheet's one action, as a full-width glass button on iOS 26 and a bordered one before it.
+private struct ChatActivityPullRequestButtonStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.buttonStyle(.glass).tint(.primary)
+        } else {
+            content.buttonStyle(.bordered).tint(.primary)
+        }
     }
 }
 

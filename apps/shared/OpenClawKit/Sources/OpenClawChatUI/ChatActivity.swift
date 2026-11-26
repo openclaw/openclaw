@@ -192,7 +192,7 @@ enum ChatActivityRules {
             pills.append(self.progress(plan))
         }
         if !input.approvalPending, let snapshot = input.pullRequests {
-            pills += self.ordered(snapshot.pullRequests).map { self.pullRequest($0, status: snapshot.status) }
+            pills += self.pullRequestPills(snapshot)
         }
         return pills
     }
@@ -296,92 +296,6 @@ enum ChatActivityRules {
                 completed,
                 total,
                 badge?.label ?? ""))
-    }
-
-    /// Open, then draft, merged and closed, keeping the Gateway's order within a state
-    /// (ui/src/lib/session-pull-request-presentation.ts).
-    static func ordered(
-        _ pullRequests: [OpenClawSessionPullRequestSnapshot.PullRequest])
-        -> [OpenClawSessionPullRequestSnapshot.PullRequest]
-    {
-        let rank = ["open": 0, "draft": 1, "merged": 2, "closed": 3]
-        return pullRequests.enumerated().sorted {
-            let l = rank[$0.element.state] ?? 4
-            let r = rank[$1.element.state] ?? 4
-            return l == r ? $0.offset < $1.offset : l < r
-        }.map(\.element)
-    }
-
-    static func pullRequestID(_ pr: OpenClawSessionPullRequestSnapshot.PullRequest) -> String {
-        "\(pr.owner)/\(pr.repo)#\(pr.number)"
-    }
-
-    static func pullRequestStateLabel(_ state: String) -> String {
-        switch state {
-        case "open": String(localized: "Open")
-        case "draft": String(localized: "Draft")
-        case "merged": String(localized: "Merged")
-        case "closed": String(localized: "Closed")
-        default: state.capitalized
-        }
-    }
-
-    static func pullRequestSymbol(_ state: String) -> String {
-        switch state {
-        case "draft": "circle.dashed"
-        case "merged": "arrow.triangle.merge"
-        case "closed": "xmark.circle"
-        default: "arrow.triangle.pull"
-        }
-    }
-
-    static func checksLabel(_ checks: OpenClawSessionPullRequestSnapshot.Checks) -> String {
-        switch checks.state {
-        case "passing": String(localized: "Checks passed")
-        case "failing": String(localized: "Checks failed")
-        default: String(localized: "Checks running")
-        }
-    }
-
-    static func pullRequest(
-        _ pr: OpenClawSessionPullRequestSnapshot.PullRequest,
-        status: String) -> ChatActivityPill
-    {
-        // Checks describe an open PR's head, and only when the last read reached GitHub.
-        let checks = ["open", "draft"].contains(pr.state) && status == "ready" ? pr.checks : nil
-        let badge: ChatActivityPill.Badge? = if status != "ready" {
-            .init(
-                mark: .symbol("exclamationmark.triangle.fill"),
-                tone: .attention,
-                label: String(localized: "Couldn’t update; showing the last details"))
-        } else if let checks {
-            switch checks.state {
-            case "passing":
-                .init(mark: .symbol("checkmark"), tone: .neutral, label: self.checksLabel(checks))
-            case "failing":
-                .init(mark: .symbol("xmark"), tone: .problem, label: self.checksLabel(checks))
-            default:
-                .init(mark: .spinner, tone: .neutral, label: self.checksLabel(checks))
-            }
-        } else {
-            nil
-        }
-        let number = "#\(pr.number)"
-        let state = self.pullRequestStateLabel(pr.state)
-        let spoken = [
-            String(format: String(localized: "Pull request %@ in %@"), number, "\(pr.owner)/\(pr.repo)"),
-            pr.title,
-            state,
-            badge?.label,
-        ].compactMap(\.self).joined(separator: ", ")
-        return ChatActivityPill(
-            kind: .pullRequest(self.pullRequestID(pr)),
-            symbol: self.pullRequestSymbol(pr.state),
-            label: number,
-            count: nil,
-            badge: badge,
-            labelTone: pr.state == "draft" || pr.state == "closed" ? .muted : .neutral,
-            accessibilityLabel: spoken)
     }
 }
 

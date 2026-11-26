@@ -107,15 +107,86 @@ struct ChatActivityTests {
         #expect(pill.badge == nil)
     }
 
-    @Test func `PR checks show only for an open head that GitHub answered for`() throws {
-        let ready = try self.pullRequests(["open", "merged"])
-        let open = ChatActivityRules.pullRequest(ready.pullRequests[0], status: ready.status)
-        #expect(open.label == "#100")
-        #expect(open.badge?.tone == .problem)
-        #expect(ChatActivityRules.pullRequest(ready.pullRequests[1], status: "ready").badge == nil)
-        // Kept from an earlier read: the warning replaces stale checks.
-        let stale = ChatActivityRules.pullRequest(ready.pullRequests[0], status: "unavailable")
+    private func pill(
+        _ state: String,
+        checks: OpenClawSessionPullRequestSnapshot.Checks?,
+        status: String = "ready") -> ChatActivityPill
+    {
+        let pr = OpenClawSessionPullRequestSnapshot.PullRequest(
+            number: 7, owner: "o", repo: "r", branch: "b", title: "T", url: "u7", state: state, checks: checks)
+        return ChatActivityRules.pullRequestPills(.init(pullRequests: [pr], status: status))[0]
+    }
+
+    private func checks(_ state: String, failed: Int = 0, running: Int = 0, passed: Int = 0)
+        -> OpenClawSessionPullRequestSnapshot.Checks
+    {
+        .init(state: state, passed: passed, failed: failed, skipped: 0, running: running)
+    }
+
+    @Test func `the PR pill marks running and failed checks and nothing once they pass`() {
+        let running = self.pill("open", checks: self.checks("pending", running: 4, passed: 8))
+        #expect(running.label == "#7")
+        #expect(running.symbol == "arrow.triangle.pull")
+        #expect(running.badge?.mark == .spinner)
+        #expect(running.badge?.tone == .neutral)
+        let failed = self.pill("open", checks: self.checks("failing", failed: 1, passed: 11))
+        #expect(failed.badge?.mark == .symbol("xmark"))
+        #expect(failed.badge?.tone == .problem)
+        #expect(self.pill("open", checks: self.checks("passing", passed: 12)).badge == nil)
+        let merged = self.pill("merged", checks: self.checks("failing", failed: 1))
+        #expect(merged.symbol == "arrow.triangle.merge")
+        #expect(merged.badge == nil)
+        // Kept from an earlier read: the warning replaces checks that may be stale.
+        let stale = self.pill("open", checks: self.checks("failing", failed: 1), status: "unavailable")
         #expect(stale.badge?.tone == .attention)
+    }
+
+    @Test func `a published PR GitHub didn't answer for is dimmed, locked, and listed once`() throws {
+        let verified = OpenClawSessionPullRequestSnapshot.PullRequest(
+            number: 2, owner: "o", repo: "r", branch: "b", title: "Two", url: "u2", state: "open")
+        let snapshot = OpenClawSessionPullRequestSnapshot(
+            pullRequests: [verified],
+            taskPullRequests: [
+                .init(url: "u1", owner: "o", repo: "notes", number: 1, branch: "x"),
+                .init(url: "u2", owner: "o", repo: "r", number: 2, branch: "b", pullRequest: verified),
+            ])
+        let list = ChatActivityPullRequest.list(snapshot)
+        // The same URL from the branch and a publication is one PR; open before one without details.
+        #expect(list.map(\.number) == [2, 1])
+        let locked = ChatActivityRules.pullRequestPills(snapshot)[1]
+        #expect(locked.symbol == "lock")
+        #expect(locked.labelTone == .muted)
+        #expect(locked.badge == nil)
+        #expect(list[1].title == nil)
+        // Its sheet has the title line only: the repository line stands in for the missing title.
+        #expect(list[1].summaryLine == nil)
+        #expect(list[1].repositoryLine == "o/notes #1")
+        // The Gateway's JSON decodes the publication without its details.
+        let decoded = try JSONDecoder().decode(OpenClawSessionPullRequestSnapshot.self, from: Data(#"""
+        {"pullRequests":[],"rateLimited":false,"status":"unavailable","taskPullRequests":[{"url":"u1","owner":"o",
+        "repo":"notes","number":1,"branch":"x","sourceSessionKey":"agent:main:c","sourceAgentId":"main"}]}
+        """#.utf8))
+        #expect(ChatActivityPullRequest.list(decoded).first?.details == nil)
+    }
+
+    @Test func `the PR sheet lists only the checks that aren't zero, failed first`() {
+        let rows = ChatActivityCheckRow.rows(self.checks("failing", failed: 1, running: 0, passed: 11))
+        #expect(rows == [.init(kind: .failed, count: 1), .init(kind: .passed, count: 11)])
+        let all = ChatActivityCheckRow.rows(self.checks("pending", failed: 2, running: 3, passed: 4))
+        #expect(all.map(\.kind) == [.failed, .running, .passed])
+        #expect(ChatActivityCheckRow.rows(self.checks("pending")).isEmpty)
+        let details = OpenClawSessionPullRequestSnapshot.PullRequest(
+            number: 4182,
+            owner: "o",
+            repo: "r",
+            branch: "b",
+            title: "T",
+            url: "u",
+            state: "open",
+            additions: 214,
+            deletions: 18)
+        let pr = ChatActivityPullRequest.list(.init(pullRequests: [details]))[0]
+        #expect(pr.summaryLine == "Open · o/r #4182 · +214 −18")
     }
 
     @Test func `children keep launch order and read their state from the row`() {

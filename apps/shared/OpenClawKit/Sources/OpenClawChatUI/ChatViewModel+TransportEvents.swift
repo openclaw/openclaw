@@ -63,10 +63,8 @@ extension OpenClawChatViewModel {
             return self.handleAgentEvent(agent)
         case let .sessionReaction(event):
             self.handleSessionReactionEvent(event)
-        case let .progressCardChanged(event):
-            return self.handleProgressCardChanged(event)
-        case let .sessionPullRequestsChanged(event):
-            self.handleSessionPullRequestsChanged(event)
+        case .progressCardChanged, .sessionPullRequestsChanged:
+            return self.handleActivityEvent(evt)
         case .questionRequested, .questionResolved:
             return self.handleQuestionEvent(evt)
         case .routeChanged, .reconnected, .seqGap:
@@ -89,7 +87,7 @@ extension OpenClawChatViewModel {
             self.progressCardStoreAvailable = nil
             self.invalidateProgressCardTarget()
             // A new connection watches nothing yet; the last snapshot stays until the next push replaces it.
-            self.pullRequestWatchKey = nil
+            self.pullRequestWatch.key = nil
             self.modelAvailabilityIsSessionScoped = false
             self.invalidateComposerCapabilities()
             self.errorText = nil

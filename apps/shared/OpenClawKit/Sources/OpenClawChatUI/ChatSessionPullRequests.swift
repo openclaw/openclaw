@@ -88,14 +88,51 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable, Hashable {
         public let createUrl: String?
     }
 
+    /// A PR this chat or one of its children published. `pullRequest` holds GitHub's verified facts and is
+    /// absent when GitHub didn't answer for it (src/gateway/control-ui-contract.ts ControlUiSessionTaskPullRequest).
+    public struct TaskPullRequest: Codable, Sendable, Hashable {
+        public let url: String
+        public let owner: String
+        public let repo: String
+        public let number: Int
+        public let branch: String
+        public let title: String?
+        public let pullRequest: PullRequest?
+
+        public init(
+            url: String,
+            owner: String,
+            repo: String,
+            number: Int,
+            branch: String,
+            title: String? = nil,
+            pullRequest: PullRequest? = nil)
+        {
+            self.url = url
+            self.owner = owner
+            self.repo = repo
+            self.number = number
+            self.branch = branch
+            self.title = title
+            self.pullRequest = pullRequest
+        }
+    }
+
     public var pullRequests: [PullRequest]
+    public var taskPullRequests: [TaskPullRequest]?
     public var repository: Repository?
     public var branch: Branch?
     public let rateLimited: Bool
     public let status: String
 
-    public init(pullRequests: [PullRequest], rateLimited: Bool = false, status: String = "ready") {
+    public init(
+        pullRequests: [PullRequest],
+        taskPullRequests: [TaskPullRequest]? = nil,
+        rateLimited: Bool = false,
+        status: String = "ready")
+    {
         self.pullRequests = pullRequests
+        self.taskPullRequests = taskPullRequests
         self.repository = nil
         self.branch = nil
         self.rateLimited = rateLimited
@@ -117,6 +154,7 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable, Hashable {
            self.branch?.branch == (previous.branch?.branch ?? previous.pullRequests.first?.branch)
         {
             result.pullRequests = previous.pullRequests
+            result.taskPullRequests = self.taskPullRequests ?? previous.taskPullRequests
             result.branch = self.branch ?? previous.branch
             result.repository = self.repository ?? previous.repository
         }
