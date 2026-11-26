@@ -45,7 +45,7 @@ export function createResearchTool(
         }
         return jsonResult({
           version: 1,
-          portable: { runtime: "direct-provider", nativeFunctionCallingRequired: false },
+          portable: { runtime: "isolated-agent-runtime", nativeFunctionCallingRequired: false },
           managed,
         });
       }

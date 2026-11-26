@@ -138,7 +138,7 @@ it("registers lazily and scans bounded recovery state without network, invokes w
     vi.mocked(runtime.gateway.request).mockRejectedValue(new Error("method unavailable"));
     const response = await tool.execute("capabilities", { action: "capabilities" });
     expect(response.details).toMatchObject({
-      portable: { nativeFunctionCallingRequired: false },
+      portable: { runtime: "isolated-agent-runtime", nativeFunctionCallingRequired: false },
       managed: { available: false },
     });
     expect(runtime.llm.complete).not.toHaveBeenCalled();

@@ -77,18 +77,19 @@ Every completed or partial job returns a structured report and durable job state
 
 ## Choose an engine
 
-| Engine               | Execution                                                   | Evidence                                                           | Configuration                                             |
-| -------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------- |
-| `portable` (default) | Ordinary API completions plus configured search/fetch tools | Retrieved text, exact quotations, fallible model support audit     | Existing model and web-tool configuration                 |
-| `google`             | Google's managed Deep Research Interactions service         | Provider-attributed report citations; not locally fetched passages | Explicit research enablement and a pinned API-key profile |
+| Engine               | Execution                                                             | Evidence                                                           | Configuration                                             |
+| -------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------- |
+| `portable` (default) | Isolated agent-runtime completions plus configured search/fetch tools | Retrieved text, exact quotations, fallible model support audit     | Existing model and web-tool configuration                 |
+| `google`             | Google's managed Deep Research Interactions service                   | Provider-attributed report citations; not locally fetched passages | Explicit research enablement and a pinned API-key profile |
 
 The portable engine does not require Codex, native function calling, or a
 vendor-specific agent. Foreground and recovered completions use the originating
 agent's configured model and normal credential resolution. Model overrides obey
 existing plugin LLM policy. Recovery does not restore unrecorded session-specific
 model or auth-profile overrides.
-`requiredAuthMode: "oauth"` requires that mode through the existing auth owner;
-it never silently falls back to an API key. This feature does not implement a
+`requiredAuthMode: "oauth"` instead selects the host's `direct-provider` route and
+requires OAuth through the existing auth owner; it never silently falls back to an
+API key. This feature does not implement a
 Codex research RPC or a private ChatGPT OAuth client. Codex API-key, Codex OAuth,
 and ChatGPT plan-usage/token-sharing qualification are separate.
 
@@ -113,8 +114,10 @@ Call the `deep_research` tool with a stable idempotency key for one request:
 
 Keep the returned `jobId`. Subsequent calls use
 `{ "action": "status" | "result" | "resume" | "cancel", "jobId": "..." }`.
-`{ "action": "capabilities" }` reports the portable route and the explicitly
-activated managed adapter; availability is not a live entitlement check.
+`{ "action": "capabilities" }` reports the default portable route
+(`portable.runtime: "isolated-agent-runtime"`) and the explicitly activated managed
+adapter. Explicit `requiredAuthMode: "oauth"` requests use the direct-provider
+route described above; availability is not a live entitlement check.
 
 A repeated start with the same key returns the existing job without resubmitting.
 Changing the request under that key is rejected. Results are returned as tool
