@@ -318,7 +318,11 @@ describe("ComposerDictationOwner", () => {
         onCommit: publish,
       });
       await startHold(target);
-      transcript(original);
+      if (choice === "raw") {
+        emit({ transcriptionSessionId: "dictation-1", type: "partial", text: "um I I need" });
+      } else {
+        transcript(original);
+      }
       if (choice === "auth change") {
         Object.defineProperty(options.client, "auth", { value: { scopes: ["operator.read"] } });
       }
@@ -326,11 +330,11 @@ describe("ComposerDictationOwner", () => {
       expect(controller.locksComposer).toBe(false);
       expect(publish).not.toHaveBeenCalled();
       await waitForFast(() => expectClosed());
-      if (choice === "uncertain write") {
+      if (choice === "raw") {
+        expect(controller.cleanupReview).toMatchObject({ status: "pending", canUseRaw: false });
         expect(controller.chooseCleanupRaw()).toBe(false);
-        expect(controller.cleanupReview?.publicationUncertain).toBe(true);
-      } else if (choice === "raw") {
-        expect(controller.chooseCleanupRaw()).toBe(true);
+        expect(publish).not.toHaveBeenCalled();
+        transcript(original);
       } else if (choice === "edit") {
         value = "User replacement";
         revision += 1;
@@ -360,9 +364,11 @@ describe("ComposerDictationOwner", () => {
         expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
         expect(controller.cleanupReview).toBeNull();
       } else if (choice === "raw") {
+        expect(controller.chooseCleanupRaw()).toBe(true);
         expect(publish).toHaveBeenCalledExactlyOnceWith(original, true);
         expect(controller.cleanupReview).toBeNull();
       } else if (choice === "uncertain write") {
+        expect(controller.chooseCleanupRaw()).toBe(false);
         expect(controller.chooseCleanupRaw()).toBe(false);
         expect(controller.cleanupReview?.publicationUncertain).toBe(true);
         expect(controller.cleanupReview?.canRetry).toBe(false);

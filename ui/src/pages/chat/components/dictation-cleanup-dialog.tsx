@@ -75,7 +75,7 @@ export function DictationCleanupDialog(props: {
                 <p role="status" aria-live="polite" aria-atomic="true">
                   {t(reviewMessage())}
                 </p>
-                <Show when={current().status !== "unavailable"}>
+                <Show when={current().status !== "unavailable" && current().status !== "pending"}>
                   <label class="field">
                     <span>{t("chat.dictation.cleanupOriginal")}</span>
                     <textarea readonly rows="4" value={current().rawText} />

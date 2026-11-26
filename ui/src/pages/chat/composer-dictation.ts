@@ -108,7 +108,10 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   get cleanupReview(): DictationCleanupReview | null {
-    return this.refinement?.review ?? null;
+    const review = this.refinement?.review ?? null;
+    return this.finishingCleanup && review && review.status !== "unavailable"
+      ? { ...review, status: "pending", canUseRaw: false }
+      : review;
   }
 
   get finishingCleanup(): boolean {
@@ -142,6 +145,9 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   chooseCleanupRaw(): boolean {
+    if (this.finishingCleanup) {
+      return false;
+    }
     const chosen = this.refinement?.chooseRaw() === true;
     if (chosen || this.refinement?.review?.publicationUncertain) {
       this.retireCleanupCapture();
@@ -547,7 +553,7 @@ export class ComposerDictationOwner extends EventTarget {
       readDraft: () => this.options.readDraft?.(),
       publish: (text: string) => this.options.onCommit(text, true),
     };
-    // Register ownership before observers can choose original text synchronously.
+    // Publish the finalization state before observers can send or insert text.
     this.pendingCleanup = options.commit ? cleanup : null;
     this.setPhase("idle");
     if (cleanup && session.transcriptSnapshot()) {

@@ -86,6 +86,7 @@ Conservative keeps one pending review. Resolve it, cancel the pending
 dictation, or dismiss the review before starting another capture. Closing the
 dialog keeps that review pending. Sending is blocked while a Conservative
 recording is finalizing so a second send action cannot drop the pending review.
+**Use original** waits for finalization, so it cannot insert an interim transcript.
 Once finalization settles, explicitly sending a separate draft retires any
 unaccepted review. Off retains the existing ordered queue for stopped recordings.
 

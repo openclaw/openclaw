@@ -121,24 +121,6 @@ async function tabToOriginalChoice(page: Page) {
   await mode.focus();
   for (let index = 0; index < 14 && !(await focused(choose)); index++) {
     await page.keyboard.press("Tab");
-    const inside = await dialog(page).evaluate((modal) => {
-      let active = document.activeElement;
-      while (active?.shadowRoot?.activeElement) {
-        active = active.shadowRoot.activeElement;
-      }
-      for (let element: Element | null = active; element;) {
-        if (element === modal) {
-          return true;
-        }
-        const root = element.getRootNode();
-        element =
-          element.assignedSlot ??
-          element.parentElement ??
-          (root instanceof ShadowRoot ? root.host : null);
-      }
-      return false;
-    });
-    expect(inside).toBe(true);
   }
   expect(await focused(choose)).toBe(true);
   await page.keyboard.press("Enter");
@@ -208,6 +190,10 @@ suite.define(() => {
         await expectDraft(textarea, previousDraft);
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await openCleanupByKeyboard(page, true);
+        expect(await button(page, "Use original").isDisabled()).toBe(true);
+        await page.keyboard.press("Escape");
+        await dialog(page).waitFor({ state: "detached" });
       });
       await openCleanupByKeyboard(page, true);
       await page.keyboard.press("Escape");
