@@ -44,6 +44,7 @@ function findFunction(body: Record<string, unknown>, name: string) {
       }
     }
   }
+  return undefined;
 }
 
 it(
