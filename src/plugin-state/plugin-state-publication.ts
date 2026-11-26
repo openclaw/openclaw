@@ -62,7 +62,8 @@ export type PluginStatePublicationEffect =
   | { readonly kind: "unchanged" }
   | { readonly kind: "postimage"; readonly valueJson: string };
 type PendingPublication = {
-  scope?: PluginStatePublicationScope;
+  /** Omitted for compound writes that retain database-wide denial. */
+  scopes?: readonly PluginStatePublicationScope[];
   effect?: PluginStatePublicationEffect;
 };
 
@@ -375,12 +376,21 @@ export function hasPendingPluginStatePublication(
   scope?: PluginStatePublicationScope,
 ): boolean {
   for (const pending of state.pending.get(identity) ?? []) {
-    const write = pending.scope;
-    if (publicationScopesOverlap(scope, write)) {
+    if (pendingPublicationOverlaps(scope, pending)) {
       return true;
     }
   }
   return false;
+}
+
+function pendingPublicationOverlaps(
+  scope: PluginStatePublicationScope | undefined,
+  pending: PendingPublication,
+): boolean {
+  return (
+    pending.scopes === undefined ||
+    pending.scopes.some((write) => publicationScopesOverlap(scope, write))
+  );
 }
 
 function publicationScopesOverlap(
@@ -408,7 +418,7 @@ export function assertPluginStatePublicationPreserves(
     throw new Error("Plugin state authority is unavailable");
   }
   for (const pending of state.pending.get(identity) ?? []) {
-    if (!publicationScopesOverlap(scope, pending.scope)) {
+    if (!pendingPublicationOverlaps(scope, pending)) {
       continue;
     }
     if (!pending.effect) {
@@ -424,11 +434,14 @@ export function assertPluginStatePublicationPreserves(
 export function beginPluginStatePublication(
   identity: () => string | symbol,
   assertCurrent?: () => void,
-  scope?: PluginStatePublicationScope,
+  scope?: PluginStatePublicationScope | readonly PluginStatePublicationScope[],
   effect?: PluginStatePublicationEffect,
 ) {
   const pendingIdentity = identity();
-  const hold = { scope, effect };
+  const hold: PendingPublication = {
+    scopes: scope === undefined || Array.isArray(scope) ? scope : [scope],
+    effect,
+  };
   const holds = state.pending.get(pendingIdentity) ?? new Set<PendingPublication>();
   holds.add(hold);
   state.pending.set(pendingIdentity, holds);

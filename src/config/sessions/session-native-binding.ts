@@ -10,6 +10,7 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { registrationPublicationScope } from "../../plugin-state/plugin-state-command-lifecycle.js";
 import { beginPluginStatePublication } from "../../plugin-state/plugin-state-publication.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type {
@@ -198,9 +199,14 @@ export function runSessionNativeBindingWorkerOperation<
     // SAFETY: The exact executing command owns this closed receipt shape; identity and phases were checked above.
     return value as SessionNativeBindingReceipt;
   };
+  // Settlement deletes or restores only participant binding rows. Other sessions' bindings stay
+  // readable; an unknown outcome still retires the whole source.
   const publication = beginPluginStatePublication(
     () => sharedSource.key,
     state.assertPublicationCurrent ?? state.admission.assertCurrent,
+    members.flatMap(({ participant }) =>
+      participant.binding ? [registrationPublicationScope(participant.binding)] : [],
+    ),
   );
   return runSessionEntryWorkerOperation<Candidate, Result>({
     ...params,

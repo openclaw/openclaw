@@ -7,6 +7,7 @@ import { readSessionArchiveText } from "../../../test/helpers/session-archive.js
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createNativeSessionCommitFinalizer } from "../../agents/harness/native-session/deletion-participant.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { preparePluginStateRead } from "../../plugin-sdk/plugin-state-runtime.js";
 import { capturePluginStateNativeBindingFacts } from "../../plugin-state/plugin-state-native-binding-facts.js";
 import { createPluginStateKeyedStoreV2 } from "../../plugin-state/plugin-state-store.js";
 import { capturePluginStateNativeBindingStore } from "../../plugin-state/plugin-state-store.native-binding.js";
@@ -283,3 +284,47 @@ it.each([
     },
   ),
 );
+
+it("keeps other sessions' binding authority readable while one session's deletion settles", () =>
+  withCodex(async ({ bindingKey, bindingStore, readBinding, readEntry, remove }) => {
+    const siblingKey = `${bindingKey}:sibling`;
+    const sibling = { ...readBinding(), sessionId: "sibling-session" };
+    bindingStore.register(siblingKey, sibling);
+    const store = createPluginStateKeyedStoreV2(
+      "codex",
+      { namespace: "app-server-thread-bindings", maxEntries: 50_000, overflowPolicy: "reject-new" },
+      { assertCurrent() {} },
+    );
+    // A codex turn starts while another session's deletion holds its binding settlement open.
+    const reads: Array<Promise<unknown>> = [];
+    native.observeNativeGrants(admission, (_request, facts) => {
+      if (facts.kind !== "native-binding-ready" || reads.length > 0) {
+        return;
+      }
+      reads.push(
+        preparePluginStateRead(store, siblingKey).then((read) => {
+          try {
+            return read?.read();
+          } finally {
+            read?.release();
+          }
+        }),
+        preparePluginStateRead(store, bindingKey).then(
+          () => "read",
+          (error: unknown) => String(error),
+        ),
+      );
+    });
+    await expect(remove()).resolves.toMatchObject({ deleted: true });
+    expect(reads).toHaveLength(2);
+    // The deleted session's own key stays denied until its outcome publishes.
+    await expect(Promise.all(reads)).resolves.toEqual([
+      sibling,
+      "Error: Plugin state authority is unavailable",
+    ]);
+    expect([readEntry(), readBinding(), bindingStore.lookup(siblingKey)]).toEqual([
+      undefined,
+      undefined,
+      sibling,
+    ]);
+  }));
