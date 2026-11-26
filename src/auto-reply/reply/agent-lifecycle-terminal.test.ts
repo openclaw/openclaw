@@ -101,6 +101,27 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     expect(data).not.toHaveProperty("stopReason");
   });
 
+  it.each(["started", "preparation", "replacement"] as const)(
+    "attributes a restart only to a backend start in the current attempt (%s)",
+    (attempt) => {
+      const terminal = createTerminal({
+        runId: "backend-run",
+        resolveTerminationFields: () => ({ aborted: true, stopReason: "restart" }),
+      });
+      if (attempt !== "preparation") {
+        terminal.note({ stream: "lifecycle", data: { phase: "start", startedAt: 100 } });
+      }
+      if (attempt === "replacement") {
+        terminal.beginAttempt();
+      }
+      terminal.emit("end", {});
+      const event = emitted();
+      expect(event.runId).toBe("backend-run");
+      expect(event.data.stopReason).toBe("restart");
+      expect(event.data.executionStarted).toBe(attempt === "started" ? true : undefined);
+    },
+  );
+
   it.each([false, true])("keeps only the selected attempt receipt (retry=%s)", (retry) => {
     const terminal = createTerminal();
     finishing(terminal, {

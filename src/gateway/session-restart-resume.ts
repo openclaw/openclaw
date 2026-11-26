@@ -11,10 +11,7 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
-import {
-  createRestartResumeMarker,
-  isRestartResumeEntryOutOfScope,
-} from "../config/sessions/session-restart-resume-scope.js";
+import { createLiveRestartResumeMarker } from "../config/sessions/session-restart-resume-scope.js";
 import {
   derivePersistedSessionLifecyclePatch,
   restartResumeSkipReason,
@@ -147,23 +144,14 @@ async function persistRunningSessions(
               );
               continue;
             }
-            // Keep an existing marker while its continuation still awaits admission.
-            const sourceRunId = entry.lifecycleRunId
-              ? session.sourceRunId === entry.lifecycleRunId
-                ? session.sourceRunId
-                : undefined
-              : !isRestartResumeEntryOutOfScope(entry)
-                ? entry.resumeAfterRestart?.sourceRunId
-                : undefined;
             replacements.push({
               sessionKey,
               entry: {
                 ...entry,
-                resumeAfterRestart: createRestartResumeMarker({
-                  ...(sourceRunId ? { sourceRunId } : {}),
+                resumeAfterRestart: createLiveRestartResumeMarker(entry, {
+                  sourceRunId: session.sourceRunId,
                   ...(directChat ? { directChat: true } : {}),
-                  operatorSource:
-                    session.operatorSource ?? entry.resumeAfterRestart?.operatorSource,
+                  operatorSource: session.operatorSource,
                 }),
               },
             });

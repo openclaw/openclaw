@@ -85,7 +85,7 @@ it("retains missed shutdown markers in terminal writes without marking resets or
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const f = createSessionCompoundWorkerFixture();
-    const retained = {};
+    const retained = { sourceRunId: "previous" };
     const cases: Array<{
       name: string;
       key?: string;
@@ -99,7 +99,7 @@ it("retains missed shutdown markers in terminal writes without marking resets or
     }> = [
       { name: "missing", shutdown: true, marker: { sourceRunId: "running" } },
       {
-        name: "queued",
+        name: "replaced-execution",
         shutdown: true,
         entry: { resumeAfterRestart: retained },
         marker: { sourceRunId: "running" },
@@ -114,6 +114,14 @@ it("retains missed shutdown markers in terminal writes without marking resets or
         unstarted: true,
         unstartedRunId: "running",
         marker: {},
+      },
+      {
+        name: "pending-continuation",
+        shutdown: true,
+        unstarted: true,
+        unstartedRunId: "running",
+        entry: { resumeAfterRestart: retained },
+        marker: retained,
       },
       { name: "cron", shutdown: true, key: "agent:main:cron:scheduled" },
       { name: "child", shutdown: true, key: "agent:main:subagent:child" },
@@ -155,7 +163,7 @@ it("retains missed shutdown markers in terminal writes without marking resets or
               phase: "end",
               aborted: true,
               stopReason: test.stopReason ?? "restart",
-              ...(test.unstarted ? { executionStarted: false } : {}),
+              executionStarted: !test.unstarted,
             },
           },
         });

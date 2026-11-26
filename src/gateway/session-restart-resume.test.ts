@@ -492,7 +492,9 @@ it.each([false, true])(
           concurrent ? {} : { sourceRunId: runId },
         );
       } finally {
-        if (other) releaseAgentRunContext("another-live-root", other);
+        if (other) {
+          releaseAgentRunContext("another-live-root", other);
+        }
         releaseAgentRunContext(runId, claim);
         subagentRuns.delete(oldRunId);
       }
