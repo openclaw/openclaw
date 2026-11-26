@@ -85,6 +85,7 @@ function expectOverflow(
     expect.objectContaining({
       message: `OpenAI realtime transcription exceeded the ${limit} limit`,
     }),
+    { terminal: true },
   );
   expect(onTranscript).not.toHaveBeenCalled();
   expect(session.isConnected()).toBe(false);
@@ -285,6 +286,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     expect(onError).toHaveBeenCalledOnce();
     expect(onError).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("final audio commit") }),
+      { terminal: true },
     );
     expect(parseSent(socket).at(-1)?.type).toBe("input_audio_buffer.append");
   });
@@ -554,6 +556,7 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
       expect.objectContaining({
         message: "OpenAI realtime transcription exceeded the terminal item history limit",
       }),
+      { terminal: true },
     );
     expect(transcripts).toEqual(["first"]);
     expect(session.isConnected()).toBe(false);

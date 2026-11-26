@@ -243,7 +243,14 @@ export async function startMeetingAgentRealtimeEngine(
         }
         harness.talkback?.enqueue(trimmed);
       },
-      onError: (error) => {
+      onError: (error, details) => {
+        if (!details?.terminal) {
+          // The provider session retries or recovers on its own.
+          params.logger.warn(
+            `${params.platform.logScope} ${agentLogScope} transcription provider error: ${formatErrorMessage(error)}`,
+          );
+          return;
+        }
         params.logger.warn(
           `${params.platform.logScope} ${agentLogScope} transcription bridge failed: ${formatErrorMessage(error)}`,
         );

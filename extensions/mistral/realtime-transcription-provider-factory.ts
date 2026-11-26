@@ -194,7 +194,7 @@ export function buildMistralRealtimeTranscriptionProvider({
         terminal = true;
         clearPartial();
         transport.closeNow();
-        req.onError?.(error);
+        req.onError?.(error, { terminal: true });
       };
 
       return createRealtimeTranscriptionWebSocketSession<MistralRealtimeTranscriptionEvent>({

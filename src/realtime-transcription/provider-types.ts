@@ -11,7 +11,8 @@ export type RealtimeTranscriptionSessionCallbacks = {
   onPartial?: (partial: string) => void;
   onTranscript?: (transcript: string) => void;
   onSpeechStart?: () => void;
-  onError?: (error: Error) => void;
+  /** `terminal` means the session stopped and will not reconnect; other errors arrive while it keeps running or retrying. */
+  onError?: (error: Error, details?: { terminal: true }) => void;
 };
 
 /** Runtime control surface for a realtime transcription session. */

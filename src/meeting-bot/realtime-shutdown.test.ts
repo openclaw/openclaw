@@ -78,6 +78,7 @@ async function createFixture(
   });
   let fatal = () => {};
   let transcript = (_text: string) => {};
+  let providerError = (_error: Error, _details?: { terminal: true }) => {};
   let inputAudio = (_audio: Buffer) => {};
   const sendAudio = vi.fn<(audio: Buffer) => void>();
   const closeProvider = vi.fn();
@@ -122,6 +123,7 @@ async function createFixture(
       ...providerMetadata,
       createSession: (request) => {
         transcript = (text) => request.onTranscript?.(text);
+        providerError = (error, details) => request.onError?.(error, details);
         return {
           connect: async () => {},
           sendAudio,
@@ -157,6 +159,7 @@ async function createFixture(
     sendUserMessage,
     logger,
     transcript: (text: string) => transcript(text),
+    providerError: (error: Error, details?: { terminal: true }) => providerError(error, details),
     inputAudio: (audio: Buffer) => inputAudio(audio),
     sendAudio,
     closeProvider,
@@ -187,6 +190,21 @@ describe("meeting shutdown", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     await state.cleanup();
+  });
+
+  it("keeps transcribing through provider errors until the provider session stops", async () => {
+    const fixture = await createFixture();
+    fixture.providerError(new Error("Unexpected server response: 503"));
+    await setImmediate();
+
+    expect(fixture.closeProvider).not.toHaveBeenCalled();
+    expect(fixture.eventTypes()).not.toContain("session.error");
+
+    fixture.providerError(new Error("reconnect limit reached"), { terminal: true });
+    await setImmediate();
+
+    expect(fixture.eventTypes()).toContain("session.error");
+    expect(fixture.closeProvider).toHaveBeenCalledOnce();
   });
 
   it("sends partitioned PCM through its final sample before closing transcription", async () => {

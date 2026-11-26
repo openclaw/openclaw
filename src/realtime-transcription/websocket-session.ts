@@ -257,7 +257,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           this.clearQueuedAudio();
           this.forceClose(socket);
           if (shouldReport) {
-            this.emitError(error);
+            this.emitError(error, true);
           }
         }
       };
@@ -452,6 +452,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           this.options.reconnectLimitMessage ??
             `${this.options.providerId} realtime transcription reconnect limit reached`,
         ),
+        true,
       );
       return;
     }
@@ -521,7 +522,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     } catch (error) {
       // Queued audio and reconnects can outlive the request that admitted them.
       this.abortCurrent();
-      this.emitError(error);
+      this.emitError(error, true);
       return false;
     }
   }
@@ -547,10 +548,15 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     socket?.terminate();
   }
 
-  private emitError(error: unknown): void {
+  private emitError(error: unknown, terminal = false): void {
     const normalized = toStringifiedError(error);
+    const { onError } = this.options.callbacks;
     try {
-      this.options.callbacks.onError?.(normalized);
+      if (terminal) {
+        onError?.(normalized, { terminal: true });
+      } else {
+        onError?.(normalized);
+      }
     } catch (callbackError) {
       this.capture({
         direction: "local",

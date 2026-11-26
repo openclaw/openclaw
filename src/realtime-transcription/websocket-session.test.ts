@@ -111,8 +111,12 @@ function handleProviderEvent(event: ProviderEvent, transport: Transport) {
   }
 }
 
-function expectError(onError: ReturnType<typeof vi.fn>, message: string | RegExp) {
-  expect(onError).toHaveBeenCalledExactlyOnceWith(expect.any(Error));
+function expectError(
+  onError: ReturnType<typeof vi.fn>,
+  message: string | RegExp,
+  ...details: [] | [{ terminal: true }]
+) {
+  expect(onError).toHaveBeenCalledExactlyOnceWith(expect.any(Error), ...details);
   const error = expectDefined<Error>(onError.mock.calls[0]?.[0], "expected error call");
   const expected = typeof message === "string" ? message : expect.stringMatching(message);
   expect(error.message).toEqual(expected);
@@ -313,7 +317,7 @@ it.each(["binary", "JSON"] as const)("caps active %s frames and terminates once"
   }
   await vi.waitFor(() => expect(terminate).toHaveBeenCalledOnce());
   expect(session.isConnected()).toBe(false);
-  expectError(onError, /send buffer exceeded/);
+  expectError(onError, /send buffer exceeded/, { terminal: true });
   if (kind === "binary") {
     session.sendAudio(Buffer.from([2]));
     expect(terminate).toHaveBeenCalledOnce();
@@ -400,6 +404,7 @@ it.each(["connected", "closed", "superseded", "revoked"] as const)(
     if (phase === "revoked") {
       expect(onError).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ message: "transcription authority revoked" }),
+        { terminal: true },
       );
     }
   },
@@ -502,6 +507,7 @@ it.each(["failed handshake", "stable reset"] as const)("reconnect lifecycle: %s"
     await vi.waitFor(() =>
       expect(onError).toHaveBeenCalledWith(
         expect.objectContaining({ message: "test realtime transcription reconnect limit reached" }),
+        { terminal: true },
       ),
     );
     expect(connections).toHaveLength(3);
