@@ -72,6 +72,15 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
       patch[field] = value;
     }
   }
+  if (params.snoozedUntil !== undefined) {
+    const until = params.snoozedUntil;
+    if (until !== null && (typeof until !== "number" || !Number.isInteger(until) || until < 1)) {
+      throw new ToolInputError(
+        "snoozedUntil must be a positive epoch millisecond timestamp or null",
+      );
+    }
+    patch.snoozedUntil = until;
+  }
   if (params.model !== undefined) {
     patch.model =
       normalizeToolModelOverride(readToolStringParam(params, "model", { required: true })) ?? null;
@@ -121,8 +130,16 @@ export async function runSessionsToolPatchMany(params: {
           "Archive the current session with a single patch; it is deferred until this run finishes.",
         );
       }
+      if (typeof params.patch.snoozedUntil === "number" && target.isRequesterSession) {
+        throw new ToolInputError(
+          "Snooze the current session with a single patch; it is deferred until this run finishes.",
+        );
+      }
       const expectedSessionId = readToolStringParam(input, "expectedSessionId");
-      if (typeof params.patch.archived === "boolean" && !expectedSessionId) {
+      if (
+        (typeof params.patch.archived === "boolean" || params.patch.snoozedUntil !== undefined) &&
+        !expectedSessionId
+      ) {
         throw new ToolInputError("Session lifecycle action requires a durable session identity");
       }
       targets.push({

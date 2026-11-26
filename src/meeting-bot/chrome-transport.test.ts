@@ -172,6 +172,23 @@ const cases = [
 ] as const;
 
 describe("meeting Chrome transport", () => {
+  it.each([false, true])(
+    "checks tab ownership for launch-disabled leave (openedByPlugin=%s)",
+    async (openedByPlugin) => {
+      const { transport } = mockTransport();
+      await transport.leaveInBrowser({
+        runtime: createPluginRuntime(),
+        config: { ...config, chrome: { ...config.chrome, launch: false } },
+        meetingSessionId: launchParams.meetingSessionId,
+        meetingUrl: launchParams.url,
+        tab: { targetId: "tracked-tab", openedByPlugin },
+      });
+      expect(browserMocks.leave).toHaveBeenCalledWith(
+        expect.objectContaining({ launch: !openedByPlugin }),
+      );
+    },
+  );
+
   it.each(cases)("preserves $name rollback ownership for tracked calls", async (testCase) => {
     const { transport, engine, createBindings, startAgent, dispose } = mockTransport({
       meetingLabel: `${testCase.name} meeting`,

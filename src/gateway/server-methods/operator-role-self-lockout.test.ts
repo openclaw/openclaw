@@ -6,7 +6,6 @@ import {
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { OPERATOR_ROLE_SELF_LOCKOUT_MESSAGE } from "../operator-role-policy.js";
 import {
   createContext,
   createOperatorClient,
@@ -17,6 +16,9 @@ import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 import { expectRpcError } from "./rpc-response.test-support.js";
 import { usersHandlers } from "./users.js";
+
+const selfLockoutMessage =
+  "This change would remove your administrator access (operator.admin), and you could no longer manage roles. Assign yourself a role that includes operator.admin first, then try again.";
 
 const mocks = vi.hoisted(() => ({ read: vi.fn(), commit: vi.fn() }));
 vi.mock("../../config/io.js", async (importOriginal) => ({
@@ -81,7 +83,7 @@ it("refuses a default role that would demote the administrator setting it", asyn
 
       // Unassigned, the default would make the person turning it on a viewer.
       expectRpcError(await patchDefaultRole(client), {
-        message: OPERATOR_ROLE_SELF_LOCKOUT_MESSAGE,
+        message: selfLockoutMessage,
       });
       expect(mocks.commit).not.toHaveBeenCalled();
 
@@ -134,7 +136,7 @@ it("refuses an administrator's own demotion but not another person's", async () 
         return respond;
       };
 
-      expectRpcError(await setRole(self.id), { message: OPERATOR_ROLE_SELF_LOCKOUT_MESSAGE });
+      expectRpcError(await setRole(self.id), { message: selfLockoutMessage });
       expect((await setRole(other.id)).mock.calls[0]?.[0]).toBe(true);
     },
   );

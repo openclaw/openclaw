@@ -10,7 +10,7 @@ import { resolveCliRuntimeExecutionProvider } from "../../../agents/model-runtim
 import { isCliProvider } from "../../../agents/model-selection-cli.js";
 import { resolveDefaultModelForAgent } from "../../../agents/model-selection-config.js";
 import { resolveModelRefFromString } from "../../../agents/model-selection-shared.js";
-import { isConfiguredCommandOwner } from "../../../auto-reply/command-auth.js";
+import { isConfiguredCommandOwner } from "../../../auto-reply/command-owner-facts.js";
 import { resolveAgentMainSessionKey } from "../../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";

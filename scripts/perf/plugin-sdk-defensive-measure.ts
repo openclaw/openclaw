@@ -15,6 +15,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { Type } from "typebox";
 import type { ProviderNormalizeToolSchemasContext } from "../../src/plugin-sdk/plugin-entry.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -103,12 +104,7 @@ await run(100);
 checksum = 0;
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
 }
 const hostLoadBefore = loadavg();
 const batches = [];

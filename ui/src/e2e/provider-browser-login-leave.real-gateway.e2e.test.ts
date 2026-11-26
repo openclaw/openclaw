@@ -82,7 +82,7 @@ async function finishSignIn(page: Page, providerPage: Page): Promise<void> {
   expect((await callback).status()).toBe(200);
   await page
     .locator("openclaw-modal-dialog")
-    .getByRole("heading", { name: `${loginLabel} is ready`, exact: true })
+    .getByRole("heading", { name: `${loginLabel} connected`, exact: true })
     .waitFor();
 }
 

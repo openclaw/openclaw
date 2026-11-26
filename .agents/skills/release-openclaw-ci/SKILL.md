@@ -19,7 +19,8 @@ Pass exception evidence with `--fast-track-request <packet.json>` to
 `pnpm release:publish-preflight`, forwarded as `fast_track_request`. Preserve
 original FRV results and sealed bytes. Bounded policy: 20 commits AND 15,000
 added/deleted lines, excluding enumerated package manifests/lockfiles from LOC
-only. Partial-FRV retains a complete outstanding-check snapshot without a delta
+only; beta prereleases have no ceiling or reference release, and their stable
+promotion still needs a passing stable FRV. Partial-FRV retains a complete outstanding-check snapshot without a delta
 ceiling. Neither establishes a fully validated baseline. Post-expiry recovery
 uses the original packet-bound GitHub publication receipt and verified job start
 time. See the [release skill](../release-openclaw-maintainer/SKILL.md#fast-track-publication-uses-github-approval).

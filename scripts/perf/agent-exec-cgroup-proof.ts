@@ -31,6 +31,7 @@ import { spawnProcess } from "../../src/process/spawn-utils.js";
 import { shutdownProcessSupervisor } from "../../src/process/supervisor/index.js";
 import { createProcessSupervisor } from "../../src/process/supervisor/supervisor.js";
 import { spawnTerminalPty } from "../../src/process/terminal-pty.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -217,12 +218,7 @@ try {
           fs.writeFileSync(trace, "");
           const inspector = new Session();
           if (values.allocation) {
-            inspector.connect();
-            await inspector.post("HeapProfiler.startSampling", {
-              samplingInterval: 32768,
-              includeObjectsCollectedByMajorGC: true,
-              includeObjectsCollectedByMinorGC: true,
-            });
+            await startCollectedHeapSampling(inspector, 32768);
           }
           const cpu = process.cpuUsage();
           const loadBefore = loadavg();

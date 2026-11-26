@@ -10,23 +10,16 @@ sidebarTitle: "Advanced configuration"
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5 and GPT-6
-OpenClaw-assembled prompts (`gpt-5*` and `gpt-6*`, such as the default
-`gpt-6-astra`). The OpenAI plugin setting below controls the friendly style on
-OpenAI-family routes. Older GPT-4.x, `gpt-oss`, o-series, and `codex-mini` model
-ids do not match.
+OpenClaw adds the legacy behavior contract and optional friendly style only to
+GPT-5 prompts. GPT-6 models, including Astra and Sol, receive the shared
+OpenClaw instructions without either addition. The same rule applies to bare
+and provider-qualified model IDs. The OpenAI plugin setting below controls
+the friendly style on OpenAI-family GPT-5 routes.
 
-The native Codex app-server harness does not receive the persona/tool-
-discipline behavior contract or the friendly interaction-style overlay through
-developer instructions; native Codex keeps Codex-owned base, model, and
-project-doc behavior, and OpenClaw disables Codex's built-in personality for
-native threads so agent workspace personality files stay authoritative.
-OpenClaw contributes only runtime context to native Codex threads: channel
-delivery, OpenClaw dynamic tools, ACP delegation, workspace context, and
-OpenClaw skills. The heartbeat-guidance text from this same contribution is the
-one exception: native Codex heartbeat turns do get it, injected as dedicated
-collaboration instructions rather than through the shared prompt-contribution
-hook.
+Ordinary native Codex threads also use OpenClaw's assembled base instructions.
+If you supply your own Codex base instructions, OpenClaw keeps them and sends
+its policy in developer instructions instead. Neither placement changes which
+models receive the GPT-5 contribution.
 
 The GPT-5 contribution adds a tagged behavior contract for persona
 persistence, execution safety, tool discipline, output shape, completion
