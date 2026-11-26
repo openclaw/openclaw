@@ -16,7 +16,7 @@ type AgentTurnLogParams = AgentTurnTerminalLogParams | AgentTurnMilestoneLogPara
 
 const agentTurnTimingLog = createSubsystemLogger("auto-reply/agent-turn-timing");
 
-function hasSlowProfilingStage(details: Record<string, unknown> | undefined): boolean {
+function hasSlowPreparationStage(details: Record<string, unknown> | undefined): boolean {
   const spans = details?.spans;
   return (
     Array.isArray(spans) &&
@@ -24,6 +24,7 @@ function hasSlowProfilingStage(details: Record<string, unknown> | undefined): bo
       (stage) =>
         typeof stage === "object" &&
         stage !== null &&
+        stage.kind !== "execution" &&
         "durationMs" in stage &&
         typeof stage.durationMs === "number" &&
         stage.durationMs >= REPLY_PROFILER_STAGE_WARN_MS,
@@ -40,12 +41,14 @@ export function createAgentTurnTimingTracker(options: { profilerEnabled?: boolea
           details?.milestone === "assistant_output_started" ||
           details?.milestone === "tool_execution_started";
         // Completed turns and provider/tool latency are context, not warnings;
-        // a completed turn still warns when one stage crosses the profiling threshold.
+        // a completed turn still warns when one preparation stage crosses the
+        // profiling threshold. Spans that enclose execution record the model and
+        // tool time the terminal duration already carries, so they stay detail.
         const isQuietCompletedTurn =
           details !== undefined &&
           details.outcome === "completed" &&
           !details.error &&
-          !hasSlowProfilingStage(details);
+          !hasSlowPreparationStage(details);
         if (isQuietCompletedTurn || (isOutputMilestone && !options.profilerEnabled)) {
           agentTurnTimingLog.info(message, details);
         } else {
@@ -86,6 +89,10 @@ export function createAgentTurnTimingTracker(options: { profilerEnabled?: boolea
     },
     measure: timing.measure,
     measureSync: timing.measureSync,
+    // Enclosing model/tool execution: timing detail, never a preparation warning.
+    measureExecution<T>(name: string, run: () => Promise<T> | T): Promise<T> {
+      return timing.measure(name, run, "execution");
+    },
     logIfSlow(params: AgentTurnTerminalLogParams) {
       // The terminal duration includes inference and tools; only failed turns
       // warn, while completed timings stay informational.

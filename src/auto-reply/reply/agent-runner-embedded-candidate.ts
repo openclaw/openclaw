@@ -128,7 +128,7 @@ export async function runEmbeddedFallbackCandidate(
       milestone: "before_embedded_run",
     });
     let eventHandler: ReturnType<typeof createAgentRunEventHandler> | undefined;
-    const result = await params.timing.measure("embedded_run", () => {
+    const result = await params.timing.measureExecution("embedded_run", () => {
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
         ...runBaseParams,
         beforeRecoveryCompaction: async (recovery) => {

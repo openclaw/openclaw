@@ -4,6 +4,7 @@ import {
   createStageTimingTracker,
   formatStageTimings,
   type StageTiming,
+  type StageTimingKind,
 } from "../../shared/stage-timing.js";
 
 type ReplyTimingLogParams = {
@@ -36,8 +37,8 @@ export function createReplyTimingTracker<TLogParams extends object = ReplyTiming
   ) => string;
   detailKeys?: (params: TLogParams) => readonly string[];
 }): {
-  measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
-  measureSync: <T>(name: string, run: () => T) => T;
+  measure: <T>(name: string, run: () => Promise<T> | T, kind?: StageTimingKind) => Promise<T>;
+  measureSync: <T>(name: string, run: () => T, kind?: StageTimingKind) => T;
   logIfSlow: (params: TLogParams, options?: { repeat?: boolean }) => void;
 } {
   const timing = createStageTimingTracker();
