@@ -244,13 +244,35 @@ describe("buildButtonProps attachments", () => {
   it("sets type to 'button' on every action", () => {
     const result = buildButtonAttachmentsForTest({
       callbackUrl: "http://localhost:18789/cb",
-      buttons: [{ id: "my_action", name: "A" }],
+      buttons: [{ id: "myaction", name: "A" }],
     });
 
     const action = requireAction(result);
     expect(action.type).toBe("button");
     expect(action.id).toBe("myaction");
     expect(action.integration.context.action_id).toBe("myaction");
+  });
+
+  it("gives every button a unique id Mattermost can route and signs the original value", () => {
+    const values = ["::删掉说明和备注两条帖子，只留表", "::Yes, do it!", "::yes?", "::yes!"];
+    const actions = requireActions(
+      buildButtonAttachmentsForTest({
+        callbackUrl: "http://localhost:18789/cb",
+        buttons: values.map((value) => ({
+          id: value,
+          name: value,
+          context: { callback_data: value },
+        })),
+      }),
+    );
+
+    const ids = actions.map((action) => action.id);
+    for (const id of ids) {
+      expect(id).toMatch(/^[A-Za-z0-9]+$/);
+    }
+    expect(new Set(ids).size).toBe(values.length);
+    expect(actions.map((action) => action.integration.context.action_id)).toEqual(ids);
+    expect(actions.map((action) => action.integration.context.callback_data)).toEqual(values);
   });
 });
 

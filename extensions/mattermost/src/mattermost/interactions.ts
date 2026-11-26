@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { sendJsonWithoutCharset as sendInteractionResponse } from "openclaw/plugin-sdk/http-response-runtime";
@@ -196,13 +196,18 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
 }
 
 /**
- * Sanitize a button ID so Mattermost's action router can match it.
- * Mattermost uses the action ID in the URL path `/api/v4/posts/{id}/actions/{actionId}`
- * and IDs containing hyphens or underscores break the server-side routing.
+ * Mattermost routes a click through `/api/v4/posts/{post_id}/actions/{action_id:[A-Za-z0-9]+}`,
+ * so any other character in an action ID makes Mattermost answer 404 before the callback runs.
+ * Other IDs (agent values, `question-0`, non-ASCII text) get a stable alphanumeric ID that the
+ * button's index keeps unique on the post; the original value travels in the signed context.
  * See: https://github.com/mattermost/mattermost/issues/25747
  */
-function sanitizeActionId(id: string): string {
-  return id.replace(/[-_]/g, "");
+function toMattermostActionId(id: string, index: number): string {
+  if (/^[A-Za-z0-9]+$/.test(id)) {
+    return id;
+  }
+  const digest = createHash("sha256").update(id).digest("hex").slice(0, 8);
+  return `${id.replace(/[^A-Za-z0-9]/g, "").slice(0, 16)}${index}${digest}`;
 }
 
 export function buildButtonAttachments(params: {
@@ -216,8 +221,8 @@ export function buildButtonAttachments(params: {
   }>;
   text?: string;
 }) {
-  const actions = params.buttons.map((btn) => {
-    const safeId = sanitizeActionId(btn.id);
+  const actions = params.buttons.map((btn, index) => {
+    const safeId = toMattermostActionId(btn.id, index);
     const context: Record<string, unknown> = {
       action_id: safeId,
       ...btn.context,
