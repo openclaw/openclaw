@@ -300,6 +300,8 @@ entry with a small `contextTokens` and OpenClaw requests that instead:
 }
 ```
 
+LM Studio can truncate inputs that exceed the loaded context and still return a vector. Choose a context that fits both your host and your longest indexed chunk, or reduce the memory chunk size. After reindexing, search for a phrase near the end of a long note and check that the note is returned.
+
 To skip LM Studio for embeddings, [llmman](/providers/llmman#advanced-configuration) sizes the
 embedding context per daemon with `LLMMAN_CONTEXT_LENGTH`.
 
