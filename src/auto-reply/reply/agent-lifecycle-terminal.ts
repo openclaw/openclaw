@@ -148,7 +148,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
       : params.resolveTerminationFields(terminalPhase === "error" ? terminalValue : undefined);
     const restartAbort = terminationFields.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON;
     const data: Record<string, unknown> = {
-      ...pending.metadata,
+      ...(workspaceFailure ? {} : pending.metadata),
       phase: restartAbort ? "end" : terminalPhase,
       endedAt: Date.now(),
       startedAt,
@@ -207,21 +207,12 @@ export function createAgentLifecycleTerminalBackstop(params: {
         data.stopReason = terminationFields.stopReason;
       }
     }
-    Object.assign(data, extraData);
-    if (workspaceFailure) {
-      // Cancellation stops inference; preparation's original error owns the
-      // one terminal outcome, rather than reporting a user-requested Stop.
-      data.phase = "error";
-      data.error = workspaceFailure.message;
-      delete data.aborted;
-      delete data.stopReason;
-      delete data.timeoutPhase;
-      delete data.providerStarted;
-      delete data.yielded;
-    }
-    // Admission also has a run ID. Only the backend start identifies an executing attempt at shutdown.
-    if (observedBackendStart && data.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON) {
-      data.executionStarted ??= true;
+    if (!workspaceFailure) {
+      Object.assign(data, extraData);
+      // Admission also has a run ID. Only the backend start identifies an executing attempt at shutdown.
+      if (observedBackendStart && data.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON) {
+        data.executionStarted ??= true;
+      }
     }
     return {
       runId: params.runId,
