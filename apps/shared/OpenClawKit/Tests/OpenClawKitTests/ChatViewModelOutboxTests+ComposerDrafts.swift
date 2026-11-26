@@ -311,6 +311,57 @@ extension ChatViewModelOutboxTests {
         #expect(await store.loadComposerDraft(key: "agent:main:main")?.text == "stored draft\n\ntyped offline")
     }
 
+    @Test(arguments: [false, true], [false, true])
+    @MainActor
+    func acceptedSendRetiresOnlyTheSubmittedRecallStash(edited: Bool, exitWithDown: Bool) async throws {
+        let (store, databases, directory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transport = ReconnectingDraftTransport()
+        let vm = OpenClawChatViewModel(
+            sessionKey: "agent:main:main",
+            transport: transport,
+            activeAgentId: "main",
+            sessionRoutingContract: "per-sender|main|main",
+            outbox: store)
+        await settleComposerDraft(vm)
+        await vm.restoreOutboxMessages(session: vm.currentSessionSnapshot())?.value
+        vm.recordSuccessfulInput("older", sessionKey: vm.visibleComposerKey)
+        vm.input = "a"
+
+        let send = try #require(vm.send())
+        await transport.healthGate.waitUntilStarted()
+        if edited {
+            vm.input = "ax"
+            vm.input = "a"
+        }
+        #expect(vm.recallPreviousInput(caretOnFirstLine: true))
+        #expect(vm.input == "older")
+        await transport.healthGate.release()
+        await send.value
+        #expect(await transport.sent == ["a"])
+
+        if exitWithDown {
+            try #require(vm.recallNextInput())
+            #expect(vm.input == "a")
+            try #require(vm.recallNextInput())
+        } else {
+            try #require(vm.cancelInputRecall())
+        }
+        let expected = edited ? "a" : ""
+        #expect(vm.input == expected)
+        await vm.persistComposerDraft()
+        vm.detachTransport()
+        await settleComposerDraft(vm)
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let restored = await composerDraftModel(reopened.store(gatewayID: store.gatewayID))
+        defer { restored.detachTransport() }
+        await settleComposerDraft(restored)
+        #expect(restored.input == expected)
+    }
+
     @Test @MainActor func `attachments stay with their session draft across switches`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
