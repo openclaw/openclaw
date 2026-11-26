@@ -58,6 +58,7 @@ async function interruptedSwitch() {
     finalize,
     outcome: recoverInterruptedManagedUpdate({
       root: fixture.slot,
+      installedRoot: fixture.slot,
       runId: run.runId,
       owner: "helper",
       databaseIdentity: {} as never,
@@ -91,6 +92,40 @@ describe.skipIf(process.platform === "win32")(
       const { finalize, outcome } = recover();
       await expect(outcome).resolves.toMatchObject({ status: "rolled-back" });
       expect(finalize).not.toHaveBeenCalled();
+    });
+
+    it("continues with the run's target after pnpm replaced the versioned root", async () => {
+      const oldRoot = path.join(dir, "v11", "a", "node_modules", "openclaw");
+      const newRoot = path.join(dir, "v11", "b", "node_modules", "openclaw");
+      await writePackageRoot(oldRoot, "2026.11.3");
+      await writePackageRoot(newRoot, "2026.12.1");
+      const originalIdentity = packageActivationIdentity(oldRoot, true);
+      const env = { ...process.env };
+      const run = createUpdateRun(
+        { trigger: "cli", target: { kind: "package", version: "2026.12.1" } },
+        { env },
+      );
+      // The package manager retires the generation it replaced.
+      fs.rmSync(path.dirname(path.dirname(oldRoot)), { recursive: true });
+      const finalize = vi.fn(async () => readManagedHandoffUpdateRun(run.runId));
+      await expect(
+        recoverInterruptedManagedUpdate({
+          root: oldRoot,
+          installedRoot: newRoot,
+          runId: run.runId,
+          owner: "helper",
+          databaseIdentity: {} as never,
+          original: { serviceRestartSafe: true, version: "2026.11.3" },
+          originalIdentity,
+          timeoutMs: 10_000,
+          assertCurrent: () => {},
+          finalize,
+        }),
+      ).resolves.toMatchObject({
+        status: "succeeded",
+        recovery: { serviceRestartSafe: true, version: "2026.12.1" },
+      });
+      expect(finalize).toHaveBeenCalledTimes(1);
     });
 
     it("refuses a link that names neither recorded release", async () => {

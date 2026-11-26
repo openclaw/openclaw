@@ -13,6 +13,11 @@ let handoffFailure;
 let terminalRuntimePath = params.recoveryModulePath;
 let serviceStoppedAtMs, serviceDowntimeMs;
 let recoveryObservation;
+// pnpm replaces the versioned root behind its stable package link. Interrupted recovery
+// follows the link, so installed commands and modules come from the generation it names.
+let installedRoot = params.updateLeaseKey;
+const installedPath = (file) => file.startsWith(params.updateLeaseKey + path.sep)
+  ? installedRoot + file.slice(params.updateLeaseKey.length) : file;
 
 // Child JSON is untyped. Keep malformed supplied reasons reportable before
 // typed classification, sentinel publication, and terminal recording consume them.
@@ -228,6 +233,8 @@ async function recoverInterruptedUpdater() {
   try {
     const assertCurrent = () => {
       if (!ownsManagedUpdateLease()) throw new Error("managed update recovery ownership was lost");
+      if (params.installLink && fs.realpathSync(params.installLink) !== installedRoot)
+        throw new Error("Active pnpm generation changed during interrupted recovery");
     };
     const updaterStopped = !restorationArmed;
     const assertPendingStop = () => {
@@ -236,16 +243,17 @@ async function recoverInterruptedUpdater() {
         throw new Error("Gateway stop intent was superseded by a later running service");
     };
     assertPendingStop();
+    if (params.installLink) installedRoot = fs.realpathSync(params.installLink);
     const recovered = await recoverInterruptedManagedUpdate({
-      root: params.updateLeaseKey, runId: params.runId, owner: params.updateLeaseOwner,
+      root: params.updateLeaseKey, installedRoot, runId: params.runId, owner: params.updateLeaseOwner,
       databaseIdentity: params.updateLeaseDatabaseIdentity, original: params.recovery,
       originalIdentity: originalInstallationIdentity, timeoutMs: params.recoveryTimeoutMs,
       assertCurrent,
       finalize: async () => {
         // Recovery verified this installation before finalization. Repair can
         // advance its schema even when it fails, so terminal writes must follow it.
-        terminalRuntimePath = params.recoveryModulePath;
-        const repair = await runOwnedUpdateCommand("repair", params.finalizeCommandArgv,
+        terminalRuntimePath = installedPath(params.recoveryModulePath);
+        const repair = await runOwnedUpdateCommand("repair", params.finalizeCommandArgv.map(installedPath),
           params.recoveryTimeoutMs, params.cwd, { ...process.env, OPENCLAW_UPDATE_RUN_HANDOFF: "1" });
         let repaired;
         try { repaired = JSON.parse(repair.updaterOutput); } catch {}
@@ -254,11 +262,11 @@ async function recoverInterruptedUpdater() {
           !["ok", "warning"].includes(repaired.status)) {
           throw new Error("Interrupted update post-core repair did not complete");
         }
-        runLedger = createInstalledRuntimeLedger(params.recoveryModulePath);
+        runLedger = createInstalledRuntimeLedger(terminalRuntimePath);
         return runLedger.getUpdateRun(params.runId);
       },
     });
-    terminalRuntimePath = params.recoveryModulePath;
+    terminalRuntimePath = installedPath(params.recoveryModulePath);
     const restored = await restoreGatewayService(
       recovered.status === "rolled-back" ? "managed-service-handoff-cancelled" : reason,
       recovered.recovery, updaterStopped || recovered.status === "succeeded" ? "error" : undefined,

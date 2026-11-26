@@ -35,6 +35,8 @@ export function readManagedHandoffGatewayStop() {
 /** The parked helper continues its own run; publication keeps its sealed owner and checks. */
 export async function recoverInterruptedManagedUpdate(params: {
   root: string;
+  /** The generation the service runs; pnpm replaces the versioned root behind its stable link. */
+  installedRoot: string;
   runId: string;
   owner: string;
   databaseIdentity: ManagedUpdateLeaseDatabaseIdentity;
@@ -45,7 +47,7 @@ export async function recoverInterruptedManagedUpdate(params: {
   /** Returns the run as read by the installed runtime after post-core repair. */
   finalize: () => Promise<UpdateRunRecord | undefined>;
 }) {
-  const { root, assertCurrent } = params;
+  const { root, installedRoot, assertCurrent } = params;
   const run = readManagedHandoffUpdateRun(params.runId);
   if (!run || run.status !== "running") {
     throw new Error("Interrupted updater has no current running record");
@@ -91,17 +93,17 @@ export async function recoverInterruptedManagedUpdate(params: {
   assertCurrent();
   const installed =
     params.original.serviceRestartSafe && params.original.buildId
-      ? await readCurrentGitUpdateRecovery(root, params.timeoutMs)
+      ? await readCurrentGitUpdateRecovery(installedRoot, params.timeoutMs)
       : {
-          ...(await verifyPackageUpdateRecovery(root)),
-          buildId: (await readBuiltGatewayBuildId(root)) ?? undefined,
+          ...(await verifyPackageUpdateRecovery(installedRoot)),
+          buildId: (await readBuiltGatewayBuildId(installedRoot)) ?? undefined,
         };
   assertCurrent();
   if (!installed.serviceRestartSafe || !installed.version) {
     throw new Error("Installed runtime identity could not be verified");
   }
   // A release link is read through; the link itself is the installation's lease key.
-  const installedIdentity = () => packageActivationIdentity(fs.realpathSync(root), true);
+  const installedIdentity = () => packageActivationIdentity(fs.realpathSync(installedRoot), true);
   const identity = installedIdentity();
   const original =
     identity === params.originalIdentity &&
@@ -138,7 +140,10 @@ export async function recoverInterruptedManagedUpdate(params: {
         : undefined
       : params.original.serviceRestartSafe && params.original.buildId && run.after.buildId
         ? run.after
-        : undefined;
+        : // A package manager that replaced the root has no journal; the run names its target.
+          installedRoot !== root && run.target.kind === "package" && run.target.version
+          ? { version: run.target.version, buildId: run.after.buildId }
+          : undefined;
   if (
     !expected?.version ||
     installed.version !== expected.version ||
