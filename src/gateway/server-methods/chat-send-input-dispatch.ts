@@ -619,7 +619,7 @@ export async function handleChatSendWithStorage(
     assertInputAdmissionCurrent();
     admission.setDiscardAbandonedPreparedMedia(undefined);
     phase?.mark("response");
-    admission.markInputAccepted(!stageInput && !commitFreshInput ? admittedSessionId : undefined);
+    admission.markInputAccepted(!stageInput && !commitFreshInput);
     getUserTurnTranscriptAdmissionOwner(userTurnRecorder)?.markInputAccepted();
     assertAcceptedInputCurrent ??= pendingAdmission.assertAdmittedCurrent;
     if (requestAuthority.family === "worker") {

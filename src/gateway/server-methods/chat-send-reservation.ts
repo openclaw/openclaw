@@ -78,7 +78,7 @@ export function createPendingChatSendReservationAccess(params: {
         params.context.dedupe.delete(key);
       }
     },
-    markInputAccepted: (unstagedSessionId?: string) => {
+    markInputAccepted: (unstaged: boolean) => {
       const accepted = params.context.dedupe.get("chat:" + runId);
       if (
         accepted?.ok !== true ||
@@ -91,14 +91,13 @@ export function createPendingChatSendReservationAccess(params: {
       accepted.effectAccepted = true;
       // Commands without a durable input transfer custody here, rather than at append/stage.
       if (
-        unstagedSessionId &&
+        unstaged &&
         (!params.request.systemInputProvenance ||
           params.request.systemInputProvenance.kind === "external_user")
       ) {
         cancelSelfSnooze({
           agentId: params.session.agentId,
           sessionKey,
-          sessionId: unstagedSessionId,
           storePath: params.session.storePath,
         });
       }

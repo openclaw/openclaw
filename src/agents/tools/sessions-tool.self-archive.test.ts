@@ -80,6 +80,7 @@ describe("sessions tool self-snooze", () => {
   it.each([
     "quiet",
     "queued",
+    "queued-after-rollover",
     "submitted",
     "aborted",
     "failed",
@@ -87,7 +88,7 @@ describe("sessions tool self-snooze", () => {
     "rejected-replacement",
     "accepted-replacement",
   ] as const)("settles with %s", async (scenario) => {
-    const { sessionKey, sessionId, storePath, createTool } =
+    const { sessionKey, sessionId, storePath, createTool, update } =
       await createArchiveSession("self-snooze");
     const snoozedUntil = Date.now() + 60_000;
     const patches: unknown[] = [];
@@ -124,11 +125,22 @@ describe("sessions tool self-snooze", () => {
             tool.execute("replace", { action: "patch", snoozedUntil: Date.now() - 1 }),
           ).rejects.toThrow(/future/);
         } else if (scenario !== "quiet") {
+          const inputSessionId =
+            scenario === "queued-after-rollover" ? "next-transcript" : sessionId;
+          if (scenario === "queued-after-rollover") {
+            await update({ sessionId: inputSessionId, updatedAt: Date.now() });
+          }
           const recorder = createUserTurnTranscriptRecorder({
-            target: { agentId: "main", sessionKey, sessionId, storePath, sessionEntry: undefined },
+            target: {
+              agentId: "main",
+              sessionKey,
+              sessionId: inputSessionId,
+              storePath,
+              sessionEntry: undefined,
+            },
             input: { text: "New human input", idempotencyKey: "newer-human" },
           });
-          if (scenario === "queued") {
+          if (scenario === "queued" || scenario === "queued-after-rollover") {
             expect(await recorder.stageApproved!({ runId: "newer", assertCurrent() {} })).toBe(
               true,
             );
@@ -146,7 +158,6 @@ describe("sessions tool self-snooze", () => {
           ? [
               {
                 key: sessionKey,
-                expectedSessionId: sessionId,
                 snoozedUntil:
                   scenario === "accepted-replacement" ? snoozedUntil + 60_000 : snoozedUntil,
               },

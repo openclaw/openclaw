@@ -1,4 +1,5 @@
 import { resolveGlobalSet } from "../shared/global-singleton.js";
+import { chatRef } from "./chat-ref.js";
 import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 
 export function isOriginalVisibleUserInput(message: PersistedUserTurnMessage) {
@@ -19,13 +20,12 @@ export function cancelSelfSnoozeForUserInput(
     cancelSelfSnooze({
       agentId: target.agentId,
       sessionKey: target.sessionKey,
-      sessionId: target.sessionId,
       storePath: target.databasePath,
     });
   }
 }
 
-type Target = { agentId: string; sessionKey: string; sessionId: string; storePath: string };
+type Target = Parameters<typeof chatRef>[0];
 type Intent = Target & { physicalStorePath?: string };
 
 // Only live requests occupy a slot. A restart drops the intent, as for self-archive.
@@ -39,7 +39,6 @@ function matches(intent: Intent, target: Target) {
   return (
     intent.agentId === target.agentId &&
     intent.sessionKey === target.sessionKey &&
-    intent.sessionId === target.sessionId &&
     (!intent.physicalStorePath ||
       intent.storePath === target.storePath ||
       intent.physicalStorePath === target.storePath)
@@ -47,11 +46,12 @@ function matches(intent: Intent, target: Target) {
 }
 
 export function captureSelfSnooze(target: Target) {
-  const intent: Intent = { ...target };
+  const intent: Intent = { ...chatRef(target) };
   pending.add(intent);
   return {
     bindStore(path: string) {
       intent.physicalStorePath = path;
+      return chatRef({ ...target, storePath: path });
     },
     admit() {
       if (!pending.has(intent)) {
@@ -79,7 +79,7 @@ export function captureSelfSnooze(target: Target) {
 }
 
 /** Accepting input invalidates its intent before yielding the writer lane. While the
- * tool resolves its physical store, an ambiguous same-identity input wins conservatively. */
+ * tool resolves its physical store, an ambiguous same-chat input wins conservatively. */
 export function cancelSelfSnooze(target: Target) {
   for (const intent of pending) {
     if (matches(intent, target)) {

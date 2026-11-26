@@ -84,7 +84,7 @@ export function acknowledgeCommittedReplyInitialization(
   // Gateway/recorded inputs transfer custody upstream, not again at dispatch.
   // Plain channel inputs without a recorder are accepted by this initialization.
   if (isUserInput && !params.inputOwnedByRecorder) {
-    cancelSelfSnooze({ ...target, sessionId: transition.current.sessionId });
+    cancelSelfSnooze(target);
   }
   return acknowledgeReplySessionTransition(
     params.replyOperation,

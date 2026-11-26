@@ -4,6 +4,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { captureSelfSnooze } from "../sessions/session-self-snooze.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -200,27 +201,30 @@ describe("sessions.patchMany orchestration", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
       const key = "agent:main:dashboard:agent-snooze";
-      const expectedSessionId = "generation";
-      await seedEntry(key, expectedSessionId);
-      const { storePath } = await resolveGatewaySessionStoreTargetWithStoreAsync({ cfg: {}, key });
-      const later = captureSelfSnooze({
+      await seedEntry(key, "original-transcript");
+      const target = await resolveGatewaySessionStoreTargetWithStoreAsync({ cfg: {}, key });
+      const chat = chatRef({
         agentId: "main",
         sessionKey: key,
-        sessionId: expectedSessionId,
-        storePath,
+        storePath: target.readSource!.path,
       });
+      const later = captureSelfSnooze(chat);
       try {
-        const params = bindDeferredSelfSnoozePatch({
-          key,
-          expectedSessionId,
-          snoozedUntil: Date.now() + 60_000,
-        });
-        const respond = vi.fn();
-        await sessionMutationHandlers["sessions.patch"]!({
-          params,
-          respond,
-          context: patchContext(),
-        } as never);
+        // Rotation alone is not a new chat. An accepted input is tested at its owner.
+        await seedEntry(key, "next-transcript");
+        const params = { key, snoozedUntil: Date.now() + 60_000 };
+        const settle = async (address: typeof chat) => {
+          const respond = vi.fn();
+          await sessionMutationHandlers["sessions.patch"]!({
+            params: bindDeferredSelfSnoozePatch({ ...params }, address),
+            respond,
+            context: patchContext(),
+          } as never);
+          return respond.mock.calls[0]?.[0];
+        };
+        expect(await settle(chatRef({ ...chat, storePath: "another-store" }))).toBe(false);
+        expect(readEntry(key)?.snoozedUntil).toBeUndefined();
+        expect(await settle(chat)).toBe(true);
         expect(readEntry(key)?.snoozedUntil).toBe(params.snoozedUntil);
         expect(later.current()).toBe(true);
       } finally {

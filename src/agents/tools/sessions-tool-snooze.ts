@@ -1,12 +1,11 @@
+import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindDeferredSelfSnoozePatch } from "../../gateway/server-methods/sessions-patch-self-snooze.js";
 import { resolveSessionSnoozeError } from "../../gateway/sessions-patch-lifecycle-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
 import { findSessionControllerOperationByRunId } from "../../sessions/session-controller.queries.js";
 import { readSessionControllerOperationState } from "../../sessions/session-controller.state.js";
@@ -25,67 +24,56 @@ import {
 const log = createSubsystemLogger("agents/sessions");
 
 export async function scheduleSelfSnooze(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  agentId: string;
-  expectedSessionId: string;
-  until: number;
-  runSessionId?: string;
+  control: Parameters<typeof prepareSessionToolControlTarget>[0];
+  checkSelection: boolean;
+  patch: SessionsPatchParams & { snoozedUntil: number };
   runId?: string;
   singleField: boolean;
   inProcessGatewayAvailable: boolean;
-  controlOnly: boolean;
   callGateway: AgentToolGatewayRequestCaller;
 }) {
-  const { cfg, key, agentId, expectedSessionId, until, callGateway } = params;
+  const { control, patch, callGateway } = params;
+  const { cfg, key, agentId } = control;
+  const until = patch.snoozedUntil;
   if (!params.singleField) {
     throw new ToolInputError("Snooze the current session in a separate patch");
   }
   if (!params.inProcessGatewayAvailable) {
     throw new ToolInputError("Self-snooze requires the running Gateway");
   }
-  if (expectedSessionId !== params.runSessionId?.trim()) {
-    throw new ToolInputError("Self-snooze requires the current run's session identity");
-  }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  const target = { agentId, sessionKey: key, sessionId: expectedSessionId, storePath };
+  const target = { agentId, sessionKey: key, storePath };
   const requestingTurn = params.runId
     ? findSessionControllerOperationByRunId(params.runId)
     : getCurrentSessionControllerOwner();
   const turnState = readSessionControllerOperationState(requestingTurn);
-  if (!turnState || requestingTurn?.sessionId !== expectedSessionId || requestingTurn.key !== key) {
+  if (
+    !turnState ||
+    requestingTurn?.key !== key ||
+    (requestingTurn.agentId && requestingTurn.agentId !== agentId)
+  ) {
     throw new ToolInputError("Self-snooze requires the active requesting turn");
   }
   const intent = captureSelfSnooze(target);
   try {
-    const revision = await withSessionEntryReadOnlyInWorker(
+    const chat = await withSessionEntryReadOnlyInWorker(
       target,
       () => {},
       async (read, owner) => {
         if (!read.ok) {
           throw read.error;
         }
-        if (read.value?.sessionId !== expectedSessionId || !owner.scope) {
-          throw new ToolInputError("Self-snooze target changed");
+        if (!read.value || !owner.scope) {
+          throw new ToolInputError("The chat selected for self-snooze is unavailable.");
         }
-        intent.bindStore(owner.scope.storePath);
         const error = resolveSessionSnoozeError(cfg, key, read.value, until, Date.now());
         if (error) {
           throw new ToolInputError(error.message);
         }
-        return read.value.lifecycleRevision;
+        return intent.bindStore(owner.scope.storePath);
       },
     );
-    const control = {
-      cfg,
-      key,
-      agentId,
-      expectedSessionId,
-      expectedLifecycleRevision: revision ?? null,
-      operation: "snooze" as const,
-      restricted: params.controlOnly,
-    };
-    if (params.controlOnly) {
+    if (control.restricted || params.checkSelection) {
       (await prepareSessionToolControlTarget(control)).release();
     }
     intent.admit();
@@ -98,18 +86,12 @@ export async function scheduleSelfSnooze(params: {
         }
         const request = {
           method: "sessions.patch",
-          params: bindDeferredSelfSnoozePatch({
-            key,
-            expectedSessionId,
-            ...(revision ? { expectedLifecycleRevision: revision } : {}),
-            ...(parseAgentSessionKey(key) ? {} : { agentId }),
-            snoozedUntil: until,
-          }),
+          params: bindDeferredSelfSnoozePatch(patch, chat),
           sessionMutationCommitGuard: composeSessionSourceAssertion([], intent.assertCurrent, {
             synchronousCheck: true,
           }),
         };
-        if (params.controlOnly) {
+        if (control.restricted) {
           await callSessionToolControl(control, request, callGateway);
         } else {
           await callGateway(request);

@@ -480,7 +480,9 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       ) {
         throw new ToolInputError("Session rename requires the current durable session identity");
       }
-      const lifecycle = typeof archived === "boolean" || values.snoozedUntil !== undefined;
+      const selfSnooze = isRequesterSession && typeof snoozedUntil === "number";
+      const lifecycle =
+        typeof archived === "boolean" || (snoozedUntil !== undefined && !selfSnooze);
       const expectedSessionId = restrictedRename
         ? renameSessionId
         : (requestedSessionId ?? (lifecycle && isRequesterSession ? renameSessionId : undefined));
@@ -497,7 +499,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         expectedSessionId,
         expectedLifecycleRevision: selectedLifecycleRevision,
         operation: snoozedUntil !== undefined ? "snooze" : archived ? "archive" : "restore",
-        restricted: true,
+        restricted: controlOnly,
       });
       const callSessionPatch = (
         sessionPatch: typeof patch & { agentId?: string },
@@ -519,18 +521,14 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       const includeResolved = patch.model !== undefined || patch.thinkingLevel !== undefined;
       const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
 
-      if (isRequesterSession && typeof snoozedUntil === "number" && expectedSessionId) {
+      if (selfSnooze) {
         return scheduleSelfSnooze({
-          cfg,
-          key,
-          agentId,
-          expectedSessionId,
-          until: snoozedUntil,
-          runSessionId: opts.agentSessionId,
+          control: controlTarget(),
+          checkSelection: requestedSessionId !== undefined,
+          patch: { ...patch, ...agentScope, snoozedUntil },
           runId: opts.runId,
           inProcessGatewayAvailable,
           singleField: Object.keys(values).length === 1,
-          controlOnly,
           callGateway: patchGateway,
         });
       }

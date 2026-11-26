@@ -56,7 +56,7 @@ import { executeSessionPatchMutations } from "./sessions-patch-engine.js";
 import { createCommitGuard } from "./sessions-patch-errors.js";
 import { patchPersonalSessionPins } from "./sessions-patch-personal-pins.js";
 import { projectSessionPatchManyResult } from "./sessions-patch-response.js";
-import { isDeferredSelfSnoozePatch } from "./sessions-patch-self-snooze.js";
+import { getDeferredSelfSnoozeChat } from "./sessions-patch-self-snooze.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import { sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -164,7 +164,7 @@ function createSessionPatchHandler(
         diagnostics,
         archiveUndo: archive.caller,
         participationOnly: sessionMutationAuthorization?.participationCeiling !== undefined,
-        deferredSelfSnooze: !request.many && isDeferredSelfSnoozePatch(request.params),
+        deferredSelfSnooze: request.many ? undefined : getDeferredSelfSnoozeChat(request.params),
         operatorAuthority: preparingOperator,
         followSharingRegistration: sessionMutationAuthorization?.followRegistration,
         readSessionSharing: sessionMutationAuthorization?.readTargetSharing,

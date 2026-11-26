@@ -89,7 +89,7 @@ export async function executeSessionPatchMutations(params: ExecuteSessionPatchMu
   const callerScopes = client?.connect.scopes ?? [];
   const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
-  const discovery = await discoverSessionPatchTargets(cfg, params.targets);
+  const discovery = await discoverSessionPatchTargets(cfg, params);
   if (!discovery.ok) {
     return discovery;
   }
@@ -437,6 +437,7 @@ export async function executeSessionPatchMutations(params: ExecuteSessionPatchMu
                           agentId: target.requestedAgentId,
                           patch: target.fullPatch,
                           archivedBy: archiveActor,
+                          deferredSelfSnooze: params.deferredSelfSnooze,
                           personalModelSelection,
                           operatorAuthority,
                         },
@@ -574,9 +575,7 @@ export async function executeSessionPatchMutations(params: ExecuteSessionPatchMu
                         );
                         replacements.push(replacement.replacement);
                         const { entry } = replacement.outcome;
-                        afterLifecycleCommit.push(() =>
-                          cancelSupersededSnooze(target, entry, params),
-                        );
+                        afterLifecycleCommit.push(() => cancelSupersededSnooze(target, params));
                         if (!existingEntry && params.onCreatedSessionCommitted) {
                           afterLifecycleCommit.push(() =>
                             params.onCreatedSessionCommitted?.({
