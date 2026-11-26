@@ -194,6 +194,10 @@ have no recorded pinner and are not copied into anyone's profile. Calls without 
 verified person can still list visible sessions without a pin filter; sign in to
 filter by pins or change them. Admitted session tools always use their requester’s pins. Direct integrations
 opt in on their connection and verify Gateway support before writing a personal pin.
+Updated macOS clients show legacy pins read-only when an older Gateway does not
+advertise `personal-session-pins`; update the Gateway to edit personal pins. A Mac
+undoing an archive on an older Gateway can restore the legacy pin that the same
+archive just cleared.
 
 The Control UI ships with its Gateway. For a writable signed-in profile, the
 Sessions table and sidebar use each list response's Gateway time to decide when
@@ -708,7 +712,7 @@ The root menu keeps everyday actions together: **Pin/Unpin**, **Rename**, **Mark
 - **Move to group** includes **New group** and **Remove from group**. **Assign to** stays on the root menu when more than one eligible owner is available ([session ownership](/concepts/multi-user#assigning-an-owner)).
   **Search groups** matches canonically equivalent accented names without
   changing the stored group name; an unaccented query remains distinct.
-- **Fork session** creates a separate session; while the agent is replying, it forks from the last completed message. Forks of local folder and project sessions keep that workspace, so existing file references continue to open. **Fork from here** keeps the same local workspace as well.
+- **Fork session** creates a separate session; while the agent is replying, it forks from the last completed message. With the built-in OpenClaw API runner, you can fork a conversation that is longer than the model window. Older messages remain searchable in the fork even when they do not fit in the next model request. Forks of local folder and project sessions keep that workspace, so existing file references continue to open. **Fork from here** keeps the same local workspace as well.
 - **Copy link** copies the session link in one step. **Advanced → Copy details** offers the preview link, conversation text as Markdown, and the session ID, without duplicating the common session link. The link requires normal Gateway authentication and session access; copying it does not grant access. Markdown loads the available conversation history, not just the messages currently visible. Both copied Markdown and `/export` downloads retain the conversation's sender labels, so messages from different participants remain distinguishable. Records without exportable text, such as tool calls without text output, are omitted.
 - In the Control UI, `/export` and `/export-session` load the available conversation history before downloading Markdown through your browser, even when older messages have not been scrolled into view. If history cannot be read completely or the conversation changes while paging, the export fails instead of downloading a partial file; retry the command. These commands take no file path. An argument leaves the draft intact and shows how to retry. The server-side HTML export available through other clients keeps its separate workspace-path behavior.
 - The chat header's **Session sharing** control manages authenticated teammate visibility and membership. For a saved, non-incognito session, its creator or a Gateway admin can also enable world-readable, read-only public access.

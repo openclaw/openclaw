@@ -316,8 +316,11 @@ describe("DirectDictationControl", () => {
     expect(onMessage).not.toHaveBeenCalled();
   });
 
-  function receiptFixture() {
+  function receiptFixture(maxLength = -1) {
     const target = document.createElement("textarea");
+    if (maxLength >= 0) {
+      target.maxLength = maxLength;
+    }
     target.value = "before same after same";
     target.setSelectionRange(7, 11);
     document.body.append(target);
@@ -388,6 +391,15 @@ describe("DirectDictationControl", () => {
     expect(f.onMessage).toHaveBeenCalledOnce();
   });
 
+  it("refuses to clip the original when the limit was already set before insertion", () => {
+    const f = receiptFixture(23);
+    expect(f.target.value).toBe("before clean after same");
+    expect(f.receipt.restore("um same")).toBe(false);
+    expect(f.receipt.isCurrent()).toBe(false);
+    expect(f.target.value).toBe("before clean after same");
+    expect(f.onMessage).toHaveBeenCalledExactlyOnceWith("before clean after same");
+  });
+
   it("refuses an oversized conservative insertion before writing and accepts the exact limit", () => {
     const target = document.createElement("textarea");
     target.value = "prefix";
@@ -412,6 +424,42 @@ describe("DirectDictationControl", () => {
     expect(target.value).toBe("prefix fit");
     expect(f.onMessage).toHaveBeenCalledExactlyOnceWith("prefix fit");
   });
+});
+
+it.each([
+  { draft: "ask me", start: 6, end: 6, limit: 8, spoken: "🌱", expected: "ask me " },
+  {
+    draft: "ask basil about peas?",
+    start: 4,
+    end: 9,
+    limit: 21,
+    spoken: "🌱 basil",
+    expected: "ask 🌱 ba about peas?",
+  },
+])(
+  "fits the dictated replacement into the available space in '$draft'",
+  ({ draft, start, end, limit, spoken, expected }) => {
+    const target = document.createElement("textarea");
+    target.maxLength = limit;
+    target.value = draft;
+    target.setSelectionRange(start, end);
+    const editor = createDirectDictationTextarea(() => target);
+    editor.captureSelection();
+    expect(editor.previewTranscript(placeComposerDictation, spoken)).toBe(expected);
+    expect(editor.insertTranscript(placeComposerDictation, spoken)).toBe(expected);
+    expect(target.value).toBe(expected);
+  },
+);
+
+it("keeps edits made after Stop when a late replacement reaches the limit", () => {
+  const target = document.createElement("textarea");
+  target.maxLength = 12;
+  target.value = "old";
+  const editor = createDirectDictationTextarea(() => target);
+  editor.captureSelection();
+  target.value = "pick a pear";
+  target.setSelectionRange(5, 6);
+  expect(editor.insertTranscript(placeComposerDictation, "ripe", true)).toBe("pick ri pear");
 });
 
 it("keeps a newer preview provisional when earlier dictation text arrives", () => {

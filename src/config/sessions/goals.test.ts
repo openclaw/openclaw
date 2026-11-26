@@ -167,11 +167,14 @@ describe("session goals", () => {
         updatedAt: 2,
         tokensUsed: 12_000,
         tokenBudget: 30_000,
-        lastStatusNote: "waiting on review",
+        continuationTurns: 1_234,
+        lastStatusNote: "previously waiting on review",
       }),
     );
     expect(text).toContain("Goal\nStatus: blocked\nObjective: land the PR");
     expect(text).toContain("Token budget: 12k/30k");
+    expect(text).toContain("Settled automatic turns: 1234");
+    expect(text).toContain("Last status note: previously waiting on review");
     expect(text).toContain("Commands: /goal resume, /goal edit <objective>, /goal clear");
   });
 

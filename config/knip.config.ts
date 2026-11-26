@@ -45,7 +45,9 @@ const repositoryScriptEntries = [
   "scripts/build-iroh.mjs!",
   // The macOS packager verifies the staged app before signing.
   "scripts/lib/mac-runtime-portability.mjs!",
+  "scripts/lib/tsdown-memory-admission.mts!",
   "scripts/perf/agent-deletion-cancellation-measure.ts",
+  "scripts/perf/gateway-catalog-context-retention.mjs!",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
   "scripts/windows-gateway-release.mjs!",

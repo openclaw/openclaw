@@ -450,7 +450,18 @@ export function createPluginNativeAdmission(
       }
       const link = path.join(namespace.capturedRoot, "node_modules", "openclaw");
       const present = fs.lstatSync(link, { throwIfNoEntry: false });
-      if (present && fs.realpathSync(link) !== hostRoot) {
+      let linkedHost: string | undefined;
+      if (present) {
+        try {
+          linkedHost = fs.realpathSync(link);
+        } catch (error) {
+          // An in-place package swap can remove the old versioned host path.
+          if (!present.isSymbolicLink() || !hasErrnoCode(error, "ENOENT")) {
+            throw error;
+          }
+        }
+      }
+      if (present && linkedHost !== hostRoot) {
         const replacement = createNamespace(
           namespace.sourceDirectory,
           namespace.sourceDirectory,
@@ -503,9 +514,7 @@ export function createPluginNativeAdmission(
           if (!hasErrnoCode(error, "EEXIST")) {
             throw error;
           }
-          if (fs.realpathSync(link) !== hostRoot) {
-            return linkHost(hostRoot);
-          }
+          return linkHost(hostRoot);
         }
       }
     }

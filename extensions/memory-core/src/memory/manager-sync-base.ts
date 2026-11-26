@@ -233,6 +233,26 @@ export abstract class MemoryManagerSyncBase {
   protected sessionAgentBusy = false;
   protected sessionBackgroundIndexing = false;
   protected syncIsBackground = false;
+  protected backgroundEmbeddingController?: AbortController;
+
+  protected setSyncBackground(background = false): void {
+    this.syncIsBackground = background;
+    this.backgroundEmbeddingController = background ? new AbortController() : undefined;
+  }
+
+  protected beginClosing(): void {
+    this.closing = true;
+    // Stop unclaimed background I/O before close joins its provider and database leases.
+    this.backgroundEmbeddingController?.abort(new Error("Memory index manager is closing"));
+  }
+
+  protected joinIndexSync(sync: Promise<void>, background = false): Promise<void> {
+    // A foreground caller adopts each publication it waits for, including a newer watch pass.
+    if (!background) {
+      this.backgroundEmbeddingController = undefined;
+    }
+    return sync;
+  }
   protected abstract readonly reindexProgress: MemoryReindexProgress | undefined;
 
   protected shouldYieldSessionIndexing(): boolean {

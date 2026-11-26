@@ -17,6 +17,7 @@ import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import type { PluginRegistry } from "../../src/plugins/registry-types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [mode = "timing", rawIterations = "5", shape = "external", runtime = "source"] =
   process.argv.slice(2);
@@ -133,12 +134,7 @@ try {
   await nextTurn();
   const heapBefore = process.memoryUsage().heapUsed;
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else {
     observer.observe({ entryTypes: ["gc"] });
   }

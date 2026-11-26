@@ -292,6 +292,61 @@ it("writes an export bundle to the literal CLI output directory", async () => {
   expect(await zip.file("summary.md")?.async("string")).toContain("# Google Meet Artifacts");
 });
 
+it("keeps namesakes distinct across a conference's transcript exports", async () => {
+  const conference = (name: string, repeat: boolean) => {
+    const first = `${name}/participants/p1`;
+    const second = `${name}/participants/p2`;
+    const entry = (id: string, text: string, participant?: string) => ({
+      name: id,
+      text,
+      participant,
+    });
+    return {
+      conferenceRecord: { name },
+      recordings: [],
+      transcripts: [],
+      smartNotes: [],
+      participants: [
+        { name: second, anonymousUser: { displayName: "Sam" } },
+        { name: first, signedinUser: { displayName: "Sam" } },
+        { name: "phone", phoneUser: { displayName: "Caller" } },
+      ],
+      transcriptEntries: [
+        { transcript: "first", entries: repeat ? [entry("a", "First commitment.", first)] : [] },
+        {
+          transcript: "next",
+          entries: [
+            entry("b", "Second commitment.", second),
+            entry("c", "Phone remark.", "phone"),
+            entry("d", "Missing roster entry.", "unlisted"),
+            entry("e", "Unattributed."),
+          ],
+        },
+      ],
+    };
+  };
+  const records = [conference(record, true), conference("conferenceRecords/rec-2", false)];
+  const artifacts = {
+    conferenceRecords: records.map((entry) => entry.conferenceRecord),
+    artifacts: records,
+  };
+  await writeMeetExportBundle({
+    outputDir: tempDir,
+    artifacts,
+    attendance: { conferenceRecords: [], attendance: [] },
+  });
+  for (const file of ["summary.md", "transcript.md"]) {
+    const [first, next] = readOutput(file).split("## conferenceRecords/rec-2");
+    expect(first).toContain("Sam: First commitment.");
+    expect(first).toContain("Sam (2): Second commitment.");
+    expect(next).toContain("Sam: Second commitment.");
+    expect(first).toContain("Caller: Phone remark.");
+    expect(first).toContain("unlisted: Missing roster entry.");
+    expect(first).toContain(file === "summary.md" ? "- Unattributed." : "- unknown: Unattributed.");
+  }
+  expect(JSON.parse(readOutput("artifacts.json"))).toEqual(artifacts);
+});
+
 it("includes artifact warnings in export summaries and manifests", async () => {
   cli.stubMeetArtifactsApi({ failSmartNoteDocumentBody: true });
 

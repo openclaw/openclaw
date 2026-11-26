@@ -86,6 +86,19 @@ describe("session activity semantics", () => {
     vi.restoreAllMocks();
   });
 
+  it("ages a visible session without refreshing its activity", async ({ onTestFinished }) => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    onTestFinished(() => void vi.useRealTimers());
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const key = "agent:main:quiet";
+    show({ rows: [row(key, { id: "online" }, Date.now() - 2 * 60_000)] });
+    const label = find(sessionSelector(key, ".activity-feed__session-time"));
+    expect(label?.textContent).toBe("2m ago");
+
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    expect(label?.textContent).toBe("8m ago");
+  });
+
   it("shows denied person activity without a misleading empty timeline", () => {
     const filters = { personId: "online", query: "", time: "all" as const };
     show({ filters, rows: [row("agent:main:private-timeline", { id: "online" }, 100)] });

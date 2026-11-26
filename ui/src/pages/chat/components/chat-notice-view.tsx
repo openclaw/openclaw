@@ -45,6 +45,7 @@ function FailureNotice(props: ChatNoticeProps) {
       <ChatRunFailureNotice
         feedback={feedback()}
         summary={failure().summary}
+        summaryAsTitle={failure().summaryAsTitle}
         cause={failure().cause}
         presentation={props.modelCatalog?.find(
           (model) => model.provider === failure().cause?.provider,

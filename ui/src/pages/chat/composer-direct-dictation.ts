@@ -96,6 +96,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
             start: textarea.selectionStart,
             end: textarea.selectionEnd,
             value: textarea.value,
+            maxLength: textarea.maxLength,
           })?.value
         : undefined;
     },
@@ -117,6 +118,8 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
         start: late ? target.selectionStart : target.value.length,
         end: late ? target.selectionEnd : target.value.length,
         value: target.value,
+        // Reviewed text must fit in full; ordinary dictation uses bounded placement.
+        maxLength: enforceLimit ? -1 : target.maxLength,
       };
       // Delayed finals must not replace edits made after Stop unlocked this draft.
       const insertion = place(transcript, captured, live, late, preservePreview);
@@ -152,7 +155,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
           }
           available = false;
           // Recompute only this insertion from its original selection and source draft.
-          const restored = place(text, captured, live, late, preservePreview);
+          const restored = place(text, captured, { ...live, maxLength: -1 }, late, preservePreview);
           if (!restored || (target.maxLength >= 0 && restored.value.length > target.maxLength)) {
             return false;
           }

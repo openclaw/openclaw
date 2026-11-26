@@ -112,6 +112,8 @@ export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
 
 export type CreateUserTurnTranscriptRecorderParams = {
+  /** The channel dispatch accepted this input before constructing its recorder. */
+  inputAlreadyAccepted?: boolean;
   prepareMentionInvitation?: (
     message: PersistedUserTurnMessage,
   ) => PreparedSessionMentionInvitation | undefined;

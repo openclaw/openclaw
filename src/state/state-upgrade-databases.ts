@@ -73,7 +73,10 @@ import {
   AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
   getAgentMemberAccessMinReader,
 } from "./openclaw-agent-member-access-schema.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
+import {
+  AGENT_ARCHIVE_UNDO_SCHEMA_VERSION,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   readStateSchemaContentVersionRow,
@@ -406,11 +409,12 @@ export function outdatedDatabases(targets: readonly DatabaseTarget[]): DatabaseT
 export function floorRaisingDatabases(targets: readonly DatabaseTarget[]): DatabaseTarget[] {
   return targets.filter((target) => {
     const supported = expectedVersion(target);
+    // v44 and v45 add only nullable columns. Revisit this range when a later step raises the floor.
     const additive =
       target.kind === "agent" &&
-      target.version === AGENT_MEMBER_ACCESS_SCHEMA_VERSION - 1 &&
-      supported === AGENT_MEMBER_ACCESS_SCHEMA_VERSION &&
-      getAgentMemberAccessMinReader() < supported;
+      target.version >= AGENT_MEMBER_ACCESS_SCHEMA_VERSION - 1 &&
+      supported <= AGENT_ARCHIVE_UNDO_SCHEMA_VERSION &&
+      getAgentMemberAccessMinReader() < AGENT_MEMBER_ACCESS_SCHEMA_VERSION;
     return target.version < supported && !additive && supported > target.minReader;
   });
 }

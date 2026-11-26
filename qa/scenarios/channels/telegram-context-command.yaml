@@ -7,23 +7,23 @@ scenario:
   coverage:
     primary:
       - telegram.built-in-commands
-  objective: Verify Telegram context help reaches native command routing.
+  objective: Verify Telegram returns the prompt budget through native command routing.
   successCriteria:
+    - The context command returns the prompt budget card.
     - The context command returns the context list shortcut.
-    - The reply explains the inline shortcut.
   codeRefs:
-    - src/auto-reply/reply/commands-context.ts
+    - src/auto-reply/reply/commands-context-report.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
     kind: flow
     channel: telegram
-    summary: Run Telegram context help and verify the list shortcut.
+    summary: Run Telegram context and verify the prompt budget and list shortcut.
     config:
-      expectedAny: [/context list, Inline shortcut]
+      expectedAll: [Prompt budget, /context list]
 
 flow:
   steps:
-    - name: context returns shortcut help
+    - name: context returns prompt budget
       actions:
         - resetTransport: true
         - set: startIndex
@@ -42,7 +42,7 @@ flow:
             timeoutMs: 60000
           saveAs: reply
         - assert:
-            expr: "config.expectedAny.every((needle) => reply.text.includes(needle))"
+            expr: "config.expectedAll.every((needle) => reply.text.includes(needle))"
             message:
               expr: "`context reply missing expected text: ${reply.text}`"
       detailsExpr: reply.text

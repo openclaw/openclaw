@@ -2285,6 +2285,8 @@ jobs:
       - publish
       - artifact_only_guard
       - gateway_concurrency
+      - node_cache_diagnostics
+      - node_cache_workload
       - vitest_pair
       - vitest_pair_guard
     if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.mode != 'gateway-cold-turn-calibration' && inputs.mode != 'node-cache-diagnostics' && inputs.mode != 'node-cache-workload-qualification' && inputs.mode != 'node-cache-qualified-measurement' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
