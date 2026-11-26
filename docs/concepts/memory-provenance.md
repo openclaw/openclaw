@@ -284,6 +284,13 @@ not update the record, so the next tracked write after it compares against a
 stale hash and records `untrusted`. Once a file is `untrusted`, later tracked
 writes keep it `untrusted` and only refresh the time, session, and hash.
 
+Dreaming promotion also refreshes the artifact hash after publishing `MEMORY.md`,
+including when the workspace files live on a remote host. It uses the same hash
+continuity check and cannot rehabilitate an `untrusted` file. A rejected or
+uncertain publication does not refresh the record. A crash or provenance-store
+failure after file publication can still leave a conservative hash mismatch;
+OpenClaw does not replay or undo that file replacement automatically.
+
 Automatic context excludes an `untrusted` root `MEMORY.md` or `USER.md`. To
 detect this:
 

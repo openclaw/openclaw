@@ -1,15 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import {
+  getMemoryWorkspaceMaintenance,
+  resolveWorkspaceCreationMode,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { replaceManagedMarkdownBlock } from "openclaw/plugin-sdk/memory-host-markdown";
 import { decodeUtf8Input } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
-import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { readStore } from "./short-term-promotion-store.js";
-import { resolveWorkspaceCreationMode, type WorkspaceFileMode } from "./workspace-file-mode.js";
+import type { WorkspaceFileMode } from "./workspace-file-mode.js";
 
 export const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 export const FALLBACK_NARRATIVE =

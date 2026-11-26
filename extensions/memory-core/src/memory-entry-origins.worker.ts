@@ -22,7 +22,7 @@ import type {
 } from "./memory-entry-origins-task.js";
 import { markMemoryForgotten, purgeForgottenMemory } from "./memory-forget-kernel.js";
 import { ensureMemorySessionTombstones } from "./memory-session-tombstones.js";
-import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
+import { extractPromotionKeys } from "./short-term-promotion-markers.js";
 
 /** The existing agent executor owns this connection and its native lifetime. */
 export function bindSqliteWorkerBackend(

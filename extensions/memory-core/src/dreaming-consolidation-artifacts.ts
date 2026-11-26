@@ -7,7 +7,7 @@ import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
 } from "./dreaming-state.js";
 import { pruneMemoryEntryOrigins } from "./memory-entry-origins.js";
-import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
+import { extractPromotionKeys } from "./short-term-promotion-markers.js";
 
 const CONSOLIDATION_BACKUP_LIMIT = 8;
 

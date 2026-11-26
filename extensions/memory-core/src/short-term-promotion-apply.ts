@@ -4,10 +4,19 @@ import path from "node:path";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
+  commitMemoryContent,
+  isAtomicReplacePermissionError,
+  MemoryAtomicPublicationError,
+  MemoryWriteConflictError,
+  readMemoryContent,
+  resolveMemoryWritePath,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { sha256Hex as hashMemoryContent } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
@@ -26,17 +35,7 @@ import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import { pruneMemoryEntryOrigins, reserveMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { readWorkspaceFile } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
-import {
-  buildPromotionMarker,
-  commitMemoryContent,
-  extractPromotionKeys,
-  hashMemoryContent,
-  isAtomicReplacePermissionError,
-  MemoryAtomicPublicationError,
-  MemoryWriteConflictError,
-  readMemoryContent,
-  resolveMemoryWritePath,
-} from "./short-term-promotion-memory-write.js";
+import { buildPromotionMarker, extractPromotionKeys } from "./short-term-promotion-markers.js";
 import {
   buildPromotionRecallAnnotations,
   groupPromotionCandidatesByProjectKey,

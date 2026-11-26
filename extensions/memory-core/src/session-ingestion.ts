@@ -12,6 +12,7 @@ import {
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { getMemoryWorkspaceMaintenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   formatMemoryDreamingDay,
   resolveMemoryDreamingWorkspaces,
@@ -32,7 +33,6 @@ import {
 } from "./dreaming-ingestion-state.js";
 import { normalizeMemoryCoreWorkspaceKey } from "./dreaming-state.js";
 import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
-import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 
 export const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
 export const SESSION_INGESTION_SCORE = 0.58;

@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
 import {
   commitMemoryContent,
-  hashMemoryContent,
   MemoryWriteConflictError,
   resolveMemoryWritePath,
-} from "./short-term-promotion-memory-write.js";
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { sha256Hex as hashMemoryContent } from "openclaw/plugin-sdk/node-crypto-runtime";
+import { afterEach, expect, it, vi } from "vitest";
 
 const openState = vi.hoisted(() => ({
   failInPlaceWriteAfterBytes: null as number | null,

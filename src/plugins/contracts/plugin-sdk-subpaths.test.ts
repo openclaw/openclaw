@@ -484,6 +484,8 @@ describe("plugin-sdk subpath exports", () => {
         ],
         "memory-core-host-runtime-files": [
           'export * from "../../packages/memory-host-sdk/src/runtime-files.js";',
+          "recordMemoryArtifactWriteProvenance",
+          "clearMemoryArtifactProvenance",
         ],
         "test-env": `
         collectProviderApiKeys createRequestCaptureJsonFetch isLiveTestEnabled
