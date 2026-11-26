@@ -157,7 +157,7 @@ Enable only the Microsoft Graph application permissions needed for the Teams sco
 
 1. Entra ID (Azure AD) **App Registration** → add Graph **Application permissions**:
    - `ChannelMessage.Read.All` for channel attachments and channel history.
-   - `Chat.Read.All` for group-chat attachments and group-chat history.
+   - `Chat.Read.All` for group-chat attachments, group-chat history, and personal-chat file recovery.
    - `Files.Read.All` when attachment bytes must be downloaded from SharePoint/OneDrive storage; history-only setups do not need it.
 2. **Grant admin consent** for the tenant.
 3. Bump the Teams app **manifest version**, re-upload, and **reinstall the app in Teams**.
@@ -179,6 +179,8 @@ Enable the fallback after granting the permissions above:
 }
 ```
 
-This applies to channels and group chats only. It adds one Graph message lookup whenever an HTML activity produced no directly downloadable media, including ordinary or mention-only messages. The default is `false` so existing installations do not gain extra Graph traffic or permission errors automatically.
+This applies to channels and group chats, and to personal chats. Bot Framework can also deliver a personal-chat message with no attachment entry at all while Graph holds its file (seen from the Teams iOS app). For a personal chat, the lookup addresses the Graph chat named in the activity's `channelData.chat.id`; a personal-chat message with attachment markers keeps the Bot Framework attachment route.
+
+It adds one Graph message lookup whenever an activity produced no directly downloadable media: in channels and group chats for an HTML activity, including ordinary or mention-only messages, and in personal chats for any message without attachment markers. The default is `false` so existing installations do not gain extra Graph traffic or permission errors automatically.
 
 **User mentions:** @mentions work out of the box for users already in the conversation. To dynamically search and mention users **not in the current conversation**, add `User.Read.All` (Application) permission and grant admin consent.
