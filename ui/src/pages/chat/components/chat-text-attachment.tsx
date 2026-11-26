@@ -3,6 +3,7 @@ import {
   createMemo,
   createSignal,
   Errored,
+  For,
   isPending,
   latest,
   Loading,
@@ -124,6 +125,74 @@ function MarkdownAttachment(props: { text: string; label: string; onBrowseFiles?
   );
 }
 
+// RFC 4180: quoted fields may hold commas, doubled quotes and line breaks.
+function parseCsvRows(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  const source = text.startsWith("\uFEFF") ? text.slice(1) : text;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (quoted) {
+      if (char !== '"') {
+        field += char;
+      } else if (source[index + 1] === '"') {
+        field += '"';
+        index += 1;
+      } else {
+        quoted = false;
+      }
+    } else if (char === '"') {
+      quoted = true;
+    } else if (char === ",") {
+      row.push(field);
+      field = "";
+    } else if (char === "\n" || char === "\r") {
+      if (char === "\r" && source[index + 1] === "\n") {
+        index += 1;
+      }
+      rows.push([...row, field]);
+      row = [];
+      field = "";
+    } else {
+      field += char;
+    }
+  }
+  if (field || row.length > 0) {
+    rows.push([...row, field]);
+  }
+  return rows;
+}
+
+function CsvAttachment(props: { text: string; label: string }) {
+  const rows = createMemo(() => parseCsvRows(props.text));
+  return (
+    <article
+      class="sidebar-attachment-preview__markdown sidebar-attachment-preview__csv sidebar-markdown"
+      dir={detectTextDirection(props.text)}
+      aria-label={props.label}
+    >
+      <table tabindex={0}>
+        <thead>
+          <tr>
+            <For each={rows()[0]}>{(cell) => <th scope="col">{cell}</th>}</For>
+          </tr>
+        </thead>
+        <tbody>
+          <For each={rows().slice(1)}>
+            {(row) => (
+              <tr>
+                <For each={row}>{(cell) => <td>{cell}</td>}</For>
+              </tr>
+            )}
+          </For>
+        </tbody>
+      </table>
+    </article>
+  );
+}
+
 type TextAttachmentProps = {
   mobile: boolean;
   plainText: boolean;
@@ -161,6 +230,10 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
         /\.(?:md|markdown)$/i.test(props.label))
     );
   };
+  const csv = () =>
+    !props.plainText &&
+    (props.mimeType.split(";", 1)[0]?.trim().toLowerCase() === "text/csv" ||
+      /\.csv$/i.test(props.label));
   // Ticket renewal retains a reader; changed identity or validation retires its observers.
   const readScope = createMemo(
     () => ({
@@ -270,7 +343,7 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
                   {t("common.retry")}
                 </button>
               </Show>
-              <Show when={(markdown() || htmlDocument()) && reader()}>
+              <Show when={(markdown() || csv() || htmlDocument()) && reader()}>
                 <button
                   class="btn btn--sm"
                   type="button"
@@ -314,7 +387,9 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
                     />
                   </div>
                 </Show>
-                {markdown() && !htmlDocument() && !source() ? (
+                {csv() && !source() ? (
+                  <CsvAttachment text={content.text} label={props.label} />
+                ) : markdown() && !htmlDocument() && !source() ? (
                   <MarkdownAttachment
                     text={content.text}
                     label={props.label}

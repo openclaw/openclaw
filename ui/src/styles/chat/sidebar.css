@@ -316,6 +316,14 @@
   margin-top: 16px;
 }
 
+.sidebar-attachment-preview__csv :where(th) {
+  white-space: nowrap;
+}
+
+.sidebar-attachment-preview__csv :where(td) {
+  white-space: pre-line;
+}
+
 .sidebar-attachment-preview__text {
   min-width: 0;
   margin: 16px 0 0;

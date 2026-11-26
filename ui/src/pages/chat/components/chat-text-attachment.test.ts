@@ -239,6 +239,33 @@ it.each([
   expect(panel.querySelector("a[download]")).not.toBeNull();
 });
 
+it("renders a CSV attachment as a table with a raw text view", async () => {
+  const text =
+    '﻿Rank,PR,Recommended next action\r\n1,188791,"Inspect the shard, then ""rerun"".\nReview #178405."\r\n2,190002,\r\n';
+  vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response(text)));
+  const panel = await mountAttachment({ title: "queue.csv", mimeType: "text/csv" });
+  await vi.waitFor(() => expect(panel.querySelector("article table")).not.toBeNull());
+  const table = panel.querySelector("article table")!;
+  expect([...table.querySelectorAll("th")].map((cell) => cell.textContent)).toEqual([
+    "Rank",
+    "PR",
+    "Recommended next action",
+  ]);
+  expect(
+    [...table.querySelectorAll("tbody tr")].map((row) =>
+      [...row.querySelectorAll("td")].map((cell) => cell.textContent),
+    ),
+  ).toEqual([
+    ["1", "188791", 'Inspect the shard, then "rerun".\nReview #178405.'],
+    ["2", "190002", ""],
+  ]);
+  panel.querySelector<HTMLButtonElement>("button[aria-pressed]")!.click();
+  await vi.waitFor(() =>
+    expect(panel.querySelector(".sidebar-attachment-preview__text")?.textContent).toBe(text),
+  );
+  expect(panel.querySelector("article table")).toBeNull();
+});
+
 it.each([
   "",
   "?download=1",
