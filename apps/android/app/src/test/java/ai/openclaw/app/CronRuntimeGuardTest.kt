@@ -10,6 +10,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
@@ -22,6 +23,13 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class CronRuntimeGuardTest {
+  private val runtimes = mutableListOf<NodeRuntime>()
+
+  @After
+  fun closeRuntimes() {
+    runtimes.forEach(::closeNodeRuntimeTestFixture)
+  }
+
   @Before
   fun clearPlainPrefs() {
     RuntimeEnvironment
@@ -317,7 +325,7 @@ class CronRuntimeGuardTest {
         "openclaw.node.cron.guard.test.${UUID.randomUUID()}",
         android.content.Context.MODE_PRIVATE,
       )
-    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also(runtimes::add)
   }
 
   private fun seedConnectedRuntime(runtime: NodeRuntime) {
