@@ -100,7 +100,7 @@ it("opens a migrated v43 session through the production engine and sharing reade
     );
     const database = openOpenClawAgentDatabase(options);
     const native = requireNativeSqliteDatabase(database.db);
-    expectVersion(native, 44);
+    expectVersion(native, agentEngineSchema.version);
     expect(assertOpenClawMigrationWitnessPreserved(before, agentWitness(native))).toEqual({
       warnings: [],
     });

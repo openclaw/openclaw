@@ -152,6 +152,7 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   if (method === "sessions.github.action") {
     return [
       record?.action === "create_issue" ||
+      record?.action === "create_comment" ||
       record?.action === "inspect_pr" ||
       record?.action === "prepare_pr" ||
       record?.action === "refresh_base" ||
