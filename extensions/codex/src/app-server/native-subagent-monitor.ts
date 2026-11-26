@@ -1374,7 +1374,8 @@ class Monitor {
     });
     // History is a best-effort snapshot; subsequent notifications and polls
     // reconcile a status change that overlaps this read.
-    if (this.childStates.get(childState.runId) !== childState || !this.isCurrentParent(state)) {
+    const live = !childState.terminal && this.childStates.get(childState.runId) === childState;
+    if (!live || !this.isCurrentParent(state)) {
       return false;
     }
     if (childState.completionCustody && !childState.completionCustody.isCurrent()) {
@@ -1406,11 +1407,10 @@ class Monitor {
       return false;
     }
     const completion = this.processRecoveredCompletion(state, childState, recovery);
-    if (!completion) {
-      return false;
+    if (completion) {
+      await completion;
     }
-    await completion;
-    return true;
+    return completion !== undefined;
   }
 
   private processRecoveredCompletion(
