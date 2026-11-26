@@ -64,7 +64,9 @@ import {
 } from "./session-row-projection.read-fixture.test-support.js";
 import {
   acpProjectionMeta,
+  appendProjectionMessages,
   requestSessionRow,
+  seedProjectionRow,
   withSessionRowProjectionState as withProjectionState,
 } from "./session-row-projection.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -139,6 +141,29 @@ it("retains materialized rows and sharing after unchanged prepared reads, but pu
       expect(projection.describe(query)!.materialized).not.toBe(prior);
       expect(projection.sharingRevision).not.toBe(revision);
     }
+  }, true));
+
+it("keeps the sharing revision stable across transcript-only refreshes", () =>
+  withProjectionState(async (create) => {
+    const warmup = seedProjectionRow("transcript-fence-warmup");
+    const seeded = seedProjectionRow("transcript-fence");
+    const projection = await create({ cfg: mainConfig, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    // The first transcript write settles one-time config publications; a separate warm-up
+    // row keeps the measured row's first event on the immediate refresh path.
+    await appendProjectionMessages(warmup.scope, { role: "user", content: "warm-up" });
+    await projection.ensureMaterialized();
+    const revision = projection.sharingRevision;
+    // Transcript activity refreshes presentation facts, not the disclosure scope.
+    await appendProjectionMessages(seeded.scope, { role: "user", content: "unrelated chatter" });
+    expect(projection.sharingRevision).toBe(revision);
+    // Real sharing changes still fence concurrent readers.
+    addSessionMember(
+      { agentId: "main", sessionKey: seeded.query.key },
+      { identityId: "fixture-viewer", addedBy: "fixture-owner" },
+    );
+    await projection.ensureMaterialized();
+    expect(projection.sharingRevision).not.toBe(revision);
   }, true));
 
 function write(key: string, entry: SessionEntry, agentId = "main", storePath?: string) {

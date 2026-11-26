@@ -9,6 +9,8 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTranscriptScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { replaceSqliteTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
 import {
   addSessionMember,
@@ -808,6 +810,127 @@ test.each(["view", "invited"] as const)(
     });
   },
 );
+
+test("recall tolerates transcript-only activity on unrelated rows during its worker read", async () => {
+  await withSearchState(async () => {
+    const owner = ensureProfileForEmail("recall-busy@example.test").id;
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const visible = await seed("main", "busy-visible", owner, "needle");
+    const busy: Array<{ sessionKey: string; sessionId: string }> = [];
+    for (let index = 0; index < 4; index++) {
+      busy.push({
+        sessionKey: await seed("main", `busy-${index}`, owner),
+        sessionId: `main-busy-${index}`,
+      });
+    }
+    const read = transcriptSearch.searchSessionTranscripts;
+    let calls = 0;
+    vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(async (...args) => {
+      const result = await read(...args);
+      // Fresh rows each attempt: the first transcript event per row refreshes immediately,
+      // so sustained unrelated activity fences every retry on a busy gateway.
+      for (const target of busy.slice(calls * 2, calls * 2 + 2)) {
+        await persistSessionTranscriptTurn(
+          { agentId: "main", ...target },
+          {
+            cwd: "/fixture",
+            updateMode: "none",
+            touchSessionEntry: false,
+            messages: [
+              { message: { role: "user", content: `unrelated chatter ${calls}` }, now: Date.now() },
+            ],
+          },
+        );
+      }
+      calls++;
+      return result;
+    });
+    const result = await search(requestContext(cfg), identifiedClient(owner), {
+      query: "needle",
+      recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:main" },
+    });
+    expect(result.ok, result.error?.message).toBe(true);
+    expect(result.payload?.results.map((hit) => hit.sessionKey)).toEqual([visible]);
+  });
+});
+
+test("recall discards hits when a destructive transcript rewrite lands during its worker read", async () => {
+  await withSearchState(async () => {
+    const owner = ensureProfileForEmail("recall-rewrite@example.test").id;
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const key = await seed("main", "rewrite-target", owner, "needle", {
+      activitySummary: {
+        version: 1,
+        text: "needle discussion",
+        updatedAt: Date.now(),
+        sessionId: "main-rewrite-target",
+        generation: null,
+        maxSeq: null,
+        leafEntryId: null,
+        coveredMessages: 1,
+        totalMessages: 1,
+        omittedContent: false,
+      },
+    });
+    const read = transcriptSearch.searchSessionTranscripts;
+    let rewritten = false;
+    vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(async (...args) => {
+      const result = await read(...args);
+      if (!rewritten) {
+        rewritten = true;
+        runOpenClawAgentWriteTransaction(
+          (database) => {
+            replaceSqliteTranscriptEventsInTransaction(
+              database,
+              resolveSqliteTranscriptScope({
+                agentId: "main",
+                sessionKey: key,
+                sessionId: "main-rewrite-target",
+              }),
+              [],
+            );
+          },
+          { agentId: "main" },
+        );
+      }
+      return result;
+    });
+    const result = await search(requestContext(cfg), identifiedClient(owner), {
+      query: "needle",
+      recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:main" },
+    });
+    expect(result.ok, result.error?.message).toBe(true);
+    expect(result.payload?.results).toEqual([]);
+  });
+});
+
+test("recall still fails when the disclosure scope keeps changing during both read attempts", async () => {
+  await withSearchState(async () => {
+    const owner = ensureProfileForEmail("recall-fenced@example.test").id;
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const key = await seed("main", "fenced-target", owner, "needle");
+    const read = transcriptSearch.searchSessionTranscripts;
+    let shared = true;
+    vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementation(async (...args) => {
+      const result = await read(...args);
+      shared = !shared;
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: key },
+        { visibility: shared ? "shared" : "draft" },
+      );
+      return result;
+    });
+    await expect(
+      search(requestContext(cfg), identifiedClient(owner), {
+        query: "needle",
+        recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:main" },
+      }),
+    ).rejects.toThrow("Session search scope changed while reading");
+  });
+});
 
 test("search prepares the full scope and rechecks visibility while materializing archived hits", async () => {
   await withSearchState(async () => {

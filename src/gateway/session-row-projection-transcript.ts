@@ -27,7 +27,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
   mark: (change: SessionRowChange) => void;
   read: (id: string) => Row | undefined;
   store: (path: string) => SessionRowStore | undefined;
-  refresh: (id: string, retained?: PreparedSessionRowDatabaseFacts) => void;
+  refresh: (id: string, retained?: PreparedSessionRowDatabaseFacts, fenceRecall?: boolean) => void;
 }) {
   const windows = new Map<string, { timer: ReturnType<typeof setTimeout>; pending: boolean }>();
   let disposed = false;
@@ -134,6 +134,12 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
                 transcriptTerminalModel: fact.value.terminalModel,
               }
             : undefined;
+        // Pure appends preserve the transcript generation; destructive rewrites rotate it
+        // and must fence recall reads that captured the old sharing revision. Rows without
+        // a certified watermark keep the transcript-only tolerance for first events.
+        const previousGeneration = facts?.activitySummaryWatermark?.generation;
+        const transcriptGenerationRotated =
+          previousGeneration !== undefined && previousGeneration !== fact.value.generation;
         row.retainedDatabaseFacts = retained;
         if (
           !retained ||
@@ -141,7 +147,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
           retained.transcriptPreview !== undefined ||
           readSessionActivitySummary(facts?.entry)
         ) {
-          params.refresh(identity(row), retained);
+          params.refresh(identity(row), retained, transcriptGenerationRotated);
         } else {
           row.databaseFactsRevision++;
         }
