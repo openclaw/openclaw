@@ -12,6 +12,7 @@ import { buildSubagentRunReadIndexFromRuns } from "../../src/agents/subagents/re
 import { projectGatewaySessionRunState } from "../../src/gateway/session-utils-display.js";
 import { buildAgentRunProjectionIndex } from "../../src/infra/agent-run-projection.js";
 import { parseAgentSessionKey } from "../../src/routing/session-key.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const baseline = process.argv.includes("--baseline");
 const preparedReads = await import("../../src/gateway/session-row-prepared-read.js");
@@ -94,12 +95,7 @@ for (const churn of [false, true]) {
     const used = process.threadCpuUsage(cpu);
     cpuSamples.push({ elapsedMs, threadCpuMs: (used.user + used.system) / 1_000 });
     const inspector = new Session();
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32_768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32_768);
     workload(churn);
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
     inspector.disconnect();

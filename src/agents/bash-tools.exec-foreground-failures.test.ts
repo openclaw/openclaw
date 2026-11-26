@@ -2,8 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  shellCallReceipt,
+  shellCallResultKey,
+} from "../config/sessions/transcript-shell-receipt.js";
 import type { ProcessSupervisor } from "../process/supervisor/index.js";
-import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -42,13 +46,17 @@ function expectSpawn(input: Partial<SpawnInput>) {
   expect(supervisorMock.spawn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(input));
 }
 
-function mockSpawn(exit: Partial<RunExit> = {}) {
+function mockSpawn(
+  exit: Partial<RunExit> = {},
+  waitForExtinction?: ManagedRun["waitForExtinction"],
+) {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
     activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: input.runId ?? "call",
     pid: 1234,
     startedAtMs: Date.now(),
     wait: vi.fn(async () => createRunExit(exit)),
+    waitForExtinction,
     cancel: vi.fn(),
   }));
 }
@@ -113,6 +121,18 @@ describe("exec foreground failures", () => {
     envSnapshot?.restore();
     envSnapshot = undefined;
     tempDirs.cleanup();
+  });
+
+  it.each([0, 3])("keeps exit %i unverified when descendant cleanup fails", async (exitCode) => {
+    mockSpawn({ exitCode }, vi.fn().mockRejectedValue(new Error("unconfirmed descendant")));
+    const tool = fullExec({
+      host: "gateway",
+      admitShellCall: async (id) => shellCallReceipt("run", id),
+    });
+    const result = await tool.execute("foreground", { command: "printf ok" });
+    expect(result.details).toMatchObject({ status: "completed", exitCode });
+    expect(requireTextContent(result)).toContain("OpenClaw could not confirm");
+    expect(shellCallResultKey(result, "run", "foreground")).toBeUndefined();
   });
 
   it("returns a failed text result when the default timeout is exceeded", async () => {

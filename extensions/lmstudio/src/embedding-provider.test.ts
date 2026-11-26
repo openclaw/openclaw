@@ -12,6 +12,7 @@ import { LmstudioModelLoadError } from "./models.fetch.js";
 const prepareLmstudioModelForInferenceMock = vi.hoisted(() =>
   vi.fn(async (_params?: { requestedContextLength?: number }) => ({
     modelKey: "text-embedding-nomic-embed-text-v1.5",
+    contextLength: _params?.requestedContextLength ?? 2048,
   })),
 );
 const fetchLmstudioModelsMock = vi.hoisted(() =>

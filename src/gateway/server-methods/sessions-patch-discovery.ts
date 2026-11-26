@@ -3,12 +3,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
-import type { MutationTarget } from "./sessions-patch-types.js";
+import type { ExecuteSessionPatchMutationsParams } from "./sessions-patch-types.js";
 
 /** Resolve each patch target once and reject aliases targeting the same logical session. */
 export async function discoverSessionPatchTargets(
   cfg: OpenClawConfig,
-  targets: readonly MutationTarget[],
+  {
+    targets,
+    deferredSelfSnooze,
+  }: Pick<ExecuteSessionPatchMutationsParams, "targets" | "deferredSelfSnooze">,
 ) {
   const prepared = await Promise.all(
     targets.map(async (input) => {
@@ -32,6 +35,16 @@ export async function discoverSessionPatchTargets(
   for (const { key, resolved } of prepared) {
     if (!resolved) {
       continue;
+    }
+    // A deferred snooze follows its chat across transcript rotation, but not to
+    // a different physical store. Lifecycle admission still requires a live row.
+    if (
+      deferredSelfSnooze &&
+      (deferredSelfSnooze.agentId !== resolved.agentId ||
+        deferredSelfSnooze.sessionKey !== resolved.canonicalKey ||
+        deferredSelfSnooze.storePath !== resolved.readSource?.path)
+    ) {
+      return invalidSessionRequest("The chat selected for self-snooze is unavailable.");
     }
     const logicalId = `${resolved.storePath}\0${resolved.canonicalKey ?? key}`;
     if (logicalTargets.has(logicalId)) {

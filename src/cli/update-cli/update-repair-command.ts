@@ -338,6 +338,14 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     if (settlement?.warning) {
       defaultRuntime.error(`Warning: ${settlement.warning}`);
     }
+    // Includes the healthy-history shortcut below; diagnostics never enter this repair path.
+    const { repairLegacyGitReleaseLauncher } = await import("../../update/repair-launcher.js");
+    const launcher = await repairLegacyGitReleaseLauncher({ root: discoveredRoot, env });
+    if (launcher) {
+      defaultRuntime.error(
+        `Repaired the legacy release launcher ${launcher}: status checks no longer count as Gateway starts.`,
+      );
+    }
   }
   // Capture Doctor-visible history before finalization admits its own newer run.
   // Terminal age limits the shortcut below, not successful repair acknowledgment.

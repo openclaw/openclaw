@@ -123,7 +123,9 @@ export class TranscriptReaderAnchor {
       this.host.initialRange.pending ||
       offsetState.hasPendingCommand ||
       offsetState.pendingInteractionAnchor !== null ||
-      this.host.prependAnchor.messageKey !== null
+      // The absolute prepend correction pauses during native touch. Measurements that
+      // land in the meantime must still keep the visible content under the reader's finger.
+      (this.host.prependAnchor.messageKey !== null && !offsetState.touchActive)
     );
   }
 
@@ -602,9 +604,9 @@ export class TranscriptReaderAnchor {
     this.columnShift = 0;
     this.shiftVirtual(-shift);
     this.syncColumn();
-    // Native zero is the reader's start: rows that grew above it while the offset was held are
-    // revealed, not scrolled past, so a reader who reached the top stays at the top.
-    if (shift < 0 || offset > 0) {
+    // Home explicitly requests the start; a touch reaching zero still retains its reader.
+    // History loading observes the edge independently before input idles.
+    if (shift < 0 || offset > 0 || !this.host.offsetState.inputTargetsStart) {
       this.scrollBy(shift);
     }
   }
