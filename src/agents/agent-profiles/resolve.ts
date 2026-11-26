@@ -35,9 +35,21 @@ export type ResolvedAgentProfile = {
   selectionSource: AgentProfileSelectionSource;
 };
 
-const profilesById = new Map<string, BuiltInAgentProfile>(
-  BUILT_IN_AGENT_PROFILES.map((profile) => [profile.id, profile]),
-);
+/** Indexes profiles by id and rejects a duplicate id instead of letting a later one win. */
+export function indexBuiltInAgentProfiles(
+  profiles: readonly BuiltInAgentProfile[],
+): Map<string, BuiltInAgentProfile> {
+  const byId = new Map<string, BuiltInAgentProfile>();
+  for (const profile of profiles) {
+    if (byId.has(profile.id)) {
+      throw new Error(`Duplicate built-in Agent Profile id: ${profile.id}`);
+    }
+    byId.set(profile.id, profile);
+  }
+  return byId;
+}
+
+const profilesById = indexBuiltInAgentProfiles(BUILT_IN_AGENT_PROFILES);
 const resolvedProfilesById = new Map<AgentProfileId, ResolvedBuiltInAgentProfile>();
 
 function resolveBuiltInProfileAncestry(
