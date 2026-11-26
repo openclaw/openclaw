@@ -536,22 +536,21 @@ describe("createFollowupRunner", () => {
   );
 
   it.each(["allow", "deny"] as const)(
-    "tells a channel sender why their queued input was refused before it started (send %s)",
+    "tells a channel sender why their queued input was refused before it started (send %s now)",
     async (sendPolicy) => {
       const refusal = new OperatorRefusalError("role-denies", {
         action: "run your queued request",
       });
+      // The send policy that counts is the current one, not the config captured at enqueue.
       Object.assign(turn.queued, {
         originatingChannel: "telegram",
         originatingTo: "telegram:1234",
         originatingAccountId: "default",
+        readAdmissionConfig: () => ({ session: { sendPolicy: { default: sendPolicy } } }),
       });
       state.admit.mockRejectedValueOnce(refusal);
       state.route.mockResolvedValue({ ok: true, delivered: true });
-      await createRunner({
-        sessionKey: "main",
-        sessionStore: { main: { sessionId: "session", updatedAt: 1, sendPolicy } },
-      })(turn.queued);
+      await createRunner({ sessionKey: "main" })(turn.queued);
       expect(state.execute).not.toHaveBeenCalled();
       expect(state.recordFailure).toHaveBeenCalledWith(
         expect.objectContaining({ notice: refusal.message }),

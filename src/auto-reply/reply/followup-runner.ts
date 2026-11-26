@@ -8,7 +8,9 @@ import { withoutRequiredSessionPlacement } from "../../agents/session-placement-
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { CronDeliveryAuthorityError } from "../../cron/delivery-attempt-fence.js";
 import { OperatorRefusalError } from "../../gateway/operator-refusal.js";
@@ -578,28 +580,44 @@ export function createFollowupRunner(
             !sourceDisposition &&
             isRoutableChannel(origin) &&
             queued.originatingTo &&
-            queued.currentInboundEventKind !== "room_event" &&
-            resolveSendPolicy({
-              cfg: queued.run.config,
-              entry: defaults.sessionStore?.[queued.run.sessionKey ?? ""],
-              sessionKey: queued.run.runtimePolicySessionKey ?? queued.run.sessionKey,
+            queued.currentInboundEventKind !== "room_event"
+          ) {
+            // A channel input refused before its turn hears why where it was sent, like a reply,
+            // under the send policy current now (admission read the same live config).
+            const cfg =
+              queued.readAdmissionConfig?.() ?? selectLiveRuntimeConfig(queued.run.config);
+            const sessionKey = queued.run.sessionKey;
+            const entry =
+              sessionKey && defaults.storePath
+                ? await readSessionEntryInWorker({ storePath: defaults.storePath, sessionKey })
+                : defaults.sessionStore?.[sessionKey ?? ""];
+            const sendPolicy = resolveSendPolicy({
+              cfg,
+              entry,
+              sessionKey: queued.run.runtimePolicySessionKey ?? sessionKey,
               channel: origin,
               chatType: normalizeChatType(queued.originatingChatType ?? queued.run.chatType),
-            }) === "allow"
-          ) {
-            // A channel input refused before its turn hears why where it was sent, like a reply.
-            await routeReply({
-              payload: { text: refusal.message, isError: true },
-              channel: origin,
-              to: queued.originatingTo,
-              agentId: queued.run.agentId,
-              sessionKey: queued.run.sessionKey,
-              accountId: queued.originatingAccountId,
-              threadId: queued.originatingThreadId,
-              cfg: queued.run.config,
-              mirror: false,
-              replyKind: "final",
             });
+            const result =
+              sendPolicy === "allow"
+                ? await routeReply({
+                    payload: { text: refusal.message, isError: true },
+                    channel: origin,
+                    to: queued.originatingTo,
+                    agentId: queued.run.agentId,
+                    sessionKey,
+                    accountId: queued.originatingAccountId,
+                    threadId: queued.originatingThreadId,
+                    cfg,
+                    mirror: false,
+                    replyKind: "final",
+                  })
+                : undefined;
+            if (result && !result.ok) {
+              defaultRuntime.error?.(
+                `followup queue: refusal notice delivery failed: ${result.error ?? "no visible delivery"}`,
+              );
+            }
           }
         } catch (error) {
           completion = { kind: "failed", error: formatErrorMessage(error) };
