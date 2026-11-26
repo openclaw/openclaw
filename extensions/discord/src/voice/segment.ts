@@ -94,7 +94,14 @@ export async function processDiscordVoiceSegment(
     result.decision.attachments.length > 0 &&
     result.decision.attachments.every((attachment) => attachment.attempts.length === 0)
   ) {
-    recording?.capture.onBatchUnavailable?.();
+    if (recording) {
+      recording.capture.onBatchUnavailable?.();
+    } else if (!entry.sttUnavailableWarned) {
+      entry.sttUnavailableWarned = true;
+      logger.warn(
+        "discord voice: no transcription model is available for stt-tts; configure tools.media.audio.models or add an audio-capable provider API key.",
+      );
+    }
     return { status: "unavailable" };
   }
   // Known omitted input cannot become a partial command. Completed silent input

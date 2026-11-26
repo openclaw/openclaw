@@ -1,11 +1,30 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createDiscordLivePolicyReader } from "../monitor/live-policy.js";
+import { createDiscordRecordingFixture } from "./transcripts-recording.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
+
+const OWNER = "100000000000000001";
+const unavailable = {
+  text: undefined,
+  decision: {
+    capability: "audio",
+    outcome: "skipped",
+    attachments: [{ attachmentIndex: 0, attempts: [] }],
+    attachmentDispositions: { 0: { kind: "no-model" } },
+    attachmentProcessing: { 0: "omitted" },
+  },
+} satisfies Awaited<ReturnType<PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"]>>;
 
 defineDiscordVoiceTests((h) => {
   const { expect, it, vi } = h;
+  const recordingFixture = createDiscordRecordingFixture(h);
+  const noTranscriptionModelWarnings = () =>
+    h.loggerWarnMock.mock.calls.filter(([message]) =>
+      String(message).includes("no transcription model"),
+    );
 
   it.each([
     ["other prefixes", "speaker-2: hello there", "speaker-2: hello there"],
@@ -262,4 +281,34 @@ defineDiscordVoiceTests((h) => {
       }
     },
   );
+
+  it("warns once per stt-tts voice session when no transcription model is available", async () => {
+    const fixture = await createBatchFixture();
+    h.transcribeAudioFileMock.mockResolvedValue(unavailable);
+    try {
+      await h.receiveRecordedSpeech(fixture.manager, undefined, fixture.entry, "333");
+      expect(h.loggerWarnMock).toHaveBeenCalledWith(
+        "discord voice: no transcription model is available for stt-tts; configure tools.media.audio.models or add an audio-capable provider API key.",
+      );
+      expect(noTranscriptionModelWarnings()).toHaveLength(1);
+      await h.receiveRecordedSpeech(fixture.manager, undefined, fixture.entry, "333");
+      expect(noTranscriptionModelWarnings()).toHaveLength(1);
+    } finally {
+      await fixture.manager.destroy();
+    }
+  });
+
+  it("keeps recording unavailable handling on the transcript capture without the stt-tts warning", async () => {
+    const f = await recordingFixture();
+    await h.startTranscripts(f.manager, f.sink);
+    h.transcribeAudioFileMock.mockResolvedValue(unavailable);
+    await f.audio(OWNER, 1);
+    expect(f.entry.transcripts?.warning).toContain(
+      "Independent batch transcription is unavailable",
+    );
+    // The capture's own warning proves onBatchUnavailable ran; its logger is
+    // created before this harness installs the runtime-env mock.
+    expect(noTranscriptionModelWarnings()).toHaveLength(0);
+    expect(f.sink).not.toHaveBeenCalled();
+  });
 });

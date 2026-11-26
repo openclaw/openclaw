@@ -361,6 +361,7 @@ export class DiscordVoiceSessions {
       conversations: new DiscordVoiceConversationQueue(),
       readAudioInputBudget,
       ttsStreamFallbackWarned: false,
+      sttUnavailableWarned: false,
       capture: new Map(),
       get transcripts(): VoiceSessionEntry["transcripts"] {
         return getTranscripts(entry);
