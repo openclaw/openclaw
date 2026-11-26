@@ -244,6 +244,7 @@ describe("tsdown config", () => {
   it("bundles SDK-owned helpers while retaining native package ownership", async () => {
     for (const [graph, bundleFsSafe] of [
       [runtimeGraph("plugins/runtime/index"), false],
+      [runtimeGraph("infra/fs-safe-copy.worker"), true],
       [runtimeGraph("infra/sqlite-readonly-location.worker"), true],
       [runtimeGraph("plugins/plugin-generation-preparation.worker"), true],
     ] as const) {
