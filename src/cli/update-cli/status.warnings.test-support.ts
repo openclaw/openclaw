@@ -3,6 +3,7 @@ import {
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
+  recordUpdateRunOwedStep,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import { printResult } from "./progress.js";
@@ -43,6 +44,7 @@ export function registerUpdateStatusWarningTests(readConsoleOutput: () => string
       for (const warning of warnings) {
         recordUpdateRunStep(run.runId, { ...warning, status: "completed" });
       }
+      recordUpdateRunOwedStep(run.runId, "shell-completion", "Completion directory is read-only.");
       finishUpdateRun(run.runId, { status: "succeeded" });
       if (surface === "status") {
         await updateStatusCommand({});
@@ -53,8 +55,11 @@ export function registerUpdateStatusWarningTests(readConsoleOutput: () => string
         );
       }
       expect(readConsoleOutput()).toContain("OpenClaw updated");
+      expect(readConsoleOutput()).toContain("Shell completion refresh is owed");
+      expect(readConsoleOutput()).toContain("openclaw update repair");
       const recorded = getUpdateRun(run.runId);
       for (const warning of warnings) {
+        expect(readConsoleOutput()).toContain(warning.detail);
         expect(recorded?.steps).toContainEqual(
           expect.objectContaining({ ...warning, status: "completed" }),
         );

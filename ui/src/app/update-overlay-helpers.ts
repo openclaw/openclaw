@@ -1,6 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "../../../src/infra/update-run-legacy-expiry.js";
-import { renderUpdateRunSummary } from "../../../src/infra/update-run-notice.js";
 import {
   isAcknowledgedAbandonedUpdateRun,
   type UpdateRunRecord,
@@ -308,6 +307,7 @@ export async function projectUpdateRunFailure(
   ) {
     return null;
   }
+  const { renderUpdateRunSummary } = await import("../../../src/infra/update-run-notice.js");
   const step = run.steps.findLast((entry) => entry.status === "failed");
   return {
     id: run.runId,

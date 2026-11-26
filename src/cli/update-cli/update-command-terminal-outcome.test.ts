@@ -617,9 +617,11 @@ describe("composed cleanup and terminal outcome", () => {
       if (kind === "cleanup-deadline") {
         expect(value.repeatedCompletion).toMatchObject({
           durationMs: 300_001,
-          advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
+          advisory: expect.objectContaining({
+            kind: "recoverable-maintenance",
+            message: expect.stringContaining("cleanup budget expired"),
+          }),
         });
-        expect(value.repeatedCompletion?.advisory?.message).toContain("cleanup budget expired");
         expect(
           await fs.readFile(path.join(value.expectedRetained, "package.json"), "utf8"),
         ).toContain('"version":"1.0.0"');

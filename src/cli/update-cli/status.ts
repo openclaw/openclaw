@@ -41,9 +41,10 @@ import {
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
 import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
 import { formatUpdateRunOmittedSteps } from "../../infra/update-run-omission.js";
-import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
+import { formatUpdateOwedStep } from "../../infra/update-run-owed-step.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { readUpdateRunStatusWithOwedSteps } from "../../infra/update-run-status.js";
+import { updateRunWarningMessages } from "../../infra/update-run-step.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
@@ -648,18 +649,17 @@ async function inspectUpdateStatus(
       if (!abandonedRun && !staleRun) {
         defaultRuntime.log(historical ?? summary);
       }
+      for (const warning of updateRunWarningMessages(run.steps)) {
+        printWarning(safeMessage(`Warning: ${warning}`));
+      }
       const omission = historical ? formatUpdateRunOmittedSteps(run.steps) : undefined;
       for (const line of historical && omission ? [omission] : []) {
         defaultRuntime.log(line);
       }
       defaultRuntime.log("");
     }
-    // The displayed run's report already lists what that run owes.
-    const reported = new Set(run ? listUpdateOwedSteps(run).map((step) => step.id) : []);
     for (const step of owedSteps ?? []) {
-      if (!reported.has(step.id)) {
-        printWarning(safeMessage(`Warning: ${formatUpdateOwedStep(step)}`));
-      }
+      printWarning(safeMessage(`Warning: ${formatUpdateOwedStep(step)}`));
     }
   }
 

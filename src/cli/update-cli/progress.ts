@@ -10,6 +10,7 @@ import { formatUpdateDoctorLintFinding } from "../../infra/update-doctor-lint.js
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
+import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
 import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
 import {
   toPublicUpdateRun,
@@ -18,7 +19,11 @@ import {
   type UpdateRunRecord,
 } from "../../infra/update-run-record.js";
 import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
-import { isFailedUpdateStep, projectUpdateRunResultSteps } from "../../infra/update-run-step.js";
+import {
+  isFailedUpdateStep,
+  projectUpdateRunResultSteps,
+  updateRunWarningMessages,
+} from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { formatJsonConsoleLine, getConsoleSettings } from "../../logging/console.js";
@@ -352,6 +357,12 @@ export async function prepareResult(
     }
     defaultRuntime.log("");
     defaultRuntime.log(theme.heading(renderUpdateRunSummary(summary)));
+    for (const warning of updateRunWarningMessages(summary.steps)) {
+      defaultRuntime.log(`Warning: ${warning}`);
+    }
+    for (const owed of reportedRun ? listUpdateOwedSteps(reportedRun) : []) {
+      defaultRuntime.log(`Warning: ${formatUpdateOwedStep(owed)}`);
+    }
     // Cleanup states what it removed and kept even when nothing needs attention.
     for (const step of additionalSteps) {
       if (step.name === AUTOMATIC_RECOVERY_CLEANUP_STEP && step.diagnostics?.[0]) {

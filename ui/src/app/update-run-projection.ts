@@ -77,8 +77,8 @@ export function projectUpdateRun(
       ? `${historical}\n\n${targetNote}`
       : historical
     : renderUpdateRunSummary(run);
-  const [headline, ...lines] = summary.split("\n");
-  const report = { headline, lines: lines.filter(Boolean), markdown: summary };
+  const [headline = summary, ...summaryLines] = summary.split("\n");
+  const report = { headline, lines: summaryLines.filter(Boolean), markdown: summary };
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
     const recorded = visibleSteps.find((step) => step.step === phase);

@@ -852,7 +852,9 @@ describe("SidebarUpdateCard", () => {
     expect(element.find(".sidebar-issues-panel__state")?.textContent).toBe(status);
     expect(element.action()?.textContent).toBe(status);
     expect(element.find(".sidebar-update-card__hold")).not.toBeNull();
-    expect(element.find(".sidebar-update-card__title")?.textContent).toContain("failed");
+    expect(element.find(".sidebar-update-card__title")?.textContent).toContain(
+      "couldn't finish updating",
+    );
   });
 
   it("retries a declined hold and keeps a consumed hold hidden across rerenders after expiry", async () => {
