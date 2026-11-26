@@ -453,6 +453,50 @@ it.each([
   expect(onReviewUpdate).toHaveBeenCalledTimes(action === "Review update" ? 1 : 0);
 });
 
+it("does not show a supervisor command after an unrelated request failure and status refresh", async () => {
+  const guidance = {
+    version: 1 as const,
+    action: "update" as const,
+    name: "Example Fleet",
+    command: "fleet update example",
+  };
+  const request = vi.fn<RequestFn>(async (method) => {
+    if (method === "update.run") {
+      throw new Error("Update request rejected: invalid parameters");
+    }
+    return method === "update.status" ? { externalSupervisorGuidance: guidance } : {};
+  });
+  const harness = updateRunHarness(request);
+  const overlays = createApplicationOverlays(harness.gateway);
+  try {
+    await flushMicrotasks();
+    const settled = confirmAndStartUpdateRuntime({
+      isCurrentTarget: () => true,
+      startGatewayUpdate: () => {
+        void overlays.runUpdate();
+      },
+      watchUpdateProgress: createUpdateProgressWatcher({ gateway: harness.gateway, overlays }),
+      onCheckStatus: () => overlays.refreshUpdateStatus(),
+      updateAvailable: UPDATE_AVAILABLE,
+      updateSchedule: null,
+      viaNativeApp: false,
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
+    findButton("Update and restart").click();
+    await flushMicrotasks();
+    expect(modal.textContent).toContain("invalid parameters");
+    findButton("Check status").click();
+    await flushMicrotasks();
+    expect(overlays.snapshot.externalSupervisorGuidance).toEqual(guidance);
+    expect(modal.textContent).toContain("invalid parameters");
+    expect(modal.querySelector(".external-supervisor-guidance")).toBeNull();
+    findButton("Close").click();
+    await settled;
+  } finally {
+    overlays.dispose();
+  }
+});
+
 it("keeps the server success report visible across restart until the operator closes it", async () => {
   const stream = createProgressStream();
   const { settled } = startUpdate({ watchUpdateProgress: stream.watchUpdateProgress });
@@ -816,3 +860,30 @@ it.each([
     }
   },
 );
+
+it("shows a deployment command for a current external refusal with no durable run", async () => {
+  const stream = createProgressStream();
+  const { settled } = startUpdate({ watchUpdateProgress: stream.watchUpdateProgress });
+  const { modal } = await getRenderedModalDialog(document.body);
+  findButton("Update and restart").click();
+  await stream.push({ busy: true });
+  await stream.push({
+    busy: false,
+    run: null,
+    reason: "external-supervisor-update-required",
+    failure: "Use the external supervisor to update.",
+    externalSupervisorGuidance: {
+      version: 1,
+      action: "update",
+      name: "Deployment host",
+      command: "deployctl update",
+    },
+  });
+  expect(modal.querySelector(".external-supervisor-guidance")?.textContent).toContain(
+    "deployctl update",
+  );
+  findButton("Retry update").click();
+  await waitForSolid(() => expect(modal.querySelector(".external-supervisor-guidance")).toBeNull());
+  findButton("Cancel").click();
+  await settled;
+});

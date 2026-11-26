@@ -6,7 +6,11 @@ import {
 } from "../../../src/infra/update-run-record.js";
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome-classification.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
-import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type {
+  ExternalSupervisorGuidance,
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../api/types.ts";
 import type { CustodianTurnAdmission } from "../components/custodian-alert-contract.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
@@ -14,6 +18,8 @@ import { resolveHeldUpdateCampaignId } from "./update-schedule-projection.ts";
 
 export type ApplicationStatusBanner = {
   source?: "read";
+  /** A structured external-supervisor refusal, including no-run pre-admission outcomes. */
+  reason?: "external-supervisor-update-required";
   tone: "danger" | "warn" | "info";
   text: string;
 };
@@ -84,6 +90,7 @@ type UpdateSentinelStep = {
 };
 
 export type UpdateRestartStatusResponse = {
+  externalSupervisorGuidance?: ExternalSupervisorGuidance;
   activeRun?: UpdateRunRecord;
   lastRun?: UpdateRunRecord;
   sentinel?: {
@@ -180,6 +187,7 @@ function lastLogLine(tail: string | null | undefined): string | null {
 }
 
 export type UpdateRunResponse = {
+  externalSupervisorGuidance?: ExternalSupervisorGuidance;
   runId?: string;
   ok?: boolean;
   result?: {
@@ -204,7 +212,7 @@ export function createUpdateStatusRefresher(params: {
     response: UpdateRestartStatusResponse,
     isCurrent: () => boolean,
   ) => void | Promise<void>;
-  onError: (error: unknown, mode: "manual" | "completion") => void;
+  onError: (error: unknown, mode: "manual" | "background" | "completion") => void;
 }) {
   const refresh = async (
     mode: "manual" | "background" | "completion" = "manual",
@@ -227,7 +235,7 @@ export function createUpdateStatusRefresher(params: {
     try {
       const pending = client.request<UpdateRestartStatusResponse>(
         "update.status",
-        refreshCheckout ? { refreshCheckout: true } : {},
+        { includeSupervisorGuidance: true, ...(refreshCheckout ? { refreshCheckout: true } : {}) },
         // Checkout discovery uses the Gateway's Git command budgets.
         { timeoutMs: refreshCheckout ? null : 5_000 },
       );
@@ -249,7 +257,7 @@ export function createUpdateStatusRefresher(params: {
       }
       return false;
     } catch (error) {
-      if (mode !== "background" && isCurrent()) {
+      if (isCurrent()) {
         params.onError(error, mode);
       }
       return false;
@@ -281,6 +289,7 @@ export function projectUpdateStatusResponse(
     : undefined;
   return {
     failure,
+    externalSupervisorGuidance: response.externalSupervisorGuidance ?? null,
     updateStatusBanner,
     recordedUpdateAttempt,
     ...(Object.hasOwn(response, "updateAvailable")
@@ -352,6 +361,7 @@ export function resolveUpdateStatusBanner(params: {
   const cause = params.cause;
   return {
     tone: status === "skipped" ? "warn" : "danger",
+    ...(reason === "external-supervisor-update-required" ? { reason } : {}),
     // A recorded cause names what actually broke; the reason slug only names
     // which step owned it.
     text: cause

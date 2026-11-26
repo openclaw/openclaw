@@ -211,7 +211,7 @@ function isGatewaySignalRestartResult(
 
 /** Uninstall the managed Gateway service after stopping it. */
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
-  assertGatewayServiceActionAllowed("uninstall", "uninstall the gateway service");
+  await assertGatewayServiceActionAllowed("uninstall", "uninstall the gateway service");
   return await runServiceUninstall({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
@@ -243,13 +243,13 @@ async function tryAdoptManagedGatewayPackage(
   ) {
     return undefined;
   }
-  assertGatewayServiceActionAllowed(action, `${action} the gateway`);
+  await assertGatewayServiceActionAllowed(action, `${action} the gateway`);
   return await tryAdoptInstalledPackageForGateway({ json, action });
 }
 
 /** Start the managed Gateway service, repairing stale service definitions when possible. */
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
-  assertGatewayServiceActionAllowed("start", "start the gateway");
+  await assertGatewayServiceActionAllowed("start", "start the gateway");
   const service = resolveGatewayService();
   const preparedRunId = await tryAdoptManagedGatewayPackage(service, "start", Boolean(opts.json));
   if (typeof preparedRunId === "boolean") {
@@ -257,8 +257,8 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   }
   const expectedPort = (await resolveGatewayConfigPorts()).explicit;
   let context = await resolveGatewayLifecycleContext(service);
-  const beforeServiceMutation = () => {
-    assertGatewayServiceActionAllowed("start", "start the gateway");
+  const beforeServiceMutation = async () => {
+    await assertGatewayServiceActionAllowed("start", "start the gateway");
     return releaseOpenClawStateDatabaseCustody();
   };
   await beforeServiceMutation();
@@ -393,7 +393,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     return;
   }
   assertGatewayServiceUpdateCurrent();
-  assertGatewayServiceActionAllowed("stop", "stop the gateway");
+  await assertGatewayServiceActionAllowed("stop", "stop the gateway");
   const service = resolveGatewayService();
   return await runServiceStop({
     serviceNoun: "Gateway",
@@ -433,7 +433,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   let preserveDefinition = Boolean(opts.preserveDefinition);
   if (preserveDefinition) {
-    assertGatewayServiceActionAllowed("restart", "restart the gateway");
+    await assertGatewayServiceActionAllowed("restart", "restart the gateway");
   }
   assertNativeRestartFlags(opts);
   if (isGatewayExternallySupervised()) {
@@ -469,8 +469,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const restartWaitMs = restartHealthAttempts * DEFAULT_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
   let unmanagedRestartWait: ReturnType<typeof resolveRestartListenerHealthWait> | undefined;
-  const beforeServiceMutation = () => {
-    assertGatewayServiceActionAllowed("restart", "restart the gateway");
+  const beforeServiceMutation = async () => {
+    await assertGatewayServiceActionAllowed("restart", "restart the gateway");
     return releaseOpenClawStateDatabaseCustody();
   };
 

@@ -45,6 +45,8 @@ import {
   isGatewayExternallySupervised,
 } from "../infra/gateway-supervision.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
+import { resolveExternalSupervisorGuidance } from "../plugins/supervisor-guidance-runtime.js";
+import type { SupervisorDisplayGuidance } from "../plugins/supervisor-guidance.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runTui } from "../tui/tui.js";
@@ -121,6 +123,7 @@ function buildGatewayRecoveryProjection(params: {
   gateway: GatewayServiceSetupOutcome;
   reachable: boolean;
   serviceLabel?: string;
+  supervisorGuidance?: SupervisorDisplayGuidance;
 }): {
   detail: string;
   summary: string;
@@ -155,7 +158,7 @@ function buildGatewayRecoveryProjection(params: {
 
   const startGuidance =
     gateway.reason === "external"
-      ? formatExternalSupervisorActionRequired("start the gateway")
+      ? formatExternalSupervisorActionRequired("start the gateway", params.supervisorGuidance)
       : t("wizard.finalize.startGatewayNow", {
           command: formatCliCommand("openclaw gateway run"),
         });
@@ -198,7 +201,10 @@ export async function ensureGatewayServiceForOnboarding(params: {
 
   if (isGatewayExternallySupervised()) {
     await prompter.note(
-      formatExternalSupervisorActionRequired("manage the gateway service"),
+      formatExternalSupervisorActionRequired(
+        "manage the gateway service",
+        await resolveExternalSupervisorGuidance("install", { config: params.nextConfig }),
+      ),
       "Gateway",
     );
     return {
@@ -574,12 +580,21 @@ export async function finalizeSetupWizard(
             gateway,
             reachable: false,
             serviceLabel: resolveGatewayService().label,
+            supervisorGuidance: await resolveExternalSupervisorGuidance("start", {
+              config: nextConfig,
+            }),
           }).detail,
           "Gateway",
         );
       } else if (!gatewayProbe.ok) {
         await prompter.note(
-          buildGatewayRecoveryProjection({ gateway, reachable: false }).detail,
+          buildGatewayRecoveryProjection({
+            gateway,
+            reachable: false,
+            supervisorGuidance: await resolveExternalSupervisorGuidance("start", {
+              config: nextConfig,
+            }),
+          }).detail,
           "Gateway",
         );
       }
@@ -895,6 +910,9 @@ export async function finalizeSetupWizard(
             gateway,
             reachable: gatewayProbe.ok,
             serviceLabel: gateway.status === "skipped" ? undefined : resolveGatewayService().label,
+            supervisorGuidance: await resolveExternalSupervisorGuidance("start", {
+              config: nextConfig,
+            }),
           }).summary
         : gatewayHealthCheckFailed
           ? t("wizard.finalize.outroHealthCheckFailed", {

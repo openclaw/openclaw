@@ -74,7 +74,7 @@ import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import * as auditUi from "./doctor-service-audit.js";
 import {
   confirmDoctorServiceRepair,
-  formatServiceRepairDeferredNote,
+  resolveServiceRepairDeferredNote,
   isServiceRepairDeferred,
   resolveServiceRepairPolicy,
   shouldManageGatewayService,
@@ -469,7 +469,7 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   if (serviceRepairDeferred) {
-    note(formatServiceRepairDeferredNote(), "Gateway service config");
+    note(await resolveServiceRepairDeferredNote({ config: cfg }), "Gateway service config");
     return cfg;
   }
 
@@ -693,7 +693,7 @@ export async function maybeScanExtraGatewayServices(
     const serviceRepairPolicy = resolveServiceRepairPolicy();
     const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
     if (serviceRepairDeferred) {
-      note(formatServiceRepairDeferredNote(), "Legacy gateway cleanup skipped");
+      note(await resolveServiceRepairDeferredNote(), "Legacy gateway cleanup skipped");
     }
     const shouldRemove = serviceRepairDeferred
       ? false

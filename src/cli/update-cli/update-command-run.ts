@@ -78,6 +78,7 @@ import {
   type SystemPackageOwnershipInspection,
 } from "../../infra/update-system-package-ownership.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { resolveExternalSupervisorGuidance } from "../../plugins/supervisor-guidance-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
@@ -569,7 +570,9 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     throw new Error("--sha requires a Git checkout or an adopted immutable installation.");
   }
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
-    throw new Error(formatExternalSupervisorUpdateRequired());
+    throw new Error(
+      formatExternalSupervisorUpdateRequired(await resolveExternalSupervisorGuidance("update")),
+    );
   }
   if (opts.sourceUpdate && installKind !== "git") {
     throw new Error("Doctor source update requires the accepted Git checkout.");

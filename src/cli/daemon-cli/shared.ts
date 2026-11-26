@@ -17,6 +17,8 @@ import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-us
 import { formatGatewayCrash, type GatewayCrashRecord } from "../../infra/gateway-crash.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
+import { resolveExternalSupervisorGuidance } from "../../plugins/supervisor-guidance-runtime.js";
+import type { SupervisorDisplayGuidance } from "../../plugins/supervisor-guidance.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { ExpectedCliError } from "../expected-cli-error.js";
@@ -46,6 +48,7 @@ export function createDaemonInstallActionContext(
 export function resolveDaemonInstallBlockMessage(
   service: "gateway" | "node",
   env: NodeJS.ProcessEnv = process.env,
+  guidance?: SupervisorDisplayGuidance,
 ): string | undefined {
   if (resolveIsNixMode(env)) {
     return "Nix mode detected; service install is disabled.";
@@ -57,6 +60,7 @@ export function resolveDaemonInstallBlockMessage(
   const mutationError = resolveGatewayServiceMutationError(
     "install or rewrite the gateway service",
     env,
+    guidance,
   );
   if (mutationError) {
     return `Gateway install blocked: ${String(mutationError)}`;
@@ -75,11 +79,15 @@ export function resolveDaemonInstallBlockMessage(
 }
 
 /** Service-policy refusals carry their own remedy; show it instead of the generic CLI failure. */
-export function assertGatewayServiceActionAllowed(
+export async function assertGatewayServiceActionAllowed(
   label: "start" | "stop" | "uninstall" | "restart",
   action: string,
-): void {
-  const refusal = resolveGatewayServiceMutationError(action);
+): Promise<void> {
+  const refusal = resolveGatewayServiceMutationError(
+    action,
+    process.env,
+    await resolveExternalSupervisorGuidance(label),
+  );
   if (refusal) {
     throw new ExpectedCliError({
       message: refusal.message,

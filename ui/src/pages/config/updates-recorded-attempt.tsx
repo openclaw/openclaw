@@ -6,6 +6,7 @@ import {
   isReportableUpdateRun,
 } from "../../../../src/shared/update-outcome-classification.ts";
 import type { UpdateFailureReportNotice } from "../../app/overlays-types.ts";
+import { ExternalSupervisorGuidance } from "../../components/external-supervisor-guidance.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { UpdateRunView } from "../../components/update-run-view.tsx";
 import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
@@ -81,6 +82,20 @@ export function RecordedAttempt(
         >
           <div class="settings-row settings-row--stacked">
             <UpdateRunView run={run()} connected={props.connected} serving={serving()} />
+          </div>
+        </Show>
+        <Show
+          when={
+            props.update.externalSupervisorGuidance &&
+            (run()?.reason ??
+              props.update.recordedUpdateAttempt?.reason ??
+              props.update.updateStatusBanner?.reason) === "external-supervisor-update-required"
+          }
+        >
+          <div class="settings-row settings-row--stacked">
+            <ExternalSupervisorGuidance
+              guidance={props.update.externalSupervisorGuidance ?? null}
+            />
           </div>
         </Show>
         <Show when={failed() || props.update.updateStatusBanner?.source === "read"}>

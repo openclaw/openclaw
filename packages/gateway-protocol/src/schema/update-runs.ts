@@ -302,21 +302,43 @@ export const UpdateRunChangedEventSchema = closedObject({
   updatedAtMs: timestamp,
 });
 
-/** Existing update.run response fields remain available alongside the durable run identity. */
-export const UpdateRunResultSchema = closedObject({
-  runId,
-  ok: Type.Boolean(),
-  result: Type.Unknown(),
+/** Transient display guidance; never persisted in update history. */
+export const ExternalSupervisorGuidanceSchema = closedObject({
+  version: Type.Literal(1),
+  action: Type.Literal("update"),
+  name: Type.String({ minLength: 1, maxLength: 128 }),
+  runFrom: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  command: Type.String({ minLength: 1, maxLength: 1024 }),
+});
+
+/** Shared display fields for admitted runs and refusals that never created a run. */
+const updateRunResultFields = {
   ackDelivered: Type.Optional(Type.Boolean()),
   ackQueued: Type.Optional(Type.Boolean()),
   acknowledgement: Type.Optional(Type.String()),
+  externalSupervisorGuidance: Type.Optional(ExternalSupervisorGuidanceSchema),
   noticeInApp: Type.Optional(Type.Boolean()),
   code: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   handoff: Type.Optional(Type.Unknown()),
   restart: Type.Optional(Type.Unknown()),
   sentinel: Type.Optional(Type.Unknown()),
-});
+};
+
+export const UpdateRunResultSchema = Type.Union([
+  closedObject({
+    runId,
+    ok: Type.Boolean(),
+    result: Type.Unknown(),
+    ...updateRunResultFields,
+  }),
+  closedObject({
+    ...updateRunResultFields,
+    runId: Type.Null(),
+    ok: Type.Literal(false),
+    result: closedObject({ status: Type.Literal("skipped"), reason: text }),
+  }),
+]);
 
 export type UpdateRunRecord = Static<typeof UpdateRunRecordSchema>;
 export type UpdateRunsGetParams = Static<typeof UpdateRunsGetParamsSchema>;

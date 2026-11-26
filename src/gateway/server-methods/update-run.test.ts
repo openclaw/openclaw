@@ -5,6 +5,8 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { validateUpdateRunResult } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createGatewayUpdateLifecycle,
   type UpdateCheckLifecycle,
@@ -43,11 +45,13 @@ vi.mock("../../infra/ocm-update-client.js", () => ({ resolveOcmUpdateManager: as
 
 let lifecycle: UpdateCheckLifecycle;
 let home: TempHomeEnv;
+let runtimeConfig: OpenClawConfig = {};
 beforeEach(async () => {
   home = await createTempHomeEnv("openclaw-update-run-git-");
   lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
   install.root = "/tmp/openclaw-checkout";
   install.kind = "git";
+  runtimeConfig = {};
 });
 afterEach(async () => {
   await lifecycle.stop();
@@ -66,7 +70,7 @@ async function invoke(params: object, client: unknown = null) {
     client,
     isWebchatConnect: () => false,
     respond,
-    context: { getRuntimeConfig: () => ({}), broadcast },
+    context: { getRuntimeConfig: () => runtimeConfig, broadcast },
   } as unknown as Parameters<typeof updateRunHandler>[0]);
   expect(respond).toHaveBeenCalledOnce();
   return { payload: respond.mock.calls[0]?.[1], broadcast };
@@ -89,6 +93,8 @@ it("shows a Control UI update in the app instead of the conversation", async () 
     },
   );
   expect(payload).toMatchObject({ ok: true, noticeInApp: true });
+  expect(validateUpdateRunResult(payload)).toBe(true);
+  expect(validateUpdateRunResult({ ...payload, runId: null })).toBe(false);
   expect(payload.acknowledgement).toBeUndefined();
   expect((await getUpdateRunAsync(payload.runId))?.origin.noticeSurface).toBe("app");
   expect(broadcast).toHaveBeenCalledWith(
@@ -268,4 +274,48 @@ it("refuses an unrecognized installation before recording or preparing an update
     code: "unmanaged-package-install",
   });
   expect(prepareUpdate).not.toHaveBeenCalled();
+});
+
+it("returns literal package guidance through current external update admission without preparing or persisting a run", async () => {
+  vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
+  const root = path.join(home.home, "deployment-plugin");
+  await fs.mkdir(root);
+  const command = "deployctl update '<gateway>' && deployctl restart";
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      name: "deployment",
+      version: "1.0.0",
+      openclaw: { extensions: ["./index.js"] },
+    }),
+  );
+  await fs.writeFile(path.join(root, "index.js"), "throw new Error('runtime must not execute');");
+  await fs.writeFile(
+    path.join(root, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "deployment",
+      configSchema: { type: "object" },
+      supervisorGuidance: { version: 1, name: "Deployment host", actions: { update: command } },
+    }),
+  );
+  runtimeConfig = { plugins: { allow: ["deployment"], load: { paths: [root] } } };
+  const legacy = await invoke({});
+  expect(legacy.payload).not.toHaveProperty("externalSupervisorGuidance");
+  const { payload, broadcast } = await invoke({ includeSupervisorGuidance: true });
+  expect(payload).toMatchObject({
+    runId: null,
+    ok: false,
+    code: "external-supervisor-update-required",
+    externalSupervisorGuidance: { version: 1, action: "update", name: "Deployment host", command },
+  });
+  expect(validateUpdateRunResult(payload), JSON.stringify(validateUpdateRunResult.errors)).toBe(
+    true,
+  );
+  expect(validateUpdateRunResult({ ...payload, ok: true })).toBe(false);
+  expect(
+    validateUpdateRunResult({ ...payload, result: { ...payload.result, status: "running" } }),
+  ).toBe(false);
+  expect(prepareUpdate).not.toHaveBeenCalled();
+  expect(broadcast).not.toHaveBeenCalled();
+  expect(await listUpdateRunsAsync()).toEqual([]);
 });

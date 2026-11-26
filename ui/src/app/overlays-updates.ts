@@ -26,7 +26,6 @@ import {
   projectUpdateRunFailure,
   resolveUnknownUpdateOutcomeBanner,
   resolveUpdateStatusBanner,
-  resolveUpdateStatusCheckBanner,
   type UpdateRestartStatusResponse,
   type UpdateRunResponse,
   type UpdateFailureTriage,
@@ -38,6 +37,7 @@ import {
   projectUpdateAvailableEvent,
   resolveHeldUpdateCampaignId,
 } from "./update-schedule-projection.ts";
+import { projectUpdateStatusReadError } from "./update-status-read-error.ts";
 
 export type ApplicationUpdateOverlayHooks = {
   connectionBootstrap?: ConnectionBootstrapCoordinator;
@@ -67,6 +67,7 @@ export function createApplicationUpdateOverlays(
     updateStatusBanner: null,
     updateStatusCheckBanner: null,
     recordedUpdateAttempt: null,
+    externalSupervisorGuidance: null,
     diagnosableUpdateFailureId: null,
     reportableUpdateFailureId: null,
     updateFailureReportBusy: false,
@@ -363,17 +364,11 @@ export function createApplicationUpdateOverlays(
     },
     onStatus: applyUpdateStatusResponse,
     onError: (error, mode) => {
-      if (mode === "completion" && snapshot.updateStatusCheckBanner?.mode === "manual") {
+      const update = projectUpdateStatusReadError(snapshot, error, mode);
+      if (!update) {
         return;
       }
-      if (error === null && snapshot.updateStatusCheckBanner === null) {
-        return;
-      }
-      snapshot = {
-        ...snapshot,
-        updateStatusCheckBanner:
-          error === null ? null : { ...resolveUpdateStatusCheckBanner(error), mode },
-      };
+      snapshot = { ...snapshot, ...update };
       publish();
     },
   });
@@ -428,6 +423,7 @@ export function createApplicationUpdateOverlays(
         updateStatusBanner: null,
         updateStatusCheckBanner: null,
         recordedUpdateAttempt: null,
+        externalSupervisorGuidance: null,
         heldUpdateCampaignId: null,
       };
     }
@@ -444,7 +440,12 @@ export function createApplicationUpdateOverlays(
     connectedSource = nextConnectedSource;
     if (connectedSourceChanged) {
       updateFailureReporter.invalidate();
-      snapshot = { ...snapshot, updateFailureReportBusy: false, updateStatusRefreshing: false };
+      snapshot = {
+        ...snapshot,
+        updateFailureReportBusy: false,
+        updateStatusRefreshing: false,
+        externalSupervisorGuidance: null,
+      };
       if (
         updateAttempt?.requestSent &&
         !runId &&
@@ -594,6 +595,7 @@ export function createApplicationUpdateOverlays(
         updateStatusBanner: null,
         updateStatusCheckBanner: null,
         recordedUpdateAttempt: null,
+        externalSupervisorGuidance: null,
       };
       publish();
       const isCurrent = () => generation === updateRunGeneration && isCurrentClient(client);
@@ -605,7 +607,7 @@ export function createApplicationUpdateOverlays(
         }
         const response = await client.request<UpdateRunResponse>(
           "update.run",
-          sessionKey ? { sessionKey } : {},
+          { includeSupervisorGuidance: true, ...(sessionKey ? { sessionKey } : {}) },
           {
             onSent: () => {
               attempt.requestSent = true;
@@ -615,6 +617,10 @@ export function createApplicationUpdateOverlays(
         if (!isCurrent()) {
           return;
         }
+        snapshot = {
+          ...snapshot,
+          externalSupervisorGuidance: response.externalSupervisorGuidance ?? null,
+        };
         if (response.runId) {
           runId = response.runId;
           await refreshRun();

@@ -160,6 +160,7 @@ const enUpdateActions = {
       submit: "Report failure",
       cancel: "Cancel",
     },
+    externalSupervisor: en.updates.externalSupervisor,
     failureReasons: en.updates.failureReasons,
     failedAtStep: en.updates.failedAtStep,
   },

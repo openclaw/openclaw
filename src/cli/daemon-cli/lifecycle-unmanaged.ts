@@ -24,6 +24,7 @@ import {
   type GatewayRestartIntent,
   writeGatewayRestartIntentSync,
 } from "../../infra/restart-intent.js";
+import { resolveExternalSupervisorGuidance } from "../../plugins/supervisor-guidance-runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { appendGatewayLifecycleAudit } from "./lifecycle-audit.js";
 import { commandInterrupted } from "./lifecycle-core.js";
@@ -251,7 +252,7 @@ export async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions)
   }
   if (!signaled) {
     fail(
-      `No verified gateway process is listening on port ${lockIdentity.port}. ${formatExternalSupervisorActionRequired("start the gateway")}`,
+      `No verified gateway process is listening on port ${lockIdentity.port}. ${formatExternalSupervisorActionRequired("start the gateway", await resolveExternalSupervisorGuidance("start"))}`,
     );
     return false;
   }

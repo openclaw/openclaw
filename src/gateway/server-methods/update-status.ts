@@ -30,6 +30,7 @@ import {
   refreshGatewayUpdateStatus,
 } from "../../infra/update-status-schedule.js";
 import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status-state.js";
+import { resolveExternalSupervisorGuidance } from "../../plugins/supervisor-guidance-runtime.js";
 import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
@@ -148,6 +149,10 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
           : undefined
         : getUpdateSchedule();
       mark("response");
+      // Released clients validate a closed response: extensions require an explicit opt-in.
+      const externalSupervisorGuidance = params.includeSupervisorGuidance
+        ? await resolveExternalSupervisorGuidance("update", { config: currentConfig })
+        : undefined;
       const result: UpdateStatusResult = {
         sentinel,
         ...(activeRun ? { activeRun: toPublicUpdateRun(activeRun) } : {}),
@@ -155,6 +160,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         updateAvailable: getUpdateAvailable(),
         ...(effectiveChannel ? { effectiveChannel } : {}),
         ...(schedule ? { schedule } : {}),
+        ...(externalSupervisorGuidance ? { externalSupervisorGuidance } : {}),
       };
       respond(true, result);
     } finally {

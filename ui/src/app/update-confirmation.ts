@@ -4,10 +4,16 @@
 // The dialog itself loads lazily: startup pays nothing for a confirmation the
 // operator has not opened.
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
-import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type {
+  ExternalSupervisorGuidance,
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../api/types.ts";
 
 /** The live server-owned run and request state shown by the update dialog. */
 export type UpdateProgress = {
+  reason?: string;
+  externalSupervisorGuidance?: ExternalSupervisorGuidance | null;
   run: UpdateRunRecord | null;
   /** An update request, run, or outcome reconciliation is still pending. */
   busy: boolean;
@@ -26,10 +32,11 @@ export function createUpdateProgressWatcher(context: {
   };
   overlays: {
     snapshot: {
+      externalSupervisorGuidance?: ExternalSupervisorGuidance | null;
       updateRun: UpdateRunRecord | null;
       updateRunning: boolean;
       updateReconciliationPending: boolean;
-      updateStatusBanner: { tone: string; text: string; source?: "read" } | null;
+      updateStatusBanner: { tone: string; text: string; source?: "read"; reason?: string } | null;
       updateStatusCheckBanner: { text: string } | null;
     };
     subscribe: (listener: () => void) => () => void;
@@ -40,7 +47,9 @@ export function createUpdateProgressWatcher(context: {
       const update = context.overlays.snapshot;
       const banner = update.updateStatusBanner;
       listener({
+        externalSupervisorGuidance: update.externalSupervisorGuidance,
         run: update.updateRun,
+        reason: update.updateRun?.reason ?? banner?.reason,
         busy: update.updateRunning || update.updateReconciliationPending,
         connected: context.gateway.snapshot.phase === "connected",
         failure: banner && banner.tone !== "info" && banner.source !== "read" ? banner.text : null,

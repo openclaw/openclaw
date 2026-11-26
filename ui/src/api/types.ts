@@ -214,3 +214,7 @@ export type {
 export type ProviderLoginOption = NonNullable<
   NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["loginOptions"]
 >[number];
+/** Current deployment guidance supplied by the authenticated Gateway. */
+export type ExternalSupervisorGuidance = NonNullable<
+  import("@openclaw/gateway-protocol").UpdateStatusResult["externalSupervisorGuidance"]
+>;

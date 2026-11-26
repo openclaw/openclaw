@@ -24,6 +24,7 @@ import {
   recordUpdateRunPhaseAsync,
 } from "../../infra/update-run-write.async.js";
 import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-install-surface.js";
+import { resolveExternalSupervisorGuidance } from "../../plugins/supervisor-guidance-runtime.js";
 import { prepareUpdate } from "../../update/run.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -46,7 +47,11 @@ export const updateRunHandler: GatewayRequestHandler = async (request) => {
     return;
   }
   if (isGatewayExternallySupervised()) {
+    const externalSupervisorGuidance = params.includeSupervisorGuidance
+      ? await resolveExternalSupervisorGuidance("update", { config: context.getRuntimeConfig() })
+      : undefined;
     respond(true, {
+      ...(externalSupervisorGuidance ? { externalSupervisorGuidance } : {}),
       runId: null,
       ok: false,
       code: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,

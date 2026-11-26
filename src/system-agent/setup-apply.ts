@@ -16,6 +16,7 @@ import {
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatExternalSupervisorActionRequired } from "../infra/gateway-supervision.js";
+import { resolveExternalSupervisorGuidance } from "../plugins/supervisor-guidance-runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -556,7 +557,9 @@ export async function applySystemAgentSetup(
             lines.push(`Gateway: not reachable yet (${detail}) — say \`gateway status\` to check`);
           }
         } else if (gateway.reason === "external") {
-          lines.push(`Gateway: ${formatExternalSupervisorActionRequired("start the gateway")}`);
+          lines.push(
+            `Gateway: ${formatExternalSupervisorActionRequired("start the gateway", await resolveExternalSupervisorGuidance("start", { config: nextConfig }))}`,
+          );
         } else if (params.installDaemon === false) {
           const { formatUserCliCommand } = await import("../daemon/durable-service-entrypoint.js");
           lines.push(

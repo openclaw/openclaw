@@ -12,6 +12,7 @@ import { createMemo, createStore, Errored, For, isPending, Loading, Show } from 
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome-classification.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { ExternalSupervisorGuidance } from "../components/external-supervisor-guidance.tsx";
 import { DialogHeader } from "../components/solid/dialog-header.tsx";
 import { UpdateGitRevisions } from "../components/solid/update-git-revisions.tsx";
 import { UpdateRunView } from "../components/update-run-view.tsx";
@@ -180,6 +181,8 @@ export async function confirmAndStartUpdateRuntime(
               : `${route.message} ${t("updates.confirm.impact")}`;
       return {
         route,
+        externalSupervisorGuidance: latestProgress?.externalSupervisorGuidance ?? null,
+        reason: run?.reason ?? latestProgress?.reason,
         details,
         run,
         working,
@@ -280,6 +283,14 @@ export async function confirmAndStartUpdateRuntime(
                 </For>
                 <Show when={view.run}>
                   {(run) => <UpdateRunView run={run()} connected={!view.disconnected} />}
+                </Show>
+                <Show
+                  when={
+                    (view.failed || view.finished) &&
+                    view.reason === "external-supervisor-update-required"
+                  }
+                >
+                  <ExternalSupervisorGuidance guidance={view.externalSupervisorGuidance} />
                 </Show>
               </div>
               <openclaw-modal-actions class="oc-dialog__footer">

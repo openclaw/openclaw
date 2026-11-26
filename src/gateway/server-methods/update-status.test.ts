@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import {
   closeUpdateFixtureDatabases,
@@ -86,9 +88,11 @@ vi.mock("../../infra/update-startup.js", () => ({
   getUpdateEffectiveChannel: async () => "stable",
 }));
 
-vi.mock("../../infra/update-status-schedule.js", () => ({
+const refreshStatus = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../../infra/update-status-schedule.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-status-schedule.js")>()),
   getGatewayUpdateSchedule: () => getUpdateSchedule(),
-  refreshGatewayUpdateStatus: async () => {},
+  refreshGatewayUpdateStatus: refreshStatus,
 }));
 
 vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
@@ -153,7 +157,11 @@ async function observeWatcher(
   }
 }
 
-async function read(method: UpdateReadMethod, params: Record<string, unknown> = {}) {
+async function read(
+  method: UpdateReadMethod,
+  params: Record<string, unknown> = {},
+  getConfig: () => OpenClawConfig = () => ({ update: { channel: "stable" } }),
+) {
   const respond = vi.fn<RespondFn>();
   const handler = expectDefined(updateStatusHandlers[method], method);
   await handler({
@@ -163,7 +171,7 @@ async function read(method: UpdateReadMethod, params: Record<string, unknown> = 
     isWebchatConnect: () => false,
     respond,
     context: {
-      getRuntimeConfig: () => ({ update: { channel: "stable" } }),
+      getRuntimeConfig: getConfig,
       logGateway,
     } as GatewayRequestContext,
   });
@@ -545,4 +553,60 @@ it("watches a valid active update when newer terminal history is malformed", asy
       expect.stringContaining("update run watcher stopped:"),
     );
   });
+});
+
+it("drops package guidance when the current status config disables its plugin during refresh", async () => {
+  vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
+  const root = path.join(home.home, "deployment");
+  await fs.mkdir(root);
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      name: "deployment",
+      version: "1.0.0",
+      openclaw: { extensions: ["./index.js"] },
+    }),
+  );
+  await fs.writeFile(path.join(root, "index.js"), "throw new Error('runtime must not execute');");
+  await fs.writeFile(
+    path.join(root, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "deployment",
+      configSchema: { type: "object" },
+      supervisorGuidance: {
+        version: 1,
+        name: "Deployment manager",
+        actions: { update: "deploy update gateway" },
+      },
+    }),
+  );
+  let config: OpenClawConfig = {
+    update: { channel: "stable" },
+    plugins: { allow: ["deployment"], load: { paths: [root] } },
+  };
+  const legacy = await read("update.status", {}, () => config);
+  expect(legacy.mock.calls[0]?.[1]).not.toHaveProperty("externalSupervisorGuidance");
+  const initial = await read("update.status", { includeSupervisorGuidance: true }, () => config);
+  expect(initial.mock.calls[0]?.[1]).toMatchObject({
+    externalSupervisorGuidance: { command: "deploy update gateway" },
+  });
+  const refreshing = createDeferredCore();
+  const refreshed = createDeferredCore();
+  refreshStatus.mockImplementationOnce(async () => {
+    refreshing.resolve();
+    await refreshed.promise;
+  });
+  const pending = read(
+    "update.status",
+    { refreshCheckout: true, includeSupervisorGuidance: true },
+    () => config,
+  );
+  await refreshing.promise;
+  config = {
+    ...config,
+    plugins: { ...config.plugins, entries: { deployment: { enabled: false } } },
+  };
+  refreshed.resolve();
+  const response = await pending;
+  expect(response.mock.calls[0]?.[1]).not.toHaveProperty("externalSupervisorGuidance");
 });

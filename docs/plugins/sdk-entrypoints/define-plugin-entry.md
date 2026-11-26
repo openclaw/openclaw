@@ -370,3 +370,16 @@ Gateway sources cannot supply original links. Receivers use the advertised catal
 pair for every list/read, and the legacy pair only when the catalog pair is absent.
 These selectors narrow publication, not reader authority.
 See [Session Share](/plugins/session-share) for numbered setup and disclosure.
+
+## Supervisor guidance contracts
+
+`openclaw/plugin-sdk/plugin-entry` exports `SupervisorAction`,
+`SupervisorGuidanceV1`, `SupervisorDisplayGuidance`, and `parseSupervisorGuidance`
+for deployment plugins. Put a static `SupervisorGuidanceV1` object directly in the
+manifest's `supervisorGuidance` field; no operator guidance configuration or runtime
+registration callback is required. OpenClaw uses guidance only when exactly one
+enabled plugin provides a valid object. Runtime imports of these SDK exports
+require a host that provides them; declare the corresponding
+[plugin API compatibility floor](/plugins/manifest/package-json).
+See [Supervisor guidance](/plugins/manifest/surfaces#supervisor-guidance)
+for the manifest format, validation limits, fallback behavior, and lifecycle policy.

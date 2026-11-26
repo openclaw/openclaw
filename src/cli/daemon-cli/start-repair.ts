@@ -36,6 +36,7 @@ import type {
 import { formatGatewayServiceStartRepairIssues } from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
+import { resolveExternalSupervisorGuidance } from "../../plugins/supervisor-guidance-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
 import type { GatewayLifecycleFacts } from "./lifecycle-context.js";
@@ -157,7 +158,11 @@ export function repairLoadedGatewayServiceForStart(
 export async function repairLoadedGatewayServiceForStart(
   params: GatewayServiceRepairParams & { action?: "restart" | "start" },
 ): Promise<GatewayServiceRepairResult<"restarted" | "started">> {
-  assertGatewayServiceMutationAllowed("repair the gateway service");
+  assertGatewayServiceMutationAllowed(
+    "repair the gateway service",
+    process.env,
+    await resolveExternalSupervisorGuidance("repair"),
+  );
   // Repair can persist a generated token; check definition authority before planning it.
   const capability = await params.service
     .readDefinitionMutationCapability?.({ env: process.env, environment: params.state.env })

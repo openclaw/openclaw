@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
-import { UpdateRunRecordSchema } from "./update-runs.js";
+import { ExternalSupervisorGuidanceSchema, UpdateRunRecordSchema } from "./update-runs.js";
 
 /**
  * Gateway config and update protocol schemas.
@@ -62,6 +62,7 @@ export const ConfigSchemaLookupParamsSchema = closedObject({
 
 /** Request payload for cached status or an explicit checkout refresh. */
 export const UpdateStatusParamsSchema = closedObject({
+  includeSupervisorGuidance: Type.Optional(Type.Boolean()),
   refreshCheckout: Type.Optional(Type.Boolean()),
 });
 
@@ -244,6 +245,7 @@ export const UpdateStatusResultSchema = closedObject({
   lastRun: Type.Optional(UpdateRunRecordSchema),
   effectiveChannel: Type.Optional(stringLiteralUnion(["stable", "extended-stable", "beta", "dev"])),
   schedule: Type.Optional(UpdateScheduleStateSchema),
+  externalSupervisorGuidance: Type.Optional(ExternalSupervisorGuidanceSchema),
 });
 
 /** Empty request payload for deferring the active update campaign. */
@@ -257,6 +259,7 @@ export const UpdateHoldResultSchema = closedObject({
 
 /** Request payload for running an update/restart flow with optional channel delivery context. */
 export const UpdateRunParamsSchema = closedObject({
+  includeSupervisorGuidance: Type.Optional(Type.Boolean()),
   acceptCapabilities: Type.Optional(Type.Boolean()),
   checkout: Type.Optional(
     Type.Union([

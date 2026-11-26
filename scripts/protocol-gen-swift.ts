@@ -850,13 +850,25 @@ export function generateSwiftProtocol(): string {
       parts.push(emitBoardEventParamsModels(schema));
       continue;
     }
+    if (name === "UpdateRunResult") {
+      const admitted = (schema.anyOf ?? schema.oneOf ?? []).find(
+        (variant) => variant.properties?.runId?.type === "string",
+      );
+      if (!admitted) {
+        throw new Error("UpdateRunResult must retain its admitted receipt projection");
+      }
+      // Keep the shipped admitted-receipt API. No-run refusals remain untyped in Swift,
+      // as before; do not introduce a permissive native model for the new union arm.
+      parts.push(emitStruct(name, admitted));
+      continue;
+    }
     if (schema.type === "object") {
       parts.push(emitStruct(name, schema));
     }
   }
 
   for (const [name, schema] of definitions) {
-    if (name === "GatewayFrame" || name === "BoardEventParams") {
+    if (name === "GatewayFrame" || name === "BoardEventParams" || name === "UpdateRunResult") {
       continue;
     }
     const union = emitDiscriminatedUnion(name, schema);

@@ -278,6 +278,12 @@ export function definePluginEntry({
   };
 }
 
+export { parseSupervisorGuidance } from "../plugins/supervisor-guidance.js";
+export type {
+  SupervisorAction,
+  SupervisorDisplayGuidance,
+  SupervisorGuidanceV1,
+} from "../plugins/supervisor-guidance.js";
 export type {
   PluginHookBeforeChannelIngressContext,
   PluginHookBeforeChannelIngressEvent,

@@ -348,7 +348,7 @@ describe("runDaemonRestart health checks", () => {
 
     const restartParams = requireMockCallArg(runServiceRestart, "runServiceRestart");
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
-    expect(() => (restartParams.beforeServiceMutation as () => void)()).toThrow(
+    await expect((restartParams.beforeServiceMutation as () => Promise<void>)()).rejects.toThrow(
       expect.objectContaining({
         humanOutput: expect.stringMatching(/^Gateway restart blocked: service management skipped/),
       }),

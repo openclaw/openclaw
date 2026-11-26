@@ -45,7 +45,7 @@ import { buildGatewayRuntimeHints } from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import {
   confirmDoctorServiceRepair,
-  formatServiceRepairDeferredNote,
+  resolveServiceRepairDeferredNote,
   isServiceRepairDeferred,
   resolveServiceRepairPolicy,
   SERVICE_REPAIR_POLICY_ENV,
@@ -97,7 +97,10 @@ async function maybeRepairLaunchAgentBootstrap(params: {
 
   note("LaunchAgent is installed but not loaded in launchd.", `${params.title} LaunchAgent`);
   if (params.serviceRepairDeferred) {
-    note(formatServiceRepairDeferredNote(), `${params.title} LaunchAgent`);
+    note(
+      await resolveServiceRepairDeferredNote({ env: params.env }),
+      `${params.title} LaunchAgent`,
+    );
     return { status: "not-loaded" };
   }
 
@@ -259,7 +262,7 @@ export async function maybeRepairGatewayDaemon(params: {
 
   if (!(await shouldManageGatewayService())) {
     await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
-    note(formatServiceRepairDeferredNote(), "Gateway");
+    note(await resolveServiceRepairDeferredNote({ config: params.cfg }), "Gateway");
     return;
   }
 
@@ -386,7 +389,7 @@ export async function maybeRepairGatewayDaemon(params: {
       }
     }
     if (serviceRepairDeferred) {
-      note(formatServiceRepairDeferredNote(), "Gateway");
+      note(await resolveServiceRepairDeferredNote({ config: params.cfg }), "Gateway");
       return;
     }
     const install = await confirmDoctorServiceRepair(
@@ -461,7 +464,7 @@ export async function maybeRepairGatewayDaemon(params: {
       return;
     }
     if (serviceRepairDeferred) {
-      note(formatServiceRepairDeferredNote(), "Gateway");
+      note(await resolveServiceRepairDeferredNote({ config: params.cfg }), "Gateway");
       return;
     }
     const start = await confirmDoctorServiceRepair(
@@ -507,7 +510,7 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
   if (serviceRepairDeferred) {
-    note(formatServiceRepairDeferredNote(), "Gateway");
+    note(await resolveServiceRepairDeferredNote({ config: params.cfg }), "Gateway");
     return;
   }
 
