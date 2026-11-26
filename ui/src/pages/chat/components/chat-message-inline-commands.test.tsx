@@ -4,7 +4,6 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
   createToolGroup,
@@ -66,7 +65,7 @@ it("exposes commands and exploration while preserving native edit groups and dis
   expect(container.querySelectorAll(".chat-activity-group__summary")).toHaveLength(1);
   expect(container.querySelector(".chat-tool-row")).toBeNull();
 
-  view.render(groups, { ...base, inlineCommands: inlineCommandPresentation });
+  view.render(groups, { ...base, inlineCommands: true });
   await waitForSolid(() =>
     expect(container.querySelectorAll(".chat-tool-row:not([aria-busy])")).toHaveLength(4),
   );
@@ -84,7 +83,7 @@ it("exposes commands and exploration while preserving native edit groups and dis
 
   view.render(groups, {
     ...base,
-    inlineCommands: inlineCommandPresentation,
+    inlineCommands: true,
     isToolMessageExpanded: () => true,
   });
   await waitForSolid(() => expect(container.textContent).toContain("one.ts"));
@@ -101,7 +100,7 @@ it("keeps a command child under its parent across an intervening inline command"
   ]);
   const options = {
     showReasoning: false,
-    inlineCommands: inlineCommandPresentation,
+    inlineCommands: true,
     isToolMessageExpanded: () => true,
     isToolExpanded: (id: string) => id === "parent:toolcard:0",
   };
@@ -185,7 +184,7 @@ it.each([false, true])(
     await settleToolBridges(container);
     await waitForSolid(() => expect(label()).toContain("Release notes"));
     const purpose = label();
-    view.render(groups, { ...options, inlineCommands: inlineCommandPresentation });
+    view.render(groups, { ...options, inlineCommands: true });
     await waitForSolid(() =>
       expect(container.querySelector(".chat-activity-group--inline")?.textContent).toContain(
         "printf checked",
@@ -206,7 +205,7 @@ it.each([false, true])(
           operation("last-launch", "sessions_spawn", { label: "Follow-up", task: "Read more." }),
         ]),
       ],
-      { ...options, inlineCommands: inlineCommandPresentation },
+      { ...options, inlineCommands: true },
     );
     await settleToolBridges(container);
     expect(container.querySelector(".chat-bubble-dots--working")).toBeNull();
@@ -241,7 +240,7 @@ it("retains separate text and media from an entry whose tool card moved under it
     isToolMessageExpanded: () => true,
     isToolExpanded: (id: string) => id === "parent:toolcard:0",
   };
-  for (const inlineCommands of [undefined, inlineCommandPresentation]) {
+  for (const inlineCommands of [undefined, false, true]) {
     view.render(groups, { ...options, inlineCommands });
     await waitForSolid(() => {
       expect(container.querySelectorAll('img[alt="Nested result image"]')).toHaveLength(1);
@@ -276,7 +275,7 @@ it("keeps native edit cards and original indexes in a mixed command envelope", a
   const toggle = vi.fn();
   view.render(groups, {
     showReasoning: false,
-    inlineCommands: inlineCommandPresentation,
+    inlineCommands: true,
     onToggleToolExpanded: toggle,
   });
   await waitForSolid(() =>

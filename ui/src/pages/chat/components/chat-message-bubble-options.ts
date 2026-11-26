@@ -3,7 +3,7 @@ import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.j
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
-import type { InlineCommandPresentation, ToolCard } from "../../../lib/chat/chat-types.ts";
+import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
@@ -86,7 +86,7 @@ export type GroupedMessageOptions = MessageRenderOptions & {
   /** First visible message of the containing group/frame; null means none. */
   firstBubbleKey?: string | null;
   showToolCalls?: boolean;
-  inlineCommands?: InlineCommandPresentation;
+  inlineCommands?: boolean;
   isToolMessageExplicitlyExpanded?: (messageId: string) => boolean;
   isToolMessageExpanded?: (messageId: string, card?: ToolCard) => boolean | undefined;
   onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;

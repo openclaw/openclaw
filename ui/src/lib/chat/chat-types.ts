@@ -572,15 +572,6 @@ export type ToolCard = {
   };
 };
 
-// Shared disclosure contract keeps thread state independent of its presentation implementation.
-export type InlineCommandPresentation = {
-  readInlineToolExpansion: (
-    expanded: ReadonlyMap<string, boolean>,
-    id: string,
-    card?: ToolCard,
-  ) => boolean | undefined;
-};
-
 export type ToolCardOutcome =
   | "running"
   | "succeeded"

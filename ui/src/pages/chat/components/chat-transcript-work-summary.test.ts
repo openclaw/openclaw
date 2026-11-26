@@ -3,7 +3,6 @@
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { wrapWebContent } from "../../../../../src/security/external-content.js";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { openAIModel, openAIMessage } from "../chat-thread-fixtures.test-support.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
@@ -54,7 +53,7 @@ it("keeps settled message preparation out of minute-boundary scroll updates", as
 it.each([false, true])(
   "preserves the reader at completion while following readers fold work (follow end: %s)",
   async (followEnd) => {
-    const inlineCommands = inlineCommandPresentation;
+    const inlineCommands = true;
     const runId = "inline-trail-run";
     const messages: unknown[] = [
       { role: "user", content: "Check the workspace", timestamp: 1_000 },

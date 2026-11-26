@@ -5,7 +5,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
   createAssistantMessage,
@@ -223,7 +222,6 @@ const liveOptions = {
 };
 
 it("preserves a pending headline deadline when inline presentation splits and rejoins work", async () => {
-  const inline = inlineCommandPresentation;
   const first = { ...prepared("write-a"), name: "write" };
   const second = { ...prepared("write-b"), name: "write" };
   const draw = (includeSecond: boolean, inlineCommands: boolean) =>
@@ -237,7 +235,7 @@ it("preserves a pending headline deadline when inline presentation splits and re
           includeSecond ? [{ ...first, status: "completed", phase: "end" }, second] : [first],
         ),
       ],
-      { ...liveOptions, inlineCommands: inlineCommands ? inline : undefined },
+      { ...liveOptions, inlineCommands },
     );
   await draw(false, false);
   expectAfter(200, "Writing write-a.ts");

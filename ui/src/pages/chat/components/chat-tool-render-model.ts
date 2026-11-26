@@ -1,6 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ControlUiSurfaceProps } from "../../../../../src/plugin-sdk/control-ui.js";
-import type { InlineCommandPresentation, ToolCard } from "../../../lib/chat/chat-types.ts";
+import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import type { ToolCardOutput } from "../../../lib/chat/tool-cards.ts";
 import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
@@ -46,7 +46,7 @@ export type ToolRenderOptions = {
   mediaReadAllowed?: boolean;
   runActive?: boolean;
   interruptedRunIds?: ReadonlySet<string>;
-  inlineCommands?: InlineCommandPresentation;
+  inlineCommands?: boolean;
   toolMessageSource?: ChatToolMessageSource;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;

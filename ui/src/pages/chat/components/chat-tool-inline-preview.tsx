@@ -1,30 +1,22 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, Show } from "solid-js";
 import { registerChatToolContentEnglish } from "../../../i18n/locales/en-chat-tool-content.ts";
-import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
 import type { ToolCardOutput } from "../../../lib/chat/tool-cards.ts";
 import {
   readToolOutputText,
   isLegacyToolOutputUnavailable,
 } from "../../../lib/chat/tool-output-text.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { isInlineCommandCard } from "./chat-activity-operations.ts";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
 
 registerEnglishCatalog(registerChatToolContentEnglish);
 
 /** Optional preview presentation reads the same invocation output as the command row. */
 export function InlineToolPreview(props: ToolCardProps & { output?: ToolCardOutput }) {
-  const previewKind = createMemo(
-    () => {
-      const current = props.card;
-      return resolveToolCallInput(current.name, asNullableRecord(current.args)).kind;
-    },
-    { lazy: true },
-  );
+  const inlineCommand = createMemo(() => isInlineCommandCard(props.card), { lazy: true });
   const preview = createMemo(() => {
-    const kind = previewKind();
-    if (kind !== "command" && kind !== "read" && kind !== "search") {
+    if (!inlineCommand()) {
       return undefined;
     }
     const current = props.output

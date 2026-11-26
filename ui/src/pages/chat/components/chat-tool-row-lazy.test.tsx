@@ -6,7 +6,6 @@ import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 
@@ -78,7 +77,7 @@ it("keeps card chrome through import recovery and retains the current resolved r
           expanded: false,
           onToggleExpanded: toggle,
           hideSummary: hideSummary(),
-          inlineCommands: inline() ? inlineCommandPresentation : undefined,
+          inlineCommands: inline(),
         }}
       />
       <For each={mutations()} keyed={(item) => item.id}>

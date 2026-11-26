@@ -4,8 +4,8 @@ import {
   accumulatedStreamText,
   trimAccumulatedStreamPrefix,
   type ChatItem,
-  type InlineCommandPresentation,
   type MessageGroup,
+  type ToolCard,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
@@ -32,6 +32,7 @@ import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
 import type { PrependFacts } from "./chat-thread-prepend.ts";
 import { carryMovedDisclosures } from "./chat-tool-activity-coalesce.ts";
+import { isInlineCommandCard } from "./components/chat-activity-operations.ts";
 import { activityDisclosureCalls } from "./components/chat-activity-projection.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
@@ -85,7 +86,7 @@ type ToolCardExpansionState = {
     bubbleMode: boolean;
     isFilteredProjection: boolean;
     autoExpandToolCalls: boolean;
-    inlineCommands: InlineCommandPresentation | undefined;
+    inlineCommands: boolean;
   };
 };
 
@@ -546,6 +547,18 @@ export function getExplicitToolExpansion(values: ReadonlyMap<string, boolean>, k
   return explicitToolExpansions.get(values)?.has(key) ? values.get(key) : undefined;
 }
 
+/** Inline presentation overrides defaults without changing grouped disclosure state. */
+export function readInlineToolExpansion(
+  expanded: ReadonlyMap<string, boolean>,
+  id: string,
+  card?: ToolCard,
+) {
+  return (
+    getExplicitToolExpansion(expanded, id) ??
+    (card && isInlineCommandCard(card) ? false : expanded.get(id))
+  );
+}
+
 function deleteExpansionState<T>(values: Map<string, T>, key: string): void {
   const previous = values.get(key);
   if (values.delete(key)) {
@@ -607,7 +620,7 @@ export function syncToolCardExpansionState(
   items: readonly (ChatItem | MessageGroup)[],
   autoExpandToolCalls: boolean,
   isFilteredProjection = false,
-  inlineCommands?: InlineCommandPresentation,
+  inlineCommands = false,
   transcriptItems?: readonly SystemEventRenderItem[],
   bubbleMode = false,
 ): void {
@@ -686,11 +699,7 @@ export function syncToolCardExpansionState(
     }
   }
   if (transcriptItems) {
-    for (const [id, call] of activityDisclosureCalls(
-      transcriptItems,
-      bubbleMode,
-      Boolean(inlineCommands),
-    )) {
+    for (const [id, call] of activityDisclosureCalls(transcriptItems, bubbleMode, inlineCommands)) {
       if (id.startsWith("lifecycle:")) {
         retainDisclosure(id, undefined, "lifecycle");
       }

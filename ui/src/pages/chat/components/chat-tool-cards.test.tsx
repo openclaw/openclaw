@@ -16,7 +16,6 @@ import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { mountSolid as mountComponent } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { attachHistoryActivity } from "../chat-history-snapshot.ts";
-import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { DiffBlock } from "./chat-diff-render.solid.tsx";
@@ -623,7 +622,7 @@ it.each([
         ? { name: "tool_call", args: { id: "web_search", args } }
         : { name: "web_search", args };
     const search = { id: "long-search", ...card, ...call, inputText: JSON.stringify(call.args) };
-    const inlineCommands = inlineCommandPresentation;
+    const inlineCommands = true;
     const container = await mountCard(search, { expanded: false, inlineCommands });
     const row = query(container, ".chat-tool-row")!;
     const title = `Search the web for “${args.query}”`;
@@ -988,7 +987,7 @@ it("previews live command output without inferring completion and retains detail
     outputTruncated: true,
   };
   const options = {
-    inlineCommands: inlineCommandPresentation,
+    inlineCommands: true,
     expanded: false,
     runActive: true,
     onToggleExpanded,

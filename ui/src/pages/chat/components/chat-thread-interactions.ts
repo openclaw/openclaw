@@ -22,7 +22,6 @@ import type {
   ChatQueueItem,
   ChatSelectionSource,
   ChatStreamSegment,
-  InlineCommandPresentation,
   MessageGroup,
 } from "../../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
@@ -178,7 +177,7 @@ export type ChatThreadProps = Omit<
     chatBubbleMode?: boolean;
     showThinking: boolean;
     showToolCalls: boolean;
-    inlineCommands?: InlineCommandPresentation;
+    inlineCommands?: boolean;
     persistCommentary?: boolean;
     runWorking?: boolean;
     runFinalizing?: boolean;

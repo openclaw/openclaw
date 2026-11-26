@@ -21,6 +21,7 @@ import {
   getExplicitToolExpansion,
   getExpandedToolCards,
   getExpandedUserMessages,
+  readInlineToolExpansion,
   syncToolCardExpansionState,
   toggleExpansionState,
 } from "../chat-thread.ts";
@@ -243,8 +244,9 @@ export function projectChatTranscript(
   } = projectTranscriptIndex(transcriptChain, expandedToolCards, props, readerExpandedWork);
   const questionPrompts = indexQuestionPrompts(props.questionPrompts);
   const toolExpanded = (id: string, card?: ToolCard) =>
-    props.inlineCommands?.readInlineToolExpansion(expandedToolCards, id, card) ??
-    expandedToolCards.get(id);
+    props.inlineCommands
+      ? readInlineToolExpansion(expandedToolCards, id, card)
+      : expandedToolCards.get(id);
   const toggleToolCardExpanded = (id: string, expanded?: boolean) =>
     toggleExpansionState(expandedToolCards, id, expanded);
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
