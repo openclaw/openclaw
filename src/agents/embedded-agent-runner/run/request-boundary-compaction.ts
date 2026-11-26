@@ -6,7 +6,12 @@ import {
   resolveCompletionTokenReservation,
   usesNativeOpenAICodexResponsesBackend,
 } from "@openclaw/ai/transports";
-import type { AssistantHistoryMessage, Context, Model } from "@openclaw/llm-core";
+import {
+  hasRuntimeContextMarker,
+  type AssistantHistoryMessage,
+  type Context,
+  type Model,
+} from "@openclaw/llm-core";
 import { extractSummaryText } from "../../../../packages/agent-core/src/harness/compaction/utils.js";
 import { consumeAgentCoreStream } from "../../../../packages/agent-core/src/runtime-deps.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -193,7 +198,8 @@ export function createRequestBoundaryCompaction(params: {
     );
     if (
       !failed &&
-      context.messages.at(-1)?.role === "toolResult" &&
+      context.messages.findLast((message) => !hasRuntimeContextMarker(message))?.role ===
+        "toolResult" &&
       params.session.agent.state.pendingToolCalls.size === 0 &&
       params.isToolBoundarySafe?.() === true &&
       maxOutputTokens > 0 &&
