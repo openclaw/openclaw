@@ -23,6 +23,7 @@ import { clearSessionStoreCacheForTest } from "../../config/sessions/store-write
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
+import { getOperatorApprovalDetailed } from "../operator-approval-store.js";
 import { startGatewayServer } from "../server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "../test-helpers.listener.js";
@@ -106,11 +107,23 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
         id: "approval-route-probe",
         configSchema: { type: "object", additionalProperties: false },
         contracts: { tools: ["approval_route_probe", "approval_hook_probe"] },
+        activation: { onStartup: true },
       }),
     );
     await fs.writeFile(
       path.join(pluginDir, "index.cjs"),
       `module.exports = { id: "approval-route-probe", register(api) {
+        api.registerGatewayMethod("approvalroute.request", async ({ params, respond }) => {
+          const result = await api.runtime.gateway.request("plugin.approval.request", {
+            pluginId: api.id,
+            title: "Review action",
+            description: "Await an explicit operator decision",
+            agentId: "main",
+            sessionKey: params.sessionKey,
+            timeoutMs: 30_000,
+          }, { scopes: ["operator.approvals"], timeoutMs: 40_000 });
+          respond(true, result);
+        }, { scope: "operator.write" });
         api.on("before_tool_call", (event) => {
           if (event.toolName !== "approval_hook_probe") return;
           return {
@@ -282,12 +295,10 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
         }
       },
     });
-    const call = requester.request("plugin.approval.request", {
-      pluginId: "approval-route-probe",
-      title: "Review action",
-      description: "Await an explicit operator decision",
-      timeoutMs: 30_000,
+    const { key } = await requester.request<{ key: string }>("sessions.create", {
+      label: "Approval reviewer",
     });
+    const call = requester.request("approvalroute.request", { sessionKey: key });
     let id: string | undefined;
     try {
       const event = await awaitGateBeforeSettlement(
@@ -304,6 +315,10 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
         "plugin.approval.list",
         {},
       );
+      await expect(getOperatorApprovalDetailed({ id })).resolves.toMatchObject({
+        outcome: "found",
+        record: { requester: { clientId: "gateway-client", deviceId: null } },
+      });
       expect(reviewerScopes.toSorted()).toEqual([APPROVALS_SCOPE, READ_SCOPE]);
       expect(reviewerEvents).toContain(id);
       expect(pending.map((entry) => entry.id)).toContain(id);

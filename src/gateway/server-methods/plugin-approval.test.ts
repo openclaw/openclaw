@@ -537,7 +537,7 @@ describe("createPluginApprovalHandlers", () => {
       );
     });
 
-    it("returns the decision to authorized reviewers outside the requester device", async () => {
+    it("returns not found for approvals hidden from the caller", async () => {
       const record = await registerOwnedApproval(manager, { title: "T" });
       await manager.resolve(record.id, "allow-once");
 
@@ -548,7 +548,7 @@ describe("createPluginApprovalHandlers", () => {
           client: createOwnedClient("other", ["operator.approvals"]),
         },
       );
-      expect(expectResponseOk(respond)).toMatchObject({ id: record.id, decision: "allow-once" });
+      expect(expectResponseRejected(respond).message).toContain("expired or not found");
     });
 
     it("returns decision when resolved", async () => {

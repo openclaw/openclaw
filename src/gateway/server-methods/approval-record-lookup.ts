@@ -305,16 +305,6 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   ) {
     return false;
   }
-  if (
-    !params.resolving &&
-    canAccessOperatorApproval({
-      client: params.client,
-      binding: { reviewerDeviceIds: params.record.approvalReviewerDeviceIds },
-      allowApprovalRuntime: true,
-    })
-  ) {
-    return true;
-  }
   const requestedByDeviceId = normalizeNullableString(params.record.requestedByDeviceId);
   const requestedByClientId = normalizeNullableString(params.record.requestedByClientId);
   const hasApprovalsScope = scopes.includes(APPROVALS_SCOPE);
@@ -331,6 +321,15 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   // Legacy adapters retain exact requester connection/device authority.
   if (requestedByDeviceId) {
     return requestedByDeviceId === clientDeviceId;
+  }
+  if (
+    !params.resolving &&
+    canAccessOperatorApproval({
+      client: params.client,
+      binding: { reviewerDeviceIds: params.record.approvalReviewerDeviceIds },
+    })
+  ) {
+    return true;
   }
   const requestedByConnId = normalizeNullableString(params.record.requestedByConnId);
   if (requestedByConnId) {
