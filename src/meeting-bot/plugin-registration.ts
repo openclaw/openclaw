@@ -9,6 +9,15 @@ type MeetingRegistrationRuntime = Partial<MeetingTranscriptSourceRuntime> & {
   reconcileTranscriptPolicy?(enabled: boolean): Promise<void>;
 };
 
+function hasTranscriptSourceMethods(
+  runtime: MeetingRegistrationRuntime,
+): runtime is MeetingTranscriptSourceRuntime {
+  return (
+    typeof runtime.startTranscriptSource === "function" &&
+    typeof runtime.stopTranscriptSource === "function"
+  );
+}
+
 /** Register one lazy runtime and its optional live-caption source for this plugin instance. */
 export function registerMeetingPluginRuntime<
   Config extends { enabled: boolean },
@@ -69,10 +78,10 @@ export function registerMeetingPluginRuntime<
         ...options.transcriptSource,
         runtime: async () => {
           const current = await ensureRuntime();
-          if (!current.startTranscriptSource || !current.stopTranscriptSource) {
+          if (!hasTranscriptSourceMethods(current)) {
             throw new Error(`${options.name} transcript source runtime is unavailable`);
           }
-          return current as MeetingTranscriptSourceRuntime;
+          return current;
         },
       }),
     );
