@@ -129,7 +129,13 @@ suite.define(() => {
             .click();
           await waitForControlUiGatewayReady(page);
           await waitForControlUiInitialRoster(page);
-          await page.locator('[data-navigation-view="online"]').click();
+          const rail = page.locator(".sidebar-rail");
+          expect(await rail.getByRole("button", { name: "People", exact: true }).count()).toBe(0);
+          await rail.getByRole("button", { name: "Pages", exact: true }).click();
+          await page
+            .locator(".sidebar-pages-menu")
+            .getByRole("link", { name: "Activity", exact: true })
+            .click();
           const person = page.locator('[data-online-user-id="' + profile.id + '"]');
           await expect
             .poll(() => person.getAttribute("aria-description"))

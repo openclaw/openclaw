@@ -152,11 +152,15 @@ export type NormalizedControlUiMockGatewayScenario = Required<
     ControlUiMockGatewayScenario,
     | "awaitInitialRoster"
     | "bootstrapPreferences"
+    | "hasMultipleSessionSharingIdentities"
     | "profileActivityViewerId"
     | keyof ControlUiPluginHello
   >
 > &
-  Pick<ControlUiMockGatewayScenario, "bootstrapPreferences" | "profileActivityViewerId"> & {
+  Pick<
+    ControlUiMockGatewayScenario,
+    "bootstrapPreferences" | "hasMultipleSessionSharingIdentities" | "profileActivityViewerId"
+  > & {
     assistantAvatarStatus: "data" | "local" | "none";
     operatorRolePolicy: ReturnType<typeof normalizeControlUiMockAuth>["operatorRolePolicy"];
     controlUiPluginHello: ControlUiPluginHello;
@@ -229,7 +233,8 @@ export function normalizeScenario(
       "suggest",
       "draft",
     ],
-    hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities ?? false,
+    // Fixtures that exercise solo/team behavior must declare it explicitly.
+    hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
     featureCapabilities: scenario.featureCapabilities ?? [],
     // This fixture answers catalog RPCs; snapshot scenarios publish their own events.
     connectCapabilities: scenario.connectCapabilities ?? [],
