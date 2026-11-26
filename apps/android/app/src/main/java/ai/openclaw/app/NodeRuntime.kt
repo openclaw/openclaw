@@ -8505,25 +8505,6 @@ class NodeRuntime internal constructor(
         )
       }
 
-  private fun parseCronJobs(jobs: JsonArray?): List<GatewayCronJobSummary> =
-    jobs
-      .mapObjects { obj ->
-        val id = obj.nonBlankString("id") ?: return@mapObjects null
-        val name = obj.nonBlankString("name") ?: return@mapObjects null
-        val schedule = obj["schedule"].asObjectOrNull()
-        val state = obj["state"].asObjectOrNull()
-        val payload = obj["payload"].asObjectOrNull()
-        GatewayCronJobSummary(
-          id = id,
-          name = name,
-          enabled = obj.boolean("enabled"),
-          scheduleLabel = cronScheduleLabel(schedule?.get("kind").asStringOrNull(), schedule),
-          promptPreview = cronPayloadPreview(payload),
-          nextRunAtMs = state.long("nextRunAtMs"),
-          lastRunStatus = cronJobLastRunStatus(state),
-        )
-      }
-
   private fun parseUsageProviders(providers: JsonArray?): List<GatewayUsageProviderSummary> =
     providers
       .mapObjects { obj ->
@@ -8707,21 +8688,6 @@ class NodeRuntime internal constructor(
       .take(4)
   }
 
-  private fun cronPayloadPreview(payload: JsonObject?): NativeText {
-    val text =
-      when (payload?.get("kind").asStringOrNull()) {
-        "systemEvent" -> payload?.get("text").asStringOrNull()
-        "agentTurn" -> payload?.get("message").asStringOrNull()
-        else -> null
-      }
-    return text
-      ?.trim()
-      ?.replace(Regex("\\s+"), " ")
-      ?.takeIf { it.isNotEmpty() }
-      ?.let(::verbatimText)
-      ?: nativeText("No prompt")
-  }
-
   private fun resolveActiveAgentId(): String = resolveAgentIdFromMainSessionKey(_mainSessionKey.value) ?: gatewayDefaultAgentId.value?.trim().orEmpty()
 }
 
@@ -8872,22 +8838,6 @@ data class GatewayModelProviderSummary(
   val displayName: String,
   val status: String,
   val profileCount: Int,
-)
-
-data class GatewayCronStatus(
-  val enabled: Boolean,
-  val jobs: Int,
-  val nextWakeAtMs: Long?,
-)
-
-data class GatewayCronJobSummary(
-  val id: String,
-  val name: String,
-  val enabled: Boolean,
-  val scheduleLabel: NativeText,
-  val promptPreview: NativeText,
-  val nextRunAtMs: Long?,
-  val lastRunStatus: String?,
 )
 
 data class GatewayUsageSummary(
@@ -9176,11 +9126,6 @@ internal fun sanitizeGatewayLogText(value: String): String =
 private fun JsonObject?.double(key: String): Double? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toDoubleOrNull()
 
 private fun JsonObject?.boolean(key: String): Boolean = (this?.get(key) as? JsonPrimitive)?.content?.trim() == "true"
-
-internal fun cronJobLastRunStatus(state: JsonObject?): String? =
-  state
-    .nonBlankString("lastStatus")
-    ?: state.nonBlankString("lastRunStatus")
 
 private fun parseGatewayStringArray(items: JsonArray?): List<String> =
   items
