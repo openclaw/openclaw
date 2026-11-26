@@ -48,6 +48,7 @@ registerEnglishCatalog(registerActivityEnglish);
 export type SessionActivityViewProps = {
   expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
+  searchInputValue: string;
   presenceViewers: readonly PresenceViewer[];
   presentationRevision?: number;
   result?: SessionsListResult;
@@ -390,6 +391,9 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
       ? (people().find((person) => person.id === props.filters.personId) ?? identity())
       : null,
   );
+  function selectTime(time: SessionActivityFilters["time"]) {
+    props.onFiltersChange({ ...props.filters, query: props.searchInputValue, time });
+  }
   function feedback(error: string | undefined, pending: boolean) {
     return (
       <>
@@ -412,7 +416,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
           <input
             type="search"
             aria-label={t("activityFeed.searchPlaceholder")}
-            value={props.filters.query}
+            value={props.searchInputValue}
             placeholder={t("activityFeed.searchPlaceholder")}
             onInput={(event) =>
               props.onFiltersChange({ ...props.filters, query: event.currentTarget.value })
@@ -430,8 +434,8 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
             ariaLabel: t(TIME_LABELS[time]),
             compactLabel: time === "all" ? t(TIME_LABELS[time]) : time,
           }))}
-          onChange={(time) => props.onFiltersChange({ ...props.filters, time })}
-          onReselect={(time) => props.onFiltersChange({ ...props.filters, time })}
+          onChange={selectTime}
+          onReselect={selectTime}
         />
         <PeopleControl
           view={props}
