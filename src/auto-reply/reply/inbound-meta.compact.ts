@@ -136,7 +136,9 @@ export function buildCompactInboundUserContextPrefix(
   const replySender =
     normalizePromptMetadataString(ctx.ReplyToSender) ??
     (ctx.ReplyToBody ? undefined : normalizePromptMetadataString(replyChainEntry?.sender));
-  if (replyBody || replySender) {
+  // Like the default context, a Telegram reply leaves its quote to the current-message block.
+  const currentMessageContext = formatTelegramCurrentMessageContext(ctx);
+  if ((replyBody || replySender) && !currentMessageContext) {
     blocks.push(
       `Reply target: ${formatContextJson({
         sender: replySender,
@@ -266,10 +268,9 @@ export function buildCompactInboundUserContextPrefix(
 
   // Like the default context, the goal block and the current-message block stay outside the
   // marked unit, separated by a blank line, so stripping the marked block never takes user text.
-  const trailingBlocks = [
-    formatActiveGoalContext(sessionEntry),
-    formatTelegramCurrentMessageContext(ctx),
-  ].filter((block): block is string => Boolean(block));
+  const trailingBlocks = [formatActiveGoalContext(sessionEntry), currentMessageContext].filter(
+    (block): block is string => Boolean(block),
+  );
 
   // One marked header lets every inbound-context stripper find the block. The blocks below it
   // have no blank lines, so a stripper removes the header and the block as one unit.

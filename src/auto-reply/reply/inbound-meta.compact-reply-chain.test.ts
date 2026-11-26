@@ -48,4 +48,28 @@ describe("compact inbound reply target from ReplyChain", () => {
     expect(projection.text).toContain('Reply target: {"sender":"Dana","body":"direct reply body"}');
     expect(projection.text).not.toContain("chain body");
   });
+
+  it("leaves a Telegram reply quote to the current-message carrier", () => {
+    const text = buildCompactInboundUserContextPrefix({
+      ...base,
+      Provider: "telegram",
+      ReplyToBody: "ship it on Friday",
+      ReplyToSender: "Alice",
+    } as TemplateContext).text;
+
+    expect(text).not.toContain("Reply target:");
+    expect(text.split("ship it on Friday")).toHaveLength(2);
+    expect(text).toContain('[Replying to: "ship it on Friday"]');
+  });
+
+  it("keeps the ReplyChain reply target on a channel without the carrier", () => {
+    const text = buildCompactInboundUserContextPrefix({
+      ...base,
+      Provider: "nextcloud-talk",
+      ReplyChain: [{ messageId: "41", sender: "Alice", body: "ship it on Friday" }],
+    } as TemplateContext).text;
+
+    expect(text).toContain('Reply target: {"sender":"Alice","body":"ship it on Friday"}');
+    expect(text).not.toContain("Current message:");
+  });
 });
