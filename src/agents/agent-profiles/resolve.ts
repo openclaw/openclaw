@@ -4,7 +4,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveAgentConfig } from "../agent-scope-config.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { BUILT_IN_AGENT_PROFILES, type BuiltInAgentProfile } from "./builtins.js";
+import {
+  BUILT_IN_AGENT_PROFILES,
+  indexBuiltInAgentProfiles,
+  type BuiltInAgentProfile,
+} from "./builtins.js";
 import {
   resolveOpenClawAgentProfileExtension,
   type OpenClawAgentProfileExtension,
@@ -25,20 +29,6 @@ export type ResolvedAgentProfile = {
   profile: ResolvedBuiltInAgentProfile;
   selectionSource: AgentProfileSelectionSource;
 };
-
-/** Indexes profiles by id and rejects a duplicate id instead of letting a later one win. */
-export function indexBuiltInAgentProfiles(
-  profiles: readonly BuiltInAgentProfile[],
-): Map<string, BuiltInAgentProfile> {
-  const byId = new Map<string, BuiltInAgentProfile>();
-  for (const profile of profiles) {
-    if (byId.has(profile.id)) {
-      throw new Error(`Duplicate built-in Agent Profile id: ${profile.id}`);
-    }
-    byId.set(profile.id, profile);
-  }
-  return byId;
-}
 
 const profilesById = indexBuiltInAgentProfiles(BUILT_IN_AGENT_PROFILES);
 const resolvedProfilesById = new Map<AgentProfileId, ResolvedBuiltInAgentProfile>();
