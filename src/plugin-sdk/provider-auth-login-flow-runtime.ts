@@ -4,6 +4,7 @@ import type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";
+import { resolveControlUiModelProvidersUrl } from "../config/control-ui-link-base.js";
 import { createProviderBrowserAuthSession } from "../gateway/provider-browser-auth.js";
 import {
   formatProviderLoginChoiceRef,
@@ -232,7 +233,13 @@ export async function prepareProviderChannelLogin(params: {
   }
   const choice = resolution.choice;
   if (choice.mode !== "chat") {
-    return { status: "reply", reply: { text: formatProviderLoginControlUiHandoff(choice) } };
+    return {
+      status: "reply",
+      reply: buildProviderLoginControlUiHandoffReply(
+        choice,
+        resolveControlUiModelProvidersUrl(params.config, choice.providerId, params.agentId),
+      ),
+    };
   }
   return { status: "ready", choice };
 }
@@ -363,6 +370,38 @@ function formatProviderLoginControlUiHandoff(choice: ProviderChannelLoginChoice)
   return choice.mode === "secret"
     ? `${choice.label} needs secure input that chat must not store. In the OpenClaw app, open Models → Connect provider, then choose “${choice.label}”.`
     : `${choice.label} needs provider sign-in. In the OpenClaw app, open Models → Connect provider, then choose “${choice.label}”.`;
+}
+
+/**
+ * Handoff copy plus a tappable Control UI button when the gateway advertises
+ * a public origin. Chat clients (especially phones) cannot act on a bare
+ * "Open Control UI" instruction, and credential-bearing links must never be
+ * placed in chat, so the button carries only the public settings URL.
+ */
+export function buildProviderLoginControlUiHandoffReply(
+  choice: ProviderChannelLoginChoice,
+  controlUiUrl?: string,
+): ProviderLoginReply {
+  return {
+    text: formatProviderLoginControlUiHandoff(choice),
+    ...(controlUiUrl
+      ? {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons" as const,
+                buttons: [
+                  {
+                    label: "Open OpenClaw",
+                    action: { type: "url" as const, url: controlUiUrl },
+                  },
+                ],
+              },
+            ],
+          },
+        }
+      : {}),
+  };
 }
 
 export function buildProviderLoginChoicesReply(

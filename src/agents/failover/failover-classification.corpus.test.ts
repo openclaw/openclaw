@@ -124,6 +124,16 @@ it("rotates ambiguous 403 permissions without reply-level auth copy", () => {
   expect(classifyReplyRequest({ message, status: 403 })).toBeUndefined();
 });
 
+it("names the provider sign-in step for HTTP 401 failures", () => {
+  const message = "unexpected status 401 Unauthorized: Invalid API key";
+  const copy = classifyReplyRequest({ message, status: 401, provider: "meta" });
+  expect(copy).toMatchObject({
+    code: "provider_authentication_error",
+    userMessage: expect.stringContaining("/login meta"),
+  });
+  expect(copy?.userMessage).toContain("switch to a working model with /model");
+});
+
 it("preserves model-unavailable guidance from the canonical reason", () => {
   const message = "Unknown model: openai/gpt-5.3-codex";
   expectClassification({ message }, "model_not_found");

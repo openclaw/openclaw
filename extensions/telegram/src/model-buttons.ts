@@ -110,7 +110,7 @@ export function buildModelSelectionCallbackData(params: {
   return `${CALLBACK_PREFIX.opaqueModel}${hashOpaqueCallback("model", params.provider, params.model)}`;
 }
 
-function buildProviderListCallbackData(provider: string, page: number): string {
+export function buildProviderListCallbackData(provider: string, page: number): string {
   const callbackData = `${CALLBACK_PREFIX.list}${provider}_${page}`;
   return LEGACY_PROVIDER_PATTERN.test(provider) && fitsTelegramCallbackData(callbackData)
     ? callbackData

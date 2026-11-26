@@ -172,7 +172,9 @@ it("keeps the current session profile when connecting another provider", async (
     },
   });
   const result = await handleLoginCommand(params, true);
-  expect(result?.reply?.text).toContain("login complete");
+  expect(result?.reply?.text).toBe(
+    `OpenAI login complete. This chat still uses anthropic/${params.model}. To use OpenAI here, send /models.`,
+  );
   expect(params.sessionEntry?.authProfileOverride).toBe("anthropic:owner");
   expect(patchSessionEntryMock).not.toHaveBeenCalled();
 });

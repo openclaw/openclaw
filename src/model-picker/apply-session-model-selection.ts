@@ -19,10 +19,16 @@ import {
   type StickyModelSelectionDispatchOutcome,
 } from "../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
+import {
+  resolveModelSelectionAuthBlock,
+  type ModelSelectionAuthBlock,
+  type ModelsMenu,
+} from "../auto-reply/reply/commands-models-menu.js";
 import { applyModelRuntimeDirective } from "../auto-reply/reply/directive-handling.model-runtime.js";
 import {
   prepareModelSelectionRuntime,
   findSelectedCatalogEntry,
+  isProviderAuthOwnedByRequiredWorker,
 } from "../auto-reply/reply/model-runtime-normalization.js";
 import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
 import { refreshQueuedFollowupSession } from "../auto-reply/reply/queue.js";
@@ -48,7 +54,10 @@ import { prepareWorkerPlacementSessionRuntime } from "../gateway/worker-environm
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
+import {
+  applyModelOverrideWithAuthProfileCompatibility,
+  shouldPreserveSessionAuthProfileForSelection,
+} from "../sessions/auth-profile-preservation.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
@@ -85,6 +94,15 @@ export type ApplySessionModelSelectionParams = {
   canPersistStickyModelSelection?: boolean;
   stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
   validateAuthProfileSelection?: () => string | undefined;
+  // Supplying the picker's menu facts opts in to the shared auth-readiness
+  // policy: a selection whose provider has no working sign-in is rejected
+  // (reason "auth") before persistence, with the recovery block for the
+  // adapter to render. Adapters pass the menu they rendered; absence never
+  // blocks. Typed commands and session patches do not pass facts and keep
+  // current behavior. Default selections are never gated.
+  // (Line comments keep this out of the size-budgeted plugin SDK declarations.)
+  /** Rendered picker menu; opts in to the sign-in gate. */
+  authReadinessMenu?: ModelsMenu;
   request: SessionModelSelectionRequest;
   /** Raw directive text used only by the existing session patch hook. */
   patchModel?: string;
@@ -120,6 +138,13 @@ export type ApplySessionModelSelectionResult =
       status: "rejected";
       reason: "locked" | "not-allowed" | "invalid-runtime" | "unknown-provider";
       message: string;
+    }
+  | {
+      status: "rejected";
+      reason: "auth";
+      message: string;
+      // Sign-in recovery; adapters render it with their own buttons.
+      authBlock: ModelSelectionAuthBlock;
     }
   | { status: "conflict"; message: string };
 
@@ -219,6 +244,50 @@ export async function applySessionModelSelectionInternal(
     return rejectNotAllowed(request.provider, request.model);
   }
 
+  const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const pinnedProfile = !request.profileOverride && startingEntry.authProfileOverride?.trim();
+  const recordedProvider = pinnedProfile
+    ? await prepareAuthProfileProvider({ agentDir, profileId: pinnedProfile })
+    : undefined;
+  // Only an account that survives this selection is an explicit Gateway pin:
+  // the compatibility owner drops another provider's pin before persistence.
+  const retainedAuthProfile =
+    request.profileOverride ??
+    (pinnedProfile &&
+    shouldPreserveSessionAuthProfileForSelection({
+      cfg: params.cfg,
+      agentDir,
+      entry: startingEntry,
+      currentProvider: params.currentProvider,
+      selection: request,
+      recordedProvider,
+    })
+      ? pinnedProfile
+      : undefined);
+  if (
+    !resetToDefault &&
+    !request.isDefault &&
+    params.authReadinessMenu &&
+    !isProviderAuthOwnedByRequiredWorker({
+      cfg: params.cfg,
+      authProfileOverride: retainedAuthProfile,
+    })
+  ) {
+    // Shared picker policy (adapters opt in by passing menu facts): never
+    // persist a selection whose provider has no working sign-in, judged on
+    // the menu data the picker was rendered from. Menu readiness describes
+    // Gateway credentials, so it cannot judge required worker-local inference;
+    // runtime preparation below keeps owning that case.
+    const authBlock = resolveModelSelectionAuthBlock({
+      menu: params.authReadinessMenu,
+      provider: request.provider,
+      model: request.model,
+    });
+    if (authBlock) {
+      return { status: "rejected", reason: "auth", message: authBlock.notice, authBlock };
+    }
+  }
+
   const prepared = await prepareModelSelectionRuntime({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -243,11 +312,6 @@ export async function applySessionModelSelectionInternal(
   if (prepared.status === "rejected") {
     return prepared;
   }
-  const agentDir = resolveAgentDir(params.cfg, params.agentId);
-  const pinnedProfile = !request.profileOverride && startingEntry.authProfileOverride?.trim();
-  const recordedProvider = pinnedProfile
-    ? await prepareAuthProfileProvider({ agentDir, profileId: pinnedProfile })
-    : undefined;
   const validateSelection = () =>
     validateOperatorSelection() ??
     params.validateAuthProfileSelection?.() ??

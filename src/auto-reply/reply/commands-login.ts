@@ -253,6 +253,10 @@ async function runChannelProviderLogin(
       nextProfileId && commandParams.model
         ? { model: commandParams.model, profileId: nextProfileId }
         : undefined,
+      !commandParams.model ||
+        normalizeSurface(commandParams.provider) === normalizeSurface(choice.providerId)
+        ? undefined
+        : `${commandParams.provider}/${commandParams.model}`,
     );
     return {
       text: [terminalMessage, loginResult.modelAccess?.message].filter(Boolean).join(" "),

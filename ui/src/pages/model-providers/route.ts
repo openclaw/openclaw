@@ -30,9 +30,17 @@ async function loadModelProvidersRouteData(
   const connect = search.get("connect") === "1";
   const provider = search.get("provider")?.trim() ?? "";
   const pluginId = connect ? search.get("plugin")?.trim() || undefined : undefined;
+  const coldAgentId = search.get("agent")?.trim() ?? "";
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const selection = context.settingsAgentSelection;
+  // A cold link (for example from a chat sign-in handoff) names the agent whose
+  // provider connection it targets; apply it to the settings selection before
+  // loading so credentials load/save against that agent, not a stale one. The
+  // selection owner validates the id against the configured roster.
+  if (coldAgentId) {
+    selection.set(coldAgentId);
+  }
   const selectionIntentRevision = selection.intentRevision;
   const owner = {
     gateway,

@@ -25,6 +25,10 @@ import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramCommandDispatch } from "./bot-native-command-dispatch.js";
 import { buildTelegramRoutingTarget } from "./bot/helpers.js";
+import type { TelegramInlineButtons } from "./button-types.js";
+import { buildProviderListCallbackData } from "./model-buttons.js";
+import { applyPendingTelegramPickerSelection } from "./model-picker-selection.js";
+import { takePendingPickerSelection } from "./picker-pending-selection.js";
 import { loadTelegramSendModule } from "./send-runtime.js";
 
 const activeTelegramProviderLoginFlows = createProviderLoginFlowRegistry();
@@ -51,6 +55,7 @@ export async function executeTelegramLoginCommand(params: {
   dispatch: TelegramCommandDispatch;
   commandText: string;
   currentProvider?: string;
+  currentModel?: string;
 }): Promise<boolean> {
   const { dispatch } = params;
   const threadKey =
@@ -149,6 +154,7 @@ export async function executeTelegramLoginCommand(params: {
   // reservation and account signal still own polling through completion.
   const completion = (async () => {
     let terminalMessage: string;
+    let terminalButtons: TelegramInlineButtons | undefined;
     try {
       const targetSessionEntryAtStart = await dispatch.nativeCommandRuntime.getSessionEntryAsync({
         agentId: dispatch.route.agentId,
@@ -234,15 +240,80 @@ export async function executeTelegramLoginCommand(params: {
       }
       const sessionModel =
         targetSessionEntryAtStart?.modelOverride ?? targetSessionEntryAtStart?.model;
+      // A sign-in started from the picker gate finishes the selection it blocked.
+      const pickerScope = {
+        accountId: dispatch.route.accountId,
+        agentId: dispatch.route.agentId,
+        sessionKey: dispatch.targetSessionKey,
+      };
+      const blockedSelection =
+        loginResult.authRefresh === "refreshed"
+          ? takePendingPickerSelection(pickerScope, loginChoice.providerId)
+          : undefined;
+      let blockedSelectionApplied = false;
+      if (blockedSelection) {
+        try {
+          blockedSelectionApplied = await applyPendingTelegramPickerSelection({
+            cfg: getRuntimeConfig(),
+            agentId: dispatch.route.agentId,
+            sessionKey: dispatch.targetSessionKey,
+            sessionEntry: await dispatch.nativeCommandRuntime.getSessionEntryAsync({
+              agentId: dispatch.route.agentId,
+              sessionKey: dispatch.targetSessionKey,
+              storePath: resolveStorePath(dispatch.runtimeCfg.session?.store, {
+                agentId: dispatch.route.agentId,
+              }),
+            }),
+            pending: blockedSelection,
+          });
+        } catch (error) {
+          flowSignal.throwIfAborted();
+          dispatch.runtime.error?.(
+            danger(
+              `telegram ${formatProviderLoginCommand(loginChoice.command)} completed but could not apply the selected model: ${String(error)}`,
+            ),
+          );
+        }
+      }
+      const blockedRef =
+        blockedSelection && `${blockedSelection.provider}/${blockedSelection.model}`;
+      const otherProviderModel =
+        params.currentProvider &&
+        params.currentModel &&
+        normalizeLowercaseStringOrEmpty(params.currentProvider) !==
+          normalizeLowercaseStringOrEmpty(loginChoice.providerId)
+          ? `${params.currentProvider}/${params.currentModel}`
+          : undefined;
+      // Signing in leaves a chat on another provider where it was; one tap opens
+      // this provider's models in the picker.
+      if (
+        otherProviderModel &&
+        !blockedSelectionApplied &&
+        loginResult.authRefresh === "refreshed"
+      ) {
+        terminalButtons = [
+          [
+            {
+              text: `${loginChoice.providerLabel} models`,
+              callback_data: buildProviderListCallbackData(loginChoice.providerId, 1),
+            },
+          ],
+        ];
+      }
       terminalMessage = [
-        formatProviderLoginCompletion(
-          loginChoice,
-          loginResult.authRefresh,
-          sessionSwitchFailed,
-          nextProfileId && sessionModel
-            ? { model: sessionModel, profileId: nextProfileId }
-            : undefined,
-        ),
+        blockedSelectionApplied
+          ? `${loginChoice.providerLabel} login complete. Model changed to ${blockedRef}.`
+          : blockedRef && !sessionSwitchFailed
+            ? `${loginChoice.providerLabel} login complete. Select ${blockedRef} again with /models.`
+            : formatProviderLoginCompletion(
+                loginChoice,
+                loginResult.authRefresh,
+                sessionSwitchFailed,
+                nextProfileId && sessionModel
+                  ? { model: sessionModel, profileId: nextProfileId }
+                  : undefined,
+                otherProviderModel,
+              ),
         loginResult.modelAccess?.message,
       ]
         .filter(Boolean)
@@ -270,6 +341,7 @@ export async function executeTelegramLoginCommand(params: {
           cfg: dispatch.runtimeCfg,
           token: dispatch.opts.token,
           accountId: dispatch.route.accountId,
+          ...(terminalButtons ? { buttons: terminalButtons } : {}),
         },
       );
       await dispatch.recordDeliveredReply(
