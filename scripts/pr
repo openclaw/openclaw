@@ -390,14 +390,17 @@ try {
       return git(repository, ["ls-tree", "-r", "-z", "--full-tree", source, "--", "scripts/pr", "scripts/pr-lib", ...inventory]);
     };
     const current = operation === "workflow-history" ? null : read();
-    const requireCurrent = (source, anchor, admission = "0") => {
+    const currentWorkflowAnchor = anchor => {
       const symbolicAnchor = spawnSync(binary, ["-C", repository, "symbolic-ref", "--quiet", anchor], { stdio: "ignore" });
       if (symbolicAnchor.error || symbolicAnchor.signal || symbolicAnchor.status !== 1) {
         throw new Error("Refusing symbolic or unreadable current workflow anchor");
       }
-      const main = run(["rev-parse", "--verify", `${anchor}^{commit}`]);
+      return run(["rev-parse", "--verify", `${anchor}^{commit}`]);
+    };
+    const requireCurrent = (source, anchor, admission = "0") => {
+      const checkpoint = currentWorkflowAnchor(anchor);
       if (!current ||
-          (admission !== "proof-baseline" && source !== main) ||
+          (admission !== "proof-baseline" && source !== checkpoint) ||
           !officialOrigin()) {
         throw new Error("Current workflow recovery requires official current main and a retained workflow");
       }
@@ -405,7 +408,7 @@ try {
         // Preserve the reviewed operation identity across unrelated main commits;
         // ancestry and the entire immutable closure still authenticate its code.
         requireSource(source, anchor);
-        if (!workflowClosure(source).equals(workflowClosure(main))) {
+        if (!workflowClosure(source).equals(workflowClosure(checkpoint))) {
           throw new Error("Proof baseline workflow differs from authenticated current main");
         }
       }
@@ -552,21 +555,26 @@ try {
       if (readSync(8, bytes, 0, bytes.length, 0) !== bytes.length) throw new Error("Incomplete workflow selection");
       const selection = JSON.parse(bytes.toString("utf8"));
       const [creator, supervisor, outcome = "", replacementHead = "", admission = "0", successor = "", action = "merge"] = paths;
+      if (successor || isCurrentAdmission(admission) || outcome) {
+        // The held selection owns this handoff; another fetch may advance main.
+        // Keep its canonical ancestry below and fresh private-main qualification under lock.
+        currentWorkflowAnchor("refs/remotes/origin/main");
+      }
       if (successor) {
         if (JSON.stringify(selection.successor) !== successor || selection.bootstrap || outcome || admission !== "0") {
           throw new Error("Workflow successor selection changed across handoff");
         }
-        requireSuccessor(selection.source, successor);
+        requireSuccessor(selection.source, successor, selection.source);
       }
       if (isCurrentAdmission(admission)) {
         if (selection.admission !== (admission === "1" ? true : admission) || selection.bootstrap || outcome) throw new Error("Workflow admission selection changed across handoff");
-        requireAdmission(selection.source, undefined, admission);
+        requireAdmission(selection.source, selection.source, admission);
       }
       if (outcome) {
         if (JSON.stringify(selection.recovery) !== JSON.stringify({ outcome, replacementHead, action }) || selection.bootstrap) {
           throw new Error("Workflow recovery selection changed across handoff");
         }
-        requireRecovery(selection.source, outcome, replacementHead, undefined, action);
+        requireRecovery(selection.source, outcome, replacementHead, selection.source, action);
       }
       const supervised = selection.creator === supervisor && process.env.OPENCLAW_PR_DEDICATED_PROCESS_GROUP === "1" &&
         process.env.OPENCLAW_PR_LOCK_NOTIFY_FD === "3" && process.env.OPENCLAW_PR_LOCK_SUPERVISOR_PID === supervisor;

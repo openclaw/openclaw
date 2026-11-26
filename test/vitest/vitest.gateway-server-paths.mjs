@@ -323,6 +323,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-restart-resume.admission.test.ts",
   "src/gateway/session-restart-resume.scope.test.ts",
   "src/gateway/session-restart-resume.test.ts",
+  "src/gateway/session-restart-shell-admission.test.ts",
   "src/gateway/session-row-event-ancestor-placement.test.ts",
   "src/gateway/session-row-event-trees.test.ts",
   "src/gateway/session-row-projection.accepted-facts.test.ts",

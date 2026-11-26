@@ -1,4 +1,5 @@
 import { createMemo, For, Show } from "solid-js";
+import { extractFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { SettingsEmpty, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -72,13 +73,8 @@ export function Diff(props: {
   );
 }
 /** SKILL.md frontmatter is shown as the header; the body renders as markdown. */
-export function splitFrontmatter(content: string): { description?: string; body: string } {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content);
-  if (!match) {
-    return { body: content };
-  }
-  const description = /^description:\s*(.*)$/m.exec(match[1] ?? "")?.[1]?.trim();
-  return { description, body: content.slice(match[0].length).replace(/^\s*\n/, "") };
+export function splitFrontmatter(content: string): { body: string } {
+  return { body: extractFrontmatterBlock(content)?.body ?? content };
 }
 
 type DiffLine = { kind: "same" | "add" | "remove"; text: string };

@@ -175,6 +175,48 @@ it("leaves through a pinned node without resolving inventory", async () => {
   );
 });
 
+it("keeps a reused Meet tab when launch is disabled, even with a stale node pin", async () => {
+  const request = gatewayResponses({});
+  const runtime = browserRuntime(request, { list: unexpected, invoke: unexpected });
+  const available = vi.spyOn(runtime.gateway, "isAvailable");
+  const result = await leaveChromeMeet({
+    runtime,
+    config: resolveGoogleMeetConfig({ chrome: { launch: false } }),
+    nodeId: "previous-node",
+    ...session,
+  });
+
+  expect(result).toEqual({
+    left: false,
+    note: "Browser leave skipped because chrome.launch is disabled.",
+  });
+  expect(available).toHaveBeenCalledOnce();
+  expect(request).not.toHaveBeenCalled();
+});
+
+it("uses the configured node when a remote session has no pin", async () => {
+  const list = vi.fn<PluginRuntime["nodes"]["list"]>(async () => ({
+    nodes: [
+      {
+        connected: true,
+        nodeId: "configured-node",
+        commands: ["googlemeet.chrome", "browser.proxy"],
+      },
+    ],
+  }));
+  const { runtime, invoke } = nodeRuntime(list);
+  const result = await leaveChromeMeet({
+    runtime,
+    config: resolveGoogleMeetConfig({ chromeNode: { node: "configured-node" } }),
+    transport: "chrome-node",
+    ...session,
+  });
+
+  expect(result).toEqual({ left: true, note: "Meet tab is already closed." });
+  expect(list).toHaveBeenCalledOnce();
+  expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "configured-node" }));
+});
+
 it.each(["chrome", "chrome-node"] as const)(
   "preserves %s route failures before launch-disabled leave",
   async (transport) => {

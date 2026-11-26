@@ -174,7 +174,12 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
     foregroundGateway: isForegroundGatewayRunArgv(process.argv),
   });
   const [
-    { formatCliFailureLines, formatCliJsonFailure, handleCliUncaughtException, isExpectedCliError },
+    {
+      formatCliFailureLines,
+      formatCliJsonFailure,
+      installCliUncaughtExceptionHandler,
+      isExpectedCliError,
+    },
     { isJsonOutputModeActive },
     { runCliWithExitFinalization },
     { withCliProcessScope },
@@ -194,9 +199,7 @@ if (shouldRunCli && !compileCacheRespawnEnv) {
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   installUnhandledRejectionHandler();
 
-  process.on("uncaughtException", (error) => {
-    handleCliUncaughtException(error);
-  });
+  installCliUncaughtExceptionHandler();
 
   void runCliWithExitFinalization({
     run: () =>

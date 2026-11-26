@@ -233,7 +233,7 @@ export async function prepareNextDeliveryGroup(
   });
 }
 
-function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
+export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
   if (run.originatingReplyToMode === "off") {
     return undefined;
   }

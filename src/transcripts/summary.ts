@@ -3,7 +3,12 @@ import {
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
+import {
+  createTranscriptSpeakerLabels,
+  formatTranscriptTurn,
+  presentTranscriptTurn,
+  type TranscriptDisplayTurn,
+} from "./speaker-labels.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptUtterance,
@@ -16,7 +21,7 @@ const DECISION_PATTERNS = /\b(decided|decision|we will|we'll|agreed|approved|go 
 const RISK_PATTERNS =
   /\b(risk|blocked|blocker|concern|issue|problem|unknown|deadline|privacy|security)\b/i;
 
-function firstSentences(utterances: TranscriptUtterance[], limit: number): string {
+function firstSentences(utterances: TranscriptDisplayTurn[], limit: number): string {
   const text = normalizeStringEntries(utterances.map((utterance) => utterance.text)).join(" ");
   const sentences: string[] = [];
   for (const match of text.matchAll(/[^.!?]+[.!?]?/g)) {
@@ -29,67 +34,53 @@ function firstSentences(utterances: TranscriptUtterance[], limit: number): strin
   return normalizeStringEntries(sentences).join(" ");
 }
 
-function collectMatches(utterances: TranscriptUtterance[], pattern: RegExp): string[] {
+function collectMatches(utterances: TranscriptDisplayTurn[], pattern: RegExp): string[] {
   const matches: string[] = [];
   utterances.some((utterance) => {
     if (pattern.test(utterance.text)) {
-      const line = formatSpeakerLine(utterance);
-      if (line) {
-        matches.push(line);
-      }
+      matches.push(formatTranscriptTurn(utterance));
     }
     return matches.length >= 12;
   });
   return matches;
 }
 
-function sanitizeUtterance(utterance: TranscriptUtterance): TranscriptUtterance {
-  const sanitized: TranscriptUtterance = {
-    ...utterance,
-    text: sanitizeTerminalText(utterance.text),
-  };
-  if (utterance.speaker) {
-    sanitized.speaker = {
-      ...utterance.speaker,
-      label: sanitizeTerminalText(utterance.speaker.label),
-    };
-  }
-  return sanitized;
+/** Prepare notes for direct callers that supply original capture utterances. */
+export function summarizeTranscripts(
+  params: { session: TranscriptSessionDescriptor; utterances: TranscriptUtterance[] },
+  speakerLabel = createTranscriptSpeakerLabels(),
+): TranscriptsSummary {
+  const turns = params.utterances.flatMap(
+    (row) =>
+      presentTranscriptTurn(row.text, speakerLabel(row.speaker?.id, row.speaker?.label)) ?? [],
+  );
+  return summarizeTranscriptTurns(params.session, turns, params.utterances.length);
 }
 
-function formatSpeakerLine(utterance: TranscriptUtterance): string {
-  const text = utterance.text.trim();
-  if (!text) {
-    return "";
-  }
-  const speaker = utterance.speaker?.label?.trim();
-  return speaker ? `${speaker}: ${text}` : text;
-}
-
-/** Build a deterministic summary from transcript utterances. */
-export function summarizeTranscripts(params: {
-  session: TranscriptSessionDescriptor;
-  utterances: TranscriptUtterance[];
-}): TranscriptsSummary {
-  const title = sanitizeTerminalText(params.session.title ?? "").trim() || "Transcripts";
-  const utterances = params.utterances
-    .map(sanitizeUtterance)
-    .filter((utterance) => !isTranscriptArtifactText(utterance.text));
-  const overview = firstSentences(utterances, 4) || "No transcript captured yet.";
+/** Summarize already-presented turns in recording order. The count includes filtered rows. */
+export function summarizeTranscriptTurns(
+  session: TranscriptSessionDescriptor,
+  utterances: TranscriptDisplayTurn[],
+  utteranceCount: number,
+): TranscriptsSummary {
+  const title = sanitizeTerminalText(session.title ?? "").trim() || "Transcripts";
+  const overview =
+    firstSentences(utterances, 4) ||
+    (session.stoppedAt ? "No usable speech was captured." : "No transcript captured yet.");
   return {
-    sessionId: params.session.sessionId,
+    sessionId: session.sessionId,
     title,
     generatedAt: new Date().toISOString(),
     overview,
     participants: normalizeUniqueStringEntries(
-      utterances.map((utterance) => utterance.speaker?.label ?? ""),
+      utterances.map((utterance) => utterance.speakerLabel),
     ),
     source: "heuristic",
-    transcript: utterances.map(formatSpeakerLine).filter(Boolean),
+    transcript: utterances.map(formatTranscriptTurn),
     decisions: collectMatches(utterances, DECISION_PATTERNS),
     actionItems: collectMatches(utterances, ACTION_PATTERNS),
     risks: collectMatches(utterances, RISK_PATTERNS),
-    utteranceCount: params.utterances.length,
+    utteranceCount,
   };
 }
 

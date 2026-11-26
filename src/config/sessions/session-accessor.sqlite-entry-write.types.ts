@@ -20,6 +20,7 @@ export type SessionEntryWriteOptions = {
   profileInvolvement?: SessionEntry["profileInvolvement"];
   /** Only the provider review owner may replace a generation-bound pause. */
   providerReviewMutation?: boolean;
+  shellCallMutation?: boolean;
   /** Canonical row revalidated in this write transaction; null proves absence. */
   canonicalPreviousEntry?: SessionEntry | null;
   /** Raw canonical columns from the same transaction, for exact no-op comparison. */

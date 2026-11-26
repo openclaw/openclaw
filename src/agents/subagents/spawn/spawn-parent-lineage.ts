@@ -6,8 +6,8 @@ type ParentIncarnation = Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
 const PARENT_CHANGED_ERROR = "Parent session changed before spawn; retry from the current turn.";
 
 /**
- * A reset during child preparation may leave stale lineage. The memory owner
- * denies that receipt at access, so spawn need not re-read the parent before commit.
+ * A reset during child preparation keeps the lineage: the memory owner resolves
+ * the parent's current incarnation at access, so spawn need not re-read the parent.
  */
 export function captureSpawnParentLineage(params: {
   parentEntry: ParentIncarnation | undefined;
