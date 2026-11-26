@@ -72,6 +72,9 @@ candidates, and new proper nouns. Later steps draft from the digest. Return to t
 transcript only for specific line ranges (to check wording or a quote), never for
 a full reread.
 
+The evidence gate below addresses
+[unsupported meeting records](https://github.com/openclaw/openclaw/pull/205816).
+
 Before publishing from the digest, identify a passage that establishes a
 meeting topic, decision or other substantive exchange. A single clear decision
 in any language qualifies. If the complete transcript contains only greetings,
