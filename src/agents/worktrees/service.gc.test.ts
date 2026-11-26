@@ -252,14 +252,14 @@ describe("ManagedWorktreeService garbage collection", () => {
     try {
       expect(await service.gc()).toMatchObject({ orphansDeleted: 1, failedCount: 1 });
       await expect(fs.lstat(sibling)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(attempts).toBe(2);
+      expect(attempts).toBe(1);
       expect(
         await warnings.findText(`worktree orphan cleanup deferred for ${orphan}`),
       ).toBeDefined();
       warnings.cleanup();
       warnings = createWarnLogCapture("openclaw-orphan-repeated-failure");
       expect(await service.gc()).toMatchObject({ orphansDeleted: 0, failedCount: 1 });
-      expect(attempts).toBe(2);
+      expect(attempts).toBe(1);
       expect(await warnings.findText("worktree orphan cleanup deferred")).toBeUndefined();
       for (const directory of [path.dirname(fingerprint), fingerprint]) {
         const readdir = fs.readdir;
@@ -275,12 +275,12 @@ describe("ManagedWorktreeService garbage collection", () => {
           enumeration.mockRestore();
         }
         expect((await service.gc()).failedCount).toBe(1);
-        expect(attempts).toBe(2);
+        expect(attempts).toBe(1);
         expect(await warnings.findText("worktree orphan cleanup deferred")).toBeUndefined();
       }
       blocked = false;
       expect((await service.gc({ retryDeferred: true })).orphansDeleted).toBe(1);
-      expect(attempts).toBe(3);
+      expect(attempts).toBe(2);
     } finally {
       removal.mockRestore();
       retirement.mockRestore();
@@ -317,46 +317,6 @@ describe("ManagedWorktreeService garbage collection", () => {
       removal.mockRestore();
     }
   });
-
-  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-    "does not repair directory permissions for another owner",
-    async () => {
-      const orphan = path.join(stateDir, "worktrees", "fingerprint", "foreign");
-      let dependency = path.join(orphan, "node_modules", "package");
-      await fs.mkdir(dependency, { recursive: true });
-      await fs.writeFile(path.join(dependency, "file.txt"), "retained\n");
-      await fs.chmod(dependency, 0o555);
-      const rename = fs.rename;
-      const retirement = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
-        await rename(source, target);
-        if (source === orphan) {
-          dependency = path.join(String(target), "node_modules", "package");
-        }
-      });
-      // Ownership mismatch uses real permissions without requiring privileged chown.
-      const lstat = fs.lstat;
-      const ownership = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-        const stat = await lstat(...args);
-        if (args[0] === dependency) {
-          if (typeof stat.uid === "bigint") {
-            stat.uid += 1n;
-          } else {
-            stat.uid += 1;
-          }
-        }
-        return stat;
-      });
-      try {
-        expect(await service.gc()).toMatchObject({ orphansDeleted: 0, failedCount: 1 });
-        expect((await fs.stat(dependency)).mode & 0o777).toBe(0o555);
-        expect(await fs.readFile(path.join(dependency, "file.txt"), "utf8")).toBe("retained\n");
-      } finally {
-        ownership.mockRestore();
-        retirement.mockRestore();
-        await fs.chmod(dependency, 0o755);
-      }
-    },
-  );
 
   it("preserves orphan registry state when caller authority is revoked after path inspection", async () => {
     const created = await materializeDownstreamFixture("revoked-orphan");

@@ -7,6 +7,7 @@ import {
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { buildPayloads } from "../../agents/embedded-agent-runner/run/payloads.test-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { MODEL_CHAT_REJECTED_CODE } from "../../agents/failover/error.js";
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import {
   MISSING_REPLY_NOTICE_TEXT,
@@ -230,26 +231,32 @@ it("preserves retry exhaustion through external thrown failures", async () => {
   expect(payload.text).toContain("9 automatic retries");
 });
 
-it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
-  state.runWithModelFallbackMock.mockRejectedValueOnce(
-    createTestFallbackSummaryError({
-      message:
-        "All models failed (2): anthropic/claude: 429 (rate_limit) | openai/gpt-5.4: 402 (billing)",
-      attempts: [
-        { provider: "anthropic", model: "claude", error: "429", reason: "rate_limit" },
-        { provider: "openai", model: "gpt-5.4", error: "402", reason: "billing" },
-      ],
-      soonestCooldownExpiry: Date.now() + 60_000,
-    }),
-  );
+it.each([
+  ["rate limit then billing", "rate_limit", "billing", undefined],
+  ["billing then listed-model rejection", "billing", "format", MODEL_CHAT_REJECTED_CODE],
+] as const)(
+  "surfaces billing guidance for mixed-cause fallback exhaustion: %s",
+  async (_label, firstReason, lastReason, code) => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new FailoverError(`All models failed (2): first (${firstReason}) | last (${lastReason})`, {
+        reason: lastReason,
+        code,
+        attempts: [
+          { provider: "anthropic", model: "claude", error: "first failure", reason: firstReason },
+          { provider: "openai", model: "gpt-5.4", error: "last failure", reason: lastReason, code },
+        ],
+        soonestCooldownExpiry: Date.now() + 60_000,
+      }),
+    );
 
-  const payload = await finalPayload(createRunAgentTurnParams(createFollowupRun()));
+    const payload = await finalPayload(createRunAgentTurnParams(createFollowupRun()));
 
-  expect(payload.text).toBe(formatBillingErrorMessage());
-  expect(payload.text).not.toContain("All models failed");
-  expect(payload.text).not.toContain("402 (billing)");
-  expect(payload.text).not.toContain("Rate-limited");
-});
+    expect(payload.text).toBe(formatBillingErrorMessage());
+    expect(payload.text).not.toContain("All models failed");
+    expect(payload.text).not.toContain("last failure");
+    expect(payload.text).not.toContain("Rate-limited");
+  },
+);
 
 it("keeps the provider reset hint when the chain summary exceeds the length guard", async () => {
   // Ordinary provider text must survive the length guard that rejects raw HTML/JSON.

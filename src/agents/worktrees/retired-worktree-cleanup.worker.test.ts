@@ -204,6 +204,27 @@ it("removes only the retired checkout and completes when it is already absent", 
   }
 });
 
+it("removes owned read-only directories such as a Go module cache", async () => {
+  const root = directories.make("retired-worktree-readonly-");
+  const retired = path.join(root, ".openclaw-removing-test");
+  const module = path.join(retired, "mod", "filippo.io", "age@v1.3.2");
+  await fs.mkdir(module, { recursive: true });
+  await fs.writeFile(path.join(module, ".gitattributes"), "* text=auto");
+  await fs.chmod(path.join(module, ".gitattributes"), 0o444);
+  await fs.chmod(module, 0o555);
+  await fs.chmod(path.dirname(module), 0o500);
+  const argv = [
+    process.execPath,
+    ...resolveRuntimeWorkerArgv(
+      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.retiredWorktreeCleanup),
+    ),
+    retired,
+  ];
+  const result = await runCommandWithTimeout(argv, { timeoutMs: 10_000 });
+  expect(result).toMatchObject({ code: 0, termination: "exit" });
+  await expect(fs.stat(retired)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 it("yields a large tree in bounded passes and resumes from the remaining files", async () => {
   const root = directories.make("retired-worktree-passes-");
   const retired = path.join(root, "retired");

@@ -273,8 +273,9 @@ type MemoryAudience =
 - A direct turn from the trusted agent owner has `owner-private` audience.
 - A direct turn from another sender, or a group, channel, or thread turn, has
   `conversation` audience for the durable root session.
-- A spawned child inherits its root audience only after the host validates each
-  recorded parent key, session ID, and lifecycle revision.
+- A spawned child inherits its root audience only while each recorded parent
+  exists and was not recreated or assigned to another owner after the spawn. A
+  parent reset keeps the audience.
 - A child spawned into another agent receives `owner-private` audience for its
   own agent only when the spawn that crossed agents was owner-attributed and the
   root is the owner's direct chat. Conversation audience never crosses agents;

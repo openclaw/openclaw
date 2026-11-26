@@ -2511,7 +2511,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(retained?.completion?.resultText).toBe("raw collector result");
     expect(readLifecycleRun(entry).completion?.required).toBe(false);
     expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
-    expect(readLifecycleRun(entry).retireAfterRequesterTurn).toBeUndefined();
+    expect(readLifecycleRun(entry).retireAfterSettle).toBeUndefined();
   });
 
   it.each(["tool-only success", "provider failure", "missing output"] as const)(
@@ -3740,8 +3740,8 @@ describe("requester settle wake trigger", () => {
       expect(readLifecycleRun(entry).requesterSettleWake).toEqual({
         status: "pending",
         attemptCount: 0,
-        retireAfterSettle: true,
       });
+      expect(readLifecycleRun(entry).retireAfterSettle).toBe(true);
       expect(settleWake).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           requesterSessionKey: "agent:main:main",
@@ -3789,7 +3789,7 @@ describe("requester settle wake trigger", () => {
         });
         expect(beforeWrite).toHaveBeenCalledOnce();
         if (retirement === "settle") {
-          expect(readLifecycleRun(entry).requesterSettleWake?.retireAfterSettle).toBe(true);
+          expect(readLifecycleRun(entry).retireAfterSettle).toBe(true);
           runs.delete(entry.runId);
         }
         expect(runs.has(entry.runId)).toBe(false);
@@ -4266,11 +4266,8 @@ describe("requester settle wake trigger", () => {
         // The child cannot wake its requester while that exact requester turn owns it.
         expect(readLifecycleRun(entry).completion?.resultText).toBe("delete-mode findings");
         expect(runs.has(entry.runId)).toBe(true);
-        expect(readLifecycleRun(entry).requesterSettleWake).toMatchObject({
-          status: "pending",
-          retireAfterSettle: true,
-        });
-        expect(readLifecycleRun(entry).retireAfterRequesterTurn).toBeUndefined();
+        expect(readLifecycleRun(entry).requesterSettleWake).toMatchObject({ status: "pending" });
+        expect(readLifecycleRun(entry).retireAfterSettle).toBe(true);
         expect(settleWake).not.toHaveBeenCalled();
         requesterTurn.end("run-requester");
         await settleRequesterTurn(controller, entry, false);

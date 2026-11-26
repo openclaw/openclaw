@@ -261,23 +261,6 @@ export function readLockPayloadSync(
   }
 }
 
-function shouldReclaimGatewayLock(params: {
-  lockPath: string;
-  payload: LockPayload | null;
-  platform: NodeJS.Platform;
-}): boolean {
-  if (classifyGatewayLockProcessNamespace(params.payload, params.lockPath) === "unknown") {
-    throw new GatewayLockNamespaceError(params.payload ?? {}, params.lockPath);
-  }
-  const ownerPid = params.payload?.pid;
-  const ownerStatus = ownerPid
-    ? resolveGatewayOwnerStatusSync(ownerPid, params.payload, params.platform, {
-        lockPath: params.lockPath,
-      })
-    : "unknown";
-  return ownerStatus === "dead";
-}
-
 export function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
   const resolvedStateDir = resolveStateDir(env);
   const stateDir = resolveIdentityPathViaExistingAncestorSync(resolvedStateDir);
@@ -573,13 +556,17 @@ export async function acquireGatewayLock(
             error instanceof GatewayLockNamespaceError &&
             (role === "gateway" || role === "sqlite-maintenance")
           ) {
+            // A crashed foreign owner's heartbeat goes stale within this wait.
             const remaining = Math.min(deadlineMs, heartbeatDeadlineMs) - now();
+            const age = error.heartbeatAgeMs;
             if (remaining <= 0) {
               return false;
             }
             if (!waited) {
               onWait(
-                `Waiting up to ${Math.ceil(remaining / 1000)} seconds for the previous Gateway to release state; an unverifiable owner will not be reclaimed automatically. ${error.message}`,
+                age === undefined
+                  ? error.message
+                  : `waiting for the previous Gateway to stop (last heartbeat ${Math.floor(age / 1000)}s ago)`,
               );
             }
             waited = true;
@@ -663,12 +650,15 @@ export async function acquireGatewayLock(
     assertStateOwnerCurrent(opts.assertCurrent);
     // Shipped Gateways discover this PID sidecar before starting. Synchronous
     // schema work retains the same fs-safe owner through its final reference.
-    const shouldReclaim = ({ payload: previous }: { payload: unknown }) =>
-      shouldReclaimGatewayLock({
-        lockPath: paths.stateLockPath,
-        payload: LockPayloadSchema.safeParse(previous).data ?? null,
-        platform: opts.platform ?? process.platform,
-      });
+    const shouldReclaim = ({ payload: previous }: { payload: unknown }) => {
+      const holder = LockPayloadSchema.safeParse(previous).data;
+      return (
+        holder !== undefined &&
+        resolveGatewayOwnerStatusSync(holder.pid, holder, opts.platform ?? process.platform, {
+          lockPath: paths.stateLockPath,
+        }) === "dead"
+      );
+    };
     if (!borrowedOwner) {
       projection = createGatewayStateProjection(
         acquireFileLockSync(paths.stateLockPath, {

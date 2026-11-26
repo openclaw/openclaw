@@ -166,7 +166,9 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    or trigger rollback.
 
 Once the resident launcher owns an installation, `gateway install` keeps that
-state directory's selected launcher as its service entry. Explicit retained-CLI
+state directory's selected launcher as its service entry, including before the
+first pending trial replaces an unmodified npm fallback. Checked durable CLI
+reuse follows the same selection as a new install. Explicit retained-CLI
 recovery still uses the requested recovery entry. Dry runs keep the existing
 read-only preview. Immutable activation and switches that need the in-place
 installer refuse with a next step; they never replace a launcher-owned
@@ -354,15 +356,18 @@ crash-after-migration cases check the serving version, trial outcome, schema,
 and seeded row counts and contents. The fixture changes scratch source only;
 it does not change the shipped schema or replace the other platform cells.
 
-For schema-version or migration changes, CI additionally boots the tested
-merge build on a fixture created by the PR fork-point release, kills it
-before Gateway listen, and records committed schemas and reader floors from
-copies. Its rollback projection restores T's config preimage and raised-floor
-SQLite stores only; other databases stay byte-exact. The previous release must
-then serve its seeded cron, sessions, and message history. Lazy stores that
-did not advance are reported as untouched, not claimed migrated. The
-compatibility gate becomes required when the candidate includes the
-reader-floor contract; fixture, target-schema, and integrity errors always fail.
+For schema-version or migration changes, CI additionally prepares the tested
+merge build through the PR fork-point release's public updater, then boots its
+real resident launcher. It kills the candidate before Gateway listen and
+records committed schemas and reader floors from inspection copies. The
+resident retries and rolls back using its own restore implementation; the
+test harness never restores config or databases. T must serve its seeded cron,
+sessions, and message history. Raised-floor stores must return to T's schema
+and floor; unraised stores must retain T+1's schema and floor. Lazy stores that
+did not advance are reported as untouched, not claimed migrated. This gate is
+required: reader failures, invalid targets, integrity errors, and incomplete
+rollback fail the lane. A fork point whose updater cannot prepare the candidate
+must be rebased.
 
 The selected lane also runs the agent SQLite migration chain from the fork-point
 schema through the real maintenance owner. Its test-side native observer rejects

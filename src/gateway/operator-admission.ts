@@ -16,10 +16,12 @@ import {
   restoreOperatorModelPolicySnapshot,
   type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
+import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
 import {
   isConfiguredCommandOwner,
   prepareCommandOwnerAuthority,
-} from "../auto-reply/command-auth.js";
+} from "../auto-reply/command-owner-facts.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import {
@@ -51,6 +53,7 @@ import type {
   PreparedUserProfileIdentity,
   UserChannelIdentity,
 } from "../state/user-profiles.types.js";
+import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { resolveGatewayAuthPolicyGrant } from "./auth-policy.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { gatewayPersonPrincipalAuthError, type ResolvedGatewayAuth } from "./auth.js";
@@ -251,6 +254,23 @@ export const readGatewayRequestAdmission = (client?: GatewayClient | null) => ({
   grant:
     client?.internal?.operatorRunAuthority?.grant ?? decideTurnGrant(client?.connect?.scopes ?? []),
 });
+
+/** A command sender's grant: the admitted turn's on the internal provider, an owner admitted at
+ * ingress or for a session event, or a configured owner principal for one of its identifiers. */
+export function readCommandSenderAdmission(
+  ctx: MsgContext,
+  owners: readonly string[],
+  senderIds: readonly string[],
+) {
+  const turn = isInternalMessageChannel(ctx.Provider)
+    ? (ctx.TurnGrant ?? decideTurnGrant(ctx.GatewayClientScopes ?? []))
+    : undefined;
+  const owner =
+    turn?.owner ||
+    getCommandOwnerAuthority(ctx)?.isCurrent() ||
+    senderIds.some((senderId) => owners.includes(senderId));
+  return { grant: decideTurnGrant(owner ? ["operator.admin"] : []) };
+}
 
 /** What channel ingress knows about a sender; admission decides what it may do. */
 export type ChannelSenderFacts = Readonly<
