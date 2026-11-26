@@ -65,12 +65,14 @@ export function summarizeWarmReloadCpu(
   const startUs = navigationStart * 1_000_000 + startMs * 1_000;
   const endUs = navigationStart * 1_000_000 + endMs * 1_000;
   const captureEndUs = navigationStart * 1_000_000 + probe.capturedUntilMs * 1_000;
+  // CDP can restore profiling on a new navigation agent after navigation starts.
+  // Require the attributed interval; retain any unrecorded navigation prefix below.
   if (
-    profile.startTime > navigationStart * 1_000_000 ||
+    profile.startTime > startUs ||
     profile.endTime < captureEndUs ||
     metric(finalMetrics, "Timestamp") * 1_000_000 < captureEndUs
   ) {
-    throw new Error("Cold CPU profile does not cover the complete cold capture window");
+    throw new Error("Cold CPU profile does not cover hello through the recorded capture end");
   }
   const counterStartMs = (metric(hello, "Timestamp") - navigationStart) * 1_000;
   const counterEndMs = (metric(rows, "Timestamp") - navigationStart) * 1_000;
@@ -92,11 +94,32 @@ export function summarizeWarmReloadCpu(
     throw new Error("Cold CPU thread counter reset between milestones");
   }
   const interval = clipInteractionCpuProfile(profile, startUs, endUs);
+  const navigationOffsetMs = (timeUs: number) => (timeUs - navigationStart * 1_000_000) / 1_000;
+  // Signed deltas can put the chronological last sample before the final array entry.
+  let sampleTime = profile.startTime;
+  let firstSampleTime = Infinity;
+  let lastSampleTime = -Infinity;
+  for (const delta of profile.timeDeltas!) {
+    sampleTime += delta;
+    firstSampleTime = Math.min(firstSampleTime, sampleTime);
+    lastSampleTime = Math.max(lastSampleTime, sampleTime);
+  }
   return {
     navigationStartSeconds: navigationStart,
     capturedUntilMs: probe.capturedUntilMs,
     sampleClock: "CDP monotonic microseconds; signed cumulative timeDeltas from profile.startTime",
     sampleWeight: "Elapsed sampling weight, not measured thread CPU",
+    coverage: {
+      scope: "Hello handled through recorded capture end",
+      recordingStartMs: navigationOffsetMs(profile.startTime),
+      recordingEndMs: navigationOffsetMs(profile.endTime),
+      firstSampleMs: navigationOffsetMs(firstSampleTime),
+      lastSampleMs: navigationOffsetMs(lastSampleTime),
+      requiredStartMs: startMs,
+      requiredEndMs: probe.capturedUntilMs,
+      unprofiledNavigationPrefixMs: Math.max(0, navigationOffsetMs(profile.startTime)),
+      fullNavigationCovered: profile.startTime <= navigationStart * 1_000_000,
+    },
     helloToRowPaint: { startMs, endMs, ...summarizeCpuProfile(interval, { includeTables: true }) },
     counters: {
       timeDomain: "threadTicks",

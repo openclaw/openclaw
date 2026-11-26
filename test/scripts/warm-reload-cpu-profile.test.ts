@@ -133,6 +133,10 @@ function transport(failedMethod?: string) {
 
 it("aligns signed samples to navigation while keeping delayed counter delivery separate", () => {
   const result = summarizeWarmReloadCpu(profile, probe, snapshots, finalMetrics);
+  expect(result.coverage).toMatchObject({
+    fullNavigationCovered: true,
+    unprofiledNavigationPrefixMs: 0,
+  });
   expect(result.helloToRowPaint).toMatchObject({ startMs: 20, endMs: 40, sampledMs: 20 });
   expect(result.helloToRowPaint.tables?.functions).toEqual([
     expect.objectContaining({ functionName: "inside", selfMs: 10 }),
@@ -170,13 +174,34 @@ it("aligns signed samples to navigation while keeping delayed counter delivery s
   ).toThrow("does not cover");
   expect(() =>
     summarizeWarmReloadCpu({ ...profile, endTime: 10_100_000 }, probe, snapshots, finalMetrics),
-  ).toThrow("complete cold capture");
+  ).toThrow("recorded capture end");
   expect(() =>
     summarizeWarmReloadCpu(profile, probe, snapshots, [{ name: "NavigationStart", value: 11 }]),
   ).toThrow("one navigation");
   expect(() =>
     summarizeWarmReloadCpu({ ...profile, samples: [] }, probe, snapshots, finalMetrics),
   ).toThrow("matching samples");
+});
+
+it("records an unprofiled navigation prefix without omitting post-hello work", () => {
+  const restarted = { ...profile, startTime: 10_010_000, timeDeltas: [10_000, 20_000, -10_000] };
+  const result = summarizeWarmReloadCpu(restarted, probe, snapshots, finalMetrics);
+  expect(result.coverage).toEqual({
+    scope: "Hello handled through recorded capture end",
+    recordingStartMs: 10,
+    recordingEndMs: 8_100,
+    firstSampleMs: 20,
+    lastSampleMs: 40,
+    requiredStartMs: 20,
+    requiredEndMs: 8_000,
+    unprofiledNavigationPrefixMs: 10,
+    fullNavigationCovered: false,
+  });
+  expect(result.helloToRowPaint.sampledMs).toBe(20);
+  expect(restarted.timeDeltas).toEqual([10_000, 20_000, -10_000]);
+  expect(() => summarizeWarmReloadCpu(restarted, probe, snapshots, metrics(7_999, 0.04))).toThrow(
+    "recorded capture end",
+  );
 });
 
 it("retains all raw samples and unmapped frames without visual or tracing commands", async () => {

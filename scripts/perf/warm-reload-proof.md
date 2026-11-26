@@ -172,8 +172,11 @@ snapshot offsets are explicit. Profiling and these markers add diagnostic overhe
 Only the first hello and first eligible row in the current document emit markers.
 Missing or duplicate snapshots, navigation changes, counter resets and incomplete
 sample coverage fail attribution instead of implying zero work.
-Cold mode requires the chat route. The profile must span navigation through the
-complete cold capture window, and final counters must still name that navigation.
+Cold mode requires the chat route. The profile must span hello handled through the
+recorded capture end, and final counters must still name that navigation. CDP can
+restart profiling when it restores a navigation agent. Recording and chronological first/last
+sample offsets, any unprofiled navigation prefix, and full-navigation coverage are
+explicit; a missing prefix is not reported as zero work or complete navigation coverage.
 No runtime behavior or performance acceptance threshold changes in this mode.
 
 The default `--admission signed-in` installs a random HttpOnly session cookie in

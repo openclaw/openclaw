@@ -18,6 +18,7 @@
 # Await the lazy row's actual command titles independently of its eager preview.
 # Verify the cold CPU diagnostic's signed-clock alignment, complete raw/native
 # attribution, missing/duplicate coverage and independent cleanup, while retaining
-# ordinary warm capture behavior. This adds 306 test lines.
-# Full branch growth is 1322 lines; the shared allowance remains 400.
-922
+# ordinary warm capture behavior. This adds 306 test lines. Another 25 lines
+# distinguish a recorded navigation prefix gap from missing post-hello coverage.
+# Full branch growth is 1347 lines; the shared allowance remains 400.
+947
