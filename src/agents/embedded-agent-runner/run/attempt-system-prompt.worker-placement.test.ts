@@ -1,5 +1,6 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { resolveAgentProfile } from "../../agent-profiles.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
@@ -13,7 +14,7 @@ const { createFixture } = await vi.hoisted(
 );
 
 async function preparePrompt(workerPlacement: boolean) {
-  const config = { agents: { defaults: { experimental: { localModelLean: false } } } };
+  const config = {};
   const fixture = createFixture({ pendingImageCount: 0 });
   const runtime = createAgentHarnessToolSurfaceRuntimeCore({
     config,
@@ -48,6 +49,7 @@ async function preparePrompt(workerPlacement: boolean) {
   } as EmbeddedRunAttemptParams;
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
     activeContextEngine: undefined,
+    agentProfile: resolveAgentProfile({ config }),
     attempt,
     bootstrap: createEmptyPromptBootstrap(),
     setup: createAttemptSetupFixture({
