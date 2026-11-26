@@ -1109,6 +1109,35 @@ it("builds the durable registered-tool superset without loading a provider runti
   ]);
 });
 
+it("blocks a previously declared intent callback on the next admitted turn after a deny", async () => {
+  const config = {
+    plugins: { allow: ["memory-core"], entries: { "memory-core": { enabled: true } } },
+  };
+  params.config = config;
+  params.senderIsOwner = true;
+  await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
+  const firstTurn = createBridge(await buildTools({ sandbox: null }));
+  const args = { action: "list" };
+  const positive = await call(firstTurn, "intent", args, "before-deny");
+  expect(positive.success, JSON.stringify(positive.contentItems)).toBe(true);
+  expect(positive.contentItems).toEqual([
+    { type: "inputText", text: expect.stringMatching(/"intents"\s*:\s*\[\]/) },
+  ]);
+  expectDefined(hostCapabilityClosers.pop(), "first turn host admission")();
+
+  params = { ...params, runId: "after-deny", config: { ...config, tools: { deny: ["intent"] } } };
+  await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
+  const nextTurn = createBridge(await buildTools({ sandbox: null }), {
+    registeredSpecs: firstTurn.specs,
+  });
+  await expect(call(nextTurn, "intent", args, "after-deny")).resolves.toMatchObject({
+    success: false,
+    contentItems: [
+      { type: "inputText", text: "OpenClaw tool is not available for this turn: intent" },
+    ],
+  });
+});
+
 it("enables gateway subagent binding for forced private QA Codex runs", async () => {
   vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
   vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
