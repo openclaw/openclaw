@@ -465,6 +465,7 @@ describe("dictation refinement at the composer boundary", () => {
     expect(checkbox).toHaveProperty("checked", false);
     checkbox.click();
     expect(h.owner.refinementEnabled).toBe(true);
+    flush();
     const status = view.getByRole("status");
     expect(status.getAttribute("aria-live")).toBe("polite");
     expect(status.getAttribute("aria-atomic")).toBe("true");

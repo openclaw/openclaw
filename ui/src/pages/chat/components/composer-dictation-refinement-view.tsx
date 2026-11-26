@@ -61,7 +61,7 @@ export function DictationRefinementView(props: {
             <label>
               {t("chat.dictation.refinementCaption")}
               <textarea
-                readOnly
+                readonly
                 dir="auto"
                 aria-live="off"
                 value={owner()?.provisionalTranscript ?? ""}
@@ -73,7 +73,7 @@ export function DictationRefinementView(props: {
             <label>
               {t("chat.dictation.refinementPreview")}
               <textarea
-                readOnly
+                readonly
                 dir="auto"
                 value={refinement()?.result?.candidateText ?? refinement()?.result?.text ?? ""}
                 style={{ width: "100%", "box-sizing": "border-box" }}
@@ -84,7 +84,7 @@ export function DictationRefinementView(props: {
               <label>
                 {t("chat.dictation.refinementOriginal")}
                 <textarea
-                  readOnly
+                  readonly
                   dir="auto"
                   value={refinement()?.result?.rawText ?? ""}
                   style={{ width: "100%", "box-sizing": "border-box" }}
@@ -105,7 +105,7 @@ export function DictationRefinementView(props: {
             <label>
               {t("chat.dictation.refinementIncomplete")}
               <textarea
-                readOnly
+                readonly
                 dir="auto"
                 value={refinement()?.incompleteCaption ?? ""}
                 style={{ width: "100%", "box-sizing": "border-box" }}

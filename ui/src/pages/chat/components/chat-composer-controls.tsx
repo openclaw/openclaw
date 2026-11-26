@@ -255,7 +255,7 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
       <Show when={props.readDictation?.()?.refinementAvailable}>
         <button
           type="button"
-          class="chat-talk-input-picker__trigger"
+          class="chat-controls__provider-settings"
           aria-label={t("chat.composer.dictationTextOptions")}
           aria-expanded={props.readDictation?.().refinementOptionsOpen ? "true" : "false"}
           onClick={() => props.readDictation?.().toggleRefinementOptions()}

@@ -176,16 +176,29 @@ export function ComposerDictationStatus(props: {
   readDictation: () => ComposerDictationOwner | undefined;
 }) {
   return (
+    <Show when={props.readDictation()?.active || props.readDictation()?.transcribing}>
+      <ChatLazyBoundary>
+        <ActiveDictationStatus readDictation={props.readDictation} />
+      </ChatLazyBoundary>
+    </Show>
+  );
+}
+
+const DictationRefinementView = lazy(() => import("./composer-dictation-status.tsx"), {
+  export: "DictationRefinementView",
+});
+
+export function ComposerDictationReview(props: {
+  readDictation: () => ComposerDictationOwner | undefined;
+}) {
+  return (
     <Show
       when={
-        props.readDictation()?.active ||
-        props.readDictation()?.transcribing ||
-        props.readDictation()?.refinementOptionsOpen ||
-        props.readDictation()?.refinementEnabled
+        props.readDictation()?.refinementOptionsOpen || props.readDictation()?.refinementEnabled
       }
     >
       <ChatLazyBoundary>
-        <ActiveDictationStatus readDictation={props.readDictation} />
+        <DictationRefinementView readDictation={props.readDictation} />
       </ChatLazyBoundary>
     </Show>
   );

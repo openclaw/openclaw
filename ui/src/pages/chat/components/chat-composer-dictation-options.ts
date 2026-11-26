@@ -19,7 +19,7 @@ export function createComposerDictationOptions(
     client: props.gatewayClient ?? null,
     sessionKey: props.sessionKey,
     draftKey: composerDraftKey(props),
-    accountId: props.userId,
+    accountId: props.userId ?? undefined,
     getDraftRevision: () => state.editRevision,
     getDraftText: () =>
       getDraft?.() ?? draftSource?.read().draft ?? state.composerTextarea?.value ?? draft,

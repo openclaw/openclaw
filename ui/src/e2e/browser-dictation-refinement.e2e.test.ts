@@ -4,6 +4,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import { rasterizeProofAnnotations } from "../test-helpers/proof-annotations.ts";
 import { installTalkBrowserFixtures } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -32,7 +33,13 @@ async function tabTo(page: Page, target: Locator) {
   throw new Error(`Control was not keyboard reachable: ${String(target)}`);
 }
 
-async function capture(page: Page, stage: string, surface: Locator, content: Locator[]) {
+async function capture(
+  page: Page,
+  stage: string,
+  surface: Locator,
+  content: Locator[],
+  label?: string,
+) {
   if (!captureProof) {
     return;
   }
@@ -57,12 +64,34 @@ async function capture(page: Page, stage: string, surface: Locator, content: Loc
       2,
     ),
   );
+  if (label) {
+    const annotations = {
+      viewport: page.viewportSize()!,
+      scale: await page.evaluate(() => window.devicePixelRatio),
+      annotations: [
+        {
+          kind: "outline" as const,
+          rect: frame.elements.at(-1)!.bounds,
+          text: label,
+          labelAt: { x: 16, y: 24 },
+          color: "#78D9C5",
+        },
+      ],
+    };
+    await writeFile(
+      path.join(suite.artifactDir, `${stage}-annotations.json`),
+      JSON.stringify(annotations, null, 2),
+    );
+    await writeFile(
+      path.join(suite.artifactDir, `${stage}-annotated.png`),
+      await rasterizeProofAnnotations(suite.browser, { ...annotations, image: frame.png }),
+    );
+  }
 }
 
 async function openDictation(page: Page) {
   await page.clock.install({ time: new Date("2026-11-26T12:00:00Z") });
   const gateway = await installMockGateway(page, {
-    deferredMethods: ["talk.session.create", "talk.session.close"],
     historyMessages: [
       {
         role: "assistant",
@@ -96,7 +125,7 @@ async function openDictation(page: Page) {
   let captures = 0;
   let sequence = 0;
   const start = async () => {
-    const after = (await gateway.getRequests("talk.session.create")).length;
+    const after = await gateway.deferNext("talk.session.create");
     captureId = `dictation-refinement-${++captures}`;
     await gateway.setMethodResponse("talk.session.create", {
       sessionId: captureId,
@@ -113,7 +142,7 @@ async function openDictation(page: Page) {
     await shell.locator('.agent-chat__dictation-status [data-status="listening"]').waitFor();
   };
   const stop = async (control: Locator) => {
-    const after = (await gateway.getRequests("talk.session.close")).length;
+    const after = await gateway.deferNext("talk.session.close");
     await tabTo(page, control);
     await page.keyboard.press("Enter");
     await page.clock.runFor(1);
@@ -168,6 +197,89 @@ suite.define(() => {
       await expect.poll(() => h.draft.inputValue()).toBe(`${initialDraft} ${finalText}`);
       expect(await h.gateway.getRequests("chat.send")).toHaveLength(0);
       await capture(page, "baseline-final", h.shell, [h.draft]);
+    }));
+
+  it("keeps finalized text in review while the synthetic Gateway holds close for five seconds", () =>
+    suite.withPage(contextOptions, async ({ page }) => {
+      const h = await openDictation(page);
+      const review = h.shell.locator(".agent-chat__dictation-refinement");
+      const expectFullWidth = async () => {
+        const available = await h.shell.locator(".agent-chat__input").evaluate((element) => {
+          const style = getComputedStyle(element);
+          return (
+            element.clientWidth -
+            Number.parseFloat(style.paddingLeft) -
+            Number.parseFloat(style.paddingRight)
+          );
+        });
+        expect(available).toBeGreaterThan(0);
+        await expect
+          .poll(() => review.evaluate((element) => element.getBoundingClientRect().width))
+          .toBeGreaterThanOrEqual(available * 0.8);
+      };
+      await tabTo(
+        page,
+        h.microphone.getByRole("button", { name: "Dictation text options", exact: true }),
+      );
+      await page.keyboard.press("Enter");
+      await tabTo(
+        page,
+        review.getByRole("checkbox", { name: "Review dictated text before inserting" }),
+      );
+      await page.keyboard.press("Space");
+      await h.start();
+      await h.stop(h.shell.locator("button.chat-send-btn--dictation-commit"));
+      await h.emit("transcript", finalText);
+      // The real relay composition test proves this five-second drain contract.
+      // Here the Gateway events are synthetic; the built UI owns its actual deadline.
+      await page.clock.runFor(2_501);
+      const status = review.getByRole("status");
+      await capture(page, "provider-drain-pending", h.shell, [h.draft, status], "Close pending");
+      expect(await status.textContent()).toBe("Finishing text. The microphone is off.");
+      expect(await h.draft.inputValue()).toBe(initialDraft);
+      await page.clock.runFor(2_499);
+      await h.emit("close");
+      await h.gateway.resolveDeferred("talk.session.close", { ok: true });
+      const preview = review.getByRole("textbox", { name: "Text preview", exact: true });
+      await expect.poll(() => preview.inputValue()).toBe(finalText);
+      expect(await status.textContent()).toBe("Text is ready to review. Nothing has been sent.");
+      expect(await h.draft.inputValue()).toBe(initialDraft);
+      expect(await h.gateway.getRequests("chat.send")).toHaveLength(0);
+      await expectFullWidth();
+      await capture(
+        page,
+        "provider-drain-ready",
+        h.shell,
+        [h.draft, preview, status],
+        "Ready after close",
+      );
+      await review.getByRole("button", { name: "Use reviewed text", exact: true }).click();
+      await expect.poll(() => h.draft.inputValue()).toBe(`${initialDraft} ${finalText}`);
+      await preview.waitFor({ state: "detached" });
+      expect(await h.gateway.getRequests("chat.send")).toHaveLength(0);
+      const options = h.microphone.getByRole("button", {
+        name: "Dictation text options",
+        exact: true,
+      });
+      const checkbox = review.getByRole("checkbox", {
+        name: "Review dictated text before inserting",
+      });
+      await options.click();
+      await expect.poll(() => options.getAttribute("aria-expanded")).toBe("false");
+      expect(await checkbox.isVisible()).toBe(false);
+      await options.click();
+      await expect.poll(() => checkbox.isVisible()).toBe(true);
+      expect(await checkbox.isChecked()).toBe(true);
+
+      await h.draft.fill("");
+      await page.getByText("Review the draft before sending.", { exact: true }).click();
+      expect(await h.draft.inputValue()).toBe("");
+      expect(await h.draft.evaluate((element) => element === document.activeElement)).toBe(false);
+      expect(await h.shell.getAttribute("data-mobile-composer")).toBe("true");
+      await expect.poll(() => h.shell.getAttribute("data-composer-resting")).toBe("true");
+      await expectFullWidth();
+      await capture(page, "empty-unfocused-options", h.shell, [h.draft, review]);
+      expect(await h.gateway.getRequests("chat.send")).toHaveLength(0);
     }));
 
   it("reviews, accepts, cancels, and recovers incomplete dictation with the keyboard on a narrow screen", () =>

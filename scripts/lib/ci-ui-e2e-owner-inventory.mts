@@ -344,6 +344,15 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ],
   ),
   pageWatch(
+    "ui/src/e2e/browser-dictation-refinement.real-gateway.e2e.test.ts",
+    ["chat"],
+    [
+      "src/gateway/talk/transcription-relay.ts",
+      "src/gateway/talk/file-transcription.ts",
+      "src/shared/dictation-refinement/coordinator.ts",
+    ],
+  ),
+  pageWatch(
     "ui/src/e2e/browser-panel-width.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
