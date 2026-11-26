@@ -221,7 +221,6 @@ export function createSessionsListTool(opts?: {
       const visibilityGuard = createSessionVisibilityDecisionChecker({
         action: "list",
         defaultAgentId: requesterAgentId,
-        requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,
         sessionReadAgentOnly: opts?.sessionReadAgentOnly,

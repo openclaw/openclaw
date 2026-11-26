@@ -397,24 +397,11 @@ export function createSessionsHistoryTool(opts?: {
       const normalizedInputKey = sessionKeyParam.trim();
       const isCurrentSession = normalizedInputKey === "current";
       const isSessionIdInput =
-        shouldResolveSessionIdInput(normalizedInputKey) &&
+        shouldResolveSessionIdInput(sessionKeyParam) &&
         !isSessionToolMainAlias(normalizedInputKey, { mainKey, alias });
       const inputStoreOwner = isSessionIdInput
         ? { kind: "none" as const }
         : resolvePersistedSessionStoreOwnerForKey(cfg, sessionKeyParam);
-      const inputAgentId =
-        parseAgentSessionKey(normalizedInputKey)?.agentId ??
-        (inputStoreOwner.kind === "configured" ? inputStoreOwner.agentId : undefined);
-      if (
-        opts?.sessionReadAgentOnly &&
-        inputAgentId &&
-        normalizeAgentId(inputAgentId) !== requesterAgentId
-      ) {
-        return jsonResult({
-          status: "forbidden",
-          error: "This run can read only its own agent's session history.",
-        });
-      }
       const resolvedSession = await resolveSessionReference({
         action: "history",
         sessionKey: sessionKeyParam,
