@@ -1,7 +1,10 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { releaseCompletionCustody } from "./native-subagent-admission-custody.js";
-import type { CodexNativeSubagentAssignmentInventory } from "./native-subagent-assignment-inventory.js";
+import {
+  type CodexNativeSubagentAssignmentInventory,
+  MAX_NATIVE_SUBAGENT_OBSERVATIONS,
+} from "./native-subagent-assignment-inventory.js";
 import type { CodexNativeSubagentCloseOwner } from "./native-subagent-close-owner.js";
 import type { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
@@ -463,7 +466,7 @@ export function readNativeSubagentObservations(
     if (!state) {
       continue;
     }
-    if (children.length === 128) {
+    if (children.length === MAX_NATIVE_SUBAGENT_OBSERVATIONS) {
       truncated = true;
       break;
     }

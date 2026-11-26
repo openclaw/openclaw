@@ -2,9 +2,7 @@ import assert from "node:assert/strict";
 import { AsyncResource } from "node:async_hooks";
 import { request } from "node:http";
 import path from "node:path";
-import type { AgentHarnessCompletionCustody } from "openclaw/plugin-sdk/agent-harness-completion";
 import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
@@ -16,23 +14,11 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNativeSubagentSessionAuthority } from "./native-subagent-assignment-store.js";
+import { registerNativeSubagentDisconnectCases } from "./native-subagent-disconnect.test-support.js";
 import {
   createCodexNativeSubagentHistoryOwner,
   type CodexNativeSubagentHistoryOwner,
 } from "./native-subagent-history-owner.js";
-import {
-  agentMessage,
-  collabItem,
-  CodexNativeSubagentMonitor,
-  createClient,
-  createNativeModelSourceFixture,
-  createRuntime,
-  createCompletionScope,
-  directSpawnItem,
-  notifyChildStarted,
-  observeCompletionAttempts,
-  threadRead,
-} from "./native-subagent-monitor.test-support.js";
 import type { CodexNativeSubagentPendingAssignment as Assignment } from "./native-subagent-pending-assignments.js";
 import type { CodexNativeSubagentSubmission as Submission } from "./native-subagent-submission.js";
 import { scopeCodexRunBindingStore } from "./session-binding-scope.js";
@@ -182,6 +168,18 @@ async function fixture(initialReceipt?: Submission) {
     readSubmissions: submissionStore.read,
   };
 }
+
+const disconnectFixture = {
+  binding,
+  consumeSubmission,
+  fixture,
+  identity,
+  makeAssignment,
+  receipt,
+  recordSubmission,
+};
+
+export type NativeSubagentDisconnectFixture = typeof disconnectFixture;
 
 describe("native subagent submission receipts in the binding store", () => {
   it("persists an authenticated HTTP receipt after its startup binding lease closes", async () => {
@@ -379,363 +377,7 @@ describe("native subagent submission receipts in the binding store", () => {
     },
   );
 
-  it.each([
-    "receipt",
-    "assignment",
-    "lost final",
-    "still running",
-    "idle during read",
-    "active during read",
-    "still interrupted on reread",
-    "revoked while running",
-    "rotated during read",
-    "registered during read",
-    "registered while running",
-    "revoked before read",
-  ])(
-    "settles an accepted follow-up after Stop acknowledgement failure or disconnect (%s)",
-    async (scenario) => {
-      const queued =
-        scenario === "lost final"
-          ? {
-              ...receipt,
-              callId: "queued-call",
-              childThreadId: "sibling",
-              predecessorRunId: "codex-thread:sibling",
-              predecessorNativeTurnId: "sibling-a",
-              submissionId: "sibling-b",
-            }
-          : undefined;
-      const f = await fixture(queued);
-      const { owner, assertCurrent, reopen, assignmentStore, submissionStore } = f;
-      const stopReceipt = { ...receipt, predecessorRunId: "codex-thread:child-thread" };
-      const { childThreadId, submissionId, predecessorNativeTurnId, parentTurnId, callId } =
-        stopReceipt;
-      const parentThreadId = binding.threadId;
-      const assignment = makeAssignment(owner, { submission: stopReceipt });
-      const assignmentRecorded = createDeferred<boolean>();
-      const receiptRecorded = createDeferred<boolean>();
-      const rejectedKind =
-        scenario === "receipt" ? consumeSubmission : "consume-native-subagent-assignment";
-      let reject = false;
-      const mutate = f.store.mutate.bind(f.store);
-      vi.spyOn(f.store, "mutate").mockImplementation((caller, mutation, ...guards) => {
-        if (reject && mutation.kind === rejectedKind) {
-          return Promise.resolve(false);
-        }
-        const recorded = mutate(caller, mutation, ...guards);
-        if (mutation.kind === recordSubmission) {
-          receiptRecorded.resolve(recorded);
-        } else if (
-          mutation.kind === "record-native-subagent-assignment" &&
-          mutation.assignment.runId === assignment.runId &&
-          !mutation.assignment.submission
-        ) {
-          assignmentRecorded.resolve(recorded);
-        }
-        return recorded;
-      });
-      const createObserverClient = () => {
-        const client = createClient();
-        if (queued) {
-          const { childThreadId: sibling, predecessorNativeTurnId: turnId } = queued;
-          client.setThreadRead(sibling, threadRead({ childThreadId: sibling, turnId }));
-        }
-        return client;
-      };
-      const client = createObserverClient();
-      const parentItem = (item: Parameters<typeof client.item>[0]) =>
-        client.item(item, parentTurnId, parentThreadId);
-      const activeTurn = (turnId: string) =>
-        threadRead({ turnId, status: "inProgress", threadStatus: "active" });
-      const completedTurn = (turnId: string, result: string, threadStatus: "idle" | "notLoaded") =>
-        threadRead({ turnId, result, resultPhase: "final_answer", threadStatus });
-      client.setThreadRead(childThreadId, activeTurn(predecessorNativeTurnId));
-      const runtime = createRuntime();
-      const authority = new AbortController();
-      const custody: AgentHarnessCompletionCustody = {
-        signal: authority.signal,
-        isCurrent: () => !authority.signal.aborted,
-        retain: () => custody,
-        settleExecution() {},
-        release() {},
-      };
-      runtime.captureAgentHarnessCompletionCustody.mockResolvedValue(custody);
-      const interrupt = vi.fn(async (threadId: string, turnId: string, guard: () => void) => {
-        guard();
-        expect([threadId, turnId]).toEqual([childThreadId, submissionId]);
-        await client.completeTurn({ turnId: submissionId, status: "interrupted" });
-        return true;
-      });
-      const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-        interruptChildAndWait: interrupt,
-        hasObservationBacking: (_parent, child) => child === queued?.childThreadId,
-      });
-      const requestCustody = Object.freeze({});
-      const modelSource = createNativeModelSourceFixture(["test-model"]);
-      const cleanup = vi.fn(async (_threadId: string, _turnId: string, guard: () => void) =>
-        guard(),
-      );
-      const parentObservation = () => ({
-        parentThreadId,
-        requesterSessionKey: identity.sessionKey,
-        historyOwner: owner,
-        completionScope: createCompletionScope(identity.sessionKey),
-        assignmentStore,
-        submissionStore,
-      });
-      const parent = await monitor.registerParent({
-        ...parentObservation(),
-        requesterTurnRunId: "parent-run",
-        requestCustody,
-        agentId: identity.agentId,
-        modelSource,
-        configurationQualification: {
-          assertCurrent: modelSource.assertCurrent,
-          hasProvider: (provider) => provider === "test-provider",
-        },
-        claimDirectChild: () => () => {},
-        cancelChildProcesses: cleanup,
-      });
-      const stop = () =>
-        monitor.withDescendantCancellation(
-          {
-            parentThreadId,
-            agentId: identity.agentId,
-            sessionKey: identity.sessionKey,
-            sessionId: identity.sessionId,
-            lifecycleRevision: owner.lifecycleRevision,
-            acceptsRequest: (acceptedCustody) => acceptedCustody === requestCustody,
-            assertCurrent,
-          },
-          (cancel) => cancel(),
-        );
-      try {
-        await parent.ready;
-        parent.bindTurn(parentTurnId);
-        await notifyChildStarted(client);
-        await parentItem(directSpawnItem("v1", parentThreadId, childThreadId));
-        await client.startTurn(predecessorNativeTurnId);
-        await client.finishTurn(
-          predecessorNativeTurnId,
-          agentMessage("a-final", "A result", "final_answer"),
-        );
-        const wait = (id: string, message: string) => {
-          const agentsStates = { [childThreadId]: { status: "completed", message } };
-          return collabItem("wait", [childThreadId], { id, agentsStates });
-        };
-        await parentItem(wait("wait-a", "A result"));
-        const predecessor = completedTurn(predecessorNativeTurnId, "A result", "notLoaded");
-        predecessor.thread.modelProvider = "test-provider";
-        client.setThreadRead(childThreadId, predecessor);
-        await monitor.prepareModelInput({
-          threadId: parentThreadId,
-          turnId: parentTurnId,
-          itemId: callId,
-          target: childThreadId,
-          readQualification: () => undefined,
-          assertCurrent,
-        });
-        const history = activeTurn(submissionId);
-        assert(history.thread.turns && predecessor.thread.turns);
-        history.thread.turns.unshift(...predecessor.thread.turns);
-        history.thread.modelProvider = "test-provider";
-        client.setThreadRead(childThreadId, history);
-        await parentItem(collabItem("sendInput", [childThreadId], { id: callId }));
-        await client.sendInputOutput({
-          parentThreadId,
-          turnId: parentTurnId,
-          callId,
-          submissionId,
-        });
-        await client.startTurn(submissionId);
-        expect(await assignmentRecorded.promise).toBe(true);
-        expect(await receiptRecorded.promise).toBe(true);
-        const expectSaved = async (assignments: Assignment[], receipts: Submission[]) => {
-          expect(await assignmentStore.read()).toEqual(assignments);
-          expect(await submissionStore.read()).toEqual(receipts);
-        };
-        await expectSaved([assignment], queued ? [queued, stopReceipt] : [stopReceipt]);
-        if (scenario !== "receipt" && scenario !== "assignment") {
-          await parent.unregister();
-          const attempts = observeCompletionAttempts();
-          const peer = createClient();
-          peer.client.initialize = async () => {};
-          peer.client.close = vi.fn(peer.close);
-          let replacement: typeof monitor | undefined;
-          let observer: typeof parent | undefined;
-          const final = completedTurn(submissionId, "B result", "idle");
-          final.thread.turns!.unshift(...predecessor.thread.turns);
-          const registerAgain = async (snapshot = final) => {
-            const next = createObserverClient();
-            next.setThreadRead(childThreadId, snapshot);
-            replacement = new CodexNativeSubagentMonitor(next.client, runtime);
-            observer = await replacement.registerParent(parentObservation());
-            await observer.ready;
-            await attempts.settle();
-            return next;
-          };
-          const running = scenario.endsWith("running") ? createDeferred<void>() : undefined;
-          const releaseOther = vi.fn();
-          if (scenario === "still running") {
-            const other = await monitor.registerParent({
-              parentThreadId: "other-parent",
-              submissionStore: { ...submissionStore, read: async () => [], release: releaseOther },
-            });
-            await other.ready;
-          }
-          const idle = (threadId: string) =>
-            peer.notify({
-              method: "thread/status/changed",
-              params: { threadId, status: { type: "idle" } },
-            });
-          const stillInterrupted = scenario === "still interrupted on reread";
-          const activeFinal = scenario === "active during read";
-          const overlaps = scenario === "idle during read" || activeFinal || stillInterrupted;
-          peer.setThreadReadFactory(childThreadId, async () => {
-            if (overlaps) {
-              await idle(childThreadId);
-              if (activeFinal) {
-                history.thread.turns = final.thread.turns;
-              } else {
-                history.thread.status = { type: "idle" };
-                const successor = history.thread.turns!.at(-1)!;
-                successor.status = "interrupted";
-                successor.completedAt = null;
-              }
-              peer.setThreadRead(childThreadId, stillInterrupted ? history : final);
-              return history;
-            }
-            if (running) {
-              history.thread.turns!.at(-1)!.completedAt = null;
-              running.resolve();
-              return history;
-            }
-            if (scenario === "rotated during read") {
-              await f.rotate("replacement");
-            }
-            if (scenario === "registered during read") {
-              await registerAgain();
-            }
-            return final;
-          });
-          const openPeer = vi.fn(() => peer.client);
-          client.client.getDisconnectedPeer = () => openPeer;
-          try {
-            client.close();
-            if (scenario === "revoked before read") {
-              authority.abort();
-            }
-            if (running) {
-              await running.promise;
-              peer.setThreadRead(childThreadId, final);
-              await idle("unrelated");
-              await expectSaved([assignment], [stopReceipt]);
-              expect(peer.request).toHaveBeenCalledOnce();
-              expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-              if (scenario === "still running") {
-                expect(releaseOther).toHaveBeenCalledOnce();
-              }
-              if (scenario === "revoked while running") {
-                authority.abort();
-                await monitor.dispose();
-              }
-              if (scenario === "registered while running") {
-                const next = await registerAgain(history);
-                await idle(childThreadId);
-                await monitor.dispose();
-                await attempts.settle();
-                expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-                await expectSaved([assignment], [stopReceipt]);
-                next.setThreadRead(childThreadId, final);
-                observer!.bindTurn("next");
-                await next.finishTurn(submissionId, agentMessage("b", "B result", "final_answer"));
-                await next.item(wait("wait-b", "B result"), "next");
-                await observer!.unregister();
-                await attempts.settle();
-                await expectSaved([], []);
-                expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-                return;
-              }
-              await idle(childThreadId);
-            }
-            await monitor.dispose();
-            await attempts.settle();
-            if (overlaps) {
-              const read = ["thread/read", { threadId: childThreadId, includeTurns: true }];
-              expect(peer.request.mock.calls.map((call) => call.slice(0, 2))).toEqual([read, read]);
-            }
-            if (authority.signal.aborted) {
-              for (const call of [openPeer, peer.request, peer.client.close]) {
-                expect(call).toHaveBeenCalledTimes(running ? 1 : 0);
-              }
-            }
-            if (stillInterrupted || authority.signal.aborted) {
-              expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-              await expectSaved([assignment], [stopReceipt]);
-              return;
-            }
-            if (scenario === "registered during read") {
-              expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-            } else if (queued) {
-              expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
-              await expectSaved([], [queued]);
-              await registerAgain();
-            }
-          } finally {
-            if (running) {
-              authority.abort();
-            }
-            await observer?.unregister();
-            await attempts.settle();
-            await replacement?.dispose();
-          }
-          if (scenario !== "rotated during read") {
-            expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
-              expect.objectContaining({ childSessionKey: assignment.runId, result: "B result" }),
-            );
-            await expectSaved([], queued ? [queued] : []);
-          } else {
-            expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-            expect(
-              await f.store.readNativeSubagentAssignments?.(identity, {
-                ...owner,
-                parentThreadId: "replacement",
-              }),
-            ).toEqual([assignment]);
-          }
-          expect(peer.client.close).toHaveBeenCalledOnce();
-          return;
-        }
-        reject = true;
-        const failed = await stop();
-        expect(failed.killed).toBe(0);
-        expect(failed.errors).toEqual([
-          new Error(
-            scenario === "receipt"
-              ? "Cancelled native follow-up receipt was not acknowledged."
-              : "Native assignment was not acknowledged.",
-          ),
-        ]);
-        await reopen();
-        await expectSaved([assignment], scenario === "receipt" ? [stopReceipt] : []);
-        reject = false;
-        const retried = await stop();
-        expect([retried.killed, retried.errors]).toEqual([1, undefined]);
-        expect(interrupt).toHaveBeenCalledOnce();
-        expect(cleanup.mock.calls.map(([threadId, turnId]) => [threadId, turnId])).toEqual([
-          [childThreadId, submissionId],
-          [childThreadId, submissionId],
-        ]);
-        await reopen();
-        await expectSaved([], []);
-        expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-      } finally {
-        await parent.unregister();
-        await monitor.dispose();
-      }
-    },
-  );
+  registerNativeSubagentDisconnectCases(disconnectFixture);
 
   it("refuses receipt persistence after the captured parent lifecycle changes", async () => {
     const { root, owner, mutate, readSubmissions } = await fixture();

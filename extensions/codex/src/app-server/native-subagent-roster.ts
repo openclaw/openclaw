@@ -1,4 +1,5 @@
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
+import { readDetachedNativeSubagents } from "./native-subagent-assignment-inventory.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import type { NativeSubagentsSnapshot } from "./native-subagent-monitor-types.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
@@ -8,7 +9,7 @@ import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js
 
 type NativeSubagentsReadParams = Parameters<NonNullable<AgentHarness["readNativeSubagents"]>>[0];
 
-/** Reads only a current binding's already retained monitor; unavailable owners stay unavailable. */
+/** Reads observations already retained for the current binding. */
 export async function readCodexNativeSubagents(
   params: NativeSubagentsReadParams,
   options: { bindingStore: CodexAppServerBindingStore },
@@ -47,6 +48,7 @@ export async function readCodexNativeSubagents(
       }
     };
     assertCurrent();
+    const request = { ...params, parentThreadId: binding.threadId, historyOwner, assertCurrent };
     const retained = await retainSharedCodexAppServerClientByInstanceId(binding.clientId, {
       waitForExit: false,
     });
@@ -55,18 +57,15 @@ export async function readCodexNativeSubagents(
       assertCurrent();
       if (retained) {
         snapshot = codexNativeSubagentMonitorRuntime.readNativeSubagents({
-          ...params,
+          ...request,
           client: retained.client,
-          parentThreadId: binding.threadId,
-          historyOwner,
-          assertCurrent,
         });
       }
     } finally {
       await retained?.release();
     }
     assertCurrent();
-    return snapshot;
+    return snapshot ?? (await readDetachedNativeSubagents(request, binding.clientId));
   } finally {
     reader?.release();
   }

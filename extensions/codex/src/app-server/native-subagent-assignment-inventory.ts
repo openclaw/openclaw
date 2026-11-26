@@ -9,6 +9,8 @@ import { assertHistoryOwnerMatchesRegistration } from "./native-subagent-history
 import type { CodexNativeSubagentHistoryRecovery } from "./native-subagent-history-recovery.js";
 import type {
   ChildState,
+  NativeSubagentsReadRequest,
+  NativeSubagentsSnapshot,
   ParentOwner,
   ParentState,
   ThreadRecovery,
@@ -20,19 +22,86 @@ import {
 import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
 import type { CodexTurn } from "./protocol.js";
 
+export const MAX_NATIVE_SUBAGENT_OBSERVATIONS = 128;
+
+type DetachedRead = {
+  state: ParentState;
+  receipt: CodexNativeSubagentSubmission;
+  clientId: string;
+  assertRunning?: () => void;
+};
+
 // Only the read can be cancelled across monitors. Each keeps its own completion authority.
-const detachedReads = new Map<
-  AbortController,
-  { state: ParentState; receipt: CodexNativeSubagentSubmission }
->();
+const detachedReads = new Map<AbortController, DetachedRead>();
 
 export function watchDetachedSubmission(
   state: ParentState,
   receipt: CodexNativeSubagentSubmission,
+  clientId: string,
 ) {
   const controller = new AbortController();
-  detachedReads.set(controller, { state, receipt });
-  return { signal: controller.signal, [Symbol.dispose]: () => detachedReads.delete(controller) };
+  const read: DetachedRead = { state, receipt, clientId };
+  detachedReads.set(controller, read);
+  return {
+    signal: controller.signal,
+    setRunning(assertRunning?: () => void) {
+      read.assertRunning = assertRunning;
+    },
+    [Symbol.dispose]: () => detachedReads.delete(controller),
+  };
+}
+
+export async function readDetachedNativeSubagents(
+  request: NativeSubagentsReadRequest,
+  clientId: string,
+): Promise<NativeSubagentsSnapshot> {
+  const watchers = [...detachedReads].filter(
+    ([controller, read]) =>
+      read.assertRunning &&
+      !controller.signal.aborted &&
+      read.clientId === clientId &&
+      read.state.agentId === request.agentId &&
+      read.state.requesterSessionKey === request.sessionKey &&
+      read.state.requesterStorePath === request.storePath &&
+      isDeepStrictEqual(read.state.historyOwner, request.historyOwner),
+  );
+  const first = watchers[0];
+  if (!first) {
+    return;
+  }
+  const pending = await first[1].state.assignmentStore?.read();
+  request.assertCurrent();
+  const children: NonNullable<NativeSubagentsSnapshot>["children"] = [];
+  for (const [controller, read] of watchers) {
+    if (
+      !read.assertRunning ||
+      controller.signal.aborted ||
+      !detachedReads.has(controller) ||
+      !pending?.some(
+        (entry) =>
+          !entry.recordedCompletion &&
+          entry.nativeParentThreadId === request.parentThreadId &&
+          isDeepStrictEqual(entry.owner, request.historyOwner) &&
+          isDeepStrictEqual(entry.submission, read.receipt),
+      )
+    ) {
+      continue;
+    }
+    try {
+      read.assertRunning();
+    } catch {
+      continue;
+    }
+    const id = read.receipt.childThreadId;
+    if (children.some((child) => child.id === id)) {
+      continue;
+    }
+    if (children.length === MAX_NATIVE_SUBAGENT_OBSERVATIONS) {
+      return { coverage: "live", children, truncated: true };
+    }
+    children.push({ id, label: id.slice(0, 256), status: "running" });
+  }
+  return children.length ? { coverage: "live", children, truncated: false } : undefined;
 }
 
 function stopDetachedReads(

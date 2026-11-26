@@ -113,7 +113,7 @@ export class CodexNativeSubagentCompletionDelivery {
     let removeClose: (() => void) | undefined;
     const recover = async (child: ChildState, receipt: CodexNativeSubagentSubmission) => {
       const state = this.dependencies.parents.get(child.parentThreadId);
-      using observation = state && watchDetachedSubmission(state, receipt);
+      using observation = state && watchDetachedSubmission(state, receipt, client.getInstanceId());
       await finished;
       const store = state?.assignmentStore;
       const custody = child.completionCustody;
@@ -156,6 +156,7 @@ export class CodexNativeSubagentCompletionDelivery {
             isDeepStrictEqual(entry.submission, receipt),
         );
       let idle = createDeferred<boolean>();
+      let activityInvalidated = false;
       let removeHandler: (() => void) | undefined;
       const read = async (includeTurns: boolean) => {
         assertCurrent();
@@ -178,9 +179,15 @@ export class CodexNativeSubagentCompletionDelivery {
             isJsonObject(params) &&
             params.threadId === child.childThreadId &&
             isJsonObject(params.status) &&
-            (params.status.type === "idle" || params.status.type === "notLoaded")
+            (params.status.type === "idle" ||
+              params.status.type === "notLoaded" ||
+              params.status.type === "systemError")
           ) {
-            idle.resolve(true);
+            activityInvalidated = true;
+            observation.setRunning();
+            if (params.status.type !== "systemError") {
+              idle.resolve(true);
+            }
           }
         });
         const { thread } = await reader.request(
@@ -190,10 +197,17 @@ export class CodexNativeSubagentCompletionDelivery {
         );
         assertCurrent();
         const result = readDetachedSuccessor(thread, state.parentThreadId, receipt, includeTurns);
+        if (result !== "active") {
+          observation.setRunning();
+        }
         if (!result || !(await pending())) {
           return;
         }
         assertCurrent();
+        // Only a full read establishes activity. Quiet checks can preserve it until a conflicting status.
+        if (includeTurns && result === "active" && !activityInvalidated) {
+          observation.setRunning(assertCurrent);
+        }
         if (typeof result !== "string") {
           if (this.claim(state, child)) {
             complete(state, child, result);
@@ -229,6 +243,7 @@ export class CodexNativeSubagentCompletionDelivery {
             status === "idle" ||
             (await raceWithTimeout(idle.promise, quietMs, () => false, options));
           idle = createDeferred<boolean>();
+          activityInvalidated = false;
         }
       } finally {
         removeHandler?.();
