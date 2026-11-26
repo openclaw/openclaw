@@ -210,6 +210,7 @@ suite.define(() => {
         const header = gallery.locator(".dashboards-header");
         await gallery.locator(".dashboards-loading").waitFor();
         const loadingHeader = await header.boundingBox();
+        await gateway.waitForRequest("sessions.list", { match: { hasBoard: true } });
         await gateway.resolveDeferred("sessions.list");
         await gallery.locator("[data-dashboard-session]").first().waitFor();
         const loadedHeader = await header.boundingBox();
@@ -290,6 +291,7 @@ suite.define(() => {
         });
         await page.reload();
         await gallery.locator(".dashboards-loading").waitFor();
+        await gateway.waitForRequest("sessions.list", { match: { hasBoard: true } });
         await gateway.resolveDeferred("sessions.list");
         await gallery.locator("[data-dashboards-empty]").waitFor();
         expect(await gallery.locator("[data-dashboards-no-results]").count()).toBe(0);
@@ -366,6 +368,7 @@ suite.define(() => {
               path: path.join(suite.artifactDir, `phone-${view}-loading.png`),
             });
           }
+          await gateway.waitForRequest("sessions.list", { match: { hasBoard: true } });
           await gateway.resolveDeferred("sessions.list");
           await gallery.locator("[data-dashboard-session]").first().waitFor();
           await gallery.locator("[data-dashboard-session]").waitFor();

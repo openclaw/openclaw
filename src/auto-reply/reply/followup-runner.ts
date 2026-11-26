@@ -578,6 +578,7 @@ export function createFollowupRunner(
           } else if (
             refusal &&
             !sourceDisposition &&
+            queued.run.sessionEventOrigin?.deliver !== false &&
             isRoutableChannel(origin) &&
             queued.originatingTo &&
             queued.currentInboundEventKind !== "room_event"

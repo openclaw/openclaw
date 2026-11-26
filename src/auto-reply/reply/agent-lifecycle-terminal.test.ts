@@ -86,14 +86,16 @@ describe("createAgentLifecycleTerminalBackstop", () => {
         createTerminal({
           runId: "preparing",
           sessionKey: "agent:main:preparing",
-          resolveTerminationFields: () => ({ aborted: true, stopReason: "aborted" }),
+          resolveTerminationFields: () => ({ aborted: true, stopReason: "restart" }),
         }),
     );
     const failure = new Error("Checkout failed; retry this session.");
+    terminal.note({ stream: "lifecycle", data: { phase: "start" } });
     preparation.failure = failure;
     finishing(terminal, {
       aborted: true,
       stopReason: "aborted",
+      executionStarted: true,
       error: "provider failed",
       errorNotice: "Your plan needs an upgrade",
       errorObservation: { provider: "fixture", failoverReason: "billing", showSummary: true },
@@ -103,7 +105,7 @@ describe("createAgentLifecycleTerminalBackstop", () => {
       {},
       {
         aborted: true,
-        stopReason: "aborted",
+        stopReason: "restart",
         errorNotice: "Your plan needs an upgrade",
         summaryAsTitle: true,
       },
@@ -114,10 +116,32 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     expect(data).toMatchObject({ phase: "error", error: failure.message, executionSettled: true });
     expect(data).not.toHaveProperty("aborted");
     expect(data).not.toHaveProperty("stopReason");
+    expect(data).not.toHaveProperty("executionStarted");
     expect(data).not.toHaveProperty("errorNotice");
     expect(data).not.toHaveProperty("summaryAsTitle");
     expect(data).not.toHaveProperty("errorObservation");
   });
+
+  it.each(["started", "preparation", "replacement"] as const)(
+    "attributes a restart only to a backend start in the current attempt (%s)",
+    (attempt) => {
+      const terminal = createTerminal({
+        runId: "backend-run",
+        resolveTerminationFields: () => ({ aborted: true, stopReason: "restart" }),
+      });
+      if (attempt !== "preparation") {
+        terminal.note({ stream: "lifecycle", data: { phase: "start", startedAt: 100 } });
+      }
+      if (attempt === "replacement") {
+        terminal.beginAttempt();
+      }
+      terminal.emit("end", {});
+      const event = emitted();
+      expect(event.runId).toBe("backend-run");
+      expect(event.data.stopReason).toBe("restart");
+      expect(event.data.executionStarted).toBe(attempt === "started" ? true : undefined);
+    },
+  );
 
   it.each([false, true])("keeps only the selected attempt receipt (retry=%s)", (retry) => {
     const terminal = createTerminal();

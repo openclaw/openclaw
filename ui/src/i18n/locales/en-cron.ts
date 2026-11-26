@@ -50,6 +50,10 @@ const enCron = {
         "Condition triggers require an interval, cron, or stream schedule.",
       systemTextRequired: "System text is required.",
       agentMessageRequired: "Agent message is required.",
+      payloadThinkingUnsupported:
+        "This reasoning level is not available for the selected model. Choose an available level or Default.",
+      payloadThinkingUnsupportedExisting:
+        "This automation’s saved reasoning level is not available for the selected model. You can still update other settings or pause it.",
       timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
       deliveryModeRequired: "Choose an option before saving.",
       webhookUrlRequired: "Enter the URL where OpenClaw should send results.",
@@ -102,6 +106,13 @@ const enCron = {
       moreJob: "More actions for {name}",
     },
 
+    result: {
+      progress: "Progress",
+      done: "Completed",
+      blocked: "Blocked",
+      needs_attention: "Needs attention",
+      no_change: "No change",
+    },
     attention: {
       title: "Last run failed",
       autoDisabledTitle: "Automatically stopped",

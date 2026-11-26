@@ -562,10 +562,12 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       ? { currentUserTimestamp: preparedUserTurnTimestamp }
       : {}),
   };
-  const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
-    ...boundaryInput,
-    messages: messagesForCurrentPrompt,
-  });
+  const projectHistoryForCurrentPrompt = (messages: AgentMessage[]) =>
+    normalizeMessagesForCurrentPromptBoundary({
+      ...boundaryInput,
+      messages,
+    });
+  const hookMessagesForCurrentPrompt = projectHistoryForCurrentPrompt(messagesForCurrentPrompt);
   if (input.systemPromptReport) {
     input.systemPromptReport.currentTurn = {
       ...(attempt.currentInboundEventKind ? { kind: attempt.currentInboundEventKind } : {}),
@@ -596,6 +598,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     prePromptMessageCount,
     promptForModel,
     promptForSession,
+    projectHistoryForCurrentPrompt,
     promptSubmission,
     promptToolResultAggregateMaxChars,
     promptToolResultMaxChars,
