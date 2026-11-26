@@ -87,6 +87,11 @@ Use **Retry setup** after a failed bundled setup. If the bundled runtime is
 missing or incompatible, reinstall OpenClaw.app. Installing a global CLI does
 not repair the app's runtime.
 
+If the app cannot create the Gateway log folder or open the log file, check the
+path and filesystem error shown in the app status or in-app log. Resolve the
+reported problem, then quit and reopen OpenClaw to retry. The app's unified log
+and optional diagnostics file record the failed step without the target path.
+
 The app automatically restarts a crashed Gateway, including an illegal instruction
 (`SIGILL`), after 1, 2, 4, then 8 seconds. It stops after five fast failures and
 preserves the crash output in the Gateway log. A minute of healthy operation resets

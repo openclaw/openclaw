@@ -7,6 +7,25 @@ import Testing
 @testable import OpenClawKit
 @testable import OpenClawNativeState
 
+private final class GatewayStartupLogCapture: Sendable {
+    let messages = Mutex<[String]>([])
+}
+
+private struct GatewayStartupLogHandler: LogHandler {
+    let capture: GatewayStartupLogCapture
+    var metadata: Logger.Metadata = [:]
+    var logLevel: Logger.Level = .error
+
+    subscript(metadataKey key: String) -> Logger.Metadata.Value? {
+        get { self.metadata[key] }
+        set { self.metadata[key] = newValue }
+    }
+
+    func log(event: LogEvent) {
+        self.capture.messages.withLock { $0.append(event.message.description) }
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
@@ -346,8 +365,15 @@ struct GatewayProcessManagerTests {
         let logDirectory = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: logDirectory) }
         try await self.withLaunchAgentEnvironment(port: port, logDirectory: logDirectory) {
-            let supervisor = GatewayChildSupervisor(launcher: { _ in throw POSIXError(.EACCES) })
-            let manager = GatewayProcessManager(childSupervisor: supervisor)
+            let privateDetail = "Permission denied at \(logDirectory.path)/private-input"
+            let supervisor = GatewayChildSupervisor(launcher: { _ in
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES), userInfo: [
+                    NSLocalizedDescriptionKey: privateDetail,
+                ])
+            })
+            let capture = GatewayStartupLogCapture()
+            let logger = Logger(label: "gateway-start-test") { _ in GatewayStartupLogHandler(capture: capture) }
+            let manager = GatewayProcessManager(childSupervisor: supervisor, logger: logger)
             manager.desiredActive = true
             defer { manager.desiredActive = false }
             let runtime = BundledRuntime(root: logDirectory.appendingPathComponent("runtime"))
@@ -360,8 +386,11 @@ struct GatewayProcessManagerTests {
             }
             #expect(reason.contains("start the Gateway process"))
             #expect(reason.contains(runtime.bun.path))
-            #expect(reason.contains(POSIXError(.EACCES).localizedDescription))
+            #expect(reason.contains(privateDetail))
             #expect(manager.log.contains(reason))
+            #expect(capture.messages.withLock { $0 } == [
+                "gateway child launch failed: could not start the Gateway process (POSIX \(EACCES))",
+            ])
         }
     }
 
@@ -374,16 +403,24 @@ struct GatewayProcessManagerTests {
         try await self.withLaunchAgentEnvironment(port: port, logDirectory: logDirectory) {
             // Use file-type conflicts so both failures are deterministic even as root.
             let expected: String
+            let step: String
+            let guidance: String
             if blockLogFolder {
                 try Data().write(to: logDirectory)
                 expected = "Could not create the Gateway log folder \(logDirectory.path):"
+                step = "create the Gateway log folder"
+                guidance = "Check that the parent folder is writable and no file blocks the log folder."
             } else {
                 let profileSuffix = AppProfile.current.name.map { "-\($0)" } ?? ""
                 let logURL = logDirectory.appendingPathComponent("openclaw-gateway\(profileSuffix).log")
                 try FileManager.default.createDirectory(at: logURL, withIntermediateDirectories: true)
                 expected = "Could not open the Gateway log file \(logURL.path):"
+                step = "open the Gateway log file"
+                guidance = "Check that the log path is a writable file or can be created in its folder."
             }
-            let manager = GatewayProcessManager()
+            let capture = GatewayStartupLogCapture()
+            let logger = Logger(label: "gateway-start-test") { _ in GatewayStartupLogHandler(capture: capture) }
+            let manager = GatewayProcessManager(logger: logger)
             manager.desiredActive = true
             defer { manager.desiredActive = false }
             let runtime = BundledRuntime(root: root.appendingPathComponent("runtime"))
@@ -397,7 +434,13 @@ struct GatewayProcessManagerTests {
             #expect(reason.hasPrefix(expected))
             if !blockLogFolder { #expect(reason.contains(POSIXError(.EISDIR).localizedDescription)) }
             #expect(!reason.contains(runtime.bun.path))
+            #expect(reason.hasSuffix("\(guidance) Then quit and reopen OpenClaw to retry."))
             #expect(manager.log.contains("[gateway] \(reason)\n"))
+
+            let message = try #require(capture.messages.withLock { $0.first })
+            let cause = blockLogFolder ? "Cocoa " : "POSIX \(EISDIR)"
+            #expect(message.hasPrefix("gateway child launch failed: could not \(step) (\(cause)"))
+            #expect(!message.contains(root.path))
         }
     }
 
