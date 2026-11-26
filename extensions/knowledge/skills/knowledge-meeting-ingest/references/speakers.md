@@ -40,6 +40,10 @@ For label-only sources, keep the labels and uncertainty; do not manufacture IDs.
 Keep raw account IDs in retained evidence and working attribution, not friendly
 or public page prose. Use names or readable disambiguators there.
 
+The [earlier guidance](https://github.com/openclaw/openclaw/blob/65ad1800528623f4148039b547a5550d0b89cf9e/extensions/knowledge/skills/knowledge-meeting-ingest/references/speakers.md#L40-L44)
+could reassign a whole track from one remark. Grouping by display name also
+[merged namesakes and split speakers after nickname changes](https://github.com/openclaw/openclaw/pull/205860).
+
 1. **Recorder's own track.** Recorders that split audio into "me"/"microphone"
    and "them"/"room" (Granola does) put the note owner on the "me" track. Map
    it to the note owner with high confidence unless the content contradicts it
