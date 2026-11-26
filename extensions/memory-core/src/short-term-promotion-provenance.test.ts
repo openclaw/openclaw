@@ -82,15 +82,21 @@ async function promoteDailySnippet(workspaceDir: string) {
   return await applyShortTermPromotions({ workspaceDir, candidates, ...thresholds });
 }
 
-it("keeps an untrusted MEMORY.md untrusted across a promotion", async () => {
-  const workspaceDir = await createWorkspace("curated");
+it.each([
+  ["MEMORY.md", "MEMORY.md"],
+  ...(process.platform === "win32" ? [] : [["USER.md", "MEMORY.md -> USER.md"] as const]),
+])("keeps an untrusted %s untrusted across a promotion through %s", async (target) => {
+  const workspaceDir = await createWorkspace(`curated-${target}`);
   await fs.writeFile(path.join(workspaceDir, dailyPath), `${snippet}\n`);
-  await writeFromTaintedTurn(workspaceDir, "MEMORY.md", "# Memory\n- Injected note\n");
+  await writeFromTaintedTurn(workspaceDir, target, "# Memory\n- Injected note\n");
+  if (target !== "MEMORY.md") {
+    await fs.symlink(target, path.join(workspaceDir, "MEMORY.md"));
+  }
 
   expect((await promoteDailySnippet(workspaceDir)).applied).toBe(1);
-  expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")).toContain(snippet);
+  expect(await fs.readFile(path.join(workspaceDir, target), "utf-8")).toContain(snippet);
   await expect(
-    readMemoryArtifactProvenance({ workspaceDir, relativePath: "MEMORY.md" }),
+    readMemoryArtifactProvenance({ workspaceDir, relativePath: target }),
   ).resolves.toMatchObject({ originClass: "untrusted" });
 });
 

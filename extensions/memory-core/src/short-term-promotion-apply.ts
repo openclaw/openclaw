@@ -373,6 +373,11 @@ export async function applyShortTermPromotions(
   let alreadyWritten = rehydratedSelected.filter((candidate) => existingMarkers.has(candidate.key));
   let toAppend = rehydratedSelected.filter((candidate) => !existingMarkers.has(candidate.key));
   const consolidationBaseMemoryHash = hashMemoryContent(existingMemory);
+  // Provenance readers classify the physical target, so record there, not at the alias.
+  const resolveMemoryProvenancePath = async () =>
+    path
+      .relative(await resolveMemoryWritePath(workspaceDir, workspaceDir), memoryWritePath)
+      .replaceAll(path.sep, "/");
   const plannedCandidateFingerprints = new Map(
     toAppend.map((candidate) => [candidate.key, consolidationCandidateFingerprint(candidate)]),
   );
@@ -509,7 +514,7 @@ export async function applyShortTermPromotions(
             workspaceDir,
             workspaceFileMode: options.workspaceFileMode,
             filePath: memoryWritePath,
-            relativePath: path.basename(memoryPath),
+            relativePath: await resolveMemoryProvenancePath(),
             tempPrefix: `${path.basename(memoryPath)}.promotion`,
             expectedHash: consolidationBaseMemoryHash,
             content: consolidationResult.content,
@@ -577,7 +582,7 @@ export async function applyShortTermPromotions(
               workspaceDir,
               workspaceFileMode: options.workspaceFileMode,
               filePath: memoryWritePath,
-              relativePath: path.basename(memoryPath),
+              relativePath: await resolveMemoryProvenancePath(),
               tempPrefix: `${path.basename(memoryPath)}.promotion`,
               expectedHash: hashMemoryContent(existingMemory),
               expectedContent: existingMemory,
