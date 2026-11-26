@@ -433,6 +433,9 @@ export async function handleEmbeddedAssistantFailure(input: {
               profileId: runtime.lastProfileId,
               status,
               rawError: failedAssistant?.errorMessage?.trim(),
+              userMessage: failedAssistant
+                ? formatProviderAssistantErrorText(failedAssistant, input.providerOwner)
+                : undefined,
             },
           ),
         );

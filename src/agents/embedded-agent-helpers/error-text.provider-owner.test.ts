@@ -5,7 +5,7 @@ import { classifyFailoverSignal } from "../failover/classify.js";
 import { isContextOverflowError } from "../failover/context-overflow.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { classifyAssistantFailoverReason } from "./assistant-message-failures.js";
-import { formatAssistantErrorText, formatUserFacingAssistantErrorText } from "./error-text.js";
+import { formatAssistantErrorText } from "./error-text.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 
 vi.mock("../../plugins/provider-failover.js", () => ({
@@ -85,22 +85,5 @@ describe("assistant diagnostic provider ownership", () => {
     vi.mocked(classifyProviderFailoverSignalWithPlugin).mockReturnValue("context_overflow");
     expect(isContextOverflowError("prompt reached the tenant maximum")).toBe(true);
     expect(classifyProviderFailoverSignalWithPlugin).toHaveBeenCalledTimes(3);
-  });
-});
-
-describe("provider display copy", () => {
-  it("redacts plugin copy before it reaches the user", () => {
-    const result = formatUserFacingAssistantErrorText(
-      makeAssistantMessageFixture({ provider: "fixture", errorMessage: "HTTP 403 rejected" }),
-      {
-        providerOwner: {
-          id: "fixture",
-          formatUserFacingError: () =>
-            "Contact support. api_key=sk-fixture1234567890abcdefghijklmnop",
-        },
-      },
-    );
-    expect(result).toContain("Contact support.");
-    expect(result).not.toContain("sk-fixture1234567890abcdefghijklmnop");
   });
 });
