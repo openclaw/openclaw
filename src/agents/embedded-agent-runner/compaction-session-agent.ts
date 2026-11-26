@@ -12,6 +12,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { resolveProviderTextTransforms } from "../../plugins/provider-runtime.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
 import { assertSessionControllerOperation } from "../../sessions/session-controller.state.js";
+import { SESSION_WATCHDOG_MAINTENANCE_GRACE_MS } from "../../sessions/session-controller.watchdog-state.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -218,7 +219,9 @@ export function startCompactionDiagnosticStream(
     runId,
     workKey: runId,
   });
-  owner.watchdogAttempt?.setExecutionDeadline(Date.now() + timeoutMs);
+  owner.watchdogAttempt?.setExecutionDeadline(
+    Date.now() + timeoutMs + SESSION_WATCHDOG_MAINTENANCE_GRACE_MS,
+  );
   markDiagnosticEmbeddedRunStarted({ ...owner, owner });
   return {
     owner,

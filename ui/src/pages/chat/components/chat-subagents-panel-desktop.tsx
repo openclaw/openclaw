@@ -3,7 +3,6 @@ import { For, Show, createMemo, createStore, createUniqueId, onSettled } from "s
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -12,11 +11,12 @@ import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
 import { endedWithoutFinishing, isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
+import type { SubagentsPanelData, SubagentsPanelRow } from "../subagents-panel-data.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-subagents-working.css";
 import "./chat-subagents-panel-desktop.css";
-import type { SubagentsPanelData, SubagentsPanelRow } from "../subagents-panel-data.ts";
 import { SubagentDesktopAvatar } from "./chat-subagent-avatar.tsx";
+import { SubagentListName } from "./chat-subagent-list-name.tsx";
 import { ChatSubagentsNative } from "./chat-subagents-native.tsx";
 import type { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
@@ -129,8 +129,8 @@ function DesktopRow(props: {
       >
         <SubagentDesktopAvatar sessionKey={props.row.session.key} working={group() === "active"} />
         <span class="subagents-desktop__identity">
-          <span ref={createTextOverflow(name)} class="subagents-desktop__name">
-            {name()}
+          <span class="subagents-desktop__name">
+            <SubagentListName name={name()} />
           </span>
           <Show when={group() !== "done"}>
             <span class="subagents-desktop__status">

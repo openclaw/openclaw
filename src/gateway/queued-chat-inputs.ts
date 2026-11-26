@@ -1,7 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { wakeOwedExec } from "../agents/bash-tools.exec-notify.js";
-import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-target.js";
+import { captureOwedRequesterTarget, wakeOwedExec } from "../agents/bash-tools.exec-notify.js";
 import { readMessageClientSources } from "../chat/message-client-source.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
@@ -102,22 +101,17 @@ export async function continueSessionQueuedInputs(
           text: owedText,
         };
         await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
-          admitted =
+          const requester =
             source === undefined
               ? undefined
-              : await restoreGatewayQueuedOperatorRecovery({
-                  agentId: target.agentId,
-                  context,
-                  source,
-                  assertCurrent,
-                });
-          const expectedTarget =
-            admitted &&
-            (await captureSessionEventTargetForHost(target.agentId, target.sessionKey, {
-              operatorAuthority: admitted.authority,
-              assertCurrent,
-            }));
-          wakeOwedExec(owed, expectedTarget ? { expectedTarget } : {}, undefined, 1);
+              : await captureOwedRequesterTarget(owed.to, source, context, assertCurrent);
+          // The admission is held until the last attempt settles, so the retry keeps it too.
+          void wakeOwedExec(
+            owed,
+            requester ? { expectedTarget: requester.target } : {},
+            undefined,
+            1,
+          ).finally(() => requester?.release());
         });
         return undefined;
       }

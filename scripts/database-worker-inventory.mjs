@@ -471,7 +471,8 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "readAgentToolUsageStateInDatabase",
-          "writeState",
+          "writeEntry",
+          "readAgentToolFirstSeenInDatabase",
           "readAgentToolUsageLiveRunsInDatabase",
           "retainLiveRun",
           "pruneAgentToolUsageInDatabase",
@@ -480,7 +481,7 @@ const reviewedOperations = new Map([
           "resetAgentToolUsageInDatabase",
         ],
         evidence:
-          "Begin/flush run in session-actor-append.worker.ts inside the transcript actor transaction; prune/flush/reset/import run only in the toolUsage.* handlers that openclaw-agent-execution-operations.ts loads from openclaw-agent-execution-tool-usage.worker.ts in the agent execution worker; status and live-run reads run in tool-usage-read.worker.ts under session-history-read-operation.worker.ts. Host imports are types.",
+          "Begin/flush run in session-actor-append.worker.ts inside the transcript actor transaction; prune/flush/firstSeen/reset/import run only in the toolUsage.* handlers that openclaw-agent-execution-operations.ts loads from openclaw-agent-execution-tool-usage.worker.ts in the agent execution worker; status and live-run reads run in tool-usage-read.worker.ts under session-history-read-operation.worker.ts. Host imports are types.",
       },
       {
         tier: "T3",
@@ -1073,7 +1074,7 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: ["clearPersistedCurrentConversationBindingsForTests"],
         evidence:
-          "Explicit testing SDK namespace only: session-binding-service.ts testing.resetSessionBindingAdaptersForTests calls this reset; its callers are tests and contracts/test-helpers/session-binding-registry-backed-contract.ts beforeEach. No production binding cleanup calls it.",
+          "Explicit testing SDK namespace only: session-binding-service.ts testing.resetSessionBindingAdaptersForTests calls this reset; its callers are tests and contracts/test-helpers/registry-session-binding.ts inside the contract test body. No production binding cleanup calls it.",
       },
     ],
   ],
@@ -2186,6 +2187,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-archive-metadata.ts",
+    [
+      {
+        tier: "T1",
+        operations: ["readTranscriptArchiveRows"],
+        evidence:
+          "Usage workers read archive identities. Transcript workers and synchronous history readers use the same query for ordered archive listings.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-archive-read.ts",
     [
       {
@@ -2196,13 +2208,7 @@ const reviewedOperations = new Map([
           "readTranscriptArchivePageInWorker",
         ],
         evidence:
-          "Only session-transcript.worker.ts:230 (presence) and session-accessor.sqlite-archive.worker.ts:483,491 (page/final) call these readers; shared archive listing remains T1.",
-      },
-      {
-        tier: "T1",
-        operations: ["listTranscriptArchivesFromDatabase"],
-        evidence:
-          "Durable archive enumeration reaches this query through transcript, Memory corpus, and usage-cost workers. session-transcript-inventory-runtime.ts returns an empty archive inventory for memory actors. Synchronous history/SDK readers retain the shared durable kernel. The shared list kernel remains mixed.",
+          "The transcript worker reads archive presence; the archive worker reads final messages and pages.",
       },
     ],
   ],

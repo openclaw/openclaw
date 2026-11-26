@@ -366,7 +366,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const refreshCompletionAuthority =
       preserveCompletedRun || replaceParams.refreshCompletionAuthority === true;
     const authority = refreshCompletionAuthority
-      ? await captureOperatorToolGatewayContinuationContext()
+      ? await captureOperatorToolGatewayContinuationContext(undefined, { retainRequester: true })
       : undefined;
     let custodyTransferred = false;
     const runIds = new Set([
@@ -491,9 +491,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             taskRunId: preserveCompletedRun ? nextRunId : (source.taskRunId ?? source.runId),
             requesterTurnRunId: preserveCompletedRun ? undefined : source.requesterTurnRunId,
             requesterTurnYielded: preserveCompletedRun ? undefined : source.requesterTurnYielded,
-            retireAfterRequesterTurn: preserveCompletedRun
-              ? undefined
-              : source.retireAfterRequesterTurn,
+            retireAfterSettle: preserveCompletedRun ? undefined : source.retireAfterSettle,
             task: nextTask,
             generation,
             createdAt: now,

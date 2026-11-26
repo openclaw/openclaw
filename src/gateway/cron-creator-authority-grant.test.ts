@@ -9,10 +9,6 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../infra/agent-run-registry.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals-core.js";
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptParamsV2,
-} from "../plugin-sdk/agent-harness-runtime.js";
 import { expectCollected } from "../test-utils/retention.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
@@ -57,7 +53,7 @@ function createManagementFixture(
   const scope = createScope(
     runId,
     callerOrigin,
-    controlUiAdmin ? { source: "control-ui-admin" } : undefined,
+    controlUiAdmin ? { source: "operator" } : undefined,
     () => continuationCurrent,
   );
   const operation = new AbortController();
@@ -115,16 +111,6 @@ describe("cron creator authority grants", () => {
     expect(() => signal.throwIfAborted()).toThrow(signal.reason);
   });
 
-  it("preserves the Control UI admin SDK projection without granting creator authority", () => {
-    const scope = createScope("sdk-compat", { kind: "unknown" }, { source: "control-ui-admin" });
-    const legacy: Pick<EmbeddedRunAttemptParams, "cronCreatorAuthorityCapability"> = {
-      cronCreatorAuthorityCapability: scope,
-    };
-    const current: Pick<EmbeddedRunAttemptParamsV2, "cronCreatorAuthorityCapability"> = legacy;
-    expect(legacy.cronCreatorAuthorityCapability?.controlUiAdmin).toBe(true);
-    expect(current.cronCreatorAuthorityCapability?.controlUiAdmin).toBe(true);
-    expect(() => mint(scope)).toThrow("Automation creation is not granted");
-  });
   it("carries direct-local origin without claiming channel requester authority", () => {
     const local = createScope("run-local", { kind: "local" });
     const grant = mint(local, undefined, undefined, undefined, "requester");
@@ -146,7 +132,6 @@ describe("cron creator authority grants", () => {
     const scope = createScope(
       "scoped-external",
       { kind: "external", channel: "discord" },
-      undefined,
       undefined,
       undefined,
       undefined,

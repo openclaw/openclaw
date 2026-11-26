@@ -25,7 +25,7 @@ export type SqliteTableFact = {
   columns: SqliteColumnFact[];
 };
 
-export type SqliteIndexFact = {
+type SqliteIndexFact = {
   schema: string;
   name: string;
   table: string;

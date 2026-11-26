@@ -8,6 +8,7 @@ const catalog = {
       workingDetails: "Agent is working. View details",
     },
     composer: {
+      textOnlySuggestions: "Suggestions are text only.",
       composerInput: "Chat composer",
       workspaceRemoved: "This conversation’s workspace was removed.",
       predictionHint: "Tab to complete",
@@ -332,6 +333,8 @@ const catalog = {
       tooLarge: "Too large to send: {names}{more}",
       tooLargeToast: "File too large. Try a smaller file.",
       openOriginal: "Open original",
+      compressionRequired: "Video is too large to send. Compress a copy or remove it.",
+      compressingVideo: "Compressing video…",
       compressToFit: "Compress to fit",
       retryCompression: "Retry compression",
       compressionHint: "Compress a smaller copy on this device. The original is unchanged.",

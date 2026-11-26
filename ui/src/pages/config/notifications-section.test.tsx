@@ -365,6 +365,35 @@ const catalog = {
   agentsError: null,
 };
 
+it.each([
+  { ids: ["support-eu"], visible: "Support", full: "Support (support-eu)" },
+  {
+    ids: ["support-eu", "support-us"],
+    visible: "2 selected",
+    full: "Support (support-eu), Support (support-us)",
+  },
+  {
+    ids: ["support-eu", "support-us", "research"],
+    visible: "3 selected",
+    full: "Support (support-eu), Support (support-us), Research",
+  },
+])(
+  "keeps notification agent summaries bounded and their exact selections accessible: $visible",
+  async ({ ids, visible, full }) => {
+    const view = renderSection({
+      webPush: webPush(false, { ...userPreferences, agentIds: ids }),
+      notificationAgents: catalog,
+    });
+    await waitForSolid(() => {
+      const [account, device] = view.getAllByRole("button", { name: "Choose notification agents" });
+      expect(account?.textContent).toBe(visible);
+      expect(device?.textContent).toBe("Account default: " + visible);
+      expect(account?.getAttribute("aria-description")).toBe(full);
+      expect(device?.getAttribute("aria-description")).toBe("Account default: " + full);
+    });
+  },
+);
+
 it("chooses agent names, saves stable IDs, and reopens without changing other preferences", async () => {
   const [current, setCurrent] = createSignal(webPush());
   const save = vi.fn(

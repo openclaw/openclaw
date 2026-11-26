@@ -57,7 +57,6 @@ import { resolveGoogleVertexBaseUrlLocation } from "./src/google-api-base-url.js
 import {
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
-  isGoogleGemini3ThinkingLevelModel,
   resolveGoogleGemini3ThinkingLevel,
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
@@ -299,11 +298,14 @@ export function buildGoogleGenerativeAiParams(
       normalizeGoogleTransportMessageRoutes(context.messages as Context["messages"]),
       canonicalGoogleModel(routeModel),
       (id) => (requiresGoogleToolCallId(model.id) ? normalizeToolCallId(id) : id),
-      { preserveCrossModelToolCallThoughtSignature: isGoogleGemini3ThinkingLevelModel(model.id) },
+      // Projection replays only same-route signatures; keep them through route aliases.
+      { preserveCrossModelToolCallThoughtSignature: true },
     ) as ProviderContext["messages"],
     tools: context.tools,
     replay: "managed",
-    requiresToolCallSignature: isGoogleGemini3ThinkingLevelModel(model.id),
+    // Every Gemini API model accepts the skip sentinel; Gemini 3+ requires it. Gating
+    // on the model id breaks when Google serves an id with a newer model.
+    requiresToolCallSignature: true,
     videoPart: (video) =>
       createGoogleVideoPlaceholder(video, videoSlots, { text: GOOGLE_VIDEO_SLOT_OMISSION }),
   });

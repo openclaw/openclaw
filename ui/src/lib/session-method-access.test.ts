@@ -287,3 +287,83 @@ describe("readSessionMethodAccess", () => {
     ).toMatchObject({ allowed: false, cause: "method-unavailable" });
   });
 });
+
+it("admits only exact chat.abort from invited send evidence, never session-wide cancellation", () => {
+  const session = { sharingRole: "member" as const, invitedAccess: "send" as const };
+  const request = {
+    method: "chat.abort",
+    requiredScope: "operator.write" as const,
+    params: { runId: "own-run" },
+    sessionScope: true,
+    session,
+  };
+  expect(access(["operator.sessions.read"], request).allowed).toBe(true);
+  for (const params of [undefined, {}, { runId: null }, { runId: "" }, { runId: "  " }]) {
+    expect(access(["operator.sessions.read"], { ...request, params }).allowed).toBe(false);
+  }
+  for (const method of ["sessions.abort", "sessions.fork", "sessions.reset"]) {
+    expect(access(["operator.sessions.read"], { ...request, method }).allowed).toBe(false);
+  }
+  for (const invitedAccess of [undefined, "read", "suggest"] as const) {
+    expect(
+      access(["operator.sessions.read"], {
+        ...request,
+        session: { ...session, invitedAccess },
+      }).allowed,
+    ).toBe(false);
+  }
+  expect(access(["operator.sessions.read"], { ...request, sessionScope: false }).allowed).toBe(
+    false,
+  );
+  expect(
+    access(["operator.sessions.read"], { ...request, requiredScope: "operator.admin" }).allowed,
+  ).toBe(false);
+  expect(access([], request).allowed).toBe(false);
+});
+
+it("admits only sending and tighter permissions from explicit invited send evidence", () => {
+  const session = {
+    sharingRole: "member" as const,
+    invitedAccess: "send" as const,
+    permissionMode: "guarded" as const,
+  };
+  const send = {
+    method: "chat.send",
+    requiredScope: "operator.write" as const,
+    sessionScope: true,
+    session,
+  };
+  expect(access(["operator.sessions.read"], send).allowed).toBe(true);
+  for (const invitedAccess of [undefined, "read", "suggest"] as const) {
+    expect(
+      access(["operator.sessions.read"], { ...send, session: { ...session, invitedAccess } })
+        .allowed,
+    ).toBe(false);
+  }
+  for (const permissionMode of ["read-only", "guarded", "workspace", "full", null] as const) {
+    expect(
+      access(["operator.sessions.read"], {
+        method: "sessions.patch",
+        params: { key: "session", permissionMode },
+        sessionScope: true,
+        session,
+      }).allowed,
+    ).toBe(permissionMode === "read-only" || permissionMode === "guarded");
+  }
+  expect(
+    access(["operator.sessions.read"], {
+      method: "sessions.patch",
+      params: { key: "session", permissionMode: "guarded" },
+      sessionScope: true,
+      session: { ...session, permissionMode: "read-only" },
+    }).allowed,
+  ).toBe(false);
+  expect(
+    access(["operator.sessions.read"], {
+      method: "sessions.patch",
+      params: { key: "session", permissionMode: "read-only", model: "other" },
+      sessionScope: true,
+      session,
+    }).allowed,
+  ).toBe(false);
+});

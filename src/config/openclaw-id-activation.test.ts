@@ -26,6 +26,7 @@ for (const writer of ["replace", "wizard", "io"] as const) {
     const saved: OpenClawConfig = JSON.parse(await fs.readFile(state.configPath, "utf8"));
     expect(saved.plugins).toEqual({ allow: ["browser", id] });
     expect(Object.keys(saved.gateway?.roles?.definitions ?? {}).toSorted()).toEqual([
+      "admin",
       "guest",
       "operator",
       "viewer",

@@ -205,7 +205,7 @@ export function buildOpenAIResponsesParams(
       tools,
       strict,
       model,
-      Boolean(options?.onPayload),
+      conversion.mutableInput,
     );
     if (
       converted.length > 0 ||

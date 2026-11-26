@@ -387,6 +387,16 @@ it("fills every calendar day across a spring-forward DST transition", async () =
   expect(summary.totals.totalTokens).toBe(0);
 });
 
+it("keeps four-digit UTC dates when filling an early calendar window", async () => {
+  const summary = await readAggregate({
+    startMs: Date.parse("0999-12-30T00:00:00Z"),
+    endMs: Date.parse("1000-01-01T23:59:59.999Z"),
+    dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+  });
+  expect(summary.days).toBe(3);
+  expect(summary.daily.map(({ date }) => date)).toEqual(["0999-12-30", "0999-12-31", "1000-01-01"]);
+});
+
 it("limits transcript stat fanout when listing durable cost inputs", async () => {
   await Promise.all(
     Array.from({ length: 48 }, async (_, index) => {

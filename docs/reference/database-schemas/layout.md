@@ -82,8 +82,10 @@ state database for Linux Gateway execution with systemd 250 or newer. Each row c
 The typed record binds the systemd unit to
 an agent, session key, and exact session ID. It retains a generic command
 summary, working directory, log path, start and end times, terminal status, exit code,
-signal and reason, notification policy and settlement, cancellation intent, and the
-captured output and result-retention bounds. Environment values, command arguments,
+signal and reason, notification policy and settlement, cancellation intent, the
+captured output and result-retention bounds, and the requester's saved operator source
+(the same bounded value a queued message keeps), which the exit admits again against
+current access. Older rows have no source. Environment values, command arguments,
 output, credentials, requester continuations, and approval grants are never stored
 in this table. Process output is a separate named log artifact under the state directory.
 
@@ -875,7 +877,9 @@ reclamation, or host-maintenance deletion.
 Agent schema 42 adds `agent_tool_usage(tool_id, score, updated_at)` in the
 executing agent's database. It stores only aggregate successful-call scores and
 last-success timestamps. The existing `cache_entries` owner holds import coverage
-boundaries and a reset generation; it does not retain per-call IDs or payloads.
+boundaries, a reset generation, and the time the agent first offered each tool to
+a ranked prompt; it does not retain per-call IDs or payloads. Reset keeps the
+first-seen times so existing tools do not become new again.
 
 The opt-in Labs feature reads at prompt boundaries. Run admission and accumulated
 counts share the existing transcript actor's transaction and authority grant when

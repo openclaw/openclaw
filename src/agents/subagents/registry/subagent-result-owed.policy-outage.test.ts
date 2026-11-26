@@ -99,6 +99,7 @@ it("keeps a finished child's result owed when its followup access policy is temp
         assertCurrent: () => authority!.assertCurrent(),
         release() {},
         run: (run) => run(),
+        runWithRequester: (run) => run(),
       },
     });
     followup.promoteYield("followup-before-policy-outage", [child], 1);

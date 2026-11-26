@@ -260,6 +260,7 @@ export function readShellView(host: ShellViewHost) {
     method: "sessions.create",
     params: {},
     sessionScope: true,
+    missingScopeReasonKey: "sessionsView.createPermissionDenied",
   });
   const newSessionDisabledReason = newSessionAccess.allowed ? undefined : newSessionAccess.reason;
   const workspacePluginsEnabled = activeRoute !== "plugins" && activeRoute !== "plugin-settings";

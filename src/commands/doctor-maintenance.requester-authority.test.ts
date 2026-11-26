@@ -193,9 +193,9 @@ it.each(["configured-owner", "profile"] as const)(
           // Child custody and post-repair work check outside the scope (#178291);
           // the held owner lends custody to the delegated check.
           expect(policy.assertCurrent).not.toThrow();
-          // The Doctor flow leaves runChecks before its post-repair cleanup.
+          // The Doctor flow leaves runChecks before its post-repair SQLite work.
           // Draining those readers requires fresh admission before restoration.
-          await maintenance!.cleanupRetainedRuntimes();
+          await maintenance!.enableSqliteReclamation([]);
           await maintenance!.run(async () => {
             if (source === "profile") {
               unlinkUserChannelIdentity(profile.id, identity);

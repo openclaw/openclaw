@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   validateUsersSelfResult,
   validateUsersSetAvatarResult,
@@ -9,7 +9,6 @@ import {
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import type { ProfileDisplayRow } from "../../state/user-profiles.types.js";
-import { setOpenClawIdMemberAccountLookup } from "../openclaw-id/tunnel-principal.js";
 import { usersHandlers } from "./users.js";
 
 const linkEmail = vi.hoisted(() => vi.fn());
@@ -702,35 +701,19 @@ it("rejects an unknown role after target preparation without changing state", as
   expectUntouched(...effects.filter((effect) => effect !== prepareUserProfileRoleAuthority));
 });
 
-it.each([false, true])(
-  "requires a default for profile role assignment unless the canonical target is an active member: %s",
-  async (member) => {
-    prepareUserProfileRoleAuthority.mockResolvedValue({
-      profileId: profile.id,
-      openclawIdAccountIds: ["member-account"],
-      isCurrent: () => true,
-    });
-    setOpenClawIdMemberAccountLookup((accountId) => member && accountId === "member-account");
-    onTestFinished(() => setOpenClawIdMemberAccountLookup(undefined));
-    setUserProfileRole.mockReturnValue({ ...profile, role: "guest" });
-    const respond = await runUsersHandler(
-      "users.setRole",
-      { profileId: profile.id, role: "guest" },
-      adminClient,
-      { getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }) },
-    );
-    if (member) {
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-        profile: { ...profile, role: "guest" },
-      });
-      expect(setUserProfileRole).toHaveBeenCalledOnce();
-    } else {
-      expectFailure(respond, {
-        code: "INVALID_REQUEST",
-        message:
-          "Named-role assignment requires gateway.roles.default to enable named-role enforcement.",
-      });
-      expectUntouched(setUserProfileRole, invalidateOperatorRolePolicy);
-    }
-  },
-);
+it("saves a profile role assignment before a default turns roles on", async () => {
+  // Inert until gateway.roles.default exists, so administrators can be chosen first.
+  prepareUserProfileRoleAuthority.mockResolvedValue({
+    profileId: profile.id,
+    isCurrent: () => true,
+  });
+  setUserProfileRole.mockReturnValue({ ...profile, role: "guest" });
+  const respond = await runUsersHandler(
+    "users.setRole",
+    { profileId: profile.id, role: "guest" },
+    adminClient,
+    { getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }) },
+  );
+  expect(respond).toHaveBeenCalledExactlyOnceWith(true, { profile: { ...profile, role: "guest" } });
+  expect(setUserProfileRole).toHaveBeenCalledOnce();
+});

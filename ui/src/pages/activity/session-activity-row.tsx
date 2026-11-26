@@ -16,6 +16,7 @@ import {
   sharedAgentIdentityProjection,
   sharedAgentsProjection,
 } from "../../lib/reactive/shared-application-projections.ts";
+import { readVisibleTime } from "../../lib/reactive/visible-clock.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   isSessionKeyAddressable,
@@ -86,11 +87,12 @@ export function SessionLinkView(props: {
     return presenceViewerLabel(owner());
   };
   const activityAt = () => sessionActivityTimestamp(props.row);
-  const relativeTime = createMemo(() => {
+  const relativeTime = () => {
     void props.presentationRevision;
     getLocale();
+    readVisibleTime(60_000);
     return formatRelativeTimestamp(activityAt(), { fallback: "" });
-  });
+  };
   const activeObserverRunId = createMemo(() => {
     const runId = props.row.observerDigest?.runId;
     return props.row.hasActiveRun === true && runId && props.row.activeRunIds?.includes(runId)

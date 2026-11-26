@@ -1,6 +1,7 @@
 import { threadId } from "node:worker_threads";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-maintenance-context.js";
 
 export type DatabaseProcessRole = "gateway" | "cli-oneshot";
 
@@ -40,6 +41,11 @@ export function withEngineStoreAdmission<T>(operation: () => T): T {
 
 export function assertEngineStoreExecutionAllowed(): void {
   if (threadId === 0 && admissionDepth === 0 && processRole.role !== "cli-oneshot") {
+    const maintenance = getOpenClawDatabaseMaintenanceScope();
+    if (maintenance?.ownsSchemaMaintenance) {
+      maintenance.assertAdmissionLifecycle();
+      return;
+    }
     throw new Error(
       "PostgreSQL connections must run in a worker; only synchronous admission, migrations, and CLI one-shots may run on the main thread",
     );

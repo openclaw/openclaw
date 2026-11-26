@@ -136,7 +136,7 @@ openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
 openclaw infer model run --prompt-file ./prompts/judge.txt --json
 openclaw infer model run --prompt-stdin --json < ./prompts/judge.txt
 openclaw infer model run --prompt "Summarize this changelog entry" --model openai/gpt-5.4 --json
-openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-2.5-flash --json
+openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-3.5-flash-lite --json
 openclaw infer model run --prompt "Use more reasoning here" --thinking high --json
 openclaw infer model providers --agent <id> --json
 openclaw infer model inspect --model gpt-6-astra --json
@@ -147,7 +147,7 @@ Use full `<provider/model>` refs with `--local` to smoke-test one provider witho
 ```bash
 openclaw infer model run --local --model anthropic/claude-sonnet-4-6 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model cerebras/gpt-oss-120b --prompt "Reply with exactly: pong" --json
-openclaw infer model run --local --model google/gemini-2.5-flash --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model google/gemini-3.5-flash-lite --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model groq/openai/gpt-oss-120b --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model llmman/qwen3.8 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model llmman/gemma4:e4b --prompt "Describe this image." --file ./photo.jpg --json

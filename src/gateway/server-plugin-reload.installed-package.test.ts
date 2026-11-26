@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
 import { retainRuntimePluginWork } from "../agents/runtime-plugin-work.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
@@ -29,18 +30,19 @@ import {
   createPluginRegistryOwner,
   resetPluginRuntimeStateForTest,
 } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   startPluginServices,
   type PluginServicesHandle,
 } from "../plugins/services.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
-import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { createInstalledReloadPackageWriter } from "./server-plugin-reload.installed-package.test-support.js";
 import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
@@ -105,77 +107,13 @@ async function verifyInstalledPackageRetention(
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
   };
   fs.mkdirSync(env.OPENCLAW_BUNDLED_PLUGINS_DIR, { recursive: true });
-  const writePackage = (
-    id: string,
-    packageDir = writeManagedNpmPlugin({
-      stateDir,
-      packageName: id,
-      pluginId: id,
-      version: "1.0.0",
-    }),
-  ) => {
-    fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
-    fs.writeFileSync(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: id,
-        version: "1.0.0",
-        openclaw: { extensions: ["./index.ts"], runtimeExtensions: ["./dist/index.js"] },
-      }),
-    );
-    fs.writeFileSync(path.join(packageDir, "index.ts"), "throw new Error('unselected source');");
-    fs.writeFileSync(
-      path.join(packageDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id,
-        activation: { onStartup: true },
-        configSchema:
-          id === "sibling"
-            ? {
-                type: "object",
-                additionalProperties: false,
-                properties:
-                  settings === "defaulted" ? { mode: { type: "string", default: "auto" } } : {},
-              }
-            : { type: "object" },
-      }),
-    );
-    fs.writeFileSync(path.join(packageDir, "dist", "helper.cjs"), 'module.exports = "A";');
-    fs.writeFileSync(
-      path.join(packageDir, "dist", "index.js"),
-      `const helper = require("./helper.cjs");
-const instance = require("node:crypto").randomUUID();
-let starts = 0, stops = 0;
-module.exports = { id: ${JSON.stringify(id)}, register(api) {
-  ${
-    cleanupRetry && id === "installed-probe"
-      ? `const fs = require('node:fs');
-  process.emit(${JSON.stringify(registrationEvent)}, instance, __filename);
-  const resource = fs.openSync(${JSON.stringify(resourcePath)}, 'wx');
-  api.lifecycle.onDispose(() => {
-    fs.closeSync(resource);
-    fs.unlinkSync(${JSON.stringify(resourcePath)});
+  const usesMiddleware = settings === "empty" && !cleanupRetry;
+  const writePackage = createInstalledReloadPackageWriter({
+    stateDir,
+    settings,
+    usesMiddleware,
+    cleanupFault: cleanupRetry ? { registrationEvent, resourcePath, stopFailurePath } : undefined,
   });
-  api.on('gateway_stop', () => {
-    if (fs.existsSync(${JSON.stringify(stopFailurePath)})) {
-      throw new Error('previous stop hook refused cleanup');
-    }
-  });`
-      : ""
-  }
-  api.registerService({ id: ${JSON.stringify(id)}, start() {
-    if (api.pluginConfig?.failStart) throw new Error("synthetic candidate start failed");
-    starts++;
-  }, stop() {
-    stops++;
-  } });
-  api.registerGatewayMethod(${JSON.stringify(`${id}.probe`)}, ({ respond }) => {
-    respond(true, { helper, instance, starts, stops, settings: api.pluginConfig });
-  });
-} };`,
-    );
-    return packageDir;
-  };
   await withEnvAsync(env, async () => {
     const siblingDir = writePackage("sibling");
     const writeSiblingControlUi = (build: string) => {
@@ -449,6 +387,18 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     assert.ok(siblingRecord);
     const siblingInstance = getPluginInstance(siblingRecord);
     assert.ok(siblingInstance);
+    const applyMiddleware = () =>
+      withPluginRuntimeRegistryScope(runtime.pluginRuntime.registry, () =>
+        createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }).applyToolResultMiddleware({
+          toolName: "exec",
+          toolCallId: "installed-middleware",
+          args: {},
+          result: { content: [{ type: "text", text: "raw" }], details: {} },
+        }),
+      );
+    if (usesMiddleware) {
+      expect((await applyMiddleware()).content).toEqual([{ type: "text", text: "raw" }]);
+    }
     const releaseSiblingWork = siblingInstance.retainWork();
     let firstReceipt: Awaited<ReturnType<typeof reload>>;
     try {
@@ -462,6 +412,12 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       );
     } finally {
       releaseSiblingWork();
+    }
+    if (usesMiddleware) {
+      expect(
+        runtime.pluginRuntime.registry.agentToolResultMiddlewares.map((entry) => entry.pluginId),
+      ).toEqual(["installed-probe"]);
+      expect((await applyMiddleware()).content).toEqual([{ type: "text", text: "A" }]);
     }
     expect(firstReceipt.runtime.pluginIds).toEqual(["installed-probe"]);
     expect(firstReceipt.runtime.warnings ?? []).not.toEqual(

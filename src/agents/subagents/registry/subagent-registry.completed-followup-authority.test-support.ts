@@ -105,6 +105,7 @@ export function registerCompletedFollowupAuthorityTests({
         const custody: SubagentCompletionCustody["authority"] = {
           operatorAuthority: authority,
           scopes: ["operator.write"],
+          requesterOrigin: undefined,
           signal: new AbortController().signal,
           assertCurrent: () => authority.signal?.throwIfAborted(),
           release() {},

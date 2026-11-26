@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { compareMcpCatalogTools } from "./agent-bundle-mcp-names.js";
+import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import type { RequesterMcpConnect, SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 import type { McpOAuthLinkStart } from "./mcp-oauth-link.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
@@ -181,11 +182,14 @@ export async function createRequesterMcpConnect(params: {
     requesterMcpOAuthIdentity(serverName, resolved.url, params.requesterScope),
   );
   const statuses = await readMcpOAuthCredentialsStatuses(identities);
-  const servers = new Map<string, () => Promise<AgentToolResult<unknown>>>();
+  const servers = new Map<
+    string,
+    (assertCurrent?: () => void) => Promise<AgentToolResult<unknown>>
+  >();
   const authorizedServerNames: string[] = [];
   for (const [index, { serverName, resolved }] of configured.entries()) {
     const status = expectDefined(statuses[index], "requester MCP OAuth status");
-    servers.set(serverName, () =>
+    servers.set(serverName, (assertCurrent) =>
       connectRequesterOAuthServer({
         serverName,
         publicOrigin: params.cfg?.gateway?.publicOrigin,
@@ -193,7 +197,20 @@ export async function createRequesterMcpConnect(params: {
           startMcpOAuthAuthorization(
             requesterMcpOAuthIdentity(serverName, resolved.url, params.requesterScope),
             resolved,
-            { redirectUrl },
+            {
+              redirectUrl,
+              ...(assertCurrent
+                ? {
+                    login: {
+                      signal: getSessionMcpRequestSignal() ?? new AbortController().signal,
+                      assertCurrent,
+                      onAuthorizationPublished: assertCurrent,
+                      beforeTokensSaved: assertCurrent,
+                      onTokensSaved: assertCurrent,
+                    },
+                  }
+                : {}),
+            },
           ),
       }),
     );
@@ -210,7 +227,10 @@ export async function createRequesterMcpConnect(params: {
     catalog: buildRequesterConnectCatalog(servers.keys(), params.safeServerNamesByServer),
     authorizedServerNames,
     configFingerprint,
-    createExecute: (serverName) => servers.get(serverName),
+    createExecute: (serverName, options) => {
+      const execute = servers.get(serverName);
+      return execute && (() => execute(options?.assertCurrent));
+    },
   };
 }
 
