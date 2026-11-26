@@ -12,4 +12,6 @@
 # Exact measured net growth minus the standard 400-line allowance.
 # On main 90ba7624 the count is 10 higher: main #205403 removed the old localModelLean
 # agent-scope test this change rewrote, so the replacement test now counts in full.
-1581
+# openclaw/small became the exact Lean migration and openclaw/compact kept the old small
+# behavior: the Lean parity fixtures against main's Lean cases add 152 lines (1733 total).
+1733
