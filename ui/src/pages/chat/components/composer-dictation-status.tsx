@@ -1,8 +1,11 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
-import { MicrophoneActivity } from "./chat-voice-activity.tsx";
+import { MicrophoneActivity } from "./microphone-activity.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 // Dictation feedback starts on the click itself: pulsing bars while the microphone
 // opens, then the live input level while listening. The permission hint only
@@ -42,9 +45,9 @@ export function ActiveDictationStatus(props: {
         <div
           class="agent-chat__dictation-status"
           data-transcribing={current === "thinking" ? "" : undefined}
-          role={current === "listening" ? undefined : "status"}
-          aria-live={current === "listening" ? undefined : "polite"}
-          aria-atomic={current === "listening" ? undefined : "true"}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
         >
           <span
             class={[

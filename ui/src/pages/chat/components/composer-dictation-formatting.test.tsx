@@ -7,9 +7,10 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
 import { ComposerDictationSendAction } from "./chat-composer-controls.tsx";
-import { DictationFormattingReview } from "./composer-dictation-formatting.tsx";
-
-type Review = NonNullable<ComposerDictationOwner["formattingReview"]>;
+import {
+  DictationFormattingReview,
+  type DictationFormattingView as Review,
+} from "./composer-dictation-formatting.tsx";
 
 function mountReview(initial: Review) {
   const actions = {
@@ -17,7 +18,6 @@ function mountReview(initial: Review) {
     acceptFormatting: vi.fn(() => true),
     dismissFormatting: vi.fn(),
     reprocessFormatting: vi.fn(),
-    confirmFormattingMarkers: vi.fn(),
   };
   let update: Setter<Review> | undefined;
   const view = mountSolid(() => {
@@ -239,7 +239,7 @@ it("explains command overflow while retaining the complete original without auto
       original,
     );
     expect(view.actions.acceptFormatting).not.toHaveBeenCalled();
-    expect(view.actions.confirmFormattingMarkers).not.toHaveBeenCalled();
+    expect(view.actions.reprocessFormatting).not.toHaveBeenCalled();
   } finally {
     view.unmount();
   }
@@ -274,7 +274,7 @@ it("confirms only selected source commands and resets selection for a replacemen
     view.getByRole("checkbox").click();
     flush();
     interpret().click();
-    expect(view.actions.confirmFormattingMarkers).toHaveBeenCalledExactlyOnceWith([
+    expect(view.actions.reprocessFormatting).toHaveBeenCalledExactlyOnceWith([
       { start: 18, end: 31 },
     ]);
     expect(view.actions.acceptFormatting).not.toHaveBeenCalled();

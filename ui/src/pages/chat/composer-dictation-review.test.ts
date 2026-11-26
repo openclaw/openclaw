@@ -80,7 +80,7 @@ describe("reviewed dictation lifecycle", () => {
     await finishing;
     expect(fixture.controller.formattingReview?.result.status).toBe("needs-review");
     expect(fixture.onCommit).not.toHaveBeenCalled();
-    fixture.controller.confirmFormattingMarkers([
+    fixture.controller.reprocessFormatting([
       { start: 14, end: 20 },
       { start: 26, end: 35 },
     ]);
@@ -98,14 +98,14 @@ describe("reviewed dictation lifecycle", () => {
       "talk.session.create",
       "talk.session.close",
     ]);
-    expect(fixture.controller.formattingDiagnostics).toMatchObject({
+    expect(fixture.controller.formattingReview?.diagnostics).toMatchObject({
       version: 1,
       isFinal: true,
       transcriptRevision: 1,
       providerPolicy: "local-deterministic",
       receipt: "committed",
     });
-    expect(JSON.stringify(fixture.controller.formattingDiagnostics)).not.toContain("milk");
+    expect(JSON.stringify(fixture.controller.formattingReview?.diagnostics)).not.toContain("milk");
   });
 
   it.each(["new capture", "cancel", "scope replacement"])(
@@ -366,7 +366,7 @@ describe("reviewed dictation lifecycle", () => {
     await vi.advanceTimersByTimeAsync(2_500);
     await finished;
     expect(fixture.controller.formattingReview?.result.status).toBe("raw-fallback");
-    expect(fixture.controller.formattingDiagnostics?.isFinal).toBe(false);
+    expect(fixture.controller.formattingReview?.diagnostics?.isFinal).toBe(false);
   });
 
   it.each([
@@ -393,7 +393,7 @@ describe("reviewed dictation lifecycle", () => {
       const initial = fixture.controller.formattingReview!.result;
       expect(initial.status).toBe("needs-review");
       const source = initial.document!.source;
-      fixture.controller.confirmFormattingMarkers(markers);
+      fixture.controller.reprocessFormatting(markers);
       const accepted = fixture.controller.formattingReview!.result;
       expect(accepted.plainText).toBe(plain);
       expect(accepted.document?.source).toEqual(source);

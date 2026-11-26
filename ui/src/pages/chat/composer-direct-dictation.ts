@@ -1,20 +1,14 @@
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { patchSettings } from "../../app/settings.ts";
-import {
-  canReplaceComposerInputWithHistory,
-  composerInputHasFocus,
-  focusComposerInput,
-  replaceComposerInputWithHistory,
-  selectComposerInput,
-} from "../../lib/composer-input.ts";
+import { focusComposerInput, selectComposerInput } from "../../lib/composer-input.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
-import {
-  placeReviewedDictation,
-  type DictationFormattingTarget,
-  type ReviewedDictationPlacement,
+import type {
+  DictationFormattingTarget,
+  ReviewedDictationEdit,
 } from "./composer-dictation-formatting.ts";
+import { readComposerDictationTarget } from "./composer-dictation-target.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
 
@@ -53,37 +47,13 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
       if (!target) {
         return undefined;
       }
-      const root = target.closest("form, .new-session-page__draft");
-      const active = target.ownerDocument.activeElement;
-      return {
-        identity: target,
+      return readComposerDictationTarget(
+        target,
         revision,
-        value: target.value,
-        start: target.selectionStart,
-        end: target.selectionEnd,
-        editable: target.isConnected && !target.disabled && !target.readOnly,
-        focused:
-          target.ownerDocument.visibilityState !== "hidden" &&
-          target.ownerDocument.hasFocus() &&
-          Boolean(root?.contains(active)) &&
-          (composerInputHasFocus(target) ||
-            Boolean(
-              active?.closest(
-                ".dictation-formatting, .chat-send-btn--voice, .chat-send-btn--dictating, .chat-send-btn--dictation-commit",
-              ),
-            )),
-        capabilities: {
-          version: 1,
-          revision: 1,
-          // Side chat and New Session render submitted messages as Markdown.
-          formats: canReplaceComposerInputWithHistory(target)
-            ? ["text/plain", "text/markdown"]
-            : [],
-          markdownProfile: "commonmark-0.31.2-lists",
-          safeMultiline: true,
-          ...(target.maxLength >= 0 ? { maxLength: target.maxLength } : {}),
-        },
-      };
+        target.value,
+        true,
+        "form, .new-session-page__draft",
+      );
     },
     /** Keep the pre-preview draft so partial dictation does not compound insertions. */
     captureSelection() {
@@ -109,14 +79,14 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
       transcript: string,
       late?: true,
       preservePreview?: true,
-      reviewed?: ReviewedDictationPlacement,
+      reviewed?: ReviewedDictationEdit,
     ): string | null {
       const target = read();
       // Delayed finals must not replace edits made after Stop unlocked this draft.
       const insertion =
         target &&
         (reviewed
-          ? { ...placeReviewedDictation(transcript, reviewed), changed: true }
+          ? { ...reviewed.insertion, changed: true }
           : place(
               transcript,
               capturedSelection,
@@ -137,12 +107,7 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
         return null;
       }
       if (reviewed) {
-        const receipt = replaceComposerInputWithHistory(
-          target,
-          insertion.value,
-          () => reviewed.isCurrent?.() === true,
-          reviewed.target,
-        );
+        const receipt = reviewed.applyTo(target);
         if (receipt === false) {
           return null;
         }
@@ -265,7 +230,7 @@ export class DirectDictationControl extends EventTarget {
         transcript: string,
         late?: true,
         preservePreview?: true,
-        reviewed?: ReviewedDictationPlacement,
+        reviewed?: ReviewedDictationEdit,
       ) => {
         // Owner changes replace draft ownership. Object identity keeps even an
         // A -> B -> A transition from accepting the prior owner's snapshot.

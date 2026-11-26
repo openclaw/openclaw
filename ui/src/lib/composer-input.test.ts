@@ -6,11 +6,8 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mountMentionComposerEditor } from "../pages/chat/components/composer-editor-mentions.tsx";
 import type { HumanMention } from "./chat/chat-types.ts";
 import { updateHumanMentions } from "./chat/human-mentions.ts";
-import {
-  readComposerEditor,
-  replaceComposerInputWithHistory,
-  selectComposerInput,
-} from "./composer-input.ts";
+import { replaceComposerInputWithHistory } from "./composer-input-history.ts";
+import { readComposerEditor, selectComposerInput } from "./composer-input.ts";
 
 afterEach(() => {
   document.body.replaceChildren();

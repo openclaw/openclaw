@@ -1,11 +1,12 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { UiSettings } from "../../app/settings-contract.ts";
-import type {
-  DictationFormattingMode,
-  DictationFormattingResult,
-  DictationRange,
+import { replaceComposerInputWithHistory } from "../../lib/composer-input-history.ts";
+import {
+  type DictationFormattingMode,
+  type DictationFormattingResult,
+  type DictationRange,
   prepareDictationFormatting,
 } from "../../lib/dictation/formatting.ts";
+import { sameDictationFormattingTarget } from "./composer-dictation-target.ts";
 
 export type { DictationFormattingMode } from "../../lib/dictation/formatting.ts";
 export type PrepareFormatting = typeof prepareDictationFormatting;
@@ -37,6 +38,11 @@ export type ReviewedDictationPlacement = {
   isCurrent?: () => boolean;
 };
 
+export type ReviewedDictationEdit = ReviewedDictationPlacement & {
+  insertion: ReturnType<typeof placeReviewedDictation>;
+  applyTo: (input: HTMLTextAreaElement) => boolean | undefined;
+};
+
 export type ComposerDictationFailure = {
   kind: "interrupted" | "start" | "busy";
   preservesText: boolean;
@@ -55,7 +61,7 @@ export type ComposerDictationOwnerOptions = {
     text: string,
     late?: true,
     preservePreview?: true,
-    reviewed?: ReviewedDictationPlacement,
+    reviewed?: ReviewedDictationEdit,
   ) => boolean | void;
   readFormattingTarget?: () => DictationFormattingTarget | undefined;
   onFormattingDismiss?: () => void;
@@ -125,6 +131,10 @@ export function reviewProjection(
   return {
     result: review.result,
     receipt: review.receipt,
+    // Bounded local diagnostics contain no transcript, target value, or credentials.
+    get diagnostics() {
+      return diagnostics(review);
+    },
     canApply:
       isCurrent(review) &&
       selectDictationFormatting(review.result, review.target, readTarget()).canApply,
@@ -146,64 +156,12 @@ export function mergeDictationMarkerConfirmations(
   ];
 }
 
-export function policyChanged(previous: UiSettings, next: UiSettings): boolean {
-  return (
-    previous.gatewayUrl !== next.gatewayUrl ||
-    previous.dictationFormatting?.mode !== next.dictationFormatting?.mode
-  );
-}
-
-export function scopeChanged(
-  previous: ComposerDictationOwnerOptions,
-  next: ComposerDictationOwnerOptions,
-): boolean {
-  return (
-    previous.client !== next.client ||
-    previous.sessionKey !== next.sessionKey ||
-    previous.draftKey !== next.draftKey
-  );
-}
-
-/** A latched mic can keep recording while its captured insertion authority expires. */
-export function formattingTargetChanged(
-  capture: DictationFormattingCapture | undefined,
-  readTarget: ComposerDictationOwnerOptions["readFormattingTarget"],
-  connecting: boolean,
-  event?: Event,
-): boolean {
-  if (event?.type === "visibilitychange") {
-    return document.visibilityState === "hidden";
-  }
-  if (event?.type === "blur") {
-    return !connecting;
-  }
-  return Boolean(
-    !(event?.type === "focusin" && connecting) &&
-    capture &&
-    !capture.invalidated &&
-    !sameDictationFormattingTarget(capture.target, readTarget?.()),
-  );
-}
-
 export function commitReceipt(committed: boolean | void): DictationFormattingReceipt {
   return committed === true
     ? "committed"
     : committed === false
       ? "not-committed"
       : "outcome-unknown";
-}
-
-export function captureTarget(
-  target: DictationFormattingTarget | undefined,
-  client: GatewayBrowserClient,
-): DictationFormattingCapture {
-  return {
-    target,
-    client,
-    auth: client.auth,
-    connection: client.connectionGeneration,
-    invalidated: false,
-  };
 }
 
 export function prepareReview(
@@ -218,7 +176,7 @@ export function prepareReview(
   return prepareDictationResult(prepare, review.result.originalText, mode, review.source, markers);
 }
 
-export function finalPreparation(
+function finalPreparation(
   mode: DictationFormattingMode,
   generation: number,
   capture: DictationFormattingCapture | undefined,
@@ -311,36 +269,6 @@ export function placeReviewedDictation(text: string, { target }: ReviewedDictati
   };
 }
 
-export function sameDictationFormattingTarget(
-  captured: DictationFormattingTarget | undefined,
-  live: DictationFormattingTarget | undefined,
-): boolean {
-  return Boolean(
-    captured &&
-    live &&
-    captured.identity === live.identity &&
-    captured.revision === live.revision &&
-    captured.value === live.value &&
-    captured.start === live.start &&
-    captured.end === live.end &&
-    captured.start >= 0 &&
-    captured.start <= captured.end &&
-    captured.end <= captured.value.length &&
-    captured.capabilities.version === 1 &&
-    live.capabilities.version === 1 &&
-    captured.capabilities.revision === live.capabilities.revision &&
-    captured.capabilities.safeMultiline === live.capabilities.safeMultiline &&
-    captured.capabilities.maxLength === live.capabilities.maxLength &&
-    captured.capabilities.markdownProfile === live.capabilities.markdownProfile &&
-    captured.capabilities.richTextProfile === live.capabilities.richTextProfile &&
-    captured.capabilities.formats.join(",") === live.capabilities.formats.join(",") &&
-    captured.editable &&
-    captured.focused &&
-    live.editable &&
-    live.focused,
-  );
-}
-
 /** No write, retry, clipboard operation or app-name inference occurs here. */
 export function selectDictationFormatting(
   result: DictationFormattingResult,
@@ -393,4 +321,143 @@ function fits(text: string, target: DictationFormattingTarget): boolean {
     (maxLength === undefined ||
       target.value.length - (target.end - target.start) + text.length <= maxLength)
   );
+}
+
+/** Perform the admitted editor transaction without transferring draft ownership. */
+export function applyReview(
+  review: DictationFormattingReview,
+  choice: "formatted" | "original",
+  readOptions: () => ComposerDictationOwnerOptions,
+  stillCurrent: () => boolean,
+  onReceipt: (receipt: DictationFormattingReceipt) => void,
+): DictationFormattingReceipt {
+  const selection = selectDictationFormatting(
+    review.result,
+    review.target,
+    readOptions().readFormattingTarget?.(),
+    choice === "original",
+  );
+  if (!selection.canApply) {
+    review.invalidated = true;
+    return review.receipt;
+  }
+  // Set the receipt before the indivisible attempt. A callback can cancel/reenter;
+  // that cannot authorize another write or make an uncertain effect disappear.
+  review.receipt = "outcome-unknown";
+  onReceipt(review.receipt);
+  try {
+    const placement = { target: review.target!, format: selection.format };
+    const insertion = placeReviewedDictation(selection.text, placement);
+    const isCurrent = () =>
+      stillCurrent() &&
+      selectDictationFormatting(
+        review.result,
+        review.target,
+        readOptions().readFormattingTarget?.(),
+        choice === "original",
+      ).canApply;
+    const committed = readOptions().onCommit(selection.text, true, undefined, {
+      ...placement,
+      insertion,
+      isCurrent,
+      applyTo: (input) =>
+        replaceComposerInputWithHistory(input, insertion.value, isCurrent, placement.target),
+    });
+    review.receipt = commitReceipt(committed);
+  } catch {
+    review.receipt = "outcome-unknown";
+  }
+  review.invalidated = true;
+  onReceipt(review.receipt);
+  return review.receipt;
+}
+
+/** Loaded for Explicit capture only; the gesture owner retains capture admission. */
+export class ComposerDictationReviewState {
+  current: DictationFormattingReview | undefined;
+  receipt: DictationFormattingReceipt = "not-committed";
+  readonly finalPreparation = finalPreparation;
+
+  constructor(
+    private readonly options: () => ComposerDictationOwnerOptions,
+    private readonly policy: () => DictationFormattingMode,
+    private readonly sourceIsCurrent: (review: DictationFormattingAuthority) => boolean,
+    private readonly changed: () => void,
+  ) {}
+
+  get projection() {
+    return reviewProjection(
+      this.current,
+      (review) => this.isCurrent(review),
+      () => this.options().readFormattingTarget?.(),
+    );
+  }
+
+  finalize(
+    text: string,
+    session: Parameters<typeof prepareFinalReview>[2],
+    preparation: ReturnType<typeof finalPreparation>,
+    policyChanged: boolean,
+  ): void {
+    const review = prepareFinalReview(prepareDictationFormatting, text, session, preparation);
+    review.invalidated ||= policyChanged;
+    this.current = review;
+    this.receipt = "not-committed";
+  }
+
+  reprocess(advance: () => number, ranges?: readonly DictationRange[]): void {
+    const mode = this.policy();
+    const review = this.current;
+    if (!review || review.receipt !== "not-committed" || !this.sourceIsCurrent(review)) {
+      return;
+    }
+    if (ranges && (!this.isCurrent(review) || !review.source.finalized || mode !== "explicit")) {
+      return;
+    }
+    // Reprocessing never retargets the draft or reacquires a lost selection.
+    const result = prepareReview(prepareDictationFormatting, review, mode, ranges);
+    this.current = { ...review, result, generation: advance(), mode, invalidated: false };
+    this.changed();
+  }
+
+  accept(choice: "formatted" | "original"): boolean {
+    const review = this.current;
+    if (!review || !this.isCurrent(review)) {
+      return false;
+    }
+    const receipt = applyReview(
+      review,
+      choice,
+      this.options,
+      () => this.current === review && this.isCurrent(review, "outcome-unknown"),
+      (next) => {
+        this.receipt = next;
+      },
+    );
+    this.changed();
+    return receipt === "committed";
+  }
+
+  invalidate(): void {
+    if (this.current) {
+      this.current.invalidated = true;
+    }
+  }
+
+  clear(): void {
+    this.current = undefined;
+  }
+
+  private isCurrent(
+    review: DictationFormattingReview,
+    receipt: DictationFormattingReceipt = "not-committed",
+  ): boolean {
+    return (
+      this.options().enabled &&
+      this.sourceIsCurrent(review) &&
+      !review.invalidated &&
+      review.mode === this.policy() &&
+      review.receipt === receipt
+    );
+  }
 }

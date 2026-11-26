@@ -2,12 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { Show, createSignal, createUniqueId, lazy, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Kbd, KeyboardShortcut, ShortcutHint } from "../../../components/solid/kbd.tsx";
-import {
-  createMenuControls,
-  Menu,
-  type MenuEntry,
-  type MenuHandle,
-} from "../../../components/solid/menu.tsx";
+import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { registerSessionNavigationEnglish } from "../../../i18n/locales/en-session-navigation.ts";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
@@ -41,7 +36,6 @@ type ChatRunControlsProps = ReturnType<typeof createChatComposerContext>["runCon
 
 export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
   const menuId = createUniqueId();
-  const controls = createMenuControls();
   let handle: MenuHandle | undefined;
   let host!: HTMLDivElement;
   let pointerDeviceSelection = false;
@@ -64,7 +58,6 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
         >
           <MicrophoneMenu
             picker={props}
-            controls={controls}
             renderItems={renderItems}
             onDevicePointer={(pointer) => {
               pointerDeviceSelection = pointer;
@@ -109,7 +102,6 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
     >
       <Menu
         id={`chat-microphone-${menuId}`}
-        controls={controls}
         lazy
         panelClass="chat-talk-input-picker__menu"
         placement="top-end"
@@ -141,6 +133,8 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
             }
           } else if (item.id === "hold-to-dictate") {
             props.onHoldToDictateChange?.(props.holdToDictate === false);
+          } else if (item.id === "preserve" || item.id === "explicit") {
+            props.readDictation?.()?.setFormattingMode(item.id);
           } else if (item.id === "capability:realtime") {
             props.onOpenTalkSettings?.();
           } else if (item.id === "capability:dictation") {
@@ -271,65 +265,52 @@ export function ComposerDictationSendAction(props: {
   onPointerDown?: (event: PointerEvent) => void;
   onReleaseFocus?: (source: ComposerDictationOwner) => void;
 }) {
-  const finishAndSend = async (event: MouseEvent) => {
-    const dictation = props.readDictation();
-    const send = props.onSend;
-    if (dictation.finalizing) {
-      return;
-    }
-    // This capture's policy survives finishing and later preference changes.
-    const requiresReview = dictation.requiresFormattingReview;
-    await dictation.finishActive();
-    if (requiresReview) {
-      return;
-    }
-    // Keep the initiating input action when asynchronous dictation finishes.
-    send(event);
-  };
-  const label = () =>
-    props.readDictation().requiresFormattingReview
-      ? t("chat.composer.dictationFinishAndReview")
-      : t("chat.runControls.send");
   return (
     <Show when={props.readDictation().active ? props.readDictation() : undefined} keyed>
       {(source) => {
-        // A disappearing action returns focus through the draft that mounted it.
-        const initialReleaseFocus = props.onReleaseFocus;
+        const label = () =>
+          t(
+            props.readDictation().requiresFormattingReview
+              ? "chat.composer.dictationFinishAndReview"
+              : "chat.runControls.send",
+          );
         let action: HTMLButtonElement | undefined;
-        onSettled(() => () => {
-          if (
-            action &&
-            source.requiresFormattingReview &&
-            action.ownerDocument.activeElement === action
-          ) {
-            initialReleaseFocus?.(source);
-          }
+        onSettled(() => {
+          const releaseFocus = props.onReleaseFocus;
+          return () => {
+            if (source.requiresFormattingReview && action?.ownerDocument.activeElement === action) {
+              releaseFocus?.(source);
+            }
+          };
         });
         return (
-          <>
-            {props.readDictation().connecting ? null : (
-              <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
-                {props.readDictation().finalizing
-                  ? t("chat.composer.dictationFinalizing")
-                  : t("chat.composer.dictationListening")}
-              </span>
-            )}
-            <openclaw-tooltip prop:content={label()}>
-              <button
-                class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
-                type="button"
-                ref={[
-                  (element) => (action = element),
-                  primaryPointerDownRef(() => props.onPointerDown),
-                ]}
-                onClick={(event: MouseEvent) => void finishAndSend(event)}
-                aria-disabled={props.readDictation().finalizing ? "true" : "false"}
-                aria-label={label()}
-              >
-                <Icon name={props.readDictation().requiresFormattingReview ? "eye" : "arrowUp"} />
-              </button>
-            </openclaw-tooltip>
-          </>
+          <openclaw-tooltip prop:content={label()}>
+            <button
+              class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
+              type="button"
+              ref={[
+                (element) => {
+                  action = element;
+                },
+                primaryPointerDownRef(() => props.onPointerDown),
+              ]}
+              onClick={async (event) => {
+                if (source.finalizing) {
+                  return;
+                }
+                const requiresReview = source.requiresFormattingReview;
+                const send = props.onSend;
+                await source.finishActive();
+                if (!requiresReview) {
+                  send(event);
+                }
+              }}
+              aria-disabled={props.readDictation().finalizing ? "true" : "false"}
+              aria-label={label()}
+            >
+              <Icon name={props.readDictation().requiresFormattingReview ? "eye" : "arrowUp"} />
+            </button>
+          </openclaw-tooltip>
         );
       }}
     </Show>

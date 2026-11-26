@@ -351,6 +351,23 @@ suite.define(() => {
       },
     ));
 
+  it("can finish an Explicit recording when the status chunk fails to load", () =>
+    suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      const statusChunk = /\/assets\/composer-dictation-status-[^/]+\.js$/;
+      await page.route(statusChunk, (route) => route.abort());
+      const fixture = await open(page, { route: "new", explicit: true });
+      await fixture.textarea.fill("Keep this draft");
+      await fixture.textarea.selectText();
+      const statusRequested = page.waitForRequest(statusChunk);
+      await fixture.shell.locator(".chat-send-btn--voice:visible").first().click();
+      await fixture.gateway.waitForRequest("talk.session.create");
+      await fixture.gateway.resolveDeferred("talk.session.create");
+      await statusRequested;
+      await button(fixture.shell, "Finish and review").click();
+      await fixture.gateway.waitForRequest("talk.session.close");
+      await fixture.noSend();
+    }));
+
   it("opts in by keyboard, reviews both formats, commits Markdown once and undoes without sending", () =>
     suite.withPage(
       {
@@ -360,13 +377,21 @@ suite.define(() => {
       async ({ page }) => {
         const fixture = await open(page);
         await fixture.shell.locator(".chat-send-btn--voice:visible").first().hover();
-        await button(page, "Microphone input").click();
-        const mode = page.getByRole("combobox", { name: "Dictation formatting", exact: true });
-        await mode.focus();
-        await mode.press("End");
-        await expect.poll(() => mode.inputValue()).toBe("explicit");
-        expect(await mode.evaluate((element) => document.activeElement === element)).toBe(true);
-        await mode.press("Escape");
+        const picker = button(page, "Microphone input");
+        await picker.press("Enter");
+        const preserve = page.getByRole("menuitemradio", { name: "Preserve recognized text" });
+        const explicit = page.getByRole("menuitemradio", {
+          name: "Interpret explicit structure (English)",
+        });
+        await expect.poll(() => preserve.getAttribute("aria-checked")).toBe("true");
+        await page.keyboard.press("End");
+        await expect
+          .poll(() => explicit.evaluate((element) => document.activeElement === element))
+          .toBe(true);
+        await page.keyboard.press("Enter");
+        await expect.poll(() => explicit.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => preserve.getAttribute("aria-checked")).toBe("false");
+        await page.keyboard.press("Escape");
         await fixture.textarea.focus();
         await fixture.start();
         await fixture.finish(speech, true, true, true);
@@ -478,7 +503,7 @@ suite.define(() => {
       suite.withPage(
         {
           permissions: ["microphone", "clipboard-read", "clipboard-write"],
-          viewport: { width: 1280, height: 1100 },
+          viewport: { width: 1280, height: 1280 },
         },
         async ({ page }) => {
           const fixture = await open(page, {

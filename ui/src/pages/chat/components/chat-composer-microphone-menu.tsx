@@ -3,28 +3,22 @@ import { createMemo, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
-import type { MenuControls, MenuEntry } from "../../../components/solid/menu.tsx";
+import type { MenuEntry } from "../../../components/solid/menu.tsx";
 import { SwitchIndicator } from "../../../components/solid/switch.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatDictationFormattingEnglish } from "../../../i18n/locales/en-chat-dictation-formatting.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { type RealtimeTalkDeviceIssue, realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
 import { voiceApiKeyMessage } from "../voice-api-key-notice.tsx";
-import { DictationFormattingModeSelect } from "./composer-dictation-formatting.tsx";
+
+registerEnglishCatalog(registerChatDictationFormattingEnglish);
 
 export function MicrophoneMenu(props: {
   picker: MicrophonePickerProps;
-  controls: MenuControls;
   renderItems: (items: () => readonly MenuEntry[]) => JSX.Element;
   onReady: (items: (() => MenuEntry[]) | undefined) => void;
   onDevicePointer: (pointer: boolean) => void;
 }) {
-  // Retain the native select while device/settings rows refresh, including its focus.
-  const formattingControl = (
-    <DictationFormattingModeSelect
-      readDictation={() => props.picker.readDictation?.()}
-      controlRef={() => props.controls.ref()}
-    />
-  );
   const items = createMemo(
     () => {
       const keyed = props.picker.apiKeyProviders ?? {};
@@ -239,12 +233,33 @@ export function MicrophoneMenu(props: {
           details: <SwitchIndicator checked={props.picker.holdToDictate !== false} size="sm" />,
         });
       }
-      if (props.picker.readDictation) {
+      const dictation = props.picker.readDictation?.();
+      if (dictation) {
         separator("formatting-separator");
         entries.push({
           kind: "content",
           id: "dictation-formatting",
-          content: formattingControl,
+          content: <MenuHeading label={t("chat.dictationFormatting.mode")} />,
+        });
+        for (const mode of ["preserve", "explicit"] as const) {
+          entries.push({
+            id: mode,
+            label: t(
+              mode === "preserve"
+                ? "chat.dictationFormatting.preserve"
+                : "chat.dictationFormatting.explicit",
+            ),
+            type: "radio",
+            checked: dictation.formattingMode === mode,
+            closeOnSelect: false,
+          });
+        }
+        entries.push({
+          kind: "content",
+          id: "dictation-formatting-hint",
+          content: (
+            <div class="chat-talk-input-picker__note">{t("chat.dictationFormatting.modeHint")}</div>
+          ),
         });
       }
       return entries;

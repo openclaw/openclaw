@@ -8,19 +8,21 @@ import type {
 } from "../../../lib/dictation/formatting.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
-import "./composer-dictation-formatting.css";
 
 registerEnglishCatalog(registerChatDictationFormattingEnglish);
 
 type FormattingOwner = Pick<
   ComposerDictationOwner,
-  | "formattingReview"
   | "formattingMode"
   | "setFormattingMode"
   | "acceptFormatting"
   | "dismissFormatting"
   | "reprocessFormatting"
-  | "confirmFormattingMarkers"
+> & { formattingReview: DictationFormattingView | undefined };
+
+export type DictationFormattingView = Omit<
+  NonNullable<ComposerDictationOwner["formattingReview"]>,
+  "diagnostics"
 >;
 type FormattingProps = { readDictation: () => FormattingOwner | undefined };
 
@@ -39,7 +41,7 @@ function FormattingMarkerReview(
       <p>{t("chat.dictationFormatting.commandsHint")}</p>
       <For each={props.result.candidates}>
         {(candidate) => (
-          <label class="dictation-formatting__candidate">
+          <label class="field checkbox">
             <input
               type="checkbox"
               checked={contains(candidate.source)}
@@ -79,7 +81,7 @@ function FormattingMarkerReview(
             owner?.formattingReview?.result === props.result &&
             owner.formattingReview.receipt === "not-committed"
           ) {
-            owner.confirmFormattingMarkers(selected());
+            owner.reprocessFormatting(selected());
             if (owner.formattingReview && owner.formattingReview.result !== props.result) {
               props.onConfirmed();
             }
@@ -92,17 +94,12 @@ function FormattingMarkerReview(
   );
 }
 
-export function DictationFormattingModeSelect(
-  props: FormattingProps & {
-    controlRef?: () => (element: HTMLSelectElement) => void;
-  },
-) {
+function DictationFormattingModeSelect(props: FormattingProps) {
   const id = createUniqueId();
   return (
-    <div class="dictation-formatting__field">
+    <div class="field">
       <label for={id}>{t("chat.dictationFormatting.mode")}</label>
       <select
-        ref={(element) => props.controlRef?.()(element)}
         id={id}
         aria-describedby={`${id}-hint`}
         value={props.readDictation()?.formattingMode ?? "preserve"}
@@ -116,7 +113,7 @@ export function DictationFormattingModeSelect(
         <option value="preserve">{t("chat.dictationFormatting.preserve")}</option>
         <option value="explicit">{t("chat.dictationFormatting.explicit")}</option>
       </select>
-      <span id={`${id}-hint`} class="dictation-formatting__hint">
+      <span id={`${id}-hint`} class="muted">
         {t("chat.dictationFormatting.modeHint")}
       </span>
     </div>
@@ -185,7 +182,7 @@ export function DictationFormattingReview(props: FormattingProps) {
     <Show when={review()}>
       {(current) => (
         <fieldset
-          class="dictation-formatting"
+          class="dictation-formatting card stack"
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.stopPropagation();
@@ -221,7 +218,7 @@ export function DictationFormattingReview(props: FormattingProps) {
             </Show>
           </div>
           <DictationFormattingModeSelect readDictation={props.readDictation} />
-          <p class="dictation-formatting__hint">{t("chat.dictationFormatting.reprocessHint")}</p>
+          <p class="muted">{t("chat.dictationFormatting.reprocessHint")}</p>
           <Show when={current().result} keyed>
             {(result) => (
               <Show when={result.candidates.length}>
@@ -235,7 +232,7 @@ export function DictationFormattingReview(props: FormattingProps) {
               </Show>
             )}
           </Show>
-          <label class="dictation-formatting__field">
+          <label class="field">
             <span>{t("chat.dictationFormatting.preview")}</span>
             <select
               ref={(element) => {
@@ -254,7 +251,7 @@ export function DictationFormattingReview(props: FormattingProps) {
             when={preview() === "semantic" && current().result.html}
             fallback={
               <textarea
-                class="dictation-formatting__preview"
+                class="dictation-formatting__preview code-block"
                 aria-label={t("chat.dictationFormatting.plain")}
                 readonly
                 rows={6}
@@ -263,7 +260,7 @@ export function DictationFormattingReview(props: FormattingProps) {
             }
           >
             <SanitizedHtml
-              class="dictation-formatting__preview"
+              class="dictation-formatting__preview code-block"
               role="region"
               aria-label={t("chat.dictationFormatting.semantic")}
               tabindex={0}
@@ -273,14 +270,14 @@ export function DictationFormattingReview(props: FormattingProps) {
           <details>
             <summary>{t("chat.dictationFormatting.original")}</summary>
             <textarea
-              class="dictation-formatting__preview"
+              class="dictation-formatting__preview code-block"
               aria-label={t("chat.dictationFormatting.original")}
               readonly
               rows={4}
               value={current().result.originalText}
             />
           </details>
-          <div class="dictation-formatting__actions">
+          <div class="wrap-row">
             <button
               type="button"
               class="btn primary"
