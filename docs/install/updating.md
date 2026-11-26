@@ -1522,9 +1522,11 @@ transaction-local verification.
 SQLite upgrades default to a whole-database `quick_check`, a full
 `integrity_check` of the tables the migration rewrites or re-indexes, and the
 existing foreign-key checks. This avoids checking every unrelated index against
-its table during a routine upgrade. Structural corruption anywhere in the
-database and corruption in the migration's affected tables still refuse the
-migration; quarantine and rollback behavior are unchanged.
+its table during a routine upgrade. An agent database version step checks only the
+schema catalog and the tables it declares, so upgrade downtime does not grow with
+unrelated agent history; the next Gateway start checks the whole database in the
+background. Other structural corruption and corruption in the migration's affected
+tables still refuse the migration; quarantine and rollback behavior are unchanged.
 Historical upgrades use the same default even when recovery requires a full-file
 backup. Automatic original-state captures and disposable update rehearsals also
 honor the requested check, including same-version Doctor repairs. Automatic rollback
