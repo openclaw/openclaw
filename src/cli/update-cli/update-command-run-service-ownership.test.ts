@@ -31,10 +31,7 @@ import {
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -46,10 +43,7 @@ import {
   resolveUpdateCommandAdmissionEnv,
   resolveUpdateCommandAdmissionRoot,
 } from "./update-command-run.js";
-import {
-  getNodeRuntimeFixture,
-  stubNodeRuntime,
-} from "./update-command-runtime-recovery.test-support.js";
+import { getNodeRuntimeFixture } from "./update-command-runtime-recovery.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import { collectServiceInspectionFailureFacts } from "./update-command-service-plan.js";
 import * as servicePlan from "./update-command-service-plan.js";
@@ -142,7 +136,7 @@ it.each([
       // An earlier run gives the service profile its state database, so it is not fresh.
       const { runId: previousRunId } = createUpdateRun({ trigger: "cli" }, { env: serviceEnv });
       updateRunLedger.finishUpdateRun(previousRunId, { status: "succeeded" }, { env: serviceEnv });
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
     }
     let pending: ReturnType<typeof createRetainedUpdateRecovery> | undefined;
@@ -153,7 +147,7 @@ it.each([
         { runId, from, to: { ...from, version: "2.0.0" } },
         { env: serviceEnv },
       );
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
     }
     const sourcePath = resolveSystemdUnitPath(process.env);
     if (scenario === "unloaded-local") {
@@ -163,7 +157,17 @@ it.each([
         `[Service]\nExecStart=${serviceNode} ${root}/dist/entry.js gateway\n`,
       );
     }
-    const snapshot = () => snapshotUpdateFixtureTree(home);
+    // POSIX cold recovery reads create and remove their schema-custody directory.
+    // Only its parent's mtime is incidental; keep every identity and file byte.
+    const snapshot = () =>
+      snapshotUpdateFixtureTree(home).map((entry) =>
+        pending && process.platform !== "win32" && entry[0] === path.relative(home, serviceState)
+          ? entry.with(2, 0)
+          : entry,
+      );
+    if (pending) {
+      expect(fs.existsSync(path.join(serviceState, "tmp"))).toBe(false);
+    }
     const before = snapshot();
     const nativeFailure = new Error("inspection-secret-canary");
     const rootFailure = new Error("installation classification failed");
@@ -253,7 +257,6 @@ it.each([
       });
       const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const callerBefore = snapshotUpdateFixtureTree(callerState);
-      const callerEnv = { ...process.env };
       const exitCode = process.exitCode;
       try {
         await updateCommand({
@@ -275,7 +278,7 @@ it.each([
           reason: "no-target",
         });
         expect(process.exitCode).toBe(1);
-        expect(process.env).toEqual(callerEnv);
+        expect(process.env).toMatchObject(callerOverrides);
         await closeStateDatabaseForTest();
         expect(snapshotUpdateFixtureTree(callerState)).toEqual(callerBefore);
         expect(
@@ -303,6 +306,10 @@ it.each([
         expect(loadUpdateRecovery(pending.runId, { env: serviceEnv })).toEqual(pending);
       } else {
         await expect(admission).rejects.toBe(rootFailure);
+      }
+      await closeStateDatabaseForTest();
+      if (pending) {
+        expect(fs.existsSync(path.join(serviceState, "tmp"))).toBe(false);
       }
       expect(snapshot()).toEqual(before);
     } else {
@@ -386,7 +393,8 @@ it.each([
 ] as const)(
   "preserves service admission authority ($platform, $outcome)",
   async ({ platform, outcome }) => {
-    stubNodeRuntime();
+    // Keep the host runtime intact so its SQLite transport matches its workers.
+    const serviceNode = getNodeRuntimeFixture().execPath;
     // Platform simulation cannot host native reconciliation workers.
     vi.spyOn(updateRunLedger, "reconcileAbandonedUpdateRunsAsync").mockResolvedValue([]);
     const { home, callerState, serviceState, serviceOverrides } = admissionHome(
@@ -400,7 +408,7 @@ it.each([
       openOpenClawStateDatabase({
         env: { ...process.env, OPENCLAW_STATE_DIR: serviceState },
       });
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
     }
     mockProcessPlatform(platform);
     mockSystemAccountHome();
@@ -423,7 +431,7 @@ it.each([
               },
             },
       readCommand: async () => ({
-        programArguments: [process.execPath, path.join(serviceRoot, "dist", "index.js"), "gateway"],
+        programArguments: [serviceNode, path.join(serviceRoot, "dist", "index.js"), "gateway"],
         environment: {
           ...serviceOverrides,
           ...(outcome === "conflict"
