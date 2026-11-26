@@ -425,6 +425,24 @@ is recovery for an observed development install, not a stable-release migration.
 The normal next release update replaces the legacy launcher with the resident
 launcher.
 
+Git installs that tracked main before the resident launcher can retain a format-1
+trial. When the selected build reaches core readiness, the Gateway removes the
+trial so a later restart can't roll back that healthy release. Channel health and
+update history writes don't gate trial removal.
+
+If the older updater calls the candidate's native install or restart command,
+the candidate tries to link that publication to the original run before carrying
+out the service action. The Gateway separately recovers the matching run after
+the older updater exits. It retries while it serves if the driver is still
+running or the history write fails. A Gateway restart before recovery can leave
+the original history entry unchanged with the healthy release still selected.
+
+The Gateway preserves existing repair acknowledgments, unrelated failures, and
+recovery records. It needs one matching publication receipt before it can record
+success and run advisory Doctor inspections and plugin maintenance. If the older
+updater exits because it can't read the migrated schema, its exit status still
+reflects that refusal.
+
 Prepared-release plugin maintenance normally runs after the candidate has migrated
 state and reported ready. Downgrades retain pre-trial maintenance because older
 releases do not have the post-ready job and do not migrate the schema forward.
