@@ -320,6 +320,19 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     request &&
     !request.supportsConsent &&
     opts.acceptCapabilities &&
+    record?.status === "running"
+  ) {
+    report(record, opts.json);
+    defaultRuntime.error(
+      "The update is still running, but capability consent was not applied before the timeout. Run `openclaw update status`; after it finishes, run `openclaw update --accept-capabilities`.",
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (
+    request &&
+    !request.supportsConsent &&
+    opts.acceptCapabilities &&
     (record?.status === "succeeded" ||
       record?.status === "skipped" ||
       (record?.status === "failed" && hasCommittedUpdateRunCore(record)))

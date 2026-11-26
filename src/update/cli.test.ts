@@ -478,6 +478,31 @@ it.each(["succeeded", "failed"] as const)(
   },
 );
 
+it("fails an old-Gateway consent timeout even when the new core serves", async () => {
+  capabilities.push(false);
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  runsGet.push(() => ({
+    run: {
+      status: "running",
+      phase: "verifying",
+      verification: { booted: true, serviceRunning: true, coreReady: true, versionMatch: true },
+    },
+  }));
+  await runReleaseUpdateCli({
+    json: false,
+    restart: true,
+    runningRoot: root,
+    timeoutMs: 100,
+    acceptCapabilities: true,
+  });
+  expect(sent).toEqual([{}]);
+  expect(process.exitCode).toBe(1);
+  expect(error.mock.calls.flat().join("\n")).toContain(
+    "capability consent was not applied before the timeout",
+  );
+});
+
 it("does not claim consent was applied when the replacement Gateway still lacks support", async () => {
   capabilities.push(false, false);
   runsGet.push(() => ({

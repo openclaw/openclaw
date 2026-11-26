@@ -70,3 +70,29 @@ it("loads executor-only copy when a slash command is executed", async () => {
     "Couldn’t access this session. Open another session and try again.",
   );
 });
+
+it("keeps serving-core update toasts in the selected locale", async () => {
+  const { manager } = await loadI18n({
+    updates: {
+      run: {
+        toast: {
+          coreServing: "{version} läuft",
+          coreServingFailed: "{version} läuft weiterhin",
+          pluginsPending: "Plugins werden aktiviert",
+          pluginFailure: "{step} fehlgeschlagen. Weiter: {next}",
+        },
+      },
+    },
+  });
+  await manager.setLocale("de");
+  const { registerUpdateActionsEnglish } = await import("./locales/en-update-actions.ts");
+  registerUpdateActionsEnglish();
+  expect(manager.t("updates.run.toast.coreServing", { version: "2.0" })).toBe("2.0 läuft");
+  expect(manager.t("updates.run.toast.coreServingFailed", { version: "2.0" })).toBe(
+    "2.0 läuft weiterhin",
+  );
+  expect(manager.t("updates.run.toast.pluginsPending")).toBe("Plugins werden aktiviert");
+  expect(
+    manager.t("updates.run.toast.pluginFailure", { step: "plugins", next: "reload brave" }),
+  ).toBe("plugins fehlgeschlagen. Weiter: reload brave");
+});
