@@ -36,6 +36,7 @@ export function writeTextFileAtomic(
   const stateDir = resolveStateDir(env);
   if (mode !== 0o600) {
     replaceFileAtomicSync({
+      allowDrvfsRenameRecovery: true,
       filePath: pathname,
       content: value,
       mode,

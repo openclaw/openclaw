@@ -22,6 +22,7 @@ import type {
 } from "./app-sidebar-session-projection.ts";
 import { projectSidebarSnoozeCatalogs } from "./app-sidebar-session-snooze-visibility.ts";
 import {
+  type SidebarSavedPinTime,
   isListedInPinnedSection,
   type SidebarEmptyGroupsMode,
   type SidebarRecentSession,
@@ -36,6 +37,8 @@ import type {
 
 export type SidebarProjectionHost = {
   readonly sessionData: SessionDataOwner;
+  readonly gatewayPinTime?: number;
+  readonly gatewayTimeForSavedPin: SidebarSavedPinTime;
   readonly sessionDataContext: ApplicationContext | undefined;
   readonly sessionProjection: SidebarSessionProjection;
   readonly sidebarAgentsMode: "chip" | "roster";
@@ -56,6 +59,8 @@ export type SidebarProjectionHost = {
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
   readonly collapsedSessionSections: ReadonlySet<string>;
+  readonly sessionOwnershipVisibility: { readonly filters: boolean };
+  readonly sessionOrganizer: { readonly draggingSessionKey: string | null };
   readonly hiddenSessionCatalogIds: ReadonlySet<string>;
   readonly sessionOwnerFilterId: string | null;
   readonly sessionOwnerFilterActive: boolean;
@@ -126,6 +131,13 @@ export function memoizedSidebarSections(
   const context = host.sessionDataContext;
   const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
   const catalogRows = host.catalogSessionRows();
+  // Empty Other keeps rendering where the sidebar always kept it as a target:
+  // more pages to load, owner filters shown, a non-Active status, or a drag.
+  const showEmptyOther =
+    host.sessionData.sessionsResult?.hasMore === true ||
+    host.sessionOwnershipVisibility.filters ||
+    host.sessionsStatusFilter !== "active" ||
+    host.sessionOrganizer.draggingSessionKey !== null;
   return memo.read(
     () => [
       rows,
@@ -135,9 +147,11 @@ export function memoizedSidebarSections(
       host.collapsedSessionSections,
       host.effectiveSessionsGrouping(),
       host.sessionsEmptyGroupsMode,
+      showEmptyOther,
       rosterLimits,
       host.sessionData.visibleSessionLimits,
       host.sidebarEntries,
+      host.gatewayPinTime,
       context?.gateway.snapshot.phase,
       context?.gateway.snapshot.client,
       host.sidebarLiveActivity,
@@ -149,11 +163,12 @@ export function memoizedSidebarSections(
     () => {
       const grouping = host.effectiveSessionsGrouping();
       const pinnedKeys = personalSessionPinKeys(host.sidebarEntries);
+      const pinTime = host.gatewayPinTime ?? Date.now();
       const sections = roster?.agentIds.map((agentId) => ({
         id: `agent:${agentId}:recent` as const,
         rows: rows.filter(
           (row) =>
-            !isListedInPinnedSection(row, pinnedKeys) &&
+            !isListedInPinnedSection(row, pinnedKeys, pinTime) &&
             host.sessionNavigationAgentId(row) === agentId,
         ),
       }));
@@ -167,6 +182,7 @@ export function memoizedSidebarSections(
         referencedRows: [...catalogRows.values()],
         sections,
         pinnedKeys,
+        pinTime,
         grouping,
         knownGroups: grouping === "category" ? host.knownSessionGroups() : [],
         selfOwnerId: context?.gateway.snapshot.selfUser?.id ?? null,
@@ -175,6 +191,7 @@ export function memoizedSidebarSections(
         catalogIds: catalogs.map((catalog) => catalog.id),
         collapsedSections,
         emptyGroupsMode: host.sessionsEmptyGroupsMode,
+        showEmptyOther,
         ownerFilter: host.sessionOwnerFilterActive
           ? "owner"
           : host.sessionInvolvingMeFilterActive
@@ -259,6 +276,8 @@ export function memoizedSidebarCatalogs(
       host.sessionData.sessionCatalogs,
       host.sessionData.pendingCatalogArchives,
       host.hiddenSessionCatalogIds,
+      host.sidebarEntries,
+      host.gatewayPinTime,
       host.sessionsStatusFilter,
       ownerId,
       host.sessionInvolvingMeFilterActive,
@@ -278,6 +297,7 @@ export function sidebarRowsInputs(
   // after Gateway selection acknowledgement does not change the row projection.
   return [
     ...sidebarNavigationInputs(host, data.sessionsResult, navigationState),
+    host.gatewayPinTime,
     host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null,
     host.expandedAgentId(),
     data.loadedChildSessionKeys,
@@ -309,6 +329,8 @@ export function memoizedSidebarHome(
       agentId,
       result,
       navigationState,
+      host.sidebarEntries,
+      host.gatewayPinTime,
       host.sessionOwnerFilterId,
       host.sessionInvolvingMeFilterActive,
       host.sessionDataContext?.gateway.snapshot.selfUser,

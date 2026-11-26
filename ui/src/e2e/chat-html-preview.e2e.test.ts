@@ -88,6 +88,96 @@ function withSandbox(
 }
 
 suite.define(() => {
+  it("delivers HiDPI coordinate clicks inside the HTML preview after navigation", async (test) => {
+    await withSandbox(test, async (sandboxPort) => {
+      const html =
+        '<details><summary style="padding:8px;width:160px">Batch notes</summary><p>Six boxes of winter pears.</p></details>';
+      await suite.withPage(
+        {
+          viewport: { width: 1280, height: 720 },
+          serviceWorkers: "block",
+          permissions: ["local-network-access"],
+        },
+        async ({ page, context }) => {
+          await page.route(`${suite.server.baseUrl}packing-slip.html`, (route) =>
+            route.fulfill({ contentType: "text/html", body: html }),
+          );
+          await page.goto(`${suite.server.baseUrl}packing-slip.html`);
+          const emulation = await context.newCDPSession(page);
+          await emulation.send("Emulation.setDeviceMetricsOverride", {
+            width: 1280,
+            height: 720,
+            deviceScaleFactor: 2,
+            mobile: false,
+            screenWidth: 1280,
+            screenHeight: 720,
+          });
+          await page.mouse.click(96, 24);
+          expect(
+            await page.locator("details").evaluate((element) => element.hasAttribute("open")),
+          ).toBe(true);
+          const gateway = await installMockGateway(page, {
+            workspace: "/workspace",
+            historyMessages: [
+              {
+                role: "assistant",
+                timestamp: Date.now(),
+                content: [{ type: "text", text: "Open [page](page.html)." }],
+              },
+            ],
+            methodResponses: {
+              "sessions.files.get": fileResponse(html),
+              "canvas.document.preview": {
+                html,
+                sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
+                sandboxPort,
+                sandboxOrigin: `http://127.0.0.1:${sandboxPort}`,
+              },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await gateway.waitForRequest("sessions.messages.subscribe");
+          await page.locator('a.markdown-file-link[data-file-path="page.html"]').click();
+          const outer = page.locator(
+            "openclaw-chat-detail-panel:visible .chat-html-preview__frame",
+          );
+          const document = outer.contentFrame().frameLocator("iframe");
+          const summary = document.locator("summary");
+          await summary.waitFor();
+          await page.locator(".sidebar-region").evaluate(async (region) => {
+            await Promise.all(
+              region
+                .getAnimations({ subtree: true })
+                .filter(
+                  (animation) =>
+                    animation.playState === "running" &&
+                    Number.isFinite(animation.effect?.getComputedTiming().endTime),
+                )
+                .map((animation) => animation.finished),
+            );
+          });
+          await expect.poll(() => page.evaluate(() => devicePixelRatio)).toBe(2);
+          const bounds = await outer.boundingBox();
+          expect(bounds).not.toBeNull();
+          const point = await summary.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+          });
+          expect(
+            await document.locator("details").evaluate((element) => element.hasAttribute("open")),
+          ).toBe(false);
+          await page.mouse.click(bounds!.x + point.x, bounds!.y + point.y);
+          await expect
+            .poll(() =>
+              document.locator("details").evaluate((element) => element.hasAttribute("open")),
+            )
+            .toBe(true);
+          await emulation.detach();
+        },
+      );
+    });
+  });
+
   for (const mode of ["scripts", "strict"] as const) {
     it(`renders HTML with ${mode} and retains Source in the same file tab`, async (test) => {
       await withSandbox(test, async (sandboxPort) => {

@@ -64,7 +64,7 @@ const sessionFields = {
     json.object({ subtitle: optionalText, narration: optionalText, toolName: optionalText }),
   ),
   childrenDisplayMode: json.optional(
-    json.enumeration(["collapsed-by-user", "expanded", "expanded-fully"]),
+    json.enumeration(["collapsed-by-user", "expanded", "expanded-by-user", "expanded-fully"]),
   ),
   childLoadParentKeys: json.optional(json.array(sessionKey)),
   icon: optionalText,

@@ -142,21 +142,13 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
         "sessions.patch": echo,
         "sessions.compact": echo,
         "models.list": { models: [{ id: "gpt-5.4" }] },
-        "models.authStatus": { providers: [] },
         "tools.catalog": { tools: [{ name: "shell" }] },
         "tools.effective": { tools: [{ name: "shell", enabled: true }] },
-        "tools.invoke": { ok: true, toolName: "shell", output: { ok: true } },
         "exec.approval.list": { approvals: [] },
       };
       const response = Object.hasOwn(responses, frame.method) && responses[frame.method];
       if (response) {
         reply(response);
-        return;
-      }
-
-      if (frame.method === "exec.approval.resolve") {
-        expect(frame.params).toMatchObject({ id: "approval-1", decision: "allow-once" });
-        reply({ ok: true, params: frame.params as JsonObject | undefined });
         return;
       }
 
@@ -250,19 +242,11 @@ describe("OpenClaw SDK websocket e2e", () => {
       await expectResponse(session.patch({ label: "Renamed" }), { method: "sessions.patch" });
       await expectResponse(session.compact({ maxLines: 200 }), { method: "sessions.compact" });
       await expectResponse(oc.models.list(), { models: [{ id: "gpt-5.4" }] });
-      await expectResponse(oc.models.status({ probe: false }), { providers: [] });
       await expectResponse(oc.tools.list(), { tools: [{ name: "shell" }] });
       await expectResponse(oc.tools.effective({ sessionKey: "sdk-session" }), {
         tools: [{ name: "shell", enabled: true }],
       });
-      await expectResponse(
-        oc.tools.invoke("shell", { args: { command: "pwd" }, sessionKey: "sdk-session" }),
-        { ok: true, toolName: "shell", output: { ok: true } },
-      );
       await expectResponse(oc.approvals.list(), { approvals: [] });
-      await expectResponse(oc.approvals.respond("approval-1", { decision: "allow-once" }), {
-        ok: true,
-      });
       expect(gateway.requests.map((request) => request.method)).toEqual([
         "connect",
         "agents.list",
@@ -279,12 +263,9 @@ describe("OpenClaw SDK websocket e2e", () => {
         "sessions.patch",
         "sessions.compact",
         "models.list",
-        "models.authStatus",
         "tools.catalog",
         "tools.effective",
-        "tools.invoke",
         "exec.approval.list",
-        "exec.approval.resolve",
       ]);
       const requestParams = new Map(
         gateway.requests.map((request) => [request.method, request.params]),

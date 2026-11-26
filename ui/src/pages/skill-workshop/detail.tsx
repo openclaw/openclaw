@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createUniqueId, Errored, For, Loading, Show } from "solid-js";
+import { parseFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
@@ -89,12 +90,14 @@ export function Detail(props: {
   };
   const supportFiles = createMemo(() => files().filter((file) => file !== "SKILL.md"));
   const description = createMemo(() => {
+    const catalogDescription = target().versionId ? undefined : skill()?.description;
+    if (catalogDescription) {
+      return catalogDescription;
+    }
     const current = viewer();
-    const own =
-      current.result && current.target.filePath === "SKILL.md"
-        ? splitFrontmatter(current.result.content).description
-        : undefined;
-    return target().versionId ? own : skill()?.description || own;
+    return current.result && current.target.filePath === "SKILL.md"
+      ? parseFrontmatterBlock(current.result.content).description
+      : undefined;
   });
   const byline = () => {
     const created = history().findLast((entry) => entry.action === "create");

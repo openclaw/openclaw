@@ -21,7 +21,6 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import { normalizeControlUiBasePath } from "../control-ui-shared.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
-import { canAccessOperatorApproval } from "../operator-approval-authorization.js";
 import { projectOperatorApprovalSnapshot } from "../operator-approval-snapshot.js";
 import {
   listTerminalOperatorApprovals,
@@ -383,16 +382,10 @@ export function createApprovalHandlers(
       const assertCurrent = () => {
         approvalGuard.assertCurrent();
         if (
-          client?.invalidated ||
-          !canAccessOperatorApproval({
-            client,
-            allowApprovalRuntime: true,
-            binding: { reviewerDeviceIds: record.reviewerDeviceIds },
-          }) ||
           (approvalGuard.family === "native-compatibility" && !readCurrent()) ||
           (resolveParams?.reviewer && (!liveRecord || !custody?.isCurrent(liveRecord)))
         ) {
-          throw new Error("approval resolver authority is no longer active");
+          throw new Error("The approval record changed. Look up the approval again.");
         }
       };
       let resolution: ApplyApprovalDecisionResult<ApprovalPayload>;

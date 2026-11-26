@@ -223,7 +223,9 @@ it.each([false, true])(
         expect(() => reader!.assertCurrent!()).not.toThrow();
         sourceCurrent = false;
       }
-      expect(() => reader!.assertCurrent!()).toThrow("Repository caller authority changed");
+      expect(() => reader!.assertCurrent!()).toThrow(
+        "Repository caller connection or identity changed",
+      );
     } finally {
       source.release();
     }

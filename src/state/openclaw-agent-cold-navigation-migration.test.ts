@@ -11,11 +11,11 @@ import {
   quoteSqliteIdentifier,
 } from "../infra/sqlite-schema-sql.js";
 import { AGENT_COLD_NAVIGATION_SCHEMA_VERSION as target } from "./openclaw-agent-db-contract.js";
+import { agentDatabaseIntegrityBeforeMutationSteps } from "./openclaw-agent-db-schema-admission.js";
 import {
   assertOpenClawAgentSchemaContains,
   getOpenClawAgentMigrationSchema,
 } from "./openclaw-agent-db-schema-helpers.js";
-import { agentDatabaseIntegrityBeforeMutationSteps } from "./openclaw-agent-db-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { assertOpenClawMigrationWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
@@ -241,6 +241,7 @@ it("checks pending-input mutation integrity before crossing from v38 to the curr
         "PRAGMA quick_check;",
         "PRAGMA integrity_check('schema_meta');",
         "PRAGMA integrity_check('session_conversations');",
+        "PRAGMA integrity_check('session_members');",
         "PRAGMA integrity_check('session_nodes');",
         "PRAGMA integrity_check('session_pending_inputs');",
         "PRAGMA integrity_check('session_transcript_active_events');",

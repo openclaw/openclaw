@@ -15,8 +15,6 @@ export type SessionsSpawnToolOptions = {
   agentSessionKey?: string;
   /** Trusted parent invocation fact, not a model-facing spawn parameter. */
   senderIsOwner?: boolean;
-  /** Rechecks a retained owner `senderIsOwner` before each spawn records it. */
-  assertSenderOwnerCurrent?: () => void;
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
   completionOwnerKey?: string;
@@ -42,6 +40,8 @@ export type SessionsSpawnToolOptions = {
   /** Host-owned sessions_create mode: a visible session without supervision or completion. */
   independent?: boolean;
   signal?: AbortSignal;
+  /** Retained host invocation, checked before preparation and creation. */
+  assertActive?: () => void;
 } & SpawnedToolContext;
 
 type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {

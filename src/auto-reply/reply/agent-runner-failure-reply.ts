@@ -15,6 +15,7 @@ import {
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
+  FailoverError,
   findCliTerminalStopError,
   findCliTimeoutError,
   isFailoverError,
@@ -24,6 +25,7 @@ import {
   renderAssistantRequestFailureCopy,
   renderRuntimeCoordinationFailureCopy,
 } from "../../agents/failover/assistant-request-failure-copy.js";
+import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
 import {
   ContextPreparationTimeoutError,
   findLocalWorkerTaskFailure,
@@ -36,6 +38,7 @@ import {
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
   renderCodexAppServerFailureCopy,
+  renderControlUiAgentFailureCopy,
   renderFailoverCodeUserCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
@@ -106,6 +109,7 @@ export function resolveReplyFailureSummary(params: {
     return undefined;
   }
   const failoverError = isFailoverError(params.error) ? params.error : undefined;
+  const code = failoverError?.code ?? attempts?.at(-1)?.code;
   const facts = params.facts;
   const text =
     kind === "rate_limit" && !attempts?.length && facts.requestFailureText
@@ -118,7 +122,9 @@ export function resolveReplyFailureSummary(params: {
             authMode: failoverError?.authMode,
           })
         : kind === "overloaded"
-          ? renderRateLimitOrOverloadedCopy({ reason: kind, raw: params.message })
+          ? // A host-authored refusal names its own cause; overload copy would blame the AI service.
+            (code !== AUTH_PROFILE_COOLDOWN_ERROR_CODE && renderFailoverCodeUserCopy(code)) ||
+            renderRateLimitOrOverloadedCopy({ reason: kind, raw: params.message })
           : renderRateLimitReplyCopy({
               message: params.message,
               reason: facts.reason,
@@ -153,6 +159,7 @@ const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but f
 type ExternalRunFailureReply = Pick<ReplyPayload, "text" | "presentation"> & {
   text: string;
   isGenericRunnerFailure: boolean;
+  summaryAsTitle?: true;
 };
 
 type ExternalRunFailureInput = string | { message: string; error?: unknown };
@@ -231,6 +238,8 @@ export function buildExternalRunFailureReply(
     includeDetails?: boolean;
     replayPrevented?: boolean;
     failoverFacts?: ReplyFailoverFacts;
+    failureSummary?: ReturnType<typeof resolveReplyFailureSummary>;
+    shouldSurfaceToControlUi?: boolean;
   },
 ): ExternalRunFailureReply {
   const message = typeof input === "string" ? input : input.message;
@@ -274,9 +283,11 @@ export function buildExternalRunFailureReply(
   const buildUnclassifiedReply = (): ExternalRunFailureReply => {
     const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
-      text: options?.includeDetails
-        ? formatForwardedExternalRunFailureText(sanitizedMessage)
-        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      text: options?.shouldSurfaceToControlUi
+        ? renderControlUiAgentFailureCopy()
+        : options?.includeDetails
+          ? formatForwardedExternalRunFailureText(sanitizedMessage)
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
       isGenericRunnerFailure: true,
     };
   };
@@ -322,7 +333,7 @@ export function buildExternalRunFailureReply(
     options?.failoverFacts ??
     resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);
   const failoverCodeCopy =
-    failoverFacts.rateLimitResetAt === undefined
+    options?.failureSummary?.kind !== "billing" && failoverFacts.rateLimitResetAt === undefined
       ? renderFailoverCodeUserCopy(failoverFacts.code)
       : undefined;
   if (failoverCodeCopy) {
@@ -394,17 +405,30 @@ export function buildExternalRunFailureReply(
     (isFailoverError(error) && error.rateLimitRetriesExhausted !== undefined) ||
     failoverFacts.rateLimitResetAt !== undefined
   ) {
-    const summary = resolveReplyFailureSummary({
-      error,
-      message,
-      facts: failoverFacts,
-      attempts: isFailoverError(error) ? error.attempts : undefined,
-    });
+    const summary =
+      options?.failureSummary ??
+      resolveReplyFailureSummary({
+        error,
+        message,
+        facts: failoverFacts,
+        attempts: readFallbackAttempts(error),
+      });
     if (summary) {
       return { text: summary.text, isGenericRunnerFailure: false };
     }
   }
+  if (error instanceof FailoverError && error.userMessage) {
+    return { text: error.userMessage, isGenericRunnerFailure: false, summaryAsTitle: true };
+  }
   const providerRequestError = failoverFacts.providerRequestError;
+  if (
+    options?.failureSummary &&
+    (options.shouldSurfaceToControlUi ||
+      options.failureSummary.kind === "billing" ||
+      !providerRequestError)
+  ) {
+    return { text: options.failureSummary.text, isGenericRunnerFailure: false };
+  }
   if (providerRequestError) {
     // Curated facet copy carries recovery guidance (quota/billing ambiguity,
     // /new for conversation-state, config fix for model_not_found); the
@@ -432,11 +456,13 @@ export function buildExternalRunFailureReply(
   // Only unclassified thrown text reaches this branch. Verbose mode is the
   // explicit opt-in because sanitization does not make raw provider bodies safe.
   return {
-    text: options?.includeDetails
-      ? formatForwardedExternalRunFailureText(
-          renderUserFacingText(normalizedMessage, { errorContext: true }),
-        )
-      : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    text: options?.shouldSurfaceToControlUi
+      ? renderControlUiAgentFailureCopy()
+      : options?.includeDetails
+        ? formatForwardedExternalRunFailureText(
+            renderUserFacingText(normalizedMessage, { errorContext: true }),
+          )
+        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
     isGenericRunnerFailure: true,
   };
 }

@@ -102,7 +102,6 @@ it.each(
     const authority = createTestOperatorAuthority({
       profileId: "caller",
       scopes: [],
-      assertCurrent() {},
     });
     const bind = async () => {
       const snapshot = await buildSkillSnapshot(workspace, options);

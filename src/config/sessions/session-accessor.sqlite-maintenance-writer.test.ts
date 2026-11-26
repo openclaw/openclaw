@@ -14,6 +14,7 @@ import {
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -204,6 +205,60 @@ it("returns bounded finalization outcomes while preserving conflicts and duplica
   }
   expect(load(2)).toEqual({ ...changed.expectedEntry, label: "newer" });
   expect(database.db.prepare("SELECT count(*) AS count FROM session_windows").get()?.count).toBe(3);
+});
+
+it("reports only the last current owner of a captured MCP session, including retained windows", async () => {
+  const { database, key, set, load } = createPlannerStore();
+  for (const name of ["last", "shared", "changed", "history", "uncaptured"]) {
+    set(name, {});
+  }
+  set("alias", {
+    sessionId: load("shared")!.sessionId,
+    previousSessionId: load("history")!.sessionId,
+  });
+  const options = { agentId: "main", path: database.path, env: process.env };
+  const entries = ["last", "shared", "changed", "history", "uncaptured"].map((name) => ({
+    sessionKey: key(name),
+    expectedEntry: load(name)!,
+  }));
+  const [last, shared, changed, history] = entries.map(
+    ({ expectedEntry }) => expectedEntry.sessionId,
+  );
+  set("changed", { label: "newer" });
+  const result = await withSqliteSessionDeletions(
+    options,
+    entries.map(({ sessionKey, expectedEntry: entry }) => ({ sessionKey, entry })),
+    async () =>
+      runSqliteSessionDeletionTransaction(
+        (current) =>
+          finalizeSessionMaintenanceInDatabase(current, {
+            kind: "maintenance-finalize",
+            agentId: "main",
+            databaseOptions: options,
+            entries,
+            materializedPlans: [],
+            retainedMcpSessionIds: [last!, shared!, changed!, history!],
+          }),
+        options,
+      ),
+  );
+  const source = readOpenClawAgentDatabaseIdentity(database);
+  expect(result.value.mcpRelease).toEqual({
+    sessionIds: [last, history],
+    source: {
+      agentId: "main",
+      databaseIdentity: source.identity,
+      databaseBirthtime: source.birthtime,
+    },
+  });
+  expect(load("alias")?.sessionId).toBe(shared);
+  expect(load("changed")?.sessionId).toBe(changed);
+  expect(load("last")).toBeUndefined();
+  expect(
+    database.db
+      .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+      .get(key("last")),
+  ).toEqual({ entry_valid: -1 });
 });
 
 it("preserves current provider keys", async () => {

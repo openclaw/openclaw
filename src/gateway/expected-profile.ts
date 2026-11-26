@@ -23,7 +23,6 @@ export function prepareGatewayRecipientProfile(
       : undefined;
     if (authority) {
       assertAdmittedRunOperatorAuthority(authority);
-      authority.assertCurrent();
     }
     const attached = client.authenticatedUserProfile?.profileId ?? authority?.profileId;
     const profile = prepared

@@ -110,11 +110,18 @@ Verification checks the build commit, both build stamps, runtime entry, Control 
 OpenClaw builds and validates a separate release without replacing the checkout's runtime.
 The running Gateway keeps its release. The next start uses the release selected by the launcher.
 With `--no-restart`, the new release stays pending until the next service start.
-If the managed service still starts the checkout, OpenClaw stages its release-launcher
-definition without starting or restarting the Gateway. Linux reloads systemd's unit
-metadata without restarting the unit; macOS reloads the staged plist on the next
-OpenClaw restart or login; Windows runs the updated task script on its next start.
-If staging fails, update history records the service-definition refresh as owed.
+The update does not rewrite a managed service that still starts the checkout's
+`dist/index.js` or `openclaw.mjs`. It leaves a forwarding marker in the checkout
+(`.git/openclaw-launcher`, or `.openclaw-launcher` in a linked worktree), so that
+entry starts the release launcher. `openclaw gateway status`, `openclaw doctor --fix`
+and `openclaw update repair` treat that service as this installation's, serving the
+release the launcher selects, and leave its definition unchanged.
+A package install's managed service that still starts the old package is staged
+onto the release launcher without starting or restarting the Gateway. Linux reloads
+systemd's unit metadata without restarting the unit; macOS reloads the staged plist
+on the next OpenClaw restart or login; Windows runs the updated task script on its
+next start. If staging fails, update history records the service-definition refresh
+as owed.
 
 Stopping another Gateway that shares this installation protects its running
 code; it does not migrate that Gateway's separate state. If its older state
@@ -167,13 +174,18 @@ the owned service PID. Listener ownership, the lock, and native service identity
 are rechecked before stopping. Missing listener attribution or an unrelated
 connection error keeps the normal drain path.
 
-When the service's Node fails the Gateway's runtime check, OpenClaw reruns the
-Gateway under a compatible Node it finds, such as its private runtime in
-`~/.openclaw/tools/cli-node`. The service's main process is then that
-launcher, and its direct child serves the Gateway. Maintenance drain accepts the
-child as the service's Gateway only when every listener on the Gateway port is
-that process and its parent is the service's main process; stopping the service
-stops both.
+Two layouts run the Gateway as the direct child of a launcher that is the
+service's main process: a release install, whose service runs
+`~/.openclaw/git-install/openclaw-launcher.mjs`, and a service whose Node fails
+the Gateway's runtime check, which OpenClaw reruns under a compatible Node it
+finds, such as its private runtime in `~/.openclaw/tools/cli-node`. Maintenance
+drain, which Doctor and `openclaw update repair` also use, accepts the child as
+the service's Gateway only when every listener on the Gateway port is that
+process and its parent is the service's main process. When no listener names
+its process, for example on a Linux host without `lsof` or `ss` or when `ss`
+cannot see the owner, the drain instead requires the kernel parent of the
+process the Gateway reports to be the service's main process. Stopping the
+service stops both.
 
 With `--no-restart`, the package is replaced under a running Gateway, and that
 Gateway restarts itself when its installation check sees the new files. On a
@@ -1883,7 +1895,14 @@ when nothing needs an operator:
   that store, the update instead checks the boot each of that update's
   processes recorded. If every one ran on this same Linux or macOS machine in an
   earlier boot, none of them can still be running, and the update claims the
-  installation as usual before it settles anything.
+  installation as usual before it settles anything. When the store exists but no
+  longer holds that lease, the update settles the recovery only if that update
+  recorded its candidate verified serving and that same version and build is
+  still installed. An updater releases its lease only after its own processes
+  have ended, and any command that claimed the installation since then proved the
+  same. This is how 2026.11.10 ends an update after it loses its plugin lifecycle
+  lease: the new version is installed and serving, but the run stays recorded as
+  running with its recovery reserved.
 
 It settles the plugin and configuration changes the way repair does. When the
 version from before that update is still installed they are rolled back, and
@@ -1940,10 +1959,11 @@ repair can settle the recovery, the message adds the reason and the command:
 - **An update is still recorded as running** and its process is not known to
   have exited, or another updater holds the installation. Wait for it; run
   `openclaw update repair` if it has stopped.
-- **The update lease store no longer holds the killed update's lease.** The
-  store was removed or replaced, or another command already claimed the
-  installation. That includes an earlier `openclaw update` that claimed it and
-  then refused for one of the reasons above, so a second attempt reports this
+- **The update lease store no longer holds the killed update's lease**, and
+  the store itself is missing or the version and build that update verified
+  serving is not the one installed. The store was removed or replaced, or
+  another command already claimed the installation. That includes an earlier
+  `openclaw update` that claimed it and then refused for one of the reasons above, so a second attempt reports this
   reason. After a restart the update also refuses this way when the boot record
   cannot show the killed update's processes gone: the killed update ran an
   older version that did not record its boot, the machine has no stable
@@ -1955,11 +1975,34 @@ repair can settle the recovery, the message adds the reason and the command:
   build.** The message names the reason: no recorded activation, a commit or
   build that differs from it, or local changes. Run `openclaw update repair`.
 - **The recovery belongs to another installation.** Run `openclaw update repair`
-  from that installation.
+  from that installation. A pnpm install whose package directory was replaced is the exception below.
 - **A dry run** changes nothing. Run `openclaw update`.
 
 Recovery that `openclaw update repair` cannot settle either keeps the plain
 refusal without a command.
+
+pnpm gives each OpenClaw version its own package directory, and activation
+moves the previous one away. Plugin recovery left by an update that died after
+activating therefore names a directory that no longer exists. Both
+`openclaw update repair` and the next `openclaw update` settle it from the
+installation that replaced it when all of these hold:
+
+- the directory that update recorded no longer exists;
+- that update ran from this installation's path, which now resolves here;
+- every process that update recorded has exited;
+- that update recorded its candidate version serving.
+
+The plugin and configuration changes are then settled as for any verified
+candidate: usually kept, but a rollback that had already restored something is
+finished instead. A commit that update had already begun is finished even when
+a later build is installed, but not when the version from before that update
+was installed again. That update's run records a
+`warning:plugin-cohort:replaced-installation` entry naming both directories.
+The next update still needs the lease proof above. An updater that exited on its
+own, rather than being killed, released its lease, so that update stops and
+names `openclaw update repair`; run it once, then update again. When any of the
+four facts is missing, both commands refuse and say which one; while that
+update's process may still be running they say to wait for it.
 
 The updater does not settle the leftover when another updater still holds the
 installation, when the lease store is missing or was replaced, when the

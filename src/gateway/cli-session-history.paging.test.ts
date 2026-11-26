@@ -1,6 +1,7 @@
 import rawFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import {
   formatCliImageTurnContext,
@@ -14,6 +15,7 @@ import {
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { ChatHistoryPageParams } from "../config/sessions/session-history-types.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { confirmPersistedSteerTargetRunId } from "../sessions/user-turn-transcript-updates.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
@@ -21,6 +23,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
+import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
 import { claudeUser, cliMeta, withClaudeProjectsDir } from "./cli-session-history.test-support.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
@@ -198,6 +201,65 @@ it("pages past native interrupts without consuming an identical canonical human 
           "latest",
         ]);
       });
+    });
+  });
+});
+
+it("rebuilds the CLI history index only for a change to its own transcript", async () => {
+  await withPagingHistory("cli-rewrite-cost", async (fixture) => {
+    const { scope, entry, readers } = fixture;
+    await fs.writeFile(fixture.filePath, native("older", "Older reply", 1));
+    const saved = await appendTranscriptMessage(scope, {
+      eventId: "steer",
+      message: { role: "user", content: "New input", timestamp: 1000 },
+    });
+    await waitForSessionTranscriptProjection(scope);
+    const anchor = expectDefined(saved.anchor, "accepted user turn");
+    const params = historyParams(fixture, fixture.homeDir);
+    const readIds = (maxBytes?: number) =>
+      withCliReader(params, readers, async (cli) => {
+        const page = await cli.readers.readRecentSessionMessagesWithStatsAsync(scope, {
+          maxMessages: 10,
+          maxBytes,
+        });
+        return page.messages.map(readChatHistoryMessageId);
+      });
+    using builds = vi.spyOn(CliSessionHistoryIndex.prototype, "finish");
+    await fixture.owner.run(fixture.target.database, async () => {
+      const before = readers.readHistoryRevision();
+      expect(await readIds()).toEqual(["older", "steer"]);
+      expect(builds).toHaveBeenCalledTimes(1);
+
+      const other = { ...scope, sessionId: "other", sessionKey: "agent:main:other" };
+      await replaceSessionEntry(other, { sessionId: other.sessionId, updatedAt: entry.updatedAt });
+      await appendTranscriptMessage(other, { message: { role: "assistant", content: "Other" } });
+      await waitForSessionTranscriptProjection(other);
+      expect(await readIds(1)).toEqual(["steer"]);
+      expect(builds).toHaveBeenCalledTimes(1);
+
+      await confirmPersistedSteerTargetRunId(
+        { ...anchor, logicalTurnId: "steer", role: "user" },
+        "active-run",
+        {
+          importedFrom: "claude-cli",
+          cliSessionId: fixture.nativeId,
+          externalId: "accepted-input",
+        },
+      );
+      const after = readers.readHistoryRevision();
+      expect(after.database).toBe(before.database);
+      expect(after).toMatchObject({
+        generation: before.generation,
+        indexedSeq: before.indexedSeq,
+        leafEventId: before.leafEventId,
+      });
+      expect(after.updatedAt).toBeGreaterThan(
+        expectDefined(before.updatedAt, "initial transcript revision"),
+      );
+      expect(await readIds()).toEqual(["older", "steer"]);
+      expect(builds).toHaveBeenCalledTimes(2);
+      expect(await readIds(1)).toEqual(["steer"]);
+      expect(builds).toHaveBeenCalledTimes(2);
     });
   });
 });

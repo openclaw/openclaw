@@ -39,10 +39,10 @@ export async function assertDatabasePortNamespaceOwner(client: Client, namespace
 export async function readPostgresStoreMetadata(
   client: Client,
   anchor: { namespace: string; storeId: string },
-): Promise<{ store: string; version: number }> {
+): Promise<{ store: string; version: number; minReader: number }> {
   const rows = await client
-    .query<{ store: string; store_id: string; version: string }>(
-      `SELECT store, store_id, version FROM ${quote(anchor.namespace)}.openclaw_schema_meta`,
+    .query<{ store: string; store_id: string; version: string; min_reader?: string | null }>(
+      `SELECT * FROM ${quote(anchor.namespace)}.openclaw_schema_meta`,
     )
     .then(
       (result) => result.rows,
@@ -61,16 +61,28 @@ export async function readPostgresStoreMetadata(
   if (!/^\d+$/u.test(row.version) || !Number.isSafeInteger(version)) {
     throw new DatabasePortDataError("PostgreSQL store metadata has an invalid schema version");
   }
+  const minReader = Number(row.min_reader ?? row.version);
+  if (
+    !/^\d+$/u.test(row.min_reader ?? row.version) ||
+    !Number.isSafeInteger(minReader) ||
+    minReader < (version === 0 ? 0 : 1) ||
+    minReader > version
+  ) {
+    throw new DatabasePortDataError("PostgreSQL store metadata has an invalid minimum reader");
+  }
   if (!listDatabaseEngineStores().some((store) => store.postgres && store.id === row.store)) {
     throw new DatabasePortDataError("Unknown PostgreSQL anchor family; use a compatible binary.");
   }
-  return { store: row.store, version };
+  return { store: row.store, version, minReader };
 }
 
 export function withPostgresStoreMetadata<T>(
   input: NonNullable<DatabaseEngineInput>,
   anchor: { namespace: string; storeId: string },
-  run: (client: Client, metadata: { store: string; version: number }) => Promise<T>,
+  run: (
+    client: Client,
+    metadata: { store: string; version: number; minReader: number },
+  ) => Promise<T>,
 ): Promise<T> {
   return withPostgresConnection(input, async (client) =>
     run(client, await readPostgresStoreMetadata(client, anchor)),

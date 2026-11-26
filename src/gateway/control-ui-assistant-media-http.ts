@@ -4,6 +4,7 @@ import { kindFromMime } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { extractCanvasShortcodes } from "../chat/canvas-render.js";
+import { isPendingInputVisibleToProfile } from "../config/sessions/session-pending-input-audience.js";
 import { readSessionPendingInput } from "../config/sessions/session-pending-input-history.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { sameTranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
@@ -171,7 +172,7 @@ async function prepareAssistantMessageMedia(
     const inputId = messageId.slice(CHAT_PENDING_INPUT_MESSAGE_PREFIX.length);
     // Attachment association needs visibility and media, not forwarded sender labels.
     const project = (input: Awaited<ReturnType<typeof readSessionPendingInput>>) =>
-      input
+      input && isPendingInputVisibleToProfile(input, policy.profileId)
         ? projectPendingInputMessage(input, MAX_PAYLOAD_BYTES, undefined, () => undefined)
         : undefined;
     assertAssociation(project(await readSessionPendingInput(scope, inputId)));
@@ -298,7 +299,6 @@ export async function handleControlUiAssistantMediaRequest(
   ) {
     if (
       !(await prepareHttpUserProfileCatalog(res)) ||
-      requestAuth?.hasCurrentClientAuthority?.() === false ||
       (!isMetaRequest &&
         ticketCandidate &&
         !verifyAssistantMediaTicket(
@@ -353,12 +353,7 @@ export async function handleControlUiAssistantMediaRequest(
       : undefined;
   const assertCurrentPolicy = () => {
     assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
-    return assertAssistantMediaPolicyCurrent(
-      policyParams,
-      mediaPolicy,
-      Boolean(allowance),
-      requestAuth ?? undefined,
-    );
+    return assertAssistantMediaPolicyCurrent(policyParams, mediaPolicy, Boolean(allowance));
   };
   const requestAbort = createHttpRequestAbortSignal(res.req, res);
   using _ = { [Symbol.dispose]: requestAbort.cleanup };
@@ -434,14 +429,17 @@ export async function handleControlUiAssistantMediaRequest(
       );
       await byteStream.close();
       await publishResponse(() => {
-        res.setHeader("Content-Type", "image/webp");
-        res.setHeader("Content-Length", String(thumbnail.byteLength));
+        res.setHeader("Content-Type", thumbnail.mimeType);
+        res.setHeader("Content-Length", String(thumbnail.data.byteLength));
         res.setHeader("Cache-Control", "private, no-cache");
         res.setHeader(
           "Content-Disposition",
-          buildAssistantMediaContentDisposition(`${filename}-preview.webp`, "image/webp"),
+          buildAssistantMediaContentDisposition(
+            `${filename}-preview${thumbnail.extension}`,
+            thumbnail.mimeType,
+          ),
         );
-        res.end(req.method === "HEAD" ? undefined : thumbnail);
+        res.end(req.method === "HEAD" ? undefined : thumbnail.data);
       });
       return true;
     }

@@ -23,7 +23,6 @@ import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.j
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
-import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
   RequesterSettleWakeEvaluation,
@@ -285,7 +284,6 @@ export function scheduleRequesterSettleWake(
   if (
     entry.collect ||
     !requesterSessionKey ||
-    (isCompletedRequesterDeliveryBlocked(entry) && admittedWake?.requesterYieldBatch !== true) ||
     entry.execution.status === "running" ||
     !hasSubagentRunEnded(entry) ||
     awaitsStoppedPauseRetirement(entry) ||
@@ -380,12 +378,7 @@ export function scheduleRequesterSettleWake(
         entry,
         async (releasePreparation) => {
           // Admission can wait; reread the row before a blocked receipt is executed again.
-          if (
-            !isSourceCurrent() ||
-            awaitsStoppedPauseRetirement(entry) ||
-            (isCompletedRequesterDeliveryBlocked(entry) &&
-              entry.requesterSettleWake?.requesterYieldBatch !== true)
-          ) {
+          if (!isSourceCurrent() || awaitsStoppedPauseRetirement(entry)) {
             return;
           }
           try {

@@ -172,29 +172,6 @@ it("worker release leaves unrelated receipt scopes unvisited", () => {
   }
 });
 
-it("keeps cold pinned receipts current across physical-fact reads until release", () => {
-  using fixture = databaseFixture("sqlite-admission-cold-pins-");
-  const { database, location } = fixture;
-  database.close();
-  const release = retainScopes(location, ["held"])!;
-  try {
-    const before = pathScopedTokens(location, ["held"]);
-    expect(before?.[0]).toBeTypeOf("string");
-    expect(
-      loadFact(
-        location,
-        { ...key, name: "test.cold-pinned-fact", lifetime: "process" },
-        () => "loaded",
-      ),
-    ).toBe("loaded");
-    expect(pathScopedTokens(location, ["held"])).toEqual(before);
-    release();
-    expect(recordsFor(location)).toEqual([]);
-  } finally {
-    release();
-  }
-});
-
 it("retains active source receipts until their last release without suppressing invalidation", () => {
   using fixture = databaseFixture("sqlite-admission-pinned-scopes-");
   const { database, location } = fixture;
@@ -357,25 +334,6 @@ it("retires the final closed handle's facts while preserving open siblings and d
   retireAdmission(location);
   expect(() => fstatSync(original.descriptor)).toThrow();
 });
-
-it.each([undefined, "process"] as const)(
-  "preserves path-load lifetime when the loader closes its handle (%s)",
-  (lifetime) => {
-    using fixture = databaseFixture("sqlite-admission-loader-close-");
-    const { location, database } = fixture;
-    const loadedKey = { ...key, name: "test.loader-close", lifetime };
-
-    expect(
-      loadFact(location, loadedKey, () => {
-        database.close();
-        return "loaded";
-      }),
-    ).toBe("loaded");
-
-    database.open();
-    expect(getFact(database, loadedKey)).toBe(lifetime === "process" ? "loaded" : undefined);
-  },
-);
 
 it("revokes retained validation when corruption is reported after native close", async () => {
   using fixture = databaseFixture("sqlite-admission-closed-corruption-");

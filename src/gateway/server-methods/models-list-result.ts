@@ -55,6 +55,7 @@ import { captureRuntimeConfig } from "../../config/runtime-source-projection.js"
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withCurrentReadAuthority } from "../../shared/current-read-authority.js";
+import { readDeclaredProviderNames } from "../provider-presentation.js";
 import { loadDeferredCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
@@ -413,6 +414,7 @@ export async function prepareModelsListResult({
         pluginRegistry: preparedPluginRegistry,
       });
       const catalogResolver = createThinkingCatalogResolver(catalog);
+      const declaredNames = readDeclaredProviderNames(preparedPluginRegistry);
       // Route rows retain identity across reads; keep display/thinking work outside the hot overlay.
       const prepared = new WeakMap<ModelCatalogEntry, Map<string, StatedRuntimeModelChoice>>();
       return (
@@ -470,8 +472,10 @@ export async function prepareModelsListResult({
             provider: entry.provider,
             model: entry.id,
           });
+          const providerName = declaredNames.get(normalizeProviderId(entry.provider));
           preparedEntry = {
             ...buildPublicModelProjection(publicEntry, { includeDetails }),
+            ...(providerName ? { providerName } : {}),
             ...(manualSelectionAllowed
               ? {
                   manualSelectionAllowed: manualSelectionAllowed({
@@ -628,7 +632,9 @@ export async function prepareModelsListResult({
         cfg,
         isCurrent: () => isCurrent() && projector.isCurrent(),
         metadataSnapshot,
-        catalog,
+        // The all view projects exactly its input rows. Scope expensive per-row auth and
+        // runtime preparation here while retaining the complete catalog for policy and diagnostics.
+        catalog: view === "all" && providerFilter ? catalog.filter(matchesProvider) : catalog,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel,
         agentId,

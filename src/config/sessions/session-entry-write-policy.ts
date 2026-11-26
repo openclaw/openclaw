@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { getChildLogger } from "../../logging/logger.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import { preserveSessionDelegatedOperatorSource } from "./session-entry-lineage.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -20,7 +21,10 @@ export function applySessionEntryWritePolicy(
     preserveVisibility?: boolean;
   },
 ): { entry: SessionEntry; previousEntry: SessionEntry | undefined } {
-  let normalizedEntry = initialEntry;
+  let normalizedEntry = preserveSessionDelegatedOperatorSource(
+    initialEntry,
+    canonicalPreviousEntry,
+  );
   if (
     canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
     canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision ||
@@ -40,6 +44,18 @@ export function applySessionEntryWritePolicy(
           ? { resumeAfterRestart: canonicalPreviousEntry.resumeAfterRestart }
           : {}),
       };
+    }
+    const sourceRunId = normalizedEntry.resumeAfterRestart?.sourceRunId;
+    const nextRunId = normalizedEntry.lifecycleRunId;
+    if (
+      sourceRunId &&
+      nextRunId &&
+      nextRunId !== canonicalPreviousEntry.lifecycleRunId &&
+      nextRunId !== sourceRunId
+    ) {
+      // Admission has transferred this row to another run. Its shutdown must not recover
+      // receipts or requester authority from a predecessor whose marker clear failed.
+      delete normalizedEntry.resumeAfterRestart;
     }
     if (
       !Object.hasOwn(normalizedEntry, "lifecycleRestartScope") &&

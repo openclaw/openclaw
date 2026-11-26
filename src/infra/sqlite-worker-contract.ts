@@ -91,11 +91,19 @@ export type SqliteWorkerCloseReceipt = {
   checkpoint?: SqliteWalCheckpointSnapshot;
 };
 
+/** A recorded maintenance observation, not a COMMIT, close receipt, or access grant. */
+export type SqliteWorkerWalCheckpoint = {
+  identity: DatabasePathIdentity;
+  incarnation: string;
+  checkpoint: SqliteWalCheckpointSnapshot;
+};
+
 // Source fixtures and compiled backends can load separate copies in the same Worker.
 export const SQLITE_WORKER_PREPARE_COMMAND = Symbol.for("openclaw.sqliteWorkerPrepareCommand");
 export const SQLITE_WORKER_PREPARE_ADMITTED = Symbol.for("openclaw.sqliteWorkerPrepareAdmitted");
 export const SQLITE_WORKER_OPERATION_CLEANUP = Symbol.for("openclaw.sqliteWorkerOperationCleanup");
 export const SQLITE_WORKER_CLOSE_RECEIPT = Symbol.for("openclaw.sqliteWorkerCloseReceipt");
+export const SQLITE_WORKER_WAL_CHECKPOINT = Symbol.for("openclaw.sqliteWorkerWalCheckpoint");
 
 /** Internal preparation and cleanup facts; public SDK operation and close contracts stay unchanged. */
 export type SqliteWorkerPreparedBackend<Operations extends SqliteWorkerOperations> =
@@ -110,6 +118,9 @@ export type SqliteWorkerPreparedBackend<Operations extends SqliteWorkerOperation
       command: SqliteWorkerCommand<Operations>,
     ): SqliteSourceFence | undefined;
     [SQLITE_WORKER_CLOSE_RECEIPT]?(): SqliteWorkerCloseReceipt | undefined;
+    [SQLITE_WORKER_WAL_CHECKPOINT]?(
+      command: SqliteWorkerCommand<Operations>,
+    ): SqliteWorkerWalCheckpoint | undefined;
   };
 
 export type SqliteWorkerExecuteOptions = {
@@ -166,6 +177,7 @@ export type SqliteWorkerReply = {
   transactionCount?: number;
   timing?: DiagnosticWorkerRequestFields["timing"];
   cleanupFailure?: OpenClawStateWorkerErrorPayload;
+  walCheckpoint?: SqliteWorkerWalCheckpoint;
 } & (
   | {
       ok: true;

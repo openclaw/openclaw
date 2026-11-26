@@ -1,5 +1,7 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { expect, it, onTestFinished } from "vitest";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
+import { claimConversationProviderState } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { createResponsesLoopbackServer } from "./openai-responses-loopback.test-support.js";
 import { createModel } from "./openai-responses-prompt-observer.test-support.js";
@@ -44,6 +46,7 @@ async function runTurns(
       {
         apiKey: "synthetic-key",
         sessionId: "uncached-instructions",
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState("uncached-instructions"),
         transport: "sse",
         onPayload: (payload: unknown) => ({ ...(payload as object), store: true }),
       } as never,

@@ -21,8 +21,8 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-doctor-repair.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
-import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-repair.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -168,8 +168,21 @@ it.each([
   "read-only reader opens",
   "last writable reader closes",
   "read-only reader opens before admission",
+  "read-only reader rebuilds a checkpointed index",
 ])("migrates a captured WAL database when its %s without writing", async (transition) => {
   const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+  if (transition === "read-only reader rebuilds a checkpointed index") {
+    const writer = new DatabaseSync(pathname);
+    const pin = new DatabaseSync(pathname, { readOnly: true });
+    pin.prepare("SELECT * FROM retained").all();
+    writer.exec(
+      "UPDATE retained SET value = 8; UPDATE retained SET value = 7; PRAGMA wal_checkpoint(TRUNCATE);",
+    );
+    writer.close();
+    pin.close();
+    expect(fs.statSync(`${pathname}-wal`).size).toBe(0);
+    expect(fs.readFileSync(`${pathname}-shm`).readUInt32LE(8)).not.toBe(0);
+  }
   // SQLite only removes the zero-write WAL index when a writable handle closes.
   const reader =
     transition === "last writable reader closes" ? new DatabaseSync(pathname) : undefined;
@@ -181,9 +194,13 @@ it.each([
   }
   const { receipt, warnings } = await withCapture(env, generations, async () => {
     reader?.close();
-    if (transition === "read-only reader opens") {
+    if (
+      transition === "read-only reader opens" ||
+      transition === "read-only reader rebuilds a checkpointed index"
+    ) {
       using readOnly = new DatabaseSync(pathname, { readOnly: true });
-      readOnly.prepare("SELECT * FROM retained").all();
+      readOnly.prepare("PRAGMA user_version").get();
+      readOnly.prepare("SELECT name FROM sqlite_master").all();
     }
     expect(readUpdateDatabaseGenerations([pathname])[pathname]).not.toBe(generations[pathname]);
     using database = new DatabaseSync(pathname);
@@ -335,7 +352,7 @@ it.each(["already exclusive", "retain exclusive"])(
   },
 );
 
-it.each(["different content", "same content"])(
+it.each(["different content", "same content", "different content with a rebuilt index"])(
   "rejects a captured WAL database after an outside commit with %s",
   async (change) => {
     const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
@@ -347,6 +364,12 @@ it.each(["different content", "same content"])(
         writer.exec("UPDATE retained SET value = 7;");
       }
       writer.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+      if (change === "different content with a rebuilt index") {
+        writer.close();
+        using reader = new DatabaseSync(pathname, { readOnly: true });
+        reader.prepare("PRAGMA user_version").get();
+        reader.prepare("SELECT name FROM sqlite_master").all();
+      }
       using database = new DatabaseSync(pathname);
       expect(() => migrate(database, pathname)).toThrow(
         "SQLite migration source changed after update capture:",

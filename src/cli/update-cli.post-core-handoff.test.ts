@@ -1,24 +1,18 @@
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
-import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import * as checks from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as cli from "./update-cli-modules.test-support.js";
-import { createChangedPostCoreUpdateOptions } from "./update-cli/update-cli-config.test-support.js";
 import { withUpdateCommandExecutor } from "./update-cli/update-command-executor.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-const nodeExecutable = resolveTestNodeExecPath();
 // These handoffs target the current runtime; omitted engines model a legacy target.
 const databaseEngines = ["sqlite", "postgres"];
 const f = createUpdateCliFixture({ databaseEngines });
@@ -100,98 +94,6 @@ it.each([true, false])(
     }
   },
 );
-
-it("keeps the candidate stopped through plugin convergence and only restarts the verified previous version despite its plugin errors", async () => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-  mocks.suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
-  mocks.resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
-  const root = await f.mockPackageInstallAtCaseDir();
-  const entryPath = path.join(root, "dist", "index.js");
-  vi.mocked(cli.resolveGatewayInstallEntrypoint).mockReset().mockResolvedValue(entryPath);
-  mocks.serviceLoaded.mockResolvedValue(true);
-  f.primeServiceCommand(
-    [nodeExecutable, entryPath, "gateway", "run"],
-    undefined,
-    resolveGatewayTaskScriptPath(process.env),
-  );
-  mocks.pathExists.mockImplementation(async (candidate: string) => candidate === entryPath);
-  mocks.callGateway.mockImplementation(
-    gatewayHealthResponse({
-      server: { version: "1.0.0", connId: "previous-gateway", bootId: "previous-boot" },
-      health: {
-        ok: true,
-        plugins: {
-          errors: [{ id: "demo", origin: "global", activated: true, error: "load failed" }],
-        },
-      },
-    }),
-  );
-  const activations: Array<{ version: string; afterPlugin: boolean }> = [];
-  const runFixtureCommand = checks.requireValue(
-    vi.mocked(cli.runCommandWithTimeout).getMockImplementation(),
-    "staged package commands",
-  );
-  vi.mocked(cli.runCommandWithTimeout).mockImplementation(async (argv, options) => {
-    if (argv[2] === "gateway" && ["install", "restart"].includes(argv[3] ?? "")) {
-      const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
-      activations.push({
-        version: manifest.version,
-        afterPlugin: mocks.spawn.mock.calls.length > 0,
-      });
-    }
-    return runFixtureCommand(argv, options);
-  });
-  mocks.spawn.mockImplementationOnce((_command: unknown, _argv: unknown, options: unknown) => {
-    const resultPath = (options as { env?: NodeJS.ProcessEnv }).env
-      ?.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
-    if (!resultPath) {
-      throw new Error("missing post-core result path");
-    }
-    queueMicrotask(() => {
-      void fs.writeFile(
-        resultPath,
-        JSON.stringify({
-          ...createChangedPostCoreUpdateOptions().pluginUpdate,
-          status: "error",
-          changed: false,
-          npm: {
-            changed: false,
-            outcomes: [
-              { pluginId: "demo", status: "error", message: "Plugin extension entry missing" },
-            ],
-          },
-        }),
-        "utf-8",
-      );
-    });
-    const child = Object.assign(new EventEmitter(), {
-      kill: vi.fn(() => {
-        queueMicrotask(() => closeChild(child, null, "SIGTERM"));
-        return true;
-      }),
-    });
-    return child;
-  });
-
-  await expect(cli.updateCommand({ yes: true })).rejects.toEqual(new cli.ExitError(1));
-
-  expect(mocks.serviceStop).toHaveBeenCalled();
-  checks.expectNoSideEffects(mocks.serviceRestart, cli.runDaemonRestart);
-  expect(cli.defaultRuntime.exit).not.toHaveBeenCalled();
-  expect(checks.getLogOutput()).not.toContain("Update Result: OK");
-  expect(mocks.spawn).toHaveBeenCalled();
-  expect(mocks.resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledOnce();
-  const pluginStartOrder = checks.requireValue(
-    mocks.spawn.mock.invocationCallOrder[0],
-    "plugin child start",
-  );
-  expect(activations).toEqual([{ version: "1.0.0", afterPlugin: true }]);
-  expect(checks.gatewayCommandCall(entryPath, "install")).toBeUndefined();
-  expect(checks.gatewayCommandCall(entryPath, "restart")?.[0]).toContain("--preserve-definition");
-  expect(mocks.resumeScheduledTaskAutoStartAfterUpdate.mock.invocationCallOrder[0]).toBeGreaterThan(
-    pluginStartOrder,
-  );
-});
 
 it.each(["spawn", "phase"])(
   "restores the exact plugin index revision when post-core %s fails",

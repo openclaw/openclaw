@@ -43,6 +43,7 @@ import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   expectNoSessionQueueCleanup,
+  getSessionsHandlers,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -320,6 +321,99 @@ archiveTest(
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
     expect(await replacement).toBeInstanceOf(Error);
   },
+);
+
+test.for(["disconnect", "Stop", "profile change", "invalidation", "grant revocation"] as const)(
+  "receipt Archive settles only its admitted drain after %s",
+  (change, { signal }) =>
+    withArchiveCleanup(signal, async (cleanup) => {
+      const session = await activeArchive("receipt-drain", cleanup);
+      const { active, persistence, storePath, sessionKey, sessionId } = session;
+      const queuedKey = "agent:main:receipt-queued";
+      await upsertSessionEntryCore(
+        { storePath, sessionKey: queuedKey },
+        { sessionId: "queued", updatedAt: 1 },
+      );
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      cleanup.releaseOnAbort(() => release.resolve());
+      const predecessor = cleanup.track(
+        runSessionMutation({
+          scope: storePath,
+          identities: [queuedKey, "queued"],
+          run: () => {
+            entered.resolve();
+            return release.promise;
+          },
+        }),
+      );
+      await waitForArchivePhase(entered.promise, predecessor, signal);
+
+      const client = identifiedClient("receipt-owner");
+      const connection = new AbortController();
+      const stop = new AbortController();
+      let grantCurrent = true;
+      client.connect.caps = ["personal-session-pins"];
+      client.connectionSignal = connection.signal;
+      const starts: string[] = [];
+      const context = await archiveLifecycleRequestContext({
+        ...active.context,
+        workerEnvironmentService: createWorkerInferenceDrainService((id) => {
+          starts.push(id);
+          return { drained: Promise.resolve(), hasWork: () => false, release() {} };
+        }),
+      });
+      context.isConnectionActive = (id, expected) =>
+        id === client.connId && expected === client && !connection.signal.aborted;
+      const respond = vi.fn();
+      const params = {
+        patch: { archived: true, requestArchiveUndo: true },
+        targets: [archiveTarget(sessionKey, sessionId), archiveTarget(queuedKey, "queued")],
+      };
+      const method = "sessions.patchMany";
+      const handlers = await getSessionsHandlers();
+      const archive = cleanup.track(
+        Promise.resolve(
+          handlers[method]!({
+            req: { type: "req", id: "receipt-drain", method, params },
+            params,
+            respond,
+            client,
+            context,
+            signal: stop.signal,
+            hasCurrentClientAuthority: () => grantCurrent,
+            isWebchatConnect: () => false,
+          }),
+        ).catch((error: unknown) => error),
+      );
+      await waitForArchivePhase(active.terminalStarted, archive, signal);
+      expect(active.controller.signal.aborted).toBe(true);
+      expect(session.read()?.archivedAt).toBeUndefined();
+      if (change === "disconnect") {
+        connection.abort();
+      } else if (change === "grant revocation") {
+        grantCurrent = false;
+      } else if (change === "Stop") {
+        stop.abort();
+      } else if (change === "profile change") {
+        client.authenticatedUserProfile!.profileId = "other";
+      } else if (change === "invalidation") {
+        client.invalidated = true;
+      }
+      release.resolve();
+      persistence.resolve();
+      expect(await archive).toMatchObject(
+        change === "Stop" ? { name: "AbortError" } : { error: { code: "FORBIDDEN" } },
+      );
+      expect(starts).toEqual([sessionId]);
+      expect(respond).not.toHaveBeenCalled();
+      const queued = loadSessionEntry({ storePath, sessionKey: queuedKey });
+      expect(queued?.sessionId).toBe("queued");
+      expect(queued?.archivedAt).toBeUndefined();
+      expect(session.read()?.archivedAt).toEqual(
+        change === "Stop" ? undefined : expect.any(Number),
+      );
+    }),
 );
 
 archiveTest(

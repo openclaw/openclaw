@@ -131,24 +131,30 @@ function renderSummary(reportLocal: KovaReport, options: SummaryOptions) {
 
   const violations = collectViolations(reportLocal.records);
   if (violations.length > 0) {
-    lines.push("## Threshold violations");
+    lines.push("## Violations");
     lines.push("");
-    lines.push("| Scenario | State | Metric | Actual | Threshold |");
-    lines.push("| --- | --- | --- | ---: | ---: |");
-    for (const item of violations.slice(0, 20)) {
+    lines.push(
+      `Found ${violations.length} violations. Each row shows one example from the Kova report.`,
+    );
+    lines.push("");
+    lines.push("| Kind | Metric | Count | Example scenario | State | Actual | Expected |");
+    lines.push("| --- | --- | ---: | --- | --- | ---: | --- |");
+    const byKindAndMetric = Map.groupBy(violations, (item) =>
+      JSON.stringify([item.kind, item.metric]),
+    );
+    for (const samples of byKindAndMetric.values()) {
+      const item = samples[0]!;
       lines.push(
         markdownRow([
+          item.kind,
+          item.metric,
+          String(samples.length),
           item.scenario,
           item.state,
-          item.metric,
           formatMetric(item.actual, item.unit),
           formatMetric(item.threshold, item.unit),
         ]),
       );
-    }
-    if (violations.length > 20) {
-      lines.push("");
-      lines.push(`_Only first 20 of ${violations.length} violations shown._`);
     }
     lines.push("");
   }
@@ -247,6 +253,7 @@ function collectViolations(records: KovaRecord[] | undefined) {
     return record.violations.map((violation) => ({
       scenario: value(record.scenario),
       state: value(stateValue(record.state)),
+      kind: value(violation.kind),
       metric: value(violation.metric || violation.id || violation.name),
       actual: violation.actual ?? violation.value,
       threshold: violation.threshold ?? violation.max ?? violation.expected,

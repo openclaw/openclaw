@@ -102,7 +102,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     openclawIdPeerKey?: string;
     /** Original peer admission; every later grant checks the live membership owner. */
     openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
-    /** Definition used for this member's hello; reload reconnects when it changes. */
+    /** Scopes this connection held before its role capped them; reload reconnects it when a role would grant more. */
+    roleCappedScopes?: readonly string[];
     /** Authenticated Control UI operator ingress; never accepted from wire params. */
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */

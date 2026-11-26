@@ -294,7 +294,7 @@ struct ChatProTab: View {
     /// never headlines: the title stays empty until the session is named (web `titlePending`).
     private var headerSessionTitle: String? {
         guard let session = self.viewModel?.currentSessionEntry() else { return nil }
-        let title = CommandCenterTab.sessionTitle(session)
+        let title = SessionPresentation.title(session)
         return title.isEmpty || title == session.key ? nil : title
     }
 

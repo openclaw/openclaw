@@ -328,40 +328,6 @@ describe("collapseCompletedTurnWork", () => {
     timestamp,
   });
 
-  it.each(["context event", "persisted boundary"])("renders a compaction %s", (source) => {
-    const boundary = source === "persisted boundary";
-    const marker = boundary
-      ? {
-          role: "system",
-          timestamp: 2_000,
-          __openclaw: {
-            kind: "compaction",
-            id: "checkpoint-with-metrics",
-            tokensBefore: 900_000,
-            tokensAfter: 24_700,
-          },
-        }
-      : chatMessage("custom", "Context compacted", 2_000, {
-          customType: "openclaw.context-compaction",
-          display: true,
-          excludeFromContext: true,
-          details: { runId: "run-1" },
-          idempotencyKey: "codex-context-compaction:thread:turn:item",
-        });
-    const items = collapsedItems({
-      messages: boundary ? [marker] : [user("do it", 1_000), marker, assistant("All done.", 3_000)],
-    });
-    expect(items[boundary ? 0 : 1]).toMatchObject(
-      boundary
-        ? { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens (97.3%)" }
-        : { compaction: "complete", label: "Context compacted" },
-    );
-    if (!boundary) {
-      expectKinds(items, ["group", "divider", "group"]);
-      expect(requireGroup(items[2]).messages[0]?.message).toMatchObject({ content: "All done." });
-    }
-  });
-
   it("keeps a tool visualization visible while collapsing its work", () => {
     const items = collapsedItems({
       messages: [

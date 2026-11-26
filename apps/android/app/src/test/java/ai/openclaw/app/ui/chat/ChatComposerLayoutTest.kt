@@ -16,6 +16,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
+import ai.openclaw.app.PersonalSessionPinAccess
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.chat.ChatActiveRunPresentation
@@ -5674,7 +5675,7 @@ class ChatComposerLayoutTest {
       .performScrollTo()
       .assertIsDisplayed()
       .assertIsNotEnabled()
-    composeRule.onNodeWithText(nativeString("Full access requires operator.admin access."), useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("You don’t have permission to turn on Full access."), useUnmergedTree = true).assertIsDisplayed()
   }
 
   @Test
@@ -5687,9 +5688,9 @@ class ChatComposerLayoutTest {
         .apply { isAccessible = true }
         .set(controller, { _: String -> false })
       NodeRuntime::class.java
-        .getDeclaredMethod("replaceGatewayCapabilities", Set::class.java)
+        .getDeclaredMethod("replaceGatewayCapabilities", Set::class.java, PersonalSessionPinAccess.Verified::class.java)
         .apply { isAccessible = true }
-        .invoke(runtime, emptySet<String>())
+        .invoke(runtime, emptySet<String>(), null)
     }
     openPermissionPicker()
     composeRule.onNodeWithText(nativeString("Update the Gateway to change session permissions.")).assertIsDisplayed()

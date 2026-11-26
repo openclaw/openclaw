@@ -103,9 +103,7 @@ export async function inspectGatewayLockRecovery(options: { env?: NodeJS.Process
 export async function recoverGatewayLock(options: { confirmation: string }) {
   const inspection = await inspectGatewayLockRecovery();
   if (inspection.confirmation !== options.confirmation) {
-    throw new Error(
-      "Gateway lock or heartbeat changed since inspection; run `openclaw gateway recover-lock` again.",
-    );
+    throw new Error("Gateway lock or heartbeat changed since inspection; inspect the lock again.");
   }
   if (inspection.postgres) {
     assertPostgresGatewayRecoveryMutationSupported(inspection.postgres);

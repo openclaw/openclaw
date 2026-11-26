@@ -72,7 +72,9 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
       operatorAuthority: run.operatorAuthority,
     }),
     resolveReplyOperatorAuthorityKey(run.operatorAuthority),
+    stableStringify(run.operatorAuthority?.participationCeiling ?? null),
     execution.senderId ?? "",
+    execution.mcpRequesterProfileId ?? "",
     JSON.stringify(execution.channelContext ?? null),
     stableStringify(execution.conversationToolPolicy ?? null),
     execution.senderE164 ?? "",
@@ -180,7 +182,6 @@ export async function prepareNextDeliveryGroup(
   const assertCurrent = () => {
     assertDrainCurrent();
     for (const item of items) {
-      item.operatorAuthority?.assertCurrent();
       if (isFollowupRunAborted(item)) {
         throw new FollowupRunDeferredError("Queued delivery source changed during preparation");
       }
