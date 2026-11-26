@@ -123,7 +123,7 @@ function installNativeCancellation(
 
 describe("descendant cascade ownership", () => {
   it.for(["session", "exact run"] as const)(
-    "tells the requester's next turn which children a %s Stop cancelled",
+    "tells the requester's next turn which children a %s Stop canceled",
     async (scope) => {
       const childKey = "agent:main:subagent:stopped-research";
       await writeSession(mainIdentity.sessionKey, mainIdentity.sessionId);
@@ -152,9 +152,9 @@ describe("descendant cascade ownership", () => {
         endedReason: "subagent-killed",
       });
       expect(peekSystemEvents(mainIdentity.sessionKey)).toEqual([
-        `${scope === "session" ? "A session Stop from a connected app" : "A Stop of your turn"} ` +
-          "cancelled 1 running sub-agent: Layout research. They won't report back. Check their " +
-          "sessions before you rely on their work, and spawn them again if the work is still needed.",
+        `${scope === "session" ? "An explicit session Stop from a connected app" : "An explicit Stop of your turn"} ` +
+          "canceled 1 running sub-agent: Layout research. It won't report back. Check its session " +
+          "before relying on any partial work, and don't restart it unless the user asks.",
       ]);
       consumeSelectedSystemEventEntries(
         mainIdentity.sessionKey,

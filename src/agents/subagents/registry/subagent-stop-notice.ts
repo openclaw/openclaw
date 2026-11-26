@@ -3,14 +3,14 @@ import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import type { ExplicitRunStopSource } from "../../../sessions/session-run-stopped.js";
 
 const STOP_NOTICE_SOURCES: Record<ExplicitRunStopSource, string> = {
-  "client-session": "A session Stop from a connected app",
-  "client-run": "A Stop of your turn",
-  "channel-user": "A /stop command",
+  "client-session": "An explicit session Stop from a connected app",
+  "client-run": "An explicit Stop of your turn",
+  "channel-user": "A user /stop command",
 };
 const STOP_NOTICE_MAX_LABELS = 10;
 
 /**
- * An explicit Stop retires the cancelled children's completions, so the requester would never
+ * An explicit Stop retires the canceled children's completions, so the requester would never
  * learn they ended. Queue one notice for its next turn; the notice never starts a turn itself.
  */
 export function enqueueStoppedSubagentsNotice(params: {
@@ -24,15 +24,23 @@ export function enqueueStoppedSubagentsNotice(params: {
     return;
   }
   const shown = params.labels
-    .slice(0, STOP_NOTICE_MAX_LABELS)
-    .map((label) => label.replace(/\s+/g, " ").trim().slice(0, 80));
+    .map((label) => label.replace(/\s+/g, " ").trim().slice(0, 80))
+    .filter(Boolean)
+    .slice(0, STOP_NOTICE_MAX_LABELS);
   const more = params.killed - shown.length;
-  const names = shown.length ? `: ${shown.join(", ")}${more > 0 ? `, and ${more} more` : ""}` : "";
+  let names = shown.join(", ");
+  if (more > 0 && shown.length > 0) {
+    names += `${shown.length === 1 ? "" : ","} and ${more} more`;
+  }
+  const one = params.killed === 1;
   enqueueSystemEvent(
-    `${STOP_NOTICE_SOURCES[params.source]} cancelled ${params.killed} running ` +
-      `${params.killed === 1 ? "sub-agent" : "sub-agents"}${names}. ` +
-      "They won't report back. Check their sessions before you rely on their work, " +
-      "and spawn them again if the work is still needed.",
+    `${STOP_NOTICE_SOURCES[params.source]} canceled ${params.killed} running ` +
+      `${one ? "sub-agent" : "sub-agents"}${names ? `: ${names}` : ""}. ` +
+      (one
+        ? "It won't report back. Check its session before relying on any partial work, " +
+          "and don't restart it unless the user asks."
+        : "They won't report back. Check their sessions before relying on any partial work, " +
+          "and don't restart them unless the user asks."),
     withSystemEventOwner({ sessionKey: params.requesterSessionKey }, params.requesterAgentId),
   );
 }
