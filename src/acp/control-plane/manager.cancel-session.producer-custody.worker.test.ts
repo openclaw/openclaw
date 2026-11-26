@@ -178,7 +178,9 @@ it("joins filtered cancellation to backend preparation cleanup", async ({ signal
       if (!claim) {
         throw new Error("Backend preparation has no controller claim");
       }
-      claim.abortController.signal.addEventListener("abort", cancelled.resolve, { once: true });
+      claim.abortController.signal.addEventListener("abort", () => cancelled.resolve(), {
+        once: true,
+      });
       await preparation.wait();
       return runtimeHandle(f, "retained-runtime");
     });
