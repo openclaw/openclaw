@@ -897,3 +897,64 @@ it("reloads missing branchless facts even when Environment was collapsed", async
   await waitForSolid(() => expect(stop).toHaveBeenCalledOnce());
   expect(view.container.querySelector('[data-details-group="environment"]')).not.toBeNull();
 });
+
+it("shows two members who have never sent, dedupes contributors, and removes revoked membership immediately", async () => {
+  const owner = {
+    type: "human",
+    id: "owner",
+    identity: { type: "profile", id: "owner" },
+    label: "Owner Person",
+  } as const;
+  const member = (id: string) => ({
+    type: "human" as const,
+    id,
+    identity: { type: "profile" as const, id },
+    label: id,
+  });
+  const sharing = {
+    sessionKey: "agent:main:details",
+    role: "owner" as const,
+    allowedVisibilities: [],
+    members: ["speaker", "Silent One", "Silent Two"].map((identityId) => ({
+      identityId,
+      addedAt: 1,
+    })),
+    identities: [member("speaker"), member("Silent One"), member("Silent Two")],
+  };
+  const element = await mount({
+    selectedSession: {
+      key: sharing.sessionKey,
+      kind: "direct",
+      owner: { actor: owner },
+      createdActor: owner,
+      participants: [member("speaker")],
+      participantCount: 1,
+    },
+    sharing,
+    desktopPresentation: {
+      peopleLabel: "People",
+      outputsLabel: "Outputs",
+      subagentsWorkingLabel: "Working",
+    },
+    desktopDisclosures: { expanded: { people: true }, onExpandedChange() {} },
+  });
+  element.desktop = true;
+  await updateDetails(element);
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(element.querySelectorAll(".chat-details-people__row")).toHaveLength(4),
+  );
+  expect(element.querySelector(".chat-details-people")?.textContent).toContain("Silent One");
+  expect(element.querySelector(".chat-details-people")?.textContent).toContain("Silent Two");
+  expect(element.querySelector(".chat-details-people")?.textContent).not.toContain("Can send");
+  await updateDetails(element, {
+    sharing: {
+      ...sharing,
+      members: sharing.members.filter(({ identityId }) => identityId !== "Silent Two"),
+    },
+  });
+  await waitForSolid(() =>
+    expect(element.querySelectorAll(".chat-details-people__row")).toHaveLength(3),
+  );
+  expect(element.querySelector(".chat-details-people")?.textContent).not.toContain("Silent Two");
+});

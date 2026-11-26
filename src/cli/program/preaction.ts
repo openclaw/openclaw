@@ -145,16 +145,13 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     let beforeStatePreparation: StartupConfigPreflightOptions["beforeStatePreparation"];
-    const [{ resolvePluginInstallInvalidConfigPolicy }, { resolvePluginInstallPreactionRequest }] =
-      await Promise.all([
-        import("../../plugins/install-config.js"),
-        import("../plugin-install-config-policy.js"),
-      ]);
-    let allowInvalid =
-      commandPath[0] === "update" ||
-      resolvePluginInstallInvalidConfigPolicy(
-        resolvePluginInstallPreactionRequest({ actionCommand, commandPath }),
-      ) === "allow-plugin-recovery";
+    let allowInvalid = primary === "update";
+    if (primary === "plugins" && secondary === "install") {
+      // Only installation can recover an invalid config from the requested plugin's metadata.
+      const { allowsPluginInstallConfigRecovery } =
+        await import("../plugin-install-config-policy.js");
+      allowInvalid = allowsPluginInstallConfigRecovery(actionCommand);
+    }
     const isGatewayRun =
       commandPath[0] === "gateway" &&
       (commandPath.length === 1 || (commandPath.length === 2 && commandPath[1] === "run"));

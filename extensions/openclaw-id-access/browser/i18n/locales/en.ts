@@ -2,13 +2,28 @@ const en = {
   role: "Role",
   administrator: "Administrator access",
   noAdministrator: "No administrator access",
+  invitedAccess: "Only sessions they’re invited to · Can be invited up to {level}",
+  invitedPermission: "Participant permission: {mode}",
+  permissions: {
+    "read-only": "Read only",
+    guarded: "Guarded",
+    workspace: "Workspace",
+    full: "Full",
+  },
+  invitationLevels: {
+    read: "Read",
+    suggest: "Suggest",
+    send: "Send",
+  },
   sessions: {
+    invited: "Only sessions they’re invited to",
     none: "No access to other people's sessions",
     view: "Read other people's sessions",
     suggest: "Read and suggest changes to other people's sessions",
     write: "Read and change other people's sessions",
   },
   sandboxRequired: "Sandbox required",
+  ownSandboxRequired: "Sandbox required for their own sessions",
   sandboxInherited: "Sandbox follows agent settings",
   sandboxNotReady: "Sandbox required · not set up yet",
   sandboxNeeded: "The {role} role needs a sandbox.",
@@ -30,13 +45,9 @@ const en = {
     "The {role} role has administrator access. Administrators can change Gateway settings, manage devices and approvals, and access connected services. Only invite someone you trust with this claw.",
   adminInvite: "Confirm administrator invite",
   cancel: "Cancel",
-  changeRole: "Change role",
-  saveRole: "Save role",
-  saveAdminRole: "Confirm administrator role",
-  roleChanged: "Role changed. Their devices reconnect with the new access.",
   blocked: "Blocked",
   undefinedRole:
-    "The role {role} is not defined on this claw. Choose another role to restore access.",
+    "The role {role} is not defined on this claw. An administrator can assign another role in Settings → Team → Roles to restore access.",
   yourRole: "Your role: {role}",
 };
 

@@ -2013,6 +2013,12 @@ prepare_restart_inference() {
     openclaw_e2e_start_mock_openai 44213 "$ARTIFACT_ROOT/restart-model.log")" || return "$?"
   openclaw_e2e_wait_mock_openai 44213 || return "$?"
   node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44213 || return "$?"
+  if [ "$SCENARIO" = "base" ] && [ "$LIVE_ENABLED" = "0" ]; then
+    # The first hop already proved the Anthropic config survives. This OpenAI-only
+    # restart must not send the fake Anthropic credential to its public catalog.
+    openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config set \
+      plugins.entries.anthropic.enabled false --strict-json || return "$?"
+  fi
   restart_inference="mock-openai"
 }
 
@@ -2800,8 +2806,10 @@ if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
   if [ "$baseline_version" = "2026.9.6" ]; then
     phase refuse-sibling-candidate assert_sibling_published_refusal
   fi
+  # Isolate the successful update’s registrations from the baseline and refusal trial.
+  : > "$ARTIFACT_ROOT/sibling-registrations.jsonl"
   phase update-sibling-candidate update_candidate
-  phase canary-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-canary
+  phase assert-sibling-update-imports node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs assert-update-imports "$UPDATE_JSON"
   phase candidate-sibling-runtime node scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs candidate
   phase sibling-activation-previous-gateway-stop stop_gateway
   OPENCLAW_UPGRADE_SURVIVOR_CONTEXT_ACTIVATION=1 phase sibling-activation-gateway-start start_gateway

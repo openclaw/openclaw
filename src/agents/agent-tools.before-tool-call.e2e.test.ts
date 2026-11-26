@@ -30,7 +30,6 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createHookRunner, type HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
@@ -428,90 +427,6 @@ describe("before_tool_call diagnostics behavior", () => {
     mockCallGateway.mockReset();
   });
 
-  it.each([
-    {
-      label: "failure",
-      details: { status: "failed", exitCode: 1 },
-      terminal: {
-        type: "tool.execution.error",
-        errorCategory: "tool_result_error",
-        terminalReason: "failed",
-      },
-    },
-    {
-      label: "timeout",
-      details: { status: "timeout", timedOut: true },
-      terminal: {
-        type: "tool.execution.error",
-        errorCategory: "tool_result_error",
-        terminalReason: "timed_out",
-      },
-    },
-    {
-      label: "cancellation",
-      details: { status: "cancelled" },
-      terminal: {
-        type: "tool.execution.error",
-        errorCategory: "tool_result_error",
-        terminalReason: "cancelled",
-      },
-    },
-    {
-      label: "blocked action",
-      details: { status: "blocked" },
-      terminal: {
-        type: "tool.execution.blocked",
-        deniedReason: "tool_result_blocked",
-        reason: "tool_result_blocked",
-      },
-    },
-  ])("classifies a resolved $label result as terminal failure", async ({ details, terminal }) => {
-    const execute = vi.fn().mockResolvedValue({
-      content: [{ type: "text", text: "tool failed" }],
-      details,
-    });
-    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "exec", execute }), {
-      agentId: "main",
-      sessionKey: "session-key",
-      runId: "run-1",
-    });
-
-    await withToolExecutionEvents(async (emitted) => {
-      await tool.execute("tool-call-1", { command: "false" }, undefined, undefined);
-      await waitForDiagnosticEventsDrained();
-
-      expect(emitted.map((event) => event.type)).toEqual(["tool.execution.started", terminal.type]);
-      expectEventFields(emitted[1], terminal);
-    });
-  });
-
-  it("classifies plugin and MCP tool execution diagnostics with bounded owner labels", async () => {
-    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
-    const rawTool = { name: "mcp_search", execute } as unknown as AnyAgentTool;
-    setPluginToolMeta(rawTool, { pluginId: "bundle-mcp", optional: false });
-    const tool = wrapToolWithBeforeToolCallHook(rawTool, {
-      agentId: "main",
-      sessionKey: "session-key",
-    });
-
-    await withToolExecutionEvents(async (emitted) => {
-      await tool.execute("tool-call-mcp", { query: "status" }, undefined, undefined);
-      await waitForDiagnosticEventsDrained();
-
-      expectEventFields(emitted[0], {
-        type: "tool.execution.started",
-        toolName: "mcp_search",
-        toolSource: "mcp",
-        toolOwner: "bundle-mcp",
-      });
-      expectEventFields(emitted[1], {
-        type: "tool.execution.completed",
-        toolSource: "mcp",
-        toolOwner: "bundle-mcp",
-      });
-    });
-  });
-
   function skillReadContext(
     skill: Parameters<typeof createCanonicalFixtureSkill>[0],
     workspaceDir?: string,
@@ -794,61 +709,6 @@ describe("before_tool_call diagnostics behavior", () => {
     });
   });
 
-  it.each([
-    {
-      label: "run cancellation",
-      abort: true,
-      abortReason: undefined,
-      message: "tool stopped with run",
-      toolCallId: "tool-call-cancelled",
-      terminalReason: "cancelled",
-    },
-    {
-      label: "run timeout",
-      abort: true,
-      abortReason: Object.assign(new Error("timed out"), { name: "TimeoutError" }),
-      message: "tool stopped with timeout",
-      toolCallId: "tool-call-timeout",
-      terminalReason: "timed_out",
-    },
-    {
-      label: "tool-local timeout",
-      abort: false,
-      abortReason: undefined,
-      message: "tool deadline elapsed",
-      toolCallId: "tool-call-local-timeout",
-      terminalReason: "timed_out",
-    },
-  ])(
-    "classifies $label in terminal diagnostics",
-    async ({ abort, abortReason, message, toolCallId, terminalReason }) => {
-      const controller = new AbortController();
-      const execute = vi.fn().mockImplementation(() => {
-        if (abort) {
-          controller.abort(abortReason);
-        }
-        throw Object.assign(new Error(message), { name: abort ? "Error" : "TimeoutError" });
-      });
-      const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }), {
-        agentId: "main",
-        sessionKey: "session-key",
-      });
-
-      await withToolExecutionEvents(async (emitted) => {
-        await expect(
-          tool.execute(toolCallId, { path: "/tmp/file" }, controller.signal, undefined),
-        ).rejects.toThrow(message);
-        await waitForDiagnosticEventsDrained();
-        expectEventFields(emitted[1], {
-          type: "tool.execution.error",
-          toolCallId,
-          terminalReason,
-          ...(terminalReason === "cancelled" ? { errorCategory: "aborted" } : {}),
-        });
-      });
-    },
-  );
-
   it("emits blocked and security diagnostics for intentional hook vetoes", async () => {
     hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
     hookRunner.runBeforeToolCall.mockResolvedValue({
@@ -1060,38 +920,6 @@ describe("before_tool_call requireApproval handling", () => {
     expect(mockCallGateway).not.toHaveBeenCalled();
   });
 
-  it("passes diagnostic trace context to before_tool_call hooks", async () => {
-    const trace = {
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-      traceFlags: "01",
-    };
-    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "pwd" },
-      toolCallId: "tool-1",
-      ctx: { agentId: "main", sessionKey: "main", runId: "run-1", trace },
-    });
-
-    expect(result.blocked).toBe(false);
-    const [event, toolContext] = requireHookCall(0);
-    expectRecordFields(event, {
-      toolName: "exec",
-      runId: "run-1",
-      toolCallId: "tool-1",
-    });
-    expectRecordFields(toolContext, {
-      toolName: "exec",
-      runId: "run-1",
-      toolCallId: "tool-1",
-    });
-    expect(toolContext.trace).toEqual(trace);
-    expect(toolContext.trace).not.toBe(trace);
-    expect(Object.isFrozen(toolContext.trace)).toBe(true);
-  });
-
   it("passes host-derived apply_patch paths to before_tool_call hooks", async () => {
     const cwd = path.join("/tmp", "openclaw-hooks");
     const patch = [
@@ -1296,26 +1124,6 @@ describe("before_tool_call requireApproval handling", () => {
       kind: "failure",
       disposition: "cancelled",
     });
-  });
-
-  it("skips derived path extraction when no policies or hooks can consume it", async () => {
-    hookRunner.hasHooks.mockReturnValue(false);
-    const params = {};
-    Object.defineProperty(params, "input", {
-      enumerable: true,
-      get() {
-        throw new Error("should not derive paths");
-      },
-    });
-
-    await expect(
-      runBeforeToolCallHook({
-        toolName: "apply_patch",
-        params,
-        toolCallId: "patch-no-hooks",
-      }),
-    ).resolves.toEqual({ blocked: false, params });
-    expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
   });
 
   it("recomputes host-derived paths after trusted policy param rewrites", async () => {

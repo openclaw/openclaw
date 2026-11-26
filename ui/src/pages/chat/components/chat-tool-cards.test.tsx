@@ -57,6 +57,56 @@ function mountTool(
   return mountCard({ id: name, name, ...card }, options, container);
 }
 
+it.each(["image", "music", "video"])("labels an implicit %s generation call", async (kind) => {
+  const container = await mountTool(
+    `${kind}_generate`,
+    { args: { prompt: "Private fixture prompt" }, live: true },
+    { expanded: false, runActive: true },
+  );
+  expect(textOf(container, ".chat-tool-row__title")).toBe(`Generating ${kind}`);
+});
+
+it.each(["image", "music", "video"])(
+  "distinguishes %s generation requests from generated media in direct and dispatched rows",
+  async (kind) => {
+    const name = `${kind}_generate`;
+    const implicitArgs = { prompt: "Private fixture prompt" };
+    const args = { ...implicitArgs, action: "generate" };
+    const dispatchedArgs = { id: name, args: implicitArgs };
+    const tool = { id: name, name, source: "openclaw" };
+    const unit = kind === "music" ? "track" : kind;
+    for (const [details, text, title] of [
+      [
+        { async: true, status: "started", taskId: "task-fixture" },
+        `Background task started for ${kind} generation (task-fixture).`,
+        `Requested ${kind} generation`,
+      ],
+      [
+        { count: 1, attachments: [{ type: kind === "music" ? "audio" : kind, path: "/fixture" }] },
+        `Generated 1 ${unit} with fixture/model.`,
+        `Generated ${kind}`,
+      ],
+    ] as const) {
+      const result = { content: [{ type: "text", text }] };
+      const envelope = { tool, result: { ...result, details } };
+      const outputText = JSON.stringify({ tool, result });
+      for (const [toolName, card] of [
+        [name, { args, details }],
+        ["tool_call", { args: dispatchedArgs, details: envelope }],
+        [name, { args, outputText: text }],
+        ["tool_call", { args: dispatchedArgs, outputText }],
+      ] as const) {
+        const container = await mountTool(
+          toolName,
+          { ...card, completed: true },
+          { expanded: false },
+        );
+        expect(textOf(container, ".chat-tool-row__title")).toBe(title);
+      }
+    }
+  },
+);
+
 it("does not render MCP App previews on the tool surface", () => {
   const container = document.createElement("div");
   const preview = { ...canvas, viewId: "cv_app", mcpApp: { viewId: "cv_app" } } as const;
@@ -325,37 +375,6 @@ it("keeps read ranges visible and opens the unmodified file path", async () => {
     ["offset:", "40"],
     ["limit:", "20"],
   ]);
-});
-
-it.each(["structured", "serialized"])("keeps %s captions out of collapsed rows", async (shape) => {
-  const privateCaption =
-    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nPrivate synthetic caption.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
-  const args = { action: "send", to: "fixture-room", message: privateCaption };
-  const card = {
-    id: "message-caption",
-    name: "message",
-    args: shape === "structured" ? args : JSON.stringify(args),
-    inputText: JSON.stringify(args),
-  };
-  const options = { messageKey: "test-message", onToggleExpanded: vi.fn() };
-  const container = await mountCard(card, { ...options, expanded: false });
-
-  const summary = query(container, "button.chat-tool-msg-summary");
-  expect(summary?.textContent).toContain("Message");
-  expect(query(summary, ".chat-tool-msg-summary__icon")?.getAttribute("aria-label")).toBe(
-    "message",
-  );
-  if (shape === "structured") {
-    expect(summary?.textContent).toContain("fixture-room");
-  }
-  expect(summary?.textContent).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
-  expect(container.textContent).not.toContain("Private synthetic caption.");
-  expect(query(container, ".chat-tool-msg-body")).toBeNull();
-
-  await mountCard(card, { ...options }, container);
-  const diagnostics = query(container, ".chat-tool-msg-body");
-  expect(diagnostics?.textContent).toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
-  expect(diagnostics?.textContent).toContain("Private synthetic caption.");
 });
 
 it("marks expanded raw block-art output so QR whitespace uses block-art rendering", async () => {

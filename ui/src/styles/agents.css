@@ -659,6 +659,17 @@
   }
 }
 
+@media (max-width: 640px) {
+  .settings-kv.agent-tool-access-facts {
+    grid-template-columns: fit-content(50%) minmax(0, 1fr);
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .settings-kv.agent-tool-access-facts > dt:not(:first-child) {
+    margin-top: 0;
+  }
+}
+
 .agent-tools-buttons,
 .agent-tools-runtime {
   display: flex;
@@ -690,7 +701,7 @@
     color var(--duration-fast) var(--ease-in-out);
 }
 
-.agent-tools-runtime-chip:hover {
+a.agent-tools-runtime-chip:hover {
   background: color-mix(in srgb, var(--card) 92%, transparent);
   border-color: color-mix(in srgb, var(--border-strong) 58%, var(--border));
 }
@@ -704,11 +715,6 @@
   color: var(--muted);
   cursor: default;
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
-}
-
-.agent-tools-runtime-chip--more:hover {
-  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
-  border-color: var(--border);
 }
 
 .agent-tools-runtime-chip__meta {
@@ -916,6 +922,29 @@
   }
 }
 
+/* Keep the switch with the skill it changes, not below its status and requirements. */
+.agent-skill-row {
+  display: block;
+}
+
+.agent-skill-row__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  cursor: var(--cursor-action);
+}
+
+.agent-skill-row__heading .settings-row__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-skill-row__heading:has(input:disabled) {
+  cursor: not-allowed;
+}
+
 .agent-skills-groups {
   display: grid;
   gap: 16px;
@@ -970,7 +999,7 @@
 }
 
 .skills-grid {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @container (min-width: 900px) {

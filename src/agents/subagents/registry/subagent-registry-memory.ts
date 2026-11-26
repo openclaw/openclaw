@@ -367,7 +367,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     }
   }
 
-  runWithCompletionAuthority<T>(observed: SubagentRunRecord, run: () => T): T {
+  runWithCompletionAuthority<T>(
+    observed: SubagentRunRecord,
+    run: (authority?: SubagentCompletionCustody["authority"]) => T,
+  ): T {
     const entry = this.currentValue(observed);
     this.assertCompletionEntryCurrent(entry);
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
@@ -386,7 +389,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       }
       return run();
     }
-    return custody ? custody.authority.run(run) : run();
+    return custody ? custody.authority.run(() => run(custody.authority)) : run();
   }
 
   selectCompletionAuthorityBatch(
@@ -401,7 +404,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     );
   }
 
-  runWithCompletionBatchAuthority<T>(observed: readonly SubagentRunRecord[], run: () => T): T {
+  runWithCompletionBatchAuthority<T>(
+    observed: readonly SubagentRunRecord[],
+    run: (authority?: SubagentCompletionCustody["authority"]) => T,
+  ): T {
     return runWithSubagentCompletionBatchAuthority(
       {
         batch: observed.map((entry) => this.currentValue(entry)),

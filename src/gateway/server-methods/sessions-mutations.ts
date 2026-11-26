@@ -34,6 +34,7 @@ import {
 } from "../session-identity-projection.js";
 import { loadSessionLifecycleRuntime } from "../session-lifecycle-runtime-loader.js";
 import { sessionMutationForbiddenError } from "../session-mutation-authorization-error.js";
+import { usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import {
@@ -53,6 +54,7 @@ import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
 import { startSessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { executeSessionPatchMutations } from "./sessions-patch-engine.js";
 import { createCommitGuard } from "./sessions-patch-errors.js";
+import { patchPersonalSessionPins } from "./sessions-patch-personal-pins.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import { sharingExpectedEntry } from "./sessions-sharing-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -121,6 +123,9 @@ function createSessionPatchHandler(
         patch = singlePatch;
         targets = [singlePatch];
       }
+      if (patch.pinned !== undefined && !usesLegacySessionPins(client)) {
+        return await patchPersonalSessionPins(options, targets, patch, request.many);
+      }
       const assertCurrent = () => {
         requestAuthority.assertCurrent();
         if (!request.many) {
@@ -145,6 +150,7 @@ function createSessionPatchHandler(
         context,
         signal,
         diagnostics,
+        participationOnly: sessionMutationAuthorization?.participationCeiling !== undefined,
         operatorAuthority: preparingOperator,
         followSharingRegistration: sessionMutationAuthorization?.followRegistration,
         readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
@@ -194,33 +200,29 @@ function createSessionPatchHandler(
       }
       const prepared = executed.preparedByIndex[0]!;
       diagnostics?.scope("response");
-      const catalog = await executed.catalogs.available(prepared.targetAgentId);
+      const { targetAgentId: agentId, canonicalKey: sessionKey } = prepared;
+      const catalog = await executed.catalogs.available(agentId);
       const [acpMeta] = await readAcpSessionMetaForEntries({
         cfg: executed.cfg,
-        entries: [
-          {
-            agentId: prepared.targetAgentId,
-            sessionKey: prepared.canonicalKey,
-            entry: outcome.entry,
-          },
-        ],
+        entries: [{ agentId, sessionKey, entry: outcome.entry }],
       });
       assertCurrent();
-      respond(
-        true,
-        projectSessionPatchResult({
-          ...prepared,
-          cfg: executed.cfg,
-          preparedAcpMeta: acpMeta ?? null,
-          entry: {
-            ...outcome.entry,
-            fastMode: prepareSessionFastModePresentation(client)(outcome.entry.fastMode),
-          },
-          modelCatalog: catalog?.entries,
-          modelCatalogRouteVariants: catalog?.routeVariants,
-        }),
-        undefined,
-      );
+      const result = projectSessionPatchResult({
+        ...prepared,
+        cfg: executed.cfg,
+        preparedAcpMeta: acpMeta ?? null,
+        entry: {
+          ...outcome.entry,
+          fastMode: prepareSessionFastModePresentation(client)(outcome.entry.fastMode),
+        },
+        modelCatalog: catalog?.entries,
+        modelCatalogRouteVariants: catalog?.routeVariants,
+      });
+      if (!usesLegacySessionPins(client)) {
+        // This shared metadata patch did not read the requester's sidebar.
+        delete result.entry.pinnedAt;
+      }
+      respond(true, result, undefined);
     } finally {
       try {
         if (preparingOperator) {

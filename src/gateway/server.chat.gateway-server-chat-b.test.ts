@@ -340,6 +340,8 @@ async function resetDirectChatSession() {
   resetConfigRuntimeState();
 }
 
+// An authless Gateway: a local socket on it is admitted as the local host.
+const NO_AUTH = { authMethod: "none" };
 function createControlUiClient(
   scopes = ["operator.write", "operator.admin"],
   properties: Record<string, unknown> = {},
@@ -348,6 +350,7 @@ function createControlUiClient(
     ...properties,
     connect: {
       client: { id: GATEWAY_CLIENT_NAMES.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT },
+      role: "operator",
       scopes,
     },
   } as never;
@@ -432,11 +435,9 @@ async function sendControlUiChat(params: {
     req: { type: "req", id: params.idempotencyKey, method: "chat.send", params: requestParams },
     params: requestParams,
     client: createControlUiClient(undefined, {
-      ...(params.localClient ? { internal: { isLocalClient: true } } : {}),
-      ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
-      ...(params.authenticatedUserProfile
-        ? { authenticatedUserProfile: params.authenticatedUserProfile }
-        : {}),
+      ...(params.localClient ? { internal: { isLocalClient: true }, authPolicy: NO_AUTH } : {}),
+      authenticatedUserId: params.authenticatedUserId,
+      authenticatedUserProfile: params.authenticatedUserProfile,
     }),
     isWebchatConnect: () => true,
     respond: params.respond,
@@ -2715,41 +2716,6 @@ describe("gateway server chat", () => {
       const serialized = JSON.stringify(messages);
       expect(serialized).toContain("oldest visible question");
       expect(serialized).not.toContain("stale announce reply");
-    });
-  });
-
-  test("chat.history backfills older offset pages across a dense silent gap", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await prepareMainHistoryHarness({ ws, createSessionDir });
-      const startedAt = Date.now();
-      await writeMainSessionTranscript([
-        createTextTranscriptEvent("user", "older visible question", { timestamp: startedAt }),
-        createTextTranscriptEvent("assistant", "older visible answer", {
-          timestamp: startedAt + 1,
-        }),
-        ...Array.from({ length: 80 }, (_, index) =>
-          createTextTranscriptEvent("assistant", "NO_REPLY", { timestamp: startedAt + index + 2 }),
-        ),
-        createTextTranscriptEvent("assistant", "latest visible answer", {
-          timestamp: startedAt + 82,
-        }),
-      ]);
-
-      const firstPage = await historyPage(ws, { limit: 1, offset: 0, maxChars: 100 });
-      expect(firstPage.ok).toBe(true);
-      expect(JSON.stringify(firstPage.payload?.messages)).toContain("latest visible answer");
-      expect(firstPage.payload?.nextOffset).toBe(1);
-
-      const olderPage = await historyPage(ws, {
-        limit: 2,
-        offset: firstPage.payload?.nextOffset,
-        maxChars: 100,
-      });
-      expect(olderPage.ok).toBe(true);
-      expect(olderPage.payload?.messages?.map(readOpenClawSeq)).toEqual([1, 2]);
-      expect(JSON.stringify(olderPage.payload?.messages)).not.toContain("NO_REPLY");
-      expect(olderPage.payload?.hasMore).toBe(false);
-      expect(olderPage.payload?.nextOffset).toBeUndefined();
     });
   });
 

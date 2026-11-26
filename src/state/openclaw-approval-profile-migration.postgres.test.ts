@@ -54,7 +54,7 @@ describe.skipIf(!connection)("PostgreSQL approval requester profile migration", 
         .run("trusted-profile", "original");
       fixture.invalidate();
       expect(() => fixture.open(source)).toThrow(
-        `PostgreSQL state schema ${OPENCLAW_STATE_SCHEMA_VERSION} is newer`,
+        new RegExp(`minimum reader ${OPENCLAW_STATE_SCHEMA_VERSION}.*supports 40`, "iu"),
       );
       const reopened = fixture.open(stateEngineSchema);
       expect(

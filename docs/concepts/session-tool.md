@@ -136,7 +136,8 @@ Use the filters together to narrow the inventory before paging:
 - `relationship`: `owned`, `created`, or `involving`, relative to the authenticated requesting user. Ownership is current responsibility; creation is original provenance; involvement means current ownership or retained prompt participation. This is not the agent's owner and does not infer identity from a session label. Without a trusted requesting-user identity, the tool rejects this filter; use an explicit `ownerId` or `creatorId` instead.
 - `ownerId` and `creatorId`: exact resolved actor IDs. Relationship filters narrow visibility; they never grant access.
 - `projectId` and `workspaceDir`: exact persisted project and working-directory associations. Listing does not inspect the filesystem or run Git.
-- `group` and `pinned`: exact sidebar group and pin state. An empty group selects ungrouped sessions.
+- `group`: exact sidebar group; an empty group selects ungrouped sessions.
+- `pinned`: whether a visible session is pinned in the signed-in requester’s **Pinned** section. `true` returns pins in their sidebar order; `false` excludes them. Rail-only shortcuts are independent. Pin filters and `sessions` pin/unpin patches require a verified requester. In an unsigned embedded run, an ordinary list omits the `pinned` field (unknown, not unpinned). Both pin filters are unavailable: run the same query from your signed-in Gateway chat. Historical shared flags do not stand in for your sidebar. Send `pinned` separately from shared settings, including archive or restore.
 - `hasBoard`: saved dashboard presence, without reading or returning dashboard content. `true` means persisted tabs exist, even without widgets; `false` means no persisted tabs. A saved dashboard face preference alone is not a dashboard. An omitted result is unknown, not proof of absence. The filter uses the same authorized Gateway inventory and runs before pagination.
 - `activeOnly`: current direct queued/running work on Gateway-backed inventories; it is unavailable in embedded mode without a live Gateway projection. `activeMinutes` is recency, not liveness. `excludeSubagents` omits subagent runs and ungrouped spawned sessions. Visible spawned conversations assigned to a custom group remain eligible under the normal visibility and archive filters.
 - `kinds`, `label`, `agentId`, and `search`: the existing classification, exact label/agent, and metadata-text filters. Kinds are `main`, `group`, `cron`, `hook`, `node`, and `other`.
@@ -188,7 +189,7 @@ The returned view is intentionally bounded:
 
 - text, including tool results and credentials, is returned without secret masking
 - thinking signatures, reasoning replay payloads, and inline image data are omitted
-- long text blocks are truncated to 4000 characters, with a truncation marker appended
+- long text blocks are truncated to 4000 characters, with a truncation marker appended; stripped `usage`, `cost`, and `details` metadata does not set `truncated` or `contentTruncated`
 - returned messages are capped at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`
 - the tool reports summary flags such as `truncated`, `droppedMessages`, `contentTruncated`, `contentRedacted`, `bytes`, and pagination metadata
 

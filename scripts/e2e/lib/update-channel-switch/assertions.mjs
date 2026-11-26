@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { createFrozenTargetSource } from "../../../lib/frozen-target-source.mjs";
 import {
   assertCompletedUpdate,
   assertTerminalUpdateReceipt,
@@ -13,7 +14,7 @@ const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-main-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update|assert-detached-switch> [...]",
+    "usage: assertions.mjs <read-source-pnpm-pin|prepare-git-fixture|write-control-ui|assert-update|assert-main-refusal|assert-owner-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update|assert-detached-switch> [...]",
   );
   process.exit(2);
 }
@@ -104,9 +105,25 @@ function writeControlUi(root) {
   fs.writeFileSync(file, controlUiHtml);
 }
 
-function prepareGitFixture(root) {
+function readSourcePnpmPin(root, sha) {
+  const manifest = sha
+    ? JSON.parse(createFrozenTargetSource(root, sha).readText("package.json"))
+    : readJson(path.join(root, "package.json"));
+  const pin = manifest?.packageManager;
+  assert(
+    typeof pin === "string" && /^pnpm@\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/u.test(pin),
+    "Detached Git fixture requires the selected source's exact pnpm pin",
+  );
+  process.stdout.write(pin);
+}
+
+function prepareGitFixture(root, pnpmPin) {
   const packageJsonPath = path.join(root, "package.json");
   const packageJson = readJson(packageJsonPath);
+  // Published manifests omit the source-only package manager pin. This fixture is a checkout.
+  if (pnpmPin) {
+    packageJson.packageManager = pnpmPin;
+  }
   const pnpmWorkspacePath = path.join(root, "pnpm-workspace.yaml");
   const workspaceConfig = fs.existsSync(pnpmWorkspacePath)
     ? readWorkspacePatchedDependencies(pnpmWorkspacePath)
@@ -217,6 +234,18 @@ function assertMainRefusal() {
   assert.equal(payload.reason, "unsupported-package-target");
 }
 
+function assertOwnerRefusal(status, route) {
+  assert.notEqual(Number(status), 0, "resident-owned installer switch must fail");
+  const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
+  assert.equal(payload.ok, false);
+  assert.match(
+    payload.error?.message ?? "",
+    new RegExp(
+      `^The resident launcher owns this installation\\. ${route} requires the in-place installer`,
+    ),
+  );
+}
+
 function assertDirtyUpdate(root, expectedHead) {
   const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
   assert.equal(payload.reason, "dirty", "ordinary untracked input must block admission");
@@ -306,10 +335,12 @@ function assertDirtyExit(statusRaw) {
 }
 
 const commands = {
-  "prepare-git-fixture": (root = "/tmp/openclaw-git") => prepareGitFixture(root),
+  "read-source-pnpm-pin": readSourcePnpmPin,
+  "prepare-git-fixture": prepareGitFixture,
   "write-control-ui": (root = "/tmp/openclaw-git") => writeControlUi(root),
   "assert-update": assertUpdate,
   "assert-main-refusal": assertMainRefusal,
+  "assert-owner-refusal": assertOwnerRefusal,
   "assert-runtime-staging-clean": assertRuntimeStagingClean,
   "assert-dirty-update": assertDirtyUpdate,
   "assert-dirty-exit": assertDirtyExit,

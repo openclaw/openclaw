@@ -15,6 +15,7 @@ import { join, resolve as resolvePath } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { validateWorkloadDefinition } from "../../scripts/lib/node-cache-workload-inputs.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   evaluateWorkflow,
@@ -37,6 +38,7 @@ type WorkflowStep = {
   uses?: string;
   with?: Record<string, string>;
   "continue-on-error"?: boolean | string;
+  "timeout-minutes"?: number;
 };
 
 type WorkflowJob = {
@@ -47,7 +49,7 @@ type WorkflowJob = {
   outputs?: Record<string, string>;
   permissions?: Record<string, string>;
   "runs-on"?: string;
-  "timeout-minutes"?: number;
+  "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
   strategy?: {
     matrix?: {
@@ -310,6 +312,8 @@ describe("OpenClaw performance workflow", () => {
         "kova",
         "vitest-pair",
         "node-cache-diagnostics",
+        "node-cache-workload-qualification",
+        "node-cache-qualified-measurement",
         "gateway-concurrency",
         "gateway-memory-caps",
         "gateway-cold-turn-calibration",
@@ -410,6 +414,471 @@ describe("OpenClaw performance workflow", () => {
     expect(upload.with?.["retention-days"]).toBe(30);
   });
 
+  it.each(["node-cache-workload-qualification", "node-cache-qualified-measurement"])(
+    "isolates %s from live, publishing, and release jobs",
+    (mode) => {
+      const workflow = readWorkflow();
+      const context = {
+        eventName: "workflow_dispatch",
+        inputs: {
+          mode,
+          profile: "release",
+          dispatch_id: "full-release-validation-workload-controls",
+          publish_reports: true,
+          live_openai_candidate: true,
+          deep_profile: true,
+        },
+      } as const;
+      for (const [name, job] of Object.entries(workflow.jobs ?? {})) {
+        expect(evaluateWorkflow(job.if, context), name).toBe(name === "node_cache_workload");
+      }
+      const job = workflow.jobs?.node_cache_workload;
+      expect(JSON.stringify(job?.env)).not.toMatch(/\brunner(?:\.|\[)/u);
+      expect(evaluateWorkflow(job?.if, { eventName: "schedule" })).toBe(false);
+      expect(job?.needs).toBeUndefined();
+      expect(job?.permissions).toEqual({ contents: "read" });
+      expect(job?.["runs-on"]).toBe("ubuntu-24.04");
+      expect(evaluateWorkflow(job?.["timeout-minutes"], context)).toBe(
+        mode === "node-cache-qualified-measurement" ? 240 : 75,
+      );
+      expect(JSON.stringify(job)).not.toMatch(/secrets\.|cache\/restore/u);
+      for (const [name, minutes] of [
+        ["Validate workload control request", 1],
+        ["Checkout workload control harness", 5],
+        ["Checkout fixed Node cache workload", 5],
+        ["Set up workload control Node", 5],
+        ["Record and verify workload control runtime", 2],
+        ["Set up fixed workload pnpm", 5],
+      ] as const) {
+        expect(findStep(name, "node_cache_workload")["timeout-minutes"]).toBe(minutes);
+      }
+      for (const [name, ref] of [
+        ["Checkout workload control harness", "${{ github.sha }}"],
+        ["Checkout fixed Node cache workload", "8cfbac51a27a1195176a3564f6d7cfd7d6994c85"],
+      ] as const) {
+        expect(findStep(name, "node_cache_workload").with).toMatchObject({
+          ref,
+          "fetch-depth": 1,
+          "persist-credentials": false,
+        });
+      }
+      expect(findStep("Set up workload control Node", "node_cache_workload").with).toEqual({
+        "node-version": "24.22.1",
+        "check-latest": false,
+        "package-manager-cache": false,
+      });
+      expect(
+        findStep("Set up fixed workload pnpm", "node_cache_workload").with?.["cache-mode"],
+      ).toBe("off");
+      const run = findStep("Qualify prepared workload Node cache controls", "node_cache_workload");
+      expect(run.run).toContain("--mode node-cache-workload-qualification");
+      expect(run.run).toContain('--harness-sha "$NODE_CACHE_HARNESS_SHA"');
+      expect(run.run).toContain('--timeout-ms "$timeout_ms" --run-attempt "$GITHUB_RUN_ATTEMPT"');
+      const upload = findStep("Upload workload control artifact", "node_cache_workload");
+      expect(upload.if).toBe("${{ always() }}");
+      expect(upload.with?.path).toBe("${{ runner.temp }}/node-cache-workload-results");
+    },
+  );
+
+  it("measures only successful controls before either artifact is finalized", () => {
+    const steps = readWorkflow().jobs?.node_cache_workload?.steps ?? [];
+    const measure = findStep("Measure qualified workload Node cache pairs", "node_cache_workload");
+    const context = { inputs: { mode: "node-cache-qualified-measurement" } };
+    expect(evaluateWorkflow(measure.if, context)).toBe(true);
+    expect(evaluateWorkflow(measure.if, { ...context, failed: true })).toBe(false);
+    expect(evaluateWorkflow(measure.if, { ...context, cancelled: true })).toBe(false);
+    expect(
+      evaluateWorkflow(measure.if, { inputs: { mode: "node-cache-workload-qualification" } }),
+    ).toBe(false);
+    const index = (name: string) => steps.findIndex((step) => step.name === name);
+    expect(index("Qualify prepared workload Node cache controls")).toBeLessThan(
+      index("Measure qualified workload Node cache pairs"),
+    );
+    for (const kind of ["control", "measurement"]) {
+      const finalize = findStep(`Finalize workload ${kind} artifact`, "node_cache_workload");
+      const upload = findStep(`Upload workload ${kind} artifact`, "node_cache_workload");
+      expect(index("Measure qualified workload Node cache pairs")).toBeLessThan(
+        index(`Finalize workload ${kind} artifact`),
+      );
+      expect(evaluateWorkflow(finalize.if, { ...context, failed: true })).toBe(true);
+      expect(evaluateWorkflow(upload.if, { ...context, failed: true })).toBe(true);
+      expect(evaluateWorkflow(upload.if, { ...context, cancelled: true })).toBe(true);
+    }
+    const upload = findStep("Upload workload measurement artifact", "node_cache_workload");
+    expect(upload.with).toMatchObject({
+      name: "node-cache-measurement-${{ github.run_id }}-${{ github.run_attempt }}",
+      path: "${{ runner.temp }}/node-cache-measurement-results",
+      "if-no-files-found": "error",
+      "include-hidden-files": true,
+    });
+    expect(
+      evaluateWorkflow(upload.if, { inputs: { mode: "node-cache-workload-qualification" } }),
+    ).toBe(false);
+  });
+
+  posixIt(
+    "anchors preparation and work ceilings before checkout without creating measurement paths",
+    () => {
+      const root = tempDirs.make("node-cache-clock-");
+      const githubEnv = join(root, "github-env");
+      const validation = findStep("Validate workload control request", "node_cache_workload");
+      const result = runWorkflowCommand(
+        "bash",
+        ["-c", `date() { printf '1000\n'; }\n${validation.run}`],
+        {
+          env: {
+            ...process.env,
+            GITHUB_RUN_ATTEMPT: "1",
+            NODE_CACHE_HARNESS_SHA: "a".repeat(40),
+            NODE_CACHE_MODE: "node-cache-qualified-measurement",
+            TARGET_REF: "",
+            GITHUB_ENV: githubEnv,
+            RUNNER_TEMP: root,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const clock = JSON.parse(
+        readFileSync(join(root, "node-cache-preparation/workflow-clock.json"), "utf8"),
+      );
+      expect(clock).toEqual({
+        anchor: "first-owned-step",
+        startedAtEpochSeconds: 1000,
+        preparationDeadlineEpochSeconds: 3400,
+        workDeadlineEpochSeconds: 14800,
+      });
+      const env = Object.fromEntries(
+        readFileSync(githubEnv, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
+      expect(env.NODE_CACHE_PREPARATION_DEADLINE).toBe("3400");
+      expect(env.NODE_CACHE_WORK_DEADLINE).toBe("14800");
+      expect(env.NODE_CACHE_MEASUREMENT_OUTPUT).toBe(join(root, "node-cache-measurement-results"));
+      expect(env.NODE_CACHE_MEASUREMENT_SCRATCH).toBe(join(root, "node-cache-measurement-scratch"));
+      expect(existsSync(env.NODE_CACHE_MEASUREMENT_OUTPUT)).toBe(false);
+      expect(existsSync(env.NODE_CACHE_MEASUREMENT_SCRATCH)).toBe(false);
+    },
+  );
+
+  posixIt.each([
+    [
+      "Qualify prepared workload Node cache controls",
+      "node-cache-workload-qualification",
+      1000,
+      1800000,
+    ],
+    [
+      "Qualify prepared workload Node cache controls",
+      "node-cache-qualified-measurement",
+      2200,
+      1199000,
+    ],
+    [
+      "Measure qualified workload Node cache pairs",
+      "node-cache-qualified-measurement",
+      13000,
+      9000000,
+    ],
+    [
+      "Measure qualified workload Node cache pairs",
+      "node-cache-qualified-measurement",
+      2200,
+      1199000,
+    ],
+  ] as const)(
+    "caps %s for %s at the remaining work budget (%s)",
+    (name, mode, deadline, expectedTimeout) => {
+      const root = tempDirs.make("node-cache-phase-");
+      const capture = join(root, "argv");
+      const step = findStep(name, "node_cache_workload");
+      const result = runWorkflowCommand(
+        "bash",
+        [
+          "-c",
+          `date() { printf '1000\n'; }\nnode() { printf '%s\n' "$@" > "$CAPTURE"; }\n${step.run}`,
+        ],
+        {
+          env: {
+            ...process.env,
+            NODE_CACHE_MODE: mode,
+            NODE_CACHE_WORK_DEADLINE: String(deadline),
+            NODE_CACHE_HARNESS: join(root, "harness"),
+            NODE_CACHE_WORKLOAD: join(root, "workload"),
+            NODE_CACHE_HARNESS_SHA: "a".repeat(40),
+            NODE_CACHE_PNPM: join(root, "pnpm"),
+            NODE_CACHE_OUTPUT: join(root, "controls"),
+            NODE_CACHE_SCRATCH: join(root, "control-scratch"),
+            NODE_CACHE_MEASUREMENT_OUTPUT: join(root, "measurements"),
+            NODE_CACHE_MEASUREMENT_SCRATCH: join(root, "measurement-scratch"),
+            GITHUB_RUN_ATTEMPT: "1",
+            CAPTURE: capture,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const argv = readFileSync(capture, "utf8").trim().split("\n");
+      expect(argv[0]).toBe(join(root, "harness/scripts/vitest-pair-benchmark.mts"));
+      const args = Object.fromEntries(
+        Array.from({ length: (argv.length - 1) / 2 }, (_, i) => [argv[1 + i * 2], argv[2 + i * 2]]),
+      );
+      expect(args).toMatchObject({
+        "--definition": join(root, "harness/scripts/node-cache-workload-definition.json"),
+        "--workload": join(root, "workload"),
+        "--harness-sha": "a".repeat(40),
+        "--pnpm-bin": join(root, "pnpm"),
+        "--timeout-ms": String(expectedTimeout),
+        "--run-attempt": "1",
+      });
+      if (name.startsWith("Measure")) {
+        expect(args).toMatchObject({
+          "--mode": "node-cache-qualified-measurement",
+          "--qualification": join(root, "controls"),
+          "--output": join(root, "measurements"),
+          "--scratch": join(root, "measurement-scratch"),
+        });
+        expect(args).not.toHaveProperty("--seed");
+        expect(args).not.toHaveProperty("--manifest");
+      } else {
+        expect(args).toMatchObject({
+          "--mode": "node-cache-workload-qualification",
+          "--output": join(root, "controls"),
+          "--scratch": join(root, "control-scratch"),
+        });
+      }
+    },
+  );
+
+  posixIt.each([
+    "Prepare fixed workload dependencies and generated types",
+    "Qualify prepared workload Node cache controls",
+    "Measure qualified workload Node cache pairs",
+  ])("rejects exhausted %s before starting a command", (name) => {
+    const step = findStep(name, "node_cache_workload");
+    const result = runWorkflowCommand(
+      "bash",
+      [
+        "-c",
+        `date() { printf '1000\n'; }\nnode() { echo unexpected-command; }\ngit() { echo unexpected-command; }\n${step.run}`,
+      ],
+      {
+        env: {
+          ...process.env,
+          NODE_CACHE_MODE: "node-cache-qualified-measurement",
+          NODE_CACHE_WORK_DEADLINE: "1000",
+          NODE_CACHE_PREPARATION_DEADLINE: "1000",
+        },
+      },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("budget exhausted");
+    expect(result.stdout).not.toContain("unexpected-command");
+  });
+
+  posixIt.each([
+    [0, 1000, 0],
+    [7, 1000, 7],
+    [0, 1600, 1],
+  ] as const)(
+    "bounds installer and Kysely together with exit %s and finish time %s",
+    (installExit, finishedAt, expectedExit) => {
+      const root = tempDirs.make("node-cache-preparation-");
+      const clock = join(root, "clock");
+      writeFileSync(clock, "1000\n");
+      const bin = join(root, "bin");
+      const workload = join(root, "workload");
+      const corepack = join(root, "corepack");
+      const native = join(corepack, "v1/pnpm/12.15.0/node_modules/@pnpm/exe.linux-x64");
+      mkdirSync(bin);
+      mkdirSync(native, { recursive: true });
+      mkdirSync(join(workload, ".github/actions/setup-node-env"), { recursive: true });
+      const executable = (file: string, body: string) => {
+        writeFileSync(file, `#!/bin/sh\n${body}\n`);
+        chmodSync(file, 0o755);
+      };
+      executable(join(native, "pnpm"), "exit 99");
+      executable(
+        join(bin, "git"),
+        `case "$2" in *workload) echo 8cfbac51a27a1195176a3564f6d7cfd7d6994c85;; *) echo ${"a".repeat(40)};; esac`,
+      );
+      executable(
+        join(bin, "node"),
+        `test -f '${root}/timeout-active' || exit 43\nprintf 'kysely\n' >> '${root}/events'`,
+      );
+      executable(
+        join(bin, "timeout"),
+        `printf '%s\n' "$1" "$2" "$3" > '${root}/timeout-args'\nshift 3\ntouch '${root}/timeout-active'\n"$@"\nstatus=$?\nprintf '${finishedAt}\n' > '${clock}'\nrm '${root}/timeout-active'\nexit "$status"`,
+      );
+      writeFileSync(
+        join(workload, ".github/actions/setup-node-env/install-dependencies.sh"),
+        `printf 'install\n' >> '${root}/events'\nexit ${installExit}\n`,
+      );
+      const step = findStep(
+        "Prepare fixed workload dependencies and generated types",
+        "node_cache_workload",
+      );
+      const result = runWorkflowCommand("bash", ["-c", `date() { cat '${clock}'; }\n${step.run}`], {
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          COREPACK_HOME: corepack,
+          NODE_CACHE_MODE: "node-cache-qualified-measurement",
+          NODE_CACHE_PREPARATION_DEADLINE: "1600",
+          NODE_CACHE_WORK_DEADLINE: "14800",
+          NODE_CACHE_HARNESS: join(root, "harness"),
+          NODE_CACHE_HARNESS_SHA: "a".repeat(40),
+          NODE_CACHE_WORKLOAD: workload,
+          NODE_CACHE_PREPARATION: join(root, "preparation"),
+          PNPM_CONFIG_STORE_DIR: join(root, "store"),
+          PNPM_CONFIG_CACHE_DIR: join(root, "cache"),
+          GITHUB_ENV: join(root, "github-env"),
+        },
+      });
+      expect(result.status, result.stderr).toBe(expectedExit);
+      expect(existsSync(join(root, "github-env"))).toBe(expectedExit === 0);
+      expect(readFileSync(join(root, "timeout-args"), "utf8")).toBe(
+        "--signal=TERM\n--kill-after=30s\n570s\n",
+      );
+      expect(readFileSync(join(root, "events"), "utf8")).toBe(
+        installExit === 0 ? "install\nkysely\n" : "install\n",
+      );
+    },
+  );
+
+  posixIt.each([true, false])(
+    "preserves measurement terminal evidence when present=%s",
+    (present) => {
+      const root = tempDirs.make("node-cache-measurement-finalize-");
+      const output = join(root, "measurements");
+      mkdirSync(output);
+      const terminal = '{"status":"failure","error":"original measurement failure"}\n';
+      if (present) {
+        writeFileSync(join(output, "terminal-manifest.json"), terminal);
+      }
+      const finalize = findStep("Finalize workload measurement artifact", "node_cache_workload");
+      const result = runWorkflowCommand("bash", ["-c", finalize.run ?? ""], {
+        env: { ...process.env, NODE_CACHE_MEASUREMENT_OUTPUT: output, JOB_STATUS: "failure" },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const retained = readFileSync(join(output, "terminal-manifest.json"), "utf8");
+      if (present) {
+        expect(retained).toBe(terminal);
+      } else {
+        expect(JSON.parse(retained)).toEqual({
+          version: 1,
+          status: "failure",
+          phase: "workflow",
+          jobStatus: "failure",
+        });
+      }
+    },
+  );
+
+  it("keeps the fixed workload definition public and independently pinned", () => {
+    const raw = JSON.parse(readFileSync("scripts/node-cache-workload-definition.json", "utf8"));
+    expect(raw).toEqual(validateWorkloadDefinition(raw));
+    expect(raw.workloadSha).toBe("8cfbac51a27a1195176a3564f6d7cfd7d6994c85");
+    expect(raw.workloadTree).toBe("d2ac3496b32ec041292ec25b188b670e6f0cf460");
+    expect(raw.expected).toHaveLength(20);
+    expect(raw.sourceIdentities).toHaveLength(5);
+    expect(raw).not.toHaveProperty("oracleProvenance");
+  });
+
+  posixIt.each(["2", "1"])(
+    "rejects an invalid workload request before setup (attempt %s)",
+    (attempt) => {
+      const validation = findStep("Validate workload control request", "node_cache_workload");
+      const root = tempDirs.make("node-cache-request-");
+      const githubEnv = join(root, "github-env");
+      const result = runWorkflowCommand("bash", ["-c", validation.run ?? ""], {
+        env: {
+          ...process.env,
+          GITHUB_RUN_ATTEMPT: attempt,
+          NODE_CACHE_HARNESS_SHA: "a".repeat(40),
+          TARGET_REF: "b".repeat(40),
+          GITHUB_ENV: githubEnv,
+          RUNNER_TEMP: root,
+        },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(attempt === "2" ? "fresh run" : "target_ref");
+      expect(existsSync(githubEnv)).toBe(false);
+    },
+  );
+
+  posixIt(
+    "retains the observed runtime fingerprint before rejecting a fixed-runtime mismatch",
+    () => {
+      const root = tempDirs.make("node-cache-runtime-");
+      mkdirSync(join(root, "scripts"));
+      writeFileSync(
+        join(root, "scripts/node-cache-workload-definition.json"),
+        JSON.stringify({ runtime: { node: "v0.0.0" } }),
+      );
+      const prep = join(root, "preparation");
+      const record = findStep("Record and verify workload control runtime", "node_cache_workload");
+      const result = runWorkflowCommand("bash", ["-c", record.run ?? ""], {
+        env: { ...process.env, NODE_CACHE_HARNESS: root, NODE_CACHE_PREPARATION: prep },
+      });
+      expect(result.status).toBe(1);
+      const actual = JSON.parse(readFileSync(join(prep, "runtime.json"), "utf8"));
+      expect(actual).toMatchObject({
+        node: expect.stringMatching(/^v\d+/u),
+        v8: expect.any(String),
+        platform: expect.any(String),
+        architecture: expect.any(String),
+        executableSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      });
+      const log = readFileSync(join(prep, "runtime.log"), "utf8");
+      expect(log).toContain(JSON.stringify(actual));
+      expect(log).toContain("Hosted Node runtime differs from the fixed workload definition");
+    },
+  );
+
+  posixIt.each([true, false])("preserves workload terminal evidence when present=%s", (present) => {
+    const root = tempDirs.make("node-cache-workflow-finalize-");
+    const output = join(root, "results");
+    const prep = join(root, "preparation");
+    mkdirSync(output);
+    mkdirSync(prep);
+    const terminal = '{"status":"failure","error":"original control failure"}\n';
+    if (present) {
+      writeFileSync(join(output, "terminal-manifest.json"), terminal);
+    }
+    writeFileSync(join(prep, "install.log"), "preparation evidence\n");
+    writeFileSync(join(prep, "runtime.json"), '{"node":"observed-runtime"}\n');
+    const finalize = findStep("Finalize workload control artifact", "node_cache_workload");
+    expect(finalize.if).toBe("${{ always() }}");
+    expect(finalize.env).toMatchObject({
+      NODE_CACHE_PREPARATION: "${{ runner.temp }}/node-cache-preparation",
+      NODE_CACHE_OUTPUT: "${{ runner.temp }}/node-cache-workload-results",
+    });
+    const result = runWorkflowCommand("bash", ["-c", finalize.run ?? ""], {
+      env: {
+        ...process.env,
+        NODE_CACHE_OUTPUT: output,
+        NODE_CACHE_PREPARATION: prep,
+        JOB_STATUS: "failure",
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const retained = readFileSync(join(output, "terminal-manifest.json"), "utf8");
+    if (present) {
+      expect(retained).toBe(terminal);
+    } else {
+      expect(JSON.parse(retained)).toMatchObject({
+        status: "failure",
+        phase: "workflow",
+        jobStatus: "failure",
+      });
+    }
+    expect(readFileSync(join(output, "preparation.log"), "utf8")).toBe("preparation evidence\n");
+    expect(readFileSync(join(output, "runtime.json"), "utf8")).toBe(
+      '{"node":"observed-runtime"}\n',
+    );
+  });
+
   posixIt("refuses a mismatched diagnostic target before running Node", () => {
     const root = tempDirs.make("node-cache-diagnostic-target-");
     const marker = join(root, "node-ran");
@@ -478,9 +947,9 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "80d9aa6268515730f9880ea97add2a0d73f6fc7a";
+    const canonicalKovaRef = "5f1ac692af2058217c793aa06af9e28dbf46c1bd";
     const legacyKovaRef = "d69b2209905195bea06980721a92ad8b70808c5d";
-    const trustedLiveKovaRef = "80d9aa6268515730f9880ea97add2a0d73f6fc7a";
+    const trustedLiveKovaRef = "5f1ac692af2058217c793aa06af9e28dbf46c1bd";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -648,7 +1117,7 @@ describe("OpenClaw performance workflow", () => {
       expect(outputs).toMatchObject({
         checkout_ref: sha,
         tested_sha: sha,
-        kova_ref: "80d9aa6268515730f9880ea97add2a0d73f6fc7a",
+        kova_ref: "5f1ac692af2058217c793aa06af9e28dbf46c1bd",
         kova_config_contract: "canonical",
       });
     });
@@ -865,9 +1334,9 @@ describe("OpenClaw performance workflow", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const installRun = findStep("Install OCM and Kova").run ?? "";
 
-    expect(workflow).toContain("OCM_VERSION: v0.2.48");
+    expect(workflow).toContain("OCM_VERSION: v0.3.10");
     expect(workflow).toContain(
-      "OCM_LINUX_X64_SHA256: d0bdb49d69fa8bf3c3487ff04f4be82126828876f81690afdc002c427e22c1ac",
+      "OCM_LINUX_X64_SHA256: 78700755a592aeaf74915ad31addff60fd4a606d767d38b7ddc90411444c3479",
     );
     expect(installRun).toContain(
       '"https://github.com/openclaw/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',

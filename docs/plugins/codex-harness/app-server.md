@@ -12,6 +12,11 @@ How OpenClaw starts and authenticates the Codex app-server, and what it isolates
 
 ## App-server policy
 
+The plugin checks for a managed Codex executable when it activates. After
+installing or removing Codex on the Gateway host, run `openclaw plugins reload
+codex` or restart the Gateway to refresh automatic runtime selection. App-server
+startup checks the selected executable and its handshake separately.
+
 By default, the plugin starts OpenClaw's managed Codex binary locally with
 stdio transport. Set `appServer.command` only to intentionally run a
 different executable. Verified setup accepts a native Codex executable or the

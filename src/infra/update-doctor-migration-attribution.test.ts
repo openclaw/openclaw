@@ -21,8 +21,8 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-doctor-repair.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
-import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-repair.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,

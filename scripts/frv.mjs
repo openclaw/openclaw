@@ -53,6 +53,8 @@ import {
   inspectActionsArtifactZipWithPolicy,
   sha256Digest,
 } from "./lib/actions-artifact-archive.mjs";
+import { artifactProducerSlots } from "./lib/full-release-publication-artifacts.mjs";
+import { INITIAL_NPM_PREPARATION_JOB } from "./lib/full-release-publication-inputs.mjs";
 import {
   dispatchReceiptRecovery,
   parseReceiptRecoveryArgs,
@@ -679,7 +681,7 @@ async function legacyNpmRecoveryProducers(
   };
 }
 
-function artifactRecoveryJobs(workflow) {
+function artifactRecoveryJobs(workflow, inputs, attemptJobs) {
   let source;
   try {
     source = parseYaml(workflow);
@@ -691,7 +693,7 @@ function artifactRecoveryJobs(workflow) {
     return [];
   }
   const producers = [];
-  for (const job of Object.values(jobs)) {
+  for (const job of artifactProducerSlots(source, inputs, attemptJobs)) {
     if (!job || typeof job !== "object" || Array.isArray(job)) {
       continue;
     }
@@ -765,7 +767,11 @@ async function artifactRecoveryProducers(
   }
   const producers = [];
   let pending = false;
-  for (const { jobName, stage, allowsReuse } of artifactRecoveryJobs(workflow)) {
+  for (const { jobName, stage, allowsReuse } of artifactRecoveryJobs(
+    workflow,
+    plan.qualificationInputs,
+    parentJobs.filter((job) => Number(job.run_attempt) === plan.parentRunAttempt),
+  )) {
     const matches = parentJobs.filter(
       (job) => job.name === jobName && Number(job.run_attempt) === plan.parentRunAttempt,
     );
@@ -3485,6 +3491,7 @@ const DISPATCHED_CHILD_PATTERN =
   /Dispatched ([\w.-]+\.ya?ml): https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)/gu;
 const ARTIFACT_DISPATCH_JOBS = [
   ["Prepare release npm artifacts", "artifact:npm"],
+  [INITIAL_NPM_PREPARATION_JOB, "artifact:npm"],
   ["Prepare release Docker artifacts", "artifact:docker"],
   ["Acquire full release candidate", "artifact:candidate"],
   ["Prepare exact plugin npm artifacts", "artifact:plugin-npm"],
@@ -4025,7 +4032,9 @@ function print(value, json) {
     );
     console.log(`candidate: ${value.candidate.sha}; tip: ${value.candidate.state}`);
     if (value.decision) {
-      console.log(formatReleaseStateOutcome(value.decision));
+      console.log(
+        formatReleaseStateOutcome(value.decision, { observedDrainStatus: value.drain.status }),
+      );
     }
     for (const error of value.observationErrors) {
       console.log(`observation: ${error}`);
@@ -4193,9 +4202,28 @@ async function main() {
   }
   const client = createClient(options.repository);
   if (options.command === "logs") {
-    const log = stripVTControlCharacters(
-      await client.getJobLog(positiveInteger(options.job, "--job")),
-    );
+    const jobId = positiveInteger(options.job, "--job");
+    let log;
+    try {
+      log = stripVTControlCharacters(await client.getJobLog(jobId));
+    } catch (error) {
+      if (!/\b(?:HTTP|returned status) 404\b/iu.test(String(error?.stderr ?? ""))) {
+        throw error;
+      }
+      // The archive can be missing while the job runs. A 404 alone cannot distinguish this
+      // from a missing job or expired logs, so only offer a retry for a confirmed active job.
+      const job = await ghJson(options.repository, `actions/jobs/${jobId}`, {}, true);
+      if (
+        job.id !== jobId ||
+        !["queued", "waiting", "pending", "requested", "in_progress"].includes(job.status)
+      ) {
+        throw error;
+      }
+      throw new Error(
+        `Job ${jobId} ${JSON.stringify(job.name)} is ${job.status}. Retry the log request after the job completes.`,
+        { cause: error },
+      );
+    }
     const output = options.grep
       ? log
           .split("\n")
