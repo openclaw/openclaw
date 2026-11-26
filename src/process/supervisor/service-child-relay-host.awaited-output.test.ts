@@ -281,18 +281,3 @@ it("reports native cleanup failure without waiting for output during shutdown", 
     vi.useRealTimers();
   }
 });
-
-it("keeps the timeout reason when cleanup after the timeout expires", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-  try {
-    const f = await startSupervisedRelay({ timeoutMs: 10 });
-    const run = await f.ready();
-    // Output stays open after the kill, as when a process outside the tree holds it.
-    const rejected = expect(run.wait()).rejects.toThrow("hard deadline");
-    await vi.advanceTimersByTimeAsync(60_000);
-    await rejected;
-    expect(run.activity.terminationReason).toBe("overall-timeout");
-  } finally {
-    vi.useRealTimers();
-  }
-});

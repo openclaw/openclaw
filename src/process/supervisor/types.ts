@@ -24,8 +24,6 @@ export type ProcessRunActivity = {
   readonly deadlineAtMs?: number;
   readonly resultSettled: boolean;
   readonly lastOutputAtMs: number;
-  /** Why the supervisor stopped the run; kept when its result then fails (e.g. cleanup expired). */
-  readonly terminationReason?: TerminationReason;
 };
 
 export type RunExit = {
