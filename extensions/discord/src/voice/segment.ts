@@ -27,6 +27,36 @@ type DiscordVoiceResponseParams = {
   enqueuePlayback: (entry: VoiceSessionEntry, task: () => Promise<void>) => void;
 };
 
+async function sendVoiceReplyTextFallback(params: {
+  entry: VoiceSessionEntry;
+  cfg: OpenClawConfig;
+  accountId: string;
+  replyText: string;
+  isCurrent: () => boolean;
+}): Promise<void> {
+  const text = params.replyText.trim();
+  if (!text || !params.isCurrent()) {
+    return;
+  }
+  const assertCurrent = () => {
+    if (!params.isCurrent()) {
+      throw new Error("Discord voice reply authorization is no longer current");
+    }
+  };
+  try {
+    const { sendMessageDiscord } = await import("../send.outbound.js");
+    await sendMessageDiscord(`channel:${params.entry.channelId}`, text, {
+      cfg: params.cfg,
+      accountId: params.accountId,
+      assertPlatformSendAuthorized: assertCurrent,
+    });
+  } catch (error) {
+    logger.warn(
+      `discord voice: text fallback dropped guild=${params.entry.guildId} channel=${params.entry.channelId}: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
 type DiscordVoiceSegmentParams = Pick<DiscordVoiceResponseParams, "entry" | "userId" | "cfg"> & {
   wavPath: string;
   resolveIngressContext: () => Promise<DiscordVoiceIngressContext | null>;
@@ -196,6 +226,13 @@ export async function respondToDiscordVoiceTranscript(
   }
   if (voiceReplyAudio.status === "failed") {
     logger.warn(`discord voice: TTS failed: ${voiceReplyAudio.error}`);
+    await sendVoiceReplyTextFallback({
+      entry,
+      cfg: params.cfg,
+      accountId: params.accountId,
+      replyText,
+      isCurrent: conversationCurrent,
+    });
     return;
   }
   const streamFailure = voiceReplyAudio.mode === "file" ? voiceReplyAudio.streamFailure : undefined;
@@ -229,6 +266,14 @@ export async function respondToDiscordVoiceTranscript(
       await entry.audio.play(input);
     } catch (error) {
       if (entry.sessionLifecycle.status !== "stopped") {
+        // Speakable audio failed to play; the completed reply would otherwise be lost.
+        await sendVoiceReplyTextFallback({
+          entry,
+          cfg: params.cfg,
+          accountId: params.accountId,
+          replyText,
+          isCurrent: conversationCurrent,
+        });
         throw error;
       }
     } finally {
