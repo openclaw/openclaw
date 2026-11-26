@@ -442,17 +442,20 @@ export function RunsSection(
     </div>
   );
 }
-function runStatusLabel(value: string, completion?: CronRunLogEntry["completionStatus"]): string {
+function runStatusLabel(entry: CronRunLogEntry): string {
+  const value = entry.status;
+  const completion = entry.completionStatus;
+  const label =
+    value === "ok" && entry.result
+      ? t(`cron.result.${entry.result.outcome}`)
+      : t((value ? RUN_STATUS_LABELS.get(value) : undefined) ?? "cron.runs.runStatusUnknown");
   if (value === "ok" && (completion === "failed" || completion === "unknown")) {
     const completionLabel = t(
       completion === "failed" ? "cron.runs.runStatusError" : "cron.runs.runStatusUnknown",
     );
-    return `${t("cron.runs.runStatusOk")} · ${completionLabel}`;
+    return `${label} · ${completionLabel}`;
   }
-  return t(
-    Array.from(RUN_STATUS_LABELS).find(([status]) => status === value)?.[1] ??
-      "cron.runs.runStatusUnknown",
-  );
+  return label;
 }
 /** Long errors stay two lines tall until the reader asks for the rest. */
 const RUN_ERROR_PREVIEW_CHARS = 160;
@@ -482,6 +485,9 @@ function runTone(entry: CronRunLogEntry, conditionFailed: boolean): "ok" | "dang
   if (conditionFailed || entry.status === "error") {
     return "danger";
   }
+  if (entry.result && !["progress", "done"].includes(entry.result.outcome)) {
+    return "muted";
+  }
   return entry.status === "ok" && entry.completionStatus !== "failed" ? "ok" : "muted";
 }
 function isInteractiveTarget(target: EventTarget | null) {
@@ -503,9 +509,9 @@ function Run(props: {
   const conditionFailed = () =>
     props.entry.status === "error" && props.entry.triggerFired === false;
   const status = () =>
-    conditionFailed()
-      ? t("cron.runEntry.conditionCheckFailed")
-      : runStatusLabel(props.entry.status ?? "unknown", props.entry.completionStatus);
+    conditionFailed() ? t("cron.runEntry.conditionCheckFailed") : runStatusLabel(props.entry);
+  const summary = () =>
+    (props.entry.status === "ok" ? props.entry.result?.summary : undefined) ?? props.entry.summary;
   // An unknown outcome is not a fact worth showing.
   const delivery = () => {
     const deliveryStatus = props.entry.deliveryStatus ?? "not-requested";
@@ -607,7 +613,7 @@ function Run(props: {
         <span class="cron-run-entry__time">{props.formatTimestamp(props.entry.ts)}</span>
       </button>
       <Show
-        when={props.entry.summary || !error()}
+        when={summary() || !error()}
         fallback={
           <div class="cron-run-entry__body">
             <RunError error={error()} />
@@ -620,11 +626,11 @@ function Run(props: {
             <div
               class={[
                 "cron-run-entry__body cron-run-entry__summary",
-                { "cron-run-entry__summary--empty": !props.entry.summary },
+                { "cron-run-entry__summary--empty": !summary() },
               ]}
             >
-              {props.entry.summary
-                ? flattenMarkdownToPlainText(props.entry.summary)
+              {summary()
+                ? flattenMarkdownToPlainText(summary() ?? "")
                 : t("cron.runEntry.noSummary")}
             </div>
           }
@@ -633,9 +639,9 @@ function Run(props: {
             tag="div"
             class={[
               "cron-run-entry__body cron-run-entry__summary chat-text",
-              { "cron-run-entry__summary--empty": !props.entry.summary },
+              { "cron-run-entry__summary--empty": !summary() },
             ]}
-            html={toSanitizedMarkdownHtml(props.entry.summary || t("cron.runEntry.noSummary"))}
+            html={toSanitizedMarkdownHtml(summary() || t("cron.runEntry.noSummary"))}
           />
         </Show>
         <Show when={error()}>
