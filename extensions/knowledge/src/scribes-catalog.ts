@@ -492,6 +492,30 @@ const choicesOf = <K extends string>(table: Record<K, unknown>) =>
   Object.keys(table) as K[];
 
 // Every choice of the settings a run message spells out; a scribe without settings has one.
+/** The scribes whose settings an administrator can change once started: which sources they read. */
+export const EDITABLE_SETTINGS: ReadonlySet<ScribeId> = new Set([
+  "conversations",
+  "granola",
+  "slack",
+]);
+
+/** The editable settings in the page's words, or undefined for a scribe without any. */
+export function settingsSummary(options: ScribeOptions[ScribeId]) {
+  if ("scope" in options) {
+    return options.scope === "all" ? "Active and archived conversations" : "Active conversations";
+  }
+  if ("meetings" in options) {
+    return options.meetings === "all" ? "Every meeting you can read" : "Your meetings";
+  }
+  if ("userToken" in options) {
+    return [
+      options.userToken ? "Bot and user token channels" : "Bot channels",
+      options.dms ? "direct messages included" : "no direct messages",
+    ].join(", ");
+  }
+  return undefined;
+}
+
 function settingsChoices(id: ScribeId): ScribeOptions[ScribeId][] {
   if (id === "conversations") {
     return (["active", "all"] as const).flatMap((scope) =>
@@ -516,18 +540,20 @@ function settingsChoices(id: ScribeId): ScribeOptions[ScribeId][] {
 
 /**
  * How an ongoing scribe's run message compares with the one Knowledge generates now.
- * - current: it is the current generated message.
+ * - current: it is the current generated message, generated from `options`.
  * - custom: it differs from every generated message, and nothing in it is wording Knowledge has
  *   since replaced.
- * - outdated: an earlier version generated it unchanged; `current` replaces it.
+ * - outdated: an earlier version generated it unchanged from `options`; `current` replaces it.
  * - differs: it differs from every generated message and still carries wording Knowledge has since
  *   replaced, or keeps the current work step without a run amount the current wording adds, so new run instructions are available (the plugin can't tell who changed it). An update
  *   is available); `current` is what resetting it applies, for the settings the message names
  *   (the defaults when it names none Knowledge generates).
  */
 export type RunMessageCheck =
-  | { state: "current" | "custom" }
-  | { state: "outdated" | "differs"; current: string };
+  | { state: "current"; options: ScribeOptions[ScribeId] }
+  | { state: "outdated"; current: string; options: ScribeOptions[ScribeId] }
+  | { state: "custom" }
+  | { state: "differs"; current: string };
 
 /** The part of an automation's schedule a run message check reads. */
 export type RunSchedule = { kind: string; expr?: string };
@@ -558,10 +584,10 @@ export function checkRunMessage(
     runPrompt({ scribe: id, mode: "ongoing", options, timezone: "UTC" }, wording, amounts);
   for (const options of choices) {
     if (message === generate(options)) {
-      return { state: "current" };
+      return { state: "current", options };
     }
     if (RUN_WORDINGS.slice(0, -1).some((wording) => message === generate(options, wording))) {
-      return { state: "outdated", current: generate(options) };
+      return { state: "outdated", current: generate(options), options };
     }
   }
   // A replaced part counts only where the message lacks its current text (which may contain it).

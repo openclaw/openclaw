@@ -9,6 +9,7 @@ import {
   scribeTile,
 } from "./scribe-dialog.js";
 import { openScheduleDialog } from "./scribe-schedule-dialog.js";
+import { settingsValue } from "./scribe-settings-dialog.js";
 import {
   needsUpgrade,
   replacesTurnCreated,
@@ -19,7 +20,12 @@ import {
   turnOffScribe,
   updateScribe,
 } from "./scribes-actions.js";
-import { scribeById, scribeLabel, type ScribeDefinition } from "./scribes-catalog.js";
+import {
+  EDITABLE_SETTINGS,
+  scribeById,
+  scribeLabel,
+  type ScribeDefinition,
+} from "./scribes-catalog.js";
 import {
   detectSources,
   loadRuns,
@@ -596,8 +602,11 @@ function detail(
       change.disabled = !canAdmin;
       scheduleValue.append(change);
     }
+    facts.push(["Schedule", scheduleValue]);
+    if (EDITABLE_SETTINGS.has(scribe.id) && status !== "missing") {
+      facts.push(["Settings", settingsValue(ui, snapshot, job, agentId, detection)]);
+    }
     facts.push(
-      ["Schedule", scheduleValue],
       [
         "Next run",
         job.state.runningAtMs
