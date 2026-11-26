@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { validateClawHubTransactions } from "./clawhub-parent-authorization.mjs";
@@ -652,15 +652,7 @@ async function main() {
   }
 }
 
-let invokedAsMain = false;
-if (process.argv[1]) {
-  try {
-    invokedAsMain = isDirectRunUrl(realpathSync(process.argv[1]), import.meta.url);
-  } catch {
-    // Inline and stdin importers need not have a filesystem entrypoint.
-  }
-}
-if (invokedAsMain) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     await main();
   } catch (error) {

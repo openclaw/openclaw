@@ -1,4 +1,5 @@
 // Compares direct-run paths and module URLs across POSIX and Windows path rules.
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,5 +32,18 @@ export function isDirectRunPath(directPath, modulePath, platform = process.platf
  * @returns {boolean}
  */
 export function isDirectRunUrl(directPath, moduleUrl, platform = process.platform) {
-  return isDirectRunPath(directPath, fileURLToPath(moduleUrl), platform);
+  const modulePath = fileURLToPath(moduleUrl);
+  if (isDirectRunPath(directPath, modulePath, platform)) {
+    return true;
+  }
+  if (!directPath) {
+    return false;
+  }
+  try {
+    // The module loader resolves symlinks by default, but argv retains the authored path.
+    return isDirectRunPath(realpathSync(directPath), modulePath, platform);
+  } catch {
+    // Importers can have an argv entry with no corresponding file.
+    return false;
+  }
 }

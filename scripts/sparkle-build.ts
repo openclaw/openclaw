@@ -1,6 +1,5 @@
 #!/usr/bin/env -S node --import tsx
 
-import { realpathSync } from "node:fs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 export type SparkleBuildFloors = {
@@ -135,6 +134,6 @@ function runCli(args: string[]): number {
   return 0;
 }
 
-if (process.argv[1] && isDirectRunUrl(realpathSync(process.argv[1]), import.meta.url)) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   process.exit(runCli(process.argv.slice(2)));
 }

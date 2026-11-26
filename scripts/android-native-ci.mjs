@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { validateReleaseChildRunProvenance } from "./full-release-validation-policy.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
@@ -52,7 +52,6 @@ export function verifyAndroidNativeCi(approval, { runGh = runReleaseToolingGh } 
   }
 }
 
-// Isolated release harnesses can invoke the verifier through a scripts symlink.
-if (process.argv[1] && isDirectRunUrl(realpathSync(process.argv[1]), import.meta.url)) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   verifyAndroidNativeCi(JSON.parse(readFileSync(process.argv[2], "utf8")));
 }
