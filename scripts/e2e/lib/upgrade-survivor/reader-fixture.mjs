@@ -115,7 +115,10 @@ async function checkRunningGateway(fixture, codeRoot, gateway, run) {
     try {
       receipt.expectedBuild = (await releaseIdentity(codeRoot)).build;
     } catch (error) {
-      throw Object.assign(error, { failureKind: "setup" });
+      throw Object.assign(
+        new Error(error instanceof Error ? error.message : String(error), { cause: error }),
+        { failureKind: "setup" },
+      );
     }
     const build = receipt.expectedBuild;
     await waitReady(fixture, gateway);

@@ -222,7 +222,7 @@ describe("schema downgrade controller classification", () => {
         before,
         after,
         schemaVersions: targets,
-        rolledBack: available === "rollback" ? rolledBack : null,
+        rolledBack: available === "rollback" ? rolledBack : undefined,
         smoke: available === "smoke" ? { status: "passed" } : null,
       });
       expect(receipt.structuralFailures).toEqual([]);

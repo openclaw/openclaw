@@ -23,15 +23,20 @@ const fileSha256 = (file) => createHash("sha256").update(fs.readFileSync(file)).
  * @param {{
  *   before: ReturnType<typeof inspectFixtureStores>,
  *   after: ReturnType<typeof inspectFixtureStores>,
- *   rolledBack?: ReturnType<typeof inspectFixtureStores> | null,
+ *   rolledBack?: ReturnType<typeof inspectFixtureStores>,
  *   schemaVersions: { state: number, agent: number },
- *   smoke?: Partial<Awaited<ReturnType<typeof smokeRunningReaderFixture>>> | null,
+ *   smoke?: {
+ *     status: string,
+ *     failureKind?: "setup" | "compatibility",
+ *     failure?: { message: string, command?: unknown },
+ *     gateway?: { error?: string },
+ *   } | null,
  * }} params
  */
 export function classifySchemaDowngrade({
   before,
   after,
-  rolledBack = null,
+  rolledBack,
   schemaVersions,
   smoke = null,
 }) {

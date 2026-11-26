@@ -19,7 +19,9 @@ function storePaths(stateDir) {
       }
     }
   }
-  return result.filter((filename) => fs.existsSync(filename)).toSorted();
+  return result
+    .filter((filename) => fs.existsSync(filename))
+    .toSorted((a, b) => a.localeCompare(b));
 }
 function filesAt(filename) {
   return suffixes.flatMap((suffix) => {
