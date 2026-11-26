@@ -107,6 +107,7 @@ async function listCodexAppServerRolloutFilesForThread(
 type CodexAppServerRolloutTokenSnapshot = {
   totalTokens?: number;
   modelContextWindow?: number;
+  observedInputTokens?: number;
   // A turn started after the latest window was reported and never reported its own.
   windowSupersededByNewerTurn?: boolean;
 };
@@ -125,10 +126,53 @@ async function readCodexAppServerRolloutTokenSnapshot(
   try {
     let position = (await handle.stat()).size;
     const partialLineFragments: Buffer[] = [];
+    let completedTurnId: string | undefined;
+    let observedResponse = false;
+    let confirmedInputTokens: number | undefined;
+    const hasTokenSnapshot = () =>
+      snapshot?.totalTokens !== undefined && snapshot.modelContextWindow !== undefined;
     const applySnapshotLine = (line: string): boolean => {
-      const lineSnapshot = readCodexAppServerRolloutTokenSnapshotLine(line);
+      const record = readCodexAppServerRolloutRecord(line);
+      const payload = isJsonObject(record?.payload) ? record.payload : undefined;
+      if (payload?.type === "task_complete" && typeof payload.turn_id === "string" && !snapshot) {
+        completedTurnId ??= payload.turn_id;
+      }
+      if (
+        record?.type === "turn_context" ||
+        payload?.type === "task_started" ||
+        payload?.type === "turn_aborted"
+      ) {
+        completedTurnId = undefined;
+        observedResponse = false;
+      }
+      const lineSnapshot = readCodexAppServerRolloutTokenSnapshotLine(record);
       if (lineSnapshot === undefined) {
-        return false;
+        if (
+          completedTurnId &&
+          snapshot?.observedInputTokens &&
+          record?.type === "token_usage_record"
+        ) {
+          observedResponse =
+            payload?.turn_id === completedTurnId &&
+            isJsonObject(payload?.usage) &&
+            payload.usage.input_tokens === snapshot.observedInputTokens;
+          if (!observedResponse) {
+            completedTurnId = undefined;
+          }
+        } else if (record?.type === "response_item" || record?.type === "compacted") {
+          // A standalone compaction response is measured too, but did not
+          // necessarily carry the model's eager tool catalog.
+          if (
+            observedResponse &&
+            payload?.role === "assistant" &&
+            payload.phase === "final_answer"
+          ) {
+            confirmedInputTokens = snapshot?.observedInputTokens;
+          }
+          observedResponse = false;
+          completedTurnId = undefined;
+        }
+        return hasTokenSnapshot() && completedTurnId === undefined;
       }
       snapshot ??= {};
       // A newer turn without a window must not borrow an earlier model's observation.
@@ -136,9 +180,16 @@ async function readCodexAppServerRolloutTokenSnapshot(
         snapshot.windowSupersededByNewerTurn = true;
       }
       snapshot.totalTokens ??= lineSnapshot.totalTokens;
-      snapshot.modelContextWindow ??= lineSnapshot.modelContextWindow;
-      return snapshot.totalTokens !== undefined && snapshot.modelContextWindow !== undefined;
+      if (
+        snapshot.modelContextWindow === undefined &&
+        lineSnapshot.modelContextWindow !== undefined
+      ) {
+        snapshot.modelContextWindow = lineSnapshot.modelContextWindow;
+        snapshot.observedInputTokens = lineSnapshot.observedInputTokens;
+      }
+      return hasTokenSnapshot() && (!completedTurnId || !snapshot.observedInputTokens);
     };
+    const result = () => snapshot && { ...snapshot, observedInputTokens: confirmedInputTokens };
 
     // Codex appends token snapshots to its rollout. Walk backward so a growing
     // thread does not reparse its entire conversation before every new turn.
@@ -148,7 +199,7 @@ async function readCodexAppServerRolloutTokenSnapshot(
       const chunk = Buffer.allocUnsafe(bytesToRead);
       const bytesRead = await readFileWindowFully(handle, chunk, nextPosition);
       if (bytesRead < bytesToRead) {
-        return snapshot;
+        return result();
       }
       let lineEnd = bytesRead;
       // Negative Buffer offsets wrap from the end, so stop when byte zero is consumed.
@@ -164,58 +215,72 @@ async function readCodexAppServerRolloutTokenSnapshot(
             : Buffer.concat([lineFragment, ...partialLineFragments.toReversed()]).toString("utf8");
         partialLineFragments.length = 0;
         if (applySnapshotLine(line)) {
-          return snapshot;
+          return result();
         }
         lineEnd = index;
       }
       if (lineEnd > 0) {
         partialLineFragments.push(chunk.subarray(0, lineEnd));
       }
+      // Observation is optional. It must not extend the rollout scan beyond
+      // the chunk that already supplied the rotation facts.
+      if (nextPosition > 0 && hasTokenSnapshot()) {
+        return result();
+      }
       position = nextPosition;
     }
     if (partialLineFragments.length > 0) {
       applySnapshotLine(Buffer.concat(partialLineFragments.toReversed()).toString("utf8"));
     }
+    return result();
   } finally {
     await handle.close();
   }
-  return snapshot;
 }
 
-function readCodexAppServerRolloutTokenSnapshotLine(
-  line: string,
-): CodexAppServerRolloutTokenSnapshot | undefined {
+function readCodexAppServerRolloutRecord(line: string) {
   if (!line.trim()) {
     return undefined;
   }
   try {
     const parsed = JSON.parse(line) as JsonValue;
-    if (isJsonObject(parsed) && parsed.type === "turn_context") {
-      return { windowSupersededByNewerTurn: true };
-    }
-    const payload = isJsonObject(parsed) ? parsed.payload : undefined;
-    const info =
-      isJsonObject(payload) && payload.type === "token_count" && isJsonObject(payload.info)
-        ? payload.info
-        : undefined;
-    if (!info) {
-      return undefined;
-    }
-    const usage = isJsonObject(info.last_token_usage)
-      ? info.last_token_usage
-      : isJsonObject(info.total_token_usage)
-        ? info.total_token_usage
-        : undefined;
-    const value = usage?.total_tokens ?? usage?.totalTokens;
-    const totalTokens = typeof value === "number" && Number.isFinite(value) ? value : undefined;
-    const windowValue = info.model_context_window ?? info.modelContextWindow;
-    const modelContextWindow = floorPositiveFiniteNumber(windowValue);
-    return totalTokens !== undefined || modelContextWindow !== undefined
-      ? { totalTokens, modelContextWindow }
-      : undefined;
+    return isJsonObject(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   }
+}
+
+function readCodexAppServerRolloutTokenSnapshotLine(
+  record: ReturnType<typeof readCodexAppServerRolloutRecord>,
+): CodexAppServerRolloutTokenSnapshot | undefined {
+  if (record?.type === "turn_context") {
+    return { windowSupersededByNewerTurn: true };
+  }
+  const payload = record?.payload;
+  const info =
+    isJsonObject(payload) && payload.type === "token_count" && isJsonObject(payload.info)
+      ? payload.info
+      : undefined;
+  if (!info) {
+    return undefined;
+  }
+  const usage = isJsonObject(info.last_token_usage)
+    ? info.last_token_usage
+    : isJsonObject(info.total_token_usage)
+      ? info.total_token_usage
+      : undefined;
+  const value = usage?.total_tokens ?? usage?.totalTokens;
+  const totalTokens = typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  const windowValue = info.model_context_window ?? info.modelContextWindow;
+  const modelContextWindow = floorPositiveFiniteNumber(windowValue);
+  // Codex's local compaction estimate sets input_tokens to zero. The
+  // cumulative fallback is useful for rotation, but is not a request sample.
+  const observedInputTokens = isJsonObject(info.last_token_usage)
+    ? floorPositiveFiniteNumber(info.last_token_usage.input_tokens)
+    : undefined;
+  return totalTokens !== undefined || modelContextWindow !== undefined
+    ? { totalTokens, modelContextWindow, observedInputTokens }
+    : undefined;
 }
 
 function resolveCodexAppServerNativeThreadTokenFuse(params: {
@@ -253,6 +318,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
 }): Promise<{
   binding: CodexAppServerThreadBinding | undefined;
   startupContextTokens?: number;
+  startupObservedInputTokens?: number;
 }> {
   const binding = params.binding;
   if (!binding?.threadId) {
@@ -321,11 +387,19 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
     );
     return await clearBinding();
   }
+  const startupObservedInputTokens = maxDefinedNumber(
+    nativeTokenSnapshots
+      .filter((snapshot) => snapshot?.modelContextWindow === nativeModelContextWindow)
+      .map((snapshot) => snapshot?.observedInputTokens),
+  );
   return {
     binding,
     ...(nativeModelContextWindow &&
     !nativeTokenSnapshots.some((snapshot) => snapshot?.windowSupersededByNewerTurn)
-      ? { startupContextTokens: nativeModelContextWindow }
+      ? {
+          startupContextTokens: nativeModelContextWindow,
+          ...(startupObservedInputTokens ? { startupObservedInputTokens } : {}),
+        }
       : {}),
   };
 }

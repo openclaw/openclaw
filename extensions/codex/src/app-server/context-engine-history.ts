@@ -25,6 +25,7 @@ import {
   hashCodexAppServerBindingFingerprint,
   type CodexAppServerBindingIdentity,
   type CodexBindingAuthority,
+  type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import {
   buildContextEngineBinding,
@@ -35,6 +36,7 @@ import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
 import type { CodexThreadRequestContext } from "./thread-lifecycle-preflight.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
+  CodexHistoryBootstrapItems,
   CodexStartOrResumeThreadParams,
 } from "./thread-lifecycle-types.js";
 
@@ -84,6 +86,7 @@ export async function prepareCodexContextEngineHistory(params: {
     "assembledMessages" | "systemPromptAddition" | "toolPayloadMode"
   >;
   historyTokenBudget?: number;
+  historyBudgetObservation?: { predecessor: CodexAppServerThreadBinding; tokenBudget: number };
   baseDeveloperInstructions: string;
   assertCurrent: () => void;
 }) {
@@ -135,26 +138,32 @@ export async function prepareCodexContextEngineHistory(params: {
       prepareFileContext: includeAttachments ? projectionParams.prepareFileContext : undefined,
     });
   const projection = await renderProjection(projectionDecision.project);
-  const buildSeed = (seedMessages: AgentMessage[]) =>
+  const buildSeed = (seedMessages: AgentMessage[], tokenBudget = params.historyTokenBudget) =>
     buildCodexSelectedHistoryItems({
       messages: seedMessages,
-      tokenBudget: params.historyTokenBudget,
+      tokenBudget,
       prepareFileContext: projectionParams.prepareFileContext,
     });
-  const historyBootstrapItems = !configured
+  const historyBootstrapItems: CodexHistoryBootstrapItems | undefined = !configured
     ? undefined
     : prepareSeed
-      ? async (assertSeedCurrent: () => void) => {
+      ? async (assertSeedCurrent, matchesPredecessor) => {
+          const observation = params.historyBudgetObservation;
+          const tokenBudget =
+            observation && (await matchesPredecessor(observation.predecessor))
+              ? observation.tokenBudget
+              : params.historyTokenBudget;
+          assertSeedCurrent();
           // Retain the host's message identities and their prepared media snapshots.
           const seed = (
             await prepareSeed({
               assertCurrent: assertSeedCurrent,
               signal: params.runtimeParams.abortSignal,
-              tokenBudget: params.historyTokenBudget,
+              tokenBudget,
             })
           ).filter(includeMessage);
           assertSeedCurrent();
-          return buildSeed(seed);
+          return buildSeed(seed, tokenBudget);
         }
       : await buildSeed(messages);
   const historyDeltaItems =
@@ -295,6 +304,11 @@ export async function seedCodexHistory(
     response: { thread: { id: string }; model?: string | null; modelProvider?: string | null };
     expectedModel: string | null | undefined;
     expectedProvider: string | null | undefined;
+    context: Pick<
+      CodexThreadRequestContext,
+      "dynamicToolsFingerprint" | "normalizeBindingModelProvider" | "restrictedToolSurface"
+    >;
+    pluginAppsFingerprint?: string;
     lifecycleTiming: CodexThreadRequestContext["lifecycleTiming"];
     assertCurrent: () => void;
   },
@@ -315,7 +329,25 @@ export async function seedCodexHistory(
   }
   const items =
     typeof params.historyBootstrapItems === "function"
-      ? await params.historyBootstrapItems(assertCurrent)
+      ? await params.historyBootstrapItems(
+          assertCurrent,
+          async (predecessor) =>
+            predecessor.dynamicToolsFingerprint === options.context.dynamicToolsFingerprint &&
+            predecessor.model === response.model &&
+            predecessor.authProfileId === params.params.authProfileId &&
+            params.appServerRuntimeFingerprint !== undefined &&
+            predecessor.appServerRuntimeFingerprint === params.appServerRuntimeFingerprint &&
+            Boolean(predecessor.nativeToolPolicyRestricted) ===
+              options.context.restrictedToolSurface &&
+            predecessor.mcpServersFingerprint ===
+              (params.mcpServersFingerprintEvaluated ? params.mcpServersFingerprint : undefined) &&
+            predecessor.pluginAppsFingerprint === options.pluginAppsFingerprint &&
+            predecessor.modelProvider ===
+              (await options.context.normalizeBindingModelProvider(
+                params.params.authProfileId,
+                response.modelProvider ?? expectedProvider ?? undefined,
+              )),
+        )
       : params.historyBootstrapItems;
   if (items.length) {
     await lifecycleTiming.measure("thread-start-seed-history", () =>

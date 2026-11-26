@@ -63,6 +63,13 @@ export type CodexPluginThreadConfigProvider = {
   build: (options?: { threadId?: string }) => Promise<CodexPluginThreadConfig>;
 };
 
+export type CodexHistoryBootstrapItems =
+  | JsonValue[]
+  | ((
+      assertCurrent: () => void,
+      matchesPredecessor: (binding: CodexAppServerThreadBinding) => Promise<boolean>,
+    ) => Promise<JsonValue[]>);
+
 export type CodexStartOrResumeThreadParams = Omit<
   CodexThreadConfigurationOptions,
   "model" | "modelProvider" | "restrictedToolSurfaceInheritedMcpServerNames"
@@ -104,7 +111,7 @@ export type CodexStartOrResumeThreadParams = Omit<
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   /** Selected quoted history, injected before turn/start on the admitted idle thread. */
-  historyBootstrapItems?: JsonValue[] | ((assertCurrent: () => void) => Promise<JsonValue[]>);
+  historyBootstrapItems?: CodexHistoryBootstrapItems;
   /** Acknowledged selection suffix for reuse; fresh threads always receive the full bootstrap. */
   historyDeltaItems?: JsonValue[];
   signal?: AbortSignal;

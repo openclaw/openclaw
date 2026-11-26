@@ -96,6 +96,43 @@ async function writeRollout(records: string | string[]) {
   await fs.writeFile(rolloutPath, Array.isArray(records) ? records.join("\n") : records);
 }
 
+it.each(["answer", "compaction", "newer turn", "different response"] as const)(
+  "reuses input usage only from the latest completed ordinary response (%s)",
+  async (scenario) => {
+    await writeExistingBinding({ rolloutPath });
+    const input = 140_000;
+    await writeRollout(
+      [
+        { type: "turn_context" },
+        scenario === "compaction"
+          ? { type: "compacted" }
+          : { type: "response_item", payload: { role: "assistant", phase: "final_answer" } },
+        {
+          type: "token_usage_record",
+          payload: { turn_id: "turn-1", usage: { input_tokens: input } },
+        },
+        {
+          payload: {
+            type: "token_count",
+            info: {
+              last_token_usage: {
+                input_tokens: scenario === "different response" ? input - 1 : input,
+                total_tokens: input + 10,
+              },
+              model_context_window: 258_400,
+            },
+          },
+        },
+        { payload: { type: "task_complete", turn_id: "turn-1" } },
+        ...(scenario === "newer turn" ? [{ type: "turn_context" }] : []),
+      ].map((row) => JSON.stringify(row)),
+    );
+    expect((await resolveBinding()).startupObservedInputTokens).toBe(
+      scenario === "answer" ? input : undefined,
+    );
+  },
+);
+
 it.each(["expected", "ordinary", "revoked"])(
   "handles preserve-only token pressure with %s authority",
   async (authority) => {
