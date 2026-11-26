@@ -159,8 +159,8 @@ it("reads standalone JSON result text and completed inline tool results", () => 
 it("keeps inline and display math in source titles and search excerpts", () => {
   const math = {
     url: pageUrl,
-    title: wrap("Solve $x^2$"),
-    snippet: wrap("Area is $\\pi r^2$ here."),
+    title: wrap("Solve \\(x^2\\)"),
+    snippet: wrap("Area is \\(\\pi r^2\\) here."),
   };
   expect(previews([tool(search([math]))])[0]).toMatchObject({
     title: "Solve x^2",

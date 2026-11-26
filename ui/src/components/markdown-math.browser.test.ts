@@ -34,7 +34,7 @@ afterEach(() => {
 
 describe("Control UI lazy LaTeX rendering", () => {
   it("automatically typesets completed cached snapshots on every Markdown surface", async () => {
-    const source = "Euler: $e^{i\\pi}+1=0$\n\n$$\n\\int_0^1 x^2 dx = \\frac{1}{3}\n$$";
+    const source = "Euler: \\(e^{i\\pi}+1=0\\)\n\n$$\n\\int_0^1 x^2 dx = \\frac{1}{3}\n$$";
     const cached = toSanitizedMarkdownHtml(source);
     expect(cached).not.toContain('class="katex"');
     for (const options of [{}, { mode: "document" as const }, { progressBars: true }]) {
@@ -54,7 +54,7 @@ describe("Control UI lazy LaTeX rendering", () => {
     const shell = document.createElement("section");
     const root = shell.attachShadow({ mode: "open" });
     const host = document.createElement("article");
-    host.innerHTML = toSanitizedMarkdownHtml("$x^2$", { mode: "document" });
+    host.innerHTML = toSanitizedMarkdownHtml("\\(x^2\\)", { mode: "document" });
     root.append(host);
     document.body.append(shell);
     await typeset(host);
@@ -64,10 +64,10 @@ describe("Control UI lazy LaTeX rendering", () => {
 
   it("copies table fractions as TeX after typesetting without removing MathML", async () => {
     const host = mount(
-      "| Formula | Note |\n| --- | --- |\n| $\\frac{1}{2}$ | Keep $y$ and `code` |",
+      "| Formula | Note |\n| --- | --- |\n| \\(\\frac{1}{2}\\) | Keep \\(y\\) and `code` |",
     );
     const table = host.querySelector("table")!;
-    const expected = "Formula\tNote\n$\\frac{1}{2}$\tKeep $y$ and code";
+    const expected = "Formula\tNote\n\\(\\frac{1}{2}\\)\tKeep \\(y\\) and code";
     expect(markdownTableCopyText(table)).toBe(expected);
     await typeset(host);
     expect(markdownTableCopyText(table)).toBe(expected);
@@ -75,7 +75,7 @@ describe("Control UI lazy LaTeX rendering", () => {
   });
 
   it("does not enqueue code, currency, URLs, or unfinished streamed math", () => {
-    const source = "Prices $5-$10 and $20. `$x$` https://example.com/$schema$ \\(unfinished";
+    const source = "Prices $5 or $10. `\\(x\\)` https://example.com/$$schema$$ \\(unfinished";
     expect(mount(source).querySelector(leafTag)).toBeNull();
     const host = document.createElement("article");
     host.innerHTML = toStreamingMarkdownParts("before\n\n$$\nx^2", {}, "lazy-incomplete").join("");
@@ -84,9 +84,9 @@ describe("Control UI lazy LaTeX rendering", () => {
   });
 
   it("does not commit to disposed leaves and resumes retained DOM on connection", async () => {
-    const retired = mount("$retired$");
+    const retired = mount("\\(retired\\)");
     retired.remove();
-    const current = mount("$current$");
+    const current = mount("\\(current\\)");
     await typeset(current);
     expect(retired.querySelector(".katex")).toBeNull();
     document.body.append(retired);

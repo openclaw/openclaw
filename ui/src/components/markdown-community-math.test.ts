@@ -5,7 +5,6 @@ import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 describe("LaTeX", () => {
   it.each([
-    ["$x^2$", false],
     ["\\(x^2\\)", false],
     ["$$x^2$$", true],
     ["\\[x^2\\]", true],
@@ -18,7 +17,7 @@ describe("LaTeX", () => {
     expect(fragment.querySelector("math")).not.toBeNull();
   });
 
-  it.each(["```tex\n$x^2$\n\\[y\\]\n```", "    $x^2$\n\n    \\(y\\)", "\\$x^2\\$"])(
+  it.each(["```tex\n\\[y\\]\n```", "    \\(y\\)", String.raw`\\(x^2\\)`])(
     "does not interpret code or escaped delimiters: %j",
     (source) => {
       expect(mathFragment(toSanitizedMarkdownHtml(source)).querySelector(".katex")).toBeNull();
@@ -26,7 +25,7 @@ describe("LaTeX", () => {
   );
 
   it("keeps math source searchable as visible text", () => {
-    const text = markdownVisibleText({}, "Solve $x^2$ today.\n\n$$\n\\frac{1}{2}\n$$\n\nDone.");
+    const text = markdownVisibleText({}, "Solve \\(x^2\\) today.\n\n$$\n\\frac{1}{2}\n$$\n\nDone.");
 
     expect(text).toContain("Solve x^2 today.");
     expect(text).toMatch(/\\frac\{1\}\{2\}\n+Done\./u);
@@ -41,21 +40,18 @@ describe("LaTeX", () => {
 
   it("does not allow KaTeX trust commands to create links", () => {
     const html = mathFragment(
-      toSanitizedMarkdownHtml("$\\href{javascript:alert(1)}{x}$"),
+      toSanitizedMarkdownHtml("\\(\\href{javascript:alert(1)}{x}\\)"),
     ).innerHTML;
 
     expect(html).not.toContain("javascript:");
     expect(html).not.toContain("<a");
   });
 
-  it("preserves compact currency ranges and bare URL paths", () => {
+  it("keeps explicit display delimiters literal inside bare URLs", () => {
     const fragment = mathFragment(
-      toSanitizedMarkdownHtml(
-        "Prices: $5-$10 and $.49–$.99; docs: https://example.com/$schema$/query?$x$=1 and www.example.com/$path$/$next$/docs",
-      ),
+      toSanitizedMarkdownHtml("Docs: https://example.com/$$schema$$/query"),
     );
-    expect(fragment.textContent).toContain("$5-$10 and $.49–$.99");
-    expect(fragment.textContent).toContain("$schema$");
+    expect(fragment.textContent).toContain("https://example.com/$$schema$$/query");
     expect(fragment.querySelector(".katex")).toBeNull();
   });
 
@@ -67,28 +63,33 @@ describe("LaTeX", () => {
   });
 
   it("escapes text when the math rendering budget is exhausted", () => {
-    const input = Array.from({ length: 201 }, (_, index) => `$x_${index}$`).join(" ");
-    const html = toSanitizedMarkdownHtml(`${input} $<img src=x onerror=alert(1)>$`);
+    const input = Array.from({ length: 201 }, (_, index) => `\\(x_${index}\\)`).join(" ");
+    const html = toSanitizedMarkdownHtml(`${input} \\(<img src=x onerror=alert(1)>\\)`);
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;img");
     expect(htmlFragment(html).querySelectorAll("openclaw-markdown-math")).toHaveLength(200);
     expect(
-      htmlFragment(toSanitizedMarkdownHtml("$fresh$")).querySelectorAll("openclaw-markdown-math"),
+      htmlFragment(toSanitizedMarkdownHtml("\\(fresh\\)")).querySelectorAll(
+        "openclaw-markdown-math",
+      ),
     ).toHaveLength(1);
   });
 
-  it("preserves currency prose and display-math suffixes", () => {
+  it("keeps single-dollar text and prices literal next to display math", () => {
     const fragment = mathFragment(
-      toSanitizedMarkdownHtml("Costs rose from $5 to $10. Result: $$x^2$$ and explanation."),
+      toSanitizedMarkdownHtml(
+        "Prices: $5 or $10. Keep $x^2$ as text. Result: $$x^2$$ and explanation.",
+      ),
     );
 
-    expect(fragment.textContent).toContain("Costs rose from $5 to $10.");
+    expect(fragment.textContent).toContain("Prices: $5 or $10. Keep $x^2$ as text.");
     expect(fragment.textContent).toContain("and explanation.");
+    expect(fragment.querySelectorAll(".katex")).toHaveLength(1);
     expect(fragment.querySelector(".katex-display")).not.toBeNull();
   });
 
   it("retains accessible MathML and KaTeX geometry", () => {
-    const fragment = mathFragment(toSanitizedMarkdownHtml("$\\frac{1}{2}$"));
+    const fragment = mathFragment(toSanitizedMarkdownHtml("\\(\\frac{1}{2}\\)"));
 
     expect(fragment.querySelector("math")).not.toBeNull();
     expect(fragment.querySelector(".katex-html[aria-hidden='true']")).not.toBeNull();
@@ -96,21 +97,21 @@ describe("LaTeX", () => {
   });
 
   it("preserves text conditions in the sanitized accessible MathML", () => {
-    const fragment = mathFragment(toSanitizedMarkdownHtml(String.raw`$x + \text{otherwise}$`));
+    const fragment = mathFragment(toSanitizedMarkdownHtml(String.raw`\(x + \text{otherwise}\)`));
     expect(fragment.querySelector(".katex-mathml math mtext")?.textContent).toBe("otherwise");
     expect(fragment.querySelector(".katex-html[aria-hidden='true']")).not.toBeNull();
   });
 
   it.each([
-    [String.raw`$\mathbb{R}$`, "double-struck"],
-    [String.raw`$\mathbf{x}$`, "bold"],
+    [String.raw`\(\mathbb{R}\)`, "double-struck"],
+    [String.raw`\(\mathbf{x}\)`, "bold"],
   ])("preserves the accessible symbol variant for %s", (source, variant) => {
     const math = mathFragment(toSanitizedMarkdownHtml(source)).querySelector(".katex-mathml math");
     expect(math?.querySelector("mi")?.getAttribute("mathvariant")).toBe(variant);
   });
 
   it("preserves a binomial's barless fraction and delimiter semantics", () => {
-    const math = mathFragment(toSanitizedMarkdownHtml(String.raw`$\binom{n}{k}$`)).querySelector(
+    const math = mathFragment(toSanitizedMarkdownHtml(String.raw`\(\binom{n}{k}\)`)).querySelector(
       ".katex-mathml math",
     );
     expect(math?.querySelector("mfrac")?.getAttribute("linethickness")).toBe("0px");
@@ -155,7 +156,7 @@ describe("LaTeX", () => {
   it("keeps math inside its link label and preserves separate dollar-prefixed labels", () => {
     const fragment = mathFragment(
       toSanitizedMarkdownHtml(
-        String.raw`[$HOME{](https://example.com/home) and [$PATH](https://example.com/path) and [$(-\infty, 0]\text{step ](done)}$](https://example.com/math)`,
+        String.raw`[$HOME{](https://example.com/home) and [$PATH](https://example.com/path) and [\((-\infty, 0]\text{step ](done)}\)](https://example.com/math)`,
       ),
     );
     const [home, path, math] = fragment.querySelectorAll("a");
@@ -172,10 +173,7 @@ function mathFragment(html: string): HTMLElement {
   const host = htmlFragment(html);
   for (const leaf of host.querySelectorAll<HTMLElement>("openclaw-markdown-math")) {
     const display = leaf.dataset.display === "true";
-    const length = display ? 2 : 1;
-    leaf.replaceChildren(
-      renderMarkdownMath((leaf.textContent ?? "").slice(length, -length), display),
-    );
+    leaf.replaceChildren(renderMarkdownMath((leaf.textContent ?? "").slice(2, -2), display));
   }
   return host;
 }

@@ -352,11 +352,9 @@ describe("community LaTeX streaming regressions", () => {
   it.each([
     "before\n\n$$\nx^2\n\n+ y^2\n$$\n\nafter",
     "before\n\n\\[\nx^2\n\n+ y^2\n\\]\n\nafter",
-    "before\n\nInline $x^2$ and \\(y^2\\).",
+    "before\n\n`\\(literal\\)` and \\(y^2\\).",
     "before\n\n$$x^2$$ and text",
     "before\n\n\\[x^2\\] and text",
-    "before\n\n`$literal$` and $x^2$",
-    "before\n\nPrices $5-$10; https://example.com/$schema$/query?$x$=1",
     "before\n\n$$x\\$$ still open\n\n+ y\n$$",
     "before\n\n$$\nx^2\n> $$\n\n+ y\n$$",
   ])("keeps keyed and unkeyed math HTML equal at every chunk: %j", (source) => {
@@ -408,8 +406,8 @@ describe("community LaTeX streaming regressions", () => {
   });
 
   it("does not cache past an incomplete inline-math line", () => {
-    const partial = "before\n\nexplanation $x";
-    const completed = `${partial}$`;
+    const partial = "before\n\nexplanation \\(x";
+    const completed = `${partial}\\)`;
     const key = "partial-inline-math-line";
 
     splitStableStreamingMarkdown(partial, key);

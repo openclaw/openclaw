@@ -12,7 +12,6 @@ const INLINE_DELIMITERS = [
   { open: "$$", close: "$$", displayMode: true },
   { open: "\\[", close: "\\]", displayMode: true },
   { open: "\\(", close: "\\)", displayMode: false },
-  { open: "$", close: "$", displayMode: false },
 ] as const;
 
 export const MAX_MATH_SCAN = 4096;
@@ -30,8 +29,7 @@ function renderMath(
   displayMode: boolean,
   budget: MarkdownMathBudget = { rendered: 0 },
 ): string {
-  const delimiter = displayMode ? "$$" : "$";
-  const literal = escapeMathFallback(delimiter + source + delimiter);
+  const literal = escapeMathFallback(displayMode ? `$$${source}$$` : `\\(${source}\\)`);
   if (budget.rendered >= MAX_MATH_EXPRESSIONS) {
     return literal;
   }
@@ -180,19 +178,9 @@ function parseInlineMath(state: StateInline, silent: boolean): boolean {
   }
   const latex = source.slice(contentStart, close);
   if (
-    delimiter.open === "$" &&
-    (/\s/u.test(source.charAt(contentStart)) ||
-      /\s/u.test(source.charAt(close - 1)) ||
-      /^(?:-\$?)?(?:\d|\.\d)/u.test(source.slice(close + delimiter.close.length)) ||
-      /\d-$/u.test(state.src.slice(0, state.pos)))
-  ) {
-    return false;
-  }
-  if (
     isInsideBareUrl(state, state.pos + close) ||
     (latex.includes("`") && isInsideCodeSpan(state, state.pos + close))
   ) {
-    // Reject cheap currency shapes first. Only ambiguous candidates need code ownership.
     return false;
   }
   if (silent && latex.includes("]")) {

@@ -396,7 +396,8 @@ same panel. Compaction preserves the composer draft.
 
 ## Math rendering
 
-The Control UI renders inline LaTeX written as `$x^2$` or `\(x^2\)`.
+The Control UI renders inline LaTeX written as `\(x^2\)`. Single-dollar
+expressions like `$x^2$` and prices like `$5 or $10` follow ordinary Markdown.
 Use `$$...$$` or `\[...\]` for display equations. Wide display equations
 scroll horizontally inside the message instead of widening the page. Focus a
 display equation to scroll it with the keyboard.

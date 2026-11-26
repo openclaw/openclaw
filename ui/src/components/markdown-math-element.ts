@@ -53,11 +53,12 @@ function defineMarkdownMathElement(): void {
         }
         const literal = this.textContent ?? "";
         const displayMode = this.dataset.display === "true";
-        const delimiter = displayMode ? "$$" : "$";
-        if (!literal.startsWith(delimiter) || !literal.endsWith(delimiter)) {
+        const open = displayMode ? "$$" : "\\(";
+        const close = displayMode ? "$$" : "\\)";
+        if (!literal.startsWith(open) || !literal.endsWith(close)) {
           return;
         }
-        const source = literal.slice(delimiter.length, -delimiter.length);
+        const source = literal.slice(open.length, -close.length);
         if (!source) {
           return;
         }
