@@ -44,6 +44,7 @@ import {
   withoutAgentToolUsage,
 } from "./openclaw-agent-tool-usage-schema.js";
 import { withoutTrajectoryPayloadColumns } from "./openclaw-agent-trajectory-storage-migration.js";
+import { AGENT_ARCHIVE_UNDO_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 
 // Schema 21–24 kept every raw writer observable through this required trigger group.
 export const LEGACY_ENTRY_VALIDITY_TRIGGERS_SQL = `
@@ -327,7 +328,13 @@ function withLegacyAgentWriteLayout(schema: string): string {
     );
 }
 
-const AGENT_SCHEMA_BEFORE_MEMBER_ACCESS = withoutAgentMemberAccess(OPENCLAW_AGENT_SCHEMA_SQL);
+const AGENT_SCHEMA_BEFORE_ARCHIVE_UNDO = OPENCLAW_AGENT_SCHEMA_SQL.replace(
+  ",\n  archive_undo_marker TEXT\n",
+  "\n",
+);
+const AGENT_SCHEMA_BEFORE_MEMBER_ACCESS = withoutAgentMemberAccess(
+  AGENT_SCHEMA_BEFORE_ARCHIVE_UNDO,
+);
 const AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS = withoutAgentPendingInputEndings(
   AGENT_SCHEMA_BEFORE_MEMBER_ACCESS,
 );
@@ -363,7 +370,9 @@ export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
               ? AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS
               : targetVersion < AGENT_MEMBER_ACCESS_SCHEMA_VERSION
                 ? AGENT_SCHEMA_BEFORE_MEMBER_ACCESS
-                : OPENCLAW_AGENT_SCHEMA_SQL;
+                : targetVersion < AGENT_ARCHIVE_UNDO_SCHEMA_VERSION
+                  ? AGENT_SCHEMA_BEFORE_ARCHIVE_UNDO
+                  : OPENCLAW_AGENT_SCHEMA_SQL;
   const navigationSchemaSql =
     targetVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
       ? withoutAgentColdNavigation(schemaSql)

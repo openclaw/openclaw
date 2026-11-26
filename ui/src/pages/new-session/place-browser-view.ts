@@ -2,6 +2,7 @@ import type {
   FsDirEntry,
   FsListDirResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import { isAbsolutePath, sameAbsolutePath } from "./path.ts";
 
 export function splitBrowserDraft(draft: string): { directory: string; prefix: string } | null {
@@ -25,7 +26,7 @@ function filterBrowserEntries(entries: readonly FsDirEntry[], prefix: string): F
     return [...entries];
   }
   // macOS stores many names in NFD; NFC comparison keeps typed precomposed queries matching.
-  const query = prefix.toLowerCase().normalize("NFC");
+  const query = foldSearchCase(prefix).normalize("NFC");
   // Case-sensitive filesystems can hold `App` and `app`; the typed spelling must win first.
   const spelled: FsDirEntry[] = [];
   const exact: FsDirEntry[] = [];
@@ -36,7 +37,7 @@ function filterBrowserEntries(entries: readonly FsDirEntry[], prefix: string): F
     if (entry.hidden && !prefix.startsWith(".")) {
       continue;
     }
-    const name = entry.name.toLowerCase().normalize("NFC");
+    const name = foldSearchCase(entry.name).normalize("NFC");
     if (entry.name === prefix) {
       spelled.push(entry);
     } else if (name === query) {
@@ -72,5 +73,6 @@ export function resolvePlaceBrowserView(params: {
         entries.length === 0 && !loading ? (split.prefix ? "no-matches" : "no-subfolders") : "none",
     };
   }
-  return { entries: [], empty: loading ? "none" : "no-matches" };
+  // Without a loaded listing (still loading, or the read failed) there is nothing to match against.
+  return { entries: [], empty: loading || !listing ? "none" : "no-matches" };
 }

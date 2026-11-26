@@ -148,6 +148,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
           ))
           ? true
           : undefined,
+      // The attempt's deferred-tool resolver loads on-demand tools on their first direct call.
+      loadsOnDemandTools: true,
       modelToolsEnabled: toolsEnabled,
       disableTools: attempt.disableTools,
       isRawModelRun,

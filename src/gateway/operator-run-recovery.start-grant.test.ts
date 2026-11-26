@@ -6,10 +6,10 @@ import { prepareInternalGetReplyOptions } from "../auto-reply/reply/get-reply.ty
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
   captureGatewayOperatorContinuation,
@@ -107,7 +107,7 @@ describe("saved requester start grant", () => {
     withRequester("chat-start@example.test", "writer", async (fixture, setRole) => {
       (await start(fixture)).release();
       setRole(role);
-      await expect(start(fixture)).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+      await expect(start(fixture)).rejects.toThrow(OperatorRefusalError);
     }),
   );
 
@@ -123,7 +123,7 @@ describe("saved requester start grant", () => {
       expect(admitted.authority.scopes).toEqual(["operator.read", "operator.talk"]);
       admitted.release();
       setRole("reader");
-      await expect(start()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+      await expect(start()).rejects.toThrow(OperatorRefusalError);
     }));
 
   it.each(automationKinds)("admits %s for a cron-only creator", (_kind, start) =>
@@ -141,7 +141,7 @@ describe("saved requester start grant", () => {
     withRequester("automation-reader@example.test", "writer", async (fixture, setRole) => {
       (await start(fixture)).release();
       setRole("reader");
-      await expect(start(fixture)).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+      await expect(start(fixture)).rejects.toThrow(OperatorRefusalError);
     }),
   );
 

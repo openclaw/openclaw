@@ -91,14 +91,32 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     );
     const failure = new Error("Checkout failed; retry this session.");
     preparation.failure = failure;
-    finishing(terminal, { aborted: true, stopReason: "aborted" });
-    terminal.capture("end", {}, { aborted: true, stopReason: "aborted" });
+    finishing(terminal, {
+      aborted: true,
+      stopReason: "aborted",
+      error: "provider failed",
+      errorNotice: "Your plan needs an upgrade",
+      errorObservation: { provider: "fixture", failoverReason: "billing", showSummary: true },
+    });
+    terminal.capture(
+      "end",
+      {},
+      {
+        aborted: true,
+        stopReason: "aborted",
+        errorNotice: "Your plan needs an upgrade",
+        summaryAsTitle: true,
+      },
+    );
     terminal.emit("end", {});
     terminal.emit("error", failure);
     const { data } = emitted();
     expect(data).toMatchObject({ phase: "error", error: failure.message, executionSettled: true });
     expect(data).not.toHaveProperty("aborted");
     expect(data).not.toHaveProperty("stopReason");
+    expect(data).not.toHaveProperty("errorNotice");
+    expect(data).not.toHaveProperty("summaryAsTitle");
+    expect(data).not.toHaveProperty("errorObservation");
   });
 
   it.each([false, true])("keeps only the selected attempt receipt (retry=%s)", (retry) => {

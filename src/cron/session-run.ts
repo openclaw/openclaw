@@ -96,7 +96,7 @@ export async function runCronSessionTurn(
   };
   const restoreOperator = async (
     signal?: AbortSignal,
-  ): Promise<Pick<ScheduledSessionAutomation, "operatorAuthority" | "automationAdmin">> => {
+  ): Promise<Pick<ScheduledSessionAutomation, "operatorAuthority">> => {
     operator?.release();
     operator = undefined;
     const { restoreCronOperatorSource } = await import("../gateway/cron-operator-source.js");
@@ -120,10 +120,7 @@ export async function runCronSessionTurn(
       throw error;
     }
     assertCurrent();
-    return {
-      operatorAuthority: operator?.authority,
-      automationAdmin: operator?.automationAdmin ? true : undefined,
-    };
+    return { operatorAuthority: operator?.authority };
   };
   try {
     const delivery =

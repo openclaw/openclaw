@@ -3,7 +3,6 @@ import type {
   ErrorShape,
   SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveSessionSubmittedModelRef } from "../../agents/session-model-ref.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
@@ -27,8 +26,14 @@ import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { createSessionModelCatalogWait } from "./session-model-catalog-wait.js";
 import * as sessionUnreadAck from "./session-unread-ack.js";
 import {
-  prepareSessionPatchArchive,
+  bindArchiveUndoToReplacement,
+  prepareArchiveUndo,
+  supportsArchiveUndoTarget,
+} from "./sessions-patch-archive-undo.js";
+import {
+  prepareSessionPatchArchives,
   prepareSessionPatchArchiveTransition,
+  prepareTargetArchiveTransition,
   releaseSessionPatchArchive,
   validateSessionPatchArchiveProjection,
 } from "./sessions-patch-archive.js";
@@ -36,7 +41,6 @@ import {
   createSessionPatchCatalogPreparation,
   type SessionPatchCatalogResult,
 } from "./sessions-patch-catalog-preparation.js";
-import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { discoverSessionPatchTargets } from "./sessions-patch-discovery.js";
 import * as patchEffects from "./sessions-patch-effects.js";
 import {
@@ -47,42 +51,27 @@ import {
 import * as sessionPatchExpectations from "./sessions-patch-expectations.js";
 import * as patchGroups from "./sessions-patch-groups.js";
 import * as modelSelection from "./sessions-patch-model-selection.js";
+import { isParticipationPermissionTightening } from "./sessions-patch-participation.js";
 import {
   prepareSessionPatchReplacement,
   createSessionPatchGroupWriter,
 } from "./sessions-patch-replacement.js";
 import type { PreparedSessionPatchExecutionPermission } from "./sessions-patch-sandbox.runtime.js";
 import type {
+  ExecuteSessionPatchMutationsParams,
   GroupMutationOperation,
   MutationOutcome,
-  MutationTarget,
   PreparedPatchTarget,
 } from "./sessions-patch-types.js";
 import { prepareSessionWorkerPlacementPatchValidation } from "./sessions-shared.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  SessionMutationAuthorization,
-} from "./types.js";
+import type { SessionMutationAuthorization } from "./types.js";
 import { preparePersonalModelSelection } from "./users-model-account-access.js";
 
-type PatchTargetIdentity = sessionUnreadAck.SessionPatchTargetIdentity;
 const { resolveSessionUnreadAck, validateSessionUnreadAck } = sessionUnreadAck;
 
 type ArchiveTransition = Awaited<ReturnType<typeof prepareSessionPatchArchiveTransition>>;
 
-export async function executeSessionPatchMutations(params: {
-  client: GatewayClient | null;
-  context: GatewayRequestContext;
-  signal?: AbortSignal;
-  diagnostics?: SessionPatchDiagnostics;
-  operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
-  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
-  readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
-  onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
-  patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
-  targets: readonly MutationTarget[];
-}) {
+export async function executeSessionPatchMutations(params: ExecuteSessionPatchMutationsParams) {
   const { client } = params;
   const timing = params.diagnostics?.scope("preflight");
   let personalModelSelection: UserModelAccountSelection | undefined;
@@ -204,6 +193,12 @@ export async function executeSessionPatchMutations(params: {
       storePath: resolved.storePath,
       targetAgentId: resolved.agentId,
     };
+    if (params.archiveUndo && !supportsArchiveUndoTarget(preparedTarget)) {
+      outcomes[index] = invalidSessionRequest(
+        "Archive Undo is unavailable for this session store.",
+      );
+      continue;
+    }
     prepared.push(preparedTarget);
     preparedByIndex[index] = preparedTarget;
   }
@@ -250,33 +245,17 @@ export async function executeSessionPatchMutations(params: {
     try {
       // Cloud reclaim precedes every mutation mutex; an earlier Move may need one.
       timing?.mark("archive");
-      await Promise.all(
-        activePrepared
-          .filter((target) => target.fullPatch.archived === true)
-          .map(async (target) => {
-            try {
-              const result = await prepareSessionPatchArchive({
-                cfg,
-                commitGuard: mutationTargets[target.index]!.commitGuard,
-                context: params.context,
-                loadGatewayModelCatalogSnapshot: () => catalogs.load(target.targetAgentId),
-                personalModelSelection,
-                ...(pluginOwnerId ? { pluginOwnerId } : {}),
-                target,
-              });
-              if (result.ok) {
-                target.archivePreparation = result.value;
-              } else {
-                outcomes[target.index] = result;
-              }
-            } catch (error) {
-              outcomes[target.index] = {
-                ok: false,
-                error: unexpectedPatchError(target.key, error),
-              };
-            }
-          }),
-      );
+      await prepareSessionPatchArchives({
+        assertDrainStartAllowed: params.archiveUndo?.assertCurrent,
+        targets: activePrepared,
+        mutationTargets,
+        outcomes,
+        cfg,
+        context: params.context,
+        personalModelSelection,
+        pluginOwnerId,
+        loadCatalog: catalogs.load,
+      });
       timing?.mark("lifecycleAdmission");
       await runSessionMutation({
         ...patchGroups.resolveSessionPatchLifecycleTargets(activePrepared),
@@ -344,6 +323,8 @@ export async function executeSessionPatchMutations(params: {
                   const labelOwners = new SessionLabelOwnerIndex(workingStore);
                   const replacements: SessionEntryCanonicalReplacement[] = [];
                   const projectedOutcomes: MutationOutcome[] = [];
+                  const archiveReceipts: NonNullable<GroupMutationOperation["archiveReceipts"]> =
+                    new Map();
                   for (const target of group) {
                     try {
                       if (params.operatorAuthority) {
@@ -406,6 +387,17 @@ export async function executeSessionPatchMutations(params: {
                           }));
                       if (projectionError) {
                         projectedOutcomes.push({ ok: false, error: projectionError });
+                        continue;
+                      }
+                      const archive = prepareArchiveUndo(
+                        params.archiveUndo,
+                        target,
+                        primaryKey,
+                        existingEntry,
+                        entries,
+                      );
+                      if (!archive.ok) {
+                        projectedOutcomes.push(archive);
                         continue;
                       }
                       const unreadAck = resolveSessionUnreadAck(existingEntry, target.fullPatch);
@@ -481,6 +473,23 @@ export async function executeSessionPatchMutations(params: {
                         continue;
                       }
                       runtimeSelections.push(runtimeSelection);
+                      if (
+                        params.participationOnly &&
+                        !(await isParticipationPermissionTightening({
+                          cfg: getCurrentConfig(),
+                          agentId: target.targetAgentId,
+                          sessionKey: primaryKey,
+                          before: existingEntry,
+                          after: projected.entry,
+                        }))
+                      ) {
+                        projectedOutcomes.push(
+                          invalidSessionRequest(
+                            "Participants may only tighten the current effective permission policy.",
+                          ),
+                        );
+                        continue;
+                      }
                       const permissionChanged =
                         projected.entry.permissionMode !== existingEntry?.permissionMode;
                       const sandboxChanged =
@@ -521,33 +530,16 @@ export async function executeSessionPatchMutations(params: {
                         projectedOutcomes.push({ ok: false, error: authorizationFailure });
                         continue;
                       }
-                      if (
-                        existingEntry &&
-                        typeof target.fullPatch.archived === "boolean" &&
-                        (existingEntry.worktree ||
-                          existingEntry.archivedAt !== undefined ||
-                          target.fullPatch.archived)
-                      ) {
-                        const worktreeTiming = params.diagnostics?.scope(
-                          target.fullPatch.archived ? "archivePlacement" : "worktree",
-                        );
-                        let transition: ArchiveTransition;
-                        try {
-                          transition = await prepareSessionPatchArchiveTransition({
-                            archived: target.fullPatch.archived,
-                            entry: existingEntry,
-                            context: params.context,
-                            scope: {
-                              agentId: target.targetAgentId,
-                              sessionKey: primaryKey,
-                              storePath: target.storePath,
-                            },
-                            authorize: mutationTargets[target.index]!.commitGuard,
-                            preparation: target.archivePreparation,
-                          });
-                        } finally {
-                          worktreeTiming?.finish();
-                        }
+                      const transition = await prepareTargetArchiveTransition({
+                        target,
+                        entry: existingEntry,
+                        primaryKey,
+                        context: params.context,
+                        diagnostics: params.diagnostics,
+                        authorize: mutationTargets[target.index]!.commitGuard,
+                        existingCheckoutOnly: archive.intent?.kind === "undo",
+                      });
+                      if (transition) {
                         archiveTransitions.set(target.index, transition);
                       }
                       commitGuards.add(mutationTargets[target.index]!.commitGuard);
@@ -576,6 +568,12 @@ export async function executeSessionPatchMutations(params: {
                         assertCurrent: assertCommitAllowed,
                       });
                       if (replacement.replacement) {
+                        bindArchiveUndoToReplacement(
+                          archiveReceipts,
+                          archive,
+                          replacement.replacement,
+                          replacement.outcome,
+                        );
                         replacements.push(replacement.replacement);
                         if (!existingEntry && params.onCreatedSessionCommitted) {
                           createdSessions.push({
@@ -598,10 +596,12 @@ export async function executeSessionPatchMutations(params: {
                   }
                   return {
                     replacements,
+                    archiveReceipts,
                     result: { kind: "complete", outcomes: projectedOutcomes },
                   };
                 };
                 const groupStore = {
+                  includeArchiveUndoMarkers: Boolean(params.archiveUndo),
                   ...(storage ? { env: storage.env, retainedExecution: storage.execution } : {}),
                   onLifecycleCommitted: () => {
                     for (const created of createdSessions) {

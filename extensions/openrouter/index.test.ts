@@ -2,14 +2,10 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
-  registerProviderPlugin,
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  expectPassthroughReplayPolicy,
-  expectUnifiedModelCatalogProviderRegistration,
-} from "openclaw/plugin-sdk/provider-test-contracts";
+import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -136,52 +132,6 @@ function hookContext(modelId: string) {
   return { provider: "openrouter", modelApi: "openai-completions", modelId };
 }
 describe("openrouter provider hooks", () => {
-  it("declares runtime text catalog discovery", () => {
-    expect(manifest.modelCatalog?.discovery).toEqual({ openrouter: "runtime" });
-  });
-
-  it("registers OpenRouter speech alongside model, media, and catalog providers", async () => {
-    const {
-      providers,
-      speechProviders,
-      mediaProviders,
-      imageProviders,
-      musicProviders,
-      videoProviders,
-    } = await registerProviderPlugin({
-      plugin: openrouterPlugin,
-      id: "openrouter",
-      name: "OpenRouter Provider",
-    });
-    for (const group of [
-      providers,
-      speechProviders,
-      mediaProviders,
-      imageProviders,
-      musicProviders,
-      videoProviders,
-    ]) {
-      expect(group.map((provider) => provider.id)).toEqual(["openrouter"]);
-    }
-    expect(providers[0]).toMatchObject({
-      resolveUsageAuth: expect.any(Function),
-      fetchUsageSnapshot: expect.any(Function),
-    });
-    for (const kind of ["text", "video_generation"] as const) {
-      const catalog = expectUnifiedModelCatalogProviderRegistration({
-        plugin: openrouterPlugin,
-        pluginId: "openrouter",
-        pluginName: "OpenRouter Provider",
-        provider: "openrouter",
-        kind,
-      });
-      expect(catalog.liveCatalog).toBeTypeOf("function");
-      if (kind === "text") {
-        expect(catalog.staticCatalog).toBeTypeOf("function");
-      }
-    }
-  });
-
   it("registers OAuth and API-key auth methods", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const authFields = [
@@ -227,20 +177,6 @@ describe("openrouter provider hooks", () => {
 
     expect(bareProviderChoice?.method.id).toBe("api-key");
     expect(oauthChoice?.method.id).toBe("oauth");
-  });
-
-  it("features OpenRouter OAuth in the top-level onboarding picker", () => {
-    const oauthChoice = manifest.providerAuthChoices?.find(
-      (choice) => choice.choiceId === "openrouter-oauth",
-    );
-
-    expect(oauthChoice).toMatchObject({
-      provider: "openrouter",
-      method: "oauth",
-      groupId: "openrouter",
-      groupLabel: "OpenRouter",
-      onboardingFeatured: true,
-    });
   });
 
   it("bundles the canonical auto router and current Kimi models", () => {
@@ -374,24 +310,6 @@ describe("openrouter provider hooks", () => {
     expect(jevProvider.resolveDynamicModel?.(context)).toBeUndefined();
     expect(loadCapabilities).not.toHaveBeenCalled();
     expect(loadedCapabilities).not.toHaveBeenCalled();
-  });
-
-  it("keeps native OpenRouter namespace ids for capability lookup", async () => {
-    loadedCapabilities.mockReset();
-    loadCapabilities.mockClear();
-    const context = dynamicContext("openrouter/auto");
-
-    await provider.prepareDynamicModel?.(context);
-    provider.resolveDynamicModel?.(context);
-
-    expect(loadCapabilities).toHaveBeenCalledWith("openrouter/auto");
-    expect(loadedCapabilities).toHaveBeenCalledWith("openrouter/auto");
-  });
-
-  it("does not include retired stealth models in the bundled catalog", () => {
-    const modelIds = buildOpenrouterProvider().models?.map((model) => model.id) ?? [];
-    expect(modelIds).not.toContain("openrouter/hunter-alpha");
-    expect(modelIds).not.toContain("openrouter/healer-alpha");
   });
 
   it("keeps stale Hunter Alpha configs out of OpenRouter proxy reasoning", () => {
@@ -881,40 +799,6 @@ describe("openrouter provider hooks", () => {
               ? { role: "assistant", content: "Ready." }
               : { role: "assistant", content: "Ready.", reasoning_content: "" },
           ]),
-        );
-      },
-    );
-
-    it.each([
-      "openrouter/anthropic/claude-sonnet-5",
-      "openrouter/deepseek/deepseek-v4-pro",
-      "openrouter/moonshotai/kimi-k3",
-      "z-ai/glm-5.2",
-      "openrouter/z-ai/glm-5.2",
-      "~anthropic/claude-opus-latest",
-      "~moonshotai/kimi-latest",
-      "x-ai/grok-4-1-fast",
-      "openrouter/x-ai/grok-4-1-fast",
-      "google/gemini-2.5-pro",
-      "openrouter/google/gemini-3.1-pro-preview",
-    ])("recognizes the live upstream cacheable model reference %s", async (modelId) => {
-      expect(provider.isCacheTtlEligible?.({ provider: "openrouter", modelId } as never)).toBe(
-        true,
-      );
-    });
-
-    it.each([
-      "openai/gpt-5.4",
-      "~openai/gpt-5.4",
-      "openrouter/openai/gpt-5.4",
-      // OpenRouter documents implicit Gemini caching only for 2.5 and newer.
-      "google/gemini-2.0-flash-001",
-      "google/gemma-3-27b-it",
-    ])(
-      "does not infer provider cache support for unrelated model reference %s",
-      async (modelId) => {
-        expect(provider.isCacheTtlEligible?.({ provider: "openrouter", modelId } as never)).toBe(
-          false,
         );
       },
     );

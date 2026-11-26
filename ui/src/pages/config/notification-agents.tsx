@@ -37,29 +37,29 @@ export function NotificationAgentsRow(props: AgentRowProps) {
     scope();
     return undefined;
   });
-  const names = (ids: readonly string[]) => {
+  const summary = createMemo(() => {
+    const ids = props.agentIds ?? props.inheritedAgentIds ?? [];
     const agents = props.agentCatalog?.agentsList?.agents;
-    return ids
-      .map((id) => {
-        const agent = agents?.find((entry) => entry.id === id);
-        const name = agent ? normalizeAgentLabel(agent) : id;
-        return (agents?.filter((entry) => normalizeAgentLabel(entry) === name).length ?? 0) > 1
-          ? `${name} (${id})`
-          : name;
-      })
-      .join(", ");
-  };
-  const summary = createMemo(() =>
-    props.agentIds === undefined
-      ? t("configView.notifications.inheritAgents", {
-          agents: props.inheritedAgentIds?.length
-            ? names(props.inheritedAgentIds)
-            : t("configView.notifications.allAgents"),
-        })
-      : props.agentIds.length
-        ? names(props.agentIds)
-        : t("configView.notifications.allAgents"),
-  );
+    const selected = ids.map((id) => {
+      const agent = agents?.find((entry) => entry.id === id);
+      const name = agent ? normalizeAgentLabel(agent) : id;
+      const duplicate = agents?.some(
+        (entry) => entry.id !== id && normalizeAgentLabel(entry) === name,
+      );
+      return { name, full: duplicate ? `${name} (${id})` : name };
+    });
+    const full =
+      selected.map((agent) => agent.full).join(", ") || t("configView.notifications.allAgents");
+    const compact =
+      selected.length > 1
+        ? t("configView.notifications.agentsSelected", { count: String(selected.length) })
+        : (selected[0]?.name ?? full);
+    const scoped = (names: string) =>
+      props.agentIds === undefined
+        ? t("configView.notifications.inheritAgents", { agents: names })
+        : names;
+    return { full: scoped(full), compact: scoped(compact) };
+  });
   return (
     <>
       <SettingsRow
@@ -67,10 +67,11 @@ export function NotificationAgentsRow(props: AgentRowProps) {
         control={
           <button
             type="button"
-            class="btn"
+            class="btn notification-agents__trigger"
             disabled={props.disabled}
             aria-label={t("configView.notifications.chooseAgents")}
-            title={summary()}
+            aria-description={summary().full}
+            title={summary().full}
             onClick={() => {
               setDraft({
                 mode:
@@ -84,7 +85,7 @@ export function NotificationAgentsRow(props: AgentRowProps) {
               props.onLoadAgents?.();
             }}
           >
-            <span class="picker-select__label">{summary()}</span>
+            <span>{summary().compact}</span>
             <Icon name="chevronDown" />
           </button>
         }
@@ -230,7 +231,7 @@ function AgentSelectionDialog(
             <div>
               <For each={rows()} keyed={(row) => row.id}>
                 {(row) => (
-                  <label class="settings-row">
+                  <label class="settings-row notification-agents__option">
                     <Checkbox
                       checked={props.selection.ids.includes(row().id)}
                       disabled={
@@ -248,14 +249,20 @@ function AgentSelectionDialog(
                         })
                       }
                     />
-                    <span class="settings-row__text">
-                      <span class="settings-row__title">{row().name}</span>{" "}
-                      <small class="settings-row__desc">
+                    <span class="settings-row__title" title={row().name}>
+                      {row().name}
+                    </span>{" "}
+                    <small
+                      class="settings-row__desc"
+                      dir={row().available ? "rtl" : undefined}
+                      title={row().id}
+                    >
+                      <bdi>
                         {row().available
                           ? row().id
                           : t("configView.notifications.savedAgentUnavailable")}
-                      </small>
-                    </span>
+                      </bdi>
+                    </small>
                   </label>
                 )}
               </For>

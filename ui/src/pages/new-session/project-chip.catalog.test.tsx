@@ -279,3 +279,44 @@ it("keeps search visible across reopening, routes row typing to it, and matches 
   expect(rows()[0]?.textContent).toContain("Cafe");
   view.unmount();
 });
+
+it.each([
+  { connection: "restricted", admin: false, write: false },
+  { connection: "admin", admin: true, write: true },
+])("explains an empty project catalog: $connection", async ({ admin, write }) => {
+  const fixture = createRepositoryFixture();
+  const { browser, state: place, request, context } = fixture;
+  request.mockResolvedValue({ projects: [] });
+  prepareCatalog(fixture, true);
+  vi.spyOn(place, "isAdmin").mockReturnValue(admin);
+  vi.spyOn(place, "canWrite").mockReturnValue(write);
+  const navigate = vi.fn();
+  Object.assign(context, { basePath: "", navigate });
+  const view = mountProjectChip(fixture, () => ({
+    folder: "",
+    workspace: "/home/openclaw/.openclaw/workspace",
+    projectId: browser.projectId,
+    selectedRemoteProject: browser.remoteProject,
+    projects: browser.projects,
+    recents: [],
+    projectQuery: browser.projectQuery,
+  }));
+  await openProjectSearch(view.container);
+  const shared = "No projects are shared with your role. Ask an admin to share one.";
+  await waitForSolid(() =>
+    expect(view.container.textContent).toContain(admin ? "No local projects registered" : shared),
+  );
+  expect(view.container.textContent?.includes(shared)).toBe(!admin);
+  const manage = view.container.querySelector<HTMLAnchorElement>(
+    ".new-session-page__manage-projects",
+  );
+  // Gateway folder browsing needs operator.write, so restricted roles never see it.
+  expect(view.container.querySelector('[data-value="browse"]') === null).toBe(!write);
+  if (!admin) {
+    expect(manage).toBeNull();
+    return;
+  }
+  expect(manage?.getAttribute("href")).toBe("/projects");
+  manage!.click();
+  expect(navigate).toHaveBeenCalledWith("projects");
+});

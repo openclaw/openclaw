@@ -146,7 +146,6 @@ function restoredSource(): RestoredGatewayOperatorAuthority {
       hasAvatar: false,
       updatedAt: 0,
     },
-    automationAdmin: true,
     release: vi.fn(),
   };
 }
@@ -525,7 +524,6 @@ describe("scheduled session execution custody", () => {
     await accepted.promise;
     expect(source.release).not.toHaveBeenCalled();
     expect(options.scheduledAutomation?.operatorAuthority).toBe(source.authority);
-    expect(options.scheduledAutomation?.automationAdmin).toBe(true);
     expect(options.scheduledAutomation?.admissionSource).toBe("requester-schedule");
     options.scheduledAutomation?.onExecutionStarted?.({
       runId: "scheduled-run",

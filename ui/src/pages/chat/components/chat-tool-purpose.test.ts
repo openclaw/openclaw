@@ -137,9 +137,9 @@ it.each([
 );
 
 it.each([
-  ["wait", { runId: "cm_test" }, "Wait"],
+  ["wait", { runId: "cm_test" }, "Waited for tool result"],
   ["ask_user", { questions: [{ question: "Do not repeat this prompt" }] }, "Asked you a question"],
-  ["tool_call", { id: "openclaw:core:wait", args: { runId: "cm_test" } }, "Wait"],
+  ["tool_call", { id: "openclaw:core:wait", args: { runId: "cm_test" } }, "Waited for tool result"],
   ["custom_tool", { text: "Inspect the workspace" }, "Custom Tool"],
   [
     "ToolSearch",
@@ -859,6 +859,115 @@ it.each([
   );
   expect(text(container, ".chat-tool-row__title")).toBe(label);
 });
+
+it.each([
+  [
+    {
+      name: "openclaw",
+      args: { action: "config_set", path: "agents.defaults.workspace", value: "./work" },
+      details: { needsApproval: true },
+    },
+    "Requested configuration change",
+  ],
+  [
+    {
+      name: "openclaw",
+      args: { action: "set_default_model", model: "example/model", approved: true },
+      outputText: "directive:approved-operation: the host will apply this action after the turn.",
+    },
+    "Requested default model change",
+  ],
+  [
+    {
+      name: "openclaw",
+      args: {
+        action: "template_install",
+        agentId: "research",
+        planIntegrity: "reviewed-plan",
+        source: { packageName: "@fixture/research", version: "1.0.0" },
+      },
+      outputText: "directive:template-operation: nothing is installed yet.",
+    },
+    "Requested template installation",
+  ],
+  [
+    {
+      name: "openclaw",
+      args: { action: "configure_model_provider" },
+      outputText: "directive: the host returns Models sign-in guidance next.",
+    },
+    "Requested model provider sign-in guidance",
+  ],
+  [
+    {
+      name: "plugins",
+      args: { action: "reloadAndResume", pluginId: "example" },
+      details: { status: "started", async: true, yielded: true },
+    },
+    "Asked to reload plugins and resume chat",
+  ],
+  [
+    { name: "workboard_board_archive", args: { id: "project", archived: false } },
+    "Restored workboard",
+  ],
+  [{ name: "workboard_board_archive", args: { id: "project" } }, "Archived workboard"],
+  [
+    {
+      name: "tool_call",
+      args: {
+        id: "openclaw:lobster:lobster",
+        args: { action: "resume", token: "checkpoint", cancel: true },
+      },
+      details: { ok: true, status: "cancelled" },
+    },
+    "Canceled workflow",
+  ],
+  [
+    {
+      name: "lobster",
+      args: { action: "resume", token: "checkpoint", approve: false },
+      details: { ok: true, status: "cancelled" },
+    },
+    "Declined workflow approval",
+  ],
+  [
+    {
+      name: "lobster",
+      args: { action: "resume", token: "checkpoint", approve: true },
+      details: { ok: true, status: "ok" },
+    },
+    "Resumed workflow",
+  ],
+  [
+    {
+      name: "workboard_dispatch",
+      args: { boardId: "project" },
+      details: { promoted: [], reclaimed: [], blocked: [], orchestrated: [], count: 0 },
+    },
+    "Ran workboard maintenance",
+  ],
+  [
+    { name: "workboard_verify", args: { id: "card", scope: "Review", outcome: "confirmed" } },
+    "Verified workboard card",
+  ],
+  [
+    { name: "workboard_verify", args: { id: "card", scope: "Review", outcome: "disputed" } },
+    "Recorded workboard card check",
+  ],
+  [
+    { name: "workboard_board_create", args: { id: "project", name: "Renamed board" } },
+    "Saved workboard",
+  ],
+] as const)(
+  "reports the recorded platform operation, not an unconfirmed effect: %j",
+  async (card, label) => {
+    const container = await mountCard(
+      { id: "platform", ...card, completed: true },
+      { expanded: false },
+    );
+    expect(text(container, ".chat-tool-disclosure__content")).toBe(label);
+  },
+);
 
 const stop = (details: object, args: object = {}) => ({
   name: "sessions",
