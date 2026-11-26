@@ -499,6 +499,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
               {
                 owner,
                 assignedBy,
+                // Re-assigning the current owner keeps when they became owner; spawned
+                // children compare it with their creation to detect a re-owned parent.
+                ...(target.entry.owner?.actor.type === owner.type &&
+                target.entry.owner.actor.id === owner.id
+                  ? { assignedAt: target.entry.owner.assignedAt }
+                  : {}),
                 expectedSessionId,
                 expectedEntry: {
                   ...sharingExpectedEntry(target),
