@@ -55,6 +55,7 @@ export function preparePendingInputQueueItems(
         ((input.queued && input.state === "queued") ||
           (input.state === "cancelled" && input.endCause === "revoked")) &&
         input.runId &&
+        asNullableRecord(input.message)?.display !== false &&
         !messageSubagentCompletions(input.message).length,
     )
     .toSorted((left, right) => left.acceptedAt - right.acceptedAt)

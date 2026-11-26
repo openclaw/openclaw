@@ -1,5 +1,7 @@
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   timedText,
   persistedText,
@@ -14,6 +16,7 @@ import {
   transcript as chatTranscript,
 } from "./chat-flow-fixtures.test-support.ts";
 import {
+  captureUiProofEnabled,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -22,6 +25,8 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
+import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
@@ -61,6 +66,57 @@ const userPrecedesReply = (
   );
 
 suite.define(() => {
+  it("shows only recoverable cancelled messages in the Home dock and full page", async () => {
+    const sessionKey = "agent:main:main";
+    const otherKey = "agent:main:other";
+    const history = {
+      sessionId: `session:${sessionKey}`,
+      messages: [],
+      pendingInputs: {
+        items: [
+          { id: "dismissed", message: { role: "user", content: [], display: false } },
+          { id: "recoverable", message: timedText("user", "Keep this unsent draft") },
+        ].map(({ id, message }, index) => ({
+          id,
+          message,
+          runId: `${id}-run`,
+          acceptedAt: index + 1,
+          state: "cancelled",
+          endCause: "revoked",
+        })),
+        total: 2,
+        queuedCount: 0,
+      },
+    };
+    const { page, gateway } = await chatFixture(
+      suite,
+      {
+        sessionKey,
+        sessionScope: "per-sender",
+        sessions: [sessionKey, otherKey].map((key) => ({ key, kind: "direct", updatedAt: 1 })),
+        methodResponses: { "chat.startup": history, "chat.history": history },
+      },
+      { viewport: { width: 1280, height: 850 } },
+    );
+    const artifacts = captureUiProofEnabled ? createControlUiE2eArtifactDir("home-queue") : null;
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, otherKey));
+    await openProgressHomeDock(page);
+    const dock = page.locator("openclaw-home-session");
+    await dock.getByText("Keep this unsent draft", { exact: true }).waitFor();
+    if (artifacts) {
+      await dock.locator(".chat-footer").screenshot({
+        path: path.join(artifacts, "home-dock.png"),
+        animations: "disabled",
+      });
+    }
+    await expectCount(dock.getByRole("button", { name: "Remove queued message" }), 1);
+    await openHomeFullPage(page);
+    const home = page.locator(`[data-chat-session-key="${sessionKey}"]:visible`);
+    await home.getByText("Keep this unsent draft", { exact: true }).waitFor();
+    await expectCount(home.getByRole("button", { name: "Remove queued message" }), 1);
+    expect(await gateway.getRequests("chat.send")).toEqual([]);
+  });
+
   it("sends a pending steer now without replacing its user bubble", async () => {
     const sessionKey = "agent:main:main";
     const sessionId = `session:${sessionKey}`;

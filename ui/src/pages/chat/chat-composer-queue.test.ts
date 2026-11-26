@@ -389,12 +389,18 @@ describe("chat composer queue reordering", () => {
 
 it("keeps a revoked author’s queued text Not sent with copy and remove, without send permission", async () => {
   const revoked = { ...input, endCause: "revoked" as const };
+  const dismissed = {
+    ...revoked,
+    id: "hidden-input",
+    runId: "hidden-run",
+    message: { role: "user", content: [], display: false },
+  };
   const originalText = "Original input, not its preview. ".repeat(500);
   const own = vi
     .fn()
-    .mockResolvedValueOnce({ sessionId, pendingInputs: { items: [revoked], total: 1 } })
+    .mockResolvedValueOnce({ sessionId, pendingInputs: { items: [dismissed, revoked], total: 2 } })
     .mockResolvedValueOnce({ text: originalText })
-    .mockResolvedValueOnce({ pendingInputs: { items: [], total: 0 } });
+    .mockResolvedValueOnce({ pendingInputs: { items: [dismissed], total: 1 } });
   const host = makeChatPageHost({
     sessionKey,
     currentSessionId: null,
@@ -416,6 +422,9 @@ it("keeps a revoked author’s queued text Not sent with copy and remove, withou
       }),
   });
   const container = renderQueue(props());
+  expect(all(container, "item").map((row) => row.getAttribute("data-chat-queue-item"))).toEqual([
+    `pending-input:${input.id}`,
+  ]);
   expect(container.textContent).toContain("Keep my accepted input");
   expect(container.textContent).toContain("Not sent");
   expect(buildPendingInputItems(pending())).toEqual([]);
@@ -426,9 +435,10 @@ it("keeps a revoked author’s queued text Not sent with copy and remove, withou
   const remove = container.querySelector<HTMLButtonElement>(".chat-queue__remove")!;
   expect(remove.disabled).toBe(false);
   remove.click();
-  await waitForSolid(() => expect(pending()).toEqual([]));
+  await waitForSolid(() => expect(pending()).toEqual([dismissed]));
   expect(own).toHaveBeenLastCalledWith(expect.objectContaining({ inputIds: [input.id] }));
   renderQueue(props(), container);
+  expect(all(container, "item")).toHaveLength(0);
   expect(container.textContent).not.toContain("Keep my accepted input");
 });
 
