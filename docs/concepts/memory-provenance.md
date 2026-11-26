@@ -294,6 +294,27 @@ detect this:
   tracked write. The record names only the latest tracked write, not
   necessarily the write that quarantined the file.
 
+### Restore trust after reviewing root memory
+
+For a quarantined root `MEMORY.md` in a configured local agent workspace, stop the
+Gateway and use [`openclaw memory trust`](/cli/memory#memory-trust). Preview the
+SHA-256, review the whole file (including instructions and excerpts), then
+rerun with that reviewed digest. Doctor reports recovery guidance; it never
+restores trust automatically.
+
+OpenClaw saves the latest restoration's time, CLI source, reviewed digest, and
+prior tracked-write record together. Later tracked writes preserve this audit
+record. A tainted or non-owner write can quarantine the file again. After a
+restore, an out-of-band change also stays out of automatic bootstrap and new
+Memory Core indexing as trusted content: the bytes must match the restored
+hash or a subsequent trusted, tracked write.
+
+Previously indexed chunks keep their original provenance. Restoration does
+not silently contact an embedding provider or promote old chunks. Run
+`openclaw memory index --force --agent <agent-id>` separately to rebuild the
+agent's derived index from current files; the rebuild can use your configured
+embedding provider.
+
 ## Purging a person or a source end to end
 
 For a participant, start with a preview in each relevant agent:

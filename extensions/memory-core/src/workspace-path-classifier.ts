@@ -14,6 +14,7 @@ export const classifyWorkspaceMemoryPaths: ClassifyWorkspaceMemoryPaths = async 
         absolutePath: path.resolve(params.workspaceDir, relativePath),
         source: "memory",
         workspaceDir: params.workspaceDir,
+        contentSha256: params.contentHashes?.[relativePath],
         ...(params.readSources !== undefined
           ? {
               readSource: {

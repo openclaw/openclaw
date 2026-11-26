@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw memory` (status/index/reset/search/forget/promote/promote-explain/rem-harness/rem-backfill/session-backfill)"
+summary: "CLI reference for `openclaw memory` (status/index/reset/search/forget/trust/promote/promote-explain/rem-harness/rem-backfill/session-backfill)"
 read_when:
   - You want to index or search semantic memory
   - You're debugging memory availability or indexing
@@ -488,6 +488,33 @@ external backups also require separate review. In particular,
 [session deletion](/cli/sessions#delete-sessions) ordinarily retains a
 deleted-transcript archive; it is not an erasure of every conversation copy.
 </Warning>
+
+## `memory trust`
+
+With the Gateway stopped, run this on the Gateway host or container using its
+state and configuration:
+
+```bash
+openclaw memory trust --agent <agent-id>
+openclaw memory trust --agent <agent-id> --sha256 <reviewed-digest>
+```
+
+The first command previews the path and SHA-256 without changing provenance or
+printing the file. Review the **whole** file locally before running the second
+command. It refuses if the current bytes do not match the reviewed SHA-256.
+An explicit hash is required to change trust; there is no `--yes` option.
+
+This command only restores existing tracked quarantine for the configured local
+workspace's root `MEMORY.md`. It does not accept a path, follow a file symlink, or
+restore trust for `USER.md`, daily notes, or node-backed workspaces. Use `--agent`
+to select the intended workspace; agents that share that workspace share its
+file provenance.
+
+Restoration changes only the provenance row, not the workspace file or the
+derived index. It does not call a model or an embedding provider. To refresh
+existing chunks explicitly, run `openclaw memory index --force --agent <agent-id>`
+while offline. That separate command may use the configured embedding provider.
+See [Freeform edits and quarantine](/concepts/memory-provenance#freeform-edits-and-quarantine).
 
 ## `memory promote`
 

@@ -19,7 +19,20 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerSignalExitGate } from "./signal-exit-barrier.js";
 
-const localOwnerAssertion = new AsyncLocalStorage<() => void>();
+const localOwnerScope = new AsyncLocalStorage<{
+  assertCurrent: () => void;
+  localGatewayAbsent?: true;
+}>();
+
+/** Capture offline authority from the actual owner, not a caller-supplied assertion. */
+export function captureOfflineStateOwnerAssertion(): () => void {
+  const scope = localOwnerScope.getStore();
+  if (!scope?.localGatewayAbsent) {
+    throw new Error("This operation requires exclusive offline state ownership.");
+  }
+  scope.assertCurrent();
+  return scope.assertCurrent;
+}
 
 type LocalMutationScope = {
   env: NodeJS.ProcessEnv;
@@ -83,7 +96,7 @@ export async function runWithLocalStateOwner<T>(params: {
   assertTargetCurrent?: () => void;
   runLocal: (scope: LocalMutationScope) => Promise<T>;
 }): Promise<T> {
-  localOwnerAssertion.getStore()?.();
+  localOwnerScope.getStore()?.assertCurrent();
   const databasePortRecovery = params.databasePortRecovery
     ? { ...params.databasePortRecovery }
     : undefined;
@@ -165,7 +178,7 @@ export async function runWithLocalStateOwner<T>(params: {
     const { loadConfig } = await import("../config/config.js");
     assertCurrent();
     let config: OpenClawConfig | undefined;
-    return await localOwnerAssertion.run(assertCurrent, () =>
+    return await localOwnerScope.run({ assertCurrent, localGatewayAbsent }, () =>
       params.runLocal({
         env,
         // Loading config can write state. Config-free owners must reach their own admission first.

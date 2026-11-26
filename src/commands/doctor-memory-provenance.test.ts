@@ -121,6 +121,7 @@ it("reports untrusted root memory files with the last recorded write", async () 
         severity: "warning",
         path: path.join(workspaceDir, "MEMORY.md"),
         message,
+        fixHint: expect.stringContaining("memory trust --agent main"),
       }),
     ]);
     // The Gateway warning points operators at plain `openclaw doctor`, so the summary must show it.

@@ -73,7 +73,12 @@ export type WorkspaceFileSourceIdentity = readonly [
 ];
 
 export type WorkspaceGuardedReadResult =
-  | { ok: true; content: string; sourceIdentity: WorkspaceFileSourceIdentity }
+  | {
+      ok: true;
+      content: string;
+      sourceIdentity: WorkspaceFileSourceIdentity;
+      contentSha256?: string;
+    }
   | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
 
 export type WorkspaceFilesystemReadCommand = {

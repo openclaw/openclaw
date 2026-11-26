@@ -1,11 +1,18 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
-import { recordMemoryArtifactWriteProvenance } from "../memory/memory-artifact-provenance.js";
+import {
+  readMemoryArtifactProvenance,
+  recordMemoryArtifactWriteProvenance,
+  restoreRootMemoryTrust,
+} from "../memory/memory-artifact-provenance.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import type { MemoryPluginRuntime } from "../plugins/memory-state.js";
 import { clearMemoryPluginState, registerMemoryCapability } from "../plugins/memory-state.js";
+import { defaultRuntime } from "../runtime.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -22,6 +29,128 @@ const { createMemoryRuntime } = await vi.importActual<{
   }) => MemoryPluginRuntime;
 }>("../../extensions/memory-core/runtime-api.js");
 
+it("restores only reviewed root memory bytes and preserves the quarantine audit", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { registerMemoryCli } = await vi.importActual<{
+      registerMemoryCli: (program: Command) => void;
+    }>("../../extensions/memory-core/cli.js");
+    registerMemoryCapability("memory-core", {
+      runtime: createMemoryRuntime({ runInBackgroundContext: (run) => run() }),
+    });
+    const workspaceDir = state.statePath("workspace");
+    const filePath = path.join(workspaceDir, "MEMORY.md");
+    const config = { agents: { entries: { main: { workspace: workspaceDir } } } };
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await state.writeConfig(config);
+    const cli = async (...args: string[]) => {
+      const program = new Command().exitOverride();
+      registerMemoryCli(program);
+      await program.parseAsync(["memory", "trust", "--agent", "main", ...args], { from: "user" });
+    };
+    const load = async () => {
+      const { contextFiles } = await resolveBootstrapContextForRun({
+        workspaceDir,
+        config,
+        agentId: "main",
+        sessionKey: "agent:main:trust-test",
+      });
+      return contextFiles.find((file) => file.path === filePath)?.content;
+    };
+    const provenance = () =>
+      readMemoryArtifactProvenance({ workspaceDir, relativePath: "MEMORY.md" });
+    let originClass: "untrusted" | "agent" = "untrusted";
+    const operations = withMemoryWriteProvenance(
+      {
+        readFile: (file, signal?: AbortSignal) => fs.readFile(file, { signal }),
+        writeFile: (file, content, signal?: AbortSignal) => fs.writeFile(file, content, { signal }),
+      },
+      createMemoryWriteProvenanceObserver({
+        mutationRoot: workspaceDir,
+        workspaceDir,
+        resolveOriginClass: () => originClass,
+        sessionKey: "agent:main:last-write",
+      }),
+    );
+    const tracked = "Original untrusted workspace memory";
+    const reviewed = "Reviewed memory with a replacement character: \ufffd\r\n";
+    const digest = createHash("sha256").update(reviewed).digest("hex");
+    await fs.writeFile(filePath, "Initial record");
+    await operations.writeFile(filePath, tracked);
+    const before = await provenance();
+    expect(before).toMatchObject({ originClass: "untrusted", sessionKey: "agent:main:last-write" });
+    expect(await load()).toBeUndefined();
+    await fs.writeFile(filePath, reviewed);
+
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    try {
+      await cli();
+      expect(log).toHaveBeenCalledWith("SHA-256: " + digest);
+      expect(log.mock.calls.flat().join("\n")).not.toContain(reviewed.trim());
+      expect(await provenance()).toEqual(before);
+      await expect(cli("--sha256", "0".repeat(64))).rejects.toThrow(/does not match/);
+      expect(await provenance()).toEqual(before);
+      expect(await load()).toBeUndefined();
+      await expect(
+        restoreRootMemoryTrust({ workspaceDir, reviewedSha256: digest }),
+      ).rejects.toThrow(/exclusive offline state ownership/);
+
+      if (process.platform !== "win32") {
+        const aliasTarget = path.join(workspaceDir, "reviewed.md");
+        await fs.rename(filePath, aliasTarget);
+        await fs.symlink(aliasTarget, filePath);
+        await expect(cli("--sha256", digest)).rejects.toThrow(/symlink|symbolic|alias/i);
+        expect(await provenance()).toEqual(before);
+        await fs.unlink(filePath);
+        await fs.rename(aliasTarget, filePath);
+      }
+
+      await cli("--sha256", digest);
+      expect(await fs.readFile(filePath, "utf8")).toBe(reviewed);
+      expect(await load()).toContain("Reviewed memory with a replacement character");
+      const restored = await provenance();
+      expect(restored).toMatchObject({
+        originClass: "agent",
+        fileHash: digest,
+        trustRestore: {
+          source: "cli",
+          reviewedSha256: digest,
+          restoredAt: expect.any(Number),
+          previousTrackedWrite: before,
+        },
+      });
+      await cli("--sha256", digest);
+      expect(await provenance()).toEqual(restored);
+
+      // Equal decoded text cannot stand in for equal reviewed bytes.
+      await fs.writeFile(
+        filePath,
+        Buffer.concat([
+          Buffer.from(reviewed.split("\ufffd")[0]!),
+          Buffer.from([0xff]),
+          Buffer.from("\r\n"),
+        ]),
+      );
+      expect(await fs.readFile(filePath, "utf8")).toBe(reviewed);
+      expect(await load()).toBeUndefined();
+      await fs.writeFile(filePath, reviewed);
+      originClass = "agent";
+      await operations.writeFile(filePath, "Trusted tracked continuation");
+      expect(await load()).toBe("Trusted tracked continuation");
+      expect((await provenance())?.trustRestore).toEqual(restored?.trustRestore);
+      originClass = "untrusted";
+      await operations.writeFile(filePath, "New tainted write");
+      originClass = "agent";
+      await operations.writeFile(filePath, "Still quarantined");
+      expect(await load()).toBeUndefined();
+      expect(await provenance()).toMatchObject({
+        originClass: "untrusted",
+        trustRestore: restored?.trustRestore,
+      });
+    } finally {
+      log.mockRestore();
+    }
+  }));
+
 afterEach(() => {
   clearMemoryPluginState();
   resetPluginStateStoreForTests();
@@ -34,6 +163,34 @@ const noSearchRuntime = (): MemoryPluginRuntime => ({
   getMemorySearchManager: refuseSearch,
   resolveMemoryBackendConfig: () => ({ backend: "builtin" }),
 });
+
+it("honors a selected local plugin's quarantine without pinned-source support", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const workspaceDir = state.statePath("workspace");
+    const memoryPath = path.join(workspaceDir, "MEMORY.md");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(memoryPath, "Memory quarantined by the selected plugin");
+    const classifyWorkspaceMemoryPaths = vi.fn(async () => [
+      { relativePath: "MEMORY.md", originClass: "untrusted" as const },
+    ]);
+    registerMemoryCapability("memory-fixture", {
+      runtime: { ...noSearchRuntime(), classifyWorkspaceMemoryPaths },
+    });
+    const { contextFiles } = await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: {
+        plugins: { slots: { memory: "memory-fixture" } },
+        agents: { entries: { main: { workspace: workspaceDir } } },
+      },
+      agentId: "main",
+      sessionKey: "agent:main:plugin-quarantine",
+    });
+    expect(classifyWorkspaceMemoryPaths).toHaveBeenCalledOnce();
+    expect(classifyWorkspaceMemoryPaths).toHaveBeenCalledWith(
+      expect.not.objectContaining({ readSources: expect.anything() }),
+    );
+    expect(contextFiles.some((file) => file.path === memoryPath)).toBe(false);
+  }));
 
 type MemoryPath = [path: string, origin: "agent" | "untrusted", source?: string | null];
 

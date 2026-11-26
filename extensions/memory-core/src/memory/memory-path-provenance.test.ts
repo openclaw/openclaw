@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -5,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryCoreTestHarness } from "../test-helpers.js";
 import { classifyWorkspaceMemoryPaths } from "../workspace-path-classifier.js";
+import { readMemoryIndexSource } from "./manager-index-source.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
@@ -20,6 +22,38 @@ const untrustedProvenance = {
 } as const;
 
 describe("memory path provenance", () => {
+  it("trusts only the exact restored bytes used to prepare index chunks", async () => {
+    const workspaceDir = tempDirs.make("restored-index-provenance-");
+    const absolutePath = path.join(workspaceDir, "MEMORY.md");
+    const content = "Reviewed memory \ufffd";
+    const fileHash = createHash("sha256").update(content).digest("hex");
+    vi.mocked(readMemoryArtifactProvenance).mockResolvedValue({
+      originClass: "agent",
+      observedAt: 1,
+      fileHash,
+      trustRestore: {
+        source: "cli",
+        restoredAt: 2,
+        reviewedSha256: fileHash,
+        previousTrackedWrite: untrustedProvenance,
+      },
+    });
+    const read = () => readMemoryIndexSource({ workspaceDir, absolutePath, source: "memory" });
+    await fs.writeFile(absolutePath, content);
+    await expect(read()).resolves.toMatchObject({
+      content,
+      pathClassification: { originClass: "agent" },
+    });
+    await fs.writeFile(
+      absolutePath,
+      Buffer.concat([Buffer.from("Reviewed memory "), Buffer.from([0xff])]),
+    );
+    await expect(read()).resolves.toMatchObject({
+      content,
+      pathClassification: { originClass: "untrusted" },
+    });
+  });
+
   it("classifies loaded remote sources without probing Gateway-local decoys", async () => {
     const workspaceDir = tempDirs.make("remote-memory-provenance-");
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Gateway decoy");
