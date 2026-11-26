@@ -30,7 +30,7 @@ it.each(rows)(
   "includes the outcome once in the focused %s disclosure's accessible name",
   async (name, args, inline, label) => {
     const container = document.createElement("div");
-    const inlineCommands = inline ? await inlineCommandPresentation() : undefined;
+    const inlineCommands = inline ? inlineCommandPresentation : undefined;
     const end = { itemId: "search", kind: "tool", title: "Search", phase: "end" } as const;
     for (const [activity, outcome] of [
       [{ ...end, status: "blocked" }, "Blocked"],
@@ -62,7 +62,7 @@ it.each(rows)(
     const card = { id: name, name, args };
     const options = {
       interrupted: true,
-      inlineCommands: inline ? await inlineCommandPresentation() : undefined,
+      inlineCommands: inline ? inlineCommandPresentation : undefined,
       onToggleExpanded: vi.fn(),
     };
     const container = await mountCard(card, { ...options, expanded: false });

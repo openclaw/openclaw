@@ -623,7 +623,7 @@ it.each([
         ? { name: "tool_call", args: { id: "web_search", args } }
         : { name: "web_search", args };
     const search = { id: "long-search", ...card, ...call, inputText: JSON.stringify(call.args) };
-    const inlineCommands = await inlineCommandPresentation();
+    const inlineCommands = inlineCommandPresentation;
     const container = await mountCard(search, { expanded: false, inlineCommands });
     const row = query(container, ".chat-tool-row")!;
     const title = `Search the web for “${args.query}”`;
