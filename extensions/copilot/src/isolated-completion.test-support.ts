@@ -60,7 +60,9 @@ export function createCopilotIsolatedHarnessFixture(
   const usageListeners = new Set<(event: SessionEvent) => void>();
   const session = {
     on: vi.fn((type: string, listener: (event: SessionEvent) => void) => {
-      if (type === "assistant.usage") usageListeners.add(listener);
+      if (type === "assistant.usage") {
+        usageListeners.add(listener);
+      }
       return () => usageListeners.delete(listener);
     }),
     abort: vi.fn().mockResolvedValue(undefined),
@@ -86,17 +88,21 @@ export function createCopilotIsolatedHarnessFixture(
     harness,
     createSession,
     resumeSession,
-    emitUsage(data: Extract<SessionEvent, { type: "assistant.usage" }>["data"], agentId?: string) {
-      for (const listener of usageListeners)
+    emitUsage(
+      usageData: Extract<SessionEvent, { type: "assistant.usage" }>["data"],
+      agentId?: string,
+    ) {
+      for (const listener of usageListeners) {
         listener({
           type: "assistant.usage",
           ...(agentId !== undefined ? { agentId } : {}),
           ephemeral: true,
-          data,
+          data: usageData,
           id: "fixture-usage",
           parentId: null,
           timestamp: "2026-01-01T00:00:00Z",
         });
+      }
     },
     complete: (extra: Partial<IsolatedCompletionParams> = {}) =>
       harness.runIsolatedCompletionV2?.({ ...ISOLATED, ...extra }),

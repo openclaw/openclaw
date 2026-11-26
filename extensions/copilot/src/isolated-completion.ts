@@ -221,7 +221,9 @@ export async function runCopilotIsolatedCompletion(
     });
     session = createdSession;
     unsubscribeUsage = createdSession.on("assistant.usage", (event) => {
-      if (event.agentId !== undefined) return;
+      if (event.agentId !== undefined) {
+        return;
+      }
       usage = normalizeCopilotUsage(event.data);
     });
     await awaitWithinCompletionBoundary({

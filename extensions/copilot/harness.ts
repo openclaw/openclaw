@@ -27,7 +27,6 @@ import {
 } from "./src/history-compaction.js";
 import {
   isCopilotByokUnsupportedProviderError,
-  resolveCopilotProvider,
   supportsCopilotByokProviderShape,
 } from "./src/provider-bridge.js";
 import type {
@@ -681,4 +680,3 @@ export function createCopilotAgentHarness(
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
