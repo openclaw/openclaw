@@ -9,12 +9,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import * as sentinelStore from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  listUpdateRuns,
-  recordUpdateRunVerification,
-} from "./update-run-ledger.js";
+import { createUpdateRun, finishUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
 import {
   runAutoUpdateCommand,
   runCampaignUpdate,
@@ -183,8 +178,6 @@ describe("automatic release campaigns", () => {
     "different detail",
     "transient metadata",
     "rolled back",
-    "core committed",
-    "core committed plugin failure",
   ] as const)("backs off only identical activation failures across restart: %s", async (resume) => {
     const log = { info: vi.fn() };
     const step: UpdateStepResult = {
@@ -201,15 +194,6 @@ describe("automatic release campaigns", () => {
       result: updateResult({ reason: "doctor-failed", steps: [step], durationMs: 10 }),
     };
     const runAuto = vi.fn<AutoUpdateRunner>(async ({ runId }) => {
-      if (resume.startsWith("core committed")) {
-        recordUpdateRunVerification(runId, {
-          booted: true,
-          serviceRunning: true,
-          coreReady: true,
-          versionMatch: true,
-          runningVersion: "2.0.0-beta.1",
-        });
-      }
       if (resume === "rolled back") {
         // The updater's terminal owner records a restored previous release as rolled-back.
         finishUpdateRun(runId, {
@@ -231,10 +215,6 @@ describe("automatic release campaigns", () => {
     if (resume === "transient metadata") {
       step.failureFacts = doctorFacts("Check failed (5ms)");
     }
-    if (resume === "core committed plugin failure") {
-      step.name = "plugins";
-      outcome.result.reason = "plugins";
-    }
     await attempt();
     if (resume === "different reason") {
       outcome.result.reason = "candidate-checks-timeout";
@@ -251,7 +231,7 @@ describe("automatic release campaigns", () => {
     expect(failures).toHaveLength(2);
     await closeStateDatabaseForTest();
     await attempt();
-    if (resume.startsWith("different") || resume.startsWith("core committed")) {
+    if (resume.startsWith("different")) {
       expect(runAuto).toHaveBeenCalledTimes(3);
       return;
     }

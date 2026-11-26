@@ -19,10 +19,6 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
@@ -756,9 +752,7 @@ it.each(["settlement", "database writes", "reporting failure"] as const)(
       });
       expect(stepsNamed(result, "doctor process settlement")).toEqual([settlement]);
     }
-    expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
-      warning,
-    );
+    expect(result.steps.flatMap((step) => step.warnings ?? [])).toContain(warning);
     await restoreTransactions();
     await expectOriginal();
   },

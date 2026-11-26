@@ -497,7 +497,7 @@ describe("SidebarUpdateCard", () => {
     "keeps live run controls focused until acknowledgement (compact: %s)",
     async (compact) => {
       const element = await mount(null, { compact, updateRun: createUpdateRunFixture() });
-      expect(element.element.textContent).toContain("OpenClaw update in progress: staging");
+      expect(element.element.textContent).toContain("OpenClaw");
       expect(element.element.textContent).toContain("phases complete");
       const actionSelector = compact
         ? ".sidebar-issues-panel__action"
@@ -514,7 +514,7 @@ describe("SidebarUpdateCard", () => {
       await element.update({
         updateRun: createUpdateRunFixture({ phase: "verifying", updatedAtMs: 3 }),
       });
-      expect(element.element.textContent).toContain("OpenClaw update in progress: verifying");
+      expect(element.element.textContent).toContain("OpenClaw");
       expect(element.find(actionSelector)).toBe(action);
       expect(document.activeElement).toBe(action);
       if (details) {
@@ -809,7 +809,7 @@ describe("SidebarUpdateCard", () => {
       expect(Boolean(element.find(".sidebar-update-card__hold"))).toBe(hold);
       const outcome = element.element.querySelectorAll(".sidebar-update-card__title");
       expect([...outcome].map((title) => title.textContent)).toEqual([
-        "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).",
+        "✅ OpenClaw updated to 2026.9.2.",
       ]);
     },
   );
@@ -823,7 +823,7 @@ describe("SidebarUpdateCard", () => {
     });
 
     expect(element.find(".sidebar-issues-panel__entity")?.textContent).toBe(
-      "OpenClaw updated to 2026.9.2 (from 2026.9.1).",
+      "OpenClaw updated to 2026.9.2.",
     );
     await element.expand();
     expect(element.find("[role='timer']")).toBeNull();

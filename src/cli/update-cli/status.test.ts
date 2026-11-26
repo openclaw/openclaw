@@ -248,7 +248,7 @@ it.each([
       expectOutput("Last update run failed (preflight-no-good-commit)");
       expect(outputText()).not.toContain("Run openclaw update.");
     } else {
-      expectOutput("OpenClaw update failed", "Run openclaw update.");
+      expectOutput("OpenClaw couldn't finish updating", "Run openclaw update.");
     }
   },
 );

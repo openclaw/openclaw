@@ -429,9 +429,12 @@ it.skipIf(process.platform === "win32").for([
                 expect.objectContaining({ step: "activating", termination: "signal", signal }),
               ]),
             });
-            const report = read(stateDir, "update-reports", `${message.runId}.md`);
-            expect(report).toContain(`interrupted by ${signal} during activating`);
-            expect(report).toContain("Bounded diagnostic JSON:");
+            expect(readRun(message.runId)?.steps).toContainEqual(
+              expect.objectContaining({
+                step: "activating",
+                detail: expect.stringContaining(`interrupted by ${signal} during activating`),
+              }),
+            );
             expect(stderr).toContain("openclaw update repair");
             return;
           }

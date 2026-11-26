@@ -1,9 +1,0 @@
-# PR #205987: 419 net test/support lines, minus the unchanged 400-line allowance.
-# Gateway-ready aggregate/notifier settlement after required plugins; early CLI completion
-# with the explicit-consent timeout exception; no nightly backoff or whole-update retry;
-# precise status/notice/report recovery; and one localized, persistent Control UI toast.
-# The existing Gateway test also preserves a newer pending trial during old maintenance
-# and resumes interrupted maintenance from the existing reported/running facts.
-# The ready/expired-lock test awaits required work before closing its work scope.
-# The generic ledger/history regrading experiment and its added test were removed.
-19

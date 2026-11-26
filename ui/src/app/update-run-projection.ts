@@ -4,16 +4,14 @@ import {
   projectUpdateRunHistory,
   type UpdateRunServingIdentity,
 } from "../../../src/infra/update-run-history-projection.ts";
+import { renderUpdateRunSummary } from "../../../src/infra/update-run-notice.ts";
 import {
   isAcknowledgedAbandonedUpdateRun,
   isUpdateRepairRun,
   type UpdateRunRecord,
   type UpdateRunStep,
 } from "../../../src/infra/update-run-record.ts";
-import {
-  renderUpdateRunReport,
-  resolveUpdateRunIdentity,
-} from "../../../src/infra/update-run-report.ts";
+import { resolveUpdateRunIdentity } from "../../../src/infra/update-run-report.ts";
 import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 
@@ -74,13 +72,13 @@ export function projectUpdateRun(
     historical && serving && isServingUpdateTarget(run, serving)
       ? t("updates.run.servingTarget")
       : null;
-  const report = historical
-    ? {
-        headline: historical,
-        lines: targetNote ? [targetNote] : [],
-        markdown: targetNote ? `${historical}\n\n${targetNote}` : historical,
-      }
-    : renderUpdateRunReport(run);
+  const summary = historical
+    ? targetNote
+      ? `${historical}\n\n${targetNote}`
+      : historical
+    : renderUpdateRunSummary(run);
+  const [headline, ...lines] = summary.split("\n");
+  const report = { headline, lines: lines.filter(Boolean), markdown: summary };
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
     const recorded = visibleSteps.find((step) => step.step === phase);

@@ -122,8 +122,8 @@ export async function prepareUpdate(params: {
     await finishUpdateRunAsync(
       params.runId,
       {
-        status: step.status === "failed" ? "failed" : "skipped",
-        reason: step.status === "failed" ? step.step : "already-current",
+        status: "skipped",
+        reason: "already-current",
         ...(nextAction ? { nextAction } : {}),
       },
       { env },
@@ -609,7 +609,7 @@ export async function runPluginMaintenance(params: {
     ];
   }
   const failures = plugins?.npm.outcomes.filter((outcome) => outcome.status === "error") ?? [];
-  // A healthy core stays selected, but failed maintenance must fail the aggregate result.
+  // Failed maintenance remains a failed step, not a failed core update.
   const failed =
     result.code !== 0 ||
     !plugins ||

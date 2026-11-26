@@ -112,15 +112,7 @@ export function registerAlreadyCurrentUpdateTests() {
           ...(expected.changed ? ["--accept-capabilities"] : []),
         ]);
         const record = await getUpdateRunAsync(run.runId);
-        expect(record).toMatchObject(
-          expected.result.status === "error"
-            ? {
-                status: "failed",
-                reason: "plugins",
-                origin: { nextAction: "openclaw plugins update --all" },
-              }
-            : { status: "skipped", reason: "already-current" },
-        );
+        expect(record).toMatchObject({ status: "skipped", reason: "already-current" });
         const plugins = record?.steps.find(({ step }) => step === "plugins");
         expect(plugins?.status).toBe(expected.result.status === "error" ? "failed" : "completed");
         expect(plugins?.detail).toBe(expected.detail);

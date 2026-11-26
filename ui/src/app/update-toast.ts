@@ -1,4 +1,3 @@
-import { hasCommittedUpdateRunCore } from "../../../src/infra/update-run-record.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { showToast, type ToastSeverity } from "../lib/toast.ts";
@@ -26,30 +25,14 @@ export function bindUpdateToast(
     registerUpdateActionsEnglish();
     const running = run.status === "running";
     const waiting = running && run.phase === "requested";
-    const committedCore = hasCommittedUpdateRunCore(run) && (running || run.status === "failed");
-    const failedStep = run.steps.findLast((step) => step.status === "failed");
-    const serving = run.verification.runningVersion ?? t("updates.run.toast.installedVersion");
     const reconnecting = running && gateway.snapshot.phase !== "connected";
     const key = running ? (waiting ? "preparing" : "processing") : run.status;
-    const message = committedCore
-      ? t(`updates.run.toast.${running ? "coreServing" : "coreServingFailed"}`, {
-          version: serving,
-        })
-      : reconnecting
-        ? t("updates.dialog.reconnecting")
-        : t(`updates.run.toast.${key}`);
-    const description = committedCore
-      ? running
-        ? t("updates.run.toast.pluginsPending")
-        : t("updates.run.toast.pluginFailure", {
-            step: failedStep?.step ?? run.reason ?? t("updates.run.step.failed"),
-            next: run.origin.nextAction ?? "openclaw update status",
-          })
-      : reconnecting
-        ? t("updates.run.reconnecting")
-        : running && !waiting
-          ? t(`updates.run.phase.${run.phase}`)
-          : undefined;
+    const message = reconnecting ? t("updates.dialog.reconnecting") : t(`updates.run.toast.${key}`);
+    const description = reconnecting
+      ? t("updates.run.reconnecting")
+      : running && !waiting
+        ? t(`updates.run.phase.${run.phase}`)
+        : undefined;
     const actionLabel = running ? undefined : t("updates.run.toast.details");
     const severity: ToastSeverity = running
       ? "progress"

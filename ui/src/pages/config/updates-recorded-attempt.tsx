@@ -1,9 +1,6 @@
 import { action, createOptimistic, For, Show } from "solid-js";
 import { projectUpdateRunHistory } from "../../../../src/infra/update-run-history-projection.ts";
-import {
-  hasCommittedUpdateRunCore,
-  isAcknowledgedAbandonedUpdateRun,
-} from "../../../../src/infra/update-run-record.ts";
+import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-run-record.ts";
 import {
   classifyUpdateOutcome,
   isReportableUpdateRun,
@@ -37,10 +34,6 @@ export function RecordedAttempt(
     return presentReport(view, pending);
   };
   const run = () => props.update.updateRun;
-  const committedCore = () => {
-    const currentRun = run();
-    return currentRun ? hasCommittedUpdateRunCore(currentRun) : false;
-  };
   const serving = () =>
     props.connected ? { version: props.gatewayVersion, buildId: props.gatewayBuildId } : undefined;
   const failed = () => {
@@ -129,7 +122,7 @@ export function RecordedAttempt(
                     {t("updates.page.diagnoseFailure")}
                   </button>
                 </Show>
-                <Show when={failed() && !committedCore()}>
+                <Show when={failed()}>
                   <button
                     class="btn btn--sm primary"
                     type="button"
@@ -165,7 +158,6 @@ export function RecordedAttempt(
           <Show
             when={
               failed() &&
-              !committedCore() &&
               run()?.target.installationMethod !== "ocm" &&
               !(
                 run()?.verification.rollbackOutcome?.status === "succeeded" &&

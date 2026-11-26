@@ -42,74 +42,27 @@ describe("update conversation notices", () => {
     ]);
   });
 
-  it.each([
-    ["committed", {}, true],
-    ["incomplete", { coreReady: false }, false],
-    ["rollback", { rollbackOutcome: { status: "succeeded", reason: "restored" } }, false],
-    [
-      "package rollback",
-      {
-        recovery: {
-          serviceRestartSafe: true,
-          packageRollbackVerified: true,
-          service: "healthy",
-          version: "2026.9.1",
-        },
-      },
-      false,
-    ],
-  ] as const)("distinguishes %s core facts in final notices", (_name, patch, committed) => {
-    const action = "Run `openclaw plugins reload brave codex`.";
-    const record = {
-      status: "failed" as const,
-      phase: "finished" as const,
-      reason: "plugin-failed",
-      verification: {
-        booted: true,
-        serviceRunning: true,
-        coreReady: true,
-        versionMatch: true,
-        runningVersion: "2026.9.2",
-        ...patch,
-      },
-      steps: [{ step: "plugins", status: "failed" as const }],
-      origin: { nextAction: action },
-    };
-    const text = renderUpdateRunSummary(record, { manualCommand: "openclaw update" });
-    if (committed) {
+  it.each(["succeeded", "skipped"] as const)(
+    "names failed maintenance without changing the %s core outcome",
+    (status) => {
+      const action = "Run `openclaw plugins reload brave codex`.";
+      const record = {
+        status,
+        phase: "finished" as const,
+        reason: null,
+        after: { version: "2026.9.2" },
+        steps: [{ step: "plugins", status: "failed" as const }],
+        origin: { nextAction: action },
+      };
+      const text = renderUpdateRunSummary(record);
       expect(text).toBe(
-        `⚠️ OpenClaw core committed; 2026.9.2 is serving.\nFailed step: plugins.\nNext: ${action}`,
+        `⚠️ OpenClaw updated; 2026.9.2 is serving.\nFailed step: plugins.\nNext: ${action}`,
       );
+      expect(renderUpdateRunNotice(record, "finished")).toBe(text);
       expect(isUpdateRunTerminalNoticeText(text)).toBe(true);
-      expect(isUpdateRunTerminalNoticeText(text.replace("Failed step:", "Other step:"))).toBe(
-        false,
-      );
-    } else {
-      expect(text).toContain("Update failed before completion (plugin-failed).");
-      expect(text).not.toContain("core committed");
-    }
-  });
-
-  it("leaves committed core activation running without a terminal notice", () => {
-    const record = {
-      status: "running" as const,
-      phase: "verifying" as const,
-      reason: null,
-      verification: {
-        booted: true,
-        serviceRunning: true,
-        coreReady: true,
-        versionMatch: true,
-        runningVersion: "2026.9.2",
-      },
-    };
-    const text = renderUpdateRunSummary(record);
-    expect(text).toBe(
-      "⬆️ OpenClaw core committed; 2026.9.2 is installed and serving.\nPlugin activation continues in the background. Run `openclaw update status` for the final result and final notice.",
-    );
-    expect(isUpdateRunTerminalNoticeText(text)).toBe(false);
-    expect(renderUpdateRunNotice(record, "finished")).toBeNull();
-  });
+      expect(record.status).toBe(status);
+    },
+  );
 
   it("only announces the current milestone", () => {
     const requested = { status: "running" as const, phase: "requested" as const, reason: null };

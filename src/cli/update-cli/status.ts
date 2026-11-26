@@ -39,10 +39,10 @@ import {
   type UpdateCheckResult,
 } from "../../infra/update-check.js";
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
 import { formatUpdateRunOmittedSteps } from "../../infra/update-run-omission.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatusWithOwedSteps } from "../../infra/update-run-status.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -636,23 +636,20 @@ async function inspectUpdateStatus(
               undefined,
             )
           : undefined;
-      const report = renderUpdateRunReport(
-        run,
+      const summary = renderUpdateRunSummary(
         refusedRestartRecovery
-          ? { nextAction: refusedRestartRecovery }
-          : run.status === "failed"
-            ? { currentHealth: currentRunHealth }
-            : {},
+          ? { ...run, origin: { ...run.origin, nextAction: refusedRestartRecovery } }
+          : run,
       );
       const historical =
         currentRunHealth?.kind === "responding"
           ? projectUpdateRunHistory(run, currentRunHealth)
           : null;
       if (!abandonedRun && !staleRun) {
-        defaultRuntime.log(historical ?? report.headline);
+        defaultRuntime.log(historical ?? summary);
       }
       const omission = historical ? formatUpdateRunOmittedSteps(run.steps) : undefined;
-      for (const line of historical ? (omission ? [omission] : []) : report.lines) {
+      for (const line of historical && omission ? [omission] : []) {
         defaultRuntime.log(line);
       }
       defaultRuntime.log("");

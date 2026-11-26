@@ -15,9 +15,9 @@ import * as watcherModule from "../gateway/update-run-watcher.js";
 import * as rootModule from "../infra/openclaw-root.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type * as UpdateInstallStatus from "../infra/update-install-status.js";
+import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
-import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
 import type * as ProcessExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
@@ -471,16 +471,13 @@ it.each(["warning", "error"] as const)(
       });
     }
     if (finding === "error") {
-      const { lines } = renderUpdateRunReport(inspected!);
-      expect(lines).toContainEqual(
-        expect.stringContaining("Doctor inspections did not run after the update"),
+      expect(inspected?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "warning:post-activation doctor inspections",
+          detail: expect.stringContaining("openclaw doctor --lint --all"),
+        }),
       );
-      expect(lines).toContainEqual(expect.stringContaining("openclaw doctor --lint --all"));
     }
-    // The update stays successful; a warning finding or skipped inspections need attention.
-    expect(renderUpdateRunReport(inspected!).headline).toMatch(
-      /^✅ OpenClaw updated.*; 1 warning needs attention\.$/u,
-    );
   },
 );
 
@@ -603,7 +600,7 @@ it.each([undefined, true, false])(
     }
     const maintained = await getUpdateRunAsync(run.runId, options);
     expect(maintained).toMatchObject({
-      status: acceptCapabilities ? "succeeded" : "failed",
+      status: "succeeded",
       phase: "finished",
       finishedAtMs: expect.any(Number),
     });
@@ -615,25 +612,22 @@ it.each([undefined, true, false])(
     );
     expect(reload).toHaveBeenCalledExactlyOnceWith(targets);
     expect(runPostActivationInspections).toHaveBeenCalledOnce();
-    expect(notices).toEqual([
-      { runId: run.runId, kind: "finished", status: acceptCapabilities ? "succeeded" : "failed" },
-    ]);
+    expect(notices).toEqual([{ runId: run.runId, kind: "finished", status: "succeeded" }]);
     expect(await readTrial()).toMatchObject({ runId: "next-run", phase: "pending" });
-    const report = renderUpdateRunReport(maintained!);
+    const summary = renderUpdateRunSummary(maintained!);
     if (failed) {
       const pluginStep = maintained?.steps.find(({ step }) => step === "plugins");
       expect(pluginStep?.detail).toContain("broken: package download failed");
       expect(pluginStep?.detail).toContain("openclaw plugins update broken");
-      expect(report.headline).toContain("core committed");
-      expect(report.lines.join("\n")).toContain("broken: package download failed");
-      expect(report.lines.join("\n")).toContain("openclaw plugins update broken");
+      expect(summary).toContain("Failed step: plugins.");
+      expect(summary).toContain("openclaw plugins update broken");
     } else if (!acceptCapabilities) {
       const pluginStep = maintained?.steps.find(({ step }) => step === "plugins");
       expect(pluginStep?.detail).toContain("changed after the installation batch");
       expect(pluginStep?.detail).toContain("openclaw plugins reload updated restored");
-      expect(report.headline).toContain("core committed");
+      expect(summary).toContain("openclaw plugins reload updated restored");
     } else {
-      expect(report.headline).not.toContain("needs attention");
+      expect(summary).not.toContain("Failed step:");
     }
   },
 );

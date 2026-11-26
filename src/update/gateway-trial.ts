@@ -23,9 +23,7 @@ import {
 } from "./store.js";
 
 /** The committed core keeps serving while its own code updates and reloads installed plugins. */
-async function maintainTrialPlugins(
-  trial: Trial,
-): Promise<{ step: UpdateRunStep; nextAction?: string } | undefined> {
+async function maintainTrialPlugins(trial: Trial): Promise<{ nextAction?: string } | undefined> {
   let pluginIds: string[] = [];
   let step: UpdateRunStep | undefined;
   try {
@@ -106,7 +104,7 @@ async function maintainTrialPlugins(
       detail,
     };
     await recordUpdateRunStepAsync(trial.runId, step);
-    return { step, nextAction };
+    return { nextAction };
   }
 }
 
@@ -180,27 +178,14 @@ export async function settleRunFromTrial(
         stderrTail,
       });
     }
-    const finish = async (plugins?: { step: UpdateRunStep; nextAction?: string }) => {
-      let failed = plugins?.step.status === "failed" ? plugins.step : undefined;
-      if (outcome.status === "succeeded" && !failed) {
-        failed = (await getUpdateRunAsync(trial.runId))?.steps.find(
-          (step) => step.status === "failed",
-        );
-      }
+    const finish = async (nextAction?: string) => {
       const finished = await finishUpdateRunAsync(
         trial.runId,
         outcome.status === "succeeded"
           ? {
-              status: failed ? "failed" : "succeeded",
+              status: "succeeded",
               after: { version: VERSION, buildId },
-              ...(failed
-                ? {
-                    reason: failed.step,
-                    nextAction:
-                      plugins?.nextAction ??
-                      `Run \`openclaw update status\` to inspect the failed ${failed.step} step.`,
-                  }
-                : {}),
+              ...(nextAction ? { nextAction } : {}),
             }
           : {
               status: "failed",
@@ -225,7 +210,7 @@ export async function settleRunFromTrial(
           if (getAsyncWorkSignal()?.aborted || !plugins) {
             return;
           }
-          await finish(plugins);
+          await finish(plugins.nextAction);
           try {
             const [{ runPostActivationInspections }, { resolvePostActivationInspectionCheckIds }] =
               await Promise.all([
@@ -277,7 +262,7 @@ export async function settleRunFromTrial(
           detail: `Plugin activation did not run because the Gateway update watcher is unavailable. Run \`${nextAction}\`.`,
         };
         await recordUpdateRunStepAsync(trial.runId, step);
-        await finish({ step, nextAction });
+        await finish(nextAction);
       }
     } else {
       await finish();

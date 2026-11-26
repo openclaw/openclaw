@@ -30,12 +30,6 @@ const enUpdateActions = {
         skipped: "OpenClaw update skipped",
         "rolled-back": "OpenClaw update rolled back",
         details: "View update details",
-        coreServing: "⬆️ OpenClaw core committed; {version} is installed and serving.",
-        coreServingFailed: "⚠️ OpenClaw core committed; {version} is serving.",
-        installedVersion: "the installed version",
-        pluginsPending:
-          "Plugin activation continues in the background. Run `openclaw update status` for the final result and final notice.",
-        pluginFailure: "Failed step: {step}. Next: {next}",
       },
       phases: "Update phases",
       steps: "Installation steps",

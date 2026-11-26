@@ -7,7 +7,6 @@ import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-
 import * as portsInspect from "../../infra/ports-inspect.js";
 import * as stateSchemas from "../../infra/update-candidate-state.js";
 import { getUpdateRun, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import * as processExec from "../../process/exec.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
@@ -184,10 +183,12 @@ export function registerUnverifiedDefinitionRecoveryTests({
       }
       const recorded = getUpdateRun(run.runId, { env: run.env });
       expect(recorded?.status).toBe(succeeded ? "succeeded" : "failed");
-      const report = renderUpdateRunReport(recorded!).markdown;
-      expect(report).toContain("openclaw update repair");
-      expect(report).not.toMatch(/keep the gateway stopped/i);
-      expect(report).toContain(reportedDetail);
+      expect(recorded?.origin.nextAction).toContain("openclaw update repair");
+      expect(recorded?.origin.nextAction).not.toMatch(/keep the gateway stopped/i);
+      expect([
+        recorded?.reason,
+        ...(recorded?.steps.map((step) => step.detail) ?? []),
+      ]).toContainEqual(expect.stringContaining(reportedDetail));
     },
   );
   const answered = { serviceRunning: true, pid: 4321, port: 18789, runningVersion: "2026.9.3" };

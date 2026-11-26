@@ -24,7 +24,7 @@ import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/upda
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
 import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
-import { hasCommittedUpdateRunCore, type UpdateRunRecord } from "../infra/update-run-record.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -311,31 +311,15 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
   let record = request
     ? await followRun(
         request.runId,
-        opts,
+        opts.json,
         Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
-        request,
       )
     : await updateWithoutGateway({ ...opts, timeoutMs });
   if (
     request &&
     !request.supportsConsent &&
     opts.acceptCapabilities &&
-    record?.status === "running"
-  ) {
-    report(record, opts.json);
-    defaultRuntime.error(
-      "The update is still running, but capability consent was not applied before the timeout. Run `openclaw update status`; after it finishes, run `openclaw update --accept-capabilities`.",
-    );
-    process.exitCode = 1;
-    return;
-  }
-  if (
-    request &&
-    !request.supportsConsent &&
-    opts.acceptCapabilities &&
-    (record?.status === "succeeded" ||
-      record?.status === "skipped" ||
-      (record?.status === "failed" && hasCommittedUpdateRunCore(record)))
+    (record?.status === "succeeded" || record?.status === "skipped")
   ) {
     // Shipped Gateways reject unknown fields. Update once with the old request, then
     // apply consent through the now-new Gateway's existing already-current/plugin path.
@@ -343,9 +327,8 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     record = retry
       ? await followRun(
           retry.runId,
-          opts,
+          opts.json,
           Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
-          retry,
         )
       : record;
   }
@@ -361,7 +344,7 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     const releaseAdmission = opts.json ? record.origin.releaseAdmission : undefined;
     record = await followRun(
       record.runId,
-      opts,
+      opts.json,
       Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
     );
     // The local preparer recorded admission; the Gateway follow-up carries only wire fields.
@@ -371,10 +354,7 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
   }
   report(record, opts.json);
   process.exitCode =
-    record?.status === "succeeded" ||
-    record?.status === "skipped" ||
-    (record?.status === "running" && hasCommittedUpdateRunCore(record)) ||
-    isPendingActivation(record)
+    record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
       ? 0
       : 1;
 }
@@ -504,9 +484,8 @@ async function requestGatewayUpdate(
 /** The Gateway restarts during a run; until the deadline, its unavailability is expected. */
 async function followRun(
   runId: string,
-  opts: Pick<ReleaseUpdateOptions, "json" | "acceptCapabilities">,
+  json: boolean,
   budgetMs: number,
-  request?: { supportsConsent: boolean },
 ): Promise<UpdateRunRecord | undefined> {
   const deadline = Date.now() + budgetMs;
   let lastLine = "";
@@ -535,15 +514,11 @@ async function followRun(
     if (record) {
       const step = record.steps.at(-1)?.step ?? record.phase;
       const line = `${record.phase}: ${step}`;
-      if (!opts.json && line !== lastLine) {
+      if (!json && line !== lastLine) {
         defaultRuntime.log(line);
         lastLine = line;
       }
-      if (
-        record.status !== "running" ||
-        ((!opts.acceptCapabilities || request?.supportsConsent !== false) &&
-          hasCommittedUpdateRunCore(record))
-      ) {
+      if (record.status !== "running") {
         return record;
       }
     }
@@ -590,61 +565,25 @@ function isPendingActivation(record: UpdateRunRecord | undefined) {
   return record?.status === "running" && record.phase === "activating";
 }
 
-function updateFailure(record: UpdateRunRecord | undefined): string | undefined {
-  if (!record || record.status === "running") {
-    return "The update did not finish in time. Run `openclaw update status` to see it.";
-  }
-  if (record.status === "succeeded" || record.status === "skipped") {
-    return undefined;
-  }
-  const detail = record.steps.find(({ step }) => step === "outcome")?.detail;
-  const message = record.origin.nextAction ?? record.reason ?? "unknown reason";
-  return `Update failed: ${detail ? `${detail}\n${message}` : message}`;
-}
-
 function report(record: UpdateRunRecord | undefined, json: boolean) {
   if (json) {
     defaultRuntime.writeJson(record ?? { status: "unknown" });
     return;
   }
-  if (
-    record &&
-    (record.status === "running" || record.status === "failed") &&
-    hasCommittedUpdateRunCore(record)
-  ) {
-    const summary = renderUpdateRunSummary(record);
-    if (record.status === "failed") {
-      defaultRuntime.error(summary);
-    } else {
-      defaultRuntime.log(summary);
-    }
-    return;
-  }
   // The CLI stopped following before the run finished (its --timeout budget); the run goes on.
   if (!record || (record.status === "running" && !isPendingActivation(record))) {
-    defaultRuntime.error(updateFailure(record));
+    defaultRuntime.error(
+      "The update did not finish in time. Run `openclaw update status` to see it.",
+    );
     return;
-  }
-  const plugins = record.steps.find(({ step }) => step === "plugins");
-  if (plugins?.status === "failed") {
-    defaultRuntime.error(`Plugins were not all updated: ${plugins.detail ?? "unknown reason"}`);
-  } else if (plugins?.detail) {
-    defaultRuntime.log(`Plugin notes: ${plugins.detail}`);
-  }
-  const forwarding = record.steps.find(({ step }) => step === "forwarding");
-  if (forwarding?.status === "failed") {
-    defaultRuntime.error(forwarding.detail);
   }
   if (isPendingActivation(record)) {
     return;
   }
-  if (record.status === "succeeded") {
-    defaultRuntime.log(`Updated to ${record.after.version ?? "the new version"}.`);
-  } else if (record.status === "skipped") {
-    defaultRuntime.log(
-      record.reason === "already-current" ? "Already up to date." : `Skipped: ${record.reason}`,
-    );
+  const summary = renderUpdateRunSummary(record);
+  if (record.status === "failed" || record.status === "rolled-back") {
+    defaultRuntime.error(summary);
   } else {
-    defaultRuntime.error(updateFailure(record));
+    defaultRuntime.log(summary);
   }
 }

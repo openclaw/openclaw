@@ -1,9 +1,9 @@
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
-import { hasCommittedUpdateRunCore, type UpdateRunRecord } from "./update-run-record.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type NoticeRun = Pick<UpdateRunRecord, "status" | "reason"> &
-  Partial<Pick<UpdateRunRecord, "before" | "verification" | "steps" | "origin">>;
+  Partial<Pick<UpdateRunRecord, "before" | "after" | "verification" | "steps" | "origin">>;
 
 /** Serving observation is independent of permission to restart or roll back. */
 export function resolveUpdateRunVerifiedServingVersion(
@@ -62,23 +62,20 @@ export function renderUpdateRunSummary(
       : (SKIPPED_UPDATE_RUN_HEADLINES.get(run.reason) ?? "ℹ️ OpenClaw wasn't updated.");
   const nextStep = options.manualCommand
     ? `Open Settings → Updates in the OpenClaw app for details. To continue, run \`${options.manualCommand}\` in your terminal.`
-    : "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.";
-  if (run.verification && hasCommittedUpdateRunCore({ verification: run.verification })) {
-    const serving = run.verification.runningVersion ?? "the installed version";
-    if (run.status === "running") {
-      return [
-        `⬆️ OpenClaw core committed; ${serving} is installed and serving.`,
-        "Plugin activation continues in the background. Run `openclaw update status` for the final result and final notice.",
-      ].join("\n");
-    }
-    const failedStep = run.steps?.findLast((step) => step.status === "failed");
-    if (run.status === "failed" && failedStep) {
-      return [
-        `⚠️ OpenClaw core committed; ${serving} is serving.`,
-        `Failed step: ${failedStep.step}.`,
-        run.origin?.nextAction ? `Next: ${run.origin.nextAction}` : nextStep,
-      ].join("\n");
-    }
+    : run.origin?.nextAction
+      ? `Next: ${run.origin.nextAction}`
+      : "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.";
+  const failedStep = run.steps?.findLast((step) => step.status === "failed");
+  const serving = run.verification?.runningVersion ?? run.after?.version;
+  if (failedStep && (run.status === "succeeded" || run.status === "skipped")) {
+    return [
+      `⚠️ OpenClaw updated${serving ? `; ${serving} is serving` : ""}.`,
+      `Failed step: ${failedStep.step}.`,
+      run.origin?.nextAction ? `Next: ${run.origin.nextAction}` : nextStep,
+    ].join("\n");
+  }
+  if (run.status === "succeeded" && serving) {
+    return `✅ OpenClaw updated to ${serving}.\n${nextStep}`;
   }
   if (run.status === "failed" && run.steps) {
     const phase =
@@ -127,7 +124,7 @@ export function renderUpdateRunSummary(
 export function isUpdateRunTerminalNoticeText(text: string): boolean {
   const lines = text.split("\n");
   if (
-    /^⚠️ OpenClaw core committed; .+ is serving\.$/u.test(lines[0] ?? "") &&
+    /^⚠️ OpenClaw updated(?:; .+ is serving)?\.$/u.test(lines[0] ?? "") &&
     /^Failed step: .+\.$/u.test(lines[1] ?? "") &&
     (lines.slice(2).join("\n").startsWith("Next: ") ||
       (lines.length === 3 &&
@@ -135,6 +132,13 @@ export function isUpdateRunTerminalNoticeText(text: string): boolean {
           "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal."))
   ) {
     return true;
+  }
+  if (/^✅ OpenClaw updated to .+\.$/u.test(lines[0] ?? "")) {
+    return (
+      lines.slice(1).join("\n").startsWith("Next: ") ||
+      lines.slice(1).join("\n") ===
+        "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal."
+    );
   }
   if (lines[0] === UPDATE_RUN_HEADLINES.get("failed") && lines.length >= 3 && lines.length <= 4) {
     const failure = (lines.length === 4 ? lines[2] : lines[1]) ?? "";

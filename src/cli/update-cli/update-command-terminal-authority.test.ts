@@ -121,9 +121,6 @@ function createRun(): Run {
     env: { ...process.env },
   };
 }
-function reportPath(run: Run) {
-  return path.join(run.env!.OPENCLAW_STATE_DIR!, "update-reports", `${run.runId}.md`);
-}
 function expectUnpublished(onResult: ReturnType<typeof vi.fn>) {
   expect(jsonOutput).toEqual([]);
   expect(onResult).not.toHaveBeenCalled();
@@ -156,9 +153,6 @@ function expectPublication(anchor: string) {
     "publication-complete",
   );
 }
-function readReport(run: Run) {
-  return syncFs.readFileSync(reportPath(run), "utf8");
-}
 async function beforeRelease(run: Run, fixture: Fixture, anchor: string) {
   return {
     sentinel: await readRestartSentinelReadOnly(run.env),
@@ -171,7 +165,6 @@ function releasedState(run: Run, anchor: string) {
   return {
     run: readRun(run),
     journal: readJournal(anchor),
-    report: syncFs.existsSync(reportPath(run)) ? readReport(run) : undefined,
   };
 }
 function expectPublished(onResult: ReturnType<typeof vi.fn>, result: object) {
@@ -296,7 +289,6 @@ it.skipIf(process.platform === "win32")(
     expect(collectNestedErrorCandidates(failure)).toContain(cancellation);
     expectUnpublished(onResult);
     expect(afterRelease?.run).toEqual(before?.run);
-    expect(afterRelease?.report).toBeUndefined();
     expect(readRun(run)).toEqual(afterRelease?.run);
     expect(rename.mock.calls).toHaveLength(postReleaseRenames);
     expect(await readRestartSentinelReadOnly(run.env)).toEqual(before?.sentinel);
@@ -321,7 +313,6 @@ it
     let originalFailure: unknown;
     let journal: Buffer | undefined;
     let settledRecord: ReturnType<typeof readRun>;
-    let preparedReport: string | undefined;
     let postReleaseRead: { mockRestore: () => void } | undefined;
     const failure = await withTerminalResult(
       async (registerRun) => {
@@ -379,11 +370,16 @@ it
             status: childFailed ? "failed" : "skipped",
             reason,
           });
-          preparedReport = readReport(run);
           if (childFailed) {
             expect(collectNestedErrorCandidates(originalFailure)).toContain(childFailure);
-            expect(preparedReport).toContain("Package manager admission refused");
-            expect(preparedReport).toContain(childFailure.message);
+            expect(settledRecord?.steps).toContainEqual(
+              expect.objectContaining({
+                detail: expect.stringContaining("Package manager admission refused"),
+              }),
+            );
+            expect(settledRecord?.steps).toContainEqual(
+              expect.objectContaining({ detail: expect.stringContaining(childFailure.message) }),
+            );
           }
         } else {
           expect(settledRecord).toEqual(original);
@@ -410,14 +406,12 @@ it
         result: { status, reason },
       });
       expectPublished(onResult, { status, reason });
-      expect(readReport(run)).toBe(preparedReport);
     } else {
       expect(failure).toBeInstanceOf(results.UpdateCommandPendingRecoveryFailure);
       expect(failure).toMatchObject({
         cause: originalFailure,
         result: { reason: "fixture-preflight-refusal" },
       });
-      expect(syncFs.existsSync(reportPath(run))).toBe(false);
       expectUnpublished(onResult);
     }
     expect(postReleaseRead).not.toHaveBeenCalled();

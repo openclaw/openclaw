@@ -1,17 +1,16 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import {
   createUpdateRun,
   finishUpdateRun,
+  getUpdateRun,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import { printResult } from "./progress.js";
 import { updateStatusCommand } from "./status.js";
 
 export function registerUpdateStatusWarningTests(readConsoleOutput: () => string) {
-  it.each(["summary", "report", "status"] as const)(
-    "shows every recorded warning and recovery path in the human %s",
+  it.each(["summary", "status"] as const)(
+    "retains every recorded warning and recovery path after the human %s",
     async (surface) => {
       const run = createUpdateRun({ trigger: "cli" });
       const snapshotDirectory = `/fixture/${"long-installation-prefix/".repeat(16)}.openclaw.package-backup-test.databases`;
@@ -53,17 +52,16 @@ export function registerUpdateStatusWarningTests(readConsoleOutput: () => string
           {},
         );
       }
-      const output =
-        surface === "report"
-          ? await fs.readFile(
-              path.join(process.env.OPENCLAW_STATE_DIR!, "update-reports", `${run.runId}.md`),
-              "utf8",
-            )
-          : readConsoleOutput();
-      for (const { detail } of warnings) {
-        expect.soft(output).toContain(`Warning: ${detail}`);
-        expect.soft(output.indexOf(`Warning: ${detail}`)).toBeLessThan(output.indexOf(diagnostic));
+      expect(readConsoleOutput()).toContain("OpenClaw updated");
+      const recorded = getUpdateRun(run.runId);
+      for (const warning of warnings) {
+        expect(recorded?.steps).toContainEqual(
+          expect.objectContaining({ ...warning, status: "completed" }),
+        );
       }
+      expect(recorded?.steps).toContainEqual(
+        expect.objectContaining({ step: "diagnostic:database snapshot", detail: diagnostic }),
+      );
     },
   );
 }

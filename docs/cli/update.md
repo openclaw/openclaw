@@ -262,13 +262,10 @@ default. Declining or cancelling preserves the failed update's nonzero exit
 status. JSON, non-interactive, `--yes`, and managed-service handoff invocations do
 not prompt after rollback.
 
-Once the new core is installed and serving, the release-update CLI returns without waiting for background plugin activation. Its output says that work is still running; `openclaw update status` shows the final result. The run records one terminal outcome after required plugin work settles. A plugin failure keeps the new core serving and names the failed step and exact recovery command, not a whole-update retry.
-
-Exception: explicit `--accept-capabilities` sent through an older Gateway waits
-for the terminal plugin result before the existing consent follow-up. Gateways
-that accept that field and ordinary updates do not take this compatibility wait.
-
-Update completion prints the terminal outcome and a local Markdown report path before exiting, including unexpected failures. Failed runs keep rollback-facing diagnostic JSON within the released 8 KiB limit. That file links a separate artifact containing every individually bounded Doctor finding; the Markdown report also retains the complete inventory. JSON output includes `reportPath`; a report-write failure prints a warning and preserves the update outcome.
+The release-update run settles once after required plugin maintenance. Its CLI,
+status and final notice use the same summary: the version serving, any failed
+plugin step, and its exact recovery command. Plugin failures do not change a
+successful core update into a failure or trigger rollback.
 
 When another process holds the state database writer, the update driver gives
 its worker-backed phase and progress writes up to two minutes to acquire the

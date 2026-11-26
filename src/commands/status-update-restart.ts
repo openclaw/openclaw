@@ -4,12 +4,10 @@ import type { GatewayProbeServerSummary } from "../gateway/probe.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { projectUpdateRunHistory } from "../infra/update-run-history-projection.js";
 import { getUpdateRun, getUpdateRunAsync } from "../infra/update-run-ledger.js";
+import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
+import { isAcknowledgedAbandonedUpdateRun } from "../infra/update-run-record.js";
 import {
-  hasCommittedUpdateRunCore,
-  isAcknowledgedAbandonedUpdateRun,
-} from "../infra/update-run-record.js";
-import {
-  renderUpdateRunReport,
+  type UpdateRunReportInput,
   resolveUpdateRunIdentity,
   updateRunReportInputFromSentinel,
 } from "../infra/update-run-report.js";
@@ -24,16 +22,10 @@ type StatusReportOptions = {
   gatewayServer?: Pick<GatewayProbeServerSummary, "version" | "buildId">;
 };
 
-function renderStatusReport(
-  run: Parameters<typeof renderUpdateRunReport>[0],
-  opts: StatusReportOptions = {},
-) {
-  const report = renderUpdateRunReport(run);
+function renderStatusReport(run: UpdateRunReportInput, opts: StatusReportOptions = {}) {
+  const summary = renderUpdateRunSummary(run);
+  const report = { headline: summary, lines: summary.split("\n").slice(1).filter(Boolean) };
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
-  const committedFailure =
-    run.status === "failed" &&
-    hasCommittedUpdateRunCore(run) &&
-    run.steps.some((step) => step.status === "failed");
   const history =
     !reconciled && opts.localGatewayHealthy
       ? projectUpdateRunHistory(run, opts.gatewayServer)
@@ -83,21 +75,11 @@ function renderStatusReport(
     (!afterIdentityAvailable && targetVersion === afterVersion) ||
     (rollbackAttempted && (!previousVersion || targetVersion === previousVersion));
   const observedFailure = run.status === "failed" && !reconciled && opts.localGatewayHealthy;
-  const message =
-    run.status === "failed" && !reconciled
-      ? run.steps
-          .filter((step) => step.status === "failed")
-          .flatMap((step) => step.failureFacts ?? [])
-          .find((fact) => fact.message)?.message
-      : undefined;
-  let headline = message ? `${report.headline} ${message}` : report.headline;
-  if (committedFailure && run.origin.nextAction) {
-    headline += `\nNext: ${run.origin.nextAction}`;
-  }
+  let headline = report.headline;
   const label = (value: string) => sanitizeTerminalText(value).slice(0, 240);
   const servingLabel = label(servingVersion ?? "an unknown version");
   const targetLabel = label(targetVersion ?? "an unknown target");
-  if (observedFailure && !committedFailure) {
+  if (observedFailure) {
     const current =
       (buildMismatch || targetIdentityUnavailable) && servingBuild
         ? `${servingLabel} (build ${label(servingBuild)})`

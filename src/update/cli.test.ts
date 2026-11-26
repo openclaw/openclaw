@@ -290,7 +290,11 @@ it.each([false, true])(
       expect(log).not.toHaveBeenCalled();
       expect(writeJson).toHaveBeenCalledOnce();
     } else {
-      expect(lines(log)).toEqual([removed, "finished: finished", "Updated to 2026.11.7."]);
+      expect(lines(log)).toEqual([
+        removed,
+        "finished: finished",
+        expect.stringContaining("✅ OpenClaw updated to 2026.11.7."),
+      ]);
       expect(error).not.toHaveBeenCalled();
     }
     expect(process.exitCode).toBe(0);
@@ -314,55 +318,11 @@ it("leaves kept-runtime lines to the cleanup owner's log", async () => {
   ]);
   const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   await runReleaseUpdateCli({ json: false, restart: false, runningRoot: root });
-  expect(log.mock.calls.map(([line]) => line)).toEqual([removed, "Already up to date."]);
+  expect(log.mock.calls.map(([line]) => line)).toEqual([
+    removed,
+    expect.stringContaining("already up to date"),
+  ]);
 });
-
-it.each([false, true])(
-  "returns on committed-core facts without waiting for background plugins (json=%s)",
-  async (json) => {
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    runsGet.push(
-      () => ({
-        run: {
-          status: "running",
-          phase: "verifying",
-          finishedAtMs: null,
-          after: { version: "2.0.0", buildId: "new-build" },
-          verification: {
-            booted: true,
-            serviceRunning: true,
-            coreReady: true,
-            versionMatch: true,
-            runningVersion: "2.0.0",
-            runningBuildId: "new-build",
-          },
-          steps: [{ step: "plugins", status: "in_progress" }],
-        },
-      }),
-      () => {
-        throw new Error("The CLI waited for background plugin completion");
-      },
-    );
-    await runReleaseUpdateCli({ json, restart: true, runningRoot: root });
-    expect(runsGet).toHaveLength(1);
-    expect(process.exitCode).toBe(0);
-    expect(error).not.toHaveBeenCalled();
-    if (json) {
-      expect(output).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "running", finishedAtMs: null }),
-      );
-    } else {
-      expect(log.mock.calls.flat().join("\n")).toContain("2.0.0 is installed and serving");
-      expect(log.mock.calls.flat().join("\n")).toContain(
-        "Plugin activation continues in the background",
-      );
-      expect(log.mock.calls.flat().join("\n")).toContain("openclaw update status");
-      expect(log.mock.calls.flat().join("\n")).not.toContain("Updated to");
-    }
-  },
-);
 
 it("says the update is still running when the --timeout budget ends first", async () => {
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
@@ -428,80 +388,6 @@ it.each([undefined, "beta"] as const)(
     ]);
   },
 );
-
-it.each(["succeeded", "failed"] as const)(
-  "keeps the old-Gateway consent bridge terminal-only after committed core (%s)",
-  async (status) => {
-    capabilities.push(false, true);
-    const entered = Promise.withResolvers<void>();
-    const verification = {
-      booted: true,
-      serviceRunning: true,
-      coreReady: true,
-      versionMatch: true,
-      runningVersion: "2.0.0",
-    };
-    runsGet.push(
-      () => {
-        entered.resolve();
-        return {
-          run: { status: "running", phase: "verifying", verification, finishedAtMs: null },
-        };
-      },
-      () => ({ run: { status, phase: "finished", verification } }),
-      () => ({ run: { status: "skipped", phase: "finished" } }),
-    );
-    vi.useFakeTimers({ toFake: ["setTimeout"] });
-    try {
-      const updating = runReleaseUpdateCli({
-        json: true,
-        restart: true,
-        runningRoot: root,
-        acceptCapabilities: true,
-      });
-      await entered.promise;
-      expect(sent).toEqual([{}]);
-      await vi.advanceTimersByTimeAsync(2_000);
-      await updating;
-      expect(sent).toEqual([
-        {},
-        {
-          checkout: { gitCommonDir: await fs.realpath(path.join(root, ".git")) },
-          acceptCapabilities: true,
-        },
-      ]);
-      expect(prepared).toEqual([]);
-      expect(process.exitCode).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  },
-);
-
-it("fails an old-Gateway consent timeout even when the new core serves", async () => {
-  capabilities.push(false);
-  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-  vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  runsGet.push(() => ({
-    run: {
-      status: "running",
-      phase: "verifying",
-      verification: { booted: true, serviceRunning: true, coreReady: true, versionMatch: true },
-    },
-  }));
-  await runReleaseUpdateCli({
-    json: false,
-    restart: true,
-    runningRoot: root,
-    timeoutMs: 100,
-    acceptCapabilities: true,
-  });
-  expect(sent).toEqual([{ timeoutMs: expect.any(Number) }]);
-  expect(process.exitCode).toBe(1);
-  expect(error.mock.calls.flat().join("\n")).toContain(
-    "capability consent was not applied before the timeout",
-  );
-});
 
 it("does not claim consent was applied when the replacement Gateway still lacks support", async () => {
   capabilities.push(false, false);
