@@ -22,8 +22,6 @@ export type SqliteIntegrityCheckOptions = {
    * database rebuilds it.
    */
   ftsSchemas?: readonly string[];
-  /** Optional diagnostic for an FK refusal; never changes its outcome. */
-  foreignKeyRecoveryHint?: (database: DatabaseSync) => string | undefined;
 };
 
 type CapturedIntegrity = {

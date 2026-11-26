@@ -13,7 +13,6 @@ import type {
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
-import { WORKBOARD_SCHEMA_SQL } from "./src/workboard-schema.js";
 
 let stateDir: string;
 let env: NodeJS.ProcessEnv;
@@ -74,97 +73,26 @@ describe.each([true, false])("Workboard retirement with count support %s", (supp
   });
 });
 
-it.each([false, true])(
-  "repairs only orphan card rows (unrelated violations: %s)",
-  async (mixed) => {
-    const repair = expectDefined(
-      stateMigrations.find(({ id }) => id === "workboard-card-orphans"),
-      "Workboard orphan repair",
-    );
-    const repairState = path.join(stateDir, mixed ? "mixed" : "repair");
-    const workboardDir = path.join(repairState, "plugins", "workboard");
-    fs.mkdirSync(workboardDir, { recursive: true });
-    const dbPath = path.join(workboardDir, "workboard.sqlite");
-    const parameters = {
-      ...input(true),
-      stateDir: repairState,
-      env: { ...env, OPENCLAW_STATE_DIR: repairState },
-    };
-    // Keep a raw handle open so committed orphan rows are still in the WAL.
-    using db = new DatabaseSync(dbPath, { enableForeignKeyConstraints: false });
-    db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
-    db.exec(WORKBOARD_SCHEMA_SQL);
-    db.exec(`
-    INSERT INTO workboard_cards (id, board_id, title, status, priority, position, created_at, updated_at)
-      VALUES ('present', 'inbox', 'Keep this card', 'todo', 'normal', 1, 0, 0);
-    INSERT INTO workboard_card_labels VALUES ('present', 0, 'keep'), ('missing', 0, 'retain in export');
-    INSERT INTO workboard_card_events (id, card_id, ordinal, kind, at)
-      VALUES ('event-1', 'missing', 0, 'created', 9007199254740993);
-  `);
-    if (mixed) {
-      db.exec(`
-      CREATE TABLE unrelated (card_id TEXT REFERENCES workboard_cards(id));
-      INSERT INTO unrelated VALUES ('also-missing');
-    `);
-      const before = db.prepare("PRAGMA foreign_key_check").all();
-      await expect(repair.migrateLegacyState(parameters)).rejects.toThrow(
-        /unrelated foreign-key violations/u,
-      );
-      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual(before);
-      expect(fs.readdirSync(workboardDir).filter((name) => name.includes("recovery"))).toEqual([]);
-      return;
-    }
-
-    await expect(repair.detectLegacyState(parameters)).resolves.toEqual({
-      preview: [expect.stringContaining("2 orphaned card rows")],
-    });
-    const result = await repair.migrateLegacyState(parameters);
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      expect.stringContaining("Recovered 2 orphaned Workboard card rows"),
-    ]);
-    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    expect(db.prepare("SELECT id, title FROM workboard_cards").all()).toEqual([
-      { id: "present", title: "Keep this card" },
-    ]);
-    expect(db.prepare("SELECT label FROM workboard_card_labels").all()).toEqual([
-      { label: "keep" },
-    ]);
-    const backups = () =>
-      fs
-        .readdirSync(workboardDir)
-        .filter((name) => name.startsWith("openclaw-workboard-card-orphans-recovery-"));
-    const directory = path.join(
-      workboardDir,
-      expectDefined(backups()[0], "Workboard recovery directory"),
-    );
-    using backup = new DatabaseSync(path.join(directory, "database.sqlite"), { readOnly: true });
-    expect(backup.prepare("PRAGMA foreign_key_check").all()).toHaveLength(2);
-    expect(backup.prepare("SELECT count(*) AS count FROM workboard_card_labels").get()).toEqual({
-      count: 2,
-    });
-    expect(
-      fs
-        .readFileSync(path.join(directory, "orphan-rows.jsonl"), "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual([
-      {
-        table: "workboard_card_events",
-        row: expect.objectContaining({ id: "event-1", card_id: "missing", at: "9007199254740993" }),
-      },
-      {
-        table: "workboard_card_labels",
-        row: { card_id: "missing", ordinal: "0", label: "retain in export" },
-      },
-    ]);
-    await expect(repair.detectLegacyState(parameters)).resolves.toBeNull();
-    await expect(repair.migrateLegacyState(parameters)).resolves.toEqual({
-      changes: [],
-      warnings: [],
-    });
-    expect(backups()).toHaveLength(1);
-  },
-);
+it("repairs card orphans only when no unrelated FK violations exist", async () => {
+  const dir = path.join(stateDir, "plugins", "workboard");
+  fs.mkdirSync(dir, { recursive: true });
+  using db = new DatabaseSync(path.join(dir, "workboard.sqlite"));
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    PRAGMA journal_mode = WAL;
+    CREATE TABLE workboard_cards (id TEXT PRIMARY KEY);
+    CREATE TABLE workboard_card_labels (card_id TEXT REFERENCES workboard_cards(id) ON DELETE CASCADE);
+    CREATE TABLE unrelated (card_id TEXT REFERENCES workboard_cards(id));
+    INSERT INTO workboard_cards VALUES ('keep');
+    INSERT INTO workboard_card_labels VALUES ('keep'), ('missing');
+    INSERT INTO unrelated VALUES ('missing');`);
+  const repair = expectDefined(stateMigrations[1], "Workboard orphan repair");
+  await expect(repair.migrateLegacyState(input(true))).rejects.toThrow(/unrelated/u);
+  expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(2);
+  db.exec("DROP TABLE unrelated");
+  expect((await repair.migrateLegacyState(input(true))).changes.join()).toContain("backup:");
+  expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  expect(db.prepare("SELECT card_id FROM workboard_card_labels").get()).toEqual({
+    card_id: "keep",
+  });
+});

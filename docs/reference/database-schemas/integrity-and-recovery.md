@@ -1518,24 +1518,12 @@ data. Retain them until the updated Gateway is verified and any needed payload
 has been recovered. Do not overwrite newer runtime state with this original
 copy. This recovery does not establish which writer created the orphan rows.
 
-### Doctor reports orphan Workboard card rows
+### Workboard orphaned card rows
 
-If `foreign_key_check` names Workboard child rows referencing missing
-`workboard_cards`, stop the Gateway and run `openclaw doctor --fix` with Workboard
-enabled. Then retry the update. A disabled Workboard plugin does not run its
-Doctor repair; enable it for the repair and restore the original setting before
-restarting the Gateway.
-
-Doctor keeps a complete, WAL-aware `database.sqlite` and a lossless
-`orphan-rows.jsonl` export in a private `openclaw-workboard-card-orphans-recovery-*`
-directory beside the Workboard database. The report names the directory. Keep
-these files private: they can contain card history and other user data. Do not
-swap the backup in for newer state or delete the WAL.
-
-Doctor removes only child rows whose card is missing, in one transaction. It
-refuses unrelated foreign-key violations and requires both integrity and foreign
-keys to pass before commit. Running it again on a clean database changes nothing.
-No schema change is required, and the origin of the orphan rows remains unknown.
+With the Gateway stopped and Workboard enabled, `openclaw doctor --fix` backs up
+the Workboard SQLite database (including committed WAL data), then removes only
+supported child rows whose card is missing. Doctor prints the private backup path
+and refuses repair if the database also has unrelated foreign-key violations.
 
 ### Why you cannot go back after updating to 2026.7.2
 

@@ -270,7 +270,7 @@ export function assertSqliteIntegrity(
       }
     }
   }
-  runSqliteForeignKeyCheck(database, databaseLabel, options.foreignKeyRecoveryHint);
+  runSqliteForeignKeyCheck(database, databaseLabel);
   if (check === "integrity_check" && !staleFts) {
     recordSqliteDatabaseIntegrity(database);
   }
@@ -384,11 +384,7 @@ function runSqliteCheck(
   );
 }
 
-function runSqliteForeignKeyCheck(
-  database: DatabaseSync,
-  databaseLabel: string,
-  recoveryHint?: SqliteIntegrityCheckOptions["foreignKeyRecoveryHint"],
-): void {
+function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
   let violationCount = 0;
   let repairable = true;
   let taskDeliveryForeignKeyId: bigint | undefined;
@@ -429,17 +425,8 @@ function runSqliteForeignKeyCheck(
   if (violationCount > MAX_REPORTED_FOREIGN_KEY_VIOLATIONS) {
     details.push("additional violations omitted");
   }
-  let hint: string | undefined;
-  try {
-    hint = recoveryHint?.(database);
-  } catch {
-    // A diagnostic lookup cannot displace the original integrity findings.
-  }
   throw new SqliteIntegrityError(
     `SQLite foreign_key_check failed for ${databaseLabel}: ${details.join("; ")}`,
-    undefined,
-    undefined,
-    hint,
   );
 }
 
@@ -467,10 +454,11 @@ export class SqliteIntegrityError extends Error {
     message: string,
     cause?: unknown,
     readonly findings?: readonly unknown[],
-    recoveryHint = 'Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.',
   ) {
     super(
-      cause === undefined ? `${message}. ${recoveryHint}` : message,
+      cause === undefined
+        ? `${message}. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.`
+        : message,
       cause === undefined ? undefined : { cause },
     );
     this.name = "SqliteIntegrityError";

@@ -1,5 +1,4 @@
 import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
-export { inspectWorkboardCardOrphans, WORKBOARD_SQLITE_STATE_PATH } from "./sqlite-recovery.js";
 
 export type WorkboardDatabasePortApi<Database, Input> = {
   postgres: string;
