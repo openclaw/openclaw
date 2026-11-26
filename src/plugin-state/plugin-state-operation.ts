@@ -198,8 +198,13 @@ function preparePluginStateOperation<Operations extends PluginStateOperationDefi
       const missing = Object.hasOwn(options, "missingValue")
         ? { value: options.missingValue, validUntil: undefined }
         : undefined;
+      // Exact-key deletion joins the commit but returns no guard to its caller.
       const mutation = writes.length
-        ? beginPluginStateMutation(context.admission.coordinationKey, writes)
+        ? beginPluginStateMutation(
+            context.admission.coordinationKey,
+            writes,
+            "deleteKeys" in handler ? "command" : "receipt",
+          )
         : undefined;
       const prior = capturePluginStateMutationSettlement(
         context.admission.coordinationKey,

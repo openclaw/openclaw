@@ -59,6 +59,17 @@ const open = (namespace: string, env = state().env) =>
     resolve: () => moduleSource,
   });
 
+function trackedNamespaces(env: NodeJS.ProcessEnv) {
+  const sources = readGlobalSingleton(Symbol.for("openclaw.pluginStateOperationEpochs")) as Map<
+    string,
+    Map<string, unknown>
+  >;
+  const { coordinationKey } = captureOpenClawStateDatabaseReadAdmission(
+    resolveOpenClawStateSqlitePath(env),
+  );
+  return sources.get(coordinationKey);
+}
+
 it("deletes the captured keys together from host-owned stores without a plugin module", async () => {
   const openData = (namespace: string) =>
     createPluginStateKeyedStore<string>("operation-test", options(namespace));
@@ -192,19 +203,41 @@ it("releases completed conversation namespaces while their plugin store rows sta
       namespace,
     );
   }
-  const sources = readGlobalSingleton(Symbol.for("openclaw.pluginStateOperationEpochs")) as Map<
-    string,
-    Map<string, unknown>
-  >;
-  const { coordinationKey } = captureOpenClawStateDatabaseReadAdmission(
-    resolveOpenClawStateSqlitePath(env),
-  );
-  expect(sources.get(coordinationKey)?.size ?? 0).toBe(0);
-  expect(sources.has(coordinationKey)).toBe(false);
+  expect(trackedNamespaces(env)).toBeUndefined();
   expect(
     await runtime.openKeyedStoreV2<string>(options("never-written", env)).lookup("job"),
   ).toBeUndefined();
-  expect(sources.has(coordinationKey)).toBe(false);
+  expect(trackedNamespaces(env)).toBeUndefined();
+});
+
+it("releases both exact-key deletion epochs after the native commit", async () => {
+  const env = { ...state().env, OPENCLAW_STATE_DIR: state().path("delete-epochs") };
+  const names = ["recall", "phase"] as const;
+  const first = open(names[0], env);
+  const second = open(names[1], env);
+  for (const store of [first, second]) {
+    await store.register("key", "delete");
+    await store.register("neighbor", "keep");
+  }
+  const prior = await read(first.createOperation<FixtureOperations>([first, second], handler));
+  prior.assertCurrent();
+  const atCommit: number[] = [];
+  sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      atCommit.push(trackedNamespaces(env)?.size ?? 0);
+    }
+    admit(request, grant);
+  });
+  const deletion = first.deleteKeys(["key"], { alsoFrom: second });
+  expect(prior.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
+  await deletion;
+  expect(atCommit).toEqual([2]);
+  for (const name of names) {
+    const reopened = createPluginStateSyncKeyedStore<string>("operation-test", options(name, env));
+    expect(reopened.lookup("key")).toBeUndefined();
+    expect(reopened.lookup("neighbor")).toBe("keep");
+  }
+  expect(trackedNamespaces(env)).toBeUndefined();
 });
 
 it("moves rows across namespaces in one worker command and rolls back undeclared writes", async () => {
