@@ -525,6 +525,12 @@ existing CLI paths keep working without retaining a separate release selection.
 This also applies with `--no-restart`; the launcher selects the pending candidate
 on its next start. The installed updater must contain this repair.
 
+Git preparation carries forward an existing host OpenClaw ID binding when its
+native crate still matches the target. If the binding needs rebuilding, that
+build must succeed in the prepared release before it can replace the serving
+Gateway. Checkouts without a host binding still skip the opt-in build. The
+installed updater must contain this change.
+
 Local npm frontends can offer their installed package to a managed package
 release. The resident release runs the update, with an explicit local package
 source, and publishes forwarding with the validated pending trial. Managed
