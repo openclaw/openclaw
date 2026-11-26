@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import { seedQaSessionTranscript } from "../../../../extensions/qa-lab/src/suite-runtime-agent-session.js";
+import { seedQaSessionTranscript } from "../../../../extensions/qa-lab/test-api.js";
 import { createTrackedProvider } from "../../../../src/gateway/test-helpers.tracked-provider.js";
 import { respondJson } from "../../../helpers/gateway-integration-fixtures.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";

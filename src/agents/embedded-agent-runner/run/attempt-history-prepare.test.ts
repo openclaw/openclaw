@@ -195,7 +195,6 @@ it.each(["operator", "channel", "spawn", "reset", "rewind"] as const)(
         ...(via === "rewind" ? { entryId: "cut" } : {}),
       },
       createdVia: via === "reset" || via === "rewind" ? "operator" : via,
-      createdActor: { type: "human" },
     });
     const prepared = await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
     const budget = createCompactionRequestBudget({
