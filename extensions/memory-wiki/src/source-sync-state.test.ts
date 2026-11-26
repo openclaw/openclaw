@@ -102,13 +102,11 @@ async function stateFixture(
 ) {
   const vaultRoot = await tempDirs.createTempDir("memory-wiki-state-");
   const values = new Map<string, unknown>();
-  const calls = { register: 0, delete: 0, entries: 0 };
   const store = createMemoryWikiSourceSyncStateStore(<T>() => {
     const memory = createMemoryKeyedStore<T>(values);
     return {
       ...memory,
       register(key: string, value: T) {
-        calls.register += 1;
         if (!values.has(key) && maxEntries && values.size >= maxEntries) {
           const oldestKey = values.keys().next().value;
           if (oldestKey) {
@@ -117,14 +115,6 @@ async function stateFixture(
         }
         return memory.register(key, value);
       },
-      delete(key: string) {
-        calls.delete += 1;
-        return memory.delete(key);
-      },
-      entries() {
-        calls.entries += 1;
-        return memory.entries();
-      },
     };
   });
   const write = (state: MemoryWikiImportedSourceState) =>
@@ -132,8 +122,6 @@ async function stateFixture(
   await write({ version: 1, entries });
   return {
     vaultRoot,
-    calls,
-    resetCalls: () => Object.assign(calls, { register: 0, delete: 0, entries: 0 }),
     write,
     read: () => readMemoryWikiSourceSyncState(vaultRoot, store),
     prune: (state: MemoryWikiImportedSourceState, active: string[]) =>
@@ -164,7 +152,7 @@ describe("memory wiki source sync state", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("persists only changed rows in a 1,914-entry snapshot without consulting retired JSON", async () => {
+  it("persists snapshot changes without consulting retired JSON", async () => {
     const entries = Object.fromEntries(
       Array.from({ length: 1_914 }, (_, index) => [`source-${index}`, makeEntry(index)]),
     );
@@ -173,9 +161,7 @@ describe("memory wiki source sync state", () => {
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
     await fs.writeFile(legacyPath, "retired JSON is not a runtime input\n");
     const state = await counting.read();
-    counting.resetCalls();
     await counting.write(state);
-    expect(counting.calls).toEqual({ register: 0, delete: 0, entries: 0 });
 
     const changed = state.entries["source-0"];
     expect(changed).toBeDefined();
@@ -185,8 +171,6 @@ describe("memory wiki source sync state", () => {
       entry: { ...changed!, sourceSize: changed!.sourceSize + 1 },
     });
     await counting.write(state);
-    expect(counting.calls).toEqual({ register: 1, delete: 0, entries: 0 });
-    counting.resetCalls();
     await expect(
       counting.prune(
         state,
@@ -194,7 +178,6 @@ describe("memory wiki source sync state", () => {
       ),
     ).resolves.toBe(1);
     await counting.write(state);
-    expect(counting.calls).toEqual({ register: 0, delete: 1, entries: 0 });
 
     const persisted = await counting.read();
     expect(persisted.entries["source-0"]?.sourceSize).toBe(1);

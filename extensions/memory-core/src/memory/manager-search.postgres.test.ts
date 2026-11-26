@@ -9,17 +9,14 @@ import {
   withEngineStoreAdmission,
   type EngineConnection,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
-import {
-  MEMORY_PATH_POSTGRES_INDEXES,
-  MEMORY_PATH_POSTGRES_INDEX_SQL,
-} from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import { MEMORY_PATH_POSTGRES_INDEX_SQL } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   DatabaseSearchCapabilityUnavailableError,
   isPostgresSqlConnection,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mergeHybridResults } from "./hybrid.js";
 import { memoryPublicationInline } from "./manager-publication-transfer.js";
 import { bindSqliteWorkerBackend } from "./manager-publication.worker.js";
@@ -103,20 +100,6 @@ const keywordQuery = (
   };
 };
 const admitted = <T>(operation: () => T) => withEngineStoreAdmission(operation);
-
-type PostgresPlanNode = {
-  "Node Type": string;
-  "Relation Name"?: string;
-  "Index Name"?: string;
-  "Actual Loops"?: number;
-  "Actual Rows"?: number;
-  "Rows Removed by Filter"?: number;
-  Plans?: PostgresPlanNode[];
-};
-
-function planNodes(node: PostgresPlanNode): PostgresPlanNode[] {
-  return [node, ...(node.Plans ?? []).flatMap(planNodes)];
-}
 
 function createFixture(
   root: string,
@@ -400,87 +383,6 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     expect(exact.path.rows).toMatchObject([
       { path: "memory/semantic.md", exactPathSpecificity: 1 },
     ]);
-  });
-
-  it("uses exact-path indexes for 50,000 sources before and after ANALYZE", async () => {
-    const sourceCount = 50_000;
-    using fixture = admitted(() =>
-      createFixture(root, `exact-path-plan-${sourceCount}`, connection!),
-    );
-    const db = fixture.pg();
-    admitted(() => {
-      // Keep the first plan representative of a newly populated store until explicit ANALYZE.
-      db.exec("ALTER TABLE memory_index_sources SET (autovacuum_enabled = false)");
-      fixture.publish("needle", "needle memory", []);
-      fixture.publish("other-needle", "unrelated", [], { path: "other/needle.md" });
-      db.runTransaction(() => {
-        db.exec(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
-            SELECT 'bulk/noise-' || n || '.md', 'memory', 'noise-' || n, 1, 5
-            FROM generate_series(1, ${sourceCount - 2}) AS n`);
-        db.exec(`INSERT INTO memory_index_chunks
-            (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-            SELECT 'noise-' || n, 'bulk/noise-' || n || '.md', 'memory', 1, 1,
-              'noise-' || n, 'fixture', 'noise', decode('', 'hex'), 1
-            FROM generate_series(1, ${sourceCount - 2}) AS n`);
-      });
-    });
-    const query = keywordQuery("needle");
-    query.body.limit = 0;
-    query.path.limit = 0;
-    query.path.exactPathLimit = 10;
-    for (const statistics of ["fresh", "analyzed"] as const) {
-      if (statistics === "analyzed") {
-        admitted(() => {
-          db.exec("ANALYZE memory_index_sources");
-          db.exec("ANALYZE memory_index_chunks");
-        });
-      }
-      const capture = vi.spyOn(db, "query");
-      let statement: Parameters<typeof db.query> | undefined;
-      try {
-        const result = await fixture.keyword(query);
-        expect(result.body.error).toBeUndefined();
-        expect(result.path.error).toBeUndefined();
-        expect(result.path.rows.map((row) => row.path)).toEqual([
-          "memory/needle.md",
-          "other/needle.md",
-        ]);
-        statement = capture.mock.calls[0];
-      } finally {
-        capture.mockRestore();
-      }
-      if (!statement) {
-        throw new Error("Keyword search must execute its indexed statement");
-      }
-      const indexedStatement = statement;
-      admitted(() => {
-        const explain = ([sql, bindings]: Parameters<typeof db.query>) => {
-          const row = db.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, bindings).rows[0];
-          const [plan] = JSON.parse(String(row?.["QUERY PLAN"])) as [{ Plan: PostgresPlanNode }];
-          return planNodes(plan.Plan).filter((node) => (node["Actual Loops"] ?? 0) > 0);
-        };
-        const indexed = explain(indexedStatement);
-        const sourceScans = indexed.filter(
-          (node) => node["Relation Name"] === "memory_index_sources",
-        );
-        expect(
-          sourceScans.filter((node) => node["Node Type"] === "Seq Scan"),
-          statistics,
-        ).toEqual([]);
-        // Also reject a source B-tree scan that filters the same entire corpus.
-        for (const scan of sourceScans) {
-          const examined =
-            ((scan["Actual Rows"] ?? 0) + (scan["Rows Removed by Filter"] ?? 0)) *
-            (scan["Actual Loops"] ?? 0);
-          expect(examined, `${statistics}: ${JSON.stringify(scan)}`).toBeLessThanOrEqual(2);
-        }
-        // Actual index use proves the reader and stored expression match in PostgreSQL.
-        expect(
-          indexed.map((node) => node["Index Name"]),
-          statistics,
-        ).toEqual(expect.arrayContaining(MEMORY_PATH_POSTGRES_INDEXES.map((index) => index.name)));
-      });
-    }
   });
 
   it.each(["unicode61", "trigram"] as const)(

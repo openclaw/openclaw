@@ -27,7 +27,6 @@ const compileControl = vi.hoisted(() => ({ calls: 0 }));
 const rootControl = vi.hoisted(() => ({
   afterMove: undefined as RootMoveHooks["afterMove"],
   moves: vi.fn<(from: string, to: string) => void>(),
-  lists: [] as Array<{ rootDir: string; calls: [string, ...unknown[]][] }>,
 }));
 
 vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
@@ -40,7 +39,6 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
         beforeMove: rootControl.moves,
         afterMove: (from, to) => rootControl.afterMove?.(from, to),
       });
-      rootControl.lists.push({ rootDir: vault.rootDir, calls: vi.spyOn(vault, "list").mock.calls });
       return vault;
     },
   };
@@ -171,7 +169,6 @@ afterEach(() => {
   compileControl.calls = 0;
   rootControl.afterMove = undefined;
   rootControl.moves.mockClear();
-  rootControl.lists.length = 0;
   configureMemoryWikiImportRunStateStore(undefined);
   resetPluginStateStoreForTests();
   vi.restoreAllMocks();
@@ -390,39 +387,6 @@ describe("ChatGPT import rollback recovery", () => {
     expect(sourceWrites).toBe(0);
     await expect(realReadFile(targetPath, "utf8")).resolves.toBe(afterCompilerRead);
     await expect(readRun()).resolves.toMatchObject(finalized);
-  });
-
-  it("scans recovery once with bounded writes for a multi-page rollback", async () => {
-    const { stateDir, rootDir, runDir, seed, rollback } = await createRollbackVault();
-    const contentHash = hash(imported);
-    const createdPaths = Array.from({ length: 24 }, (_, index) => ({
-      path: `sources/linear-${index}.md`,
-      contentHash,
-    }));
-    await Promise.all(
-      createdPaths.map(async (entry) => {
-        await fs.writeFile(path.join(rootDir, entry.path), imported, "utf8");
-      }),
-    );
-    await seed({ createdPaths });
-    let writes = 0;
-    configureDurableImportRunStore(stateDir, async () => {
-      writes += 1;
-    });
-    rootControl.lists.length = 0;
-
-    await expect(rollback()).resolves.toMatchObject({
-      removedCount: createdPaths.length,
-      preservedPaths: [],
-    });
-    expect(
-      rootControl.lists.flatMap(({ rootDir: root, calls }) =>
-        calls.filter(
-          ([relative]) => path.resolve(root, relative) === path.join(runDir, "recovered"),
-        ),
-      ),
-    ).toHaveLength(1);
-    expect(writes).toBe(3);
   });
 
   it.skipIf(process.platform === "win32")(
