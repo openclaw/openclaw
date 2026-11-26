@@ -30,7 +30,9 @@ it("blocks Voice provider choices the Gateway would reject", async () => {
   expect(byValue("")?.disabled).toBe(true);
   expect(byValue("tts-local-cli")?.disabled).not.toBe(true);
   voice()!.params.onChange("tts-local-cli");
-  expect(runtimeConfig.patchForm).toHaveBeenCalledWith(["talk", "providers", "tts-local-cli"], {});
+  expect(runtimeConfig.patchForm).toHaveBeenCalledWith(["talk", "providers", "tts-local-cli"], {
+    args: [],
+  });
   expect(runtimeConfig.patchForm).toHaveBeenCalledWith(["talk", "provider"], "tts-local-cli");
   runtimeConfig.patchForm.mockClear();
   page.configObject = {

@@ -312,7 +312,8 @@ export function TalkSplitVoice(props: FieldsProps & { catalog: TalkCatalogState 
           ]}
           onChange={(next) => {
             if (next === CUSTOM_COMMAND_PROVIDER && !entries().includes(CUSTOM_COMMAND_PROVIDER)) {
-              runtimeConfig.patchForm(["talk", "providers", CUSTOM_COMMAND_PROVIDER], {});
+              // New empty objects are pruned from config form saves.
+              runtimeConfig.patchForm(["talk", "providers", CUSTOM_COMMAND_PROVIDER], { args: [] });
             }
             if (next) {
               runtimeConfig.patchForm(["talk", "provider"], next);

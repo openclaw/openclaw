@@ -133,7 +133,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps a long retained Talk provider inside its picker on a phone", async () => {
+  it("keeps a long retained Talk provider editable on a phone", async () => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true },
       async ({ page }) => {
@@ -157,14 +157,18 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "settings/talk");
-        const trigger = page
-          .locator("openclaw-select-picker", { hasText: provider })
-          .locator(".picker-select__trigger");
-        await trigger.waitFor({ state: "attached" });
+        const liveVoice = page.locator("section.settings-section", {
+          has: page.getByRole("heading", { name: "Live voice", exact: true }),
+        });
+        const trigger = liveVoice.locator("openclaw-select-picker .picker-select__trigger").first();
+        const customProvider = liveVoice.getByRole("textbox", { name: "Provider", exact: true });
+        await expect.poll(() => trigger.textContent()).toContain("Custom…");
+        await expect.poll(() => customProvider.inputValue()).toBe(provider);
         await page.evaluate(() => document.fonts.ready.then(() => {}));
-        const fits = await trigger.evaluate((button: HTMLElement) => {
-          const bounds = button.getBoundingClientRect();
+        const fits = await customProvider.evaluate((input) => {
+          const bounds = input.getBoundingClientRect();
           return (
+            bounds.width > 0 &&
             bounds.left >= 0 &&
             bounds.right <= window.innerWidth &&
             document.documentElement.scrollWidth <= window.innerWidth
@@ -172,16 +176,10 @@ suite.define(() => {
         });
         expect(fits, "the retained provider does not widen the phone page").toBe(true);
         await trigger.click();
-        const auto = page.getByRole("option", { name: "Auto", exact: false }).first();
-        await auto.waitFor();
+        const auto = page.getByRole("option", { name: /^Auto(?: \(|$)/ });
         await auto.click();
-        const liveProvider = page
-          .locator("section.settings-section", {
-            has: page.getByRole("heading", { name: "Live voice" }),
-          })
-          .locator(".picker-select__trigger")
-          .first();
-        await expect.poll(() => liveProvider.textContent()).not.toContain(provider);
+        await expect.poll(() => trigger.textContent()).toMatch(/Auto/);
+        await expect.poll(() => customProvider.count()).toBe(0);
       },
     );
   });
