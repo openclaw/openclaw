@@ -430,6 +430,17 @@ Lean also lowers memory use while the Gateway starts:
   Gateway, trading some fork latency for the broker's memory. The plugin
   native-resource broker still starts when plugins first need it.
 
+### Lean worker heap
+
+In `lean`, worker threads that start after the profile resolves use a smaller V8 young
+generation: 4 MiB semi-spaces instead of V8's default, which lets each worker's young
+generation grow to 64 MiB under load. Workers collect short-lived objects more often and
+hold less memory between collections. The main thread and workers that started earlier
+keep V8's default. `standard` doesn't change it.
+
+If you start the Gateway with your own `--max-semi-space-size` (on the command line or in
+`NODE_OPTIONS`), lean leaves that value in place for the main thread and all workers.
+
 ### Lean worker memory admission
 
 In `lean`, the Gateway admits extra workers only while they fit a memory budget.

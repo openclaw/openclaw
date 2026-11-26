@@ -15,3 +15,20 @@ if (isMainThread && !process.versions.bun && heapFlag.test(startupFlags)) {
     setFlagsFromString("--max-old-space-size=0 --max-heap-size=0");
   }
 }
+
+/**
+ * Bound the young generation of isolates created from now on; 0 restores V8's default.
+ * Existing isolates keep theirs. False when startup flags own the size or forbid changes.
+ */
+export function setFutureWorkerSemiSpaceMiB(mebibytes) {
+  if (
+    !isMainThread ||
+    process.versions.bun ||
+    immutableFlags.test(startupFlags) ||
+    /--max[-_]semi[-_]space[-_]size(?:=|\s)/u.test(startupFlags)
+  ) {
+    return false;
+  }
+  setFlagsFromString(`--max-semi-space-size=${mebibytes}`);
+  return true;
+}

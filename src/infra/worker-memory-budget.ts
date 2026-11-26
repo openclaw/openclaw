@@ -1,5 +1,6 @@
 import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
 import type { WorkerPoolMemoryBudget } from "@openclaw/worker-runtime";
+import { setFutureWorkerSemiSpaceMiB } from "../../worker-heap-flag.mjs";
 import type { GatewayConfig } from "../config/types.gateway.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -22,12 +23,16 @@ const HOST_BUDGET_SHARE = 0.4;
 // Worker isolates inherit environment data, never child processes or the process environment.
 const FLOOR_ONLY_KEY = "openclaw.workerMemoryBudget.floorOnly";
 const MiB = 1024 ** 2;
+// V8 lets each isolate's young generation reach 64 MiB; under load that was a third of lean's
+// worker heap. 4 MiB semi-spaces cost no measured turn latency.
+const LEAN_WORKER_SEMI_SPACE_MIB = 4;
 const log = createSubsystemLogger("gateway/resources");
 const state = resolveGlobalSingleton<{
   budget?: ReturnType<typeof createWorkerMemoryBudget>;
   hosted: HostedSlotPredicate;
   hasSharedHost: () => boolean;
   floorOnlyPublished?: true;
+  youngGenerationBounded?: true;
 }>(
   Symbol.for("openclaw.workerMemoryBudget"),
   () => ({ hosted: () => false, hasSharedHost: () => false }),
@@ -35,8 +40,24 @@ const state = resolveGlobalSingleton<{
     current.budget?.retire();
     current.budget = undefined;
     publishFloorOnly(current, false);
+    boundWorkerYoungGeneration(current, false);
   },
 );
+
+// Process-wide V8 setting: it reaches nested, plugin and dependency workers without their help.
+// The main isolate and workers that started before the profile resolved keep V8's default.
+function boundWorkerYoungGeneration(
+  current: { youngGenerationBounded?: true },
+  bounded: boolean,
+): void {
+  if (bounded) {
+    current.youngGenerationBounded =
+      setFutureWorkerSemiSpaceMiB(LEAN_WORKER_SEMI_SPACE_MIB) || undefined;
+  } else if (current.youngGenerationBounded) {
+    setFutureWorkerSemiSpaceMiB(0);
+    current.youngGenerationBounded = undefined;
+  }
+}
 
 // Only a lean Gateway publishes the flag, so other processes never touch environment data.
 function publishFloorOnly(current: { floorOnlyPublished?: true }, floorOnly: boolean): void {
@@ -66,6 +87,7 @@ export function initializeWorkerMemoryBudget(
   state.budget = undefined;
   // Workers created from here on inherit this Gateway's choice, never a previous one.
   publishFloorOnly(state, profile.profile === "lean");
+  boundWorkerYoungGeneration(state, profile.profile === "lean");
   if (profile.profile !== "lean") {
     return;
   }
