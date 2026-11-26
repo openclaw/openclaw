@@ -99,14 +99,10 @@ export class ComposerDictationRefinement {
     }
     const abort = new AbortController();
     this.abort = abort;
-    const deadlineAt = Date.now() + REFINEMENT_LIMITS.deadlineMs;
     this.phase = "finishing";
     this.options.changed();
     try {
-      const transcript = await session.finishSnapshot({
-        signal: abort.signal,
-        timeoutMs: REFINEMENT_LIMITS.deadlineMs,
-      });
+      const transcript = await session.finishSnapshot({ signal: abort.signal });
       if (abort.signal.aborted || !this.current(capture)) {
         this.reconcile();
         return false;
@@ -155,7 +151,7 @@ export class ComposerDictationRefinement {
         featurePolicy: { enabled: true, processorIds: ["whitespace"] },
         // Local text processing says nothing about the separately selected STT route.
         providerPolicy: { routeId: null, locality: "strict-local" },
-        deadlineAt,
+        deadlineAt: Date.now() + REFINEMENT_LIMITS.deadlineMs,
       };
       this.coordinator = new DictationRefinementCoordinator({
         processors: [whitespaceRefinementProcessor],

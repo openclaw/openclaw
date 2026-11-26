@@ -1,3 +1,3 @@
 # M11 schema, finality, protected edits, revocation races, real-composer review and browser journey.
 # Separate boundaries; conformance/provider/browser fixtures are explicitly scoped, no live claims.
-1662
+1664

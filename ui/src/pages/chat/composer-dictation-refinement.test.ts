@@ -312,7 +312,7 @@ describe("dictation refinement at the composer boundary", () => {
     expect(h.owner.refinement).toBeUndefined();
   });
 
-  it("releases capture, previews one final, and requires explicit acceptance before a draft write", async () => {
+  it("waits through the realtime relay's five-second drain before offering explicit acceptance", async () => {
     const h = fixture();
     h.owner.setRefinementEnabled(true);
     await h.start();
@@ -322,8 +322,10 @@ describe("dictation refinement at the composer boundary", () => {
     const finished = h.owner.finishActive();
     expect(h.media.track.stop).toHaveBeenCalledOnce();
     expect(h.owner.locksComposer).toBe(false);
-    expect(h.owner.refinement?.phase).toBe("finishing");
     h.emit("transcript", "Do not delete customer_id.");
+    // The close RPC can acknowledge Stop while the relay is still draining provider events.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.owner.refinement?.phase).toBe("finishing");
     h.emit("close");
     await expect(finished).resolves.toBe(false);
     expect(h.onCommit).not.toHaveBeenCalled();
@@ -446,7 +448,7 @@ describe("dictation refinement at the composer boundary", () => {
     await h.start();
     h.emit("partial", "Do not");
     const finished = h.owner.finishActive();
-    await vi.advanceTimersByTimeAsync(2_500);
+    await vi.advanceTimersByTimeAsync(10_000);
     await finished;
     flush();
     expect(h.owner.refinement?.phase).toBe("unavailable");

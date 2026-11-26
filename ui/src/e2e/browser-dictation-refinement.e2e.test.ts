@@ -260,7 +260,7 @@ suite.define(() => {
       await h.start();
       await h.emit("partial", "Do not");
       await h.stop(finish);
-      await page.clock.runFor(2_501);
+      await page.clock.runFor(10_001);
       const incomplete = review.getByRole("textbox", {
         name: "Incomplete caption — manual recovery only",
       });

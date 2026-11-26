@@ -137,7 +137,7 @@ describe("dictation finality at the capture owner", () => {
       h.emit("transcript", "I can", 1);
       const result = h.session.finishSnapshot();
       if (reason === "timeout") {
-        await vi.advanceTimersByTimeAsync(2_500);
+        await vi.advanceTimersByTimeAsync(10_000);
       } else if (reason === "error") {
         h.emit("error", "", 2);
       } else {
@@ -200,7 +200,7 @@ describe("dictation finality at the capture owner", () => {
     expect(h.request).toHaveBeenCalledWith(
       "talk.session.close",
       { sessionId: "capture", discard: true },
-      { timeoutMs: 2_500 },
+      { timeoutMs: 10_000 },
     );
     h.settleClose();
   });

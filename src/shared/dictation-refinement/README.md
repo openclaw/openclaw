@@ -88,7 +88,8 @@ no optional context or vocabulary hints to speech recognition.
 | Context or vocabulary snapshots       | 32 per collection                         |
 | Protected spans / edits               | 256 each                                  |
 | Registered processors                 | 32                                        |
-| Stop/finality/refinement deadline     | 2,500 ms, shared by the browser flow      |
+| Browser Stop-to-close deadline        | 10,000 ms, including the realtime drain   |
+| Text refinement deadline              | 2,500 ms, after transcript finalization   |
 | Selected model invocations            | At most one per admitted final generation |
 
 The [selected-model adapter](../../talk/dictation-refinement-model.ts) acquires the

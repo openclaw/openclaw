@@ -19,7 +19,6 @@ import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 registerEnglishCatalog(registerChatDictationEnglish);
 
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
-const REFINEMENT_FINALIZATION_MAX_WAIT_MS = 2_500;
 const DICTATION_ENCODING = "g711_ulaw";
 const DICTATION_SAMPLE_RATE_HZ = 8000;
 
@@ -358,30 +357,19 @@ export class ComposerDictationSession {
   }
 
   /**
-   * Refinement has a hard stop-to-result allowance, including remote close. A final
-   * segment alone cannot certify that trailing audio completed after an error or timeout.
+   * Review uses a bounded Stop-to-close wait that includes the realtime relay's
+   * five-second drain. A final segment alone cannot certify trailing audio.
    */
   async finishSnapshot(
-    options: { signal?: AbortSignal; timeoutMs?: number } = {},
+    options: { signal?: AbortSignal } = {},
   ): Promise<ComposerDictationFinalSnapshot> {
-    const timeoutMs = options.timeoutMs ?? REFINEMENT_FINALIZATION_MAX_WAIT_MS;
-    if (
-      !Number.isFinite(timeoutMs) ||
-      timeoutMs <= 0 ||
-      timeoutMs > REFINEMENT_FINALIZATION_MAX_WAIT_MS
-    ) {
-      throw new RangeError("Dictation finalization timeout must be between 1 and 2500 ms");
-    }
-    const { snapshot } = await this.beginFinalization({ ...options, timeoutMs });
+    const { snapshot } = await this.beginFinalization(options);
     return snapshot;
   }
 
-  private beginFinalization(options?: {
-    signal?: AbortSignal;
-    timeoutMs: number;
-  }): Promise<DictationFinalization> {
+  private beginFinalization(options?: { signal?: AbortSignal }): Promise<DictationFinalization> {
     if (!this.finalization) {
-      this.finalizationTimeoutMs = options?.timeoutMs ?? null;
+      this.finalizationTimeoutMs = options ? FINAL_TRANSCRIPT_MAX_WAIT_MS : null;
       this.finalization = this.waitForLateFinal(options);
       // Stop the microphone synchronously; neither completion nor cancellation waits
       // for a provider's close reply. The existing remote owner releases its transport.
@@ -545,10 +533,7 @@ export class ComposerDictationSession {
     return { text, final };
   }
 
-  private waitForLateFinal(options?: {
-    signal?: AbortSignal;
-    timeoutMs: number;
-  }): Promise<DictationFinalization> {
+  private waitForLateFinal(options?: { signal?: AbortSignal }): Promise<DictationFinalization> {
     return new Promise((resolve) => {
       const initialTranscript = this.transcriptSnapshot();
       const transcripts: string[] = [...this.finalTranscripts];
@@ -592,7 +577,7 @@ export class ComposerDictationSession {
         timer = globalThis.setTimeout(() => {
           finish("timeout");
           void this.cancel().catch(() => undefined);
-        }, options.timeoutMs);
+        }, FINAL_TRANSCRIPT_MAX_WAIT_MS);
         if (options.signal) {
           unlistenAbort = listen(options.signal, "abort", abort, { once: true });
         }
