@@ -154,6 +154,13 @@ const firstAdmission = reuseCompletedSetup(() => {
   f.useScripts(join(directory, "scripts"));
   useOfficialOrigin(f);
   configureMerge(f, { comment: "lost" });
+  const bind = join(f.root, "bind.sh");
+  writeFileSync(bind, `${gitOwner}\npr_batch_wrapper_git workflow-admit "$1" 123 "$2" ""\n`);
+  const bound = spawnSync("bash", [bind, f.repo, source], {
+    env: { ...createIndependentPrFixtureEnv(), GIT_EXEC: "git", GIT_ALLOW_PROTOCOL: "file" },
+    encoding: "utf8",
+  });
+  expect(bound.status, bound.stderr).toBe(0);
   return { f, source, current, retainedDirectory, directory };
 });
 
@@ -251,12 +258,7 @@ describePosix("current-main first admission with a retained workflow", () => {
     expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
   });
   it("native entrypoint accepts only the explicit first-admission shape and fences an existing outcome", () => {
-    const { f, source } = firstAdmission();
-    const bind = join(f.root, "bind.sh");
-    writeFileSync(bind, `${gitOwner}\npr_batch_wrapper_git workflow-admit "$1" 123 "$2" ""\n`);
-    const env = { ...createIndependentPrFixtureEnv(), GIT_EXEC: "git", GIT_ALLOW_PROTOCOL: "file" };
-    const bound = spawnSync("bash", [bind, f.repo, source], { env, encoding: "utf8" });
-    expect(bound.status, bound.stderr).toBe(0);
+    const { f } = firstAdmission();
     const binding = f.git(["rev-parse", bindingRef]);
     const rejected = f.git(["hash-object", "-w", "--stdin"], "rejected");
     f.git(["update-ref", outcomeRef, rejected]);
@@ -368,6 +370,22 @@ const rejectedAdmin = reuseCompletedSetup(() => {
 });
 
 describePosix("current-workflow selection handoff", () => {
+  it("restores execution controls with the completed setup", () => {
+    const setup = firstAdmission();
+    setup.f.workflowAfterHold(join(setup.f.root, "removed-hook.sh"));
+    setup.f.useScripts(join(setup.f.root, "removed-scripts"));
+    setup.f.workflowSource(setup.f.base, join(setup.f.root, "removed-source"));
+
+    const { f, source, current } = firstAdmission();
+    const binding = f.git(["rev-parse", bindingRef]);
+    expectExit(runCurrent(f, { admin: f.path }), 1);
+    expect(f.record()).toMatchObject({
+      phase: "commenting",
+      workflowAdmission: { binding, from: source, to: current },
+    });
+    expect(f.git(["rev-parse", bindingRef])).toBe(binding);
+  });
+
   it.each(["admission", "recovery"] as const)(
     "qualifies fresh main after a same-closure fetch during %s handoff",
     (mode) => {
