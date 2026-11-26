@@ -28,6 +28,7 @@ import {
 import { readUserTurnMentionInvitation } from "../../sessions/user-turn-transcript-admission.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import { appendSessionManagerActor } from "./session-manager-actor-append.js";
@@ -367,8 +368,20 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         ) {
           throw error;
         }
-        const current = actor.snapshot(authority) ?? (await actor.read(authority));
-        outcome = await append(current.transcript.version.updatedAt);
+        // Keep the refreshed watermark and its one retry in the same writer turn.
+        // Otherwise another resume write can invalidate the retry before it enters.
+        outcome = await runOpenClawAgentWriteAdmission(
+          options,
+          async () => {
+            assertCurrent();
+            const current = actor.snapshot(authority) ?? (await actor.read(authority));
+            return append(current.transcript.version.updatedAt);
+          },
+          true,
+          undefined,
+          undefined,
+          "session-manager.write",
+        );
       }
       try {
         if (outcome.committed.kind !== "metadata") {
