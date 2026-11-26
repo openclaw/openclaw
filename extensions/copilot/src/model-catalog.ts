@@ -5,11 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import {
-  isProviderAuthError,
-  resolveApiKeyForProvider,
-  resolveProviderAuthProfileMetadataAsync,
-} from "openclaw/plugin-sdk/provider-auth-runtime";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { resolveCopilotAuth } from "./auth-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
@@ -86,26 +82,14 @@ export async function loadCopilotModelCatalog(
           ...authScope,
           workspaceDir: params.workspaceDir,
           signal: timeout.signal,
-        }).catch(async (error: unknown) => {
-          if (
-            !isProviderAuthError(error) ||
-            error.code !== "missing-provider-auth" ||
-            error.providerGuidance ||
-            error.cause !== undefined ||
-            (await resolveProviderAuthProfileMetadataAsync(authScope)).profileId
-          ) {
-            throw error;
-          }
-          // Only an absent host credential permits the SDK's existing CLI login.
-          return undefined;
         }),
       timeout.signal,
     );
     const auth = resolveCopilotAuth({
       agentId: params.agentId,
       agentDir: params.agentDir,
-      resolvedApiKey: credential?.apiKey,
-      authProfileId: credential?.profileId,
+      resolvedApiKey: credential.apiKey,
+      authProfileId: credential.profileId,
     });
     const acquisition = pool.acquire(auth, {
       copilotHome: auth.copilotHome,
@@ -131,7 +115,7 @@ export async function loadCopilotModelCatalog(
       outcomes: [
         {
           provider: "github-copilot",
-          ...(credential?.profileId ? { profileId: credential.profileId } : {}),
+          ...(credential.profileId ? { profileId: credential.profileId } : {}),
           status: "ready",
           listedModelIds: entries.map((entry) => entry.id),
         },

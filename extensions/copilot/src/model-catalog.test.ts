@@ -4,9 +4,8 @@ import { createCopilotAgentHarness } from "../harness.js";
 import { tokenFingerprint } from "./auth-bridge.js";
 import { createCopilotClientPool } from "./runtime.js";
 
-const { resolveAuth, metadata, missingAuth } = vi.hoisted(() => ({
+const { resolveAuth, missingAuth } = vi.hoisted(() => ({
   resolveAuth: vi.fn(),
-  metadata: vi.fn(),
   missingAuth: Object.assign(new Error("No provider credential"), {
     code: "missing-provider-auth",
     providerGuidance: false,
@@ -16,8 +15,6 @@ const { resolveAuth, metadata, missingAuth } = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
   resolveApiKeyForProvider: resolveAuth,
-  resolveProviderAuthProfileMetadataAsync: metadata,
-  isProviderAuthError: (error: unknown) => error === missingAuth,
 }));
 
 const scope = {
@@ -38,7 +35,6 @@ function fixture() {
   const release = vi.spyOn(pool, "release");
   const harness = createCopilotAgentHarness({ pool });
   resolveAuth.mockResolvedValue({ apiKey: "catalog-token", profileId: "github-copilot:test" });
-  metadata.mockResolvedValue({});
   return { list, start, stop, sdkFactory, pool, release, harness };
 }
 
@@ -166,26 +162,13 @@ describe("Copilot native model catalog", () => {
     }
   });
 
-  it("uses CLI login only when no configured host profile exists", async () => {
-    for (const name of [
-      "OPENCLAW_GITHUB_TOKEN",
-      "COPILOT_GITHUB_TOKEN",
-      "GH_TOKEN",
-      "GITHUB_TOKEN",
-    ]) {
-      vi.stubEnv(name, undefined);
-    }
+  it("does not publish native models without host authentication", async () => {
     const f = fixture();
     resolveAuth.mockRejectedValue(missingAuth);
-    f.list.mockResolvedValue({ models: [] });
     try {
-      await f.harness.loadModelCatalog!(scope);
-      expect(f.sdkFactory).toHaveBeenCalledWith(expect.objectContaining({ useLoggedInUser: true }));
-      metadata.mockResolvedValue({ profileId: "github-copilot:broken" });
       await expect(f.harness.loadModelCatalog!(scope)).rejects.toBe(missingAuth);
-      expect(f.list).toHaveBeenCalledOnce();
+      expect(f.sdkFactory).not.toHaveBeenCalled();
     } finally {
-      vi.unstubAllEnvs();
       await f.harness.dispose?.();
       await f.pool.dispose();
     }

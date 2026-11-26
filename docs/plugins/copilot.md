@@ -43,7 +43,7 @@ Copilot CLI environment.
 ## Model discovery
 
 The model picker queries the Copilot SDK with the agent's configured credential.
-When no host credential or profile exists, it uses the Copilot CLI login.
+Sign in with `openclaw models auth login-github-copilot` before discovery.
 The native catalog includes account-enabled Fusion routing when the SDK reports
 an available tier. Set `params.fusionTier` for `github-copilot/fusion` to choose
 the routing tier; discovery does not copy account defaults into requests. Disabled models and hidden Fusion
