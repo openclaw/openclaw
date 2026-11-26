@@ -75,7 +75,8 @@ export function createLoginSignIn(
   let record: FirstRunActivationReceipt | null = null;
   let restoring = false;
   let resumeAdmission: object | undefined;
-  // Auth status when the running sign-in started; unknown status never confirms a lost result.
+  // Auth status when the running sign-in started, or when this page reopened it; unknown
+  // status never confirms a lost result.
   let startStatus: ModelAuthStatusResult | null | undefined;
 
   const receiptContext = ({ context, agentId }: LoginScope) => ({
@@ -281,6 +282,9 @@ export function createLoginSignIn(
       adopt(selected, allowSetup);
     }
     own(scope);
+    // A sign-in finished before this read is already in it, so it shows no account; one
+    // finished after it does.
+    startStatus = authStatus;
     record = receipt;
     runner.restore(recovery, observe(receipt), "models.authLogin", {
       label: selected?.label,
