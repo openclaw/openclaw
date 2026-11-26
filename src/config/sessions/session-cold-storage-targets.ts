@@ -5,6 +5,7 @@ import type { SessionStoreTargetInventoryResult } from "./session-store-target-i
 import { captureSessionStoreTargetInventory } from "./session-store-target-routing.js";
 import {
   prepareSessionStoreCandidatesInWorker,
+  sessionStoreLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { listConfiguredSessionStoreAgentIds } from "./targets.js";
@@ -40,31 +41,36 @@ export async function withSessionColdStorageInventory<T>(
   assertCurrent();
   registryRead.assertCurrent();
   const { candidates } = prepared;
-  const result = await withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
-    const assertDiscoveryCurrent = () => {
-      assertCurrent();
-      registryRead.assertCurrent();
-      discovery.assertCurrent();
-    };
-    const registry = await registryRead.read();
-    assertDiscoveryCurrent();
-    const inventory = await discovery.readTargetInventory({
-      ...prepared,
-      registeredDatabases:
-        registry.result.status === "available"
-          ? registry.result.entries
-          : { status: "unavailable" },
-    });
-    assertDiscoveryCurrent();
-    if (inventory.kind === "session-target-registry-required") {
-      throw new Error(
-        kind === "status"
-          ? "Cold storage inventory did not receive its registry snapshot"
-          : "Cold maintenance did not receive its registry snapshot",
-      );
-    }
-    return operation(inventory, env, assertDiscoveryCurrent);
-  });
+  // The minute sweep already wakes the store reader. Inventory must not keep a history worker resident.
+  const result = await withSessionHistoryWorkerReadCandidates(
+    candidates,
+    async (discovery) => {
+      const assertDiscoveryCurrent = () => {
+        assertCurrent();
+        registryRead.assertCurrent();
+        discovery.assertCurrent();
+      };
+      const registry = await registryRead.read();
+      assertDiscoveryCurrent();
+      const inventory = await discovery.readTargetInventory({
+        ...prepared,
+        registeredDatabases:
+          registry.result.status === "available"
+            ? registry.result.entries
+            : { status: "unavailable" },
+      });
+      assertDiscoveryCurrent();
+      if (inventory.kind === "session-target-registry-required") {
+        throw new Error(
+          kind === "status"
+            ? "Cold storage inventory did not receive its registry snapshot"
+            : "Cold maintenance did not receive its registry snapshot",
+        );
+      }
+      return operation(inventory, env, assertDiscoveryCurrent);
+    },
+    sessionStoreLane,
+  );
   try {
     await prepareSessionStoreCandidatesInWorker({
       validate: {

@@ -142,9 +142,25 @@ it("refuses a replaced source while its worker inventory is delayed", async () =
   }
 });
 
+it("keeps idle cold storage maintenance off the session history workers", async () => {
+  const historyRead = vi.spyOn(historyLane.pool, "run");
+  const config = { session: { store: state.statePath("idle", "openclaw-agent.sqlite") } };
+  await expect(runSessionColdStorageMaintenance({ config })).resolves.toEqual({
+    archivedTranscripts: 0,
+    externalizedTranscripts: 0,
+  });
+  expect(historyRead).not.toHaveBeenCalled();
+});
+
 it("propagates worker rejection without a synchronous fallback", async () => {
   const failure = new Error("inventory worker refused");
-  vi.spyOn(historyLane.pool, "run").mockRejectedValueOnce(failure);
+  const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+  vi.spyOn(sessionStoreLane.pool, "run").mockImplementation((...args) => {
+    if (args[1]?.diagnosticOperation === "session-target-inventory") {
+      return Promise.reject(failure);
+    }
+    return run(...args);
+  });
   const observer = observeParentSqlite();
   onTestFinished(observer.restore);
   await expect(status()).rejects.toBe(failure);
