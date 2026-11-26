@@ -87,7 +87,7 @@ describe.each([
     await write("assets/shared-Br123456.js.br", brotliCompressSync(assetBody));
     await write("assets/shared-Id123456.js", assetBody);
     await write("assets/cold.js", assetBody);
-    for (const name of ["get", "head", "forbidden"]) {
+    for (const name of ["get", "head", "forbidden", "absent", "excluded"]) {
       await write(`assets/cold-${name}-A1234567.js`, assetBody);
     }
     for (const publicAsset of ["themes/absolutely.css", "sw.js"]) {
@@ -159,6 +159,28 @@ describe.each([
       ).toEqual(assetBody);
       expect(read).not.toHaveBeenCalled();
       expect(list).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ["absent", "br, gzip, identity;q=0"],
+      ["excluded", "*;q=0"],
+    ])("reuses the %s asset's 406 while rechecking unknown paths", async (name, accept) => {
+      const read = vi.spyOn(WorkerTaskPool.prototype, "run");
+      const headers = { "Accept-Encoding": accept };
+      for (const expectedReads of [1, 0]) {
+        read.mockClear();
+        expect(
+          (await requestAsset(`${baseUrl}/assets/cold-${name}-A1234567.js`, "GET", headers))
+            .response.statusCode,
+        ).toBe(406);
+        expect(read).toHaveBeenCalledTimes(expectedReads);
+        read.mockClear();
+        expect(
+          (await requestAsset(`${baseUrl}/assets/unavailable-${name}-A1234567.js`, "GET", headers))
+            .response.statusCode,
+        ).toBe(404);
+        expect(read).toHaveBeenCalledOnce();
+      }
     });
 
     it("keeps public content immutable across builds and revalidates changed versions", async () => {

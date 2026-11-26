@@ -115,19 +115,19 @@ export function readControlUiRootAsset(
       : (["identity"] as const);
   const generation = owner.generation;
   const representationKey = (encoding: HttpRepresentationEncoding) => `${encoding}:${fileRel}`;
-  for (const encoding of preferences) {
-    const cached = owner.cached.get(representationKey(encoding));
-    if (
-      !cached &&
-      encoding !== "identity" &&
-      owner.cached.peek(representationKey("identity"))?.asset[encoding] === null
-    ) {
-      continue;
-    }
-    if (cached && (!readBody || cached.selected.body)) {
-      return Promise.resolve(cached.asset);
-    }
-    break; // A higher priority variant is unexamined or still needs its body.
+  const sourceKey = representationKey("identity");
+  const knownSource = owner.cached.peek(sourceKey);
+  // Only a confirmed absence may be skipped. When the client accepts nothing available,
+  // the admitted source still proves a 406; a missing source must be checked separately.
+  const preferred = preferences.find(
+    (encoding) =>
+      encoding === "identity" ||
+      knownSource?.asset[encoding] !== null ||
+      owner.cached.peek(representationKey(encoding)),
+  );
+  const cached = owner.cached.get(preferred ? representationKey(preferred) : sourceKey);
+  if (cached && (!preferred || !readBody || cached.selected.body)) {
+    return Promise.resolve(cached.asset);
   }
   const identity = `${generation}:${preferences.join(",")}:${fileRel}`;
   const key = `${readBody ? "body" : "metadata"}:${identity}`;
@@ -283,7 +283,7 @@ export function readControlUiRootAsset(
       location,
       "identity",
       readBody &&
-        !owner.cached.peek(representationKey("identity"))?.selected?.body &&
+        !owner.cached.peek(sourceKey)?.selected.body &&
         (preferences[0] === "identity" || knownIdentity),
     );
     if (!source) {
@@ -325,7 +325,7 @@ export function readControlUiRootAsset(
       // Pin absent variants to the admitted source, without spending an LRU slot per missing file.
       publish("identity", file, file).asset[encoding] = null;
     }
-    return source.asset;
+    return publish("identity", file, file).asset;
   })().finally(() => owner.pending.delete(key));
   owner.pending.set(key, preparation);
   return preparation;
