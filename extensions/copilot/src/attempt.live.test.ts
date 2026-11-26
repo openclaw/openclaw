@@ -475,13 +475,14 @@ describeLive("copilot agent runtime live smoke", () => {
       );
       expect(settledResult.terminal).toEqual({ kind: "ok" });
       expect(matchingCalls).toHaveLength(1);
-      expect(
-        settledResult.toolMetas.some(
-          (toolMeta) =>
-            toolMeta.toolName === liveToolState.toolName &&
-            toolMeta.meta?.includes(liveToolState.sentinelPrefix),
-        ),
-      ).toBe(true);
+      const expectedToolResult = `${liveToolState.sentinelPrefix}${liveToolState.expectedText}`;
+      const dispatch = settledResult.toolMetas.find(
+        (meta) => meta.toolName === "dispatch_action" && meta.meta?.includes(expectedToolResult),
+      );
+      expect(JSON.parse(dispatch?.meta ?? "null")).toMatchObject({
+        tool: { name: liveToolState.toolName },
+        result: { content: [{ type: "text", text: expectedToolResult }] },
+      });
 
       const finalPrompt = "Reply with exactly COPILOT-SETTLED-FINALIZER-OK and nothing else.";
       const finalResult = await harness.finalizeSettledTurn?.({
