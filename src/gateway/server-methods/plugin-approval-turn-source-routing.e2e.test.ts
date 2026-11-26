@@ -12,11 +12,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
-import { APPROVALS_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
 import { startGatewayServer } from "../server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "../test-helpers.listener.js";
@@ -243,6 +244,66 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
       id: (result as { id: string }).id,
       decision: "allow-once",
     });
+  });
+
+  it("delivers and lists an approval for a separate non-admin reviewer", async () => {
+    const requested = createDeferredCore<{ id: string }>();
+    const admin = await connectGatewayClient({
+      url,
+      token,
+      platform: "approval-admin",
+      scopes: [ADMIN_SCOPE],
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+      onEvent: (event) => {
+        if (event.event === "plugin.approval.requested") {
+          requested.resolve(event.payload as { id: string });
+        }
+      },
+    });
+    const reviewerEvents: string[] = [];
+    let reviewerScopes: string[] = [];
+    approvalClient = await connectGatewayClient({
+      url,
+      token,
+      platform: "approval-reviewer",
+      scopes: [READ_SCOPE, APPROVALS_SCOPE],
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+      onHelloOk: (hello) => {
+        reviewerScopes = hello.auth.scopes;
+      },
+      onEvent: (event) => {
+        if (event.event === "plugin.approval.requested") {
+          reviewerEvents.push((event.payload as { id: string }).id);
+        }
+      },
+    });
+    const call = requester.request("plugin.approval.request", {
+      pluginId: "approval-route-probe",
+      title: "Review action",
+      description: "Await an explicit operator decision",
+      timeoutMs: 30_000,
+    });
+    let id: string | undefined;
+    try {
+      ({ id } = await awaitGateBeforeSettlement(
+        requested.promise,
+        call,
+        "Approval ended before delivery",
+      ));
+      const pending = await approvalClient.request<Array<{ id: string }>>(
+        "plugin.approval.list",
+        {},
+      );
+      expect(reviewerScopes.toSorted()).toEqual([APPROVALS_SCOPE, READ_SCOPE]);
+      expect(reviewerEvents).toContain(id);
+      expect(pending.map((entry) => entry.id)).toContain(id);
+    } finally {
+      if (id) {
+        await admin.request("approval.resolve", { id, decision: "deny" });
+      }
+      await call;
+      await disconnectGatewayClient(admin);
+    }
   });
 
   it("routes a plugin tool approval only to the host-selected reviewer device", async () => {

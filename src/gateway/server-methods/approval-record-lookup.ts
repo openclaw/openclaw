@@ -13,6 +13,7 @@ import {
   participationApprovalTurnActor,
 } from "../exec-approval-participation.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
+import { canAccessOperatorApproval } from "../operator-approval-authorization.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
 import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
@@ -303,6 +304,16 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
     )
   ) {
     return false;
+  }
+  if (
+    !params.resolving &&
+    canAccessOperatorApproval({
+      client: params.client,
+      binding: { reviewerDeviceIds: params.record.approvalReviewerDeviceIds },
+      allowApprovalRuntime: true,
+    })
+  ) {
+    return true;
   }
   const requestedByDeviceId = normalizeNullableString(params.record.requestedByDeviceId);
   const requestedByClientId = normalizeNullableString(params.record.requestedByClientId);

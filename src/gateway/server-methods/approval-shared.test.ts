@@ -327,7 +327,7 @@ describe("handlePendingApprovalRequest", () => {
 
   it.for([
     {
-      name: "targets requested approval events to visible approval clients when available",
+      name: "targets requested approval events to authorized reviewers on other devices",
       id: "approval-visible",
       requestedBy: { requestedByDeviceId: "device-owner" },
       clientConnId: "conn-requester",
@@ -335,7 +335,7 @@ describe("handlePendingApprovalRequest", () => {
         { connId: "conn-owner-approval", clientId: "client-owner", deviceId: "device-owner" },
         { connId: "conn-other-approval", clientId: "client-other", deviceId: "device-other" },
       ],
-      recipients: ["conn-owner-approval"],
+      recipients: ["conn-owner-approval", "conn-other-approval"],
     },
     {
       name: "routes backend-runtime approval events to the authorized approval reviewer device",
@@ -358,7 +358,7 @@ describe("handlePendingApprovalRequest", () => {
       recipients: ["conn-mobile-approval"],
     },
     {
-      name: "targets requester-bound approval events to gateway-client approval runtimes",
+      name: "targets approval events to trusted runtimes and authorized human reviewers",
       id: "approval-delivery-runtime",
       requestedBy: owner,
       clientConnId: "conn-owner",
@@ -374,7 +374,7 @@ describe("handlePendingApprovalRequest", () => {
           deviceId: "device-other",
         },
       ],
-      recipients: ["conn-delivery-runtime"],
+      recipients: ["conn-delivery-runtime", "conn-other-approval"],
     },
     {
       name: "does not target no-device approvals by self-declared client id",
@@ -657,7 +657,8 @@ describe("handlePendingApprovalRequest", () => {
       testContext,
       "approval-wait-hidden",
       undefined,
-      (pendingRecord) => Object.assign(pendingRecord, owner),
+      (pendingRecord) =>
+        Object.assign(pendingRecord, owner, { approvalReviewerDeviceIds: ["device-owner"] }),
     );
     expect(await manager.resolve(record.id, "allow-once")).toBe(true);
 
@@ -814,7 +815,7 @@ describe("handlePendingApprovalRequest", () => {
         clientId: "client-other",
         deviceId: "device-other",
       },
-      recipients: ["conn-owner-approval"],
+      recipients: ["conn-owner-approval", "conn-other-approval"],
       connectedClients: true,
       allowed: true,
     },
