@@ -118,11 +118,11 @@ describe("writing profile settings admission", () => {
 
   test.each([
     "https://mail.example/private",
-    "https://mail.example?token=secret",
+    "https://mail.example/?view=compact",
     "https://mail.example#part",
     "https://mail.example?",
     "https://mail.example#",
-    "https://me:secret@mail.example",
+    "https://@mail.example/",
     "https://*.example",
     "https://%2a.example.test",
     "https://＊.example.test",
