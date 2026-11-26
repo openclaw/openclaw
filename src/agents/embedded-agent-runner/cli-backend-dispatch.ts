@@ -30,6 +30,11 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
     return undefined;
   }
+  // The one-shot CLI bridge cannot carry credential-lifetime callbacks. Keep bound
+  // runs with the embedded auth owner that enforces them at credential use.
+  if (params.authProfileBinding) {
+    return undefined;
+  }
   // The CLI runner needs the caller-owned transcript path or the caller's in-memory session;
   // runs without either stay on the passthrough where session targets are resolved internally.
   const sessionFile =
@@ -63,7 +68,12 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     return undefined;
   }
   const toolsAllow = [...new Set(names)];
-  const eligibility = await resolveEmbeddedCliBackendDispatchEligibilityAsync(params);
+  const requiredProfile = params.requiredAuthProfileId;
+  const selectedProfile = requiredProfile ?? params.authProfileId;
+  const eligibility = await resolveEmbeddedCliBackendDispatchEligibilityAsync({
+    ...params,
+    authProfileId: selectedProfile,
+  });
   if (!eligibility) {
     return undefined;
   }
@@ -76,7 +86,6 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
   // A fresh CLI session uses the account order new CLI sessions use, so an OpenClaw-held
   // subscription login reaches the CLI as it does for the session's own turns.
   const { config, agentDir } = params;
-  const requiredProfile = params.authProfileBinding?.profileId ?? params.requiredAuthProfileId;
   const canForwardProfile =
     config !== undefined &&
     agentDir !== undefined &&
@@ -96,7 +105,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
         authProfileProvider: params.provider ?? eligibility.provider,
         config,
         agentDir,
-        selected: { authProfileId: requiredProfile ?? params.authProfileId },
+        selected: { authProfileId: selectedProfile },
       })
     : params.authProfileId;
   if (requiredProfile && authProfileId !== requiredProfile) {

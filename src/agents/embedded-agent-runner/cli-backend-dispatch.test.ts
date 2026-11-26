@@ -40,6 +40,10 @@ vi.mock("../model-auth.js", () => ({
   resolveAuthProfileOrder,
   resolveModelAuthMode,
 }));
+vi.mock("../auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auth-profiles/store-runtime.js")>()),
+  loadAuthProfileStoreForRuntimeAsync: async () => ensureAuthProfileStore(),
+}));
 vi.mock("../model-runtime-aliases.js", () => ({
   resolveCliRuntimeExecutionProvider,
 }));
@@ -245,6 +249,57 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
       }
     },
   );
+
+  it("keeps callback-bound credentials with the embedded credential owner", async () => {
+    resolveRuntimeCliBackends.mockReturnValue([
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "claude" },
+        subscriptionAuthDispatch: true,
+      },
+    ]);
+    ensureAuthProfileStore.mockReturnValue({ version: 1, profiles });
+    const rejectBinding = () => {
+      throw new Error("Binding cannot authorize this account");
+    };
+    await expect(
+      runDispatch({
+        config: {},
+        agentDir: "/agents/main",
+        authProfileId: "anthropic:claude-cli",
+        authProfileBinding: {
+          profileId: "anthropic:claude-cli",
+          authRequirement: "subscription",
+          assertCurrent: rejectBinding,
+          revalidate: async () => rejectBinding(),
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(runCliAgent).not.toHaveBeenCalled();
+  });
+
+  it("uses the required API-key account before subscription eligibility", async () => {
+    resolveRuntimeCliBackends.mockReturnValue([
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "claude" },
+        subscriptionAuthDispatch: true,
+      },
+    ]);
+    ensureAuthProfileStore.mockReturnValue({ version: 1, profiles });
+    resolveAuthProfileOrder.mockReturnValue(["anthropic:claude-cli"]);
+    await expect(
+      runDispatch({
+        config: {},
+        agentDir: "/agents/main",
+        authProfileId: "anthropic:claude-cli",
+        requiredAuthProfileId: "anthropic:api",
+      }),
+    ).resolves.toBeUndefined();
+    expect(runCliAgent).not.toHaveBeenCalled();
+  });
 
   it("dispatches when no credential mode resolves for the passthrough", async () => {
     resolveModelAuthMode.mockReturnValue(undefined);
