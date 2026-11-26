@@ -74,6 +74,7 @@ const repositoryScriptEntries = [
   "src/cli/update-cli/update-command-state-handoff.process.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-ci-lint-plan.mts!",
+  "scripts/bench-vocabulary.mts!",
   "scripts/bench-ci-planner.mts!",
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-ios-release-note-overlap.mjs!",
