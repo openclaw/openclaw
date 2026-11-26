@@ -5,6 +5,7 @@ import {
   createOwnedStdioProcess,
   type OwnedStdioProcessOptions,
 } from "openclaw/plugin-sdk/process-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_OUTPUT_BYTES = 8 * MAX_FRAME_BYTES;
@@ -30,10 +31,10 @@ type AgyFrame =
   | { kind: "terminal"; id: string; successful: boolean; text: string };
 
 function record(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new Error("Invalid Antigravity protocol object.");
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
 export function isAgyConversationId(value: unknown): value is string {
