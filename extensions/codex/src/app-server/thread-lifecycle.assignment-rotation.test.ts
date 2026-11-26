@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -12,6 +12,7 @@ import type { RetainedLiveThread } from "./client-thread-owner.js";
 import { getCodexInferenceThread, ownCodexInferenceClient } from "./inference-routing.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import type { CodexNativeSubagentPendingAssignment } from "./native-subagent-pending-assignments.js";
+import { buildCodexAppServerRuntimeFingerprint } from "./plugin-app-cache-key.js";
 import type { JsonObject, RpcRequest } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
@@ -43,6 +44,7 @@ async function fixture(
   withProjection = false,
   pluginFingerprint?: () => string,
   inferenceConfig?: JsonObject,
+  remote?: Pick<CodexStartOrResumeThreadParams, "appServer" | "appServerRuntimeFingerprint">,
 ) {
   if (inferenceConfig) {
     stubCodexInferenceTransportEnv();
@@ -83,6 +85,9 @@ async function fixture(
       }
       if (method === "account/read") {
         return { account: { type: "apiKey" } };
+      }
+      if (remote && method === "thread/resume") {
+        return threadStartResult("parent-1");
       }
       if (method === "thread/start") {
         starts += 1;
@@ -136,6 +141,7 @@ async function fixture(
     mcpServersFingerprint: "mcp-before",
     mcpServersFingerprintEvaluated: true,
     appServerRuntimeFingerprint: "connection-A",
+    ...remote,
   } satisfies CodexStartOrResumeThreadParams;
   const parent = await startOrResumeThread(options);
   if (inferenceConfig) {
@@ -148,12 +154,14 @@ async function fixture(
       await wire.client.request("thread/unsubscribe", { threadId }, { assertCurrent, withCurrent });
     },
   );
-  await retainCodexAppServerLiveThread(
-    wire.client,
-    parent.threadId,
-    releasePredecessor,
-    parent.liveThreadConfigFingerprint,
-  );
+  if (!remote) {
+    await retainCodexAppServerLiveThread(
+      wire.client,
+      parent.threadId,
+      releasePredecessor,
+      parent.liveThreadConfigFingerprint,
+    );
+  }
   const owner = createCodexNativeSubagentHistoryOwner({
     parentThreadId: parent.threadId,
     sessionId: params.sessionId,
@@ -262,6 +270,100 @@ describe("native assignment custody across ordinary parent rotation", () => {
     const replacement = await pending;
     expect(f.store.read(f.identity)?.threadId).toBe("parent-2");
     expect(await f.readAssignments(replacement.threadId, replacement)).toEqual(f.assignments);
+  });
+
+  it("resumes the original remote parent and pending work across a Gateway-only upgrade", async () => {
+    const base = createAppServerOptions();
+    const appServer: CodexStartOrResumeThreadParams["appServer"] = {
+      ...base,
+      connectionClass: "remote",
+      start: {
+        ...base.start,
+        transport: "websocket",
+        authToken: "synthetic-original",
+        url: "wss://codex.example.invalid/",
+      },
+    };
+    const identity = (version: string) => ({
+      userAgent: `openclaw/0.164.0 (Linux) (openclaw; ${version})`,
+      serverVersion: "0.164.0",
+      codexHome: "/home/agent",
+      platformFamily: "unix",
+      platformOs: "linux",
+    });
+    const runtimeIdentity = identity(OPENCLAW_VERSION);
+    const saved = buildCodexAppServerRuntimeFingerprint({
+      appServer,
+      runtimeIdentity: identity("2026.11.5"),
+    });
+    const f = await fixture(false, undefined, undefined, {
+      appServer,
+      appServerRuntimeFingerprint: saved,
+    });
+    const readRuntimeIdentity = vi
+      .spyOn(f.client, "getRuntimeIdentity")
+      .mockReturnValue(runtimeIdentity);
+    onTestFinished(() => {
+      readRuntimeIdentity.mockRestore();
+    });
+    const current = buildCodexAppServerRuntimeFingerprint({ appServer, runtimeIdentity });
+    expect(saved).not.toEqual(current);
+    const owner = f.assignments[0].owner;
+    assert(owner);
+    const receipt = {
+      parentTurnId: "parent-turn",
+      callId: "call-one",
+      childThreadId: "other-child",
+      submissionId: "turn-b",
+      predecessorRunId: "codex-thread:other-child:turn:turn-a",
+      predecessorNativeTurnId: "turn-a",
+    };
+    await expect(
+      f.store.mutate(
+        f.identity,
+        { kind: "record-native-subagent-submission", owner, receipt },
+        () => undefined,
+      ),
+    ).resolves.toBe(true);
+    const threadId = f.parent.threadId;
+    expect(await f.client.request("thread/unsubscribe", { threadId })).toMatchObject({
+      status: "unsubscribed",
+    });
+    expect(await f.client.request("thread/read", { threadId, includeTurns: false })).toMatchObject({
+      thread: { id: threadId, status: { type: "notLoaded" } },
+    });
+    const next = await startOrResumeThread({ ...f.options, appServerRuntimeFingerprint: current });
+    expect(next.threadId).toBe(f.parent.threadId);
+    const resumes = f.request.mock.calls.filter(([method]) => method === "thread/resume");
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0][1]).toMatchObject({ threadId: f.parent.threadId });
+    expect(next.appServerRuntimeFingerprint).toBe(saved);
+    expect(f.store.read(f.identity)?.appServerRuntimeFingerprint).toBe(saved);
+    expect(await f.store.readNativeSubagentSubmissions(f.identity, owner)).toEqual([receipt]);
+    expect(await f.readAssignments(next.threadId, next)).toEqual(f.assignments);
+
+    const replacement = await f.rotate({ appServerRuntimeFingerprint: current });
+    expect(replacement.threadId).not.toBe(next.threadId);
+    expect(await f.readAssignments(replacement.threadId, replacement)).toEqual(f.assignments);
+    const rotated = f.readState();
+    assert(rotated?.state === "active");
+    expect(rotated.nativeSubagentSubmissions).toBeUndefined();
+
+    const changedConnection = {
+      ...appServer,
+      start: { ...appServer.start, authToken: "synthetic-replacement" },
+    };
+    const changedFingerprint = buildCodexAppServerRuntimeFingerprint({
+      appServer: changedConnection,
+      runtimeIdentity,
+    });
+    const changed = await f.rotate({
+      appServer: changedConnection,
+      appServerRuntimeFingerprint: changedFingerprint,
+    });
+    expect(changed.threadId).not.toBe(replacement.threadId);
+    expect(changed.appServerRuntimeFingerprint).toBe(changedFingerprint);
+    expect(await f.readAssignments(changed.threadId, changed)).toEqual([]);
   });
 
   it("does not expose the old assignments through a different connection", async () => {
