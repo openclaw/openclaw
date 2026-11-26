@@ -177,6 +177,29 @@ function ranBeforeRestart(run: UpdateRunRecord): boolean {
   return drivers.every((driver) => driver !== undefined && ranInEarlierHostBoot(driver, current));
 }
 
+/** The run recorded its candidate serving, and that candidate is the core installed at `root`. */
+async function isVerifiedCandidateInstalled(
+  run: UpdateRunRecord,
+  pair: PluginCohortRecoveryPair,
+  root: string,
+): Promise<boolean> {
+  const { to } = pair.reservation;
+  const { verification } = run;
+  if (
+    verification.serviceRunning !== true ||
+    verification.versionMatch !== true ||
+    verification.runningVersion !== to.version ||
+    (to.buildId !== null && verification.runningBuildId !== to.buildId)
+  ) {
+    return false;
+  }
+  const [version, buildId] = await Promise.all([
+    readPackageVersion(root),
+    readBuiltGatewayBuildId(root),
+  ]);
+  return version === to.version && (buildId ?? null) === to.buildId;
+}
+
 /** Whose saved plugin cohort this is, seen from the installation at `installKey`. */
 export type PluginCohortInstallation =
   | { kind: "this" }
@@ -587,6 +610,19 @@ export async function inspectInterruptedUpdateRecovery(
       holder.startIdentity === driver.startIdentity;
     // A restart empties the temporary lease store, but also ends every process of the boot.
     const rebooted = !recorded && held.kind === "absent" && ranBeforeRestart(history);
+    // An executor releases its lease only after its command scope joined every child and
+    // confirmed their cleanup, and a later claim succeeds only once they are gone, so a lease
+    // missing from a store that still exists shows that update's processes ended (2026.11.10
+    // unwinds this way after losing its plugin lifecycle lease, #205167). Settle that only
+    // forward, onto the candidate it verified serving that is still installed.
+    // Accepted edge: a store deleted and recreated in this boot while a killed driver's
+    // children still run looks the same.
+    const released =
+      !recorded &&
+      !rebooted &&
+      store !== undefined &&
+      held.kind === "absent" &&
+      (await isVerifiedCandidateInstalled(history, pair, root));
     return {
       pair,
       refuse,
@@ -595,8 +631,9 @@ export async function inspectInterruptedUpdateRecovery(
       databasePath,
       store,
       rebooted,
+      released,
       refused:
-        recorded || rebooted
+        recorded || rebooted || released
           ? undefined
           : refuse(
               "The update lease store no longer holds that update's lease, so this update cannot show that its processes are gone.",
@@ -611,6 +648,7 @@ export async function inspectInterruptedUpdateRecovery(
   const { pair, refuse, inspectHistory, refuseOtherRecovery, refused, databasePath, store } =
     inspected;
   const rebooted = inspected.rebooted === true;
+  const released = inspected.released === true;
   return async (resolveAdmissionEnv) => {
     // Admission can follow a managed service to another state directory: not this recovery.
     const admitted = resolveOpenClawStateSqlitePath(await resolveAdmissionEnv(invocationCwd));
@@ -660,6 +698,9 @@ export async function inspectInterruptedUpdateRecovery(
         if (rebooted && !ranBeforeRestart(history)) {
           throw refuse("The update's recorded processes changed while this update was starting.");
         }
+        if (released && !(await isVerifiedCandidateInstalled(history, pair, root))) {
+          throw refuse("The installed version changed while this update was starting.");
+        }
         const installation = inspectPluginCohortInstallation(pair, installKey, history);
         // What repair's finalization finishes and an already-current update would not.
         const gatewayStopped = findUpdateGatewayStop([history])?.started === false;
@@ -679,6 +720,11 @@ export async function inspectInterruptedUpdateRecovery(
             }
           },
           admit: ({ action: outcome, originalCore, rollbackStarted }) => {
+            if (released && outcome !== "commit") {
+              throw (blocked = refuse(
+                "That update released its lease without finishing, and settling it would roll back the version it verified.",
+              ));
+            }
             // A rollback over the installed candidate leaves it half updated, including
             // a commit the cohort owner turns back into a rollback.
             if (outcome === "rollback" && !originalCore) {
