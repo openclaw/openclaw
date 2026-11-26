@@ -149,7 +149,7 @@ export function recordDoctorHealthWarnings(
   for (const finding of findings.filter((entry) => entry.severity !== "info")) {
     ctx.repairEvidence?.remaining(finding.checkId, [finding.message]);
   }
-  ctx.repairEvidence?.remaining("doctor", warnings);
+  ctx.repairEvidence?.summarize(warnings);
   ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings(
     options?.prepend ? [...added, ...existing] : [...existing, ...added],
   );

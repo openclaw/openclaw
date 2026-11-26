@@ -139,10 +139,10 @@ export function createDoctorCompletedResult(
     ),
     ...(ctx.postInstallDoctorResult?.warnings ?? []),
   ];
-  ctx.repairEvidence?.summarize([
-    ...rawWarnings.filter((warning) => !maintenanceWarnings.includes(warning)),
-    ...(ctx.updateWarnings ?? []),
-  ]);
+  // Contribution warnings are classified when recorded, before their display limits.
+  ctx.repairEvidence?.summarize(
+    rawWarnings.filter((warning) => !maintenanceWarnings.includes(warning)),
+  );
   const warnings = normalizeUpdatePostInstallDoctorWarnings(rawWarnings);
   return {
     ...(ctx.postInstallDoctorResult ?? { status: "ok" }),

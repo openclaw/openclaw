@@ -239,3 +239,18 @@ it("preserves deployment-owned Gateway credentials during externally managed rep
     expect.stringContaining(tokenRef.id),
   ]);
 });
+
+it("keeps optional trusted-proxy fallback removal in deployment guidance", async () => {
+  const { ctx, run } = await createFixture(REDACTED_SENTINEL, { externallyManaged: true });
+  ctx.cfg.gateway = {
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: { userHeader: "x-forwarded-user" },
+      password: REDACTED_SENTINEL,
+    },
+  };
+  await run();
+  expectNote("Replace or remove the optional password");
+  expectNote("deployment source");
+  expect(ctx.cfg.gateway.auth?.password).toBe(REDACTED_SENTINEL);
+});

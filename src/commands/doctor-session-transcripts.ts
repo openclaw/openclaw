@@ -429,11 +429,8 @@ export async function noteSessionTranscriptHealth(options?: {
       postSessionPluginReceipt = createLegacyStateMigrationStepReceipt(receiptStep, pluginRepair);
       params.onStepReceipt?.(postSessionPluginReceipt);
     }
-    // A classified receipt owns evidence; raw callbacks must not reclassify it.
-    if (!postSessionPluginReceipt || !params.onStepReceipt) {
-      publishChanges(pluginRepair.changes);
-      publishWarnings(pluginRepair.warnings);
-    }
+    publishChanges(pluginRepair.changes);
+    publishWarnings(pluginRepair.warnings);
     const pluginMessages = [...pluginRepair.changes, ...pluginRepair.warnings];
     if (pluginMessages.length > 0) {
       note(pluginMessages.join("\n"), "Plugin session repair");

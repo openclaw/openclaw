@@ -191,7 +191,10 @@ export async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promis
     finding = {
       ...finding,
       fixHint:
-        "Restore a valid Gateway credential in the deployment source or its secret owner, then redeploy/restart through its supervisor and rerun this externally managed repair.",
+        (finding.path === "gateway.auth.password"
+          ? "Replace or remove the optional password in the deployment source or its secret owner; keep trusted-proxy authentication configured."
+          : "Restore a valid Gateway credential in the deployment source or its secret owner.") +
+        " Then redeploy/restart through its supervisor and rerun this externally managed repair.",
     };
   }
   note([finding.message, finding.fixHint].filter(Boolean).join("\n"), "Gateway auth");

@@ -504,10 +504,7 @@ export function resolveInitialDoctorHealthContributions(params: {
           env: ctx.env ?? process.env,
           shouldRepair: ctx.prompter.shouldRepair,
         });
-        if (warnings.length > 0) {
-          ctx.updateWarnings ??= [];
-          ctx.updateWarnings.push(...warnings);
-        }
+        recordDoctorHealthWarnings(ctx, [], warnings);
         const { noteStateIntegrity } = await import("../commands/doctor-state-integrity.js");
         await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath, {
           stateDirExistedAtStart: ctx.stateDirExistedAtStart,

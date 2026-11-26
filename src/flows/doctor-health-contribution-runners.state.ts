@@ -71,7 +71,16 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
     integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
-    onChanges: (changes) => ctx.repairEvidence?.applied("session-state", changes),
+    onChanges: (changes) =>
+      ctx.repairEvidence?.applied(
+        "session-state",
+        changes.filter(
+          (change) =>
+            !ctx.configResult.stateMigrationStepReceipts?.some((receipt) =>
+              receipt.changes.includes(change),
+            ),
+        ),
+      ),
     onWarnings: (warnings) => recordDoctorHealthWarnings(ctx, [], warnings),
     onFindings: (findings) => renderStructuredHealthFindings(ctx, findings),
     ...(ctx.configResult.postSessionPluginMigration

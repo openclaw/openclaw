@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createExternallyManagedDoctorRepairEvidence } from "../commands/doctor-externally-managed-repair.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
+import {
+  createDoctorHealthContribution,
+  recordDoctorHealthWarnings,
+} from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
   createDoctorPrompterFixture,
@@ -43,7 +46,7 @@ describe("Doctor health contribution repair evidence", () => {
 
   it("materializes heartbeat cadence before scratch migration and final config writes", async () => {
     const applied = vi.fn();
-    const remaining = vi.fn();
+    const summarize = vi.fn();
     mocks.maybeMigrateHeartbeatCadenceToCron
       .mockResolvedValueOnce({ changes: ["Heartbeat automation committed."], warnings: [] })
       .mockResolvedValueOnce({ changes: [], warnings: ["Heartbeat migration could not finish."] });
@@ -61,11 +64,11 @@ describe("Doctor health contribution repair evidence", () => {
       configResult: { heartbeatMigrationSource: source },
       repairEvidence: {
         applied,
-        remaining,
+        remaining: vi.fn(),
         complete: vi.fn(),
         migration: vi.fn(),
         receipts: vi.fn(),
-        summarize: vi.fn(),
+        summarize,
       },
       prompter: createDoctorPrompterFixture(true),
       env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
@@ -78,7 +81,7 @@ describe("Doctor health contribution repair evidence", () => {
     expect(applied).toHaveBeenCalledWith("doctor:heartbeat-retirement", [
       "Heartbeat automation committed.",
     ]);
-    expect(remaining).toHaveBeenCalledWith("doctor", ["Heartbeat migration could not finish."]);
+    expect(summarize).toHaveBeenCalledWith(["Heartbeat migration could not finish."]);
     expect(ctx.updateWarnings).toContain("Heartbeat migration could not finish.");
   });
 
@@ -155,6 +158,7 @@ it.each([
       warningDisposition: "recoverable",
     });
     evidence.sink.receipts(ctx.configResult.stateMigrationStepReceipts);
+    recordDoctorHealthWarnings(ctx, [], [warning]);
     createDoctorCompletedResult(ctx, undefined, []);
     evidence.sink.complete();
     const report = evidence.finish();

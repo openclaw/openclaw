@@ -429,8 +429,8 @@ describe("doctor session transcript repair", () => {
       changes: [],
     });
     expect(receipts).toEqual([first, replay]);
-    expect(onWarnings).not.toHaveBeenCalled();
-    expect(onChanges).not.toHaveBeenCalled();
+    expect(onWarnings).toHaveBeenCalledWith(["Retained a dreaming cron row."]);
+    expect(onChanges).toHaveBeenCalledWith(["repaired frozen plugin action"]);
   });
 
   it.each([
