@@ -130,12 +130,20 @@ export async function settleRunFromTrial(
   trial: Trial | null,
   prefix = resolvePrefix(),
 ): Promise<void> {
-  if (trial?.outcome && !trial.reported && trial.runId) {
+  if (
+    trial?.outcome &&
+    trial.runId &&
+    (!trial.reported || (await getUpdateRunAsync(trial.runId))?.status === "running")
+  ) {
     const outcome = trial.outcome;
     const buildId = resolveRuntimeServiceBuildId();
     // Only the release that actually booted may claim successful activation.
     if (outcome.status === "succeeded" && trial.buildId && buildId !== trial.buildId) {
       return;
+    }
+    if (!trial.reported) {
+      trial.reported = true;
+      await writeTrial(trial, prefix);
     }
     // The terminal trial handed ownership to this Gateway, not its expired preparer.
     const preparationLock = await readUpdateLock(prefix);
@@ -199,8 +207,6 @@ export async function settleRunFromTrial(
               reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
             },
       );
-      trial.reported = true;
-      await writeTrial(trial, prefix);
       if (
         finished.steps.some((step) => step.step === "notice:ack" && step.status === "completed")
       ) {
@@ -211,10 +217,10 @@ export async function settleRunFromTrial(
       }
     };
     if (outcome.status === "succeeded") {
-      const step = "post-activation doctor inspections";
       // The launcher committed already; only the aggregate result waits for required plugins.
       const accepted = wakeUpdateRunWatcher(trial.runId, () =>
         withCommandProcessScope(async () => {
+          const step = "post-activation doctor inspections";
           const plugins = await maintainTrialPlugins(trial);
           if (getAsyncWorkSignal()?.aborted || !plugins) {
             return;

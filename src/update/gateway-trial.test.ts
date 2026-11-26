@@ -34,6 +34,7 @@ import { VERSION } from "../version.js";
 import { announceReady, settleRunFromTrial } from "./gateway-trial.js";
 import {
   acquireUpdateLock,
+  createTrialPending,
   readTrial,
   readUpdateLock,
   resolvePrefix,
@@ -203,6 +204,7 @@ it.each(["succeeded", "rolled-back"] as const)(
     await acquireUpdateLock({ runId: run.runId, pid: process.pid, deadlineMs: 0 });
     const work = new AsyncWorkScope();
     await work.run(() => announceReady(null));
+    await Promise.all(backgroundWork);
     await work.drain();
     const finished = await getUpdateRunAsync(run.runId, options);
     expect(finished).toMatchObject({
@@ -517,6 +519,7 @@ it.each([undefined, true, false])(
       v: 2,
       runId: run.runId,
       phase: "committed",
+      reported: acceptCapabilities === undefined,
       target: "releases/new/openclaw",
       previous: "releases/old/openclaw",
       version: VERSION,
@@ -572,7 +575,7 @@ it.each([undefined, true, false])(
         expect.objectContaining({ step: "plugins", status: "in_progress" }),
       );
       expect(await readTrial()).toMatchObject({ phase: "committed" });
-      expect((await readTrial())?.reported).not.toBe(true);
+      expect((await readTrial())?.reported).toBe(true);
       expect(notices).toEqual([]);
       expect(runPostActivationInspections).not.toHaveBeenCalled();
       expect(reload).not.toHaveBeenCalled();
@@ -580,6 +583,12 @@ it.each([undefined, true, false])(
       expect(argv).toEqual(expect.arrayContaining(["update", "plugins", "--json"]));
       expect(argv.includes("--accept-capabilities")).toBe(acceptCapabilities === true);
       expect(commandOptions).toMatchObject({ timeoutMs: 10 * 60_000, killProcessTree: true });
+      await createTrialPending({
+        runId: "next-run",
+        target: "releases/next/openclaw",
+        previous: trial.target,
+        version: VERSION,
+      });
     } finally {
       command.resolve({
         stdout: `Plugin maintenance finished.\n${JSON.stringify(result)}`,
@@ -609,7 +618,7 @@ it.each([undefined, true, false])(
     expect(notices).toEqual([
       { runId: run.runId, kind: "finished", status: acceptCapabilities ? "succeeded" : "failed" },
     ]);
-    expect(await readTrial()).toMatchObject({ phase: "committed", reported: true });
+    expect(await readTrial()).toMatchObject({ runId: "next-run", phase: "pending" });
     const report = renderUpdateRunReport(maintained!);
     if (failed) {
       const pluginStep = maintained?.steps.find(({ step }) => step === "plugins");

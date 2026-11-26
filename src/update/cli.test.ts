@@ -496,7 +496,7 @@ it("fails an old-Gateway consent timeout even when the new core serves", async (
     timeoutMs: 100,
     acceptCapabilities: true,
   });
-  expect(sent).toEqual([{}]);
+  expect(sent).toEqual([{ timeoutMs: expect.any(Number) }]);
   expect(process.exitCode).toBe(1);
   expect(error.mock.calls.flat().join("\n")).toContain(
     "capability consent was not applied before the timeout",
