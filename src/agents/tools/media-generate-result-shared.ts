@@ -63,6 +63,8 @@ export async function buildMediaGenerateToolExecutionResult(params: {
   maxBytes: number;
   messages?: Array<string | null>;
   taskHandle?: MediaGenerationTaskHandle | null;
+  /** Durable spawn key admitted for resolving generated references in split-key sessions. */
+  attachmentRequesterSessionKey?: string;
   details: Record<string, unknown>;
 }): Promise<MediaGenerateToolExecutionResult> {
   const { result, attachments, mediaUrls } = params;
@@ -83,6 +85,10 @@ export async function buildMediaGenerateToolExecutionResult(params: {
             sizeBytes: buffer.byteLength,
             sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
             requesterSessionKey: params.taskHandle?.requesterSessionKey,
+            requesterSessionKeys: [
+              params.taskHandle?.requesterSessionKey,
+              params.attachmentRequesterSessionKey,
+            ].filter((key): key is string => Boolean(key)),
           }),
         };
       } catch {
