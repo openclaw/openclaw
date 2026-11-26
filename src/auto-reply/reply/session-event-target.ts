@@ -56,7 +56,7 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.read.js
 import {
   prepareCommandOwnerAuthority,
   type PreparedCommandOwnerAuthority,
-} from "../command-owner-authority.js";
+} from "../command-owner-facts.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
 import { narrowSessionEventSettings } from "./session-event-policy-inheritance.js";

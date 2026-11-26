@@ -16,11 +16,11 @@ import {
   restoreOperatorModelPolicySnapshot,
   type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
+import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
 import {
-  getCommandOwnerAuthority,
   isConfiguredCommandOwner,
   prepareCommandOwnerAuthority,
-} from "../auto-reply/command-owner-authority.js";
+} from "../auto-reply/command-owner-facts.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAbortError } from "../infra/abort-signal.js";

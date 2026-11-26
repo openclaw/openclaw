@@ -22,7 +22,7 @@ import {
 import {
   resolveConfiguredCommandOwners,
   resolveOwnerAllowFromList,
-} from "./command-owner-authority.js";
+} from "./command-owner-facts.js";
 import { getCommandSenderAuthority } from "./command-sender-authority.js";
 import {
   formatAllowFromList,

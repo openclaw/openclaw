@@ -18,7 +18,7 @@ const TURN_FLAGS = new Set([
 ]);
 export const TURN_FLAG_FILES = new Set([
   "src/agents/tools/gateway-tool.ts",
-  "src/auto-reply/command-owner-authority.ts",
+  "src/auto-reply/command-owner-facts.ts",
   "src/auto-reply/reply/reply-source-admission.ts",
   "src/auto-reply/reply/session-event-target.ts",
   "src/auto-reply/reply/session.ts",

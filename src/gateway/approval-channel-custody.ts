@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ApprovalChannelReviewer } from "../../packages/gateway-protocol/src/index.js";
-import { isConfiguredCommandOwner } from "../auto-reply/command-owner-authority.js";
+import { isConfiguredCommandOwner } from "../auto-reply/command-owner-facts.js";
 import {
   getLoadedChannelPlugin,
   resolveChannelApprovalCapability,

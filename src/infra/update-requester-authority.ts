@@ -149,7 +149,7 @@ async function captureManagedUpdateRequester(
         { ensureCliPluginRegistryLoaded },
         { PluginLoadFailureError },
       ] = await Promise.all([
-        import("../auto-reply/command-owner-authority.js"),
+        import("../auto-reply/command-owner-facts.js"),
         import("../gateway/channel-operator-authority.js"),
         // Keep synchronous authority checks on the reader loaded at admission.
         import("../config/io.js"),

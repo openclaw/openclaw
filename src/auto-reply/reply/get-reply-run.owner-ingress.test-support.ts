@@ -1,5 +1,6 @@
 import { getRuntimeConfig } from "../../config/config.js";
-import { bindCommandOwnerAuthority, isConfiguredCommandOwner } from "../command-owner-authority.js";
+import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
+import { isConfiguredCommandOwner } from "../command-owner-facts.js";
 import {
   createPreparedReplyTurn as turn,
   createProviderSurface,
