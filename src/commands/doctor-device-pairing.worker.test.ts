@@ -15,6 +15,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectDevicePairingHealthFindings } from "./doctor-device-pairing.js";
+import { withReadOnlyPluginStateSnapshot } from "./doctor-lint-state-snapshot.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -58,8 +59,8 @@ it("reads token inventories off-host without creating storage or retaining mutab
   });
 });
 
-it("detects stale local tokens from the active state view while checking legacy files at the source", async () => {
-  await withOpenClawTestState({ label: "doctor-token-active-view" }, async (state) => {
+it("detects stale source tokens while inspecting a private pairing snapshot", async () => {
+  await withOpenClawTestState({ label: "doctor-token-source-view" }, async (state) => {
     const identity = loadOrCreateDeviceIdentity();
     const pairing = await requestDevicePairing({
       deviceId: identity.deviceId,
@@ -77,19 +78,15 @@ it("detects stale local tokens from the active state view while checking legacy 
     });
     staleTokenClock.mockRestore();
     await staleTokenWrite;
-    const sourceDir = state.path("source-state");
-    await fs.mkdir(`${sourceDir}/identity`, { recursive: true });
-    await fs.writeFile(`${sourceDir}/identity/device-auth.json`, '{"version":1}');
+    await closeOpenClawStateDatabaseAsync();
     using prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
 
-    const findings = await collectDevicePairingHealthFindings({
-      cfg: { gateway: { mode: "local" } },
-      env: { ...state.env, OPENCLAW_STATE_DIR: sourceDir },
-    });
-    expect(findings.map(({ requirement }) => requirement)).toEqual([
-      "device-auth-store-legacy-file",
-      "local-token-stale",
-    ]);
+    const findings = await withReadOnlyPluginStateSnapshot(state.env, (inspect) =>
+      inspect(() =>
+        collectDevicePairingHealthFindings({ cfg: { gateway: { mode: "local" } }, env: state.env }),
+      ),
+    );
+    expect(findings.map(({ requirement }) => requirement)).toEqual(["local-token-stale"]);
     expect(JSON.stringify(findings)).not.toContain("synthetic-stale-token");
     expect(prepare.mock.calls.filter(([sql]) => sql.includes('"device_auth_tokens"'))).toEqual([]);
   });
