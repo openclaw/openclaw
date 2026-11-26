@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as daemonExec from "../../daemon/exec-file.js";
+import * as scheduledTaskProbe from "../../daemon/schtasks-state-probe.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import * as gatewayService from "../../daemon/service.js";
 import {
@@ -21,6 +22,7 @@ import { systemdManagerVersionProbe } from "../../daemon/systemd-user-bus.test-s
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import * as updateInstallStatus from "../../infra/update-install-status.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -34,6 +36,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
 import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
@@ -60,8 +63,8 @@ function createCommandResult(
   return { code: 0, termination: "exit" as const, stdout: "", stderr: "", ...overrides };
 }
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -96,6 +99,7 @@ function admissionHome(prefix: string) {
 it.each([
   "owned",
   "owned-command",
+  "owned-command-channel",
   "owned-pending",
   "stale-install",
   "absent",
@@ -122,11 +126,12 @@ it.each([
     vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", `unix:path=${path.join(home, "bus")}`);
     vi.spyOn(daemonExec, "execFileUtf8").mockImplementation(systemdManagerVersionProbe);
     const serviceEnv = { ...process.env, ...serviceOverrides };
-    if (scenario === "owned-command") {
+    const runsCommand = scenario === "owned-command" || scenario === "owned-command-channel";
+    if (runsCommand) {
       await writePackageRoot(root, "1.0.0");
       for (const [state, channel] of [
         [callerState, "stable"],
-        [serviceState, "beta"],
+        [serviceState, scenario === "owned-command-channel" ? "stable" : "beta"],
       ] as const) {
         fs.mkdirSync(state, { mode: 0o700 });
         fs.writeFileSync(
@@ -222,8 +227,64 @@ it.each([
       expect(run.env).toMatchObject(usesServiceState ? serviceOverrides : callerOverrides);
       expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
     };
-    if (scenario === "owned-command") {
-      await expectAdmitted(true);
+    if (runsCommand) {
+      // Distinct slots expose caller-state leakage before any release is prepared.
+      for (const [state, selectedRoot] of [
+        [callerState, foreignRoot],
+        [serviceState, root],
+      ] as const) {
+        const prefix = path.join(state, "git-install");
+        fs.mkdirSync(prefix);
+        fs.symlinkSync(selectedRoot, path.join(prefix, "openclaw"), "junction");
+      }
+      vi.stubEnv("OPENCLAW_UPDATE_PACKAGE_SPEC", undefined);
+      vi.spyOn(scheduledTaskProbe, "probeScheduledTaskUpdateAccess").mockReturnValue({
+        status: "missing",
+      });
+      vi.spyOn(updateInstallStatus, "resolveStartupInstallStatus").mockResolvedValue({
+        root,
+        status: { root, installKind: "package", packageManager: "npm" },
+        installReceipt: null,
+      });
+      const registry = vi.spyOn(updateCheck, "resolveNpmChannelTag").mockResolvedValue({
+        tag: "beta",
+        version: null,
+        error: "fixture target unavailable",
+      });
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const callerBefore = snapshotUpdateFixtureTree(callerState);
+      const callerEnv = { ...process.env };
+      const exitCode = process.exitCode;
+      try {
+        await updateCommand({
+          yes: true,
+          json: true,
+          restart: false,
+          timeout: "30",
+          ...(scenario === "owned-command-channel" ? { channel: "beta" } : {}),
+        });
+        expect(registry).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ channel: "beta" }),
+        );
+        expect(output).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ status: "failed", reason: "no-target" }),
+        );
+        const run = output.mock.calls[0]![0] as { runId: string };
+        expect(getUpdateRun(run.runId, { env: serviceEnv })).toMatchObject({
+          status: "failed",
+          reason: "no-target",
+        });
+        expect(process.exitCode).toBe(1);
+        expect(process.env).toEqual(callerEnv);
+        await closeStateDatabaseForTest();
+        expect(snapshotUpdateFixtureTree(callerState)).toEqual(callerBefore);
+        expect(
+          JSON.parse(fs.readFileSync(serviceOverrides.OPENCLAW_CONFIG_PATH, "utf8")),
+        ).toMatchObject({ update: { channel: "beta" } });
+        expect(fs.readdirSync(path.join(serviceState, "git-install", "releases"))).toEqual([]);
+      } finally {
+        process.exitCode = exitCode;
+      }
       expect(
         fs.existsSync(resolveOpenClawStateSqlitePath({ ...process.env, ...callerOverrides })),
       ).toBe(false);
