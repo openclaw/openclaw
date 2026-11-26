@@ -259,6 +259,8 @@ export async function seedBaselineMigrationFixture({
   });
   writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
     id: pluginId,
+    // Hook-only fixtures must opt into startup; enabled config alone stays lazy.
+    activation: { onStartup: true },
     configSchema: { type: "object", properties: {}, additionalProperties: false },
   });
   const fixture = {
