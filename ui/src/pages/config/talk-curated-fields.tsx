@@ -222,6 +222,7 @@ export function TalkLiveTuning(props: FieldsProps) {
 }
 
 const CUSTOM_COMMAND_PROVIDER = "tts-local-cli";
+const CUSTOM_SPEECH_PROVIDER = "\0custom";
 
 function CommandFields(props: FieldsProps) {
   const { runtimeConfig } = useApplication();
@@ -275,6 +276,18 @@ export function TalkSplitVoice(props: FieldsProps & { catalog: TalkCatalogState 
   const entries = () => Object.keys(record(record(props.config?.talk)?.providers) ?? {});
   const configured = () =>
     entries().filter((id) => !catalogIds().has(id) && id !== CUSTOM_COMMAND_PROVIDER);
+  // Aliases change the displayed option, not the saved spelling.
+  const displayedProvider = createMemo(() => {
+    const id = selected();
+    if (!id || id === CUSTOM_COMMAND_PROVIDER || entries().includes(id)) {
+      return id;
+    }
+    return (
+      speech()?.providers.find((provider) => provider.id === id)?.id ??
+      speech()?.providers.find((provider) => provider.aliases?.includes(id))?.id ??
+      CUSTOM_SPEECH_PROVIDER
+    );
+  });
   // The Gateway rejects talk.provider outside a non-empty talk.providers map, and an unset
   // provider next to several entries, so those choices are shown but cannot be picked.
   const outsideEntries = (id: string) =>
@@ -290,7 +303,7 @@ export function TalkSplitVoice(props: FieldsProps & { catalog: TalkCatalogState 
         <SettingsPickerRow
           title={t("talkPage.provider.title")}
           disabled={props.disabled}
-          value={selected()}
+          value={displayedProvider()}
           options={[
             {
               value: "",
@@ -312,8 +325,14 @@ export function TalkSplitVoice(props: FieldsProps & { catalog: TalkCatalogState 
               group: t("talkPage.revamp.groupConfigured"),
             })),
             { value: CUSTOM_COMMAND_PROVIDER, label: t("talkPage.revamp.customCommand") },
+            ...(displayedProvider() === CUSTOM_SPEECH_PROVIDER
+              ? [{ value: CUSTOM_SPEECH_PROVIDER, label: t("talkPage.provider.custom") }]
+              : []),
           ]}
           onChange={(next) => {
+            if (next === CUSTOM_SPEECH_PROVIDER) {
+              return;
+            }
             if (next === CUSTOM_COMMAND_PROVIDER && !entries().includes(CUSTOM_COMMAND_PROVIDER)) {
               // New empty objects are pruned from config form saves.
               runtimeConfig.patchForm(["talk", "providers", CUSTOM_COMMAND_PROVIDER], { args: [] });
@@ -325,6 +344,9 @@ export function TalkSplitVoice(props: FieldsProps & { catalog: TalkCatalogState 
             }
           }}
         />
+        <Show when={displayedProvider() === CUSTOM_SPEECH_PROVIDER}>
+          <TalkInput {...props} title={t("talkPage.provider.title")} path={["talk", "provider"]} />
+        </Show>
       </Show>
       <Show when={selected() === CUSTOM_COMMAND_PROVIDER}>
         <CommandFields {...props} />

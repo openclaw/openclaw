@@ -83,3 +83,55 @@ it("keeps empty Custom command arguments when the editor is committed", async ()
     ["--voice", "", "--text", "Hello", ""],
   );
 });
+
+function mountSplitProvider(provider: string) {
+  const harness = createTalkMutationHarness({
+    catalogRequest: (_, catalog) => ({
+      ...catalog,
+      speech: {
+        providers: [
+          { id: "microsoft", label: "Microsoft", aliases: ["edge"], configured: true },
+          { id: "openai", label: "OpenAI", configured: false },
+        ],
+      },
+    }),
+  });
+  harness.page.configObject = { talk: { realtime: { mode: "stt-tts" }, provider } };
+  const picker = () =>
+    [...harness.page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find((candidate) =>
+      candidate.params.options.some((option) => option.value === "tts-local-cli"),
+    );
+  return { ...harness, picker };
+}
+
+it("displays a saved speech provider alias without patching the draft", async () => {
+  const { page, picker, runtimeConfig } = mountSplitProvider("edge");
+  await waitForSolid(() => expect(picker()?.params.value).toBe("microsoft"));
+  expect(picker()?.params.options.find(({ value }) => value === "microsoft")?.label).toBe(
+    "Microsoft",
+  );
+  expect(page.configObject?.talk).toMatchObject({ provider: "edge" });
+  expect(runtimeConfig.patchForm).not.toHaveBeenCalled();
+  expect(runtimeConfig.removeFormValue).not.toHaveBeenCalled();
+});
+
+it("retains and edits a speech provider ID outside the catalog", async () => {
+  const { page, picker, runtimeConfig } = mountSplitProvider("example-voice");
+  await waitForSolid(() =>
+    expect(
+      picker()?.params.options.find(({ value }) => value === picker()?.params.value)?.label,
+    ).toMatch(/Custom/),
+  );
+  const input = page.querySelector<HTMLInputElement>('input[aria-label="Provider"]');
+  expect(input?.value).toBe("example-voice");
+  input!.value = "example-voice-next";
+  input!.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(runtimeConfig.patchForm).toHaveBeenCalledWith(["talk", "provider"], "example-voice-next");
+});
+
+it("writes the chosen catalog speech provider", async () => {
+  const { picker, runtimeConfig } = mountSplitProvider("edge");
+  await waitForSolid(() => expect(picker()?.params.value).toBe("microsoft"));
+  picker()!.params.onChange("openai");
+  expect(runtimeConfig.patchForm).toHaveBeenCalledExactlyOnceWith(["talk", "provider"], "openai");
+});
