@@ -390,9 +390,9 @@ describe("reviewed dictation lifecycle", () => {
       expect(accepted.plainText).toBe(plain);
       expect(accepted.document?.source).toEqual(source);
       expect(fixture.onCommit).not.toHaveBeenCalled();
-      expect(request.mock.calls.filter(([method]) => method === "talk.session.create")).toHaveLength(
-        1,
-      );
+      expect(
+        request.mock.calls.filter(([method]) => method === "talk.session.create"),
+      ).toHaveLength(1);
     },
   );
 

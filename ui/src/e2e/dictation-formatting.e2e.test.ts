@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
+  defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
   startControlUiE2eServer,
@@ -13,7 +14,8 @@ import { installTalkBrowserFixtures } from "./browser-talk-start-stop.fixtures.t
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-// Real shipped UI and editor transactions; microphone samples, STT and Gateway are synthetic.
+// Real shipped UI and editor transactions; STT and Gateway are synthetic.
+const microphoneWav = process.env.OPENCLAW_DICTATION_FORMATTING_MICROPHONE_WAV;
 // Set this flag when exercising the same capture against the unmodified base build.
 const baselineOnly = process.env.OPENCLAW_DICTATION_FORMATTING_BASELINE === "1";
 // Diagnostic source proof preserves the ordinary bundled CI lane as the default.
@@ -25,7 +27,11 @@ const suite = createControlUiE2eSuite({
     ? { startServer: () => startControlUiE2eServer(undefined, { source: true }) }
     : {}),
   browserLaunchOptions: {
-    args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
+    args: [
+      "--use-fake-device-for-media-stream",
+      "--use-fake-ui-for-media-stream",
+      ...(microphoneWav ? [`--use-file-for-fake-audio-capture=${microphoneWav}`] : []),
+    ],
   },
 });
 const button = (host: Page | Locator, name: string) =>
@@ -49,8 +55,9 @@ async function capture(page: Page, stage: string, surface: Locator, content: Loc
     JSON.stringify(
       {
         stage,
-        fixture:
-          "Synthetic STT, synthetic microphone and mocked Gateway; actual product UI and native editor",
+        fixture: microphoneWav
+          ? "Chromium fake media capture from WAV, synthetic STT and mocked Gateway; actual product UI and native editor"
+          : "Synthetic STT, synthetic microphone and mocked Gateway; actual product UI and native editor",
         lane: sourceProof ? "source-server (production build not verified)" : "production bundle",
         baselineOnly,
         viewport: page.viewportSize(),
@@ -81,18 +88,44 @@ async function open(
     rtl?: boolean;
     largeText?: boolean;
     uncertainReceipt?: boolean;
+    recipient?: boolean;
   } = {},
 ) {
   const route = options.route ?? "chat";
   const sessionId = "formatting-synthetic-session";
   const gateway = await installMockGateway(page, {
     deferredMethods: ["talk.session.create"],
-    ...(route === "new"
+    ...(options.recipient
       ? {
-          featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "sessions.dispatch"],
+          featureMethods: [...defaultControlUiFeatureMethods, "users.mentionable"],
+          presenceUsers: [
+            {
+              self: true,
+              id: "viewer",
+              identity: { type: "profile", id: "viewer" },
+              name: "Viewer",
+            },
+          ],
         }
-      : {}),
+      : route === "new"
+        ? {
+            featureMethods: [
+              "chat.metadata",
+              "chat.startup",
+              "sessions.create",
+              "sessions.dispatch",
+            ],
+          }
+        : {}),
     methodResponses: {
+      ...(options.recipient
+        ? {
+            "users.mentionable": {
+              users: [{ profileId: "alice", displayName: "Alice" }],
+              truncated: false,
+            },
+          }
+        : {}),
       "sessions.companion.state": { exchanges: [] },
       "talk.catalog": {
         transcription: { ready: true, providers: [] },
@@ -109,7 +142,9 @@ async function open(
       },
     },
   });
-  await installTalkBrowserFixtures(page);
+  if (!microphoneWav) {
+    await installTalkBrowserFixtures(page);
+  }
   await page.addInitScript(
     ({ key, explicit, rtl, largeText, uncertainReceipt }) => {
       const settings = JSON.parse(localStorage.getItem(key) ?? "{}");
@@ -140,7 +175,7 @@ async function open(
   }
   const textarea = page.locator(
     options.rail
-      ? ".chat-session-rail__composer textarea"
+      ? ".chat-session-rail__input"
       : route === "new"
         ? ".new-session-page__message"
         : ".agent-chat__composer-combobox > textarea",
@@ -186,6 +221,10 @@ async function open(
       await gateway.waitForRequest("talk.session.create");
       await gateway.resolveDeferred("talk.session.create");
       await page.locator(".agent-chat__dictation-phase--listening").waitFor({ state: "attached" });
+      if (microphoneWav) {
+        const audio = await gateway.waitForRequest("talk.session.appendAudio");
+        expect(audio.params).toMatchObject({ sessionId, audioBase64: expect.any(String) });
+      }
     },
     finish: async (text: string, explicit = true, final = true, keyboard = false) => {
       await emit(text);
@@ -234,6 +273,37 @@ suite.define(() => {
   if (baselineOnly) {
     return;
   }
+
+  it("keeps Alice's recipient identity through Keep original and native Undo without sending", () =>
+    suite.withPage(
+      { permissions: ["microphone"], viewport: { width: 1280, height: 1000 } },
+      async ({ page }) => {
+        const fixture = await open(page, { explicit: true, recipient: true });
+        await fixture.textarea.click();
+        await page.keyboard.type("@Ali");
+        await page
+          .getByRole("listbox", { name: "Mention a person" })
+          .getByRole("option", { name: "Alice" })
+          .click();
+        const editor = fixture.shell.locator('[data-composer-editor="true"]');
+        const chip = editor.locator('.chat-composer-mention[data-profile-id="alice"]');
+        const before = "@Alice ";
+        expect(await fixture.textarea.inputValue()).toBe(before);
+        await chip.waitFor();
+        await editor.press("End");
+        await fixture.start();
+        await fixture.finish(speech);
+        const panel = review(page);
+        await button(panel, "Keep original").click();
+        await expect.poll(() => fixture.textarea.inputValue()).toBe(before + speech);
+        await chip.waitFor();
+        await capture(page, "after-recipient-retained", fixture.shell, chip);
+        await editor.press("ControlOrMeta+z");
+        await expect.poll(() => fixture.textarea.inputValue()).toBe(before);
+        await chip.waitFor();
+        await fixture.noSend();
+      },
+    ));
 
   it("finishes an explicit Side chat recording with Enter without submitting the question", () =>
     suite.withPage(
@@ -360,7 +430,7 @@ suite.define(() => {
         const fixture = await open(page, { route: "new", explicit: true });
         await fixture.start();
         const text = "Opening paragraph new paragraph closing paragraph";
-        await fixture.finish(text, true, true, true);
+        await fixture.finish(text);
         await fixture.noSend();
         const panel = review(page);
         expect(await panel.getByRole("region", { name: "Semantic preview" }).textContent()).toBe(
@@ -402,7 +472,7 @@ suite.define(() => {
       suite.withPage(
         {
           permissions: ["microphone", "clipboard-read", "clipboard-write"],
-          viewport: { width: 1280, height: 1000 },
+          viewport: { width: 1280, height: 1100 },
         },
         async ({ page }) => {
           const fixture = await open(page, {
@@ -420,6 +490,10 @@ suite.define(() => {
               "insertion target changed",
             );
           } else if (state === "unknown") {
+            for (const command of await panel.getByRole("checkbox").all()) {
+              await command.check();
+            }
+            await button(panel, "Interpret selected commands").click();
             await button(panel, "Use formatted text").click();
             await expect
               .poll(() => panel.getByRole("status").textContent())
@@ -430,9 +504,8 @@ suite.define(() => {
             expect(
               await panel.getByRole("textbox", { name: "Plain text preview" }).inputValue(),
             ).toBe(speech);
-            expect(await panel.getByRole("status").textContent()).toContain(
-              "Formatting was unavailable",
-            );
+            // A non-final transcript is recoverable as plain text, not as a formatted proposal.
+            expect(await panel.getByRole("checkbox").count()).toBe(0);
           }
           expect(await button(panel, "Use formatted text").isDisabled()).toBe(true);
           await capture(page, `after-${state}`, fixture.shell, panel.getByRole("status"));

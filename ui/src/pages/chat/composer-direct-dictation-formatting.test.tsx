@@ -132,10 +132,7 @@ function fixture(mode: "preserve" | "explicit" = "explicit") {
       expect(owner.connecting).toBe(false);
       return owner;
     },
-    async finalize(
-      finishing: Promise<boolean>,
-      text = "bullet milk next item eggs end list",
-    ) {
+    async finalize(finishing: Promise<boolean>, text = "bullet milk next item eggs end list") {
       transcript(text);
       emit({ type: "close", reason: "completed" });
       await finishing;
@@ -178,10 +175,7 @@ it("preserves literal Markdown when reviewed dictation replaces the whole direct
   view.target.setSelectionRange(0, view.target.value.length);
   const owner = await view.start();
   view.target.focus();
-  await view.finalize(
-    owner.finishActive(),
-    "bullet *literal* next item _also literal_ end list",
-  );
+  await view.finalize(owner.finishActive(), "bullet *literal* next item _also literal_ end list");
   view.confirmListCommands();
   expect(owner.formattingReview?.canApply).toBe(true);
 
@@ -294,7 +288,5 @@ it("retains Preserve recording locks and its original direct insertion", async (
   expect(view.target.readOnly).toBe(false);
   await view.finalize(finishing);
   expect(owner.formattingReview).toBeUndefined();
-  expect(view.onMessage).toHaveBeenCalledExactlyOnceWith(
-    "bullet milk next item eggs end list",
-  );
+  expect(view.onMessage).toHaveBeenCalledExactlyOnceWith("bullet milk next item eggs end list");
 });

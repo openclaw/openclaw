@@ -229,10 +229,15 @@ it("explains command overflow while retaining the complete original without auto
     receipt: "not-committed",
   });
   try {
-    expect(view.getByRole("status").textContent).toContain("Command review is limited to 20 phrases");
+    expect(view.getByRole("status").textContent).toContain(
+      "Command review is limited to 20 phrases",
+    );
     expect(view.queryByRole("checkbox")).toBeNull();
     expect(view.queryByRole("button", { name: "Interpret selected commands" })).toBeNull();
-    expect(view.getByRole("textbox", { name: "Recognized text" })).toHaveProperty("value", original);
+    expect(view.getByRole("textbox", { name: "Recognized text" })).toHaveProperty(
+      "value",
+      original,
+    );
     expect(view.actions.acceptFormatting).not.toHaveBeenCalled();
     expect(view.actions.confirmFormattingMarkers).not.toHaveBeenCalled();
   } finally {
@@ -269,9 +274,9 @@ it("confirms only selected source commands and resets selection for a replacemen
     view.getByRole("checkbox").click();
     flush();
     interpret().click();
-    expect(view.actions.confirmFormattingMarkers).toHaveBeenCalledExactlyOnceWith(
-      [{ start: 18, end: 31 }],
-    );
+    expect(view.actions.confirmFormattingMarkers).toHaveBeenCalledExactlyOnceWith([
+      { start: 18, end: 31 },
+    ]);
     expect(view.actions.acceptFormatting).not.toHaveBeenCalled();
     const confirmed = prepareDictationFormatting(original, "explicit", {
       sourceRevision: 2,

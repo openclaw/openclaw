@@ -7,12 +7,16 @@ import {
   type DictationFormattingTarget,
 } from "./composer-dictation-formatting.ts";
 
-const prepared = prepareDictationFormatting("Shopping list bullet milk next item eggs", "explicit", {
-  confirmedMarkers: [
-    { start: 14, end: 20 },
-    { start: 26, end: 35 },
-  ],
-});
+const prepared = prepareDictationFormatting(
+  "Shopping list bullet milk next item eggs",
+  "explicit",
+  {
+    confirmedMarkers: [
+      { start: 14, end: 20 },
+      { start: 26, end: 35 },
+    ],
+  },
+);
 function target(): DictationFormattingTarget {
   return {
     identity: {},

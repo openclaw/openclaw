@@ -270,9 +270,10 @@ describe("dictation semantic formatting", () => {
       ok: false,
       reason: "ambiguous-marker-consumption",
     });
-    expect(
-      validateDictationDocument({ ...result.document!, consumedMarkers: [] }),
-    ).toMatchObject({ ok: false, reason: "unused-marker-confirmation" });
+    expect(validateDictationDocument({ ...result.document!, consumedMarkers: [] })).toMatchObject({
+      ok: false,
+      reason: "unused-marker-confirmation",
+    });
   });
 
   it("keeps unselected list words literal and rejects an orphan continuation", () => {
