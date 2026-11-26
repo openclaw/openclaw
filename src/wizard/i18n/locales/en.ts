@@ -399,6 +399,9 @@ export const en = {
       failureTimeout: "The completion timed out.",
       failureUnavailable: "This AI route is not available right now.",
       failureUnknown: "The completion failed for an unknown reason.",
+      savedSignInModel:
+        "Model ID to verify with this saved {provider} sign-in (no provider prefix)",
+      savedSignInModelNoProfile: "Enter only the model ID. The saved sign-in stays the same.",
       foundNothing: "No existing AI access was detected on this machine.",
       recommendedInstall: "{label} — {hint}\n  {website}",
       recommendedInstallsTitle: "Recommended installs",

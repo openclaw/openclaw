@@ -217,6 +217,73 @@ export async function listManualSetupInferenceDetection(
   };
 }
 
+async function listSavedSetupInferenceCandidates(
+  params: Pick<
+    Awaited<ReturnType<typeof prepareSetupInferenceOptions>>,
+    "cfg" | "targetAgentId" | "authChoices"
+  > & { workspace: string; signal?: AbortSignal; persistedSetupOnly?: boolean },
+): Promise<SetupInferenceCandidate[]> {
+  const { cfg, targetAgentId: agentId, authChoices: choices, workspace, signal } = params;
+  const providerParams = { cfg, agentId, choices, workspace, signal };
+  const loadMethod = params.persistedSetupOnly
+    ? undefined
+    : (await import("./setup-provider-method.js")).withSetupProviderAuthMethod;
+  const agentDir = resolveAgentDir(cfg, agentId);
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
+  const candidates: SetupInferenceCandidate[] = [];
+  for (const [profileId, credential] of Object.entries(store.profiles)) {
+    signal?.throwIfAborted();
+    const saved = credential.setup;
+    const choice = findSetupCredentialChoice(choices, credential);
+    let modelRef = saved?.modelRef;
+    if (!modelRef && choice && loadMethod) {
+      const loaded = await loadMethod({ ...providerParams, choice }, ({ method }) => ({
+        modelRef: method.starterModel,
+      }));
+      signal?.throwIfAborted();
+      if (!("error" in loaded)) {
+        modelRef = loaded.modelRef;
+      }
+    }
+    if (!modelRef) {
+      continue;
+    }
+    candidates.push({
+      kind: toSavedAuthSetupKind(profileId),
+      ...(choice?.modelTarget ? { modelTarget: choice.modelTarget } : {}),
+      modelRef,
+      brandId: choice?.providerId ?? credential.provider,
+      label: `Saved ${choice?.choiceLabel ?? credential.provider} sign-in`,
+      detail: credential.setup?.replacement
+        ? "Saved but inactive. Test this sign-in again, then choose whether to activate it."
+        : "Verify this saved sign-in to use it. No new sign-in is needed.",
+      recommended: false,
+      credentials: true,
+      ...(choice?.icon ? { icon: choice.icon } : {}),
+      ...(choice?.website ? { website: choice.website } : {}),
+    });
+  }
+  return candidates;
+}
+
+/** Refresh saved sign-ins for a retry without re-running service or CLI discovery. */
+export async function listSavedSetupInferenceRetryCandidates(
+  agentId?: string,
+): Promise<SetupInferenceCandidate[]> {
+  const prepared = await prepareSetupInferenceOptions(agentId);
+  const saved = await listSavedSetupInferenceCandidates({
+    ...prepared,
+    workspace: prepared.manual.workspace,
+    persistedSetupOnly: true,
+  });
+  return saved.filter((candidate) => {
+    const ref = parseProviderModelRef(candidate.modelRef);
+    return (
+      ref !== null && !prepared.detectionRequiredProviders.has(normalizeProviderId(ref.provider))
+    );
+  });
+}
+
 export async function detectSetupInference(agentId?: string): Promise<SetupInferenceDetection> {
   const prepared = await prepareSetupInferenceOptions(agentId);
   let partial: SetupInferenceDetection = {
@@ -331,55 +398,13 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
           recommendedInstalls: listRecommendedToolInstalls(),
         };
         const local = Promise.all([
-          (async (): Promise<SetupInferenceCandidate[]> => {
-            const params = {
-              cfg,
-              agentId: targetAgentId,
-              workspace,
-              choices: authChoices,
-              signal,
-            };
-            const { withSetupProviderAuthMethod } = await import("./setup-provider-method.js");
-            const agentDir = resolveAgentDir(params.cfg, params.agentId);
-            const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
-            const candidates: SetupInferenceCandidate[] = [];
-            for (const [profileId, credential] of Object.entries(store.profiles)) {
-              params.signal.throwIfAborted();
-              const saved = credential.setup;
-              const choice = findSetupCredentialChoice(params.choices, credential);
-              let modelRef = saved?.modelRef;
-              if (!modelRef && choice) {
-                const loaded = await withSetupProviderAuthMethod(
-                  { ...params, choice },
-                  ({ method }) => ({
-                    modelRef: method.starterModel,
-                  }),
-                );
-                params.signal.throwIfAborted();
-                if (!("error" in loaded)) {
-                  modelRef = loaded.modelRef;
-                }
-              }
-              if (!modelRef) {
-                continue;
-              }
-              candidates.push({
-                kind: toSavedAuthSetupKind(profileId),
-                ...(choice?.modelTarget ? { modelTarget: choice.modelTarget } : {}),
-                modelRef,
-                brandId: choice?.providerId ?? credential.provider,
-                label: `Saved ${choice?.choiceLabel ?? credential.provider} sign-in`,
-                detail: credential.setup?.replacement
-                  ? "Saved but inactive. Test this sign-in again, then choose whether to activate it."
-                  : "Verify this saved sign-in to use it. No new sign-in is needed.",
-                recommended: false,
-                credentials: true,
-                ...(choice?.icon ? { icon: choice.icon } : {}),
-                ...(choice?.website ? { website: choice.website } : {}),
-              });
-            }
-            return candidates;
-          })().then((saved) => {
+          listSavedSetupInferenceCandidates({
+            cfg,
+            targetAgentId,
+            authChoices,
+            workspace,
+            signal,
+          }).then((saved) => {
             signal.throwIfAborted();
             partial = {
               ...initialDetection,

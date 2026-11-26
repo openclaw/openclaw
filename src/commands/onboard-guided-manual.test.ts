@@ -24,6 +24,99 @@ vi.mock("../flows/provider-flow.js", () => ({
 }));
 
 describe("guided provider catalog", () => {
+  it("lets the user select a different model with a newly saved sign-in after verification fails", async () => {
+    const savedKind = "saved-auth:fixture%3Asetup" as const;
+    const modelRef = "fixture/previously-selected";
+    const alternateModelRef = "fixture/team/alternate@20261124";
+    const detection = {
+      candidates: [],
+      unavailableCandidates: [],
+      manualProviders: [],
+      authOptions: [],
+      recommendedInstalls: [],
+      workspace: "/tmp/fixture-workspace",
+      setupComplete: false,
+    };
+    let profileSaved = false;
+    const activate = vi.fn<Parameters<typeof runManualStage>[0]["activate"]>();
+    activate
+      .mockImplementationOnce(async () => {
+        profileSaved = true;
+        return {
+          ok: false,
+          status: "timeout",
+          error: "Fixture verification failed after saving sign-in",
+        };
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        modelRef: alternateModelRef,
+        lines: ["Connected"],
+        latencyMs: 1,
+      });
+    const refreshSavedCandidates = vi.fn(async () =>
+      profileSaved
+        ? [
+            {
+              kind: savedKind,
+              modelRef,
+              label: "Saved fixture sign-in",
+              detail: modelRef,
+              recommended: false,
+              credentials: true,
+            },
+          ]
+        : [],
+    );
+    const prompter = createWizardPrompter({}, { selectValues: ["fixture"] });
+    vi.mocked(prompter.text).mockImplementation(async ({ initialValue, validate, sensitive }) => {
+      expect(activate).toHaveBeenCalledTimes(1);
+      expect(initialValue).toBe("previously-selected");
+      expect(sensitive).not.toBe(true);
+      expect(validate?.("  ")).toBeTruthy();
+      expect(validate?.("@other:profile")).toBeTruthy();
+      expect(validate?.("alternate@other:profile")).toBeTruthy();
+      expect(validate?.("team/alternate@20261124")).toBeUndefined();
+      return " team/alternate@20261124 ";
+    });
+    vi.mocked(prompter.select)
+      .mockImplementationOnce(async <T>({ options }: WizardSelectParams<T>) => {
+        const choice = options.find((option) => option.value === "fixture");
+        if (!choice) {
+          throw new Error("Missing fixture provider option");
+        }
+        return choice.value;
+      })
+      .mockImplementationOnce(async <T>({ options }: WizardSelectParams<T>) => {
+        const choice = options.find((option) => option.value === "detected-ai");
+        if (!choice) {
+          throw new Error("Second picker did not offer the newly saved sign-in");
+        }
+        return choice.value;
+      });
+    const params = {
+      detection,
+      refreshSavedCandidates,
+      config: {},
+      workspace: detection.workspace,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() as never },
+      prompter,
+      activate,
+    };
+    await expect(runManualStage(params)).resolves.toContain("Connected");
+    expect(refreshSavedCandidates).toHaveBeenCalledOnce();
+    expect(activate).toHaveBeenCalledTimes(2);
+    expect(activate).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ kind: "provider-auth", authChoice: "fixture-api-key" }),
+    );
+    expect(activate).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ kind: savedKind, modelRef: alternateModelRef }),
+    );
+    expect(activate.mock.calls[1]?.[0].authChoice).toBeUndefined();
+    expect(prompter.text).toHaveBeenCalledOnce();
+  });
   it("offers an install-catalog provider before its manifest is installed", async () => {
     const activate = vi.fn(async () => ({
       ok: true as const,
