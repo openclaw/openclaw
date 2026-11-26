@@ -13,20 +13,30 @@ it.each(["uncaughtException", "unhandledRejection"] as const)(
     const first = vi.fn();
     const second = vi.fn();
     const listener = installProcessFailureListener(event, first);
+    const inner = new Error("inner");
+    const outer = new Error("outer");
+    const late = new Error("late");
+    const report = (error: Error) => {
+      if (event === "uncaughtException") {
+        listener(error, "uncaughtException");
+      } else {
+        listener(error, Promise.resolve());
+      }
+    };
     try {
       const reportLate = await withCliFailureContext(async () => {
         expect(installProcessFailureListener(event, first)).toBe(listener);
         const resume = AsyncLocalStorage.snapshot();
         await withCliFailureContext(async () => {
           expect(installProcessFailureListener(event, second)).toBe(listener);
-          listener("inner");
+          report(inner);
         });
-        listener("outer");
-        return () => resume(() => listener("late"));
+        report(outer);
+        return () => resume(() => report(late));
       });
       reportLate();
-      expect(first.mock.calls).toEqual([["outer"]]);
-      expect(second.mock.calls).toEqual([["inner"], ["late"]]);
+      expect(first.mock.calls).toEqual([[outer]]);
+      expect(second.mock.calls).toEqual([[inner], [late]]);
       expect(process.listeners(event).filter((entry) => entry === listener)).toHaveLength(1);
     } finally {
       if (previousHandler) {

@@ -6,7 +6,7 @@ export async function captureCliUncaughtExceptionListener(start: () => Promise<u
   await start();
   const owner = readGlobalSingleton(
     Symbol.for("openclaw.processFailureListener.uncaughtException"),
-  ) as { listener: (reason: unknown) => void } | undefined;
+  ) as { listener: unknown } | undefined;
   const listener = process
     .listeners("uncaughtException")
     .find((entry) => entry === owner?.listener);

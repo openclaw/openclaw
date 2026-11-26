@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { ProcessEventMap } from "node:process";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type FailureEvent = "uncaughtException" | "unhandledRejection";
@@ -19,7 +20,7 @@ export function installProcessFailureListener(event: FailureEvent, handle: Failu
     () => {
       const owner = {
         handle,
-        listener: (reason: unknown): void => {
+        listener: (...[reason]: ProcessEventMap[FailureEvent]): void => {
           (getCliFailureContext()?.[event] ?? owner.handle)(reason);
         },
       };
