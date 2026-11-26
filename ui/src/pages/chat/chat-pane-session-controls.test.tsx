@@ -51,6 +51,7 @@ describe("chat account selection", () => {
     request: GatewayRequestHandler,
     selection: ChatAccountSelection | null,
     modelAuthStatusResult?: ModelAuthStatusResult,
+    canSelectShared?: () => boolean,
   ) {
     const container = document.body.appendChild(document.createElement("div"));
     onTestFinished(() => container.remove());
@@ -60,6 +61,7 @@ describe("chat account selection", () => {
       chatAccountSelection: selection,
     });
     const onSelect = vi.fn(async () => true);
+    const onSelectShared = vi.fn(async () => true);
     const onManage = vi.fn();
     mountSolid(
       () => {
@@ -70,6 +72,9 @@ describe("chat account selection", () => {
             client: state.client,
             ownsScope: () => current,
             selection: state.chatAccountSelection,
+            sharedAccounts: canSelectShared
+              ? { isCurrent: canSelectShared, onSelect: onSelectShared }
+              : undefined,
             model: "openai/gpt-5.5",
             disabled: false,
             onSelect,
@@ -89,6 +94,7 @@ describe("chat account selection", () => {
       container,
       state,
       onSelect,
+      onSelectShared,
       onManage,
       retire: () => {
         current = false;
@@ -191,6 +197,61 @@ describe("chat account selection", () => {
     );
     view.select("manage");
     expect(view.onManage).toHaveBeenCalledOnce();
+  });
+
+  it("lists usable shared accounts for the active provider and rechecks access on selection", async () => {
+    const request = vi.fn().mockResolvedValue({ profileId: "owner", links: [], accounts: [] });
+    const alternate = {
+      profileId: "openai:alternate",
+      displayName: "Shared alternate",
+      type: "token",
+      status: "static",
+    } as const;
+    let canSelectShared = true;
+    const view = mountAccountControl(
+      request,
+      { kind: "shared", authProfileId: "openai:current", label: "Current shared account" },
+      {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "static",
+            profiles: [
+              { ...alternate, profileId: "openai:current", displayName: "Current shared account" },
+              alternate,
+              {
+                ...alternate,
+                profileId: "openai:inactive",
+                displayName: "Inactive sign-in",
+                status: "missing",
+                reasonCode: "setup_inactive",
+              },
+            ],
+          },
+          {
+            provider: "anthropic",
+            displayName: "Anthropic",
+            status: "static",
+            profiles: [
+              { ...alternate, profileId: "anthropic:other", displayName: "Other provider" },
+            ],
+          },
+        ],
+      },
+      () => canSelectShared,
+    );
+    view.open();
+    await vi.waitFor(() => expect(view.container.textContent).toContain("Shared alternate"));
+    expect(view.container.querySelectorAll("[data-chat-account-option]")).toHaveLength(3);
+    expect(view.container.textContent).not.toContain("Inactive sign-in");
+    expect(view.container.textContent).not.toContain("Other provider");
+    view.select("account:openai:alternate");
+    expect(view.onSelectShared).toHaveBeenCalledExactlyOnceWith("openai:alternate");
+    canSelectShared = false;
+    view.select("account:openai:alternate");
+    expect(view.onSelectShared).toHaveBeenCalledTimes(1);
   });
 
   it("retries a failed inventory explicitly after reopening the section", async () => {

@@ -1,5 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
@@ -288,13 +289,20 @@ export function renderChatPaneComposerControls(params: {
         snapshot,
         modelAuthStatusResult: state.modelAuthStatusResult,
         accountSelection,
-        renderAccountSection: (accountModel) =>
-          renderChatModelAccountControl({
+        renderAccountSection: (accountModel) => {
+          const modelAuthStatusResult = state.modelAuthStatusResult;
+          const selectAccount = (authProfileId: string) => {
+            const model = `${accountModel}@${authProfileId}`;
+            return modelAccess.allowed && canPatch({ model })
+              ? switchChatModel(state, model, sessionKey)
+              : Promise.resolve(false);
+          };
+          return renderChatModelAccountControl({
             owner: state,
             client,
             ownsScope: ownsRoute,
             selection: accountSelection,
-            modelAuthStatusResult: state.modelAuthStatusResult,
+            modelAuthStatusResult,
             model: accountModel,
             disabled:
               !modelAccess.allowed ||
@@ -307,12 +315,20 @@ export function renderChatPaneComposerControls(params: {
               state.chatStream !== null ||
               Boolean(state.chatModelSwitchPromises[sessionKey]),
             ownsSelection: () => ownsSelection() && state.chatAccountSelection === accountSelection,
-            onSelect: (account) =>
-              modelAccess.allowed && canPatch({ model: `${accountModel}@${account.authProfileId}` })
-                ? switchChatModel(state, `${accountModel}@${account.authProfileId}`, sessionKey)
-                : Promise.resolve(false),
+            sharedAccounts: {
+              isCurrent: () => {
+                const auth = state.hello?.auth;
+                return (
+                  Boolean(auth?.scopes?.length && hasOperatorAdminAccess(auth)) &&
+                  state.modelAuthStatusResult === modelAuthStatusResult
+                );
+              },
+              onSelect: selectAccount,
+            },
+            onSelect: (account) => selectAccount(account.authProfileId),
             onManage: onModelAccounts,
-          }),
+          });
+        },
         activeRunId: state.chatRunId,
         agentDefaultModel,
         connected: state.connected,

@@ -20,6 +20,8 @@ type AccountInventoryScope = {
   ownsScope: () => boolean;
 };
 
+type AccountChoice = Pick<UserModelAccount, "authProfileId" | "label"> & { select: () => void };
+
 type AccountInventory = {
   selection?: ChatAccountSelection;
   accounts: UserModelAccount[];
@@ -116,12 +118,16 @@ export function renderChatModelAccountControl(
     model: string;
     disabled: boolean;
     ownsSelection?: () => boolean;
+    sharedAccounts?: {
+      isCurrent: () => boolean;
+      onSelect: (profileId: string) => Promise<boolean>;
+    };
     onSelect: (account: UserModelAccount) => Promise<boolean>;
     onAutomatic?: () => void;
     onManage?: () => void;
   },
 ) {
-  const { selection, client } = params;
+  const { selection, client, sharedAccounts } = params;
   if (!selection) {
     return undefined;
   }
@@ -138,6 +144,32 @@ export function renderChatModelAccountControl(
           canonicalModelAuthProviderId(provider),
       )
       .flatMap((p) => p.profiles) ?? [];
+  const accountChoices = () => {
+    const choices = new Map<string, AccountChoice>();
+    for (const account of currentInventory.accounts) {
+      if (account.provider === provider) {
+        choices.set(account.authProfileId, {
+          ...account,
+          select: () => void params.onSelect(account),
+        });
+      }
+    }
+    if (sharedAccounts?.isCurrent()) {
+      for (const profile of profiles) {
+        const usable = ["ok", "expiring", "static"].includes(profile.status);
+        if (usable && !choices.has(profile.profileId)) {
+          choices.set(profile.profileId, {
+            authProfileId: profile.profileId,
+            label: profile.displayName || profile.profileId,
+            select: () => void sharedAccounts.onSelect(profile.profileId),
+          });
+        }
+      }
+    }
+    return choices;
+  };
+  const choices = accountChoices();
+  const accounts = [...choices.values()];
   const email = (profileId: string | undefined) =>
     profiles.find((profile) => profile.profileId === profileId)?.email;
   const selectedProfile = profiles.find((profile) => profile.profileId === currentId);
@@ -148,14 +180,12 @@ export function renderChatModelAccountControl(
   const selectedIdentity = [
     ...new Set([selectedLabel, selectedProfile?.email].filter(Boolean)),
   ].join(" · ");
-  const description = (account: UserModelAccount | undefined) =>
+  const description = (account: AccountChoice | undefined) =>
     email(account?.authProfileId) ??
     (account &&
-    currentInventory.accounts.some(
+    accounts.some(
       (candidate) =>
-        candidate.authProfileId !== account.authProfileId &&
-        candidate.provider === account.provider &&
-        candidate.label === account.label,
+        candidate.authProfileId !== account.authProfileId && candidate.label === account.label,
     )
       ? account.authProfileId
       : undefined);
@@ -170,13 +200,12 @@ export function renderChatModelAccountControl(
       value: currentValue,
       label: selectedLabel,
       description:
-        email(currentId) ??
-        description(
-          currentInventory.accounts.find((account) => account.authProfileId === currentId),
-        ),
+        currentId === undefined
+          ? undefined
+          : (email(currentId) ?? description(choices.get(currentId))),
     },
-    ...currentInventory.accounts
-      .filter((account) => account.provider === provider && account.authProfileId !== currentId)
+    ...accounts
+      .filter((account) => account.authProfileId !== currentId)
       .map((account) => ({
         value: `account:${account.authProfileId}`,
         label: account.label,
@@ -199,14 +228,8 @@ export function renderChatModelAccountControl(
     } else if (value === "retry") {
       event.preventDefault();
       void loadAccounts(currentInventory, client, currentInventory.nextCursor);
-    } else {
-      const account = currentInventory.accounts.find(
-        (candidate) =>
-          `account:${candidate.authProfileId}` === value && candidate.provider === provider,
-      );
-      if (account) {
-        void params.onSelect(account);
-      }
+    } else if (value.startsWith("account:")) {
+      accountChoices().get(value.slice("account:".length))?.select();
     }
   };
   const toggleAccounts = () => {
