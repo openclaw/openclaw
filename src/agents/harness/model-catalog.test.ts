@@ -148,9 +148,9 @@ describe("agent harness model catalog", () => {
     expect(load.mock.lastCall?.[0]).not.toHaveProperty("providerIds");
   });
 
-  it.each([undefined, []])(
-    "enumerates unconfigured picker runtimes only for an unscoped request (%s)",
-    async (providerIds) => {
+  it.each([{ providerIds: undefined }, { providerIds: [] }])(
+    "enumerates unconfigured picker runtimes only for an unscoped request ($providerIds)",
+    async ({ providerIds }) => {
       const load = vi.fn<NonNullable<AgentHarness["loadModelCatalog"]>>(async () => []);
       await augmentPreparedModelCatalogWithAgentHarness({
         input: pickerInput(pickerConfig("openclaw", "model", {}, [])),
@@ -162,27 +162,35 @@ describe("agent harness model catalog", () => {
     },
   );
 
-  it("refreshes a requested provider when the runtime default uses another provider", async () => {
-    const load = vi.fn<NonNullable<AgentHarness["loadModelCatalog"]>>(async () => [
-      { provider: "github-copilot", id: "fusion", name: "Fusion", nativeRuntime: "native-one" },
-    ]);
-    const result = await augmentPreparedModelCatalogWithAgentHarness({
-      input: pickerInput(pickerConfig("native-one")),
-      snapshot: catalog([]),
-      pluginRegistry: catalogRegistry(
-        { "native-one": load },
-        { modelCatalogProviderIds: ["github-copilot"] },
-      ),
-      providerIds: ["github-copilot"],
-      includesProvider: (provider) => provider === "github-copilot",
-    });
-    expect(load).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ providerIds: ["github-copilot"] }),
-    );
-    expect(result.entries).toEqual([
-      expect.objectContaining({ provider: "github-copilot", id: "fusion" }),
-    ]);
-  });
+  it.each([false, true])(
+    "uses catalog ownership for cross-provider refresh (declared: %s)",
+    async (declared) => {
+      const load = vi.fn<NonNullable<AgentHarness["loadModelCatalog"]>>(async () => [
+        { provider: "github-copilot", id: "fusion", name: "Fusion", nativeRuntime: "native-one" },
+      ]);
+      const result = await augmentPreparedModelCatalogWithAgentHarness({
+        input: pickerInput(pickerConfig("native-one")),
+        snapshot: catalog([]),
+        pluginRegistry: catalogRegistry(
+          { "native-one": load },
+          declared ? { modelCatalogProviderIds: ["github-copilot"] } : {},
+        ),
+        providerIds: ["github-copilot"],
+        includesProvider: (provider) => provider === "github-copilot",
+      });
+      expect(load).toHaveBeenCalledTimes(declared ? 1 : 0);
+      if (declared) {
+        expect(load).toHaveBeenCalledWith(
+          expect.objectContaining({ providerIds: ["github-copilot"] }),
+        );
+        expect(result.entries).toEqual([
+          expect.objectContaining({ provider: "github-copilot", id: "fusion" }),
+        ]);
+      } else {
+        expect(result.entries).toEqual([]);
+      }
+    },
+  );
 
   it.each([
     { baseRuntime: "openclaw", agentRuntime: undefined, observedRuntime: undefined },
