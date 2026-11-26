@@ -631,6 +631,35 @@ it("a v1 keyword projection is dropped and rebuilt as v2 on the next search", as
   expect(upgraded.some((name) => name.includes("_v1"))).toBe(false);
 });
 
+it("a v1 projection rebuilt by an older build after v2 forces a full v2 rebuild", async () => {
+  const f = await fixture();
+  await f.put("kept_cjk", "Kept", "复盘会议定在名古屋举行");
+  expect(await f.total({ query: "名古屋" })).toBe(1);
+  // Simulate a downgrade that ran after v2: the older build recreates v1 tables and
+  // rewrites the shared state row to the digest of the corpus it saw, while this
+  // build's v2 rows go stale (a deleted row and a record it never indexed).
+  await f.put("added_cjk", "Added", "年会安排在仙台");
+  // Index it so the shared state row matches the current corpus, as the older build leaves it.
+  expect(await f.total({ query: "仙台" })).toBe(1);
+  f.store.withDatabase((db) => {
+    const suffix = String(
+      db.prepare("SELECT name FROM sqlite_master WHERE name GLOB 'keyword_rows_v2_*'").get()!.name,
+    ).slice("keyword_rows_v2_".length);
+    db.exec(`CREATE TABLE keyword_rows_v1_${suffix} (id TEXT PRIMARY KEY) STRICT`);
+    db.exec(`DELETE FROM keyword_fts_v2_${suffix}`);
+    db.exec(`DELETE FROM keyword_rows_v2_${suffix}`);
+  });
+  const current = await f.service.grep({ query: "仙台" }, f.owner);
+  expect(ids(current)).toStrictEqual(["added_cjk"]);
+  expect(await f.total({ query: "名古屋" })).toBe(1);
+  expect(
+    f.store.withDatabase(
+      (db) =>
+        db.prepare("SELECT name FROM sqlite_master WHERE name GLOB 'keyword_*_v1_*'").all().length,
+    ),
+  ).toBe(0);
+});
+
 it("ranking preserves pagination and scope without rereading the filtered corpus", async () => {
   const f = await fixture();
   await f.put("title_record", "Needle", "text", { tags: ["chosen"] });

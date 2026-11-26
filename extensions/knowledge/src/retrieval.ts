@@ -459,8 +459,17 @@ function reconcileKeywordIndex(
       history.map((r) => [r.id, r.path, r.hash, r.revision]),
     ]),
   );
+  const retired = [
+    "keyword_fts",
+    "keyword_rows",
+    "keyword_history_fts",
+    "keyword_history_rows",
+  ].map((name) => `${name}_v1_${suffix}`);
+  // A v1 table here means a pre-v2 build ran after this one. It may have changed
+  // records and rewritten the shared state row, so the v2 tables cannot be trusted.
+  const downgraded = retired.some((name) => tableExists(db, name));
   const untracked = tables.filter(
-    ({ table, rows }) => !tableExists(db, rows) || !tableExists(db, table),
+    ({ table, rows }) => downgraded || !tableExists(db, rows) || !tableExists(db, table),
   );
   const state = db.prepare("SELECT * FROM keyword_state_v1 WHERE binding=?").get(binding);
   let indexedAt = String(state?.indexed_at ?? "");
@@ -470,15 +479,10 @@ function reconcileKeywordIndex(
     indexedAt = runSqliteImmediateTransactionSync(
       db,
       () => {
-        // A scope upgrading to v2 has no v2 tables yet; its v1 projection is never read again.
+        // v2 never reads the v1 projection again.
         if (untracked.length) {
-          for (const retired of [
-            "keyword_fts",
-            "keyword_rows",
-            "keyword_history_fts",
-            "keyword_history_rows",
-          ]) {
-            db.exec(`DROP TABLE IF EXISTS ${retired}_v1_${suffix}`);
+          for (const name of retired) {
+            db.exec(`DROP TABLE IF EXISTS ${name}`);
           }
         }
         for (const entry of tables) {
