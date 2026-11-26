@@ -139,7 +139,7 @@ export function createDoctorCompletedResult(
     ),
     ...(ctx.postInstallDoctorResult?.warnings ?? []),
   ]);
-  ctx.repairEvidence?.remaining("doctor", [
+  ctx.repairEvidence?.summarize([
     ...warnings.filter((warning) => !maintenanceWarnings.includes(warning)),
     ...(ctx.updateWarnings ?? []),
   ]);

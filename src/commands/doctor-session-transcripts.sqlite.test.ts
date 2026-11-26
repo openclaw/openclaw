@@ -229,6 +229,27 @@ describe("doctor session transcript repair", () => {
     expectNote("Archived 2 legacy transcript artifact(s).");
   });
 
+  it("publishes committed dashboard repairs and their warnings through transcript evidence", async () => {
+    const dashboard = await import("./doctor-session-dashboard-chat-type.js");
+    const owner = vi.spyOn(dashboard, "repairLegacyDashboardChatTypes").mockResolvedValueOnce({
+      found: 2,
+      repaired: 1,
+      scannedStores: 1,
+      warnings: ["One dashboard row was retained."],
+    });
+    const onChanges = vi.fn();
+    const onWarnings = vi.fn();
+    try {
+      await repair({ onChanges, onWarnings });
+      expect(onChanges).toHaveBeenCalledWith([
+        "Recorded direct chat type for dashboard session(s): 1.",
+      ]);
+      expect(onWarnings).toHaveBeenCalledWith(["One dashboard row was retained."]);
+    } finally {
+      owner.mockRestore();
+    }
+  });
+
   it("defers workspace writes while legacy-main source cleanup is incomplete", async () => {
     migrateLegacyMainSessionKeys.mockResolvedValueOnce({
       armed: true,

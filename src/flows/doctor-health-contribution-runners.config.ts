@@ -58,6 +58,8 @@ export async function runWriteConfigHealth(
       (ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true) ||
       JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
     if (changesPending) {
+      const { reportDoctorExternalConfigRepairs } = await import("./doctor-external-config.js");
+      await reportDoctorExternalConfigRepairs(ctx);
       ctx.repairEvidence?.remaining("config", [
         "Deployment-owned config requires changes. Update the deployment source, redeploy it, then rerun Doctor repair.",
       ]);

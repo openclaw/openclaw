@@ -142,7 +142,16 @@ async function runDoctorConfigPreflightOperation(
   ) => {
     options.onStateMigrationMessage?.(
       stepId,
-      changesAlreadyReceipted ? { ...result, changes: [] } : result,
+      changesAlreadyReceipted
+        ? {
+            ...result,
+            changes: [],
+            warnings: result.warnings.filter(
+              (warning) =>
+                !stateMigrationStepReceipts.some((receipt) => receipt.warnings.includes(warning)),
+            ),
+          }
+        : result,
     );
     stateMigrationUnsettled ||=
       result.outcome === "deferred" ||
@@ -280,6 +289,8 @@ async function runDoctorConfigPreflightOperation(
         changes: receipt.changes,
         warnings: receipt.warnings,
         notices: receipt.notices,
+        ...(receipt.outcome === "warning" ? { warningDisposition: "recoverable" as const } : {}),
+        ...(receipt.outcome === "deferred" ? { outcome: "deferred" as const } : {}),
       });
       throwIfDoctorStateMigrationRefused(stateMigrationStepReceipts);
     }
@@ -467,6 +478,10 @@ async function runDoctorConfigPreflightOperation(
                   changes: receipt.changes,
                   warnings: receipt.warnings,
                   notices: receipt.notices,
+                  ...(receipt.outcome === "warning" || receipt.outcome === "skipped"
+                    ? { warningDisposition: "recoverable" as const }
+                    : {}),
+                  ...(receipt.outcome === "deferred" ? { outcome: "deferred" as const } : {}),
                 });
               },
             }),

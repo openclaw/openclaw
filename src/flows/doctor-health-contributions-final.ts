@@ -82,11 +82,13 @@ const CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID =
 async function runHeartbeatRetirementHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeMigrateHeartbeatCadenceToCron } =
     await import("../commands/doctor-heartbeat-retirement.js");
-  await maybeMigrateHeartbeatCadenceToCron({
+  const result = await maybeMigrateHeartbeatCadenceToCron({
     cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
     shouldRepair: ctx.prompter.shouldRepair,
     env: ctx.env,
   });
+  ctx.repairEvidence?.applied("doctor:heartbeat-retirement", result.changes);
+  recordDoctorHealthWarnings(ctx, [], result.warnings);
 }
 
 export function resolveFinalDoctorHealthContributions(params: {

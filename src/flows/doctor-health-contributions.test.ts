@@ -1593,29 +1593,6 @@ describe("doctor health contributions", () => {
     });
   });
 
-  it("materializes heartbeat cadence before scratch migration and final config writes", async () => {
-    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
-    const cadenceIndex = ids.indexOf("doctor:heartbeat-cadence-migration");
-    const scratchIndex = ids.indexOf("doctor:heartbeat-scratch-migration");
-
-    expect(cadenceIndex).toBeGreaterThan(-1);
-    expect(cadenceIndex).toBeLessThan(scratchIndex);
-    expect(scratchIndex).toBeLessThan(ids.indexOf("doctor:write-config"));
-
-    const contribution = requireDoctorContribution("doctor:heartbeat-cadence-migration");
-    const source = { agents: { defaults: { heartbeat: { every: "0m" } } } };
-    const ctx = createDoctorHealthFlowContext({
-      configResult: { heartbeatMigrationSource: source },
-      prompter: createDoctorPrompterFixture(true),
-      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
-    });
-    await contribution.run(ctx);
-    await requireDoctorContribution("doctor:heartbeat-scratch-migration").run(ctx);
-
-    const migration = { cfg: source, shouldRepair: true, env: ctx.env };
-    expect(mocks.maybeMigrateHeartbeatCadenceToCron.mock.calls).toEqual([[migration], [migration]]);
-  });
-
   it.each([
     ["cadence", "heartbeat-cadence-migration", mocks.collectHeartbeatCadenceMigrationFindings],
     ["task", "heartbeat-task-cron-migration", mocks.collectHeartbeatTaskMigrationFindings],

@@ -22,11 +22,13 @@ export type ExternallyManagedDoctorRepairReport = {
   applied: AppliedRepair[];
   skipped: Array<{ scope: "config" | "service"; reason: string }>;
   remaining: RemainingRepair[];
+  advisories: RemainingRepair[];
 };
 
 export type DoctorRepairEvidenceSink = {
   applied(stepId: string, changes: readonly string[]): void;
   complete(): void;
+  summarize(warnings: readonly string[]): void;
   remaining(stepId: string, messages: readonly string[]): void;
   migration(stepId: string, result: MigrationMessages): void;
   receipts(receipts: readonly LegacyStateMigrationStepReceipt[] | undefined): void;
@@ -56,6 +58,7 @@ export function createExternallyManagedDoctorRepairEvidence(): {
   const configBefore = readConfigBytes(configPath);
   const applied: AppliedRepair[] = [];
   const remaining: RemainingRepair[] = [];
+  const advisories: RemainingRepair[] = [];
   let repairCompleted = false;
   const sink: DoctorRepairEvidenceSink = {
     applied(stepId, changes) {
@@ -66,17 +69,33 @@ export function createExternallyManagedDoctorRepairEvidence(): {
     complete() {
       repairCompleted = true;
     },
+    summarize(warnings) {
+      sink.remaining(
+        "doctor",
+        warnings.filter((warning) => !advisories.some((entry) => entry.message === warning)),
+      );
+    },
     remaining(stepId, messages) {
       remaining.push(...messages.map((message) => ({ stepId, message })));
     },
     migration(stepId, result) {
       sink.applied(stepId, result.changes);
-      sink.remaining(stepId, result.warnings);
+      if (result.warningDisposition === "recoverable" && result.outcome !== "deferred") {
+        advisories.push(...result.warnings.map((message) => ({ stepId, message })));
+      } else {
+        sink.remaining(stepId, result.warnings);
+      }
     },
     receipts(receipts) {
       for (const receipt of receipts ?? []) {
-        sink.applied(receipt.id, receipt.changes);
-        sink.remaining(receipt.id, receipt.warnings);
+        sink.migration(receipt.id, {
+          changes: receipt.changes,
+          warnings: receipt.warnings,
+          ...(receipt.outcome === "warning" || receipt.outcome === "skipped"
+            ? { warningDisposition: "recoverable" as const }
+            : {}),
+          ...(receipt.outcome === "deferred" ? { outcome: "deferred" as const } : {}),
+        });
         if (receipt.outcome === "refused" && receipt.warnings.length === 0) {
           sink.remaining(receipt.id, [receipt.refusal?.message ?? "Repair was refused."]);
         }
@@ -137,6 +156,13 @@ export function createExternallyManagedDoctorRepairEvidence(): {
           },
         ],
         remaining: dedupedRemaining,
+        advisories: advisories.filter(
+          (entry, index, entries) =>
+            entries.findIndex(
+              (candidate) =>
+                candidate.stepId === entry.stepId && candidate.message === entry.message,
+            ) === index,
+        ),
       };
     },
   };

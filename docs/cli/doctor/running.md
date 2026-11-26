@@ -92,6 +92,8 @@ posture changes who owns config writes and service effects. Doctor reports confi
 changes without writing them and never installs, stops, starts, or rewrites a
 Gateway service. The JSON report projects the same repair evidence into
 `applied`, `skipped`, and `remaining`; a nonempty `remaining` list exits nonzero.
+Owner-classified recoverable migration warnings appear in `advisories` instead of
+blocking completion. Deferred or refused required repairs still remain blocking.
 Update the deployment config source for any remaining config finding, redeploy it,
 then rerun repair.
 

@@ -316,7 +316,13 @@ export async function noteSessionTranscriptHealth(options?: {
         ? [`Retired legacy exec policy from durable session row(s): ${execPolicyReport.repaired}.`]
         : [],
     );
-    await repairLegacyDashboardChatTypes(rowRepairParams);
+    const dashboardReport = await repairLegacyDashboardChatTypes(rowRepairParams);
+    publishWarnings(dashboardReport.warnings ?? []);
+    publishChanges(
+      dashboardReport.repaired > 0
+        ? [`Recorded direct chat type for dashboard session(s): ${dashboardReport.repaired}.`]
+        : [],
+    );
     const acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
       ...rowRepairParams,
       authority: maintenanceAuthority,

@@ -92,7 +92,7 @@ export function createDoctorHealthContribution(
           checks: healthChecks,
           dryRun,
           progress: ctx.options.json !== true,
-          allowConfigMutation: ctx.options.externallyManaged !== true,
+          ...(ctx.options.externallyManaged === true ? { allowConfigMutation: false } : {}),
         });
         ctx.cfg = result.config;
         renderStructuredHealthFindings(ctx, dryRun ? result.findings : result.remainingFindings);

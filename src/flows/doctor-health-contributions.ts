@@ -97,10 +97,6 @@ async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<
   );
 }
 
-async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  await runCoreHealthFindingNote(ctx, "core/doctor/gateway-config");
-}
-
 async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (!ctx.sourceConfigValid) {
     return;
@@ -126,6 +122,10 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     return;
   }
   note([finding.message, finding.fixHint].filter(Boolean).join("\n"), "Gateway auth");
+  if (ctx.options.externallyManaged === true) {
+    reportDoctorHealthFinding(ctx, finding);
+    return;
+  }
   if (finding.path !== "gateway.auth.token") {
     recordDoctorHealthWarnings(ctx, [finding]);
     return;
@@ -418,7 +418,7 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     ...resolveInitialDoctorHealthContributions({
       runStructuredHealthRepairs: (ctx) =>
         runStructuredHealthRepairs(ctx, resolveDoctorContributionHealthChecks),
-      runGatewayConfigHealth,
+      runGatewayConfigHealth: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/gateway-config"),
       runAuthProfileMigration,
       runAuthProfileHealth,
       runGatewayAuthHealth,

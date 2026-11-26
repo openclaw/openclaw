@@ -212,3 +212,26 @@ it.each(["repair", "generate", "backup failure", "replacement", "kind change"] a
     expectNote(backup);
   },
 );
+
+it("preserves deployment-owned Gateway credentials during externally managed repair", async () => {
+  const { ctx, entry, run, backups } = await createFixture(REDACTED_SENTINEL, {
+    repair: true,
+    externallyManaged: true,
+    json: true,
+  });
+  const remaining = vi.fn();
+  ctx.repairEvidence = {
+    remaining,
+    applied: vi.fn(),
+    complete: vi.fn(),
+    migration: vi.fn(),
+    receipts: vi.fn(),
+    summarize: vi.fn(),
+  };
+  await run();
+  expect(await readToken(entry)).toEqual({ ok: true, value: REDACTED_SENTINEL });
+  expect(backups()).toEqual([]);
+  expect(remaining).toHaveBeenCalledWith("core/doctor/gateway-auth", [
+    expect.stringContaining(tokenRef.id),
+  ]);
+});

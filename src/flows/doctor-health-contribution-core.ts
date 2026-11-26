@@ -72,7 +72,7 @@ export async function runStructuredHealthRepairs(
     {
       checks,
       progress: ctx.options.json !== true,
-      allowConfigMutation: ctx.options.externallyManaged !== true,
+      ...(ctx.options.externallyManaged === true ? { allowConfigMutation: false } : {}),
     },
   );
   reportDoctorRepairResult(ctx, result, [...availabilityFindings, ...result.remainingFindings]);
@@ -105,7 +105,7 @@ export async function runCoreContributionHealth(
       checks,
       dryRun,
       progress: ctx.options.json !== true,
-      allowConfigMutation: ctx.options.externallyManaged !== true,
+      ...(ctx.options.externallyManaged === true ? { allowConfigMutation: false } : {}),
     },
   );
   reportDoctorRepairResult(ctx, result, dryRun ? result.findings : result.remainingFindings);
