@@ -75,7 +75,9 @@ export function summarizeTranscripts(params: {
   const utterances = params.utterances
     .map(sanitizeUtterance)
     .filter((utterance) => !isTranscriptArtifactText(utterance.text));
-  const overview = firstSentences(utterances, 4) || "No transcript captured yet.";
+  const overview =
+    firstSentences(utterances, 4) ||
+    (params.session.stoppedAt ? "No usable speech was captured." : "No transcript captured yet.");
   return {
     sessionId: params.session.sessionId,
     title,
