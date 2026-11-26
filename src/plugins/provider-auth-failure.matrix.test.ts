@@ -15,7 +15,6 @@ import {
 import { createRequest, createResponse } from "../gateway/server-http.test-harness.js";
 import { prepareTailscalePublishedOrigin } from "../gateway/tailscale-published-origin.js";
 import { waitForLocalOAuthCallback } from "../plugin-sdk/provider-auth-runtime.js";
-import { parseOAuthAuthorizationInput } from "../plugin-sdk/provider-oauth-runtime.js";
 import { WizardSession } from "../wizard/session.js";
 import type { ProviderChannelLoginChoice } from "./provider-login-options.js";
 
@@ -128,21 +127,6 @@ describe("browser redirect", () => {
     const error: unknown = await result.catch((caught: unknown) => caught);
     expect(error).toMatchObject({ reason: "timed_out" });
     expect(String(error)).not.toMatch(/\/login|CLI/);
-  });
-});
-
-describe("paste", () => {
-  it.each([
-    ["http://localhost/cb?code=c&state=other", "paste_wrong_attempt"],
-    ["https://provider.example/auth?state=s1", "paste_sign_in_page"],
-    ["error=access_denied", "consent_denied"],
-  ])("rejects %s as %s so the paste step stays open", (input, reason) => {
-    expect(() =>
-      parseOAuthAuthorizationInput(input, {
-        state: "s1",
-        signInUrl: "https://provider.example/auth?state=s1",
-      } as never),
-    ).toThrow(expect.objectContaining({ reason }));
   });
 });
 

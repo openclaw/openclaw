@@ -28,9 +28,9 @@ it("records agent folders under canonical ids for the recovery manifest", async 
     await fs.mkdir(path.dirname(database(folder)), { recursive: true, mode: 0o700 });
     using db = new DatabaseSync(database(folder));
     db.exec(
-      "PRAGMA user_version=17; CREATE TABLE schema_meta(meta_key TEXT, role TEXT, agent_id TEXT)",
+      "PRAGMA user_version=17; CREATE TABLE schema_meta(meta_key TEXT, role TEXT, agent_id TEXT, schema_version INTEGER)",
     );
-    db.prepare("INSERT INTO schema_meta VALUES ('primary','agent',?)").run(agentId);
+    db.prepare("INSERT INTO schema_meta VALUES ('primary','agent',?,17)").run(agentId);
   }
   const input = { backupRoot, stateDir, config: {}, env: {}, stagingRoot };
   const inspectionPlan = await discoverUpdateStateSchemaInspectionInProcess(input);

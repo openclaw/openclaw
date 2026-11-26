@@ -189,7 +189,6 @@ function source(params: SourceOptions = {}) {
     gatewayAccessGrant: { pluginId: "fixture-access", grantId: params.grantId ?? "original" },
     source: {},
     signal: params.signal === false ? undefined : signal,
-    assertCurrent,
     retain: params.retain === false ? undefined : retain,
   });
   return { authority, controller, release, closeForeground: () => references-- };
@@ -304,7 +303,6 @@ it("retains original access after foreground close and stops only its private ge
   await expect(ensureSandboxContainer(params)).rejects.toThrow("original access revoked");
   expect(owner.release).toHaveBeenCalledTimes(2);
   replacement.closeForeground();
-  expect(() => replacement.authority.assertCurrent()).not.toThrow();
   await revoke(replacement, name);
   expect(fixture.containers.get(name)?.running).toBe(false);
   expect(calls("kill")).toEqual(Array.from({ length: 2 }, () => ["kill", id]));

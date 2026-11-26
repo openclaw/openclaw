@@ -251,6 +251,7 @@ async function prepareResourceFixture(
     sharingTarget: () => target,
     sharingTargetState: () => ({ status: "ready", target }),
     hasMembership: () => false,
+    memberAccess: () => undefined,
   } as unknown as SessionRowProjection;
   const context = bindSessionRowProjection(createContext(), () => projection);
   context.getRuntimeConfig = () => config;

@@ -125,15 +125,13 @@ export function createRequesterSettleCases() {
           requesterContinuationSettled: settled,
           acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
         },
-        aborted
-          ? { ...localOnly, expected: { ...missingRequesterFinal, reason: "requester_aborted" } }
-          : localOnly,
+        localOnly,
       ),
     ),
     ...["accepted", "in_flight"].map((status) =>
       settleCase(`retains an ${status} settle handoff until terminal evidence`, undefined, {
         status,
-        expected: { delivered: false, disposition: "session_queued" },
+        expected: { delivered: false, path: "queued" },
       }),
     ),
     settleCase(
@@ -142,11 +140,7 @@ export function createRequesterSettleCases() {
       {
         ...localOnly,
         status: "timeout",
-        expected: {
-          ...missingRequesterFinal,
-          reason: "requester_timed_out",
-          disposition: "permanent_failure",
-        },
+        expected: missingRequesterFinal,
       },
     ),
     settleCase(

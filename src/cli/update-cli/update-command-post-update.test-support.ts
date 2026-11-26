@@ -578,7 +578,9 @@ export function registerServiceInstallationConvergenceTests(
           );
         }
         if (absent) {
-          expect(mocks.printResult.mock.lastCall?.[0].steps).toEqual([]);
+          expect(mocks.printResult.mock.lastCall?.[0].steps).not.toContainEqual(
+            expect.objectContaining({ name: "advisory:node-restart" }),
+          );
           expect(defaultRuntime.error).toHaveBeenCalledWith(absentMessage);
         }
       } finally {

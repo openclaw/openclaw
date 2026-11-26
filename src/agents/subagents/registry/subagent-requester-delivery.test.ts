@@ -86,7 +86,6 @@ it.for([
                 delivered: false,
                 path: "direct",
                 reason: "delivery_suppressed",
-                disposition: "intentional_non_delivery",
               },
             })
           : {

@@ -24,11 +24,9 @@ function hasOperatorToolSource(authority: OperatorToolGatewayAuthority | undefin
 /** Known operator sources cannot turn missing Gateway routing into standalone host access. */
 export function hasOperatorToolGatewayAuthority(): boolean {
   const admitted = getGatewayToolCallerIdentity()?.operatorAuthority;
-  admitted?.assertCurrent();
   const direct = readOperatorToolGatewayAuthority();
   direct?.signal.throwIfAborted();
   direct?.assertCurrent?.();
-  direct?.operatorRunAuthority?.assertCurrent();
   const scope = getPluginRuntimeGatewayRequestScope();
   const scopedOperator = Boolean(
     scope?.client?.authenticatedUserProfile ||
@@ -79,7 +77,6 @@ export async function captureAmbientGatewayOperatorAuthority(params: {
   if (inheritedOperator) {
     if (params.retainInherited) {
       assertAdmittedRunOperatorAuthority(inheritedOperator);
-      inheritedOperator.assertCurrent();
     }
     return {
       authority: inheritedOperator,
@@ -112,7 +109,6 @@ export async function captureAmbientGatewayOperatorAuthority(params: {
     if (scope?.resolveGatewayContext && scope.resolveGatewayContext() !== context) {
       throw new Error("Gateway request context changed. Start a new request.");
     }
-    capturedOperator?.authority.assertCurrent();
     return { ...capturedOperator, assertInvocationCurrent };
   } catch (error) {
     capturedOperator?.release();

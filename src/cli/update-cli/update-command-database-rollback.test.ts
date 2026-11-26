@@ -581,7 +581,7 @@ it.each([
       return { ok: true, score: 7, summary: "Fixture retained runtime serves restored data" };
     });
     let verifySettledHistory: (() => void) | undefined;
-    try {
+    {
       const operation = withUpdateCommandTerminalResult(
         (registerRun) => {
           registerRun(run);
@@ -897,7 +897,6 @@ it.each([
         await operation;
       }
       verifySettledHistory?.();
-    } finally {
     }
   },
 );

@@ -339,3 +339,90 @@ test("requires a default for GitHub role assignments, including an empty mapping
     );
   }
 });
+
+test.each(["read", "suggest", "send"] as const)(
+  "accepts the opt-in invited ceiling %s only on invited roles",
+  (maxInvitedAccess) => {
+    const definition = { ...validRole, sessions: { others: "invited", maxInvitedAccess } };
+    expect(
+      validated(rolesConfig({ definitions: { guest: definition } })).gateway?.roles?.definitions
+        .guest?.sessions,
+    ).toEqual(definition.sessions);
+    for (const others of ["none", "view", "suggest", "write"]) {
+      expect(
+        OpenClawSchema.safeParse(
+          rolesConfig({
+            definitions: { guest: { ...definition, sessions: { others, maxInvitedAccess } } },
+          }),
+        ).success,
+      ).toBe(false);
+    }
+  },
+);
+
+test.each(["invitedTools", "invitedAlsoAllow"] as const)(
+  "validates %s invited tool policy syntax only with an invitation ceiling",
+  (field) => {
+    const sessions = { others: "invited", maxInvitedAccess: "send" };
+    const config = (value: object) =>
+      rolesConfig({ definitions: { guest: { ...validRole, sessions: value } } });
+    for (const invitedTools of [
+      [],
+      ["read"],
+      [" read ", "read"],
+      ["*"],
+      ["group:fs"],
+      ["browser", "knowledge_*", "mcp:server:read", "plugins", "openclaw"],
+      ["github_publish", "sessions_yield", "view_image", "progress_card"],
+      ["tool_search", "tool_describe", "dispatch_action"],
+    ]) {
+      expect(
+        validated(config({ ...sessions, [field]: invitedTools })).gateway?.roles?.definitions.guest
+          ?.sessions,
+      ).toEqual({ ...sessions, [field]: [...new Set(invitedTools.map((name) => name.trim()))] });
+    }
+    for (const invitedTools of [null, "read", [123], [""], ["  "]]) {
+      expect(OpenClawSchema.safeParse(config({ ...sessions, [field]: invitedTools })).success).toBe(
+        false,
+      );
+    }
+    expect(OpenClawSchema.safeParse(config({ others: "invited", [field]: ["read"] })).success).toBe(
+      false,
+    );
+  },
+);
+
+test.each([
+  [[], []],
+  [["read"], []],
+  [[], ["web_fetch"]],
+  [["read"], ["web_fetch"]],
+])("rejects both invited tool policy fields %j / %j", (invitedTools, invitedAlsoAllow) => {
+  expectSchemaIssue(
+    rolesConfig({
+      definitions: {
+        guest: {
+          ...validRole,
+          sessions: { others: "invited", maxInvitedAccess: "send", invitedTools, invitedAlsoAllow },
+        },
+      },
+    }),
+    ["gateway", "roles", "definitions", "guest", "sessions"],
+    "cannot set both invitedTools and invitedAlsoAllow",
+  );
+});
+
+test("validates invited permission only on invited-session roles", () => {
+  for (const invitedPermission of ["read-only", "guarded", "workspace", "full"]) {
+    for (const others of ["none", "invited", "view", "suggest", "write"]) {
+      const cfg = {
+        gateway: {
+          roles: {
+            definitions: { guest: { ...validRole, sessions: { others, invitedPermission } } },
+          },
+        },
+      };
+      expect(OpenClawSchema.safeParse(cfg).success).toBe(others === "invited");
+    }
+  }
+});

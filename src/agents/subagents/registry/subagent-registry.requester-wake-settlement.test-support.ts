@@ -180,7 +180,6 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
       }
       expect(unbound?.requesterSettleWake).toBeUndefined();
       expect(unbound?.delivery?.status).toBe("delivered");
-      expect(unbound?.delivery?.disposition).not.toBe("intentional_non_delivery");
     },
   );
 

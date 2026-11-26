@@ -144,19 +144,15 @@ it("keeps a linked owner's accepted work when the person's stored role changes",
     await setCanonicalUserProfileRole(person.id, "talker", {
       onCommitted: (id) => invalidateOperatorRolePolicy(id, { roleOnly: true }),
     });
-    expect(owner.authority.signal?.aborted).toBe(false);
-    expect(() => owner.authority.assertCurrent()).not.toThrow();
-    expect(personal.authority.signal?.aborted).toBe(false);
-    expect(personal.authority.assertCurrent).not.toThrow();
+    expect(owner.authority.signal?.aborted).not.toBe(true);
+    expect(personal.authority.signal?.aborted).not.toBe(true);
     await expect(capture()).rejects.toThrow();
     const nextOwner = await capture(OWNER);
     expect(nextOwner.authority.profileId).toBe(person.id);
-    expect(nextOwner.authority.assertCurrent).not.toThrow();
     nextOwner.release();
     // Identity publications apply to new admissions, not accepted work.
     invalidateOperatorRolePolicy(person.id);
-    expect(owner.authority.signal?.aborted).toBe(false);
-    expect(owner.authority.assertCurrent).not.toThrow();
+    expect(owner.authority.signal?.aborted).not.toBe(true);
     owner.release();
     personal.release();
   }));

@@ -96,12 +96,10 @@ async function runningOwner(signal: AbortSignal) {
     await params.onDeliveryResult?.({
       delivered: false,
       path: "direct",
-      reason: "requester_aborted",
-      disposition: "permanent_failure",
       error: "requester aborted before consuming the child result",
     });
     reported.resolve(undefined);
-    return "permanent_failure";
+    return "undelivered";
   });
   const complete = (triggerCleanup: boolean) =>
     withinTest(

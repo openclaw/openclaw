@@ -30,6 +30,7 @@ import type {
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
 import { resolveAgentHarnessOperatorPolicyError } from "../operator-access-program.js";
+import { assertParticipationRuntime } from "../participation-ceiling.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -447,6 +448,7 @@ export async function runAgentHarnessAttempt(
                 replyOperation: internalParams.replyOperation,
                 sessionPersistence: internalParams.sessionPersistence,
                 trigger: internalParams.trigger,
+                mcpRequesterProfileId: internalParams.mcpRequesterProfileId,
                 bindWatchdogAttempt: internalParams.bindWatchdogAttempt,
                 joinObservation: internalParams.joinObservation,
                 queueInputAdapter,
@@ -521,6 +523,7 @@ export async function runAgentHarnessAttempt(
 
 function assertHarnessModelPolicySupport(harness: AgentHarness, params: EmbeddedRunAttemptParams) {
   const authority = readRunOperatorAuthority(params);
+  assertParticipationRuntime(authority?.participationCeiling, harness.id);
   const error = !isBuiltInOpenClawAgentHarness(harness)
     ? resolveAgentHarnessOperatorPolicyError(harness, authority)
     : undefined;

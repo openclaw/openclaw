@@ -1,6 +1,7 @@
 import type { WebClient } from "@slack/web-api";
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { downloadSlackFile, readSlackMessages } from "./actions.js";
+import { resetSlackUserProfileCache } from "./user-profiles.js";
 
 const createSlackLookupClientMock = vi.hoisted(() => vi.fn());
 const resolveSlackMedia = vi.fn<typeof import("./monitor/media.js").resolveSlackMedia>();
@@ -8,7 +9,8 @@ vi.mock("./monitor/media.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./monitor/media.js")>()),
   resolveSlackMedia: (...args: Parameters<typeof resolveSlackMedia>) => resolveSlackMedia(...args),
 }));
-vi.mock("./client.js", () => ({
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
   createSlackLookupClient: createSlackLookupClientMock,
   getSlackWriteClient: vi.fn(),
 }));
@@ -232,4 +234,111 @@ it.each([
   }
   expect(client.conversations.history).not.toHaveBeenCalled();
   expect(client.conversations.replies).not.toHaveBeenCalled();
+});
+
+it("adds author profile names with one lookup per distinct author and keeps failed authors unchanged", async () => {
+  resetSlackUserProfileCache("default");
+  const client = createClient();
+  const users = {
+    U1: {
+      name: "ada",
+      real_name: "Ada L",
+      profile: { display_name: "Ada", real_name: "Ada Lovelace" },
+    },
+    U3: { name: "grace", profile: { display_name: "", real_name: "" } },
+  };
+  const info = vi.fn(async ({ user }: { user: string }) => {
+    if (user === "U2") {
+      throw new Error("missing_scope");
+    }
+    return { user: users[user as keyof typeof users] };
+  });
+  Object.assign(client, { users: { info } });
+  const ownProfile = { display_name: "Slack Supplied" };
+  client.conversations.history.mockResolvedValueOnce({
+    messages: [
+      { ts: "1", user: "U1", text: "one" },
+      { ts: "2", user: "U2", text: "two" },
+      { ts: "3", user: "U1", text: "three" },
+      { ts: "4", user: "U3", text: "four" },
+      { ts: "5", user: "U4", user_profile: ownProfile, text: "five" },
+      { ts: "6", bot_id: "B1", text: "six" },
+    ],
+    has_more: false,
+  });
+  const { messages } = await readSlackMessages("C1", { client, includeAuthorProfiles: true });
+  expect(info.mock.calls.map(([args]) => args.user)).toEqual(["U1", "U2", "U3"]);
+  expect(messages).toEqual([
+    {
+      ts: "1",
+      user: "U1",
+      text: "one",
+      user_profile: { display_name: "Ada", real_name: "Ada Lovelace", name: "ada" },
+    },
+    { ts: "2", user: "U2", text: "two" },
+    {
+      ts: "3",
+      user: "U1",
+      text: "three",
+      user_profile: { display_name: "Ada", real_name: "Ada Lovelace", name: "ada" },
+    },
+    { ts: "4", user: "U3", text: "four", user_profile: { name: "grace" } },
+    { ts: "5", user: "U4", user_profile: ownProfile, text: "five" },
+    { ts: "6", bot_id: "B1", text: "six" },
+  ]);
+});
+
+it("skips author lookups unless requested", async () => {
+  const client = createClient();
+  const info = vi.fn();
+  Object.assign(client, { users: { info } });
+  client.conversations.history.mockResolvedValueOnce({
+    messages: [{ ts: "1", user: "U1", text: "one" }],
+    has_more: false,
+  });
+  await expect(readSlackMessages("C1", { client })).resolves.toEqual({
+    messages: [{ ts: "1", user: "U1", text: "one" }],
+    hasMore: false,
+  });
+  expect(info).not.toHaveBeenCalled();
+});
+
+it("reuses author lookups across reads for one account, team and token, never across scopes or failures", async () => {
+  const info = vi.fn(async ({ user }: { user: string }) => {
+    if (user === "U9") {
+      throw new Error("ratelimited");
+    }
+    return { user: { name: `handle-${user}`, profile: { display_name: `Name ${user}` } } };
+  });
+  const read = async (scope: { accountId: string; teamId?: string; token?: string }) => {
+    const client = createClient();
+    Object.assign(client, { users: { info } });
+    client.conversations.history.mockResolvedValueOnce({
+      messages: [
+        { ts: "1", user: "U7" },
+        { ts: "2", user: "U8" },
+        { ts: "3", user: "U9" },
+      ],
+      has_more: false,
+    });
+    const { messages } = await readSlackMessages("C1", {
+      client,
+      ...scope,
+      includeAuthorProfiles: true,
+    });
+    return messages.map((message) => message.user_profile?.display_name);
+  };
+  resetSlackUserProfileCache("cache-a");
+  resetSlackUserProfileCache("cache-b");
+  await expect(read({ accountId: "cache-a" })).resolves.toEqual(["Name U7", "Name U8", undefined]);
+  expect(info).toHaveBeenCalledTimes(3);
+  await expect(read({ accountId: "cache-a" })).resolves.toEqual(["Name U7", "Name U8", undefined]);
+  expect(info).toHaveBeenCalledTimes(4);
+  expect(info.mock.calls[3]?.[0]).toEqual({ user: "U9" });
+  await read({ accountId: "cache-b" });
+  expect(info).toHaveBeenCalledTimes(7);
+  await read({ accountId: "cache-a", teamId: "T2" });
+  expect(info).toHaveBeenCalledTimes(10);
+  await read({ accountId: "cache-a", token: "xoxp-other-workspace" });
+  expect(info).toHaveBeenCalledTimes(13);
 });

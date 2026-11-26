@@ -229,6 +229,7 @@ describe("requester settle dispatch deadline", () => {
           }
         },
         run: (run) => run(),
+        runWithRequester: (run) => run(),
       },
     });
     onTestFinished(() => owner.close());
@@ -238,7 +239,7 @@ describe("requester settle dispatch deadline", () => {
     const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
     deliver.mockImplementationOnce(async () => {
       unavailable = true;
-      return { delivered: false, path: "none", disposition: "retryable" };
+      return { delivered: false, path: "none" };
     });
     await expect(run()).rejects.toThrow(GatewayOperatorAccessUnavailableError);
     expect(completeBatch).not.toHaveBeenCalled();

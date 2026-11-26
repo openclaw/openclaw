@@ -137,7 +137,6 @@ it.each(["browser", "cli", "acp"] as const)(
       profileId: "prefix-operator",
       scopes: ["operator.write"],
       signal: new AbortController().signal,
-      assertCurrent: () => {},
     });
     const expected = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey, operatorAuthority },
@@ -221,7 +220,6 @@ it.each([true, false])(
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "prefix-operator",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
     });
     const expected = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: session.sessionKey!, operatorAuthority },

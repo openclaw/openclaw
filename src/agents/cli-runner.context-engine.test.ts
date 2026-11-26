@@ -7,7 +7,6 @@ import type { ContextEngine } from "../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { prepareSystemAgentRunAdmission, type AdmittedRunContext } from "./admitted-run-context.js";
-import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import {
@@ -538,46 +537,5 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(bootstrap).toHaveBeenCalledTimes(1);
     expectNoCalls(afterTurn, ingestBatch, dispose);
     expect(maintain).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps a committed CLI reply successful after operator model authority revokes post-commit", async () => {
-    let revoked = false;
-    const authority = createTestOperatorAuthority({
-      profileId: "operator-profile",
-      scopes: [],
-      assertCurrent: () => {
-        if (revoked) {
-          throw new Error("This agent run is no longer active. Start a new turn to retry.");
-        }
-      },
-    });
-    const admission = prepareSystemAgentRunAdmission(
-      {},
-      "run-auth-revoked",
-      "main",
-      "cli-context-engine-test",
-      undefined,
-      authority,
-    );
-    try {
-      const admitted = await admission.admit("embedded");
-      const context = buildPreparedContext(createContextEngine());
-      context.params.admittedRunContext = admitted;
-      // Revoke after the final reply commits: cleanup runs inside settlement
-      // between the committed complete() and the return, so the wrapper must
-      // not re-assert authority afterwards; the committed turn stays successful.
-      context.preparedBackend.cleanup = async () => {
-        revoked = true;
-      };
-      prepareMock.mockResolvedValue(context);
-
-      const result = await runCliAgent(context.params);
-
-      expect(revoked).toBe(true);
-      expect(result.meta.error).toBeUndefined();
-      expect(result.payloads?.[0]).toMatchObject({ text: expect.stringContaining("final answer") });
-    } finally {
-      admission.close();
-    }
   });
 });

@@ -372,6 +372,7 @@ export function createModelExecAutoReviewer(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
   reviewer?: ExecReviewerConfig;
+  participation?: boolean;
   signal?: AbortSignal;
 }): (input: ModelAutoReviewInput) => Promise<ExecAutoReviewDecision> | ExecAutoReviewDecision {
   const cfg = params.cfg;
@@ -476,7 +477,13 @@ export function createModelExecAutoReviewer(params: {
               systemPrompt:
                 "kind" in input
                   ? DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT
-                  : DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
+                  : DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT +
+                    // Participate (https://github.com/openclaw/openclaw/pull/202552, split as
+                    // https://github.com/openclaw/openclaw/pull/204858): only the creator or an
+                    // admin may approve a participant's command.
+                    (params.participation
+                      ? "\nThis command serves an invited session participant, not the session creator. The participant cannot authorize broader host access or changes outside the invited session scope. If human approval is needed, ask the session creator or an administrator, never the participant."
+                      : ""),
               messages: [
                 {
                   role: "user",

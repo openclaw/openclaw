@@ -1,8 +1,9 @@
 import type { SessionEntry } from "../config/sessions/types.js";
 
 /**
- * Unread follows visible activity: `lastActivityAt` advances only when a visible run completes or
- * a channel message arrives. Hidden turns advance `lastInteractionAt` (the idle-reset clock) only.
+ * Unread follows chat content: `lastActivityAt` advances when a run ends with a new visible reply
+ * in its transcript, a channel message arrives, or a background result is delivered. Silent and
+ * hidden turns advance only `lastInteractionAt` (the idle-reset clock).
  */
 export function deriveSessionUnread(
   entry?: Pick<SessionEntry, "createdAt" | "lastReadAt" | "markedUnreadAt" | "lastActivityAt">,

@@ -89,6 +89,8 @@ does not install it. The exact archive bytes bind the review to installation
 through the existing live Add owner; no publication or restart is needed. The
 origin and ClawHub scan status of a local file are unverified. Current operator-admin authority is required. Canceling,
 leaving the page, or changing the connection drops the browser's pending archive.
+After a successful import, the Control UI opens the new agent's chat. If the UI
+can't open it, choose **Retry opening chat** to try again without reinstalling.
 After an uncertain installation result, inspect the agent before uploading again.
 
 For API clients, the same `templates.add.plan` and `templates.add.apply` methods
@@ -163,9 +165,15 @@ instead of falling back to the generic artwork. To publish without an avatar,
 ask the agent to remove it from the proposal. Changing the image after review
 requires a fresh review before **Publish**.
 
-Sign in with `clawhub login` on the Gateway host. Select **Publish** on the card
-or in the preview dialog to upload the exact reviewed artifact using that
-account. Opening the preview is optional. An agent turn cannot authorize publication.
+If you are signed out of ClawHub, select **Sign in** on the private draft card.
+When the code appears, select **Copy & open ClawHub**, paste the code, and
+approve. The same conversation shows the unpublished draft when it is ready.
+Cancelling or letting sign-in expire leaves the draft private.
+
+**Preview** lets you inspect the reviewed artifact without uploading it. Select
+**Publish** on the card or in the preview dialog to upload that exact artifact.
+Neither signing in nor an agent turn authorizes publication.
+
 The card stays in the conversation and shows **Pending** while ClawHub checks
 the submission. Select **View submission** to follow its progress on ClawHub.
 While pending, the open card checks again 30 seconds after each response. Checks stop after
@@ -513,6 +521,15 @@ or configure the agent afterward. The first assistant response is a normal
 personality/SOUL greeting, not a saved canned greeting or a message sent on your
 behalf. Later setup failure retains the exposed agent and conversation;
 completion does not replace an existing draft.
+
+Offline CLI Add checks model and sign-in availability before its optional greeting.
+If no usable model is available, it skips the greeting and prints a short note to
+stderr, including with `--json`. Dependency installation, automations, and
+first-run instruction files still finish normally; a successful Add exits `0`.
+Configure a model in **Settings → Models**, then open the new agent's chat.
+When a model is available, Add still runs the greeting. A failed model turn or
+failed setup step still reports `partial` and exits `1`; it is not treated as a
+skipped greeting.
 
 During a CLI Add, the installer shows a card for each newly installed plugin and
 an automation-created notice as each routine is added. Disabled routines remain

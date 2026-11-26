@@ -123,6 +123,8 @@ export type CliCompactionDelta =
 export type CliToolUseStartDelta = {
   toolCallId: string;
   name: string;
+  /** The native call follows completed text in the cumulative assistant lane. */
+  followsAssistantText?: true;
   // Preserve the producer kind: a server-native start without its result is not a failed local call.
   kind: "tool_use" | "server_tool_use" | "mcp_tool_use";
   args: Record<string, unknown>;

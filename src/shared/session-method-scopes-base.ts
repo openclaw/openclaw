@@ -166,6 +166,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "pinned",
   "sidebarRoot",
   "archived",
+  "requestArchiveUndo",
   "snoozedUntil",
   "unread",
   "model",
@@ -184,9 +185,11 @@ const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set(
   "expectedLifecycleRevision",
   "expectedPermissionMode",
   "expectedMarkedUnreadAt",
+  "archiveUndoToken",
   "expectedSidebarRoot",
   "expectedCategory",
   "expectedArchived",
+  "expectedArchivedAt",
   "expectedSidebarAncestors",
 ]);
 

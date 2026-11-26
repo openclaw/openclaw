@@ -24,6 +24,7 @@ import {
   openclawIdTunnelRolePolicy,
   openclawIdSubjectRolePolicy,
 } from "./openclaw-id/tunnel-principal.js";
+import { operatorRefusalText } from "./operator-refusal.js";
 import {
   isNamedOperatorRoleEnforcementEnabled,
   isOperatorRoleEnforcedFor,
@@ -275,7 +276,6 @@ export function resolveOperatorRolePolicy(
     if (!authority && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
       throw new Error("OpenClaw ID membership changed. Reconnect before starting a request.");
     }
-    client?.internal?.operatorRunAuthority?.assertCurrent();
     if (principal.kind !== "member") {
       return openclawIdTunnelRolePolicy(principal);
     }
@@ -286,15 +286,11 @@ export function resolveOperatorRolePolicy(
   if (actor?.kind === "operator" && authority) {
     assertAdmittedRunOperatorAuthority(authority);
     const roleFacts = authority.readCurrentRoleFacts?.();
-    if (!roleFacts) {
-      authority.assertCurrent();
-    }
     if (authority.profileId !== actor.profileId) {
       throw new Error("Gateway requester profile changed");
     }
     // A linked owner device's run keeps the owner's authority under its person's profile.
     if (authority.openclawIdPrincipal?.kind === "owner") {
-      authority.assertCurrent();
       return undefined;
     }
     if (roleFacts && Object.hasOwn(roleFacts, "policy")) {
@@ -453,7 +449,6 @@ export function authorizeGatewaySessionCreation(
 ): ErrorShape | undefined {
   if (params.authority) {
     assertAdmittedRunOperatorAuthority(params.authority);
-    params.authority.assertCurrent();
   }
   const actor =
     params.actor ??
@@ -474,7 +469,7 @@ export function authorizeGatewaySessionCreation(
   }
   return errorShape(
     ErrorCodes.FORBIDDEN,
-    `Your operator role cannot create sessions for agent "${params.agentId}"; choose an allowed agent or ask a gateway administrator to update your role.`,
+    operatorRefusalText("agent-not-in-role", `start a session with agent "${params.agentId}"`),
   );
 }
 
@@ -526,4 +521,49 @@ export function assertOperatorCloudProfileDispatchAllowed(params: {
       "Your operator role cannot dispatch to this cloud profile; choose your own session and an allowed profile, or ask a gateway administrator to update your role.",
     ),
   );
+}
+
+export const OPERATOR_ROLE_SELF_LOCKOUT_MESSAGE =
+  "This change would remove your administrator access (operator.admin), and you could no longer manage roles. Assign yourself a role that includes operator.admin first, then try again.";
+
+/**
+ * Returns a refusal when a role change would leave the person making it without
+ * operator.admin. `assignment` previews a pending users.setRole; otherwise the person's
+ * current assignment is resolved under `config`. The gateway owner and shared-token
+ * connections are never under roles, so they cannot lock themselves out this way.
+ */
+export function resolveOperatorRoleSelfLockout(params: {
+  client: GatewayClient | null | undefined;
+  config: OpenClawConfig;
+  assignment?: { profileId: string; role: string | null };
+}): string | undefined {
+  const { client } = params;
+  const profileId = client?.authenticatedUserProfile?.profileId;
+  if (
+    !profileId ||
+    profileId === GATEWAY_OWNER_PROFILE_ID ||
+    client?.connect?.role !== "operator"
+  ) {
+    return undefined;
+  }
+  const profile = captureResidentUserProfileAccess(profileId).readCurrentFacts();
+  // An assignment names either the alias the caller used or the canonical row.
+  const assigned =
+    params.assignment &&
+    (params.assignment.profileId === profileId || params.assignment.profileId === profile.profileId)
+      ? params.assignment.role
+      : profile.assignedRole;
+  // An OpenClaw ID owner device keeps the owner's grants whatever its person's role says.
+  const role = openclawIdSubjectRolePolicy(client.internal?.openclawIdPrincipal, () =>
+    resolveOperatorRolePolicyForAssignment(
+      profile.profileId,
+      assigned,
+      params.config,
+      profile.githubLogin,
+      operatorRoleSubject(profile),
+    ),
+  );
+  return role && !role.scopes.includes(ADMIN_SCOPE)
+    ? OPERATOR_ROLE_SELF_LOCKOUT_MESSAGE
+    : undefined;
 }

@@ -15,7 +15,7 @@ export type PrepareResult =
   | { ok: true; releaseRoot: string; buildId?: string; version: string }
   | { ok: false; reason: string; stderrTail: string };
 
-/** One deadline includes fetch, dependencies, core build and UI build. */
+/** One deadline includes fetch, dependencies and the full build, including Control UI. */
 export async function prepareGit(params: {
   checkout: string;
   sha: string;
@@ -55,7 +55,7 @@ export async function prepareGit(params: {
     timeoutMs: remaining(),
     env,
     stepIndex: steps.length,
-    totalSteps: 5,
+    totalSteps: 4,
     results: steps,
     progress: {
       onStepStart: async ({ name: stepName }) => {
@@ -126,7 +126,6 @@ export async function prepareGit(params: {
       pnpmEnv,
     );
     await run("build", ["pnpm", "build"], releaseRoot, pnpmEnv);
-    await run("ui-build", ["pnpm", "ui:build"], releaseRoot, pnpmEnv);
     reason = "metadata-failed";
     const version = await readPackageVersion(releaseRoot);
     if (!version) {

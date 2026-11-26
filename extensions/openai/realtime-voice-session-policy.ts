@@ -40,6 +40,7 @@ import {
 import {
   OPENAI_GPT_LIVE_AUTH_REQUIRED,
   OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
+  OPENAI_GPT_LIVE_CHATGPT_AUTH_REQUIRED,
   OPENAI_GPT_LIVE_PUBLIC_AUTH_REQUIRED,
   OPENAI_GPT_LIVE_PUBLIC_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
 } from "./realtime-quicksilver-redaction.js";
@@ -47,6 +48,7 @@ import {
   OPENAI_GPT_LIVE_MODELS,
   OPENAI_GPT_LIVE_MODEL_PREFIX,
   isOpenAIGptLiveSubscriptionModel,
+  requiresOpenAIGptLiveSubscriptionAuth,
   resolveOpenAIQuicksilverVoiceCapabilities,
 } from "./realtime-quicksilver.js";
 
@@ -500,6 +502,9 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
     if (subscriptionAuth) {
       return subscriptionAuth;
     }
+  }
+  if (requiresOpenAIGptLiveSubscriptionAuth(params.model)) {
+    throw new Error(OPENAI_GPT_LIVE_CHATGPT_AUTH_REQUIRED);
   }
   const platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
   if (platformAuth) {

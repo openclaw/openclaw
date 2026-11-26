@@ -7,7 +7,6 @@ import type {
 import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
-import { buildGroupDisplayName } from "../config/sessions/group-display.js";
 import {
   MAX_SESSION_PARTICIPANTS,
   resolveSessionCreatorActor,
@@ -26,7 +25,6 @@ import {
   normalizeSessionSearchText,
 } from "../shared/session-search-text.js";
 import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
-import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import {
   projectSessionOwner,
@@ -37,8 +35,11 @@ import {
   projectSessionPeopleFacet,
   resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
-import type { SessionEntryPair } from "./session-list-order.js";
-import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
+import type { SessionEntryPair, SessionPinRank } from "./session-list-order.js";
+import {
+  addSessionListSearchModelFields,
+  resolveSessionListSearchDisplayName,
+} from "./session-list-search-fields.js";
 import type {
   SessionListModelFactsLookup,
   SessionListTargetLookup,
@@ -61,7 +62,6 @@ import {
   projectGatewaySessionActiveRun,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
-import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { SessionListModelCatalog, SessionsListResult } from "./session-utils.types.js";
 
 export type SessionListFilteredEntries = {
@@ -91,6 +91,8 @@ export type SessionListFilterParams = {
   cfg: OpenClawConfig;
   entries: (archived: SessionsListParams["archived"]) => Iterable<SessionEntryPair>;
   entriesSorted?: boolean;
+  personalPinRank?: SessionPinRank;
+  personalPins?: ReadonlyMap<string, number>;
   getTarget: SessionListTargetLookup;
   getModelFacts?: SessionListModelFactsLookup;
   modelSearchMayMatch?: (search: string) => boolean;
@@ -114,28 +116,6 @@ export type SessionListFilterParams = {
   projectActiveRun?: SessionListActiveRunProjector;
   involvementKeys: (profileId: string, personal: boolean) => ReadonlySet<string>;
 };
-
-function resolveSessionListSearchDisplayName(
-  key: string,
-  entry?: SessionEntry,
-): string | undefined {
-  if (entry?.displayName) {
-    return entry.displayName;
-  }
-  const parsed = parseGroupKey(key);
-  const channel = sessionDeliveryChannel(entry) ?? parsed?.channel;
-  if (isGroupOrChannelDisplaySession(entry, parsed) && channel) {
-    return buildGroupDisplayName({
-      provider: channel,
-      subject: entry?.subject,
-      groupChannel: entry?.groupChannel,
-      space: entry?.space,
-      id: parsed?.id,
-      key,
-    });
-  }
-  return entry?.label ?? sessionDeliveryOrigin(entry)?.label;
-}
 
 function matchesSessionListSearch(fields: Array<string | undefined>, search: string): boolean {
   return fields.some(
@@ -509,8 +489,17 @@ export function filterSessionEntries(
       }
     }
     if (
+      entry.snoozedUntil !== undefined &&
+      entry.snoozedUntil > now &&
+      params.personalPins?.has(key)
+    ) {
+      activityExpiresAt = Math.min(activityExpiresAt, entry.snoozedUntil - 1);
+    }
+    if (
       opts.pinned !== undefined &&
-      (entry.pinnedAt !== undefined && isPinnableSessionEntry(storeKey, entry)) !== opts.pinned
+      (params.personalPinRank
+        ? params.personalPinRank(pair) > 0
+        : entry.pinnedAt !== undefined && isPinnableSessionEntry(storeKey, entry)) !== opts.pinned
     ) {
       continue;
     }

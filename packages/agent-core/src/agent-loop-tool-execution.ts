@@ -127,6 +127,8 @@ export async function prepareToolCallExecution(
     interruption?.dispose();
     acceptingUpdates = false;
     scopedExecutionContext.pendingInput = undefined;
+    // The run-context loader holds the run's history; a settled call must not keep it alive.
+    scopedExecutionContext.loadTool = undefined;
     pendingInput = undefined;
     for (const release of inputSubscriptions) {
       release();

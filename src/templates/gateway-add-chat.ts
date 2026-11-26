@@ -19,7 +19,7 @@ import {
 } from "./add-stateless.js";
 import { TemplateAddMutationError } from "./add.js";
 import { withResolvedClawHubSource, type PrefetchedClawHubSource } from "./clawhub-source.js";
-import type { TemplateSetupReport } from "./conversation.js";
+import { readTemplateSetupDeclarations, type TemplateSetupReport } from "./conversation.js";
 import {
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
@@ -292,12 +292,15 @@ export async function createTemplateAgentFromChat(
             );
             preparedSource = source;
             configured = true;
+            const declared = readTemplateSetupDeclarations(source.manifest);
             await measureTemplateAddStage(
               "session.finalize",
               async () =>
                 await admitted.chat.complete?.({
                   source: input.source,
                   requiredAutomationIds: source.manifest.automations.map(({ id }) => id),
+                  // The first turn acts on these; handing them over saves it a manifest read.
+                  ...(declared ? { declared } : {}),
                   ...(admitted.deviceTimeZone ? { deviceTimeZone: admitted.deviceTimeZone } : {}),
                   report,
                   dependenciesPending: true,

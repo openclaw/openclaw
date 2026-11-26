@@ -272,6 +272,7 @@ describe("QuestionManager", () => {
       id: record.id,
       status: "answered",
       answers,
+      resolvedBy: "plain-text",
     });
     expect(() =>
       manager.resolve(record.id, answers, "other", { resolutionId: "other-resolution" }),
@@ -641,7 +642,7 @@ describe("QuestionManager", () => {
     active = false;
     manager.cancelClosedAuthorities({ instanceId: "other-instance", runId: "other-run" });
     expect(resolved).toHaveBeenCalledWith(
-      { id: record.id, status: "cancelled" },
+      { id: record.id, status: "cancelled", resolvedBy: "requester-inactive" },
       expect.objectContaining({ record: manager.get(record.id) }),
     );
   });

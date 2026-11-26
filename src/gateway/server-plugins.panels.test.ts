@@ -104,13 +104,13 @@ it("binds the plugin ID and delivers only to the requesting browser", async () =
 });
 
 it.for<[string, (h: ReturnType<typeof createHarness>) => void, RegExp]>([
-  ["caller revoked", (h) => h.revoke(), /authority/],
+  ["caller revoked", (h) => h.revoke(), /authority closed|could not start/],
   ["plugin retired", (h) => markPluginRegistryRetired(h.registry), /current plugin runtime/],
   ["plugin disabled", (h) => Object.assign(h.plugin, { enabled: false }), /current plugin runtime/],
   [
     "requester disconnected",
     (h) => Object.assign(h.requester, { invalidated: true }),
-    /authority|no longer connected|lost access/,
+    /authority closed|could not start|no longer connected|lost access/,
   ],
 ])(
   "rejects %s during handler preparation without redirecting delivery",

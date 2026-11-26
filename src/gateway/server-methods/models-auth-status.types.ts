@@ -45,6 +45,8 @@ export type ModelAuthStatusProvider = {
     source: "config" | "env";
     envVar?: string;
   };
+  /** The saved sign-in doesn't cover voice and no API key is set; adding one would. */
+  voiceApiKeyRequired?: true;
   usage?: Pick<
     ProviderUsageSnapshot,
     "windows" | "summary" | "plan" | "billing" | "accountEmail" | "authProfileId"

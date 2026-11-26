@@ -12,7 +12,6 @@ const initial = sessionRow("category-test", {
   sessionId: "category-incarnation",
   updatedAt: 1,
   category: "Alpha",
-  pinned: false,
 });
 const result = (overrides: Partial<GatewaySessionRow>, ts = 2) =>
   sessionsResult([{ ...initial, ...overrides }], ts);

@@ -12,10 +12,6 @@ import { parseMessageWithAttachments } from "../../../gateway/chat-attachments.j
 import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
-import {
-  OutboundDeliveryError,
-  PlatformMessageNotDispatchedError,
-} from "../../../infra/outbound/deliver-types.js";
 import { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
 import { saveMediaBuffer } from "../../../media/store.js";
 import { createTestInstance } from "../../../plugins/plugin-instance.test-support.js";
@@ -232,7 +228,7 @@ describe("queued completion handoff", () => {
         expect(executed).toBe(false);
         if (outcome === "delivery deadline") {
           deliveryDeadline.abort(new Error("completion delivery expired"));
-          expect(await delivery).toMatchObject({ delivered: false, disposition: "retryable" });
+          expect(await delivery).toMatchObject({ delivered: false });
           parentSettled.resolve();
           await vi.advanceTimersByTimeAsync(0);
           expect(executed).toBe(false);
@@ -613,7 +609,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         delivered: false,
         path: "none",
         reason: "completion_handoff_pending",
-        terminal: true,
       },
       gatewayCalls: 0,
     }),
@@ -791,17 +786,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     {
       name: "accepted",
       response: { status: "accepted", runId: "pending" },
-      expected: { path: "direct", reason: "requester_turn_pending", disposition: "session_queued" },
-    },
-    {
-      name: "error",
-      response: { status: "error", result: { payloads: [{ text: "failed" }] } },
-      expected: { disposition: "retryable" },
-    },
-    {
-      name: "operator cancellation",
-      response: { status: "timeout", stopReason: "rpc", summary: "cancelled" },
-      expected: { terminal: true, disposition: "intentional_non_delivery" },
+      expected: { path: "queued", reason: "requester_turn_pending" },
     },
   ])("records private handoff $name without raw fallback", async ({ response, expected }) => {
     const { result: delivery, sendMessage } = await runDelivery("discord", {
@@ -835,14 +820,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     {
       name: "intentional suppression",
       suppressionReason: "cancelled_by_message_sending_hook",
-      disposition: "intentional_non_delivery",
       reason: "delivery_suppressed",
     },
     {
       name: "adapter ambiguity",
       suppressionReason: "adapter_returned_no_identity",
-      disposition: "ambiguous",
-      reason: undefined,
+      reason: "delivery_suppressed",
     },
   ] as const)("reports $name from direct text completion fallback", async (testCase) => {
     const onDeliveryResult = vi.fn();
@@ -864,7 +847,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      disposition: testCase.disposition,
       reason: testCase.reason,
     });
     expect(onDeliveryResult).not.toHaveBeenCalled();
@@ -1221,9 +1203,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
       expectRecordFields(result, {
         delivered: false,
-        path: "queued",
+        path: "none",
         reason: "completion_handoff_unavailable",
-        disposition: status === "failed" ? "permanent_failure" : "retryable",
       });
       expect(callGateway).not.toHaveBeenCalled();
       expect(sendMessage).not.toHaveBeenCalled();
@@ -1282,7 +1263,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           ? {
               delivered: false,
               reason: "completion_handoff_pending",
-              disposition: "session_queued",
+              path: "queued",
             }
           : { delivered: true, path: "direct" },
       );
@@ -1356,7 +1337,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     }
   });
 
-  const ambiguousCompletion = { delivered: false, disposition: "ambiguous" };
+  const undeliveredCompletion = { delivered: false };
   const suppressedCompletionReceipt = (reasons: string[]) => ({
     status: "suppressed",
     resultCount: 0,
@@ -1371,7 +1352,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         "no_visible_payload",
         "adapter_returned_no_identity",
       ]),
-      expected: { ...ambiguousCompletion, finalAssistantVisibleText: "" },
+      expected: { ...undeliveredCompletion, finalAssistantVisibleText: "" },
     },
     {
       name: "empty output before a hook cancellation",
@@ -1382,7 +1363,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ]),
       expected: {
         delivered: false,
-        disposition: "intentional_non_delivery",
         reason: "delivery_suppressed",
         error: "cancelled_by_message_sending_hook",
       },
@@ -1402,7 +1382,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           },
         ],
       },
-      expected: ambiguousCompletion,
+      expected: undeliveredCompletion,
     },
     {
       name: "partial send without per-payload details",
@@ -1412,7 +1392,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         sentBeforeError: true,
         errorMessage: "supplement failed",
       },
-      expected: ambiguousCompletion,
+      expected: undeliveredCompletion,
     },
   ])("does not credit a $name automatic completion receipt", async (testCase) => {
     const { deliveryStatus, expected } = testCase;
@@ -1430,10 +1410,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expect(result).toMatchObject(expected);
     expect(result.requesterVisibleFinalDelivered).toBeUndefined();
-    if (expected?.disposition === "ambiguous") {
-      expect(result.reason).toBeUndefined();
-      expect(result.terminal).toBeUndefined();
-    }
   });
 
   const requesterSettleCases = createRequesterSettleCases();
@@ -1479,91 +1455,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(agentParams.sourceReplyDeliveryMode).toBeUndefined();
   });
 
-  const transient = new Error("connect ECONNRESET");
-  const permanent = new Error("chat not found");
-  const wrapped = (cause: Error) => new Error("outbound delivery failed", { cause });
-  const identifiedSend = (message: string, channel: "telegram" | "discord") =>
-    new OutboundDeliveryError(message, {
-      cause: new Error(message),
-      results: [{ channel, messageId: "already-sent" }],
-    });
-  const identifiedError = identifiedSend("connect ECONNRESET", "telegram");
-  const rejected = new PlatformMessageNotDispatchedError("payload rejected by platform policy", {
-    cause: transient,
-    retryable: false,
-  });
-  const writerRebound = (cause?: Error) =>
-    Object.assign(
-      new Error("session writer claim changed before transcript persistence", { cause }),
-      { name: "SessionTranscriptWriterClaimReboundError" },
-    );
-  type FailureCase = [
-    name: string,
-    error: Error,
-    outcome: "permanent_failure" | "ambiguous" | "retryable",
-    route?: "active" | "direct",
-  ];
-  it.each<FailureCase>([
-    [
-      "parent restart admission race",
-      new Error(
-        'Session "agent:main:main" changed while starting work. Retry. | SESSION_WORK_START_CHANGED',
-      ),
-      "retryable",
-    ],
-    ["wrapped permanent failure", wrapped(permanent), "permanent_failure"],
-    ["typed rejection beats transient cause", wrapped(rejected), "permanent_failure"],
-    ["identified platform send", identifiedError, "ambiguous"],
-    [
-      "nested visible reply",
-      new Error("connect ECONNRESET", {
-        cause: Object.assign(new Error("platform send completed"), { visibleReplySent: true }),
-      }),
-      "ambiguous",
-    ],
-    ["writer rebound after send", writerRebound(identifiedError), "ambiguous", "active"],
-    ["writer rebound", writerRebound(), "retryable"],
-    [
-      "wrapped writer rebound",
-      new Error("requester handoff failed", { cause: writerRebound() }),
-      "retryable",
-    ],
-    ["writer rebound with permanent cause", writerRebound(permanent), "permanent_failure"],
-    [
-      "identified incomplete send",
-      identifiedSend("incomplete terminal response", "discord"),
-      "ambiguous",
-      "direct",
-    ],
-    [
-      "writer rebound sent marker",
-      Object.assign(writerRebound(), { sentBeforeError: true }),
-      "ambiguous",
-    ],
-  ])("%s", async (_name, error, outcome, route) => {
-    const callGateway = createGatewayMock();
-    vi.mocked(callGateway).mockRejectedValue(error);
-    const sendMessage = createSendMessageMock();
-    const result =
-      route === "direct"
-        ? await deliverFixture("discord", {
-            callGateway,
-            sendMessage,
-            sourceTool: "subagent_announce",
-            internalEvents: identifiedCompletion(),
-          })
-        : await deliverFixture("channel", {
-            callGateway,
-            directIdempotencyKey: "announce-retry-contract",
-            ...(route === "active" ? { isActive: true } : {}),
-          });
-    expect(result).toMatchObject({ delivered: false, path: "direct", disposition: outcome });
-    expect(callGateway).toHaveBeenCalledOnce();
-    if (route === "direct") {
-      expect(sendMessage).not.toHaveBeenCalled();
-    }
-  });
-
   it("routes a completion after the finished child's plugin scope closes", async () => {
     const scope = new PluginInvocationScope(createTestRegistry(), [
       registerDirectTargetTestChannel("telegram"),
@@ -1597,7 +1488,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: false,
       path: "none",
       reason: "source_owner_changed",
-      terminal: true,
     });
     expect(callGateway).toHaveBeenCalledOnce();
     expect(sendMessage).not.toHaveBeenCalled();

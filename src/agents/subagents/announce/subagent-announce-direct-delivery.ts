@@ -6,6 +6,7 @@ import { getRuntimeConfig as getSubagentAnnounceRuntimeConfig } from "../../../c
 import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound/best-effort-delivery.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
@@ -38,6 +39,7 @@ import {
   resolveCommandReplyExpectation,
   resolveCompletionInputReplyExpectation,
 } from "../../reply-completion.js";
+import { readRetainedRequesterToolCaller } from "../../tools/gateway-caller-context.js";
 import {
   deliverCompletionDirect,
   isDirectMessageDeliveryTarget,
@@ -45,10 +47,10 @@ import {
 } from "./subagent-announce-completion-delivery.js";
 import {
   hasAnnounceSendEvidence,
-  classifyAnnounceDeliveryError,
   isIncompleteAnnounceAgentResultError,
   resolveSubagentAnnounceTimeoutMs,
   SourceOwnerChangedError,
+  summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
   getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
@@ -56,10 +58,9 @@ import {
   withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
 import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
-import {
-  sourceOwnerChangedResult,
-  type SubagentAnnounceDeliveryResult,
-  type SubagentAnnounceDirectParams,
+import type {
+  SubagentAnnounceDeliveryResult,
+  SubagentAnnounceDirectParams,
 } from "./subagent-announce-dispatch.js";
 import { resolveExactSubagentCompletionEvent } from "./subagent-announce-handoff.js";
 import { resolveCompletionDeliveryOrigins } from "./subagent-announce-origin.js";
@@ -67,12 +68,7 @@ import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 /** Another owner (a yielded requester or an idle cron turn) settles this completion. */
 function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
-  return {
-    delivered: false,
-    path: "none",
-    reason: "completion_handoff_pending",
-    terminal: true,
-  };
+  return { delivered: false, path: "none", reason: "completion_handoff_pending" };
 }
 
 export async function sendSubagentAnnounceDirectly(
@@ -91,11 +87,7 @@ async function sendSubagentAnnounceDirectlyBound(
   params: Parameters<typeof sendSubagentAnnounceDirectly>[0],
 ): ReturnType<typeof sendSubagentAnnounceDirectly> {
   if (params.signal?.aborted) {
-    return classifyAnnounceDeliveryError(params.signal.reason, {
-      path: "none",
-      interruption: "requester_aborted",
-      replaySafe: true,
-    });
+    return { delivered: false, path: "none", error: summarizeDeliveryError(params.signal.reason) };
   }
   const parentOnly = params.completionTarget === "parent";
   const sourceToolId =
@@ -108,9 +100,6 @@ async function sendSubagentAnnounceDirectlyBound(
     ? RUNTIME_EVENT_USER_PROMPT
     : params.triggerMessage;
   let dispatchPrepared = params.onBeforeDispatch === undefined;
-  let executionStarted = false;
-  let accepted = false;
-  const beforeAdmission = () => !accepted && !params.controllerInput?.custody.rpcAdopted;
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
     params.targetRequesterSessionKey,
@@ -130,6 +119,12 @@ async function sendSubagentAnnounceDirectlyBound(
     );
     const requesterEntry = requester.entry;
     const requesterAgentId = requester.agentId;
+    const operatorAuthority =
+      getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
+    const participating = operatorAuthority?.participationCeiling !== undefined;
+    if (participating) {
+      operatorAuthority.signal?.throwIfAborted();
+    }
     const requesterSessionId = requesterEntry?.sessionId;
     const requesterLifecycleRevision = requesterEntry?.lifecycleRevision;
     const deliveryTarget =
@@ -196,8 +191,6 @@ async function sendSubagentAnnounceDirectlyBound(
         path: "none",
         reason: "completion_handoff_unavailable",
         error: "completion requester session is unavailable",
-        terminal: true,
-        disposition: "intentional_non_delivery",
       };
     }
     const requesterAbandonment = params.expectsCompletionMessage
@@ -250,7 +243,8 @@ async function sendSubagentAnnounceDirectlyBound(
       : requiresMessageToolDelivery
         ? "message_tool_only"
         : undefined;
-    const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
+    const shouldDeliverAgentFinal =
+      !participating && deliveryTarget.deliver && !requiresMessageToolDelivery;
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
       channel:
@@ -262,6 +256,7 @@ async function sendSubagentAnnounceDirectlyBound(
     // A public completion steers once into the requester's running turn. Ordinary
     // rejection leaves its input queued for the dispatch below.
     if (
+      !participating &&
       !parentOnly &&
       !params.requireDirectDelivery &&
       params.expectsCompletionMessage &&
@@ -320,7 +315,7 @@ async function sendSubagentAnnounceDirectlyBound(
         });
       } catch (error) {
         if (error instanceof SourceOwnerChangedError) {
-          return sourceOwnerChangedResult();
+          return { delivered: false, path: "none", reason: "source_owner_changed" };
         }
         throw error;
       }
@@ -330,19 +325,14 @@ async function sendSubagentAnnounceDirectlyBound(
       }
       // Otherwise steering consumed admission; its outcome counts while the owner is current.
       if (!isCompletionDeliveryAllowed()) {
-        return sourceOwnerChangedResult();
+        return { delivered: false, path: "none", reason: "source_owner_changed" };
       }
       if (steer.status === "indeterminate") {
         // The input was consumed without a confirmed commit; it is never replayed.
-        return {
-          delivered: false,
-          path: "steered",
-          error: steer.errorMessage,
-          disposition: "ambiguous",
-        };
+        return { delivered: false, path: "steered", error: steer.errorMessage };
       }
       if (!isCompletionAdmissionAllowed()) {
-        return sourceOwnerChangedResult();
+        return { delivered: false, path: "none", reason: "source_owner_changed" };
       }
     }
     // A cron run keeps its session turn through finalization, so a requester turn queued
@@ -361,11 +351,11 @@ async function sendSubagentAnnounceDirectlyBound(
       }
     }
     if (params.signal?.aborted) {
-      return classifyAnnounceDeliveryError(params.signal.reason, {
+      return {
+        delivered: false,
         path: "none",
-        interruption: "requester_aborted",
-        replaySafe: true,
-      });
+        error: summarizeDeliveryError(params.signal.reason),
+      };
     }
     const directAgentOrigin = shouldDeliverAgentFinal
       ? deliveryTarget
@@ -451,6 +441,7 @@ async function sendSubagentAnnounceDirectlyBound(
         throw new SourceOwnerChangedError();
       }
       directAnnounceResponse = await runAnnounceAgentCall({
+        agentToolCaller: readRetainedRequesterToolCaller(),
         agentParams: directAgentParams,
         subagentCompletions: params.subagentCompletions,
         controllerInput: params.controllerInput,
@@ -501,14 +492,8 @@ async function sendSubagentAnnounceDirectlyBound(
             : undefined,
         expectFinal: true,
         signal: params.signal,
-        onAccepted: (payload) => {
-          accepted = true;
-          params.onAccepted?.(payload);
-        },
-        onExecutionStarted: () => {
-          executionStarted = true;
-          params.onExecutionStarted?.();
-        },
+        onAccepted: params.onAccepted,
+        onExecutionStarted: params.onExecutionStarted,
         onBeforeDispatch: params.onBeforeDispatch
           ? async () => {
               await params.onBeforeDispatch!();
@@ -523,14 +508,14 @@ async function sendSubagentAnnounceDirectlyBound(
         resolveGatewayContext: params.resolveGatewayContext,
       });
       if (!isCompletionDeliveryAllowed()) {
-        return sourceOwnerChangedResult();
+        return { delivered: false, path: "none", reason: "source_owner_changed" };
       }
     } catch (err) {
       if (!dispatchPrepared) {
         throw err;
       }
       if (err instanceof SourceOwnerChangedError) {
-        return sourceOwnerChangedResult();
+        return { delivered: false, path: "none", reason: "source_owner_changed" };
       }
       if (hasAnnounceSendEvidence(err)) {
         throw err;
@@ -547,12 +532,7 @@ async function sendSubagentAnnounceDirectlyBound(
         }
       }
       params.onDeliveryError?.(err);
-      directFailure = classifyAnnounceDeliveryError(err, {
-        requesterSettle: sourceToolId === "subagent_settle",
-        replaySafe: !executionStarted,
-        beforeAdmission: beforeAdmission(),
-        ...(params.signal?.aborted ? { interruption: "requester_aborted" } : {}),
-      });
+      directFailure = { delivered: false, path: "direct", error: summarizeDeliveryError(err) };
     }
 
     const classified = directFailure ?? classifyResponse(directAnnounceResponse);
@@ -563,10 +543,6 @@ async function sendSubagentAnnounceDirectlyBound(
       throw err;
     }
     params.onDeliveryError?.(err);
-    return classifyAnnounceDeliveryError(err, {
-      requesterSettle: sourceToolId === "subagent_settle",
-      replaySafe: !executionStarted,
-      beforeAdmission: beforeAdmission(),
-    });
+    return { delivered: false, path: "direct", error: summarizeDeliveryError(err) };
   }
 }

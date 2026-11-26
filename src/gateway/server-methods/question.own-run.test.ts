@@ -133,10 +133,10 @@ async function createOwnRunFixture() {
     throw new Error("expected the Guest's admitted operator authority");
   }
   const source = captured;
-  const authority = claimAgentRunDelegatedAuthority(
-    { instanceId: "guest-question-run", runId: requestParams.runId },
-    source.authority.assertCurrent,
-  );
+  const authority = claimAgentRunDelegatedAuthority({
+    instanceId: "guest-question-run",
+    runId: requestParams.runId,
+  });
   const synthetic = createSyntheticPluginRuntimeClient({
     operatorRoleActor: { kind: "operator", profileId: profile.id },
     operatorRunAuthority: source.authority,
@@ -513,8 +513,7 @@ describe("own-run question admission", () => {
       const waiting = manager.waitAnswer(id);
       setUserProfileRole(f.profile.id, "suspended");
       invalidateOperatorRolePolicy(f.profile.id);
-      expect(f.source.authority.signal?.aborted).toBe(false);
-      expect(f.source.authority.assertCurrent).not.toThrow();
+      expect(f.source.authority.signal?.aborted).not.toBe(true);
       expect(observation.sessionAccess?.assertSourceCurrent).not.toThrow();
       expect(observation.record.status).toBe("pending");
       await expect(
@@ -579,7 +578,6 @@ describe("own-run question admission", () => {
           const observation = manager.observe(id)!;
           setUserProfileRole(f.profile.id, "suspended");
           invalidateOperatorRolePolicy(f.profile.id);
-          expect(admitted.authority.assertCurrent).not.toThrow();
           expect(observation.record.status).toBe("pending");
           expect(admitted.authority.signal?.aborted).not.toBe(true);
           // Neither optional-session fallback nor a secret prompt can skip new admission.

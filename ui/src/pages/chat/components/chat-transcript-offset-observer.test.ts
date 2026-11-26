@@ -469,7 +469,70 @@ it.each([
   expect(state.nativeInputActive).toBe(false);
   element.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true, cancelable: true }));
   expect(state.nativeInputActive).toBe(true);
+  element.scrollTop = 20;
+  element.dispatchEvent(new Event("scroll"));
   element.dispatchEvent(new Event("scrollend"));
+  expect(state.nativeInputActive).toBe(false);
+});
+
+// WebKit starts a keyboard scroll a frame after keydown. The previous movement's idle can
+// land in between; ending the key's gesture there lets row corrections write through the
+// smooth scroll and stop it short of the top, so older history never loads.
+it("keeps a scroll key's native input until its own scroll goes idle", () => {
+  vi.useFakeTimers();
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const element = document.createElement("div");
+  Object.defineProperties(element, {
+    clientHeight: { value: 200 },
+    scrollHeight: { value: 1000 },
+  });
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 0,
+    getScrollElement: () => element,
+    estimateSize: () => 40,
+    scrollToFn: vi.fn(),
+    observeElementRect: vi.fn(),
+    observeElementOffset: vi.fn(),
+  });
+  virtualizer.scrollElement = element;
+  virtualizer.targetWindow = window;
+  const state = new TranscriptOffsetState();
+  onTestFinished(
+    observeTranscriptOffset(
+      {
+        state,
+        getScrollElement: () => element,
+        endAnchor: new TranscriptEndAnchor(() => {}),
+        prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
+        canFollowEnd: () => false,
+        isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
+        cancelScroll: vi.fn(),
+        onLayoutCorrection: vi.fn(),
+        invalidate: vi.fn(),
+        onOffset: vi.fn(),
+        onReaderScroll: vi.fn(),
+        onRequestEnd: vi.fn(),
+        onComposerLayout: vi.fn(),
+        onNativeScroll: vi.fn(),
+      },
+      virtualizer,
+      vi.fn(),
+    ),
+  );
+  // The initial end placement scrolls; its idle is still pending when the reader presses Home.
+  element.scrollTop = 800;
+  element.dispatchEvent(new Event("scroll"));
+  element.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true }),
+  );
+  vi.advanceTimersByTime(1_000);
+  expect(state.nativeInputActive).toBe(true);
+  // The key's own scroll, once idle, ends the gesture.
+  element.scrollTop = 0;
+  element.dispatchEvent(new Event("scroll"));
+  vi.advanceTimersByTime(1_000);
   expect(state.nativeInputActive).toBe(false);
 });
 

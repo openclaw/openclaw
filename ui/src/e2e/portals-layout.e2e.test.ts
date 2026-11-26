@@ -1,6 +1,7 @@
 import type { PortalSummary } from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
 import {
+  controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -81,6 +82,63 @@ suite.define(() => {
       },
     );
   });
+  it("centers the device-ready status inside the embedded portal sheet", async () => {
+    await suite.withPage(
+      {
+        ...createControlUiE2eContextOptions(),
+        viewport: { width: 820, height: 1180 },
+        hasTouch: true,
+      },
+      async ({ page }) => {
+        const sessionKey = "agent:main:portal-layout";
+        const environmentId = "review-device";
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          featureMethods: [...defaultControlUiFeatureMethods, "environments.status"],
+          methodResponses: {
+            "environments.status": { id: environmentId, type: "worker", status: "available" },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await gateway.emitGatewayEvent("ui.command", {
+          command: { kind: "panel", panel: "portal", open: true, environmentId },
+          sessionKey,
+        });
+        const pane = page.locator("openclaw-portals-page[embedded]");
+        const title = pane.getByText("Device ready. Waiting for your app…", { exact: true });
+        await title.waitFor();
+        // The opening sheet can move between separate browser protocol calls.
+        const offset = await title.evaluate((message) => {
+          const host = message.closest("openclaw-portals-page[embedded]");
+          if (!host) {
+            throw new Error("Missing portal status bounds");
+          }
+          const hostBounds = host.getBoundingClientRect();
+          const messageBounds = message.getBoundingClientRect();
+          if (
+            !hostBounds.width ||
+            !hostBounds.height ||
+            !messageBounds.width ||
+            !messageBounds.height
+          ) {
+            throw new Error("Missing portal status bounds");
+          }
+          return {
+            x: Math.abs(
+              messageBounds.x + messageBounds.width / 2 - hostBounds.x - hostBounds.width / 2,
+            ),
+            y: Math.abs(
+              messageBounds.y + messageBounds.height / 2 - hostBounds.y - hostBounds.height / 2,
+            ),
+          };
+        });
+        expect(offset.x).toBeLessThanOrEqual(1);
+        expect(offset.y).toBeLessThanOrEqual(1);
+      },
+    );
+  });
+
   it.each([
     ["tall", 1440, 1000],
     ["short", 1280, 520],

@@ -22,6 +22,10 @@ export const validateTemplatesDraftsSaveParams = createProtocolValidator(
   S.TemplatesDraftsSaveParamsSchema,
   Checks.isTemplatesDraftsSaveParams,
 );
+export const validateTemplatesDraftsSignInParams = createProtocolValidator(
+  S.TemplatesDraftsSignInParamsSchema,
+  Checks.isTemplatesDraftsSignInParams,
+);
 export const validateTemplatesDraftsReviewParams = createProtocolValidator(
   S.TemplatesDraftsReviewParamsSchema,
   Checks.isTemplatesDraftsReviewParams,

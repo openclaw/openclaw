@@ -68,7 +68,7 @@ it("preserves captured results in model-visible requester history", async () => 
   await settleRequesterCompletionBatch({
     entries: batch,
     databaseOptions: { database: db.value },
-    outcome: { delivered: false, path: "direct", reason: "requester_aborted" },
+    outcome: { delivered: false, path: "direct" },
   });
   const notice = await readNotice();
   expect(notice).toMatchObject({

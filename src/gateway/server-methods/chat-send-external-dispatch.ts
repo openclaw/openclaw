@@ -23,7 +23,8 @@ export function runChatSendExternalDispatch<T>(
     params.admission.runtimeGoal &&
     isDirectGatewayUserClient(params.client) &&
     params.request.goalOperation
-      ? params.admission.operatorAuthority?.assertCurrent
+      ? params.admission.operatorAuthority &&
+        (() => params.admission.activeRunAbort.controller.signal.throwIfAborted())
       : externalAuthorityAdmission && assertDashboardReadCurrent;
   return assertRepositoryCurrent
     ? withRepositoryChatDispatch(

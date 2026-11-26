@@ -1,6 +1,8 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { prepareRunningBackgroundProcessCount } from "../agents/bash-process-observation.js";
+import { intersectSessionPermissionModes } from "../agents/session-permission-mode.js";
+import { personalSessionPinRank } from "../config/sessions/session-pin-policy.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -23,6 +25,7 @@ import {
   sessionRowFactEncodingBytes,
   type SessionListView,
 } from "./session-list-view-cache.js";
+import { presentSessionPin, usesLegacySessionPins } from "./session-pin-compatibility.js";
 import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -31,6 +34,7 @@ import {
   definedSessionRowFields,
   freezeSessionRow,
   sessionRowId,
+  sameSessionRowFacts,
   sessionRowsRevision,
   type SessionRowGeneration,
 } from "./session-row-identity.js";
@@ -53,7 +57,6 @@ import {
 } from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
-  authorizeSessionAgentRun,
   resolveSessionVisibility,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
@@ -65,7 +68,8 @@ import {
   projectGatewaySessionActiveRun,
 } from "./session-utils-display.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
-import { authorizeSessionWorkspaceRead } from "./session-workspace-read-policy.js";
+
+type PersonalPinOrder = ReadonlyMap<string, number> | null;
 
 type PresentationOptions = Readonly<
   Omit<
@@ -73,6 +77,7 @@ type PresentationOptions = Readonly<
     "now" | "active" | "subagentRuns" | "preparedFacts" | "preparedRunState"
   > & {
     includeActivitySummary?: boolean;
+    personalPins?: PersonalPinOrder;
     rowMode?: SessionsListParams["rowMode"];
     omitSentinelChildren?: boolean;
     childArchiveFilter?: SessionsListParams["archived"];
@@ -82,18 +87,6 @@ type PresentationOptions = Readonly<
 const DEFAULT_PRESENTATION_OPTIONS: PresentationOptions = {};
 
 type ActiveRunStates = Map<records.Row["generation"], ReturnType<VisibleActiveSessionRunProjector>>;
-
-function sameFacts(previous: readonly unknown[] | undefined, current: readonly unknown[]) {
-  if (previous?.length !== current.length) {
-    return false;
-  }
-  for (let i = 0; i < current.length; i++) {
-    if (current[i] !== previous[i]) {
-      return false;
-    }
-  }
-  return true;
-}
 
 const sharedLists = new WeakMap<
   GatewaySessionRow[],
@@ -157,17 +150,18 @@ export function prepareSessionRowPublication(
   projection: SessionRowProjection,
   now: number,
   read: SessionRowReadView = projection,
+  legacyPins = usesLegacySessionPins,
 ) {
   const view = prepareSessionRowPublicationView(projection);
   let activeRuns: Map<VisibleActiveSessionRunProjector, ActiveRunStates> | undefined;
   let subagentRuns: SessionRowReadView["state"]["rowContext"]["subagentRuns"] | undefined;
   return (client?: GatewayClient | null, projectRun?: VisibleActiveSessionRunProjector) => {
-    const recipient = prepareSessionRowRecipient(read, client, view);
+    const recipient = prepareSessionRowRecipient(read, client, view, legacyPins);
     let presentation: ReturnType<typeof prepareProjectedSessionPresentation> | undefined;
     return {
       getAudienceKey() {
         // Fixed-domain prefixes keep the opaque sharing key intact without re-encoding it.
-        return `${recipient.presentFastMode("ultrafast") === true ? 0 : 1}:${recipient.publicationState?.factsRevision ?? ""}:${recipient.sharing.getCacheKey()}`;
+        return `${recipient.omitSharedPins ? 1 : 0}:${recipient.presentFastMode("ultrafast") === true ? 0 : 1}:${recipient.publicationState?.factsRevision ?? ""}:${recipient.sharing.getCacheKey()}`;
       },
       // Event fanout needs display structures only on an audience miss, after live authority.
       getPresentation() {
@@ -197,23 +191,26 @@ function prepareSessionRowRecipient(
   projection: SessionRowReadView,
   client?: GatewayClient | null,
   publication?: PublicationView,
+  legacyPins = usesLegacySessionPins,
 ) {
   const { cfg, policyConfig, rowContext } = projection.state;
-  const presentFastMode = prepareSessionFastModePresentation(client);
-  const publicationState = publication?.();
   const sharing = prepareProjectedSessionSharing({
     cfg: policyConfig,
     client: client ?? null,
-    isMember: (value, identityId) =>
-      projection
-        .readMembership({
-          agentId: value.agentId,
-          key: value.storeKey,
-          storePath: value.storePath,
-        })
-        ?.has(identityId) ?? false,
+    memberAccess: (value, id) => projection.memberAccess(value.storePath, value.storeKey, id),
+    isMember: ({ agentId, storePath, storeKey }, identityId) =>
+      projection.describe({ agentId, storePath, key: storeKey })?.membership.has(identityId) ??
+      false,
   });
-  return { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing };
+  return {
+    cfg,
+    policyConfig,
+    rowContext,
+    presentFastMode: prepareSessionFastModePresentation(client),
+    publicationState: publication?.(),
+    sharing,
+    omitSharedPins: client !== undefined && !legacyPins(client),
+  };
 }
 
 /** Recreate after yields: the caller identity and clock belong to one synchronous presentation. */
@@ -279,7 +276,11 @@ export function prepareProjectedSessionPresentation(
     sharing.entryFilter,
     sharing.sessionCap === "invited" ? sharing.identity?.id : undefined,
   );
-  const listView = (opts: SessionsListParams, selection = false): SessionListView => {
+  const listView = (
+    opts: SessionsListParams,
+    selection = false,
+    personalPins?: PersonalPinOrder,
+  ): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
     if (selection) {
       delete query.rowMode;
@@ -290,6 +291,7 @@ export function prepareProjectedSessionPresentation(
     const key = JSON.stringify([
       client === undefined,
       sharing.getCacheKey(),
+      personalPins === null ? false : personalPins && [...personalPins.keys()],
       presentFastMode("ultrafast"),
       // oxlint-disable-next-line unicorn/no-array-sort -- Object.entries creates a private array.
       Object.entries(query).sort(([left], [right]) => left.localeCompare(right)),
@@ -312,25 +314,32 @@ export function prepareProjectedSessionPresentation(
           ).get(profileId)?.hidden ?? false)
         : undefined;
     viewerFacts.sharingRole = sharingRole;
+    const access = sharing.accessForTarget(value);
+    viewerFacts.invitedAccess =
+      access.invitedAccessCeiling &&
+      (access.access === "read" || access.access === "suggest" || access.access === "send")
+        ? access.access
+        : undefined;
+    viewerFacts.invitedPermission =
+      viewerFacts.invitedAccess === "send"
+        ? intersectSessionPermissionModes(
+            sharing.invitedPermission,
+            value.entry.permissionMode ?? "full",
+          )
+        : undefined;
     // Summary modes omit this diagnostic; their disclosure still uses current sharing facts.
     viewerFacts.sendDisabledReason =
       rowMode === "sidebar" || rowMode === "dashboard"
         ? undefined
-        : (authorizeSessionAgentRun(
-            { cfg: policyConfig, client: client ?? null, target: value },
-            { policy: sharing.policy },
-          )?.message ??
-          sharing.authorizeTarget(value, sharingRole)?.message ??
+        : (sharing.authorizeRun(value, true)?.message ??
+          sharing.authorizeTarget(value, sharingRole, true)?.message ??
           (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
             ? "send blocked by session policy"
             : null));
     viewerFacts.workspaceReadDisabledReason =
       rowMode === "sidebar" || rowMode === "dashboard"
         ? undefined
-        : (authorizeSessionWorkspaceRead(
-            { cfg: policyConfig, client: client ?? null, target: value, unscopedHostRoot },
-            { policy: sharing.policy },
-          )?.message ?? null);
+        : (sharing.authorizeWorkspaceRead(value, unscopedHostRoot)?.message ?? null);
     return viewerFacts;
   };
   const projectModels = (row: GatewaySessionRow, view?: SessionRowView) =>
@@ -458,12 +467,11 @@ export function prepareProjectedSessionPresentation(
       facts[15] = run?.active;
       facts[16] = run?.status;
       facts[17] = preparedFacts;
-      facts[18] =
-        sessionTitleRequests.get({
-          storePath: record.storeTarget.storePath,
-          sessionKey: record.key,
-          sessionId: record.entry.sessionId,
-        }) !== undefined;
+      facts[18] = sessionTitleRequests.isPending({
+        storePath: record.storeTarget.storePath,
+        sessionKey: record.key,
+        sessionId: record.entry.sessionId,
+      });
       facts[19] = resolveActiveSessionAgentStatus(record.entry.agentStatus, now);
       // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
       facts[20] =
@@ -480,7 +488,7 @@ export function prepareProjectedSessionPresentation(
           facts.push(id);
         }
       }
-      if (!sameFacts(published?.facts, facts)) {
+      if (!sameSessionRowFacts(published?.facts, facts)) {
         // Prior views may supply immutable fields, but must not keep retired row graphs alive.
         // Reusing audience variants is best effort across garbage collection.
         const previousViews = publicationState.previousViews.get(
@@ -513,7 +521,7 @@ export function prepareProjectedSessionPresentation(
             client: client ?? null,
             sessionKey: value.canonicalKey,
             target: value,
-          }) && !sharing.authorizeTarget(value, recipientView?.sharingRole)
+          }) && !sharing.authorizeTarget(value, recipientView?.sharingRole, true)
         : undefined;
     const signature = views && optionKey(options);
     recipientFacts[0] = recipientView?.visibility;
@@ -528,9 +536,17 @@ export function prepareProjectedSessionPresentation(
       ? visibility.swarmKey
       : excludedSwarmKeys && JSON.stringify([...excludedSwarmKeys]);
     recipientFacts[7] = recipientView?.workspaceReadDisabledReason;
-    recipientFacts.length = 8;
+    const personalPin = options.personalPins
+      ? personalSessionPinRank(options.personalPins, record.key, record.entry, now) > 0
+      : recipient.omitSharedPins || options.personalPins === null
+        ? null
+        : undefined;
+    recipientFacts[8] = recipientView?.invitedAccess;
+    recipientFacts[9] = recipientView?.invitedPermission;
+    recipientFacts[10] = personalPin;
+    recipientFacts.length = 11;
     const variants = signature === undefined ? undefined : views?.get(signature);
-    const current = variants?.find((cached) => sameFacts(cached.facts, recipientFacts));
+    const current = variants?.find((cached) => sameSessionRowFacts(cached.facts, recipientFacts));
     if (current) {
       return projectModels(current.row, current);
     }
@@ -540,7 +556,7 @@ export function prepareProjectedSessionPresentation(
         : published?.previousViews
             ?.deref()
             ?.get(signature)
-            ?.find((cached) => sameFacts(cached.facts, recipientFacts));
+            ?.find((cached) => sameSessionRowFacts(cached.facts, recipientFacts));
     const row = projection.present(record, {
       ...options,
       now,
@@ -552,6 +568,7 @@ export function prepareProjectedSessionPresentation(
       preparedRunState: temporal,
       backgroundProcessCount,
     });
+    presentSessionPin(row, personalPin);
     row.childOwnerSessionKeys = [...childOwnerSessionKeys];
     row.fastMode = presentFastMode(row.fastMode);
     row.effectiveFastMode = presentFastMode(row.effectiveFastMode);
@@ -628,25 +645,29 @@ export function prepareProjectedSessionPresentation(
     },
     select(
       opts: SessionsListParams,
-      select: (retained?: Map<object, SessionListFilteredEntries>) => SessionEntrySelection,
+      select: (
+        retained?: Map<object, SessionListFilteredEntries>,
+        invited?: boolean,
+      ) => SessionEntrySelection,
+      personalPins?: PersonalPinOrder,
     ) {
-      // Membership, clocks, and transient runs are not owned by metadata partitions.
-      const live = opts.activeOnly || opts.activityPulseBoundaries;
-      if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
+      // Clocks and transient runs are not owned by metadata or membership publications.
+      if (opts.search || opts.spawnedBy || opts.activeOnly || opts.activityPulseBoundaries) {
         return select();
       }
-      const view = listView(opts, true);
+      const view = listView(opts, true, personalPins);
       if (
         view.selectedAt !== undefined &&
-        opts.activeMinutes !== undefined &&
         (now < view.selectedAt || now > (view.activityExpiresAt ?? Infinity))
       ) {
         view.selection = undefined;
         view.partitions = undefined;
       }
       if (!view.selection) {
+        view.invited = entryFilter !== undefined && sharing.sessionCap === "invited";
         const { entries, ownerSessionProfiles, ...facets } = select(
           publicationState?.lists.partitions(view),
+          view.invited,
         );
         Object.freeze(entries);
         view.selection = Object.freeze({
@@ -660,10 +681,10 @@ export function prepareProjectedSessionPresentation(
       }
       return view.selection;
     },
-    list(rows: GatewaySessionRow[], opts: SessionsListParams) {
+    list(rows: GatewaySessionRow[], opts: SessionsListParams, personalPins?: PersonalPinOrder) {
       // Current authorization and temporal presentation precede reuse. The retained vector
       // owns bytes only; it never retains a connection or grants permission to a later read.
-      const view = listView(opts);
+      const view = listView(opts, false, personalPins);
       const conditional =
         view.conditional === true ||
         opts.rowMode === "sidebar" ||

@@ -108,8 +108,7 @@ it.each([true, false])(
       const pending = await listSessionPendingInputs(scope);
       expect(pending.total).toBe(1);
       const expectRetained = async () => {
-        expect(authority.assertCurrent).not.toThrow();
-        expect(authority.signal?.aborted).toBe(false);
+        expect(authority.signal?.aborted).not.toBe(true);
         expect(isRpcSourceQueued(active)).toBe(true);
         expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
         expect(await listSessionPendingInputs(scope)).toEqual(pending);

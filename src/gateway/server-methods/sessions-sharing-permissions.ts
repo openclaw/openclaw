@@ -10,11 +10,19 @@ import { profileCatalogPath } from "../../state/user-profile-identity.read.js";
 import {
   listResidentUserProfileDisplayFacts,
   readResidentUserProfileRevision,
+  readResidentUserProfileId,
 } from "../../state/user-profile-list.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { operatorRoleSubject } from "../operator-role-enforcement.js";
-import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
+import {
+  resolveOperatorRolePolicyForAssignment,
+  resolveOperatorRolePolicyForProfile,
+} from "../operator-role-policy.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
+import {
+  resolveSessionMemberAccess,
+  resolveSessionInvitationAccess,
+} from "../session-member-access.js";
 import {
   authorizeOwnSessionMutation,
   authorizeSessionAgentRun,
@@ -24,6 +32,20 @@ import {
 import { prepareProjectedSessionSharing } from "../session-sharing-read.js";
 import { sessionSuggestionAddPermissionError } from "./sessions-suggestions-access.js";
 import type { GatewayClient } from "./types.js";
+
+/** Role ceilings govern people; non-human members retain unspecified access. */
+export function resolveSessionMemberInvitationAccess(
+  identityId: string,
+  access: SessionMemberPermissionLevel | undefined,
+  cfg: OpenClawConfig,
+) {
+  return resolveSessionInvitationAccess(
+    readResidentUserProfileId(identityId)
+      ? resolveOperatorRolePolicyForProfile(identityId, cfg)
+      : undefined,
+    access,
+  );
+}
 
 /** Synchronous profile-policy projection, not a login or transport admission. */
 export function projectSessionMemberPermissions(params: {
@@ -35,7 +57,7 @@ export function projectSessionMemberPermissions(params: {
   profiles: ReturnType<typeof listResidentUserProfileDisplayFacts>;
 }): SessionMemberPermission[] {
   const visibility = resolveSessionVisibility(params.target.entry);
-  if (visibility === "shared" || visibility === "draft" || !params.client) {
+  if (!params.client) {
     return [];
   }
   const pathname = profileCatalogPath({});
@@ -88,6 +110,31 @@ export function projectSessionMemberPermissions(params: {
       profile.githubLogin ?? null,
       operatorRoleSubject(profile),
     );
+    const ceiling =
+      policy?.sessions.others === "invited" ? policy.sessions.maxInvitedAccess : undefined;
+    if (ceiling) {
+      const levels = ["read", "suggest", "send"] as const;
+      const member = params.members.find((value) => value.identityId === profile.profileId);
+      const access = resolveSessionMemberAccess({
+        policy,
+        scopes: policy?.scopes ?? [],
+        creator: false,
+        admin: false,
+        member: { present: Boolean(member), access: member?.access },
+        // Draft visibility suspends access; its sharing editor still shows the saved bounded grant.
+        visibility: visibility === "draft" ? "read-only" : visibility,
+      });
+      permissions.push({
+        identityId: profile.profileId,
+        invitation: member ? "member" : "available",
+        level: access.access === "suggest" || access.access === "send" ? access.access : "read",
+        options: levels.slice(0, levels.indexOf(ceiling) + 1),
+      });
+      continue;
+    }
+    if (visibility === "shared" || visibility === "draft") {
+      continue;
+    }
     // With no named policy, the profile has no configured scope ceiling. A device can still be narrower.
     const scopes = policy?.scopes ?? ["operator.read", "operator.write"];
     const client: GatewayClient = {
@@ -123,7 +170,7 @@ export function projectSessionMemberPermissions(params: {
     const canSuggest = authorizeOperatorScopesForMethod("session.suggestions.add", scopes).allowed;
     const level = (member: boolean): SessionMemberPermissionLevel => {
       const access = member ? sharing(true) : baseline;
-      if (canStart && !access.authorizeTarget(params.target)) {
+      if (canStart && !access.authorizeTarget(params.target, undefined, true)) {
         return "send";
       }
       if (

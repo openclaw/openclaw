@@ -432,7 +432,7 @@ export function registerDeliveryRetryOwnerTests({
 
   it("keeps the announce deadline waiting for its live requester, then expires an orphan", async () => {
     await useRetryTimers();
-    const finished = createDeferredCore<"retryable">();
+    const finished = createDeferredCore<"undelivered">();
     const announceStarted = createDeferredCore();
     const announce = vi.fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>(async () => {
       announceStarted.resolve();
@@ -478,7 +478,7 @@ export function registerDeliveryRetryOwnerTests({
       expect(signal.aborted).toBe(true);
     } finally {
       clearInterval(progress);
-      finished.resolve("retryable");
+      finished.resolve("undelivered");
       await requester.finish();
       await join();
     }
@@ -496,7 +496,7 @@ export function registerDeliveryRetryOwnerTests({
         throw new Error("descendant preparation failed");
       });
       const runSubagentAnnounceFlow = vi.fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>(
-        async () => "retryable",
+        async () => "undelivered",
       );
       using run = fixture(
         {

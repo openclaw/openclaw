@@ -1,17 +1,28 @@
+import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { NODE_SERVICE_KIND, resolveGatewayProfileSuffix } from "../../daemon/constants.js";
+import { resolveNodeService } from "../../daemon/node-service.js";
 import {
   findServiceOwnershipRefusal,
   hasGatewayServiceStopUnsafeError,
 } from "../../daemon/service-inspection-error.js";
+import {
+  gatewayServiceCommandMatchesRoot,
+  resolveServiceEntrypointIndex,
+} from "../../daemon/service-layout.js";
 import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { adoptCandidateManagedServiceStop } from "../../infra/update-candidate-predecessor-stop.js";
 import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  hasCommandProcessCleanupError,
+  ignoreNonCleanupCommandError,
+} from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
-import { describeNodeUpdateRestart } from "../../update/node-service-notice.js";
+import { formatCliCommand } from "../command-format.js";
+import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import {
@@ -36,6 +47,75 @@ import {
   tryInstallShellCompletion,
 } from "./update-command-service.js";
 import { createPostUpdateExceptionResult } from "./update-command-terminal-publication.js";
+
+/** The in-place package route (including shipped-driver finalization) never restarts the node. */
+async function appendNodeOnlyPackageUpdateAdvice(
+  params: FinishUpdateParams,
+  result: UpdateRunResult,
+): Promise<void> {
+  if (
+    result.status !== "ok" ||
+    params.coreAlreadyCurrent ||
+    !params.mutationStarted ||
+    !["npm", "pnpm", "bun"].includes(result.mode) ||
+    params.preManagedServiceStop?.serviceUpdateVerdict?.kind !== "absent"
+  ) {
+    return;
+  }
+  const root = result.root ?? params.root;
+  const env = params.opts.run?.env ?? params.ownedManagedUpdateEnv ?? process.env;
+  const service = resolveNodeService();
+  const options = { timeoutMs: 5_000, requireEffective: true };
+  const command = await service.readCommand(env, options).catch(ignoreNonCleanupCommandError);
+  if (!command) {
+    return;
+  }
+  const kind = command.environment?.OPENCLAW_SERVICE_KIND?.trim();
+  const entry = resolveServiceEntrypointIndex(command.programArguments);
+  // Only the default node supports a pre-marker service definition for lifecycle commands.
+  const legacyNode =
+    !kind &&
+    !resolveGatewayProfileSuffix(env.OPENCLAW_PROFILE) &&
+    entry !== undefined &&
+    command.programArguments[entry + 1] === "node" &&
+    command.programArguments[entry + 2] === "run";
+  if (
+    (kind !== NODE_SERVICE_KIND && !legacyNode) ||
+    (await gatewayServiceCommandMatchesRoot(root, command).catch(ignoreNonCleanupCommandError)) !==
+      true
+  ) {
+    return;
+  }
+  const runtime = await service
+    .readRuntime(env, { ...options, commandInspection: { kind: "present", command } })
+    .catch(ignoreNonCleanupCommandError);
+  if (runtime?.status !== "running") {
+    return;
+  }
+  const entrypoint = path.join(root, "openclaw.mjs");
+  const executable =
+    process.platform === "win32"
+      ? `& ${quotePowerShellArg(process.execPath)} ${quotePowerShellArg(entrypoint)}`
+      : [process.execPath, entrypoint].map(quoteCliArg).join(" ");
+  const restart = formatCliCommand("openclaw node restart", env).replace(
+    "openclaw",
+    () => executable,
+  );
+  const pid = runtime.pid ? ` (PID ${runtime.pid})` : "";
+  const advice = `Node service is still running${pid}; this update did not restart it. When node work is idle, run \`${restart}\` to load the updated package.`;
+  result.steps.push({
+    name: "advisory:node-restart",
+    command: "describe node package activation",
+    cwd: root,
+    durationMs: 0,
+    exitCode: 0,
+    stdoutTail: advice,
+    diagnostics: [advice],
+  });
+  if (!params.opts.json) {
+    defaultRuntime.log(advice);
+  }
+}
 
 export async function preparePostUpdateService(
   params: FinishUpdateParams,
@@ -185,6 +265,9 @@ export async function completePostUpdateMaintenance(
   assertCurrent: () => void,
   context: { root: string },
 ): Promise<void> {
+  assertCurrent();
+  await appendNodeOnlyPackageUpdateAdvice(params, result);
+  assertCurrent();
   const run = params.opts.run;
   const plugins = result.postUpdate?.plugins;
   // Plugin work runs before activation. What it left undone is owed only now, on a kept result.
@@ -227,25 +310,6 @@ export async function completePostUpdateMaintenance(
     // A current core refreshes completion only when an earlier update still owes it, unprompted.
     await retryOwedSteps(() => refreshShellCompletion(true));
     return;
-  }
-  if (result.status === "ok" && !params.gitRelease) {
-    // Candidate finalization also serves the first hop from shipped in-place updaters.
-    const message = await describeNodeUpdateRestart({
-      root: result.root ?? params.root,
-      env: params.opts.run?.env ?? params.ownedManagedUpdateEnv ?? process.env,
-      activation: "installed",
-    });
-    if (message) {
-      defaultRuntime.error(message);
-      result.steps.push({
-        name: "node-service-inspection",
-        command: "",
-        cwd: result.root ?? params.root,
-        durationMs: 0,
-        exitCode: 0,
-        warnings: [message],
-      });
-    }
   }
   const startedAt = performance.now();
   using _ = {

@@ -26,10 +26,12 @@ import { resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
 import { reloadManagedPlugin } from "../../plugins/management-mutations.js";
+import { listManagedPlugins } from "../../plugins/management-service.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { TemplateAddMutationError } from "../../templates/add-mutation-error.js";
 import { assertTemplatesEnabled, TemplatesDisabledError } from "../../templates/availability.js";
 import { ClawHubSourceError } from "../../templates/clawhub-source.js";
+import type { TemplateSetupOpening } from "../../templates/conversation.js";
 import { createTemplateCronGateway } from "../../templates/cron-gateway.js";
 import {
   templateCronGatewayJobMatchesRef,
@@ -50,7 +52,10 @@ import { TemplateGatewayConsentError } from "../../templates/gateway-plugin-cons
 import { TemplateSkillConsentError } from "../../templates/gateway-skill-consent.js";
 import { resolveTemplatePreferredModel } from "../../templates/preferred-model.js";
 import { TemplateProjectError } from "../../templates/project.js";
-import { buildTemplateOpeningMessage } from "../../templates/setup-prompt.js";
+import {
+  buildTemplateOpeningMessage,
+  type TemplateSetupPluginState,
+} from "../../templates/setup-prompt.js";
 import { measureTemplateAddStage, withTemplateAddTimings } from "../../templates/timings.js";
 import type { TemplateAddPlan } from "../../templates/types.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -73,6 +78,28 @@ function templateDeviceTimeZone(
   const zone = client?.connect.client?.timeZone;
   // Intl also accepts numeric offsets; they aren't IANA zones and can't follow DST.
   return zone && !/^[+-]/.test(zone) ? resolveTimezone(zone) : undefined;
+}
+
+/**
+ * What this Gateway's inventory says about each ClawHub plugin the Template references.
+ * The first turn would otherwise spend a model round trip per plugin asking for the same
+ * facts. Undefined leaves one lookup to the agent.
+ */
+function declaredPluginStates(
+  opening: TemplateSetupOpening,
+  inventory: Awaited<ReturnType<typeof listManagedPlugins>>["plugins"] | undefined,
+): TemplateSetupPluginState[] | undefined {
+  const declared = opening.declared?.plugins;
+  if (!declared?.length) {
+    return declared ? [] : undefined;
+  }
+  return inventory
+    ? declared.map((packageName) => ({
+        packageName,
+        state:
+          inventory.find((plugin) => plugin.packageName === packageName)?.state ?? "not-installed",
+      }))
+    : undefined;
 }
 
 // One terminal record per request; never serialize request data or caught errors.
@@ -278,6 +305,14 @@ export async function applyTemplateAddForRequest(
       );
     }
   };
+  // Asked for now, while the Template is fetched and written, so it is ready by the first turn.
+  const pluginInventory =
+    "mode" in params
+      ? listManagedPlugins({ config: context.getRuntimeConfig(), cachedCatalogOnly: true }).then(
+          (listed) => listed.plugins,
+          () => undefined,
+        )
+      : Promise.resolve(undefined);
   options.onStage?.("apply");
   const result = await withTemplateAddTimings(
     options.req.id,
@@ -315,7 +350,15 @@ export async function applyTemplateAddForRequest(
                       agent.agentId,
                       agent.sessionKey,
                       "template",
-                      buildTemplateOpeningMessage(opening, agent),
+                      buildTemplateOpeningMessage(
+                        opening,
+                        agent,
+                        // Use the inventory only if it is already here; the greeting never waits for it.
+                        declaredPluginStates(
+                          opening,
+                          await Promise.race([pluginInventory, Promise.resolve(undefined)]),
+                        ),
+                      ),
                       () => {
                         assertCurrent();
                         publishProgress("agent-ready", agent);

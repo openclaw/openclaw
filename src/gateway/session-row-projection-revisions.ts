@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { recordSessionRowSelectionReset } from "../infra/gateway-work-metrics.js";
 import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
@@ -167,7 +166,7 @@ export function createSessionRowProjectionRevisions(
         previous.generation !== row.generation ||
         previous.entry?.sessionId !== row.entry?.sessionId ||
         previous.entry?.lifecycleRevision !== row.entry?.lifecycleRevision ||
-        !isDeepStrictEqual(previous.parents, row.parents)
+        previous.parents !== row.parents
       ) {
         taskPublication = undefined;
       }

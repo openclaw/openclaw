@@ -439,6 +439,29 @@ suite.define(() => {
     });
   });
 
+  it("leaves a held profile save without waiting for its reply", async () => {
+    await suite.withPage(editorPageOptions, async ({ page }) => {
+      const gateway = await workerGateway(
+        page,
+        "route-initial",
+        profilesConfig({ pending: configuredCloudWorkerProfile() }),
+      );
+      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.locator(".settings-disclosure > summary").click();
+      await exactButton(page, "Edit: pending").click();
+      await gateway.deferNext("config.patch");
+      await exactButton(page, "Save").click();
+      await gateway.waitForRequest("config.patch");
+      await expect.poll(() => page.getByLabel("Crabbox backend").isDisabled()).toBe(true);
+      await evaluateControlUiContext(page, (app) => app.navigate("appearance"));
+      await page.locator("openclaw-cloud-workers-page").waitFor({ state: "detached" });
+      expect(new URL(page.url()).pathname).toBe("/settings/appearance");
+      await publishProfiles(gateway, { pending: configuredCloudWorkerProfile() }, "route-saved");
+      expect(await gateway.getRequests("config.patch")).toHaveLength(1);
+      expect(await page.getByText("Profile saved", { exact: true }).count()).toBe(0);
+    });
+  });
+
   it.each([
     {
       name: "provider replacement",

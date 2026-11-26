@@ -15,7 +15,7 @@ export type ReleasePublishInputs = {
   targetSha?: string;
   npmDistTag?: string;
   pluginSdkApiAcknowledgement: string;
-  pluginSdkApiEvidenceDigest?: string;
+  pluginSdkApiEvidenceDigest?: string | null;
   npmDecisions: ReleaseNpmDecision[] | undefined;
 };
 
