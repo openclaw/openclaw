@@ -20,7 +20,7 @@ import {
 } from "../image-sanitization.js";
 import { readNodePermissionError } from "../node-permission-error.js";
 import type { AgentToolResult } from "../runtime/index.js";
-import { markToolExecutionRefused } from "../tool-effect-receipt.js";
+import { markToolEffectReceipt, markToolExecutionRefused } from "../tool-effect-receipt.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
 import { ComputerToolSession } from "./computer-tool-node.js";
@@ -573,8 +573,21 @@ export function createComputerTool(options?: {
           toolCallId,
           signal,
         });
-        if (actResult.observation || isComputerObservationAction(action, params.dialogAction)) {
-          return await deliverObservation(actResult);
+        const isObservation = isComputerObservationAction(action, params.dialogAction);
+        // A successful follow-up read cannot strengthen the original action's evidence.
+        const withActionEffectReceipt = (result: AgentToolResult<unknown>) =>
+          markToolEffectReceipt(
+            result,
+            isObservation
+              ? actResult.ok
+                ? "read_completed"
+                : "failed_no_effect"
+              : actResult.ok && actResult.effect === "confirmed"
+                ? "mutation_committed"
+                : "uncertain",
+          );
+        if (actResult.observation || isObservation) {
+          return withActionEffectReceipt(await deliverObservation(actResult));
         }
         // Browser preparation can launch a different window; its old native target is not an after-image.
         const windowRef = "windowRef" in wireParams ? wireParams.windowRef : undefined;
@@ -595,32 +608,38 @@ export function createComputerTool(options?: {
             if (!observation.ok || !observation.observation?.observationId) {
               throw new Error(computerActResultText("get_window_state", observation));
             }
-            return await deliverObservation(observation, "get_window_state", {
-              action,
-              result: actResult,
-            });
+            return withActionEffectReceipt(
+              await deliverObservation(observation, "get_window_state", {
+                action,
+                result: actResult,
+              }),
+            );
           }
-          return await captureAndDeliverScreenshot({
-            noteLines: [computerActResultText(action, actResult)],
-            resolved,
-            action,
-            toolCallId,
-            signal,
-          });
+          return withActionEffectReceipt(
+            await captureAndDeliverScreenshot({
+              noteLines: [computerActResultText(action, actResult)],
+              resolved,
+              action,
+              toolCallId,
+              signal,
+            }),
+          );
         } catch (err) {
           session.setTarget(resolved.target);
           signal?.throwIfAborted();
-          // Input landed; a failed follow-up observation should not fail the action.
+          // Keep the action's receipt when only its follow-up observation fails.
           const permissionMissing = readNodePermissionError(err);
-          return textResult(
-            `${computerActResultText(action, actResult)}\nfollow-up ${observeWindow ? "observation" : "screenshot"} failed: ${formatErrorMessage(err)}`,
-            {
-              ...computerTargetDetails(resolved.target),
-              action,
-              screenIndex: resolved.target.screenIndex,
-              result: actResult,
-              ...(permissionMissing ? { permissionMissing } : {}),
-            },
+          return withActionEffectReceipt(
+            textResult(
+              `${computerActResultText(action, actResult)}\nfollow-up ${observeWindow ? "observation" : "screenshot"} failed: ${formatErrorMessage(err)}`,
+              {
+                ...computerTargetDetails(resolved.target),
+                action,
+                screenIndex: resolved.target.screenIndex,
+                result: actResult,
+                ...(permissionMissing ? { permissionMissing } : {}),
+              },
+            ),
           );
         }
       }),

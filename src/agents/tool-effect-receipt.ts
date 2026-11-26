@@ -9,8 +9,19 @@ export type ToolEffectReceipt = Readonly<{
 }>;
 
 const NO_START_RECEIPT: ToolEffectReceipt = Object.freeze({ state: "not_started" });
+const effectReceipts = new WeakMap<object, ToolEffectReceipt>();
 type ToolExecutionRefusal = Readonly<{ kind: "gated" | "blocked"; reason: string }>;
 const executionRefusals = new WeakMap<object, ToolExecutionRefusal>();
+
+/** Record an execution owner's settled effect without exposing forgeable result fields. */
+export function markToolEffectReceipt<T extends object>(
+  result: T,
+  state: Exclude<ToolEffectReceipt["state"], "not_started">,
+): T {
+  const receipt: ToolEffectReceipt = Object.freeze({ state });
+  effectReceipts.set(receipt, receipt);
+  return attachInternalToolResultProvenance(result, receipt);
+}
 
 /** Host refusals are not successful tool outputs, even when presented as guidance. */
 export function markToolExecutionRefused<T extends object>(
@@ -40,11 +51,14 @@ export function markToolExecutionNotStarted<T>(value: T): T {
 }
 
 export function readToolEffectReceipt(value: unknown): ToolEffectReceipt | undefined {
-  return typeof value === "object" &&
-    value !== null &&
-    (getInternalToolResultProvenance(value) === NO_START_RECEIPT || readToolExecutionRefusal(value))
-    ? NO_START_RECEIPT
-    : undefined;
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const provenance = getInternalToolResultProvenance(value);
+  if (provenance === NO_START_RECEIPT || readToolExecutionRefusal(value)) {
+    return NO_START_RECEIPT;
+  }
+  return provenance ? effectReceipts.get(provenance) : undefined;
 }
 
 export function consumeToolExecutionNotStarted(value: unknown): boolean {
