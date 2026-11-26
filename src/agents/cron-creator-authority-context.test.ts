@@ -36,7 +36,7 @@ import * as gatewayModule from "./tools/gateway.js";
 function admittedFixture(
   runId: string,
   kind: "local" | "unknown" = "unknown",
-  source: "control-ui-admin" | "channel-owner" = "control-ui-admin",
+  source: "operator" | "channel-owner" = "operator",
   callerScopedCreation?: true,
 ) {
   const caller = admittedCaller(runId);
@@ -45,7 +45,6 @@ function admittedFixture(
     runId,
     { kind },
     { source },
-    undefined,
     undefined,
     undefined,
     callerScopedCreation,
@@ -163,10 +162,10 @@ it("binds an explicit exact-run origin and expires retained operator authority",
   expect(() => retained?.assertActive()).toThrow();
 });
 it.each([
-  ["local", "control-ui-admin", undefined],
-  ["unknown", "control-ui-admin", undefined],
+  ["local", "operator", undefined],
+  ["unknown", "operator", undefined],
   ["unknown", "channel-owner", undefined],
-  ["unknown", "control-ui-admin", true],
+  ["unknown", "operator", true],
 ] as const)(
   "separates management, creation, and runtime authority for %s/%s (fresh=%s)",
   async (kind, source, callerScopedCreation) => {
@@ -251,7 +250,7 @@ it("exposes add but refuses incomplete capture and retired requester authority",
   setRuntimeConfigSnapshot({});
   onTestFinished(clearRuntimeConfigSnapshot);
   const runId = "remote-admin-capture";
-  const { authority, caller, run } = admittedFixture(runId, "unknown", "control-ui-admin", true);
+  const { authority, caller, run } = admittedFixture(runId, "unknown", "operator", true);
   caller.sessionKey = "agent:main:remote";
   await run(async () => {
     const callGatewayTool = vi.fn();

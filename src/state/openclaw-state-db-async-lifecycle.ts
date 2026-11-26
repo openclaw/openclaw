@@ -122,6 +122,7 @@ export function createOpenClawDatabaseMaintenanceScope(
     ownsSchemaMaintenance:
       options?.schemaMaintenance === true || parent?.ownsSchemaMaintenance === true,
     sqliteIntegrityCheck: options?.sqliteIntegrityCheck ?? parent?.sqliteIntegrityCheck,
+    assertAdmissionLifecycle,
     assertOwnerCurrent(access) {
       assertOpen();
       if (checkingOwner) {

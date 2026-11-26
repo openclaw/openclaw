@@ -586,16 +586,15 @@ describe("CLI attempt execution", () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const manifestMetadataSnapshot = params.configuredSelection?.metadataSnapshot;
     const modelManifestContext = { manifestPlugins: manifestMetadataSnapshot ?? [] };
-    const configuredThinkingCatalog = params.configuredSelection
-      ? buildConfiguredModelCatalog({ cfg, ...modelManifestContext })
-      : [];
     const prepared: Parameters<typeof runEmbeddedAgentAttempt>[0]["prepared"] = {
       ...params,
       opts,
       cfg,
       body: opts.message,
       transcriptBody: opts.message,
-      configuredThinkingCatalog,
+      configuredThinkingCatalog: params.configuredSelection
+        ? buildConfiguredModelCatalog({ cfg, ...modelManifestContext })
+        : [],
       normalizedSpawned: {},
       agentCfg: undefined,
       thinkOverride: undefined,
@@ -621,6 +620,7 @@ describe("CLI attempt execution", () => {
       acpManager: getAcpSessionManager(),
       acpResolution: null,
       runLease: undefined,
+      releaseParticipation: undefined,
     };
     const modelSelection: Parameters<typeof runEmbeddedAgentAttempt>[0]["modelSelection"] =
       params.configuredSelection

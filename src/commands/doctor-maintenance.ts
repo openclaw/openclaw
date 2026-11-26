@@ -80,6 +80,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   let stopped: PreManagedServiceStop | undefined;
   let serviceVerdict: PreManagedServiceStop["serviceUpdateVerdict"];
   let stopDeadline: number | undefined;
+  let stoppedAtMs: number | undefined;
   const warnings: string[] = [];
   const warn = (message: string) => {
     warnings.push(message);
@@ -296,6 +297,10 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       });
     }
     params.runtime.log("Gateway restarted and verified after Doctor maintenance.");
+    if (before.stopped && stoppedAtMs !== undefined) {
+      const seconds = (Date.now() - stoppedAtMs) / 1000;
+      params.runtime.log(`The Gateway was stopped for ${seconds.toFixed(1)} s.`);
+    }
     if (staleReplacement) {
       const warning = `Warning: Replaced stale Gateway PID ${staleReplacement.pid ?? "unknown"} through its service manager; verified ${staleReplacement.version} build ${staleReplacement.buildId} after Doctor maintenance.`;
       warn(warning);
@@ -457,7 +462,9 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
           // State admission may refuse a live owner before a maintenance handle exists.
           warn(serviceVerdict.message);
         }
-        if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
+        // An offline service is not proof that no update owns it: the package updater
+        // replaces the live tree after its stop, outside the service operation lock.
+        if (inspection.serviceUpdateVerdict?.kind !== "absent") {
           assertAuthority(() => {
             const admitted = resolveDoctorUpdateAdmission(env);
             // Storage guards can run inside a transaction; receipts belong to service admission.
@@ -551,6 +558,8 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
                           warn,
                           onStopped: (before) => {
                             stopped = before;
+                            // Reported when the native stop completes; preparation kept serving.
+                            stoppedAtMs ??= Date.now();
                           },
                         });
                       // The drain's auth probe borrows state custody acquired before stopping.
@@ -585,10 +594,11 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
                       });
                     }
                     if (stopped?.stopped) {
+                      stoppedAtMs ??= Date.now();
                       params.runtime.log("Stopped the managed Gateway for Doctor repair.");
                       // Forced termination cannot run our restoration finalizer.
                       params.runtime.log(
-                        `Doctor restores the managed Gateway after repairs settle. If forcibly terminated: ${formatDoctorRecoveryHint(stopped.serviceEnv ?? env)}`,
+                        `Doctor stopped it because its repairs write state that the running Gateway also writes, and restores it after repairs settle. If forcibly terminated: ${formatDoctorRecoveryHint(stopped.serviceEnv ?? env)}`,
                       );
                     }
                     await admitRepair();

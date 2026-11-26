@@ -179,7 +179,7 @@ export function parseStateLeaseProcessOwner(
 
 export function readStateLeaseProcessOwnerStatus(
   owner: StateLeaseProcessOwner | null,
-  _heartbeatAt?: number,
+  gatewayHeartbeatAt?: number,
 ): "live" | "dead" | "unknown" {
   if (!owner) {
     return "unknown";
@@ -187,6 +187,7 @@ export function readStateLeaseProcessOwnerStatus(
   const namespace = classifyGatewayOwnerProcessNamespace(owner.processNamespace, {
     ownerHost: owner.host,
     machineIdentity: owner.machineIdentity,
+    readGatewayHeartbeat: gatewayHeartbeatAt === undefined ? undefined : () => gatewayHeartbeatAt,
   });
   if (namespace !== "same") {
     return namespace;

@@ -102,7 +102,8 @@ export type UpdateRunListInput = {
   reason?: string;
   excludeReason?: string;
   includeRunId?: string;
-  completedStep?: { step: string; detail: string };
+  excludeRunId?: string;
+  completedStep?: string;
 };
 
 export function readUpdateRuns(db: EngineConnection, input: UpdateRunListInput) {
@@ -114,6 +115,9 @@ export function readUpdateRuns(db: EngineConnection, input: UpdateRunListInput) 
     .selectAll();
   if (input.active) {
     query = query.where("status", "=", "running");
+  }
+  if (input.excludeRunId) {
+    query = query.where("run_id", "!=", input.excludeRunId);
   }
   if (input.succeeded) {
     query = query.where("status", "=", "succeeded");
@@ -137,13 +141,8 @@ export function readUpdateRuns(db: EngineConnection, input: UpdateRunListInput) 
           .select("step.key")
           .where((step) =>
             step.and([
-              step(jsonExtractText(db, step.ref("step.value"), "step"), "=", completedStep.step),
+              step(jsonExtractText(db, step.ref("step.value"), "step"), "=", completedStep),
               step(jsonExtractText(db, step.ref("step.value"), "status"), "=", "completed"),
-              step(
-                jsonExtractText(db, step.ref("step.value"), "detail"),
-                "=",
-                completedStep.detail,
-              ),
             ]),
           ),
       ),

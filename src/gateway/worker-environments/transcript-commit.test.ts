@@ -337,6 +337,7 @@ describe("worker transcript commit application", () => {
         onUserTurnMediaPersisted,
         runId,
         client: null,
+        senderIsOwner: false,
         context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
       });
 

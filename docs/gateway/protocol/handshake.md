@@ -126,6 +126,13 @@ reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
 
+The `session-approval-recipients-v1` hello capability allows authenticated people
+without global `operator.approvals` scope to request session approval replay with
+`includeApprovals: true`. The Gateway selects the creator, reviewer, and own-turn
+status recipients; this opt-in grants no review authority. Without that advertised
+capability, clients must keep approval opt-in limited to approvals-scoped operators
+and subscribe to the plain transcript for other readers.
+
 Optional hello fields:
 
 | Field                             | Client use                                                                                                                                                                                                                                                                                   |

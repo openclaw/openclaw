@@ -325,7 +325,7 @@ it.each([
 });
 
 describe("handleCronCliError", () => {
-  const recovery =
+  const machineMessage =
     "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
   const missingJob = () =>
     new GatewayClientRequestError({
@@ -333,15 +333,15 @@ describe("handleCronCliError", () => {
       message: "transport-neutral lookup miss",
       details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
     });
-  it("renders typed lookup misses as expected machine failures", () => {
+  it("guides typed lookup misses to disabled automations without changing machine output", () => {
     const { thrown, json, stderr } = renderJsonError(
       missingJob(),
-      ["cron", "show", "missing-job"],
+      ["cron", "get", "missing-job"],
       "Could not start the CLI.",
     );
     expect(thrown).toBeInstanceOf(ExpectedCliError);
-    expect(json).toEqual({ ok: false, error: { type: "cli_error", message: recovery } });
-    expect(stderr).toContain(recovery);
+    expect(json).toEqual({ ok: false, error: { type: "cli_error", message: machineMessage } });
+    expect(stderr).toContain("`openclaw cron list --all`");
     for (const forbidden of ["Could not start the CLI.", "openclaw doctor", "OPENCLAW_DEBUG"]) {
       expect(stderr).not.toContain(forbidden);
     }

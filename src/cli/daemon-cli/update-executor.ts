@@ -4,8 +4,8 @@ import { withGatewayServiceRebindCapture } from "../../daemon/service-rebind.js"
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { ExitError } from "../../runtime.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   withDelegatedUpdateCommandExecutor,
   type UpdateCommandChildGrant,
@@ -76,9 +76,15 @@ export async function runGatewayServiceUpdateCommand(
         fence.assertCurrent,
         async () => {
           if (action === "install" || action === "restart") {
-            const history = captureOpenClawStateWorkerContext();
-            const { prepareLegacyTrialRun } = await import("../../update/legacy-trial.js");
-            await prepareLegacyTrialRun(grant.runId, root, fence.assertCurrent, history);
+            try {
+              const { prepareLegacyTrialRun } = await import("../../update/legacy-trial.js");
+              await prepareLegacyTrialRun(grant.runId, root, fence.assertCurrent);
+            } catch (error) {
+              fence.assertCurrent();
+              createSubsystemLogger("update").warn(
+                `Could not record legacy update preparation: ${String(error)}`,
+              );
+            }
           }
           if (input.originalDefinition !== undefined) {
             if (action !== "install" || typeof input.originalDefinition !== "string") {

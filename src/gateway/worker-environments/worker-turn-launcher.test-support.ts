@@ -559,11 +559,16 @@ export function unusedEnvironments(): WorkerTurnEnvironmentService {
   };
 }
 
-export function turn(runId = "run-worker-turn", executionIdentity = false) {
+export function turn(
+  runId = "run-worker-turn",
+  options: { executionIdentity?: boolean; extraPlugins?: readonly string[] } = {},
+) {
   const config = {
-    ...(executionIdentity
+    ...(options.executionIdentity
       ? { logging: { audit: { enabled: true, executionIdentity: true } } }
       : {}),
+    // Launch the real model runtime without cold-loading unrelated bundled plugins.
+    plugins: { allow: ["openai", ...(options.extraPlugins ?? [])], slots: { memory: "none" } },
     models: {
       providers: {
         openai: {

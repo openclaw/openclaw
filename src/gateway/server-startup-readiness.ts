@@ -11,16 +11,20 @@ type GatewayReadinessLog = {
 
 export async function logGatewayReady(
   params: GatewayReadinessLog,
-  message = "gateway ready",
+  updateCanary = false,
 ): Promise<void> {
   if (params.isClosing?.()) {
     return;
   }
-  await announceGatewayInstallationReady(params.getReadiness);
+  if (!updateCanary) {
+    await announceGatewayInstallationReady(params.getReadiness);
+  }
   const prepared = await params.getReadiness.prepare();
   if (!params.isClosing?.() && prepared.publish().ready) {
     params.startupTrace?.mark("ready");
-    params.log.info(message);
+    params.log.info(
+      updateCanary ? "candidate gateway ready; autonomous sidecars suppressed" : "gateway ready",
+    );
   }
 }
 
@@ -55,7 +59,6 @@ export function createGatewayReadyAnnouncer(
     ) {
       return;
     }
-    await announceGatewayInstallationReady(params.getReadiness);
     const prepared = await params.getReadiness.prepare();
     if (
       !readyAnnounced &&

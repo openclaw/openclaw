@@ -67,8 +67,6 @@ it.each([
       { kind: "unknown" },
       { source: "channel-owner" },
       () => true,
-      undefined,
-      { senderId: "synthetic-owner", channel: "telegram" },
     )!;
     const { operationalRunInstance } = createTestAdmittedRunContext("parent");
     const approvalAuthority = runs.claimAgentRunDelegatedAuthority(operationalRunInstance);

@@ -633,6 +633,12 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     return refreshSidebarSessionList(this, { affectedAgentId });
   }
 
+  /** Gateway time crossed a saved pin's wake outside the sidebar window. */
+  wakeSidebarSessions = (): void =>
+    this.inputs.sidebarAgentsMode === "roster"
+      ? rosterActivityStore(this.context).wake()
+      : this.context.sessions.wakeList(this.sessionListQuery(this.inputs.expandedAgentId()));
+
   scheduleSidebarSessions(): Promise<void> {
     this.bindFilteredSessions();
     return scheduleFilteredSidebarSessions(this, () => this.unsubscribeFilteredSessions);

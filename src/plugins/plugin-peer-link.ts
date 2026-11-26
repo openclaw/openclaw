@@ -1,6 +1,5 @@
-import { lstatSync, statSync, type Stats } from "node:fs";
 // Owns installed plugin host links and standalone build identity admission.
-import fs from "node:fs/promises";
+import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -10,25 +9,25 @@ import {
   readStandaloneRuntimeManifestForRoot,
 } from "../../cli-invocation.mjs";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { ignoreMissingPath } from "../infra/errno.js";
+import { resolveServingGitReleasePrefix } from "../infra/git-release-paths.js";
 import { resolveUserPath } from "../infra/home-dir.js";
-import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { sameFsObject } from "../infra/path-case.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { resolvePluginInstallDir } from "./install-paths.js";
+import { resolvePluginInstallDir, resolveRegisteredGitCheckout } from "./install-paths.js";
 import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
 import { listNpmPackageDirs } from "./npm-package-dirs.js";
 import { safeRealpathSync } from "./path-safety.js";
 import {
+  linkOpenClawPeerDependency,
+  readSafePackageManifest,
+  safeRealpath,
+  type PluginPeerLinkLogger,
+} from "./plugin-peer-link-target.js";
+import {
   loadPluginCohortProtectedArtifacts,
   type PluginCohortProtectedArtifacts,
 } from "./update-cohort-protected-artifacts.js";
-
-type PluginPeerLinkLogger = {
-  info?: (message: string) => void;
-  warn?: (message: string) => void;
-};
 
 type RelinkManagedNpmRootResult = {
   repaired: number;
@@ -43,8 +42,6 @@ export type OpenClawPeerLinkAuditIssue = {
 type AuditManagedNpmRootResult = {
   issues: OpenClawPeerLinkAuditIssue[];
 };
-
-type OpenClawPeerLinkResult = "linked" | "skipped" | "unchanged";
 
 type OpenClawHostDependency = {
   declaration: "peerDependencies" | "dependencies" | "optionalDependencies";
@@ -71,36 +68,6 @@ export function resolveOpenClawHostDependency(manifest: {
   return null;
 }
 
-async function readSafePackageManifest(
-  packageDir: string,
-): Promise<Record<string, unknown> | null> {
-  const result = readRootJsonObjectSync({
-    rootDir: packageDir,
-    relativePath: "package.json",
-    boundaryLabel: "installed plugin package directory",
-  });
-  if (!result.ok) {
-    if (
-      result.reason === "open" &&
-      (result.failure.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
-    ) {
-      return null;
-    }
-    if (result.reason === "parse") {
-      throw new SyntaxError(result.error);
-    }
-    if (result.reason === "open" && result.failure.error instanceof Error) {
-      throw result.failure.error;
-    }
-    throw new Error(
-      `Could not safely read package.json from ${packageDir}: ${
-        result.reason === "open" ? result.failure.reason : result.error
-      }`,
-    );
-  }
-  return result.value;
-}
-
 async function readPackageOpenClawLinkDependencies(
   packageDir: string,
   onPackageReadError?: (error: unknown, packageDir: string) => void,
@@ -123,14 +90,6 @@ async function listManagedNpmRootPackageDirs(npmRoot: string): Promise<string[]>
     includeEntry: (entry, scoped) => entry.isDirectory() && (scoped || !entry.name.startsWith(".")),
   });
   return packageDirs.toSorted((a, b) => a.localeCompare(b));
-}
-
-async function safeRealpath(filePath: string): Promise<string | null> {
-  try {
-    return await fs.realpath(filePath);
-  } catch {
-    return null;
-  }
 }
 
 function managedPackageNameFromDir(params: { npmRoot: string; packageDir: string }): string {
@@ -278,117 +237,6 @@ export async function auditDeclaredOpenClawHostDependency(params: {
   return await auditOpenClawPeerDependencyLink(params);
 }
 
-async function ensureRealNodeModulesDir(params: {
-  installedDir: string;
-  logger: PluginPeerLinkLogger;
-  beforePersistentApply?: () => void;
-  beforePersistentEffect?: () => void | Promise<void>;
-}): Promise<string | null> {
-  const nodeModulesDir = path.join(params.installedDir, "node_modules");
-  let existing: Stats | undefined;
-  try {
-    existing = await fs.lstat(nodeModulesDir);
-  } catch (error) {
-    ignoreMissingPath(error);
-  }
-  if (!existing) {
-    await params.beforePersistentEffect?.();
-    params.beforePersistentApply?.();
-    await fs.mkdir(nodeModulesDir, { recursive: true });
-    existing = await fs.lstat(nodeModulesDir);
-  }
-  if (!existing.isDirectory() || existing.isSymbolicLink()) {
-    params.logger.warn?.(
-      `Skipping openclaw peerDependency link because ${nodeModulesDir} is not a real directory.`,
-    );
-    return null;
-  }
-  return nodeModulesDir;
-}
-
-async function linkOpenClawPeerDependency(params: {
-  hostRoot: string;
-  installedDir: string;
-  logger: PluginPeerLinkLogger;
-  beforePersistentApply?: () => void;
-  beforePersistentEffect?: () => void | Promise<void>;
-}): Promise<OpenClawPeerLinkResult> {
-  const nodeModulesDir = await ensureRealNodeModulesDir(params);
-  if (!nodeModulesDir) {
-    return "skipped";
-  }
-
-  const linkPath = path.join(nodeModulesDir, "openclaw");
-  const expectedTarget = (await safeRealpath(params.hostRoot)) ?? params.hostRoot;
-  const currentTarget = await safeRealpath(linkPath);
-  // Explicit install/repair always rebinds a relocated copy to this runtime, even for the same build.
-  if (currentTarget === expectedTarget) {
-    return "unchanged";
-  }
-
-  const warn = (error: unknown): "skipped" => {
-    params.beforePersistentApply?.();
-    params.logger.warn?.(`Failed to symlink peerDependency "openclaw": ${String(error)}`);
-    return "skipped";
-  };
-  let existing: Stats | null;
-  let previousTarget = currentTarget;
-  try {
-    existing = await fs.lstat(linkPath).catch((error: unknown) => {
-      ignoreMissingPath(error);
-      return null;
-    });
-    if (existing?.isSymbolicLink()) {
-      previousTarget = path.resolve(nodeModulesDir, await fs.readlink(linkPath));
-    }
-    if (
-      existing &&
-      !existing.isSymbolicLink() &&
-      (!existing.isDirectory() || (await readPackageName(linkPath)) !== "openclaw")
-    ) {
-      params.logger.warn?.(
-        `Skipping openclaw peerDependency link because ${linkPath} already exists and is not a symlink.`,
-      );
-      return "skipped";
-    }
-  } catch (error) {
-    return warn(error);
-  }
-  // Admit each effect through its initiating owner before submitting filesystem work.
-  if (existing) {
-    await params.beforePersistentEffect?.();
-    params.beforePersistentApply?.();
-    try {
-      if (existing.isSymbolicLink()) {
-        await fs.unlink(linkPath);
-      } else {
-        await fs.rm(linkPath, { recursive: true, force: true });
-      }
-    } catch (error) {
-      return warn(error);
-    }
-  }
-  await params.beforePersistentEffect?.();
-  params.beforePersistentApply?.();
-  try {
-    await fs.symlink(params.hostRoot, linkPath, "junction");
-    if (previousTarget) {
-      params.logger.warn?.(
-        `Repaired OpenClaw host link at ${linkPath}: ${previousTarget} -> ${expectedTarget}`,
-      );
-    }
-    params.logger.info?.(`Linked peerDependency "openclaw" -> ${params.hostRoot}`);
-    return "linked";
-  } catch (error) {
-    return warn(error);
-  }
-}
-
-async function readPackageName(packageDir: string): Promise<string | undefined> {
-  const manifest = await readSafePackageManifest(packageDir);
-  return typeof manifest?.name === "string" ? manifest.name : undefined;
-}
-
 /**
  * Symlink the host openclaw package for plugins that declare it as a dependency.
  * Plugin package managers still own third-party dependencies; this only wires
@@ -446,16 +294,52 @@ async function reconcileRegisteredHostLinks(
 ): Promise<RegisteredOpenClawHostLinkResult> {
   const extensionsRoot = path.resolve(params.extensionsDir);
   const extensionsRootRealPath = await safeRealpath(extensionsRoot);
-  if (!extensionsRootRealPath) {
-    return { repaired: 0, issues: [] };
-  }
+  const gitEnv = params.stateDir
+    ? { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir }
+    : params.env;
 
   let repaired = 0;
   const issues: OpenClawPeerLinkAuditIssue[] = [];
   for (const [pluginId, record] of Object.entries(params.installRecords).toSorted(
     ([left], [right]) => left.localeCompare(right),
   )) {
+    if (record.source === "git") {
+      const checkout = await resolveRegisteredGitCheckout(record, gitEnv);
+      if (
+        !checkout ||
+        !(await readPackageOpenClawLinkDependencies(checkout, params.onPackageReadError))
+      ) {
+        continue;
+      }
+      const issue = await auditOpenClawPeerDependencyLink({
+        packageDir: checkout,
+        packageName: pluginId,
+      });
+      if (issue) {
+        issues.push(issue);
+      }
+      if (params.mode !== "repair" || protectedArtifacts?.includesPackageDir(checkout)) {
+        continue;
+      }
+      const host = resolveOpenClawHostRoot();
+      const hostRoot = host ? await safeRealpath(host) : null;
+      const gitReleasePrefix = hostRoot ? resolveServingGitReleasePrefix(hostRoot) : null;
+      if (!hostRoot || !gitReleasePrefix) {
+        continue;
+      }
+      const result = await linkOpenClawPeerDependency({
+        installedDir: checkout,
+        hostRoot,
+        gitReleasePrefix,
+        logger: params.logger ?? {},
+        beforePersistentApply: params.beforePersistentApply,
+        beforePersistentEffect: params.beforePersistentEffect,
+      });
+      repaired += Number(result === "linked");
+      continue;
+    }
     if (
+      !extensionsRootRealPath ||
       (record.source !== "npm" && record.source !== "clawhub" && record.source !== "archive") ||
       !record.installPath?.trim()
     ) {

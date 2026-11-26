@@ -1,5 +1,6 @@
 import { wakeUpdateRunWatcher } from "../gateway/update-run-watcher.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunStep } from "../infra/update-run-record.js";
 import { updateRunStepsFromResultStep } from "../infra/update-run-step.js";
 import {
@@ -192,83 +193,96 @@ export async function settleRunFromTrial(
   trial: Trial | null,
   prefix = resolvePrefix(),
 ): Promise<void> {
-  if (!trial?.outcome || trial.reported || !trial.runId) {
-    return;
-  }
-  const outcome = trial.outcome;
-  const buildId = resolveRuntimeServiceBuildId();
-  // Only the release that actually booted may claim successful activation.
-  if (outcome.status === "succeeded" && trial.buildId && buildId !== trial.buildId) {
-    return;
-  }
-  await recordUpdateRunVerificationAsync(trial.runId, {
-    runningVersion: VERSION,
-    ...(buildId ? { runningBuildId: buildId } : {}),
-    booted: true,
-    serviceRunning: true,
-    coreReady: true,
-    ...(outcome.status === "succeeded"
-      ? { versionMatch: true }
-      : {
-          rollbackOutcome: {
-            status: "succeeded",
-            reason: outcome.reason ?? "new build failed to start",
-          },
-        }),
-  });
-  if (outcome.status === "rolled-back" && outcome.stderrTail) {
-    const stderrTail = redactSensitiveText(outcome.stderrTail, { mode: "tools" });
-    await recordUpdateRunStepAsync(trial.runId, {
-      step: "diagnostic:startup",
-      status: "completed",
-      detail: stderrTail,
-      stderrTail,
+  if (trial?.outcome && !trial.reported && trial.runId) {
+    const outcome = trial.outcome;
+    const buildId = resolveRuntimeServiceBuildId();
+    // Only the release that actually booted may claim successful activation.
+    if (outcome.status === "succeeded" && trial.buildId && buildId !== trial.buildId) {
+      return;
+    }
+    await recordUpdateRunVerificationAsync(trial.runId, {
+      runningVersion: VERSION,
+      ...(buildId ? { runningBuildId: buildId } : {}),
+      booted: true,
+      serviceRunning: true,
+      coreReady: true,
+      ...(outcome.status === "succeeded"
+        ? { versionMatch: true }
+        : {
+            rollbackOutcome: {
+              status: "succeeded",
+              reason: outcome.reason ?? "new build failed to start",
+            },
+          }),
     });
+    if (outcome.status === "rolled-back" && outcome.stderrTail) {
+      const stderrTail = redactSensitiveText(outcome.stderrTail, { mode: "tools" });
+      await recordUpdateRunStepAsync(trial.runId, {
+        step: "diagnostic:startup",
+        status: "completed",
+        detail: stderrTail,
+        stderrTail,
+      });
+    }
+    const finished = await finishUpdateRunAsync(
+      trial.runId,
+      outcome.status === "succeeded"
+        ? { status: "succeeded", after: { version: VERSION, buildId } }
+        : {
+            status: "failed",
+            reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
+          },
+    );
+    if (outcome.status === "succeeded") {
+      schedulePostUpdateMaintenance(trial);
+    }
+    trial.reported = true;
+    await writeTrial(trial, prefix);
+    // A requester that received the start notice also hears the outcome (same rule as the run watcher).
+    if (finished.steps.some((step) => step.step === "notice:ack" && step.status === "completed")) {
+      const { createUpdateRunNotifier } = await import("../gateway/update-run-notice.runtime.js");
+      await (
+        await createUpdateRunNotifier(finished)
+      )(finished, "finished");
+    }
   }
-  const finished = await finishUpdateRunAsync(
-    trial.runId,
-    outcome.status === "succeeded"
-      ? { status: "succeeded", after: { version: VERSION, buildId } }
-      : {
-          status: "failed",
-          reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
-        },
-  );
-  if (outcome.status === "succeeded") {
-    schedulePostUpdateMaintenance(trial);
+  // Preparation refuses an active trial after taking its lock.
+  switch (trial?.phase) {
+    case "pending":
+    case "trial":
+    case "restoring":
+      return;
+    case undefined:
+    case "committed":
+    case "rolled-back":
+      break;
   }
-  trial.reported = true;
-  await writeTrial(trial, prefix);
-  // A requester that received the start notice also hears the outcome (same rule as the run watcher).
-  if (finished.steps.some((step) => step.step === "notice:ack" && step.status === "completed")) {
-    const { createUpdateRunNotifier } = await import("../gateway/update-run-notice.runtime.js");
-    await (
-      await createUpdateRunNotifier(finished)
-    )(finished, "finished");
+  const lock = await readUpdateLock(prefix);
+  if (lock?.dead) {
+    if ((await getUpdateRunAsync(lock.runId))?.status === "running") {
+      await finishUpdateRunAsync(lock.runId, { status: "failed", reason: "interrupted" });
+    }
+    await releaseUpdateLock(prefix);
   }
 }
 
-/** Called after the listener is serving, including the old release after a rollback. */
-export async function announceReady(
+/** Separately retire the legacy rollback trial at core readiness. */
+export async function observeLegacyTrialReadiness(
   buildId: string | null,
-  runningRoot: string | null = null,
-): Promise<boolean> {
-  const { settleLegacyTrial } = await import("./legacy-trial.js");
-  const legacySettled = await settleLegacyTrial(runningRoot, buildId, (runId) =>
-    schedulePostUpdateMaintenance({ runId }),
+  runningRoot: string | null,
+): Promise<(() => Promise<boolean>) | undefined> {
+  const { disarmLegacyTrial, recoverLegacyTrialRun } = await import("./legacy-trial.js");
+  const receipt = await disarmLegacyTrial(runningRoot, buildId);
+  return (
+    receipt &&
+    (() => recoverLegacyTrialRun(receipt, (runId) => schedulePostUpdateMaintenance({ runId })))
   );
-  const lock = await readUpdateLock();
-  // A restarted container can reuse the old Gateway's PID (including PID 1). A lock with this
-  // PID taken after this process started is this Gateway's own update in progress, not a leftover.
-  const startedAt = Date.now() - process.uptime() * 1000;
-  if (lock && (lock.dead || (lock.pid === process.pid && lock.startedAt < startedAt))) {
-    await finishUpdateRunAsync(lock.runId, { status: "failed", reason: "interrupted" });
-    await releaseUpdateLock();
-  }
-  const trial = await readTrial();
-  await settleRunFromTrial(trial);
+}
+
+/** Called after the listener is serving, including the old release after a rollback. */
+export async function announceReady(buildId: string | null): Promise<void> {
   if (process.env.OPENCLAW_LAUNCHER_IPC !== "1" || !process.send || !process.connected) {
-    return legacySettled || trial?.reported === true;
+    return await settleRunFromTrial(await readTrial());
   }
   const { promise, resolve, reject } = Promise.withResolvers<Trial | null>();
   const onMessage = (message: unknown) => {
@@ -291,9 +305,8 @@ export async function announceReady(
         reject(error);
       }
     });
-    const reported = await promise;
-    await settleRunFromTrial(reported);
-    return legacySettled || reported?.reported === true;
+    const confirmed = await promise;
+    await settleRunFromTrial(confirmed ?? (await readTrial()));
   } finally {
     clearTimeout(timer);
     process.off("message", onMessage);

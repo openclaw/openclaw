@@ -81,7 +81,9 @@ type InstallationObserver = {
   check?: Promise<void>;
   readiness?: PreparedReadinessChecker;
   trialSettled?: boolean;
-  trialSettlement?: Promise<void>;
+  legacyTrialChecked?: boolean;
+  legacyTrialCheck?: Promise<void>;
+  recoverTrialHistory?: () => Promise<boolean>;
 };
 
 // SDK chunks and the Gateway share one process owner without loading restart machinery.
@@ -193,37 +195,67 @@ export async function announceGatewayInstallationReady(
   }
   observer.readiness = readiness;
   try {
-    await settleInstallationTrial(observer);
+    await disarmInstallationLegacyTrial(observer);
   } catch (error) {
     createSubsystemLogger("gateway/update-run").warn(
-      `Update readiness history was not recorded; maintenance will retry: ${coerceErrorMessage(error)}`,
+      `Could not settle the update trial; maintenance will retry: ${coerceErrorMessage(error)}`,
+    );
+  }
+  const recover = observer.recoverTrialHistory;
+  if (recover) {
+    observer.recoverTrialHistory = undefined;
+    void recover().then(
+      (completed) => {
+        if (!completed) {
+          observer.recoverTrialHistory = recover;
+        }
+      },
+      (error: unknown) => {
+        observer.recoverTrialHistory = recover;
+        createSubsystemLogger("gateway/update-run").warn(
+          `Update readiness history was not recorded; maintenance will retry: ${coerceErrorMessage(error)}`,
+        );
+      },
     );
   }
 }
 
-function settleInstallationTrial(observer: InstallationObserver): Promise<void> {
+function disarmInstallationLegacyTrial(observer: InstallationObserver): Promise<void> {
   const readiness = observer.readiness;
-  if (observer.trialSettled || !readiness) {
+  if (observer.legacyTrialChecked || !readiness) {
     return Promise.resolve();
   }
-  observer.trialSettlement ??= readiness
+  observer.legacyTrialCheck ??= readiness
     .prepare()
     .then(async (prepared) => {
       if (!prepared.publish().coreReady) {
         return;
       }
-      const { announceReady } = await import("../update/gateway-trial.js");
-      observer.trialSettled = await announceReady(observer.running.buildId, observer.root);
+      const { observeLegacyTrialReadiness } = await import("../update/gateway-trial.js");
+      observer.recoverTrialHistory = await observeLegacyTrialReadiness(
+        observer.running.buildId,
+        observer.root,
+      );
+      observer.legacyTrialChecked = true;
     })
     .finally(() => {
-      observer.trialSettlement = undefined;
+      observer.legacyTrialCheck = undefined;
     });
-  return observer.trialSettlement;
+  return observer.legacyTrialCheck;
 }
 
 /** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
 export async function checkGatewayInstallationReplacement(): Promise<void> {
   const observer = installationState.observer;
+  // Resident launchers acknowledge the serving listener through the existing maintenance owner.
+  if (observer && !observer.trialSettled) {
+    observer.trialSettled = true;
+    void import("../update/gateway-trial.js")
+      .then(({ announceReady }) => announceReady(observer.running.buildId))
+      .catch(() => {
+        observer.trialSettled = false;
+      });
+  }
   if (observer?.readiness) {
     await announceGatewayInstallationReady(observer.readiness);
   }

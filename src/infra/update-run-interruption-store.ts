@@ -2,7 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { verifiedLegacyTrialReadiness } from "../update/legacy-trial-record.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { claimUpdateResultInTransaction } from "./update-result-claim.js";
@@ -17,8 +16,8 @@ import type {
 import {
   decodeRun,
   hasStoredUpdateRecovery,
+  readActiveUpdateRun,
   readLatestUpdateRun,
-  readUpdateRunRecord,
   readUpdateRuns,
 } from "./update-run-read.kernel.js";
 import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
@@ -74,6 +73,37 @@ export function canSettleInterruptedUpdate(run: UpdateRunRecord): boolean {
   );
 }
 
+/** Only interrupted activation can be recovered using the matching readiness observation. */
+function canRecoverLegacyTrialRun(run: UpdateRunRecord): boolean {
+  const abandoned = run.status === "failed" && run.reason === "abandoned";
+  return (
+    run.target.kind === "git" &&
+    run.repair.length === 0 &&
+    !run.verification.recovery &&
+    !run.verification.rollbackOutcome &&
+    (abandoned ||
+      (run.status === "running" &&
+        !run.reason &&
+        ["activating", "restarting", "verifying"].includes(run.phase))) &&
+    recordedUpdateRunDrivers(run).length > 0 &&
+    !run.steps.some(
+      (step) =>
+        step.step === "driver:identity-unavailable" ||
+        step.step === "reconcile:acknowledged" ||
+        step.step === "package rollback" ||
+        step.step === "previous generation restoration" ||
+        (step.status === "failed" &&
+          !(
+            abandoned &&
+            (step.step === "reconcile:abandoned" ||
+              (["activating", "restarting", "verifying"].includes(step.step) &&
+                !step.detail &&
+                !step.failureFacts?.length))
+          )),
+    )
+  );
+}
+
 /** Revalidate the captured run and recovery exclusion inside the worker's transaction. */
 export function persistInterruptedUpdateObservation(
   input: InterruptedUpdateSettlement,
@@ -90,23 +120,46 @@ export function persistInterruptedUpdateObservation(
         assertCurrent("commit");
         return { accepted: true, run, ...(updateResult ? { updateResult } : {}) };
       };
-      const current = input.legacyReady
-        ? readUpdateRunRecord(db, input.expected.runId)
-        : readLatestUpdateRun(db);
-      const active = readUpdateRuns(db, { active: true, limit: input.legacyReady ? 100 : 1 });
-      if (
-        !current ||
-        !isDeepStrictEqual(current, input.expected) ||
-        active.some((run) => run.runId !== current.runId) ||
-        hasStoredUpdateRecovery(db, current.runId)
-      ) {
-        return { accepted: false };
-      }
-      const legacyCandidate = input.legacyReady
-        ? verifiedLegacyTrialReadiness(current, input.verification)
-        : undefined;
-      if (input.legacyReady && !legacyCandidate) {
-        return { accepted: false };
+      let current: UpdateRunRecord;
+      const legacyCandidate = input.legacyReady;
+      if (legacyCandidate) {
+        const matches = readUpdateRuns(db, { limit: 2, completedStep: legacyCandidate.step });
+        const [run] = matches;
+        const verification = input.verification;
+        if (
+          !run ||
+          matches.length !== 1 ||
+          !canRecoverLegacyTrialRun(run) ||
+          hasStoredUpdateRecovery(db, run.runId) ||
+          verification?.runningBuildId !== legacyCandidate.buildId ||
+          verification.runningVersion !== legacyCandidate.version ||
+          !verification.booted ||
+          !verification.serviceRunning ||
+          !verification.versionMatch ||
+          !verification.settled ||
+          !verification.coreReady
+        ) {
+          return { accepted: false };
+        }
+        if (
+          readUpdateRuns(db, { active: true, limit: 1, excludeRunId: run.runId }).length ||
+          recordedUpdateRunDrivers(run).some((driver) => inspectUpdateRunDriver(driver) !== "dead")
+        ) {
+          return { accepted: false, retry: true };
+        }
+        current = run;
+      } else {
+        const run = readLatestUpdateRun(db);
+        const active = readActiveUpdateRun(db);
+        if (
+          !run ||
+          !isDeepStrictEqual(run, input.expected) ||
+          (active && active.runId !== run.runId) ||
+          hasStoredUpdateRecovery(db, run.runId)
+        ) {
+          return { accepted: false };
+        }
+        current = run;
       }
       const previous = current.steps.find((step) => step.step === "reconcile:settle");
       const completingCleanup =

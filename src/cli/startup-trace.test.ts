@@ -35,6 +35,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   flushDiagnosticsTimeline();
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -196,24 +197,47 @@ it.each([
 );
 
 it.each(["timeline", ""])(
-  "records startup phases with initial diagnostics=%j",
+  "retains observed startup times through delayed activation and flush with diagnostics=%j",
   async (diagnostics) => {
     const timelinePath = path.join(directories.make("openclaw-startup-trace-"), "timeline.jsonl");
     vi.stubEnv("OPENCLAW_DIAGNOSTICS", diagnostics);
     vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
+    const origin = performance.timeOrigin;
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const timestamp = (elapsed: number) => new Date(origin + elapsed).toISOString();
     const trace = makeTrace(["agent", "--local"]);
+    now = 120;
     trace.mark("bootstrap");
-    await trace.measure("run-main-import", () => Promise.resolve());
+    now = 200;
+    const loading = trace.measure("run-main-import", () => {
+      now = 350;
+      vi.setSystemTime(origin + now);
+      return "loaded";
+    });
+    // Activation awaits must not move the earlier mark or backdate the operation's start.
+    now = 300;
+    vi.setSystemTime(origin + now);
+    await expect(loading).resolves.toBe("loaded");
     await expect(
       trace.measure("command-execution", async () => "done", { timeline: false }),
     ).resolves.toBe("done");
 
+    now = 1_000;
+    vi.setSystemTime(origin + now);
     if (!diagnostics) {
       expect(await trace.requiresDiagnosticsConfig()).toBe(true);
       expect(fs.existsSync(timelinePath)).toBe(false);
       await trace.configureDiagnosticsTimeline({ diagnostics: { flags: ["timeline"] } });
     }
 
+    now = 1_100;
+    trace.mark("configured");
+    now = 2_000;
+    // A wall-clock adjustment during the queued write must not change its observed time.
+    vi.setSystemTime(origin - 60_000);
+    await trace.configureDiagnosticsTimeline({ diagnostics: { flags: ["timeline"] } });
     flushDiagnosticsTimeline();
     const events = fs
       .readFileSync(timelinePath, "utf8")
@@ -223,11 +247,19 @@ it.each(["timeline", ""])(
     expect(events).toEqual(
       expect.arrayContaining([
         timelineEvent("mark", "bootstrap", {
-          durationMs: expect.any(Number),
-          attributes: expect.objectContaining({ totalMs: expect.any(Number) }),
+          timestamp: timestamp(120),
+          durationMs: 20,
+          attributes: expect.objectContaining({ totalMs: 20 }),
         }),
-        timelineEvent("span.start", "run-main-import"),
-        timelineEvent("span.end", "run-main-import", { durationMs: expect.any(Number) }),
+        timelineEvent("span.start", "run-main-import", { timestamp: timestamp(300) }),
+        timelineEvent("span.end", "run-main-import", {
+          timestamp: timestamp(350),
+          durationMs: 50,
+        }),
+        timelineEvent("mark", "configured", {
+          timestamp: timestamp(1_100),
+          attributes: expect.objectContaining({ totalMs: 1_000 }),
+        }),
       ]),
     );
     expect(events).not.toContainEqual(expect.objectContaining({ name: "entry.command-execution" }));

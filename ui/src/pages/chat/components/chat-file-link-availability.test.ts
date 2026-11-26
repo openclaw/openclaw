@@ -87,3 +87,18 @@ it("keeps links when the Gateway cannot answer or answers out of order", async (
     expect(document.body.getElementsByTagName("a")).toHaveLength(2);
   }
 });
+
+it("does not probe a workspace the session row says this viewer cannot read", async () => {
+  const workspace = { sessionKey: "agent:main:main", agentId: "main" } as SessionWorkspaceState;
+  const { state, statFiles } = host(missingFor([]));
+  Object.assign(state, { sessionWorkspaceReadDisabledReason: "Your operator role requires…" });
+  const links = render(
+    '<a data-file-path="src/a.ts">a</a>' +
+      '<div data-file-session-key="agent:main:subagent:x"><a data-file-path="src/b.ts">b</a></div>',
+  );
+  await checkFileLinkAvailability(state, workspace, links);
+  expect(statFiles.mock.calls).toEqual([
+    ["agent:main:subagent:x", [{ path: "src/b.ts" }], { agentId: "main" }],
+  ]);
+  expect(document.body.getElementsByTagName("a")).toHaveLength(2);
+});

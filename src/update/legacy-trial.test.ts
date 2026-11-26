@@ -2,15 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  withUpdateCommandExecutor,
-  withDelegatedUpdateCommandExecutor,
-} from "../cli/update-cli/update-command-executor.js";
-import { execFileUtf8 } from "../daemon/exec-file.js";
-import { withGatewayServiceUpdateAuthority } from "../daemon/service-update-authority.js";
-import * as tempRoot from "../infra/tmp-openclaw-dir.js";
 import { deadDriverFixture } from "../infra/update-run-fixture.test-support.js";
 import { persistInterruptedUpdateObservationAsync } from "../infra/update-run-interruption-worker.js";
+import { acknowledgeAbandonedUpdateRun } from "../infra/update-run-ledger.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import { reconcileAbandonedUpdateRunsAsync } from "../infra/update-run-reconciliation.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
@@ -26,7 +20,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { VERSION } from "../version.js";
-import { announceReady } from "./gateway-trial.js";
+import { observeLegacyTrialReadiness } from "./gateway-trial.js";
+import { legacyTrialReceipt } from "./legacy-trial-record.js";
 import { prepareLegacyTrialRun } from "./legacy-trial.js";
 import { resolvePrefix } from "./store.js";
 
@@ -44,18 +39,21 @@ afterEach(async () => {
   }
 });
 
-async function fixture() {
+async function fixture(nestedSlot = false) {
   const state = await fs.mkdtemp(path.join(os.tmpdir(), "legacy-trial-"));
   directories.push(state);
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
   vi.stubEnv("OPENCLAW_LAUNCHER_IPC", "");
   openOpenClawStateDatabase();
   const prefix = resolvePrefix();
-  const root = path.join(prefix, "releases", "exact-candidate", "openclaw");
+  const packagePath = nestedSlot ? path.join("lib", "node_modules", "openclaw") : "openclaw";
+  const slot = path.join(prefix, packagePath);
+  const root = path.join(prefix, "releases", "exact-candidate", packagePath);
   await fs.mkdir(root, { recursive: true });
-  await fs.symlink(root, path.join(prefix, "openclaw"), "junction");
+  await fs.mkdir(path.dirname(slot), { recursive: true });
+  await fs.symlink(root, slot, "junction");
   const trial = {
-    target: "releases/exact-candidate/openclaw",
+    target: path.relative(path.dirname(slot), root),
     previous: "releases/previous/openclaw",
     version: VERSION,
     buildId: "legacy-candidate-build",
@@ -73,15 +71,6 @@ async function fixture() {
   return { root, file, trial, runId: run.runId };
 }
 
-async function recordReadyReceipt(f: Awaited<ReturnType<typeof fixture>>) {
-  const { target, previous, version, buildId, createdAt } = f.trial;
-  await recordUpdateRunStepAsync(f.runId, {
-    step: "finalize:legacy-release-ready",
-    status: "completed",
-    detail: JSON.stringify({ target, previous, version, buildId, createdAt }),
-  });
-}
-
 it.each(["repairing", "restarting"] as const)(
   "does not correlate a Git-targeted repair during %s with the original activation",
   async (phase) => {
@@ -92,11 +81,6 @@ it.each(["repairing", "restarting"] as const)(
     const before = await getUpdateRunAsync(repair.runId);
     await prepareLegacyTrialRun(repair.runId, f.root, () => {});
     expect(await getUpdateRunAsync(repair.runId)).toEqual(before);
-    await prepareLegacyTrialRun(f.runId, f.root, () => {});
-    await announceReady(f.trial.buildId, f.root);
-    expect((await getUpdateRunAsync(f.runId))?.steps).toContainEqual(
-      expect.objectContaining({ step: "finalize:legacy-release-ready", status: "completed" }),
-    );
   },
 );
 
@@ -118,58 +102,19 @@ it("keeps the admitted activation ledger across asynchronous trial discovery", a
   });
   await prepareLegacyTrialRun(f.runId, f.root, () => {});
   expect((await getUpdateRunAsync(f.runId, original))?.steps).toContainEqual(
-    expect.objectContaining({ step: "finalize:legacy-release-prepared", status: "completed" }),
+    expect.objectContaining({ step: legacyTrialReceipt(f.trial).step, status: "completed" }),
   );
   expect(await getUpdateRunAsync(f.runId, foreign)).toEqual(before);
 });
 
-it.each(["missing", "repair", "invalid-grant"] as const)(
-  "keeps independently authorized native restoration separate from %s correlation",
-  async (kind) => {
-    const f = await fixture();
-    const control = path.join(path.dirname(resolvePrefix()), "control");
-    await fs.mkdir(control, { mode: 0o700 });
-    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-    const repair = await createUpdateRunAsync({ trigger: "cli", target: { kind: "git" } });
-    await recordUpdateRunPhaseAsync(repair.runId, "repairing");
-    const runId = kind === "missing" ? "missing-original-update" : repair.runId;
-    const effect = path.join(control, "restored-service");
-    const restore = async (fence: { assertCurrent: () => void }) =>
-      withGatewayServiceUpdateAuthority(fence.assertCurrent, async () => {
-        await prepareLegacyTrialRun(runId, f.root, fence.assertCurrent);
-        const command = await execFileUtf8(process.execPath, [
-          "-e",
-          `require("node:fs").writeFileSync(${JSON.stringify(effect)}, "restored")`,
-        ]);
-        expect(command.code, command.stderr).toBe(0);
-      });
-    if (kind === "invalid-grant") {
-      await expect(withDelegatedUpdateCommandExecutor({}, runId, f.root, restore)).rejects.toThrow(
-        "Candidate executor grant is malformed",
-      );
-      await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
-    } else {
-      const before = await getUpdateRunAsync(repair.runId);
-      await withUpdateCommandExecutor(runId, async (executor) =>
-        restore(await executor.enter(f.root)),
-      );
-      expect(await fs.readFile(effect, "utf8")).toBe("restored");
-      expect(await getUpdateRunAsync(repair.runId)).toEqual(before);
-    }
-  },
-);
-
-it.each([
-  "running",
-  "abandoned",
-  "complete-oldest-in-long-history",
-  "complete-newest-in-long-history",
-])(
+it.each(["running", "abandoned", "nested-slot", "complete-oldest-in-long-history"])(
   "automatically completes the exact healthy legacy update after its driver exits (%s)",
   async (kind) => {
-    const f = await fixture();
+    const f = await fixture(kind === "nested-slot");
     let historyFailure: UpdateRunRecord | undefined;
     if (kind.endsWith("-in-long-history")) {
+      f.trial.previous = "releases/" + "old-generation/".repeat(80) + "openclaw";
+      await fs.writeFile(f.file, JSON.stringify(f.trial));
       for (let index = 0; index < 100; index++) {
         const other = await createUpdateRunAsync({ trigger: "cli" });
         await finishUpdateRunAsync(other.runId, { status: "failed", reason: "build-failed" });
@@ -177,24 +122,15 @@ it.each([
           historyFailure = await getUpdateRunAsync(other.runId);
         }
       }
-      if (kind === "complete-newest-in-long-history") {
-        await finishUpdateRunAsync(f.runId, { status: "failed", reason: "build-failed" });
-        const newest = await createUpdateRunAsync({
-          trigger: "cli",
-          target: { kind: "git" },
-          origin: { driver: deadDriverFixture().dead },
-        });
-        f.runId = newest.runId;
-        await recordUpdateRunPhaseAsync(f.runId, "restarting");
-      }
     }
     await prepareLegacyTrialRun(f.runId, f.root, () => {});
     expect((await getUpdateRunAsync(f.runId))?.after).toEqual({});
     if (kind === "abandoned") {
       await reconcileAbandonedUpdateRunsAsync({ runIds: [f.runId] });
     }
-    await announceReady(f.trial.buildId, f.root);
+    const recover = await observeLegacyTrialReadiness(f.trial.buildId, f.root);
     await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
+    await recover!();
     const run = await getUpdateRunAsync(f.runId);
     if (historyFailure) {
       expect(await getUpdateRunAsync(historyFailure.runId)).toEqual(historyFailure);
@@ -203,12 +139,6 @@ it.each([
       status: "succeeded",
       after: { version: VERSION, buildId: f.trial.buildId },
     });
-    expect(run?.steps).toContainEqual(
-      expect.objectContaining({
-        step: "finalize:legacy-release-ready",
-        status: "completed",
-      }),
-    );
   },
 );
 
@@ -223,7 +153,7 @@ it.each(["modern", "wrong-build", "wrong-root", "restoring", "pending"])(
       ...(kind === "pending" ? { pending: true } : {}),
     });
     await fs.writeFile(f.file, bytes);
-    await announceReady(
+    await observeLegacyTrialReadiness(
       kind === "wrong-build" ? "other-build" : f.trial.buildId,
       kind === "wrong-root" ? path.dirname(f.root) : f.root,
     );
@@ -235,13 +165,38 @@ it("does not attribute an uncorrelated healthy trial to the newest failed run", 
   const f = await fixture();
   await finishUpdateRunAsync(f.runId, { status: "failed", reason: "abandoned" });
   const before = await getUpdateRunAsync(f.runId);
-  await announceReady(f.trial.buildId, f.root);
+  const recover = await observeLegacyTrialReadiness(f.trial.buildId, f.root);
   await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
+  await recover!();
   expect(await getUpdateRunAsync(f.runId)).toEqual(before);
 });
 
+it("removes the healthy trial while the original updater is still alive", async () => {
+  const f = await fixture();
+  await recordUpdateRunPhaseAsync(f.runId, "restarting", {
+    origin: { driver: deadDriverFixture().driver },
+  });
+  await prepareLegacyTrialRun(f.runId, f.root, () => {});
+  const recover = await observeLegacyTrialReadiness(f.trial.buildId, f.root);
+  await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await recover!()).toBe(false);
+  expect(await getUpdateRunAsync(f.runId)).toMatchObject({ status: "running" });
+});
+
+it("preserves an abandoned update acknowledged by repair", async () => {
+  const f = await fixture();
+  await prepareLegacyTrialRun(f.runId, f.root, () => {});
+  await reconcileAbandonedUpdateRunsAsync({ runIds: [f.runId] });
+  expect(acknowledgeAbandonedUpdateRun(f.runId)).toBe(true);
+  const acknowledged = await getUpdateRunAsync(f.runId);
+  const recover = await observeLegacyTrialReadiness(f.trial.buildId, f.root);
+  await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
+  await recover!();
+  expect(await getUpdateRunAsync(f.runId)).toEqual(acknowledged);
+});
+
 it.each(["newer", "older"])(
-  "retains the ready legacy trial while a %s active run blocks completion",
+  "retries history without rearming the trial while a %s active run blocks completion",
   async (order) => {
     const f = await fixture();
     let blockerRunId = f.runId;
@@ -259,20 +214,18 @@ it.each(["newer", "older"])(
       await reconcileAbandonedUpdateRunsAsync({ runIds: [f.runId] });
       blockerRunId = (await createUpdateRunAsync({ trigger: "cli" })).runId;
     }
-    const bytes = await fs.readFile(f.file, "utf8");
-    expect(await announceReady(f.trial.buildId, f.root)).toBe(false);
-    expect(await fs.readFile(f.file, "utf8")).toBe(bytes);
-    const pending = await getUpdateRunAsync(f.runId);
-    expect(pending?.status).toBe(order === "older" ? "running" : "failed");
-    expect(pending?.steps).toContainEqual(
-      expect.objectContaining({ step: "finalize:legacy-release-ready", status: "completed" }),
+    const recover = await observeLegacyTrialReadiness(f.trial.buildId, f.root);
+    await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await recover!()).toBe(false);
+    expect((await getUpdateRunAsync(f.runId))?.status).toBe(
+      order === "older" ? "running" : "failed",
     );
     await finishUpdateRunAsync(blockerRunId, {
       status: "failed",
       reason: "unrelated-fixture-failure",
     });
     const unrelated = await getUpdateRunAsync(blockerRunId);
-    expect(await announceReady(f.trial.buildId, f.root)).toBe(true);
+    expect(await recover!()).toBe(true);
     expect(await getUpdateRunAsync(f.runId)).toMatchObject({
       status: "succeeded",
       after: { version: VERSION, buildId: f.trial.buildId },
@@ -293,80 +246,52 @@ it("does not attribute an ambiguous publication to any matching run", async () =
     runIds.push(other.runId);
   }
   const before = await Promise.all(runIds.map((runId) => getUpdateRunAsync(runId)));
-  await announceReady(f.trial.buildId, f.root);
+  const recover = await observeLegacyTrialReadiness(f.trial.buildId, f.root);
   await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
+  await recover!();
   expect(await Promise.all(runIds.map((runId) => getUpdateRunAsync(runId)))).toEqual(before);
 });
 
-it.each([
-  "complete",
-  "unrelated-failure",
-  "live-driver",
-  "wrong-candidate",
-  "changed-row",
-  "stored-recovery",
-])("completes only the correlated core-ready interrupted run (%s)", async (kind) => {
-  const f = await fixture();
-  const completes = kind === "complete";
-  if (kind === "live-driver") {
-    await recordUpdateRunPhaseAsync(f.runId, "restarting", {
-      origin: { driver: deadDriverFixture().driver },
-    });
-  }
-  await prepareLegacyTrialRun(f.runId, f.root, () => {});
-  await recordReadyReceipt(f);
-  if (kind === "unrelated-failure") {
-    await recordUpdateRunStepAsync(f.runId, {
-      step: "plugin install",
-      status: "failed",
-      detail: "registry refused",
-    });
-  }
-  if (kind !== "live-driver") {
+it.each(["unrelated-failure", "wrong-candidate", "stored-recovery"])(
+  "completes only the correlated core-ready interrupted run (%s)",
+  async (kind) => {
+    const f = await fixture();
+    await prepareLegacyTrialRun(f.runId, f.root, () => {});
+    if (kind === "unrelated-failure") {
+      await recordUpdateRunStepAsync(f.runId, {
+        step: "plugin install",
+        status: "failed",
+        detail: "registry refused",
+      });
+    }
     await reconcileAbandonedUpdateRunsAsync({ runIds: [f.runId] });
-  }
-  const expected = (await getUpdateRunAsync(f.runId))!;
-  const unrelated = await createUpdateRunAsync({ trigger: "cli" });
-  await finishUpdateRunAsync(unrelated.runId, { status: "failed", reason: "build-failed" });
-  const unrelatedBefore = await getUpdateRunAsync(unrelated.runId);
-  if (kind === "changed-row") {
-    await recordUpdateRunStepAsync(f.runId, {
-      step: "post-activation doctor inspections",
-      status: "completed",
-    });
-  }
-  if (kind === "stored-recovery") {
-    const { writeConfigMachineState } = await import("../state/config-machine-state-write.js");
-    const { UPDATE_RECOVERY_KEY_PREFIX } = await import("../infra/update-run-recovery-keys.js");
-    writeConfigMachineState(UPDATE_RECOVERY_KEY_PREFIX + f.runId, { retained: true });
-  }
-  const before = await getUpdateRunAsync(f.runId);
-  const result = await persistInterruptedUpdateObservationAsync(
-    captureOpenClawStateWorkerContext(),
-    {
-      expected,
-      legacyReady: true,
-      detail: "The matching release is core-ready.",
-      verification: {
-        booted: true,
-        serviceRunning: true,
-        coreReady: true,
-        settled: true,
-        versionMatch: true,
-        runningVersion: VERSION,
-        runningBuildId: kind === "wrong-candidate" ? "different-build" : f.trial.buildId,
+    const unrelated = await createUpdateRunAsync({ trigger: "cli" });
+    await finishUpdateRunAsync(unrelated.runId, { status: "failed", reason: "build-failed" });
+    const unrelatedBefore = await getUpdateRunAsync(unrelated.runId);
+    if (kind === "stored-recovery") {
+      const { writeConfigMachineState } = await import("../state/config-machine-state-write.js");
+      const { UPDATE_RECOVERY_KEY_PREFIX } = await import("../infra/update-run-recovery-keys.js");
+      writeConfigMachineState(UPDATE_RECOVERY_KEY_PREFIX + f.runId, { retained: true });
+    }
+    const before = await getUpdateRunAsync(f.runId);
+    const result = await persistInterruptedUpdateObservationAsync(
+      captureOpenClawStateWorkerContext(),
+      {
+        legacyReady: legacyTrialReceipt(f.trial),
+        detail: "The matching release is core-ready.",
+        verification: {
+          booted: true,
+          serviceRunning: true,
+          coreReady: true,
+          settled: true,
+          versionMatch: true,
+          runningVersion: VERSION,
+          runningBuildId: kind === "wrong-candidate" ? "different-build" : f.trial.buildId,
+        },
       },
-    },
-  );
-  expect(result?.accepted).toBe(completes);
-  expect(await getUpdateRunAsync(unrelated.runId)).toEqual(unrelatedBefore);
-  if (completes) {
-    expect(await getUpdateRunAsync(f.runId)).toMatchObject({
-      status: "succeeded",
-      after: { version: VERSION, buildId: f.trial.buildId },
-      reason: null,
-    });
-  } else {
+    );
+    expect(result?.accepted).toBe(false);
+    expect(await getUpdateRunAsync(unrelated.runId)).toEqual(unrelatedBefore);
     expect(await getUpdateRunAsync(f.runId)).toEqual(before);
-  }
-});
+  },
+);

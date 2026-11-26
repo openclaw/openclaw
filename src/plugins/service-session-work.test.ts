@@ -1,12 +1,10 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { OperatorRefusalError } from "../gateway/operator-refusal.js";
 import { readPluginSessionWorkAuthority } from "../gateway/plugin-session-work-authority.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { SessionAccessPreparationPendingError } from "../gateway/session-access-authority.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
-import {
-  GatewayDispatchUnavailableError,
-  GatewayOperatorRecoveryAuthorizationError,
-} from "../infra/restart-recovery-errors.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginServiceSessionWork } from "./service-session-work.js";
@@ -353,7 +351,7 @@ it("surfaces unexpected restore and storage failures instead of policy denial", 
 it("reports known original-source revocation without entering work", async () => {
   const { service } = fixture();
   await service.admit(input);
-  state.restoreError = new GatewayOperatorRecoveryAuthorizationError();
+  state.restoreError = new OperatorRefusalError("access-ended");
   const work = vi.fn();
   await expect(service.run("job", work)).resolves.toMatchObject({ status: "unavailable" });
   expect(work).not.toHaveBeenCalled();

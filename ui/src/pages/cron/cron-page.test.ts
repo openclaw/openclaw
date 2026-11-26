@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import { startCronClone } from "../../lib/cron/index.ts";
 import { updateCronRunsFilter } from "../../lib/cron/runs.ts";
@@ -250,6 +250,47 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
   await waitFor(() => expect(dom.callsFor(request, "models.list")).toHaveLength(1));
 });
 
+it("retries the failed history page without replacing runs or starting an automation", async () => {
+  const job = scheduledJob("garden", { name: "Garden inventory" });
+  const older = createDeferred<ReturnType<typeof cronRunsResponse>>();
+  let append = older.promise;
+  const request = cronRpc({
+    "cron.get": () => job,
+    "cron.list": () => harness.cronListResponse([job]),
+    "cron.runs": (params) => {
+      if ((params as { offset: number }).offset === 1) {
+        return append;
+      }
+      return { ...runPage(job.id, 2, "Latest inventory"), hasMore: true, nextOffset: 1 };
+    },
+  });
+  const { page } = mountCronPage(request);
+  page.routeSearch = "?job=garden";
+  await waitFor(() => expect(dom.text(page, ".cron-runs")).toContain("Latest inventory"));
+  getButtonByText(page, "Load more activity").click();
+  await expectRpc(request, "cron.runs", expect.objectContaining({ id: job.id, offset: 1 }));
+  older.reject(
+    new GatewayRequestError({
+      code: "UNAVAILABLE",
+      message: "History temporarily unavailable. Bearer abcdefghijkl",
+    }),
+  );
+  await waitFor(() =>
+    expect(dom.text(page, ".cron-runs [role=alert]") ?? "").toContain("load more"),
+  );
+  const detail = dom.text(page, ".cron-runs details:not([open]) code");
+  expect(detail).toBe("History temporarily unavailable. Bearer [redacted]");
+  append = Promise.resolve(runPage(job.id, 1, "Older inventory"));
+  const failed = dom.callsFor(request, "cron.runs").at(-1);
+  const inventoryReads = dom.callsFor(request, "cron.list").length;
+  getButtonByText(page, "Retry").click();
+  await waitFor(() => expect(dom.text(page, ".cron-runs")).toContain("Older inventory"));
+  expect(dom.text(page, ".cron-runs")).toContain("Latest inventory");
+  expect(dom.callsFor(request, "cron.runs").at(-1)).toEqual(failed);
+  expect(dom.callsFor(request, "cron.list")).toHaveLength(inventoryReads);
+  expect(dom.callsFor(request, "cron.run")).toHaveLength(0);
+});
+
 it.each(["selecting another job", "changing agent scope", "opening another link", "disconnecting"])(
   "ignores a pending job link after %s",
   async (action) => {
@@ -297,25 +338,31 @@ it("opens an explicitly linked automation directly in its settings", async () =>
   });
 });
 
-it("clears a failed job link when opening another link", async () => {
-  const job = createCronViewJob("current-job", { state: {} });
-  const request = cronRpc({
-    "cron.get": (params) => {
-      if ((params as { id: string }).id === "removed-job") {
-        throw new Error("Automation no longer exists");
-      }
-      return job;
-    },
-    "cron.list": () => harness.cronListResponse([job]),
-  });
-  const { page } = mountCronPage(request);
-  page.routeSearch = "?job=removed-job";
-  await waitFor(() => expect(page.textContent).toContain("Automation no longer exists"));
-  page.routeSearch = "?job=current-job";
-  await waitFor(() => expect(page.cron.cronEditingJob?.id).toBe(job.id));
-  expect(page.cron.cronError).toBeNull();
-  expect(page.textContent).not.toContain("Automation no longer exists");
-});
+it.each([
+  ["INVALID_REQUEST", "Automation no longer exists"],
+  ["FORBIDDEN", "You cannot access this automation"],
+])(
+  "preserves and clears a job-link %s failure when opening another link",
+  async (code, message) => {
+    const job = createCronViewJob("current-job", { state: {} });
+    const request = cronRpc({
+      "cron.get": (params) => {
+        if ((params as { id: string }).id === "removed-job") {
+          throw new GatewayRequestError({ code, message });
+        }
+        return job;
+      },
+      "cron.list": () => harness.cronListResponse([job]),
+    });
+    const { page } = mountCronPage(request);
+    page.routeSearch = "?job=removed-job";
+    await waitFor(() => expect(page.textContent).toContain(message));
+    page.routeSearch = "?job=current-job";
+    await waitFor(() => expect(page.cron.cronEditingJob?.id).toBe(job.id));
+    expect(page.cron.cronError).toBeNull();
+    expect(page.textContent).not.toContain(message);
+  },
+);
 
 it("drops pending automation scratch when admin access is removed", async () => {
   const job = createCronViewJob("migrated-job", {

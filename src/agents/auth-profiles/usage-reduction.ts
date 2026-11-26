@@ -10,7 +10,11 @@ import type {
   ProfileUsageStats,
 } from "./types.js";
 import { computeNextProfileUsageStats, resolveUsageWindowUntil } from "./usage-failure-state.js";
-import { isBlockedWindowActiveForModel } from "./usage-state.js";
+import {
+  isActiveUnusableWindow,
+  isBlockedWindowActiveForModel,
+  isProviderManagedCooldownReason,
+} from "./usage-state.js";
 
 export type WhamCooldownProbeResult = {
   available?: true;
@@ -128,6 +132,8 @@ export type AuthProfileFailureReduction = {
   retryAfterMs?: number;
   whamResult: WhamCooldownProbeResult | null;
   probeEligible: boolean;
+  /** Resolved by the caller: workers cannot read plugin metadata. */
+  providerManagesAvailability?: boolean;
 };
 
 export type PersonalAuthProfileUsageReduction =
@@ -160,10 +166,20 @@ export function reduceAuthProfileFailure(
   if (reason === "no_error_details" && !currentWhamResult) {
     return undefined;
   }
+  // Readers never enforce a provider-managed capacity window (for example one stored
+  // before the provider opted in). Treat it as already expired, so a later failure
+  // neither inherits its deadline nor escalates from its stale failure count.
+  const stored =
+    previousStats &&
+    input.providerManagesAvailability &&
+    isProviderManagedCooldownReason(previousStats.cooldownReason) &&
+    isActiveUnusableWindow(previousStats.cooldownUntil, now)
+      ? { ...previousStats, cooldownUntil: now }
+      : previousStats;
   const existing =
-    currentWhamResult?.available && previousStats?.blockedReason === "subscription_limit"
-      ? reconcileWhamBlock(previousStats, currentWhamResult, now)
-      : (previousStats ?? {});
+    currentWhamResult?.available && stored?.blockedReason === "subscription_limit"
+      ? reconcileWhamBlock(stored, currentWhamResult, now)
+      : (stored ?? {});
   const computed = computeNextProfileUsageStats({ existing, now, reason, modelId, retryAfterMs });
   return currentWhamResult
     ? applyWhamCooldownResult({ existing, computed, now, reason, whamResult: currentWhamResult })

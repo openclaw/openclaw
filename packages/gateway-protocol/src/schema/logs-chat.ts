@@ -266,6 +266,17 @@ export const ChatPredictResultSchema = closedObject({
   text: Type.Union([Type.String({ maxLength: 500 }), Type.Null()]),
 });
 
+/** Read, copy, or remove only the authenticated author’s revoked, unconsumed inputs. */
+export const ChatPendingInputsOwnParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  inputId: Type.Optional(NonEmptyString),
+  agentId: Type.Optional(NonEmptyString),
+  before: Type.Optional(Type.Integer({ minimum: 1 })),
+  inputIds: Type.Optional(
+    Type.Array(NonEmptyString, { minItems: 1, maxItems: 100, uniqueItems: true }),
+  ),
+});
+
 /** Dismiss displayed pending inputs that ended interrupted or cancelled. */
 export const ChatPendingInputsDismissParamsSchema = closedObject({
   sessionKey: NonEmptyString,

@@ -12,7 +12,10 @@ import {
   isArtifactPreservingStateRead,
 } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
+import {
+  matchesOperatorApprovalSelection,
+  type OperatorApprovalExecSelection,
+} from "./operator-approval-reviewer-binding.js";
 import { operatorApprovalPublication } from "./operator-approval-store.publication.js";
 import {
   decodeOperatorApprovalRow,
@@ -34,6 +37,7 @@ type PendingApprovalSelection = {
   sourceSessionKey?: string;
   audienceSessionKey?: string;
   reviewerDeviceId?: string;
+  execApprovalSelection?: OperatorApprovalExecSelection;
   limit?: number;
   nowMs: number;
 };
@@ -155,8 +159,7 @@ class PendingApprovalIndex {
             record.expiresAtMs > nowMs &&
             (!kind || record.kind === kind) &&
             (!sourceSessionKey || record.source.sessionKey === sourceSessionKey) &&
-            (reviewerDeviceId === undefined ||
-              matchesOperatorApprovalReviewerBinding(record, reviewerDeviceId))
+            matchesOperatorApprovalSelection(record, reviewerDeviceId, params.execApprovalSelection)
           ) {
             records.push(record);
             if (records.length === limit) {

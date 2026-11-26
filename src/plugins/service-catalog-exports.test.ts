@@ -147,6 +147,61 @@ describe("service-owned catalog exports", () => {
     expect(f.list).toHaveBeenCalledOnce();
   });
 
+  it("pages currently admitted hosts and replaces the preceding page's grants", async () => {
+    const f = fixture();
+    let localHosts = ["native", "withdrawn", "other"];
+    f.provider.automaticExportHosts = () => localHosts;
+    f.list.mockImplementation(async ({ hostIds, cursors }) =>
+      [...(hostIds ?? []), "peer"].map((hostId) => {
+        const cursor = cursors?.[hostId];
+        const terminal = cursor === "opaque/end";
+        return {
+          hostId,
+          label: hostId,
+          kind: "gateway",
+          connected: true,
+          nextCursor: terminal ? undefined : cursor ? "opaque/end" : "opaque/2",
+          sessions: terminal ? [] : [{ ...f.rows[0]!, threadId: cursor ? "next" : "shown" }],
+        };
+      }),
+    );
+    const catalog = f.exports.listCatalogs()[0]!;
+    const [first] = await catalog.list({});
+    expect(f.list.mock.calls[0]?.[0]).not.toHaveProperty("cursors");
+    expect(first).toMatchObject({ hostId: "native", nextCursor: "opaque/2" });
+    const pending = createDeferred<Awaited<ReturnType<SessionCatalogProvider["read"]>>>();
+    f.read.mockImplementationOnce(() => pending.promise);
+    const reading = catalog.read(f.request);
+    localHosts = ["native", "other"];
+    const hosts = await catalog.list({
+      cursors: { native: first!.nextCursor!, withdrawn: "stale", peer: "unsolicited" },
+    });
+    expect(f.list.mock.calls[1]?.[0].hostIds).toEqual(["native", "other"]);
+    expect(f.list.mock.calls[1]?.[0].cursors).toEqual({ native: "opaque/2" });
+    expect(hosts.map(({ hostId, sessions }) => [hostId, sessions[0]?.threadId])).toEqual([
+      ["native", "next"],
+      ["other", "shown"],
+    ]);
+    pending.resolve({ ...f.request, items: [] });
+    await expect(reading).rejects.toThrow("source changed");
+    for (const hostId of ["native", "withdrawn", "peer"]) {
+      await expect(catalog.read({ ...f.request, hostId })).rejects.toThrow("Select a listed");
+    }
+    await expect(catalog.read({ ...f.request, threadId: "next" })).resolves.toMatchObject({
+      threadId: "next",
+    });
+    await expect(
+      catalog.list({ source: f.request, cursors: { native: "opaque/2" } }),
+    ).rejects.toThrow("exact catalog source");
+    expect(f.list).toHaveBeenCalledTimes(2);
+    const resumed = f.exports.listCatalogs()[0]!;
+    const [terminal] = await resumed.list({ cursors: { native: hosts[0]!.nextCursor! } });
+    expect(terminal).toMatchObject({ hostId: "native", nextCursor: undefined, sessions: [] });
+    await expect(resumed.read({ ...f.request, threadId: "next" })).rejects.toThrow(
+      "Select a listed",
+    );
+  });
+
   it.each(["source replaced", "consent removed", "service stopped"] as const)(
     "discards pending bytes if %s",
     async (reason) => {

@@ -1,20 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
+import { servingGitReleaseSlot } from "../infra/git-release-paths.js";
 import { sendUpdateResultTelemetry } from "../infra/update-result-telemetry.js";
 import { persistInterruptedUpdateObservationAsync } from "../infra/update-run-interruption-worker.js";
-import { getUpdateRunAsync, listUpdateRunsAsync } from "../infra/update-run-reader.js";
+import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import { isUpdateRepairRun } from "../infra/update-run-record.js";
 import { recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import {
-  LEGACY_TRIAL_PREPARED,
-  LEGACY_TRIAL_READY,
+  legacyTrialReceipt,
   legacyTrialSchema,
-  projectLegacyTrialReceipt,
-  recoverableLegacyTrial,
-  sameLegacyTrial,
+  type LegacyTrialReceipt,
 } from "./legacy-trial-record.js";
 import { resolvePrefix } from "./store.js";
 
@@ -33,8 +31,9 @@ async function readLegacyTrial(prefix: string) {
 }
 
 async function matchesSelectedRelease(root: string, target: string, prefix: string) {
+  const slot = servingGitReleaseSlot(prefix);
   const [running, selected, candidate, realPrefix] = await Promise.all(
-    [root, path.join(prefix, "openclaw"), path.resolve(prefix, target), prefix].map((entry) =>
+    [root, slot, path.resolve(path.dirname(slot), target), prefix].map((entry) =>
       fs.realpath(entry).catch(() => undefined),
     ),
   );
@@ -52,20 +51,9 @@ export async function prepareLegacyTrialRun(
   runId: string,
   root: string,
   assertCurrent: () => void,
-  context = captureOpenClawStateWorkerContext(),
+  env = { ...process.env },
 ) {
-  const options = { env: context.environment, path: context.admission.databasePath };
-  const run = await getUpdateRunAsync(runId, options);
-  if (
-    !run ||
-    run.status !== "running" ||
-    run.target.kind !== "git" ||
-    isUpdateRepairRun(run) ||
-    !["activating", "restarting", "verifying"].includes(run.phase)
-  ) {
-    return;
-  }
-  const prefix = resolvePrefix(context.environment);
+  const prefix = resolvePrefix(env);
   const trial = await readLegacyTrial(prefix);
   if (
     !trial ||
@@ -75,31 +63,33 @@ export async function prepareLegacyTrialRun(
   ) {
     return;
   }
-  assertCurrent();
+  const context = captureOpenClawStateWorkerContext({ env });
+  const run = await getUpdateRunAsync(runId, { env, path: context.admission.databasePath });
+  if (
+    !run ||
+    run.status !== "running" ||
+    run.target.kind !== "git" ||
+    isUpdateRepairRun(run) ||
+    !["activating", "restarting", "verifying"].includes(run.phase)
+  ) {
+    return;
+  }
   await recordUpdateRunStepAsync(
     runId,
-    {
-      step: LEGACY_TRIAL_PREPARED,
-      status: "completed",
-      endedAtMs: Date.now(),
-      detail: JSON.stringify(projectLegacyTrialReceipt(trial)),
-    },
-    { context, env: context.environment, assertCurrent, requireNoRecovery: true },
+    { step: legacyTrialReceipt(trial).step, status: "completed", endedAtMs: Date.now() },
+    { context, env, assertCurrent, requireNoRecovery: true },
   );
 }
 
-/** Readiness ends only the legacy trial this Gateway actually runs, never a modern trial. */
-export async function settleLegacyTrial(
+/** Core readiness ends only the legacy trial this Gateway actually runs, without opening history. */
+export async function disarmLegacyTrial(
   root: string | null,
   buildId: string | null,
-  onCompleted: (runId: string) => void,
-): Promise<boolean> {
+): Promise<LegacyTrialReceipt | undefined> {
   if (!root || !buildId) {
-    return false;
+    return undefined;
   }
-  const context = captureOpenClawStateWorkerContext();
-  const options = { env: context.environment, path: context.admission.databasePath };
-  const prefix = resolvePrefix(context.environment);
+  const prefix = resolvePrefix();
   const trial = await readLegacyTrial(prefix);
   if (
     !trial ||
@@ -108,67 +98,41 @@ export async function settleLegacyTrial(
     trial.buildId !== buildId ||
     !(await matchesSelectedRelease(root, trial.target, prefix))
   ) {
-    return false;
+    return undefined;
   }
-  // Match the exact publication occurrence, not a newest run or a version. Missing or
-  // ambiguous history still ends the healthy trial, but cannot invent update success.
-  const detail = JSON.stringify(projectLegacyTrialReceipt(trial));
-  const matches = await listUpdateRunsAsync(
-    {
-      limit: 2,
-      completedStep: { step: LEGACY_TRIAL_PREPARED, detail },
-    },
-    options,
-  );
-  if (matches.length === 1) {
-    const recorded = await recordUpdateRunStepAsync(
-      matches[0]!.runId,
-      {
-        step: LEGACY_TRIAL_READY,
-        status: "completed",
-        endedAtMs: Date.now(),
-        detail,
-      },
-      { context, env: context.environment, requireNoRecovery: true },
-    );
-    if (!recorded) {
-      return false;
-    }
-    const candidate = recoverableLegacyTrial(recorded);
-    if (candidate) {
-      const result = await persistInterruptedUpdateObservationAsync(context, {
-        expected: recorded,
-        legacyReady: true,
-        detail: "The selected legacy Git release is core-ready after its original updater exited.",
-        verification: {
-          runningVersion: VERSION,
-          runningBuildId: buildId,
-          pid: process.pid,
-          booted: true,
-          serviceRunning: true,
-          versionMatch: true,
-          coreReady: true,
-          settled: true,
-        },
-      });
-      if (!result?.accepted) {
-        return false;
-      }
-      if (result.updateResult) {
-        void sendUpdateResultTelemetry(result.updateResult, { env: context.environment });
-      }
-      onCompleted(recorded.runId);
-    } else if (recorded.status === "running") {
-      // A live or unproven original driver retains completion; readiness can retry later.
-      return false;
-    }
-  }
-  // A later publication owns its own trial. The existing publisher serializes updates;
-  // a change during these awaited history writes leaves settlement for the next tick.
+  const receipt = legacyTrialReceipt(trial);
   const current = await readLegacyTrial(prefix);
-  if (current && sameLegacyTrial(current, trial)) {
-    await fs.rm(path.join(prefix, "releases", ".trial"), { force: true });
-    return true;
+  if (!current || legacyTrialReceipt(current).step !== receipt.step) {
+    return undefined;
   }
-  return false;
+  await fs.rm(path.join(prefix, "releases", ".trial"), { force: true });
+  return receipt;
+}
+
+export async function recoverLegacyTrialRun(
+  receipt: LegacyTrialReceipt,
+  onCompleted: (runId: string) => void,
+): Promise<boolean> {
+  const context = captureOpenClawStateWorkerContext();
+  const result = await persistInterruptedUpdateObservationAsync(context, {
+    legacyReady: receipt,
+    detail: "The selected legacy Git release is core-ready after its original updater exited.",
+    verification: {
+      runningVersion: receipt.version,
+      runningBuildId: receipt.buildId,
+      pid: process.pid,
+      booted: true,
+      serviceRunning: true,
+      versionMatch: true,
+      coreReady: true,
+      settled: true,
+    },
+  });
+  if (result?.updateResult) {
+    void sendUpdateResultTelemetry(result.updateResult, { env: context.environment });
+  }
+  if (result?.run) {
+    onCompleted(result.run.runId);
+  }
+  return result !== undefined && !result.retry;
 }

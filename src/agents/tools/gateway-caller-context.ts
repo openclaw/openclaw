@@ -3,7 +3,7 @@ import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-iden
 import {
   inheritSessionEventToolPolicy,
   narrowSessionEventSettings,
-} from "../../auto-reply/reply/session-event-policy.js";
+} from "../../auto-reply/reply/session-event-policy-inheritance.js";
 import type { SessionEntriesCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
 import {
   composeSessionSourceAssertion,
@@ -12,7 +12,10 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
-import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
+import type {
+  GatewayContextResolver,
+  TrustedAgentToolCaller,
+} from "../../gateway/server-methods/types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
 import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
@@ -24,6 +27,7 @@ import {
   captureGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../plugins/runtime/gateway-context-binding.js";
+import { assertParticipationToolUser } from "../../security/dangerous-tools.js";
 import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import type { SessionControllerWatchdogAttempt } from "../../sessions/session-controller.watchdog.js";
 // Ambient trusted caller context for model-mediated Gateway tool calls.
@@ -37,6 +41,7 @@ import {
   type AdmittedRunContext,
   type OperationalRunInstanceRef,
 } from "../admitted-run-context.js";
+import type { WebchatMcpRequester } from "../agent-bundle-mcp-webchat-requester.types.js";
 import { wrapAgentToolExecutionContext } from "../agent-tool-metadata.js";
 import {
   captureActiveEmbeddedRunPersonalToolParticipants,
@@ -52,6 +57,8 @@ import type { GatewayToolCallerSource } from "./gateway-caller-context.types.js"
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
 type GatewayToolCallerIdentity = {
+  /** Exact direct-turn owner captured before private harness state is projected away. */
+  webchatMcpRequester?: WebchatMcpRequester;
   watchdogAttempt?: SessionControllerWatchdogAttempt;
   personalToolParticipants?: ReplyTurnParticipants;
   personalToolUser?: string;
@@ -226,6 +233,20 @@ export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | unde
   return gatewayToolCallerStorage.getStore();
 }
 
+/** The requester a retained continuation re-entered, for its next agent admission. */
+export function readRetainedRequesterToolCaller(): TrustedAgentToolCaller | undefined {
+  const caller = getGatewayToolCallerIdentity();
+  const selection = caller?.personalToolIdentityScoped ? caller.personalToolSelection : undefined;
+  return caller && selection
+    ? {
+        agentId: caller.agentId,
+        sessionKey: caller.sessionKey,
+        requesterOrigin: selection.requesterOrigin,
+        assertCurrent: selection.assertCurrent,
+      }
+    : undefined;
+}
+
 /** Selection is model input; only the turn's host-owned participants grant a target. */
 export async function withGatewayPersonalToolUser<T>(
   user: string | undefined,
@@ -259,6 +280,7 @@ export function resolveGatewayToolOperatorSelection(options?: {
   if (!selection) {
     const participant =
       caller?.personalToolUser !== undefined ? resolveGatewayPersonalToolParticipant() : undefined;
+    assertParticipationToolUser(participant?.profileId, caller?.operatorAuthority);
     const selectedParticipant =
       participant?.profileId !== caller?.operatorAuthority?.profileId ? participant : undefined;
     const operatorAuthority = selectedParticipant?.operatorAuthority ?? caller?.operatorAuthority;
@@ -306,6 +328,7 @@ export function withGatewayToolOperatorContinuation<T>(
     {
       ...caller,
       personalToolParticipants: undefined,
+      webchatMcpRequester: undefined,
       personalToolUser: undefined,
       personalToolIdentityScoped: true,
       // The accepting collector holds this source; no participant is selected here.
@@ -490,6 +513,9 @@ export async function withGatewayToolCallerIdentity<T>(
       workspacePublicationPolicy: inheritedValue("workspacePublicationPolicy"),
       workspaceEvidenceSandbox: inheritedValue("workspaceEvidenceSandbox"),
       personalToolParticipants: inheritedValue("personalToolParticipants"),
+      webchatMcpRequester: Object.hasOwn(identity, "webchatMcpRequester")
+        ? identity.webchatMcpRequester
+        : inheritedOwner?.webchatMcpRequester,
       personalToolUser: inheritedValue("personalToolUser"),
       personalToolIdentityScoped: inheritedValue("personalToolIdentityScoped"),
       personalToolSelection: inheritedValue("personalToolSelection"),

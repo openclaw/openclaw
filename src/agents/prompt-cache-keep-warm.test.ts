@@ -1,13 +1,20 @@
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import { describe, expect, it, vi } from "vitest";
+import * as runtimeConfig from "../config/config.js";
+import * as sessionTargets from "../config/sessions/targets-runtime.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { promptCacheKeepWarmState } from "./prompt-cache-keep-warm-candidates.js";
 import {
   readObservedPromptCacheTtlMs,
   readStoredPromptCacheKeepWarm,
   resolvePromptCacheKeepWarmMaxPings,
+  runPromptCacheKeepWarm,
 } from "./prompt-cache-keep-warm.js";
 import type { SessionEntry as TranscriptEntry } from "./sessions/session-manager.js";
 
 const route = { provider: "anthropic", model: "claude-opus-5-5" };
 let nextId = 0;
+
 const reply = (
   usage: { cacheRead?: number; cacheWrite5m?: number; cacheWrite1h?: number },
   replyRoute = route,
@@ -114,3 +121,35 @@ describe("readStoredPromptCacheKeepWarm", () => {
     ).toBe(0);
   });
 });
+
+it.skipIf(Boolean(process.versions.bun))(
+  "defers keep-warm session recovery until host memory returns",
+  async () => {
+    const recovered = promptCacheKeepWarmState.recovered;
+    promptCacheKeepWarmState.recovered = false;
+    resetGatewayWorkAdmission();
+    vi.spyOn(runtimeConfig, "getRuntimeConfig").mockReturnValue({});
+    const targets = vi
+      .spyOn(sessionTargets, "resolveAllAgentSessionStoreTargetsAsync")
+      .mockResolvedValue([]);
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+    vi.spyOn(os, "totalmem").mockReturnValue(353 * 1024 ** 2);
+    const free = vi.spyOn(os, "freemem").mockReturnValue(40 * 1024 ** 2);
+    vi.spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      const signal = new AbortController().signal;
+      await expect(runPromptCacheKeepWarm(signal)).resolves.toBe(70_000);
+      expect(targets).not.toHaveBeenCalled();
+      expect(promptCacheKeepWarmState.recovered).toBe(false);
+
+      free.mockReturnValue(200 * 1024 ** 2);
+      await expect(runPromptCacheKeepWarm(signal)).resolves.toBe(Infinity);
+      expect(targets).toHaveBeenCalledOnce();
+    } finally {
+      promptCacheKeepWarmState.recovered = recovered;
+      vi.restoreAllMocks();
+      resetGatewayWorkAdmission();
+    }
+  },
+);

@@ -20,12 +20,13 @@ export type DurableChatComposerSnapshot = Omit<
 type RestoreBaseline = {
   scope: DurableComposerDraftScope;
   latestRevision: number;
+  attachmentVersion?: string;
   signature: string;
 };
 
 type RestoredDraft = Pick<
   DurableComposerDraft,
-  "revision" | "text" | "mentions" | "goalMode" | "replyTarget"
+  "revision" | "attachmentVersion" | "text" | "mentions" | "goalMode" | "replyTarget"
 > & {
   attachments: ChatAttachment[];
 };
@@ -103,6 +104,9 @@ export async function writeDurableComposerSnapshot(snapshot: DurableChatComposer
     snapshot.scope,
     {
       revision: snapshot.revision,
+      ...(snapshot.attachmentVersion !== undefined
+        ? { attachmentVersion: snapshot.attachmentVersion }
+        : {}),
       text: payloadUnavailable ? "" : snapshot.text,
       ...(snapshot.mentions?.length && !payloadUnavailable ? { mentions: snapshot.mentions } : {}),
       ...(snapshot.goalMode ? { goalMode: snapshot.goalMode } : {}),
@@ -203,13 +207,19 @@ export class DurableChatComposerPersistence {
         return;
       }
       const revision = result.status === "found" ? result.draft.revision : result.revision;
-      if (revision === undefined || revision < baseline.latestRevision) {
+      const draft = result.status === "found" ? result.draft : undefined;
+      const attachmentVersion = draft?.attachmentVersion ?? draft?.writeId;
+      // A synchronous caption can outlive its IDB write without changing the saved files.
+      const sameAttachments =
+        draft &&
+        baseline.attachmentVersion !== undefined &&
+        baseline.attachmentVersion === attachmentVersion;
+      if (revision === undefined || (revision < baseline.latestRevision && !sameAttachments)) {
         if (isCurrent()) {
           onCurrentWins(revision ?? 0);
         }
         return;
       }
-      const draft = result.status === "found" ? result.draft : undefined;
       let attachments: ChatAttachment[] = [];
       if (draft) {
         try {
@@ -224,6 +234,7 @@ export class DurableChatComposerPersistence {
       }
       apply({
         revision,
+        attachmentVersion,
         text: draft ? draft.text : "",
         ...(draft?.mentions ? { mentions: draft.mentions } : {}),
         ...(draft?.goalMode ? { goalMode: draft.goalMode } : {}),

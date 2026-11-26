@@ -60,6 +60,8 @@ backup and its matching build, not just reinstalling the older package.
 | 41      | Active transcript byte and dependency facts in an initially empty companion table                                                                                                                                                                      | `Unreleased` |
 | 42      | Opt-in aggregate successful tool usage scores, without transcript backfill                                                                                                                                                                             | `Unreleased` |
 | 43      | Pending-input terminal causes and original-source storage; legacy user Stop and dismissal facts become `user-stop` without changing accepted message bytes                                                                                             | `Unreleased` |
+| 44      | Optional `session_members.access` invitation levels; existing memberships retain null access                                                                                                                                                           | `Unreleased` |
+| 45      | Private nullable archive occurrence marker on the logical session node; no historical issuance                                                                                                                                                         | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -79,6 +81,23 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Agent schema 45
+
+SQLite and PostgreSQL append one nullable `TEXT` column, `session_nodes.archive_undo_marker`.
+It stores a private occurrence verifier, not the Undo token, a pin rank, or session entry JSON.
+Neither creation nor migration issues a verifier. The version step updates schema metadata but
+performs no node backfill or index build. SQLite's scoped backup copies `session_nodes` and
+`schema_meta`; PostgreSQL keeps its exact-predecessor backup. Existing integrity checks still apply.
+
+Upgrade with all writers stopped under maintenance custody. Older builds refuse a newly opened
+v45 store; the version number cannot revoke an already-open connection. Concurrent writers from
+older builds are unsupported. Rollback requires the verified pre-upgrade backup and matching build;
+do not lower the version markers manually.
+
+An earlier development preview used the same version 44 for the marker without invitation levels.
+That is not the canonical v44 predecessor. Automatic upgrade is unsupported: keep writers stopped,
+preserve the preview store, and restore a verified pre-preview backup with its matching build.
 
 ### Session deletion indexes (same-version additive index, lead-approved 2026-10-31)
 

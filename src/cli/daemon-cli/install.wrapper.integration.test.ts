@@ -234,6 +234,17 @@ it.each([false, true])("retains a pre-write install refusal (rebind=%s)", async 
   expect(service.install).not.toHaveBeenCalled();
 });
 
+it("runs the delegated install when legacy history cannot be prepared", async () => {
+  supplyExecutorInput();
+  const history = await import("../../update/legacy-trial.js");
+  vi.spyOn(history, "prepareLegacyTrialRun").mockRejectedValueOnce(
+    new Error("history unavailable"),
+  );
+  const install = vi.fn(async () => {});
+  await runGatewayServiceUpdateCommand("run", "install", install);
+  expect(install).toHaveBeenCalledOnce();
+});
+
 it.each([
   { failure: "fence", message: "executor fence lost" },
   { failure: "aggregate", message: "settlement failed" },

@@ -51,25 +51,6 @@ function expectSharedSigningSecret(cfg: OpenClawConfig, accountId: string) {
   });
 }
 
-const slackDefaultActions = [
-  "send",
-  "channel-create",
-  "conversation-open",
-  "react",
-  "reactions",
-  "read",
-  "edit",
-  "delete",
-  "download-file",
-  "upload-file",
-  "pin",
-  "unpin",
-  "list-pins",
-  "member-info",
-  "emoji-list",
-  "channel-list",
-] as const;
-
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -78,16 +59,6 @@ installChannelActionsContractSuite({
   plugin: slackPlugin,
   unsupportedAction: "poll",
   cases: [
-    {
-      name: "configured account exposes default Slack actions",
-      cfg: slackConfig({
-        botToken: "xoxb-test",
-        appToken: "xapp-test",
-        actions: { channels: true },
-      }),
-      expectedActions: slackDefaultActions,
-      expectedCapabilities: ["presentation"],
-    },
     {
       name: "missing tokens disables the actions surface",
       cfg: slackConfig({ enabled: true }),

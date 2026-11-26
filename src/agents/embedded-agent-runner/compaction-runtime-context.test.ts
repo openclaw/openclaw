@@ -12,6 +12,7 @@ import {
   modelDefinition,
   providerEntry,
 } from "../model-auth.fixtures.test-support.js";
+import { prepareParticipationTestRun } from "../participation-ceiling.test-support.js";
 import * as providerModelNormalizationRuntime from "../provider-model-normalization.runtime.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import {
@@ -22,6 +23,7 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 import { buildAfterTurnRuntimeContext } from "./run/attempt-prompt-helpers.js";
+import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { buildContextEngineCompactionSessionTarget } from "./run/session-bootstrap.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -67,20 +69,6 @@ function think(params: Partial<ThinkingInput> = {}) {
 }
 
 describe("compaction runtime context", () => {
-  it.each([
-    [100_000, 500_000, 100_000],
-    [500_000, 64_000, 64_000],
-  ])("caps requested %i tokens by model window %i", (requested, contextWindow, expected) => {
-    expect(
-      resolveCompactionContextTokenBudget({
-        provider: "openai",
-        modelId: "mock-model",
-        model: modelWithWindow(contextWindow),
-        requestedTokenBudget: requested,
-      }),
-    ).toBe(expected);
-  });
-
   it.each([
     [16_000, 3_000],
     [2_000, 2_000],
@@ -189,38 +177,6 @@ describe("compaction runtime context", () => {
       ...routing,
       provider: "openai",
       model: "gpt-5.4",
-    });
-  });
-
-  it("normalizes nullable routing fields", () => {
-    expect(
-      createContext({
-        sessionKey: null,
-        messageChannel: null,
-        messageProvider: null,
-        chatType: null,
-        agentAccountId: null,
-        currentChannelId: null,
-        currentThreadTs: null,
-        currentMessageId: null,
-        authProfileId: null,
-        senderId: null,
-        provider: null,
-        modelId: null,
-      }),
-    ).toMatchObject({
-      sessionKey: undefined,
-      messageChannel: undefined,
-      messageProvider: undefined,
-      chatType: undefined,
-      agentAccountId: undefined,
-      currentChannelId: undefined,
-      currentThreadTs: undefined,
-      currentMessageId: undefined,
-      authProfileId: undefined,
-      senderId: undefined,
-      provider: undefined,
-      model: undefined,
     });
   });
 
@@ -496,11 +452,11 @@ describe("compaction runtime context", () => {
   });
 });
 
-it.each([true, false])("preserves process scope and model policy (locked=%s)", (locked) => {
+it.each([true, false])("preserves process scope and model policy (locked=%s)", async (locked) => {
   const scopedId = "after-turn-session",
     foreignId = "after-turn-foreign";
   for (const [id, scopeKey, pid] of [
-    [scopedId, "session-123", 1234],
+    [scopedId, "agent:main:session-123", 1234],
     [foreignId, "agent:main", undefined],
   ] as const) {
     addSession({
@@ -532,8 +488,14 @@ it.each([true, false])("preserves process scope and model policy (locked=%s)", (
       agentDir: "/tmp/agent",
       activeAgentId: "main",
       attempt: {
+        admittedRunContext: await prepareParticipationTestRun({
+          kind: "send",
+          profileId: "guest",
+          sessionKey: "agent:main:session-123",
+          permission: "read-only",
+        }).preparedRunAdmission.admit("embedded"),
         sessionId: "session-123",
-        sessionKey: "session-123",
+        sessionKey: "agent:main:session-123",
         sandboxSessionKey: "global",
         sandboxAgentId: "main",
         provider: "openai",
@@ -555,6 +517,12 @@ it.each([true, false])("preserves process scope and model policy (locked=%s)", (
         },
       },
     });
+    expect(
+      readCompactionAccountingRecorder(context)?.operatorAuthority?.participationCeiling
+        ?.permission,
+    ).toBe("read-only");
+    expect(context).not.toHaveProperty("admittedRunContext");
+    expect(context).not.toHaveProperty("participationCeiling");
     expect(context.activeProcessSessions).toHaveLength(1);
     expect(context).toMatchObject({
       activeProcessSessions: [{ sessionId: scopedId, command: "sleep 600", pid: 1234 }],

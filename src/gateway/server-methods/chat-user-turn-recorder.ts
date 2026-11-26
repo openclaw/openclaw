@@ -29,6 +29,7 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import { readSuggestedBy } from "../../sessions/user-turn-transcript.metadata.js";
 import type { UserTurnOriginalInputCommit } from "../../sessions/user-turn-transcript.types.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -110,6 +111,11 @@ export function createGatewayChatUserTurnController(params: {
   const senderProfileId = recoveredInput
     ? recoveredInput.requesterProfile?.id
     : params.client?.authenticatedUserProfile?.profileId;
+  const suggestedBy = readSuggestedBy(
+    recoveredInput
+      ? recoveredInput.target.message["__openclaw"]?.suggestedBy
+      : params.client?.internal?.suggestedBy,
+  );
   const toolCaller = params.client?.internal?.agentToolCaller;
   const requesterOrigin = captureRequesterOrigin({
     requesterOrigin: toolCaller?.requesterOrigin,
@@ -149,8 +155,11 @@ export function createGatewayChatUserTurnController(params: {
     idempotencyKey: sourceId,
     ...(request.p.replyToId ? { replyToId: request.p.replyToId } : {}),
     ...(sender ? { sender } : {}),
+    ...(suggestedBy ? { suggestedBy } : {}),
     ...(sourceClients.length ? { transport: { clients: sourceClients } } : {}),
-    ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
+    ...(admission.operatorAuthority?.grant.owner
+      ? { senderIsOwner: admission.operatorAuthority.grant.owner }
+      : {}),
     provenance:
       request.systemInputProvenance ??
       (params.client?.internal?.syntheticClient ? undefined : { kind: "external_user" }),
@@ -329,7 +338,7 @@ export function createGatewayChatUserTurnController(params: {
                 }
               : {}),
             ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
-            ...(request.suppressCommandInterpretation
+            ...(request.suppressCommandInterpretation || request.participating
               ? { suppressCommandInterpretation: true }
               : {}),
             ...(request.p.deliver !== undefined || request.explicitOrigin
@@ -388,6 +397,7 @@ export function createGatewayChatUserTurnController(params: {
                     },
                     retained.map((mention) => ({
                       profileId: mention.profileId,
+                      access: mention.access,
                       token: text.slice(mention.start, mention.end),
                     })),
                   );

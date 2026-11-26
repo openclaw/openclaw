@@ -7,7 +7,6 @@ import {
   projectLiveSessionMessage,
 } from "../../packages/gateway-client/src/session-projection.js";
 import { getMediaDir } from "../media/store.js";
-import * as assistantDisplay from "../shared/assistant-display-content.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import { extractTextFromMessage } from "../tui/tui-formatters.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
@@ -61,7 +60,7 @@ it("keeps size recovery in text fallback without adding prose to the rich card",
   expect(projectChatDisplayMessage(unrelated)).not.toHaveProperty("text");
 });
 
-it("admits display content once before sanitizing a history page", () => {
+it("projects visible history without changing stored input", () => {
   const messages = [
     { role: "user", content: "Show the report" },
     {
@@ -72,22 +71,13 @@ it("admits display content once before sanitizing a history page", () => {
     },
     { role: "toolResult", toolCallId: "read-1", content: [text("Tool output")] },
   ];
-  const original = structuredClone(messages);
-  const admission = vi.spyOn(assistantDisplay, "projectAssistantDisplayContent");
-  try {
-    const projected = projectChatDisplayMessages([null, ...messages, "invalid"]);
-    expect(JSON.stringify(projected)).toBe(
-      JSON.stringify([
-        messages[0],
-        { role: "assistant", content: [text("Visible report")] },
-        messages[2],
-      ]),
-    );
-    expect(messages).toEqual(original);
-    expect(admission).toHaveBeenCalledTimes(messages.length);
-  } finally {
-    admission.mockRestore();
-  }
+  expect(JSON.stringify(projectStable([null, ...messages, "invalid"]))).toBe(
+    JSON.stringify([
+      messages[0],
+      { role: "assistant", content: [text("Visible report")] },
+      messages[2],
+    ]),
+  );
 });
 
 it("preserves model-change labels without exposing other custom-message details", () => {
@@ -572,6 +562,18 @@ it.each([
     );
   },
 );
+
+it.each([
+  { authorizationUrl: "https://auth.example.test/signin", shown: true },
+  { authorizationUrl: "javascript:alert(1)", shown: false },
+])("keeps only web MCP sign-in links for the Control UI (%j)", ({ authorizationUrl, shown }) => {
+  const mcpConnect = { serverName: "tracker", authorizationUrl };
+  const block = (details?: unknown) =>
+    toolResult("tracker__list_issues", details ? { details } : {});
+  expect(sanitizeChatHistoryMessages(toolRows(block({ mcpConnect, extra: "drop" })))).toEqual(
+    toolRows(block(shown ? { mcpConnect } : undefined)),
+  );
+});
 
 const execStatus = { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false };
 it.each([

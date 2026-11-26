@@ -13,11 +13,13 @@ import { createPreparedReadinessFixture } from "./server/readiness.test-support.
 
 const fixture = vi.hoisted(() => ({ root: "", buildId: "build-before" as string | null }));
 const trial = vi.hoisted(() => ({
-  ready: vi.fn(async (_buildId: string | null, _root: string | null) => true),
+  residentReady: vi.fn<typeof import("../update/gateway-trial.js").announceReady>(),
+  ready: vi.fn<typeof import("../update/gateway-trial.js").observeLegacyTrialReadiness>(),
 }));
 vi.mock("../update/gateway-trial.js", async (original) => ({
   ...(await original<typeof import("../update/gateway-trial.js")>()),
-  announceReady: trial.ready,
+  announceReady: trial.residentReady,
+  observeLegacyTrialReadiness: trial.ready,
 }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
@@ -77,7 +79,8 @@ beforeEach(async () => {
   resetGatewayWorkAdmission();
   fixture.root = directories.make("openclaw-replaced-install-");
   fixture.buildId = "build-before";
-  trial.ready.mockReset().mockResolvedValue(true);
+  trial.ready.mockReset().mockResolvedValue(undefined);
+  trial.residentReady.mockReset().mockResolvedValue(undefined);
   await fs.mkdir(path.join(fixture.root, "dist"));
   vi.resetModules();
   owner = await import("./stale-install.js");
@@ -93,57 +96,40 @@ afterEach(() => {
 });
 
 describe("running installation replacement", () => {
-  it("owns readiness settlement without blocking replacement after a failed write", async () => {
+  it("detects replacement while a history write is pending and retries after rejection", async () => {
     const handoff = registerReplacement();
-    const logging = await import("../logging/subsystem.js");
-    const createLogger = logging.createSubsystemLogger;
-    const warn = vi.fn();
-    vi.spyOn(logging, "createSubsystemLogger").mockImplementation((subsystem) => ({
-      ...createLogger(subsystem),
-      warn,
-    }));
-    await writeIdentity("2026.9.4", "build-before");
-    const entered = createDeferredCore();
     const release = createDeferredCore();
-    trial.ready.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      throw new Error("history write failed");
-    });
-    let completed = false;
-    const pending = owner.announceGatewayInstallationReady(createPreparedReadinessFixture()).then(
-      () => {
-        completed = true;
-        return undefined;
-      },
-      (error: unknown) => {
-        completed = true;
-        return error;
-      },
+    let recovered = false;
+    trial.ready.mockResolvedValueOnce(
+      vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          await release.promise;
+          throw new Error("history write failed");
+        })
+        .mockImplementation(async () => {
+          recovered = true;
+          return true;
+        }),
     );
-    await entered.promise;
-    expect(completed).toBe(false);
-    release.resolve();
-    expect(await pending).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("maintenance will retry: history write failed"),
-    );
-    trial.ready.mockRejectedValueOnce(new Error("periodic history write failed"));
-    await writeIdentity();
-    await expect(owner.checkGatewayInstallationReplacement()).resolves.toBeUndefined();
-    expect(handoff).toHaveBeenCalledOnce();
-    expect(owner.getGatewayInstallationReplacement()).toMatchObject({
-      running: { version: "2026.9.4", buildId: "build-before" },
-      onDisk: { version: "2026.9.5", buildId: "build-after" },
-    });
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("maintenance will retry: periodic history write failed"),
-    );
-    await owner.checkGatewayInstallationReplacement();
-    await owner.checkGatewayInstallationReplacement();
-    expect(trial.ready).toHaveBeenCalledTimes(3);
-    expect(trial.ready).toHaveBeenLastCalledWith("build-before", fixture.root);
-    expect(handoff).toHaveBeenCalledOnce();
+    await owner.announceGatewayInstallationReady(createPreparedReadinessFixture());
+    try {
+      await writeIdentity();
+      await owner.checkGatewayInstallationReplacement();
+      expect(owner.getGatewayInstallationReplacement()).toMatchObject({
+        running: { version: "2026.9.4", buildId: "build-before" },
+        onDisk: { version: "2026.9.5", buildId: "build-after" },
+      });
+      expect(handoff).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+    }
+    await expect
+      .poll(async () => {
+        await owner.checkGatewayInstallationReplacement();
+        return recovered;
+      })
+      .toBe(true);
   });
   it("rechecks core admission after an early startup observation was not ready", async () => {
     registerReplacement();
@@ -161,24 +147,13 @@ describe("running installation replacement", () => {
     });
     await logGatewayReady({ getReadiness: readiness, log: { info: vi.fn() } });
     await owner.checkGatewayInstallationReplacement();
+    await expect.poll(() => trial.residentReady.mock.calls[0]).toEqual(["build-before"]);
     expect(trial.ready).not.toHaveBeenCalled();
     pending = false;
     await owner.checkGatewayInstallationReplacement();
     expect(trial.ready).toHaveBeenCalledExactlyOnceWith("build-before", fixture.root);
   });
 
-  it("retries a ready observation that did not settle a trial", async () => {
-    registerReplacement();
-    trial.ready.mockResolvedValueOnce(false);
-    const { logGatewayReady } = await import("./server-startup-readiness.js");
-    await logGatewayReady({
-      getReadiness: createPreparedReadinessFixture(),
-      log: { info: vi.fn() },
-    });
-    await owner.checkGatewayInstallationReplacement();
-    await owner.checkGatewayInstallationReplacement();
-    expect(trial.ready).toHaveBeenCalledTimes(2);
-  });
   it("keeps periodic installation observations free of synchronous filesystem calls", async () => {
     const handoff = registerReplacement();
     await writeIdentity("2026.9.4", "build-before");

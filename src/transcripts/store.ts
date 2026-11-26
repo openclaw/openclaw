@@ -299,11 +299,13 @@ export class TranscriptsStore {
   async readSummarySnapshot(
     session: TranscriptSessionDescriptor,
     maxUtterances: number,
+    minimumNextSequence?: number,
   ): Promise<StoreTypes.TranscriptSummarySnapshot | undefined> {
     return this.readWorker("transcripts.summarySnapshot", {
       params: {
         session: { sessionId: session.sessionId, startedAt: session.startedAt },
         maxUtterances,
+        minimumNextSequence,
       },
     });
   }

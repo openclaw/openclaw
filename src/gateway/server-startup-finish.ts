@@ -401,7 +401,7 @@ export async function finishGatewayStartup(params: {
   ]);
   await logGatewayReady(
     { getReadiness, log, startupTrace, isClosing: () => lifecycle.closePreludeStarted },
-    opts.updateCanary ? "candidate gateway ready; autonomous sidecars suppressed" : "gateway ready",
+    opts.updateCanary,
   );
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
   if (opts.updateCanary) {

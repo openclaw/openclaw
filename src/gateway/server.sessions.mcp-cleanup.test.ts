@@ -1,4 +1,4 @@
-// Registered reset/delete must join transports already retired by the MCP idle sweep.
+// Session lifecycle mutations own reclamation even when the idle sweep started it.
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, test } from "vitest";
 import {
@@ -31,8 +31,8 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-test.for(["sessions.reset", "sessions.delete"] as const)(
-  "%s joins MCP idle disposal before mutating the session",
+test.for(["sessions.reset", "sessions.delete", "sessions.patch"] as const)(
+  "%s waits for its idle MCP transport to close before mutating the session",
   async (method, { signal }) => {
     const beforeSettlement = (gate: Promise<unknown>, work: Promise<unknown>, message: string) =>
       withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
@@ -42,8 +42,6 @@ test.for(["sessions.reset", "sessions.delete"] as const)(
     const readEntry = () => loadSessionEntry({ agentId: "main", sessionKey, storePath });
     await writeSingleLineSession(dir, sessionId, "hello");
     await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-    const initialEntry = readEntry();
-    expect(initialEntry).toBeDefined();
     await Promise.all([
       getSessionsHandlers(),
       import("./session-reset-service.js"),
@@ -110,7 +108,7 @@ test.for(["sessions.reset", "sessions.delete"] as const)(
       cfg: {
         plugins: { enabled: false },
         mcp: {
-          sessionIdleTtlMs: 1,
+          ...(method === "sessions.patch" ? {} : { sessionIdleTtlMs: 1 }),
           servers: { fixture: { url: server.url, transport: "streamable-http" } },
         },
       },
@@ -120,16 +118,34 @@ test.for(["sessions.reset", "sessions.delete"] as const)(
     } finally {
       await releaseSessionMcpRuntime(lease);
     }
-    clock.setTime(lease.runtime.lastUsedAt + 1);
-    const sweep = manager.sweepIdleRuntimes();
-    pending.push(sweep);
-    await beforeSettlement(
-      server.terminationStarted,
-      sweep,
-      "MCP idle sweep settled before disposal started",
-    );
-    expect(manager.peekSession({ sessionId })).toBeUndefined();
-    const mutation = directSessionReq(method, { key: sessionKey }).then((result) => {
+    const archive = { key: sessionKey, archived: true, expectedSessionId: sessionId };
+    let sweep: Promise<void> | undefined;
+    if (method === "sessions.patch") {
+      expect(
+        await directSessionReq(method, { ...archive, expectedSessionId: "stale-id" }),
+      ).toMatchObject({ ok: false });
+      expect(await directSessionReq(method, { ...archive, archived: false })).toMatchObject({
+        ok: true,
+      });
+      expect(manager.peekSession({ sessionId })).toBe(lease.runtime);
+      expect(server.terminationCount()).toBe(0);
+    } else {
+      clock.setTime(lease.runtime.lastUsedAt + 1);
+      sweep = manager.sweepIdleRuntimes();
+      pending.push(sweep);
+      await beforeSettlement(
+        server.terminationStarted,
+        sweep,
+        "MCP idle sweep settled before disposal started",
+      );
+      expect(manager.peekSession({ sessionId })).toBeUndefined();
+    }
+    const initialEntry = readEntry();
+    expect(initialEntry).toBeDefined();
+    const mutation = directSessionReq(
+      method,
+      method === "sessions.patch" ? archive : { key: sessionKey },
+    ).then((result) => {
       mutationFinished = true;
       if (!result.ok) {
         throw new Error(`${method} failed: ${JSON.stringify(result.error)}`);
@@ -138,7 +154,7 @@ test.for(["sessions.reset", "sessions.delete"] as const)(
     });
     pending.push(mutation);
     await beforeSettlement(
-      retirementStarted.promise,
+      method === "sessions.patch" ? server.terminationStarted : retirementStarted.promise,
       mutation,
       "Session cleanup settled before retiring MCP",
     );
@@ -149,11 +165,16 @@ test.for(["sessions.reset", "sessions.delete"] as const)(
     expect(pendingEntry?.sessionId).toBe(sessionId);
     expect(pendingEntry?.lifecycleRevision).toBe(initialEntry?.lifecycleRevision);
     terminate.resolve();
-    await withinTest(sweep, signal);
+    if (sweep) {
+      await withinTest(sweep, signal);
+    }
     expect(await withinTest(mutation, signal)).toMatchObject({ ok: true });
+    expect(manager.peekSession({ sessionId })).toBeUndefined();
     const entry = readEntry();
     if (method === "sessions.delete") {
       expect(entry).toBeUndefined();
+    } else if (method === "sessions.patch") {
+      expect(entry?.archivedAt).toEqual(expect.any(Number));
     } else {
       expect(entry?.sessionId).toBe(sessionId);
       expect(entry?.lifecycleRevision).toEqual(expect.any(String));

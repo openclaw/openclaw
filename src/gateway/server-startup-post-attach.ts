@@ -321,10 +321,7 @@ export async function startGatewayPostAttachRuntime(params: {
               return pluginRegistry;
             }
             params.onSidecarsReady?.();
-            await logGatewayReady(
-              params,
-              "candidate gateway ready; autonomous sidecars suppressed",
-            );
+            await logGatewayReady(params, true);
             return pluginRegistry;
           }
           const internalHookSelection = await resolveInternalHookSelection(

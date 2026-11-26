@@ -98,7 +98,7 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
                     "PRAGMA schema_version",
                     "PRAGMA user_version",
                     "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
-                    'select "value_json" from "config_machine_state" where "state_key" = ?',
+                    'select * from "config_machine_state" where "state_key" = ?',
                   ]
                 : [];
             expect(queries).toEqual(qualificationQueries);
