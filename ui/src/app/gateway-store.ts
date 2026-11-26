@@ -433,7 +433,10 @@ export function createApplicationGateway(
         );
         setUnavailableDeadline("suspensionPhase");
         // A successful hello retires bootstrap; the client has processed any issued device grant.
-        connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
+        // An unchanged connection must keep pending document recovery and draft reviews current.
+        if (connection.bootstrapToken !== "" || connection.bootstrapProfile !== undefined) {
+          connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
+        }
         const retiredAuthLog = eventLog.bindRecoveryScope(hello.auth?.recoveryScope);
         if (retiredAuthLog) {
           publishEventLogRetirement(retiredAuthLog);

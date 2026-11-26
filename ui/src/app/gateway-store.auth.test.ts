@@ -17,6 +17,7 @@ import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalid
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { writeSnapshotFixture } from "../pages/chat/session-snapshot.test-support.ts";
 import type { BootRecord } from "./boot-record.ts";
+import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,
@@ -24,6 +25,7 @@ import {
   stubGatewayStoreTestGlobals,
 } from "./gateway-store.test-support.ts";
 import { loadSettings, persistSessionToken, saveSettings } from "./settings.ts";
+import { reloadAfterRenderErrorOnce } from "./stale-chunk-reload.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
 const RELOAD_GUARD_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
@@ -155,6 +157,65 @@ describe("createApplicationGateway authentication diagnostics", () => {
       error: { code, message, details },
     };
   }
+
+  it.each([
+    { name: "ordinary hello", bootstrapToken: "", bootstrapProfile: undefined, reloads: true },
+    {
+      name: "bootstrap token",
+      bootstrapToken: "synthetic-bootstrap",
+      bootstrapProfile: undefined,
+      reloads: false,
+    },
+    {
+      name: "bootstrap profile",
+      bootstrapToken: "",
+      bootstrapProfile: "owner" as const,
+      reloads: false,
+    },
+  ])(
+    "preserves pending render recovery only for $name",
+    async ({ bootstrapToken, bootstrapProfile, reloads }) => {
+      const { replace, probe, fetchMock } = stubBuildReloadDocument();
+      gateway.connect({ bootstrapToken, bootstrapProfile });
+      const connection = gateway.connection;
+      const client = gateway.snapshot.client;
+      const pending = reloadAfterRenderErrorOnce(createGatewayControlUiReloadOptions(gateway));
+      expect(fetchMock).toHaveBeenCalledOnce();
+
+      // Initial render recovery can probe while this same client's hello is still pending.
+      accept();
+      const sameConnection = gateway.connection === connection;
+      probe.resolve(new Response(null, { status: 200 }));
+      const recovered = await pending;
+
+      expect(gateway.snapshot.client).toBe(client);
+      expect(sameConnection).toBe(reloads);
+      expect(gateway.connection.bootstrapToken).toBe("");
+      expect(gateway.connection.bootstrapProfile).toBeUndefined();
+      expect(recovered).toBe(reloads);
+      expect(replace).toHaveBeenCalledTimes(Number(reloads));
+      expect(sessionStorage.getItem("openclaw.controlUi.renderErrorReloadAttempted")).toBe(
+        reloads ? "1" : null,
+      );
+    },
+  );
+
+  it("rejects a pending render recovery after connection credentials change", async () => {
+    const { replace, probe, fetchMock } = stubBuildReloadDocument();
+    gateway.start();
+    const connection = gateway.connection;
+    const pending = reloadAfterRenderErrorOnce(createGatewayControlUiReloadOptions(gateway));
+    expect(fetchMock).toHaveBeenCalledOnce();
+
+    gateway.connect({ token: "synthetic-replacement-token" });
+    accept();
+    probe.resolve(new Response(null, { status: 200 }));
+
+    expect(await pending).toBe(false);
+    expect(gateway.connection).not.toBe(connection);
+    expect(replace).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("openclaw.controlUi.renderErrorReloadAttempted")).toBeNull();
+  });
 
   function rejectStaleBuild(
     {
