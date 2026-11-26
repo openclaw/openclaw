@@ -1,15 +1,22 @@
+import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor-capabilities.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
-import { inspectUpdateRepairDriverAdmission } from "../infra/update-run-activity.js";
+import {
+  hasUnrecordedUpdateRunDriver,
+  inspectUpdateRepairDriverAdmission,
+  recordedUpdateRunDrivers,
+} from "../infra/update-run-activity.js";
 import { recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import { createUpdateRunAdmissionReader } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
+import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 
 export function resolveDoctorUpdateAdmission(
   env: NodeJS.ProcessEnv,
   boundRunId?: string,
+  legacyPostCore?: DoctorMaintenanceParams["legacyPostCore"],
 ): {
   assertCurrent: () => void;
   readContinuation: () => UpdateRunRecord | undefined;
@@ -23,7 +30,29 @@ export function resolveDoctorUpdateAdmission(
   );
   const readAdmission = () => {
     const runs = readRuns();
-    const admission = inspectUpdateRepairDriverAdmission(runs, inheritedRunId);
+    // The shipped updater did not record a driver. Its already-admitted native
+    // executor proves this exact post-core run; all other runs still use driver admission.
+    if (legacyPostCore) {
+      captureUpdateCommandExecutorAuthority(legacyPostCore.fence, legacyPostCore.runId);
+    }
+    const legacyRun =
+      legacyPostCore &&
+      runs.find(
+        (run) =>
+          run.runId === inheritedRunId &&
+          run.runId === legacyPostCore.runId &&
+          run.createdAtMs === legacyPostCore.createdAtMs &&
+          run.status === "running" &&
+          !recordedUpdateRunDrivers(run).length &&
+          !hasUnrecordedUpdateRunDriver(run),
+      );
+    if (legacyPostCore && !legacyRun) {
+      throw new Error("Legacy post-core Doctor continuation changed during admission.");
+    }
+    const admission = inspectUpdateRepairDriverAdmission(
+      legacyRun ? runs.filter((run) => run !== legacyRun) : runs,
+      inheritedRunId,
+    );
     if (admission.kind === "conflict") {
       if (admission.reason === "ancestry-unverified") {
         throw new DoctorMaintenanceRefusalError(
@@ -46,7 +75,7 @@ export function resolveDoctorUpdateAdmission(
       }
       throw new Error(admission.message);
     }
-    return admission;
+    return legacyRun ? { kind: "continuation" as const, run: legacyRun } : admission;
   };
   const admission = readAdmission();
   const continuation =
@@ -63,7 +92,10 @@ export function resolveDoctorUpdateAdmission(
     },
     recordContinuation: () => {
       const current = readAdmission();
-      if (continuation?.steps.some((step) => step.step === "finalize:repair-continuation")) {
+      if (
+        !legacyPostCore &&
+        continuation?.steps.some((step) => step.step === "finalize:repair-continuation")
+      ) {
         const run =
           current.kind === "continuation"
             ? current.run
