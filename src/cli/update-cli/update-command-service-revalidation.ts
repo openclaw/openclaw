@@ -235,6 +235,16 @@ export async function assertManagedGatewayArtifactPublication(params: {
     }
     const startupEntry = binding.windowsStartupEntry;
     if (startupEntry !== undefined) {
+      // A leftover Startup entry can observe the selected Task's own process; the
+      // Task stop ends that listener. PID reuse since inspection is an accepted edge case.
+      if (
+        before.servicePid !== undefined &&
+        state.runtime?.pid === before.servicePid &&
+        resolveGatewayProfileSuffix(state.env.OPENCLAW_PROFILE) ===
+          resolveGatewayProfileSuffix(before.serviceEnv.OPENCLAW_PROFILE)
+      ) {
+        return true;
+      }
       // Only the selected Task's proven absence can select its Startup fallback.
       selectedState ??= await readBinding({
         env: before.serviceEnv,
