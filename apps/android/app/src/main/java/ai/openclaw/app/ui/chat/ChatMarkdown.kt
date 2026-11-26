@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
@@ -460,10 +461,11 @@ private fun MarkdownRendering.RenderTableBlock(table: TableBlock) {
         modifier = Modifier.fillMaxWidth(),
       ) {
         for (index in 0 until maxCols) {
-          val cell = row.cells.getOrNull(index) ?: AnnotatedString("")
+          val cell = row.cells.getOrNull(index)
           val anchor = rememberChatReaderAnchor()
           Text(
-            text = cell,
+            text = cell?.text ?: AnnotatedString(""),
+            textAlign = cell?.alignment,
             style = if (row.isHeader) ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold) else inlineStyles.baseCallout,
             color = textColor,
             onTextLayout = anchor?.onTextLayout ?: {},
@@ -498,8 +500,18 @@ private fun buildTableRows(
           cells =
             markdownSiblings(row.firstChild)
               .filterIsInstance<TableCell>()
-              .map { buildInlineMarkdown(it.firstChild, inlineStyles) }
-              .toList(),
+              .map { cell ->
+                TableRenderCell(
+                  text = buildInlineMarkdown(cell.firstChild, inlineStyles),
+                  alignment =
+                    when (cell.alignment) {
+                      TableCell.Alignment.LEFT -> TextAlign.Left
+                      TableCell.Alignment.CENTER -> TextAlign.Center
+                      TableCell.Alignment.RIGHT -> TextAlign.Right
+                      null -> null
+                    },
+                )
+              }.toList(),
         )
       }
     }.toList()
@@ -1035,7 +1047,12 @@ private data class InlineStyles(
 
 private data class TableRenderRow(
   val isHeader: Boolean,
-  val cells: List<AnnotatedString>,
+  val cells: List<TableRenderCell>,
+)
+
+private data class TableRenderCell(
+  val text: AnnotatedString,
+  val alignment: TextAlign?,
 )
 
 /**
