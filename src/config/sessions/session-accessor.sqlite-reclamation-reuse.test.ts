@@ -10,6 +10,7 @@ import {
   readSqliteDatabaseCleanClose,
 } from "../../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -474,6 +475,26 @@ test("keeps a failed capacity retirement owned until retry before admitting anot
   const close = vi
     .spyOn(oldest!, "close")
     .mockRejectedValueOnce(new Error("capacity close failed"));
+  const fifth = fixtures[4]!.plans[0]!.databaseOptions;
+  const source = readDatabasePathIdentitySync(fifth.path);
+  const warmIds = spawned.map((worker) => worker.threadId);
+  const warmLeases = leasesFor(fixtures[0]!);
+  const release = createDeferredCore();
+  const holding = archiveWorker.runExclusiveSqliteTranscriptArchiveWorker(() => release.promise);
+  const authority = new AbortController();
+  const stale = reclamationWorker.withSqliteReclamationWorker(
+    fifth,
+    source,
+    async () => undefined,
+    () => authority.signal.throwIfAborted(),
+  );
+  authority.abort(new Error("stale deletion"));
+  release.resolve();
+  await expect(stale).rejects.toThrow("stale deletion");
+  await holding;
+  expect(close).not.toHaveBeenCalled();
+  expect(spawned.map((worker) => worker.threadId)).toEqual(warmIds);
+  expect(leasesFor(fixtures[0]!)).toEqual(warmLeases);
   await expect(reclaim({ plan: fixtures[4]!.plans[0]! })).rejects.toThrow("capacity close failed");
   expect(spawned).toHaveLength(4);
   expect(leasesFor(fixtures[0]!)).toHaveLength(2);

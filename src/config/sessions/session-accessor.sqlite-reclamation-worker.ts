@@ -116,6 +116,10 @@ export function withSqliteReclamationWorker<T>(
     const key = sqliteReaderDatabasePathKey(options.path);
     if (!retained.has(key)) {
       while (retained.size >= MAX_RETAINED_RECLAMATION_WORKERS) {
+        // A queued request can lose authority without cancelling its FIFO slot.
+        // Check before retiring a different database's warm connection.
+        assertRequestCurrent();
+        assertSourceCurrent();
         const oldest = retained.values().next().value;
         // The archive FIFO has settled every retained request. Close owns native
         // cleanup and registry removal; a failed close keeps custody and capacity.
