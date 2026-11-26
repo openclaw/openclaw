@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { ShellCallReceipt } from "../config/sessions/transcript-shell-receipt.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { captureDiagnosticToolExecutionAwaiting } from "../infra/diagnostic-tool-execution-liveness.js";
 import {
@@ -69,11 +70,7 @@ import {
   createExecToolExecutionTimeoutResolver,
   resolveExecTimeoutDefaults,
 } from "./exec-tool-timeout.js";
-import {
-  bindShellProcess,
-  markShellCallResult,
-  type ShellCallReceipt,
-} from "./shell-call-receipt.js";
+import { bindShellProcess, markShellCallResult } from "./shell-call-receipt.js";
 import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
@@ -400,6 +397,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         ? async () => {
             signal?.throwIfAborted();
             receipt ??= await defaults.admitShellCall!(toolCallId);
+            return receipt.recordDeferredOutcome;
           }
         : undefined;
       const finish = (result: Parameters<typeof attachExecApprovalReview>[0]) =>

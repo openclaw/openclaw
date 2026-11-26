@@ -3,6 +3,7 @@ import {
   copyInternalToolResultState,
   getInternalToolExecutionPreparer,
 } from "../../../../packages/agent-core/src/internal-hooks.js";
+import { shellCallResultKey } from "../../../config/sessions/transcript-shell-receipt.js";
 import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
 import {
   createNestedToolActivity,
@@ -15,7 +16,6 @@ import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
-import { shellCallResultKey } from "../../shell-call-receipt.js";
 import { retainToolSearchImplementation } from "../../tool-search-scheduling.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import { isToolUsageWrapper } from "../../tool-usage.js";

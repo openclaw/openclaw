@@ -86,6 +86,7 @@ import {
 import { inlineEvalFact, opaqueProgramAsk } from "./bash-tools.exec-interpreter-approval.js";
 import { createApprovalSlug, runExecProcess } from "./bash-tools.exec-runtime.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
+import { hasObservedExit } from "./shell-call-receipt.js";
 
 const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
   kind: "one-shot",
@@ -1019,11 +1020,17 @@ export async function processGatewayAllowlist(
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
     const followupTarget = buildExecApprovalFollowupTarget(params, approvalId);
-    const sendDeniedFollowup = (reason: string) =>
-      sendExecApprovalFollowupResult(
+    const recordOutcome = await params.admitShellDispatch?.();
+    let gatewayInvocationStarted = false;
+    const sendDeniedFollowup = async (reason: string) => {
+      if (!gatewayInvocationStarted) {
+        await recordOutcome?.({ kind: "not-dispatched" });
+      }
+      return sendExecApprovalFollowupResult(
         followupTarget,
         `Exec denied (gateway id=${approvalId}, ${reason}): ${params.command}`,
       );
+    };
     const denyApprovalStateWriteFailure = async () => {
       emitApprovalEvent({
         action: "exec.approval.denied",
@@ -1038,8 +1045,6 @@ export async function processGatewayAllowlist(
         await sendDeniedFollowup("approval-request-failed");
       }
     };
-    await params.admitShellDispatch?.();
-    let gatewayInvocationStarted = false;
 
     void (async () => {
       const approvalDecision = await resolveApprovalForExecution(sendApprovalRequestFailedFollowup);
@@ -1154,6 +1159,7 @@ export async function processGatewayAllowlist(
         return;
       }
       if (admitted.status === "operand-drift") {
+        await recordOutcome?.({ kind: "not-dispatched" });
         await sendExecApprovalFollowupResult(followupTarget, admitted.message);
         return;
       }
@@ -1165,6 +1171,14 @@ export async function processGatewayAllowlist(
       const { run } = admitted;
 
       const outcome = await run.promise;
+      if (
+        !outcome.timedOut &&
+        !run.session.cleanupUncertain &&
+        !run.session.finalizationFailed &&
+        hasObservedExit(outcome)
+      ) {
+        await recordOutcome?.({ kind: "exited", exitCode: outcome.exitCode });
+      }
       const dynamicFollowupText = await resolveGatewayExecApprovalFollowupText({
         approvalFollowup: params.approvalFollowup,
         approvalId,

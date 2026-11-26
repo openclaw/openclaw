@@ -5,14 +5,18 @@ import { getSession, waitForExecSession } from "../agents/bash-process-registry.
 import { createProcessTool } from "../agents/bash-tools.process.js";
 import { createShellCallAdmission } from "../agents/embedded-agent-runner/run/attempt-shell-call.js";
 import { createLazyExecTool } from "../agents/lazy-exec-tool.js";
-import {
-  markShellCallResult,
-  shellCallReceipt,
-  shellCallResultKey,
-} from "../agents/shell-call-receipt.js";
+import { markShellCallResult } from "../agents/shell-call-receipt.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { applySessionEntryOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  loadTranscriptEventsSync,
+  readTranscriptEventMessage,
+} from "../config/sessions/session-accessor.sqlite-read.js";
 import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import {
+  shellCallReceipt,
+  shellCallResultKey,
+} from "../config/sessions/transcript-shell-receipt.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
@@ -185,4 +189,66 @@ it("launches the native shell only after a fenced write and reconciles only its 
         oneShotCliRun: true,
       }),
     ).toBeUndefined();
+  }));
+
+it("keeps pending approvals uncertain and records a deferred outcome only for its original call", async () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const db = openOpenClawAgentDatabase({ agentId: "main" });
+    const runId = "approval-owner";
+    const target = {
+      agentId: "main",
+      sessionId: "approval-window",
+      sessionKey: "agent:main:main",
+      storePath: db.path,
+      expectedWriterRunId: runId,
+      expectedLifecycleRevision: "rev",
+    };
+    const seed = {
+      sessionId: target.sessionId,
+      activeWriterRunId: runId,
+      lifecycleRevision: "rev",
+      updatedAt: 1,
+    };
+    writeSessionEntry(db, target.sessionKey, seed);
+    const admit = createShellCallAdmission({
+      admittedRunContext: createTestAdmittedRunContext(runId),
+      runId,
+      sessionKey: target.sessionKey,
+      sessionTarget: target,
+    })!;
+    const pending = await admit("waiting");
+    const denied = await admit("denied");
+    await denied.recordDeferredOutcome({ kind: "not-dispatched" });
+    await denied.recordDeferredOutcome({ kind: "not-dispatched" });
+    // A settled approval releases its slot for the next command even while a sibling is pending.
+    for (let index = 0; index < 65; index++) {
+      const completed = await admit(`completed-${index}`);
+      await completed.recordDeferredOutcome({ kind: "exited", exitCode: index === 0 ? 3 : 0 });
+    }
+    const reconcile = () => applySessionEntryOperation(target, { kind: "shell-call", runId });
+    expect((await reconcile())?.pendingShellCalls?.calls).toEqual([
+      { callId: "waiting", key: pending.key },
+    ]);
+    const observations = () =>
+      loadTranscriptEventsSync(target)
+        .map(readTranscriptEventMessage)
+        .filter((message) => message?.customType === "openclaw:shell-approval-outcome");
+    expect(observations()).toHaveLength(66);
+    expect(observations()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ details: { kind: "not-dispatched", toolCallId: "denied" } }),
+        expect.objectContaining({
+          details: { kind: "exited", exitCode: 3, toolCallId: "completed-0" },
+        }),
+      ]),
+    );
+    // A late callback must not append a result after another turn takes custody.
+    writeSessionEntry(db, target.sessionKey, { ...seed, activeWriterRunId: "replacement" });
+    await applySessionEntryOperation(target, {
+      kind: "shell-call",
+      runId: "replacement",
+      call: { callId: "new", key: "replacement-key" },
+    });
+    await pending.recordDeferredOutcome({ kind: "exited", exitCode: 0 });
+    expect(observations()).toHaveLength(66);
   }));

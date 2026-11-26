@@ -1,14 +1,11 @@
-import { randomUUID } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getInternalToolResultProvenance } from "../../packages/agent-core/src/internal-hooks.js";
 import {
-  attachInternalToolResultProvenance,
-  getInternalToolResultProvenance,
-} from "../../packages/agent-core/src/internal-hooks.js";
+  bindShellResultObservation,
+  type ShellCallReceipt,
+} from "../config/sessions/transcript-shell-receipt.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 
-export type ShellCallReceipt = { runId: string; callId: string; key: string };
-const receipts = new WeakMap<object, ShellCallReceipt>();
 const processReceipts = new WeakMap<ProcessSession, ShellCallReceipt>();
 
 export function bindShellProcess(
@@ -34,14 +31,19 @@ export function markShellPollResult<T extends object>(
     !session.cleanupUncertain &&
     !session.finalizationFailed
   ) {
-    return bindResult(result, { ...receipt, callId: pollCallId });
+    return bindShellResultObservation(result, { ...receipt, callId: pollCallId });
   }
   return result;
 }
 
-function hasObservedExit(
-  result: Pick<ProcessSession, "exitCode" | "exitReason" | "exitSignal" | "noOutputTimedOut">,
-): boolean {
+export function hasObservedExit<
+  T extends {
+    exitCode?: number | null;
+    exitReason?: string;
+    exitSignal?: string | number | null;
+    noOutputTimedOut?: boolean;
+  },
+>(result: T): result is T & { exitCode: number } {
   // Remote nodes may report only an exit code. When the supervisor has a cause,
   // a kill, cancellation or memory limit cannot establish the command's effect.
   return (
@@ -50,23 +52,6 @@ function hasObservedExit(
     !result.exitSignal &&
     !result.noOutputTimedOut
   );
-}
-
-function bindResult<T extends object>(result: T, receipt: ShellCallReceipt): T {
-  // Each observation has its own transcript identity, including concurrent or repeated polls.
-  // The shared opaque prefix is the only fact the recovery owner needs.
-  const observation = { ...receipt, key: `${receipt.key}/${randomUUID()}` };
-  const token = {};
-  receipts.set(token, observation);
-  return attachInternalToolResultProvenance(result, token);
-}
-
-export function shellCallReceipt(runId: string, callId: string): ShellCallReceipt {
-  return {
-    runId,
-    callId,
-    key: `shell-result:${randomUUID()}`,
-  };
 }
 
 /** Only the native shell can bind an observed process result to its pre-dispatch identity. */
@@ -84,18 +69,7 @@ export function markShellCallResult<T extends { details: ExecToolDetails }>(
       detail.reason === "policy-denied" ||
       (detail.reason !== "outcome-unknown" && !detail.timedOut && hasObservedExit(detail)))
   ) {
-    return bindResult(result, receipt);
+    return bindShellResultObservation(result, receipt);
   }
   return result;
-}
-
-/** Wrappers can carry a child's private provenance; only its own terminal writer may redeem it. */
-export function shellCallResultKey(
-  result: unknown,
-  runId: string | undefined,
-  callId: string | undefined,
-): string | undefined {
-  const provenance = isRecord(result) ? getInternalToolResultProvenance(result) : undefined;
-  const receipt = provenance && receipts.get(provenance);
-  return receipt && receipt.runId === runId && receipt.callId === callId ? receipt.key : undefined;
 }

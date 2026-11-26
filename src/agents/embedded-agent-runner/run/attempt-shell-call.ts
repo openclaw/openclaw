@@ -1,12 +1,7 @@
-import { applySessionEntryOperation } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { restartResumeSkipReason } from "../../../config/sessions/session-run-lifecycle-projection.js";
-import { sessionEntryCommitGuardOptions } from "../../../config/sessions/session-source-authority.js";
-import {
-  captureOwnedTranscriptWriteAssertion,
-  getOwnedSessionTranscriptInitialWriter,
-  getOwnedSessionTranscriptWriterFence,
-} from "../../../config/sessions/transcript-write-context.js";
+import { admitSessionShellCall } from "../../../config/sessions/session-shell-call.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import {
   getSessionControllerEntryForOperation,
   isCurrentSessionControllerOperation,
@@ -18,7 +13,6 @@ import {
   normalizeMessageChannel,
 } from "../../../utils/message-channel-normalize.js";
 import { readRunOperatorAuthority } from "../../admitted-run-context.js";
-import { shellCallReceipt } from "../../shell-call-receipt.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 
@@ -66,6 +60,7 @@ export function createShellCallAdmission(
   }
   const target = {
     ...candidate,
+    agentId: candidate.agentId ?? resolveAgentIdFromSessionKey(candidate.sessionKey),
     sessionKey: candidate.sessionKey,
     sessionId: candidate.sessionId,
     storePath: candidate.storePath,
@@ -136,53 +131,6 @@ export function createShellCallAdmission(
       ),
     };
   };
-  return async (callId: string) => {
-    const owner = { sessionKey: target.sessionKey, sessionTarget: target };
-    const initial = getOwnedSessionTranscriptInitialWriter(owner);
-    const fence = initial
-      ? initial.committedFence
-      : (getOwnedSessionTranscriptWriterFence(owner) ?? fallbackFence);
-    const writer = fence?.expectedWriterRunId;
-    if (!writer) {
-      throw new Error(
-        "The shell command was not started because its session writer could not be verified.",
-      );
-    }
-    const receipt = shellCallReceipt(runId, callId);
-    const assertCurrent = captureOwnedTranscriptWriteAssertion(target);
-    const expected = {
-      sessionId: target.sessionId,
-      lifecycleRevision: fence.expectedLifecycleRevision,
-      activeWriterRunId: writer,
-    };
-    const row = await applySessionEntryOperation(
-      target,
-      {
-        kind: "shell-call",
-        runId,
-        call: { callId, key: receipt.key },
-        notice: await captureNotice(),
-        expected,
-      },
-      {
-        ...sessionEntryCommitGuardOptions(assertCurrent),
-        preserveActivity: true,
-        skipMaintenance: true,
-        requireWriteSuccess: true,
-      },
-    );
-    assertCurrent();
-    if (
-      row?.sessionId !== expected.sessionId ||
-      row.lifecycleRevision !== expected.lifecycleRevision ||
-      row.activeWriterRunId !== writer ||
-      row.pendingShellCalls?.runId !== runId ||
-      !row.pendingShellCalls.calls.some((call) => call.key === receipt.key)
-    ) {
-      throw new Error(
-        "The shell command was not started because its restart receipt could not be saved.",
-      );
-    }
-    return receipt;
-  };
+  return (callId: string) =>
+    admitSessionShellCall({ target, fallbackFence, runId, callId, captureNotice });
 }

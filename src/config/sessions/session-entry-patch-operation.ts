@@ -69,7 +69,10 @@ type SessionEntryPatchStep = (
       runId: string;
       call?: { callId: string; key: string };
       notice?: NonNullable<SessionEntry["pendingShellCalls"]>["notice"];
-      acknowledged?: NonNullable<SessionEntry["resumeAfterRestart"]>;
+      acknowledged?: {
+        marker: NonNullable<SessionEntry["resumeAfterRestart"]>;
+        pending: NonNullable<SessionEntry["pendingShellCalls"]>;
+      };
     }
   | { kind: "writer-revoke"; runId: string; terminalAtMs?: number }
   | {
@@ -276,7 +279,11 @@ export function reduceSessionEntryPatch(
       const pending = entry.pendingShellCalls;
       const previous = pending?.runId === runId ? pending : undefined;
       if (operation.acknowledged) {
-        if (!previous || !isDeepStrictEqual(entry.resumeAfterRestart, operation.acknowledged)) {
+        if (
+          !previous ||
+          !isDeepStrictEqual(previous, operation.acknowledged.pending) ||
+          !isDeepStrictEqual(entry.resumeAfterRestart, operation.acknowledged.marker)
+        ) {
           throw new Error("The interrupted shell no longer owns this restart marker");
         }
         return { pendingShellCalls: undefined, resumeAfterRestart: undefined };

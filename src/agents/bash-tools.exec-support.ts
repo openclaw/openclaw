@@ -34,9 +34,10 @@ export function buildExecRunningResult(
 ): AgentToolResult<ExecToolDetails> {
   const { session, startedAt } = run;
   // A waiter started during this turn is absent from the turn-start snapshot.
-  const otherRunning = listActiveProcessSessionReferences({ scopeKey: session.scopeKey })
-    .filter((other) => other.sessionId !== session.id)
-    .map((other) => `${other.sessionId} (${other.name})`);
+  const otherRunning = listActiveProcessSessionReferences({
+    scopeKey: session.scopeKey,
+    exclude: session,
+  }).map((other) => `${other.sessionId} (${other.name})`);
   const followUp = buildBackgroundExecFollowUp(session, yieldMs, otherRunning);
   const deadlineAtMs = session.processActivity?.deadlineAtMs;
   const deadline =

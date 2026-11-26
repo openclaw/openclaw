@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import { shellCallResultKey } from "../config/sessions/transcript-shell-receipt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindAgentAssistantSource, readAgentAssistantSource } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -44,7 +45,6 @@ import type {
 } from "./sessions/session-compaction-persistence.js";
 import { withSessionManagerAppend } from "./sessions/session-manager-append-admission.js";
 import { prepareSessionManagerSync } from "./sessions/session-manager-incognito-scope.js";
-import { shellCallResultKey } from "./shell-call-receipt.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,

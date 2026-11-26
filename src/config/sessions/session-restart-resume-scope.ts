@@ -78,3 +78,13 @@ export function isRestartResumeEntryOutOfScope(
     scope
   );
 }
+
+/** A shutdown marker can recover only shell calls made by its original backend execution. */
+export function selectPendingRestartShellCalls(
+  entry: InternalSessionEntry,
+  marker: RestartResumeMarker,
+) {
+  return marker.sourceRunId && marker.sourceRunId === entry.pendingShellCalls?.runId
+    ? entry.pendingShellCalls
+    : undefined;
+}

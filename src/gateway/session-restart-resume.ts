@@ -6,12 +6,13 @@ import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "../auto-reply/reply/session-event-handoff.js";
-import {
-  applySessionEntryReplacements,
-  patchSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
+import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
-import { createLiveRestartResumeMarker } from "../config/sessions/session-restart-resume-scope.js";
+import { acknowledgeRestartResumeMarker } from "../config/sessions/session-restart-recovery.js";
+import {
+  createLiveRestartResumeMarker,
+  selectPendingRestartShellCalls,
+} from "../config/sessions/session-restart-resume-scope.js";
 import {
   derivePersistedSessionLifecyclePatch,
   restartResumeSkipReason,
@@ -470,6 +471,7 @@ async function resumeRestartStore(
           continue;
         }
         const { entry, marker, parked, skip } = resumed;
+        const pendingShell = selectPendingRestartShellCalls(entry, marker);
         let admissionStage = "principal";
         if (skip && !(parked && skip === "subagent")) {
           summary.record(agentId, sessionKey, skip);
@@ -496,11 +498,7 @@ async function resumeRestartStore(
               sessionKey,
               sessionId: entry.sessionId,
               preserveRecordedSource: true,
-              operatorSource:
-                marker.operatorSource ??
-                (marker.sourceRunId && entry.pendingShellCalls?.runId === marker.sourceRunId
-                  ? entry.pendingShellCalls.notice?.operatorSource
-                  : undefined),
+              operatorSource: marker.operatorSource ?? pendingShell?.notice?.operatorSource,
               assertCurrent: () => signal.throwIfAborted(),
             });
             admissionStage = "target";
@@ -536,7 +534,7 @@ async function resumeRestartStore(
                 runSetupScript: authority?.authority.scopes.includes(ADMIN_SCOPE) === true,
               });
             }
-            if (marker.sourceRunId && marker.sourceRunId === entry.pendingShellCalls?.runId) {
+            if (pendingShell) {
               admissionStage = "shell-recovery";
               if (
                 await pauseInterruptedShellTurn({
@@ -586,7 +584,7 @@ async function resumeRestartStore(
             }
             // A failed admission still owns its diagnostic. Only the local transcript
             // may report the shell uncertainty when requester or workspace validation failed.
-            if (marker.sourceRunId && marker.sourceRunId === entry.pendingShellCalls?.runId) {
+            if (pendingShell) {
               await pauseInterruptedShellTurn({
                 target: { ...target, agentId, sessionKey },
                 entry,
@@ -606,21 +604,11 @@ async function resumeRestartStore(
               log,
             });
           }
-          await patchSessionEntryCore(
+          await acknowledgeRestartResumeMarker(
             { ...target, agentId, sessionKey },
-            (current) =>
-              current.sessionId === entry.sessionId &&
-              current.lifecycleRevision === entry.lifecycleRevision &&
-              current.resumeAfterRestart?.sourceRunId === marker.sourceRunId &&
-              current.resumeAfterRestart?.scope === marker.scope
-                ? { resumeAfterRestart: undefined }
-                : null,
-            {
-              requireWriteSuccess: true,
-              skipMaintenance: true,
-              // Shutdown marks before cancelling recovery; its new marker wins.
-              assertCommitAllowed: assertRecoveryCurrent,
-            },
+            entry,
+            marker,
+            assertRecoveryCurrent,
           );
         }
       } catch (error) {
