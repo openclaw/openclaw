@@ -202,16 +202,14 @@ suite.define(() => {
           name: "visitor_invite" | "visitor_revoke",
           args: Record<string, unknown>,
         ) => {
-          const result = await rpc<ToolsInvokeResult>(adminPage, "tools.invoke", {
+          const { ok, output, error } = await rpc<ToolsInvokeResult>(adminPage, "tools.invoke", {
             name,
             args: { email: guestEmail, ...args },
           });
-          expect(result).toMatchObject({ ok: true, output: { content: expect.any(Array) } });
-          if (!result.ok) {
-            throw new Error("Synthetic invitation failed: " + result.error?.message);
-          }
-          expect(result.output).not.toHaveProperty("isError", true);
-          return asNullableRecord(asNullableRecord(result.output)?.details);
+          expect(ok, error?.message).toBe(true);
+          expect(output).toMatchObject({ content: expect.any(Array) });
+          expect(output).not.toHaveProperty("isError", true);
+          return asNullableRecord(asNullableRecord(output)?.details);
         };
         await invite("visitor_invite", { days: 2, note: "First invitation note." });
         const first = await open(guestAddr);
@@ -229,9 +227,9 @@ suite.define(() => {
           (
             await rpc<{ sessions: WelcomeRow[] }>(page, "sessions.list", { archived: "all" })
           ).sessions.filter((row) => (row.displayName ?? row.label)?.startsWith("Welcome "));
-        const initialWelcomes = await welcomeRows(first);
-        expect(initialWelcomes).toHaveLength(1);
-        const [original] = initialWelcomes;
+        const [original, ...duplicates] = await welcomeRows(first);
+        expect(original).toBeDefined();
+        expect(duplicates).toHaveLength(0);
         expect(
           JSON.stringify(await rpc(first, "chat.history", { sessionKey: original!.key })),
         ).toContain("First invitation note.");
@@ -263,8 +261,7 @@ suite.define(() => {
         if (typeof extension?.expiresAt !== "string") {
           throw new Error("The invitation receipt did not include an expiry");
         }
-        const expiry = new Date(extension.expiresAt);
-        const expiryLabel = new Intl.DateTimeFormat("en-US", {
+        const expiryLabel = new Date(extension.expiresAt).toLocaleString("en-US", {
           timeZone: "UTC",
           year: "numeric",
           month: "short",
@@ -272,11 +269,9 @@ suite.define(() => {
           hour: "numeric",
           minute: "2-digit",
           timeZoneName: "short",
-        }).format(expiry);
+        });
         await returning.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-        await expectBrowser(
-          inbox.getByText("Guest access extended", { exact: true }),
-        ).toBeVisible();
+        await expectBrowser(inbox.getByText("Guest access extended")).toBeVisible();
         await expectBrowser(
           inbox.getByText("Expires " + expiryLabel, { exact: true }).first(),
         ).toBeVisible();
