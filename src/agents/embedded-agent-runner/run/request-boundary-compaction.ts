@@ -10,7 +10,7 @@ import { extractSummaryText } from "../../../../packages/agent-core/src/harness/
 import { consumeAgentCoreStream } from "../../../../packages/agent-core/src/runtime-deps.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { decideContextPressure } from "../../context-pressure.js";
+import { decideContextPressure, deferBoundaryMaintenanceOnce } from "../../context-pressure.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { getRawSessionAppendMessageAsync } from "../../session-raw-append-message.js";
 import {
@@ -91,6 +91,7 @@ export function createRequestBoundaryCompaction(params: {
   config?: OpenClawConfig;
   contextTokenBudget: number;
   reserveTokens: number;
+  maxOutputTokens?: number;
   runId?: string;
   /** Soft fallbacks and text commits may stop only where the tool batch can continue. */
   isToolBoundarySafe?: () => boolean;
@@ -175,9 +176,22 @@ export function createRequestBoundaryCompaction(params: {
         resolveCompactionThreshold({ contextWindowTokens: contextTokens, reserveTokensFloor: 0 }),
       ),
     );
+    const conservativeInputTokens = Math.max(
+      outgoing.estimatedPromptTokens,
+      maintenance.estimatedPromptTokens,
+    );
+    if (conservativeInputTokens < softTriggerTokens) {
+      return undefined;
+    }
+    const maxOutputTokens = options?.maxTokens ?? params.maxOutputTokens ?? model.maxTokens;
     if (
-      Math.max(outgoing.estimatedPromptTokens, maintenance.estimatedPromptTokens) <
-      softTriggerTokens
+      !failed &&
+      context.messages.at(-1)?.role === "toolResult" &&
+      params.session.agent.state.pendingToolCalls.size === 0 &&
+      params.isToolBoundarySafe?.() === true &&
+      maxOutputTokens > 0 &&
+      conservativeInputTokens + maxOutputTokens <= contextTokens &&
+      deferBoundaryMaintenanceOnce(params.runId)
     ) {
       return undefined;
     }
