@@ -130,10 +130,12 @@ describe("runCli exit behavior", () => {
     });
     onTestFinished(registerSignalExitOwner(() => {}));
     using json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    using _error = vi.spyOn(console, "error").mockImplementation(() => {});
+    using consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const report = (expectJson: boolean) => {
       json.mockClear();
+      consoleError.mockClear();
       handleCliUncaughtException(new Error("fixture failure"));
+      expect(consoleError).toHaveBeenCalled();
       expect(json).toHaveBeenCalledTimes(expectJson ? 1 : 0);
     };
     let late: (() => void) | undefined;
