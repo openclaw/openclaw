@@ -470,6 +470,7 @@ it("keeps native reader movement before a queued message-anchor restoration", as
     },
   ];
   const { container, session, renderRows } = await mountTestTranscript(paneId, rows, transcript);
+  session.layout.ready = true;
   viewport(container, 600, 3000);
   const bubble = expectDefined(container.querySelector(".chat-bubble"), "retained message");
   Object.defineProperty(bubble, "getBoundingClientRect", {
@@ -477,11 +478,12 @@ it("keeps native reader movement before a queued message-anchor restoration", as
   });
   const messageRows = new Map([["reader-message", "long-row"]]);
   session.syncMessageRows(messageRows, messageRows);
-  transcript.scrollToOffset(800);
+  transcript.scrollToOffset(824);
   renderRows(rows);
   flushFrames();
   await Promise.resolve();
   await Promise.resolve();
+  container.dispatchEvent(new WheelEvent("wheel", { deltaY: -24 }));
   nativeScroll(container, 800);
   expect(transcript.isPositionSettled).toBe(true);
   expect(container.scrollTop).toBe(800);
