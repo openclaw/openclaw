@@ -75,6 +75,7 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
     scenario !== "git-release" &&
     scenario !== "release-update" &&
     scenario !== "backup-schedule" &&
+    scenario !== "sqlite-migration-budget" &&
     scenario !== "session-share" &&
     scenario !== "missing-configured-plugin-migration" &&
     scenario !== "missing-load-path" &&
@@ -241,6 +242,12 @@ function comparePublishedReleaseVersion(a, b) {
 }
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
+  if (scenario === "sqlite-migration-budget") {
+    return (
+      catalog.oldestSupportedBaseline !== null &&
+      baselineSpec === `openclaw@${catalog.oldestSupportedBaseline}`
+    );
+  }
   if (scenario === "git-release") {
     return baselineSpec === "openclaw@2026.11.5";
   }

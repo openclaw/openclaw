@@ -4,6 +4,7 @@ export const toolingIsolatedTestFiles = [
   "test/codex-account-usage.integration.test.ts",
   // The real migration owner acquires maintenance authority through the main-thread broker.
   "test/scripts/upgrade-survivor-migration-chain.test.ts",
+  "test/scripts/upgrade-survivor-nightly-chain.test.ts",
   // The admitted Browser fixture mutates the global runtime config snapshot.
   "test/worker-browser-config.test.ts",
   // Shipped updater composition belongs to the manual/full-release tooling tier.

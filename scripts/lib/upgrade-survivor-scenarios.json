@@ -1,5 +1,5 @@
 {
-  "oldestSupportedBaseline": null,
+  "oldestSupportedBaseline": "2026.11.7",
   "scenarios": [
     "base",
     "git-release",
@@ -35,6 +35,7 @@
     "versioned-runtime-deps",
     "cron-scheduled-authority",
     "sqlite-volume",
+    "sqlite-migration-budget",
     "recovery-cleanup",
     "auth-profile-v2026-7-2-beta-5",
     "watchos-direct-node"

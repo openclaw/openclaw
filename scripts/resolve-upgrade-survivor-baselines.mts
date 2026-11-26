@@ -10,6 +10,7 @@ import {
   assertSupportedUpgradeSurvivorBaselineSpec,
   MINIMUM_UPGRADE_SURVIVOR_BASELINE,
   normalizeUpgradeSurvivorBaselineSpec,
+  readUpgradeSurvivorScenarioCatalog,
 } from "./lib/upgrade-survivor-policy.mjs";
 
 type ReleaseRecord = Partial<Record<"isPrerelease" | "publishedAt" | "tagName", unknown>>;
@@ -232,6 +233,20 @@ export function resolveBaselines(args: Map<string, string>) {
   for (const token of requestedTokens) {
     if (token === "supported-lines") {
       resolved.push(...resolveSupportedLines(args));
+    } else if (token === "support-floor") {
+      const catalogFile = args.get("scenario-catalog-json");
+      const text = readFileSync(
+        catalogFile ?? new URL("./lib/upgrade-survivor-scenarios.json", import.meta.url),
+        "utf8",
+      );
+      if (!readUpgradeSurvivorScenarioCatalog(text)) {
+        throw new Error("support-floor requires a valid inert scenario catalog");
+      }
+      const floor = JSON.parse(text).oldestSupportedBaseline;
+      if (typeof floor !== "string") {
+        throw new Error("support-floor requires a declared oldestSupportedBaseline");
+      }
+      resolved.push(`openclaw@${floor}`);
     } else if (token === "release-history") {
       resolved.push(
         ...resolveLastStable(

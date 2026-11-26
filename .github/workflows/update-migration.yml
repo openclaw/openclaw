@@ -4,6 +4,8 @@ on:
   schedule:
     # Sunday 03:17 UTC avoids the daily cache warmers and top-of-hour bursts.
     - cron: "17 3 * * 0"
+    # One isolated occupied-SQLite budget cell, not the weekly matrix.
+    - cron: "43 4 * * *"
   workflow_dispatch:
     inputs:
       workflow_ref:
@@ -34,7 +36,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: update-migration-${{ github.event_name }}
+  group: update-migration-${{ github.event_name }}-${{ github.event.schedule == '43 4 * * *' && 'daily' || 'weekly' }}
   cancel-in-progress: false
 
 jobs:
@@ -48,8 +50,8 @@ jobs:
       package_ref: ${{ inputs.package_ref || 'main' }}
       suite_profile: custom
       docker_lanes: update-migration
-      published_upgrade_survivor_baselines: ${{ inputs.baselines || 'supported-lines' }}
-      published_upgrade_survivor_scenarios: ${{ inputs.scenarios || 'plugin-deps-cleanup legacy-operator-state' }}
+      published_upgrade_survivor_baselines: ${{ github.event.schedule == '43 4 * * *' && 'support-floor' || inputs.baselines || 'supported-lines' }}
+      published_upgrade_survivor_scenarios: ${{ github.event.schedule == '43 4 * * *' && 'sqlite-migration-budget' || inputs.scenarios || 'plugin-deps-cleanup legacy-operator-state' }}
       shared_image_artifact_namespace: update-migration
       shared_image_policy: no-push-artifact
       telegram_mode: none

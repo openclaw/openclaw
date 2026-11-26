@@ -497,15 +497,25 @@ available for explicit host calibration. The independent
 `OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT` watchdog still defaults to 900 seconds;
 increase it explicitly when scaling a fixture beyond that duration.
 
-The `Update Migration` workflow runs weekly and supports manual dispatch. Its
-default `supported-lines` baseline set resolves npm dist-tags and published
-versions at run time: `latest`, the previous stable release, `extended-stable`
-when that tag exists, and the supported floor `2026.8.33`. Duplicate versions
-run once. It updates each baseline to the selected `package_ref` artifact
-(`main` by default), exercising plugin cleanup and legacy operator state.
-Leave `baselines` blank to use that default. For an explicit historical replay
-from every published stable release since 2026.6.1, pass
-`baselines=all-since-2026.6.1`:
+The `Update Migration` workflow keeps its weekly Sunday 03:17 UTC matrix and
+supports manual dispatch. Its default `supported-lines` baseline set resolves
+npm dist-tags and published versions at run time: `latest`, the previous stable
+release, and `extended-stable` when that tag exists. Duplicate versions run once.
+It updates each baseline to the selected `package_ref` artifact (`main` by
+default), exercising plugin cleanup and legacy operator state.
+Leave `baselines` blank to use that default.
+
+The daily 04:43 UTC schedule uses the same job for exactly one
+`sqlite-migration-budget` case against `support-floor`. The token resolves
+`scripts/lib/upgrade-survivor-scenarios.json.oldestSupportedBaseline`, the
+candidate-owned release-admission floor, from inert JSON at the candidate SHA.
+The new scenario is pinned to that floor and excluded from broad scenario aliases.
+This is distinct from `MINIMUM_UPGRADE_SURVIVOR_BASELINE` (`2026.6.1`), the
+unchanged broad legacy harness floor: historical replays remain available below
+the candidate release-admission floor.
+
+For an explicit historical replay from every published stable release since
+2026.6.1, pass `baselines=all-since-2026.6.1`:
 
 ```bash
 gh workflow run update-migration.yml \

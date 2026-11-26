@@ -120,7 +120,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list; use supported-lines for latest/previous/extended, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
+        description: Optional baseline list; use support-floor for the candidate catalog floor, supported-lines for latest/previous/extended, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
         required: false
         default: ""
         type: string
@@ -267,7 +267,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list; use supported-lines for latest/previous/extended, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
+        description: Optional baseline list; use support-floor for the candidate catalog floor, supported-lines for latest/previous/extended, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
         required: false
         default: ""
         type: string
@@ -902,6 +902,7 @@ jobs:
         if: steps.frozen_selection.outputs.upgrade_baselines_required == 'true'
         env:
           CANDIDATE_VERSION: ${{ steps.resolve.outputs.package_version }}
+          CANDIDATE_SOURCE_SHA: ${{ steps.resolve.outputs.package_source_sha }}
           CANDIDATE_PUBLISHED: ${{ inputs.source == 'npm' || fromJSON(inputs.candidate_artifact_json || '{}').packagePublished == true }}
           FALLBACK_BASELINE: ${{ inputs.published_upgrade_survivor_baseline }}
           REQUESTED_BASELINES: ${{ inputs.published_upgrade_survivor_baselines }}
@@ -945,6 +946,18 @@ jobs:
             --candidate-published "$CANDIDATE_PUBLISHED"
             --github-output "$GITHUB_OUTPUT"
           )
+          if [[ "$REQUESTED_BASELINES" == *"support-floor"* ]]; then
+            if [[ ! "$CANDIDATE_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+              echo "support-floor requires the exact candidate source SHA." >&2
+              exit 1
+            fi
+            # Read only inert JSON at the candidate's exact source, never its code.
+            scenario_catalog_json="$RUNNER_TEMP/upgrade-survivor-scenarios.json"
+            gh api -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/upgrade-survivor-scenarios.json?ref=${CANDIDATE_SOURCE_SHA}" \
+              > "$scenario_catalog_json"
+            args+=(--scenario-catalog-json "$scenario_catalog_json")
+          fi
           if [[ -n "$npm_versions_json" ]]; then
             args+=(--npm-versions-json "$npm_versions_json")
           fi

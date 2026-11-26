@@ -3,7 +3,9 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import catalog from "../../scripts/lib/upgrade-survivor-scenarios.json" with { type: "json" };
 import { parseArgs, resolveBaselines } from "../../scripts/resolve-upgrade-survivor-baselines.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readWorkflow, readWorkflowOutputs as readOutputs } from "./ci-workflow.test-support.js";
@@ -113,6 +115,102 @@ function resolveFixture({ args = {}, releases, versions, tags }: BaselineFixture
 }
 
 describe("scripts/resolve-upgrade-survivor-baselines", () => {
+  it("resolves the floor from candidate-owned inert data rather than the harness catalog", () => {
+    const file = path.join(root, "candidate-catalog.json");
+    writeJson(file, { ...catalog, oldestSupportedBaseline: "2026.10.4" });
+    const args = new Map([
+      ["requested", "support-floor"],
+      ["scenario-catalog-json", file],
+    ]);
+    expect(resolveBaselines(args)).toEqual(["openclaw@2026.10.4"]);
+    writeJson(file, { ...catalog, oldestSupportedBaseline: null });
+    expect(() => resolveBaselines(args)).toThrow("declared oldestSupportedBaseline");
+    writeFileSync(file, "throw new Error('must never execute candidate policy')");
+    expect(() => resolveBaselines(args)).toThrow("valid inert scenario catalog");
+  });
+
+  it("plans exactly one daily floor cell and keeps weekly supported-line inputs unchanged", () => {
+    const migration = readWorkflow(".github/workflows/update-migration.yml") as {
+      concurrency: { group: string };
+      jobs: { update_migration: { with: Record<string, string> } };
+    };
+    const selected = migration.jobs.update_migration.with;
+    const evaluate = (expression: string, schedule: string) =>
+      expression.replace(/\$\{\{\s*(.*?)\s*\}\}/gu, (_, source: string) =>
+        String(
+          runInNewContext(source, {
+            github: { event_name: "schedule", event: { schedule } },
+            inputs: {},
+          }),
+        ),
+      );
+    const daily = "43 4 * * *";
+    const weekly = "17 3 * * 0";
+    expect(evaluate(selected.published_upgrade_survivor_baselines!, weekly)).toBe(
+      "supported-lines",
+    );
+    expect(evaluate(selected.published_upgrade_survivor_scenarios!, weekly)).toBe(
+      "plugin-deps-cleanup legacy-operator-state",
+    );
+    expect(evaluate(migration.concurrency.group, daily)).not.toBe(
+      evaluate(migration.concurrency.group, weekly),
+    );
+    const run = workflow().jobs.resolve_package.steps.find(
+      (step) => step.id === "upgrade_survivor_baselines",
+    )?.run;
+    assert(run);
+    const sourceSha = "a".repeat(40);
+    writeExecutable(
+      path.join(bin, "gh"),
+      `#!/usr/bin/env node
+import assert from "node:assert/strict";
+assert.deepEqual(process.argv.slice(2), [
+  "api", "-H", "Accept: application/vnd.github.raw+json",
+  "repos/openclaw/openclaw/contents/scripts/lib/upgrade-survivor-scenarios.json?ref=${sourceSha}",
+]);
+console.log(${JSON.stringify(JSON.stringify(catalog))});
+`,
+    );
+    shell(run, {
+      CANDIDATE_SOURCE_SHA: sourceSha,
+      CANDIDATE_VERSION: "2026.11.26",
+      CANDIDATE_PUBLISHED: "false",
+      FALLBACK_BASELINE: "openclaw@2026.11.25",
+      REQUESTED_BASELINES: evaluate(selected.published_upgrade_survivor_baselines!, daily),
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      RUNNER_TEMP: root,
+    });
+    const resolved = readOutputs(output);
+    expect(resolved.baselines).toBe(`openclaw@${catalog.oldestSupportedBaseline}`);
+    const groups = JSON.parse(
+      execFileSync(process.execPath, ["scripts/plan-targeted-docker-lane-groups.mjs"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          LANES: "update-migration",
+          GROUP_SIZE: "1",
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: resolved.baseline,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: resolved.baselines,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: resolved.baseline_scope,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: evaluate(
+            selected.published_upgrade_survivor_scenarios!,
+            daily,
+          ),
+        },
+      }),
+    ) as Array<Record<string, unknown>>;
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.docker_lanes).toBe("update-migration");
+    // A single cell inherits the resolved workflow inputs rather than overriding them.
+    expect(groups[0]?.published_upgrade_survivor_baselines ?? resolved.baselines).toBe(
+      `openclaw@${catalog.oldestSupportedBaseline}`,
+    );
+    expect(
+      groups[0]?.published_upgrade_survivor_scenarios ??
+        evaluate(selected.published_upgrade_survivor_scenarios!, daily),
+    ).toBe("sqlite-migration-budget");
+  });
+
   it.each([false, true])(
     "discovers all release pages before publishing baselines (API failure: %s)",
     (failApi) => {

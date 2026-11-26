@@ -383,6 +383,23 @@ even when observation fails, with the attempted version range. Failed observatio
 retain statement identity, method, SQL source, and integrity/coverage facts, not
 database objects, catalog snapshots, or queried row values.
 
+The daily `update-migration` budget case uses the published support-floor
+release's own writers to create at least 10 GiB of occupied agent SQLite data.
+Freelist pages, WAL bytes, sparse allocation, and file padding do not count.
+The baseline Gateway closes its stores before the candidate starts; the
+harness does not checkpoint or manufacture a clean-close seal.
+
+The check calls the complete production startup owner under a real trial
+written by the production trial APIs. It includes custody, replay, schema
+steps, integrity, manifest publication, and native close. Serial pre-image
+copy calls are observed by a test-side spy that delegates unchanged: startup
+time minus those copy intervals must be at most 10 seconds, and cumulative
+copy time must be at most 10 minutes, leaving margin in the compiled
+20-minute trial budget. Receipts include bytes and time per copy and the
+fixture filesystem; clone/byte mode is recorded as **not observed**.
+Committed schemas and selected row counts and canonical content must survive.
+This is startup-owner timing, not a boot-to-ready or packaged-Gateway benchmark.
+
 - **Platforms:** a Linux systemd user service, a Linux container without a user
   bus, a macOS LaunchAgent and a Windows Scheduled Task. (#203497 merged with
   macOS-only package proof; #203735 and #203769 fixed Linux container failures

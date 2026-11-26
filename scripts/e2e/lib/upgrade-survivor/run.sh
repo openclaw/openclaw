@@ -2584,6 +2584,21 @@ if [ "$SCENARIO" = "git-release" ]; then
   exit 0
 fi
 phase install-baseline install_baseline
+if [ "$SCENARIO" = "sqlite-migration-budget" ]; then
+  if [ "$CANDIDATE_KIND" != tarball ] || [ "$UPDATE_RESTART_MODE" != manual ] ||
+    [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
+    echo "Nightly SQLite migration requires a candidate tarball, isolated manual mode, and no live provider." >&2
+    exit 2
+  fi
+  phase resolve-nightly-candidate resolve_candidate_version
+  phase nightly-migration-budget env \
+    OPENCLAW_NIGHTLY_BASELINE_ROOT="$(package_root)" \
+    OPENCLAW_NIGHTLY_RUNTIME_ROOT="$RUNTIME_ROOT/nightly" \
+    OPENCLAW_NIGHTLY_ARTIFACT_ROOT="$ARTIFACT_ROOT" \
+    bash -c 'cd "$OPENCLAW_NIGHTLY_SOURCE_ROOT"; exec node scripts/run-vitest.mjs run test/scripts/upgrade-survivor-nightly-chain.test.ts --maxWorkers=1 --configLoader runner'
+  run_completed="1"
+  exit 0
+fi
 phase initialize-state initialize_state
 if [ "$SCENARIO" = "session-share" ]; then
   require_isolated_manual_baseline openclaw@2026.10.7

@@ -47,9 +47,10 @@ cleanup_outer() {
     if [ "$exit_status" -eq 0 ] && [ "$run_completed" = "1" ]; then
       # The image user owns the private child and can differ from the host user.
       if ! docker_e2e_docker_cmd run --rm --network none \
+        --user root \
         --entrypoint rm \
         -v "$WORKER_RUNTIME_HOST_ROOT:/tmp/openclaw-worker-cleanup" \
-        "$IMAGE_NAME" -rf -- /tmp/openclaw-worker-cleanup/runtime ||
+        "$IMAGE_NAME" -rf -- /tmp/openclaw-worker-cleanup/runtime /tmp/openclaw-worker-cleanup/cache /tmp/openclaw-worker-cleanup/vite ||
         ! rm -rf "$WORKER_RUNTIME_HOST_ROOT"; then
         echo "Worker-cell runtime cleanup failed: $WORKER_RUNTIME_HOST_ROOT" >&2
         exit_status=1
@@ -184,6 +185,9 @@ BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-}"
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
+if [ "$SCENARIO" = "sqlite-migration-budget" ]; then
+  DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2700s}"
+fi
 if [ "$SCENARIO" = "git-release" ]; then
   export OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1
   # The lane's package label; the Git baseline is OPENCLAW_UPGRADE_SURVIVOR_GIT_BASELINE_SHA.
@@ -522,6 +526,33 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
       -v "$WORKER_RUNTIME_HOST_ROOT:$SURVIVOR_RUNTIME_ROOT"
     )
     # The container user creates/owns the private child, not the host mount point.
+    SURVIVOR_RUNTIME_ROOT="$SURVIVOR_RUNTIME_ROOT/runtime"
+  fi
+
+  if [ "$SCENARIO" = "sqlite-migration-budget" ]; then
+    if [ "$(uname -s)" != Linux ] || [ "$CANDIDATE_IS_CURRENT" != "1" ] ||
+      [ "$UPDATE_RESTART_MODE" != manual ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
+      echo "Nightly SQLite migration requires Linux-prepared current source, isolated manual mode, and no live models." >&2
+      exit 2
+    fi
+    if [ ! -f "$ROOT_DIR/node_modules/vitest/package.json" ]; then
+      echo "Nightly SQLite migration needs the selected source's prepared Linux dependencies." >&2
+      exit 2
+    fi
+    mkdir -p "$ROOT_DIR/.cache" "$ROOT_DIR/node_modules/.vite"
+    WORKER_RUNTIME_HOST_ROOT="$(mktemp -d "$ROOT_DIR/.cache/openclaw-nightly-migration.XXXXXX")"
+    mkdir "$WORKER_RUNTIME_HOST_ROOT/cache" "$WORKER_RUNTIME_HOST_ROOT/vite"
+    chmod a+rwxt "$WORKER_RUNTIME_HOST_ROOT"
+    chmod a+rwx "$WORKER_RUNTIME_HOST_ROOT/cache" "$WORKER_RUNTIME_HOST_ROOT/vite"
+    UPGRADE_SCENARIO_ARGS+=(
+      -v "$WORKER_RUNTIME_HOST_ROOT:$SURVIVOR_RUNTIME_ROOT"
+      -v "$ROOT_DIR:/tmp/openclaw-nightly-source:ro"
+      -v "$WORKER_RUNTIME_HOST_ROOT/cache:/tmp/openclaw-nightly-source/.cache"
+      -v "$WORKER_RUNTIME_HOST_ROOT/vite:/tmp/openclaw-nightly-source/node_modules/.vite"
+      -e OPENCLAW_NIGHTLY_SOURCE_ROOT=/tmp/openclaw-nightly-source
+      -e "OPENCLAW_NIGHTLY_SOURCE_SHA=$(git -C "$ROOT_DIR" rev-parse HEAD)"
+      -e "OPENCLAW_NIGHTLY_RUNNER_BACKEND=${OPENCLAW_CI_RUNNER_BACKEND:-${RUNNER_ENVIRONMENT:-not supplied}}"
+    )
     SURVIVOR_RUNTIME_ROOT="$SURVIVOR_RUNTIME_ROOT/runtime"
   fi
 

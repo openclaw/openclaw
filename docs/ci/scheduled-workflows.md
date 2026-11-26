@@ -901,15 +901,29 @@ gh workflow run duplicate-after-merge.yml \
 
 ### Update Migration
 
-`Update Migration` runs the expanded published-upgrade baseline set weekly on
-Sunday at 03:17 UTC and on manual dispatch. It keeps both `plugin-deps-cleanup`
-and `legacy-operator-state`, with no provider secrets. Its separate
-non-canceling schedule group coalesces pending runs and cannot cancel manual
-validation. See [Package Acceptance suite profiles](/ci/release-validation#suite-profiles)
+`Update Migration` keeps the expanded published-upgrade baseline set weekly on
+Sunday at 03:17 UTC and on manual dispatch. The weekly matrix still exercises
+`plugin-deps-cleanup` and `legacy-operator-state`, with no provider secrets.
+Daily at 04:43 UTC, the same job selects only `support-floor` plus
+`sqlite-migration-budget`: one 10 GiB occupied-native-SQLite migration case.
+The baseline token reads the candidate's inert scenario catalog at its exact
+source SHA; it does not execute candidate policy code.
+
+Daily and weekly schedules have separate non-canceling concurrency groups,
+so pending Sunday runs cannot replace each other or manual validation.
+The scenario is excluded from `reported-issues` and `far-reaching` aliases.
+Its schema/integrity/startup-owner budget is 10 seconds after subtracting
+serial pre-image copies; those copies have a separate cumulative 10-minute
+budget and report bytes, duration, and filesystem type; copy mode is **not observed**.
+Existing deadlines
+remain: the lane has 3,000 seconds, the reusable job defaults to 60 minutes,
+and the existing explicit-scenario planner selects a 90-minute job ceiling.
+See [Package Acceptance suite profiles](/ci/release-validation#suite-profiles)
 for runtime baseline resolution, per-baseline grouping, the 78–90
-runner-minute weekly planning allowance, and the successful-upgrade requirements.
+runner-minute weekly planning allowance, and successful-upgrade requirements.
 [Runner registration budgets](/ci/capacity#runner-registration-budget) account
-for the weekly burst separately from PR and main admission.
+for the weekly burst separately from PR and main admission; the daily case
+adds one existing-lane cell without expanding that matrix.
 
 ## ClawSweeper activity forwarding
 

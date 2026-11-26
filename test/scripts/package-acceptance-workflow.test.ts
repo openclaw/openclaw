@@ -9669,7 +9669,7 @@ test "$package_manager" = "pnpm@12.1.0"
     }
   });
 
-  it("runs secretless weekly supported-line migration with optional manual historical replays", () => {
+  it("runs secretless weekly migration and an isolated daily budget cell with manual replays", () => {
     const workflow = readFileSync(UPDATE_MIGRATION_WORKFLOW, "utf8");
     const packageWorkflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
     const job = workflowJob(UPDATE_MIGRATION_WORKFLOW, "update_migration");
@@ -9688,13 +9688,17 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(
       readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.workflow_dispatch?.inputs,
     ).not.toHaveProperty("allow_frozen_target_scenario_omissions");
-    expect(readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.schedule).toEqual([{ cron: "17 3 * * 0" }]);
+    expect(readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.schedule).toEqual([
+      { cron: "17 3 * * 0" },
+      { cron: "43 4 * * *" },
+    ]);
     expect(job.with).toMatchObject({
       workflow_ref: "${{ inputs.workflow_ref || 'main' }}",
       package_ref: "${{ inputs.package_ref || 'main' }}",
-      published_upgrade_survivor_baselines: "${{ inputs.baselines || 'supported-lines' }}",
+      published_upgrade_survivor_baselines:
+        "${{ github.event.schedule == '43 4 * * *' && 'support-floor' || inputs.baselines || 'supported-lines' }}",
       published_upgrade_survivor_scenarios:
-        "${{ inputs.scenarios || 'plugin-deps-cleanup legacy-operator-state' }}",
+        "${{ github.event.schedule == '43 4 * * *' && 'sqlite-migration-budget' || inputs.scenarios || 'plugin-deps-cleanup legacy-operator-state' }}",
     });
     expect(job.with).not.toHaveProperty("allow_frozen_target_scenario_omissions");
     expect(workflow).toContain("telegram_mode: none");
