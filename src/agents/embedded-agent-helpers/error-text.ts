@@ -101,31 +101,6 @@ type AssistantErrorTextOptions = {
 };
 type ClassifiedAssistantErrorFacts = ReturnType<typeof classifyAssistantErrorFacts>;
 
-export function formatProviderAssistantErrorText(
-  msg: AssistantHistoryMessage,
-  owner: PreparedProviderFailoverOwner | undefined,
-): string | undefined {
-  const errorMessage = msg.errorMessage?.trim();
-  if (
-    !owner?.formatUserFacingError ||
-    !errorMessage ||
-    msg.stopReason !== "error" ||
-    isTerminalAssistantError(msg)
-  ) {
-    return undefined;
-  }
-  const message = normalizeOptionalString(
-    owner.formatUserFacingError({
-      provider: owner.id,
-      modelId: msg.model,
-      errorMessage,
-      status: extractErrorHttpStatus(errorMessage)?.code,
-      code: msg.errorCode,
-      errorType: msg.errorType,
-    }),
-  );
-  return message ? redactSensitiveText(message, { mode: "tools" }) : undefined;
-}
 function classifyAssistantErrorFacts(
   msg: AssistantHistoryMessage,
   opts?: AssistantErrorTextOptions,
@@ -138,6 +113,7 @@ function classifyAssistantErrorFacts(
   const providerPlugin = opts?.providerOwner ?? null;
   const classification = classifyFailoverSignal(signal, { providerPlugin });
   return {
+    signal,
     provider: opts?.provider ?? msg.provider ?? opts?.providerOwner?.id,
     model: opts?.model ?? msg.model,
     reason: failoverReasonFromClassification(classification),
@@ -349,41 +325,59 @@ function isRawAssistantErrorPassthrough(params: {
   );
 }
 
-export function formatUserFacingAssistantErrorText(
+export function formatUserFacingAssistantError(
   msg: AssistantHistoryMessage,
   opts?: AssistantErrorTextOptions,
-  providerMessage: string | null | undefined = formatProviderAssistantErrorText(
-    msg,
-    opts?.providerOwner,
-  ),
-): string {
+): { text: string; providerAuthored?: true } {
   if (msg.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
-    return REPETITIVE_OUTPUT_ERROR_MESSAGE;
+    return { text: REPETITIVE_OUTPUT_ERROR_MESSAGE };
   }
   if (msg.errorCode === TOOL_REPEAT_LIMIT_CODE) {
     // Show only the agent-core template; never arbitrary text carried under this code.
-    return msg.errorMessage &&
-      /^OpenClaw stopped this turn: the model called (?:[\w.-]{1,64}|a tool) with the same arguments \d+ times in a row\. Send a new message to continue\.$/.test(
-        msg.errorMessage,
-      )
-      ? msg.errorMessage
-      : TOOL_REPEAT_LIMIT_FALLBACK;
+    return {
+      text:
+        msg.errorMessage &&
+        /^OpenClaw stopped this turn: the model called (?:[\w.-]{1,64}|a tool) with the same arguments \d+ times in a row\. Send a new message to continue\.$/.test(
+          msg.errorMessage,
+        )
+          ? msg.errorMessage
+          : TOOL_REPEAT_LIMIT_FALLBACK,
+    };
   }
   const modelLoadCopy = renderModelLoadFailureCopy(msg);
   if (modelLoadCopy) {
-    return modelLoadCopy;
+    return { text: modelLoadCopy };
   }
   const rawError = msg.errorMessage?.trim();
   const approvalMessage = resolveExecutionApprovalFailureMessage(rawError);
   if (approvalMessage) {
-    return `⚠️ ${approvalMessage}`;
+    return { text: `⚠️ ${approvalMessage}` };
   }
   const facts = classifyAssistantErrorFacts(msg, opts);
   if (!facts.storageFailure && rawError === MODEL_REQUEST_POLICY_DENIED_TEXT) {
-    return MODEL_REQUEST_POLICY_DENIED_TEXT;
+    return { text: MODEL_REQUEST_POLICY_DENIED_TEXT };
   }
-  if (!facts.storageFailure && providerMessage) {
-    return providerMessage;
+  const owner = opts?.providerOwner;
+  if (
+    !facts.storageFailure &&
+    msg.stopReason === "error" &&
+    !isTerminalAssistantError(msg) &&
+    facts.signal.message &&
+    owner?.formatUserFacingError
+  ) {
+    const text = normalizeOptionalString(
+      owner.formatUserFacingError({
+        provider: owner.id,
+        modelId: msg.model,
+        errorMessage: facts.signal.message,
+        status: facts.status,
+        code: facts.signal.code,
+        errorType: facts.signal.errorType,
+      }),
+    );
+    if (text) {
+      return { text: redactSensitiveText(text, { mode: "tools" }), providerAuthored: true };
+    }
   }
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
@@ -397,8 +391,16 @@ export function formatUserFacingAssistantErrorText(
         ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
         : undefined
       : friendlyError);
-  if (safeFriendlyError) {
-    return safeFriendlyError.trim();
-  }
-  return renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT;
+  return {
+    text: safeFriendlyError
+      ? safeFriendlyError.trim()
+      : (renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT),
+  };
+}
+
+export function formatUserFacingAssistantErrorText(
+  msg: AssistantHistoryMessage,
+  opts?: AssistantErrorTextOptions,
+): string {
+  return formatUserFacingAssistantError(msg, opts).text;
 }

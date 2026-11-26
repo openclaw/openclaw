@@ -15,6 +15,7 @@ import {
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
+  FailoverError,
   findCliTerminalStopError,
   findCliTimeoutError,
   isFailoverError,
@@ -157,6 +158,7 @@ const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but f
 type ExternalRunFailureReply = Pick<ReplyPayload, "text" | "presentation"> & {
   text: string;
   isGenericRunnerFailure: boolean;
+  summaryAsTitle?: true;
 };
 
 type ExternalRunFailureInput = string | { message: string; error?: unknown };
@@ -407,6 +409,9 @@ export function buildExternalRunFailureReply(
     if (summary) {
       return { text: summary.text, isGenericRunnerFailure: false };
     }
+  }
+  if (error instanceof FailoverError && error.userMessage) {
+    return { text: error.userMessage, isGenericRunnerFailure: false, summaryAsTitle: true };
   }
   const providerRequestError = failoverFacts.providerRequestError;
   if (providerRequestError) {

@@ -40,6 +40,7 @@ function panelPlacement(line: HTMLElement, panel: HTMLElement): "bottom" | "top"
 export function ChatRunFailureNotice(props: {
   feedback?: ControlUiSurfaceProps["run-failure-feedback"];
   summary: string;
+  summaryAsTitle?: true;
   cause?: RunFailureCause;
   /** The cause provider's presentation from the chat's model catalog. */
   presentation?: Pick<ProviderPresentation, "providerName">;
@@ -63,7 +64,7 @@ export function ChatRunFailureNotice(props: {
     return firstLine.length <= 240 ? firstLine : undefined;
   });
   const title = () =>
-    (props.cause?.showSummary ? concise() : undefined) ||
+    (props.summaryAsTitle ? concise() : undefined) ||
     t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
       provider: providerDisplayLabel(props.cause?.provider ?? "", props.presentation),
     });

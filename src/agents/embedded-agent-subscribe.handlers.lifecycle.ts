@@ -16,7 +16,6 @@ import {
 } from "./embedded-agent-error-observation.js";
 import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
 import {
-  formatProviderAssistantErrorText,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "./embedded-agent-helpers/error-text.js";
@@ -309,7 +308,6 @@ export function handleAgentEnd(
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
-  let providerErrorNotice: string | undefined;
   let errorObservation: ReturnType<typeof projectChatErrorDetail>;
   // Terminal delivery does not depend on streamed text alone: when the streamed
   // assistant texts are empty, payload building falls back to the completed
@@ -386,23 +384,14 @@ export function handleAgentEnd(
     const failoverReason = classifyAssistantFailoverReason(lastAssistant, {
       providerOwner: ctx.params.providerOwner ?? null,
     });
-    const providerMessage = formatProviderAssistantErrorText(
-      lastAssistant,
-      ctx.params.providerOwner,
-    );
-    const errorText = formatUserFacingAssistantErrorText(
-      lastAssistant,
-      {
-        cfg: ctx.params.config,
-        sessionKey: ctx.params.sessionKey,
-        agentId: ctx.params.agentId,
-        provider: lastAssistant.provider,
-        model: lastAssistant.model,
-        providerOwner: ctx.params.providerOwner,
-      },
-      providerMessage ?? null,
-    );
-    providerErrorNotice = errorText === providerMessage ? providerMessage : undefined;
+    const errorText = formatUserFacingAssistantErrorText(lastAssistant, {
+      cfg: ctx.params.config,
+      sessionKey: ctx.params.sessionKey,
+      agentId: ctx.params.agentId,
+      provider: lastAssistant.provider,
+      model: lastAssistant.model,
+      providerOwner: ctx.params.providerOwner,
+    });
     const observedError = buildApiErrorObservationFields(rawError, {
       provider: lastAssistant.provider,
       providerOwner: ctx.params.providerOwner,
@@ -459,14 +448,7 @@ export function handleAgentEnd(
       phase:
         ctx.params.terminalLifecyclePhase === "finishing" ? "finishing" : isError ? "error" : "end",
       ...(isError ? { error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT } : {}),
-      ...(providerErrorNotice ? { errorNotice: providerErrorNotice } : {}),
-      ...(errorObservation
-        ? {
-            errorObservation: providerErrorNotice
-              ? { ...errorObservation, showSummary: true }
-              : errorObservation,
-          }
-        : {}),
+      ...(errorObservation ? { errorObservation } : {}),
       ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
       ...(ctx.state.timeoutPhase ? { timeoutPhase: ctx.state.timeoutPhase } : {}),

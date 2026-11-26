@@ -4,11 +4,7 @@ import {
   classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { isCompactionFailureError } from "../../agents/embedded-agent-helpers/context-overflow-observation.js";
-import {
-  FailoverError,
-  findCliTimeoutError,
-  isFailoverError,
-} from "../../agents/failover-error.js";
+import { findCliTimeoutError, isFailoverError } from "../../agents/failover-error.js";
 import { isLikelyContextOverflowError } from "../../agents/failover/context-overflow.js";
 import { isCliPartialOutputRejected } from "../../agents/failover/error.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
@@ -98,13 +94,19 @@ export async function handleAgentExecutionError(params: {
   };
   const settleFailure = async (
     payload: ReplyPayload & { text: string },
-    isGenericRunnerFailure = false,
+    options: { isGenericRunnerFailure?: boolean; summaryAsTitle?: true } = {},
   ): Promise<Extract<AgentTurnInternalResult, { kind: "final" }>> => {
+    const isGenericRunnerFailure = options.isGenericRunnerFailure ?? false;
     // History can persist this terminal before the rendered reply is delivered.
     takePendingLifecycleTerminal().emit(
       "error",
       err,
-      isGenericRunnerFailure ? undefined : { errorNotice: payload.text },
+      isGenericRunnerFailure
+        ? undefined
+        : {
+            errorNotice: payload.text,
+            ...(options.summaryAsTitle ? { summaryAsTitle: true } : {}),
+          },
     );
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);
@@ -251,7 +253,7 @@ export async function handleAgentExecutionError(params: {
       params.shouldSurfaceToControlUi && err.userMessage === undefined
         ? renderControlUiAgentFailureCopy()
         : externalReply.text;
-    return await settleFailure({ text }, externalReply.isGenericRunnerFailure);
+    return await settleFailure({ text }, externalReply);
   }
   const failoverFacts = resolveReplyFailoverFacts(err, message, params.runtimeConfig);
   const failureSummary = resolveReplyFailureSummary({
@@ -285,9 +287,6 @@ export async function handleAgentExecutionError(params: {
     });
     return { kind: "aborted", reason: "restart" };
   }
-  if (err instanceof FailoverError && err.userMessage) {
-    return await settleFailure({ text: err.userMessage });
-  }
   if (isCompactionFailure) {
     takePendingLifecycleTerminal().emit("error", err);
     defaultRuntime.error(
@@ -298,30 +297,21 @@ export async function handleAgentExecutionError(params: {
   }
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {
-    return await settleFailure({
-      // Recorded retry exhaustion is more specific than generic quota guidance.
-      // Other facets keep their recovery advice, as in buildExternalRunFailureReply.
-      text:
-        failureSummary?.kind === "rate_limit" &&
-        ((isFailoverError(err) && err.rateLimitRetriesExhausted !== undefined) ||
-          failoverFacts.rateLimitResetAt !== undefined)
-          ? failureSummary.text
-          : providerRequestError.userMessage,
-    });
+    const reply = buildExternalRunFailureReply({ message, error: err }, { failoverFacts });
+    return await settleFailure({ text: reply.text }, reply);
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-  const externalRunFailureCandidate =
-    !failureSummary && !isContextOverflow
-      ? buildExternalRunFailureReply(
-          { message, error: err },
-          {
-            includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
-            includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
-            replayPrevented,
-            failoverFacts,
-          },
-        )
-      : undefined;
+  const externalRunFailureCandidate = !isContextOverflow
+    ? buildExternalRunFailureReply(
+        { message, error: err },
+        {
+          includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
+          includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
+          replayPrevented,
+          failoverFacts,
+        },
+      )
+    : undefined;
   const externalRunFailureReply =
     !params.shouldSurfaceToControlUi ||
     externalRunFailureCandidate?.isGenericRunnerFailure === false ||
@@ -330,6 +320,7 @@ export async function handleAgentExecutionError(params: {
       ? externalRunFailureCandidate
       : undefined;
   const fallbackText =
+    (externalRunFailureReply?.summaryAsTitle ? externalRunFailureReply.text : undefined) ??
     failureSummary?.text ??
     (isContextOverflow
       ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
@@ -344,8 +335,12 @@ export async function handleAgentExecutionError(params: {
         ? { presentation: externalRunFailureReply.presentation }
         : {}),
     },
-    !failureSummary &&
-      !isContextOverflow &&
-      (externalRunFailureCandidate?.isGenericRunnerFailure ?? true),
+    {
+      isGenericRunnerFailure:
+        !failureSummary &&
+        !isContextOverflow &&
+        (externalRunFailureCandidate?.isGenericRunnerFailure ?? true),
+      summaryAsTitle: externalRunFailureReply?.summaryAsTitle,
+    },
   );
 }

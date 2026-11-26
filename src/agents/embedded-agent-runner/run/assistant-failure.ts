@@ -18,8 +18,7 @@ import {
   isRateLimitAssistantError,
 } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
-  formatProviderAssistantErrorText,
-  formatUserFacingAssistantErrorText,
+  formatUserFacingAssistantError,
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "../../embedded-agent-helpers/error-text.js";
 import { parseImageDimensionError } from "../../embedded-agent-helpers/image-errors.js";
@@ -367,7 +366,26 @@ export async function handleEmbeddedAssistantFailure(input: {
       ...(status !== undefined ? { status } : {}),
     });
   };
-  const throwFailure = (error: FailoverError): never => {
+  const errorCopy =
+    !listedModelRejection && failedAssistant
+      ? formatUserFacingAssistantError(failedAssistant, {
+          cfg: runInput.runParams.config,
+          sessionKey: runInput.runParams.sessionKey ?? runInput.runParams.sessionId,
+          agentId: runInput.runParams.agentId,
+          provider: activeErrorContext.provider,
+          providerOwner: input.providerOwner,
+          model: activeErrorContext.model,
+          authMode,
+        })
+      : undefined;
+  const throwFailure = (
+    message: string,
+    details: ConstructorParameters<typeof FailoverError>[1],
+  ): never => {
+    const error = new FailoverError(message, {
+      ...details,
+      userMessage: errorCopy?.providerAuthored ? errorCopy.text : undefined,
+    });
     if (decision.action === "surface_error" && error.reason === "format") {
       // A different model cannot repair a rejected request. Context overflow
       // remains owned by the earlier compaction recovery path.
@@ -423,22 +441,14 @@ export async function handleEmbeddedAssistantFailure(input: {
         );
         await markFailedProfile();
         logDecision("fallback_model", { status });
-        throwFailure(
-          new FailoverError(
-            "The AI service is temporarily overloaded. Please try again in a moment.",
-            {
-              reason: "overloaded",
-              provider: activeErrorContext.provider,
-              model: activeErrorContext.model,
-              profileId: runtime.lastProfileId,
-              status,
-              rawError: failedAssistant?.errorMessage?.trim(),
-              userMessage: failedAssistant
-                ? formatProviderAssistantErrorText(failedAssistant, input.providerOwner)
-                : undefined,
-            },
-          ),
-        );
+        throwFailure("The AI service is temporarily overloaded. Please try again in a moment.", {
+          reason: "overloaded",
+          provider: activeErrorContext.provider,
+          model: activeErrorContext.model,
+          profileId: runtime.lastProfileId,
+          status,
+          rawError: failedAssistant?.errorMessage?.trim(),
+        });
       }
     }
 
@@ -500,29 +510,11 @@ export async function handleEmbeddedAssistantFailure(input: {
     (decision.action === "surface_error" &&
       !externalAbort &&
       !timedOut &&
-      (failoverFailure || listedModelRejection))
+      (failoverFailure || listedModelRejection || errorCopy?.providerAuthored))
   ) {
-    const providerMessage =
-      !listedModelRejection && failedAssistant
-        ? formatProviderAssistantErrorText(failedAssistant, input.providerOwner)
-        : undefined;
     const message =
       (listedModelRejection ? MODEL_CHAT_REJECTED_TEXT : undefined) ||
-      (failedAssistant
-        ? formatUserFacingAssistantErrorText(
-            failedAssistant,
-            {
-              cfg: runInput.runParams.config,
-              sessionKey: runInput.runParams.sessionKey ?? runInput.runParams.sessionId,
-              agentId: runInput.runParams.agentId,
-              provider: activeErrorContext.provider,
-              providerOwner: input.providerOwner,
-              model: activeErrorContext.model,
-              authMode,
-            },
-            providerMessage ?? null,
-          )
-        : undefined) ||
+      (errorCopy?.providerAuthored ? undefined : errorCopy?.text) ||
       failedAssistant?.errorMessage?.trim() ||
       (timedOut
         ? "LLM request timed out."
@@ -553,38 +545,32 @@ export async function handleEmbeddedAssistantFailure(input: {
     if (decision.action === "fallback_model") {
       logDecision("fallback_model", { status });
     }
-    throwFailure(
-      new FailoverError(
-        renderRateLimitRetryExhaustion(input.rateLimitRetriesExhausted) ?? message,
-        {
-          reason,
-          rateLimitRetriesExhausted: input.rateLimitRetriesExhausted,
-          rateLimitResetAt:
-            assistantSignal?.retryAfterMs === undefined
-              ? undefined
-              : Date.now() + assistantSignal.retryAfterMs,
-          provider: activeErrorContext.provider,
-          model: activeErrorContext.model,
-          profileId: runtime.lastProfileId,
-          authMode,
-          status,
-          code: listedModelRejection ? MODEL_CHAT_REJECTED_CODE : failedAssistant?.errorCode,
-          rawError: failedAssistant?.errorMessage?.trim(),
-          userMessage: providerMessage,
-          // Retry reason "timeout" also includes 5xx; only the terminal owner records a deadline.
-          timeout:
-            terminalOutcome.status === "timeout"
-              ? {
-                  timeoutPhase: terminalOutcome.timeoutPhase,
-                  providerStarted: terminalOutcome.providerStarted,
-                }
-              : undefined,
-          suspend:
-            Boolean(runInput.runParams.sessionKey ?? runInput.runParams.sessionId) &&
-            (reason === "rate_limit" || reason === "billing"),
-        },
-      ),
-    );
+    throwFailure(renderRateLimitRetryExhaustion(input.rateLimitRetriesExhausted) ?? message, {
+      reason,
+      rateLimitRetriesExhausted: input.rateLimitRetriesExhausted,
+      rateLimitResetAt:
+        assistantSignal?.retryAfterMs === undefined
+          ? undefined
+          : Date.now() + assistantSignal.retryAfterMs,
+      provider: activeErrorContext.provider,
+      model: activeErrorContext.model,
+      profileId: runtime.lastProfileId,
+      authMode,
+      status,
+      code: listedModelRejection ? MODEL_CHAT_REJECTED_CODE : failedAssistant?.errorCode,
+      rawError: failedAssistant?.errorMessage?.trim(),
+      // Retry reason "timeout" also includes 5xx; only the terminal owner records a deadline.
+      timeout:
+        terminalOutcome.status === "timeout"
+          ? {
+              timeoutPhase: terminalOutcome.timeoutPhase,
+              providerStarted: terminalOutcome.providerStarted,
+            }
+          : undefined,
+      suspend:
+        Boolean(runInput.runParams.sessionKey ?? runInput.runParams.sessionId) &&
+        (reason === "rate_limit" || reason === "billing"),
+    });
   }
 
   logDecision("continue_normal");

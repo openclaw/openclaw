@@ -5,7 +5,7 @@ import { resolveCompactionRecoveryLifecycleError } from "../../agents/compaction
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
-import { FailoverError, getFailoverErrorCode } from "../../agents/failover/error.js";
+import { getFailoverErrorCode } from "../../agents/failover/error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
 import {
   AgentHarnessModelRequestPolicyError,
@@ -54,7 +54,6 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
   "livenessState",
   "replayInvalid",
   "errorObservation",
-  "errorNotice",
   "suppressErrorNotice",
   "assistantTranscriptIdempotencyKey",
 ] as const;
@@ -146,7 +145,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
       : params.resolveTerminationFields(terminalPhase === "error" ? terminalValue : undefined);
     const restartAbort = terminationFields.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON;
     const data: Record<string, unknown> = {
-      ...pending.metadata,
+      ...(workspaceFailure ? {} : pending.metadata),
       phase: restartAbort ? "end" : terminalPhase,
       endedAt: Date.now(),
       startedAt,
@@ -156,14 +155,6 @@ export function createAgentLifecycleTerminalBackstop(params: {
       data.stopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     } else if (terminalPhase === "error") {
       const oauthFailure = classifyOAuthRefreshFailureError(terminalValue);
-      if (
-        isRecord(data.errorObservation) &&
-        data.errorObservation.showSummary === true &&
-        !(terminalValue instanceof FailoverError && terminalValue.userMessage)
-      ) {
-        const { showSummary: _showSummary, ...observation } = data.errorObservation;
-        data.errorObservation = observation;
-      }
       data.error =
         renderStorageFailureSummary(classifyGatewayStorageFailure(terminalValue)) ??
         renderAgentHarnessPreflightUserMessage(terminalValue) ??
@@ -213,18 +204,7 @@ export function createAgentLifecycleTerminalBackstop(params: {
         data.stopReason = terminationFields.stopReason;
       }
     }
-    Object.assign(data, extraData);
-    if (workspaceFailure) {
-      // Cancellation stops inference; preparation's original error owns the
-      // one terminal outcome, rather than reporting a user-requested Stop.
-      data.phase = "error";
-      data.error = workspaceFailure.message;
-      delete data.aborted;
-      delete data.stopReason;
-      delete data.timeoutPhase;
-      delete data.providerStarted;
-      delete data.yielded;
-    }
+    Object.assign(data, workspaceFailure ? undefined : extraData);
     return {
       runId: params.runId,
       lifecycleGeneration: params.getLifecycleGeneration(),
