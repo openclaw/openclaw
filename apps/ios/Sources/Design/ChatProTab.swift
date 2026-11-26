@@ -551,15 +551,26 @@ struct ChatProTab: View {
         guard let viewModel else { return }
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("OpenClawTranscripts", isDirectory: true)
-        let fileURL = directory.appendingPathComponent(viewModel.transcriptExportFilename, isDirectory: false)
-
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try viewModel.exportTranscriptMarkdown().write(to: fileURL, atomically: true, encoding: .utf8)
+            let fileURL = try Self.writeTranscript(for: viewModel, in: directory)
             self.transcriptShareItem = TranscriptShareItem(fileURL: fileURL)
         } catch {
             self.showsTranscriptExportError = true
         }
+    }
+
+    static func writeTranscript(for viewModel: OpenClawChatViewModel, in directory: URL) throws -> URL {
+        let title = viewModel.currentSessionEntry()?.displayName
+        let key = viewModel.sessionKey
+        let filename = ChatTranscriptExporter.filename(sessionTitle: title, sessionKey: key)
+        let markdown = ChatTranscriptExporter.markdown(
+            sessionTitle: title,
+            sessionKey: key,
+            messages: viewModel.messages)
+        let fileURL = directory.appendingPathComponent(filename, isDirectory: false)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try markdown.write(to: fileURL, atomically: true, encoding: .utf8)
+        return fileURL
     }
 
     /// Chat follows the operator session; buildChat reports connected only when it can serve chat.

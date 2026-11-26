@@ -268,15 +268,12 @@ struct ChatTranscriptExporterTests {
         let body = "\n\n### User — 1970-01-01T00:00:00Z\n\nKeep this line.\n"
 
         model.sessions = [OpenClawChatSessionEntry(key: "agent:main:main", displayName: "A")]
-        #expect(model.transcriptExportFilename == "A.md")
         #expect(model.exportTranscriptMarkdown() == "# A" + body)
 
         model.sessions.append(OpenClawChatSessionEntry(key: "main", displayName: "Review / Friday"))
-        #expect(model.transcriptExportFilename == "Review-Friday.md")
         #expect(model.exportTranscriptMarkdown() == "# Review / Friday" + body)
 
         model.sessions = [OpenClawChatSessionEntry(key: "agent:other:other", displayName: "Unrelated")]
-        #expect(model.transcriptExportFilename == "main.md")
         #expect(model.exportTranscriptMarkdown() == "# main" + body)
     }
 
