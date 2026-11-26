@@ -5,8 +5,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingOutput } from "../../packages/media-understanding-common/src/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ImageCompressionModelPolicy } from "../media/web-media.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { MediaUnderstandingProvider } from "./provider-types.js";
 import {
+  createAudioInputBudgetReader,
   describeVideoFile,
   describeImageFile,
   describeImageFileWithModel,
@@ -558,6 +566,33 @@ describe("media-understanding audio input budget", () => {
       expect(mocks.runCapability).not.toHaveBeenCalled();
     },
   );
+
+  it("refreshes inferred upload limits when the active or request-scoped provider registry changes", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: { audio: { maxBytes: 4096 }, models: [{ provider: "example", maxBytes: 8192 }] },
+      },
+    };
+    const previous = captureActivePluginRegistrySnapshot();
+    try {
+      mocks.buildProviderRegistry.mockReturnValue(new Map());
+      const readBudget = createAudioInputBudgetReader(() => cfg);
+      expect(readBudget()).toEqual({ enabled: true, maxBytes: 4096 });
+      const audioProvider = new Map([["example", { capabilities: ["audio"] }]]);
+      mocks.buildProviderRegistry.mockReturnValue(audioProvider);
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      expect(readBudget()).toEqual({ enabled: true, maxBytes: 8192 });
+      mocks.buildProviderRegistry.mockReturnValue(new Map());
+      withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: createEmptyPluginRegistry(), isWebchatConnect: () => false },
+        () => expect(readBudget()).toEqual({ enabled: true, maxBytes: 4096 }),
+      );
+      mocks.buildProviderRegistry.mockReturnValue(audioProvider);
+      expect(readBudget()).toEqual({ enabled: true, maxBytes: 8192 });
+    } finally {
+      restoreActivePluginRegistrySnapshot(previous);
+    }
+  });
 
   it("does not load providers to prepare disabled audio input", async () => {
     await expect(
