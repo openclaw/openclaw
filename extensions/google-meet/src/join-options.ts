@@ -39,12 +39,16 @@ export function parseGoogleMeetTransport(value: unknown): GoogleMeetTransport | 
   );
 }
 
-export function readGoogleMeetJoinOptions(
-  raw: Record<string, unknown>,
-  route = {
+export function parseGoogleMeetJoinRoute(raw: Record<string, unknown>) {
+  return {
     transport: parseGoogleMeetTransport(raw.transport),
     mode: parseGoogleMeetMode(raw.mode),
-  },
+  };
+}
+
+export function readGoogleMeetJoinOptions(
+  raw: Record<string, unknown>,
+  route = parseGoogleMeetJoinRoute(raw),
 ) {
   return {
     ...route,

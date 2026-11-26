@@ -24,6 +24,7 @@ import {
   parsePositiveIntegerOption,
   parsePositiveNumber,
   promptInput,
+  readCliJoinOptions,
   resolveGoogleMeetOAuthCallbackTimeoutMs,
   type DoctorOptions,
   type JoinOptions,
@@ -44,11 +45,7 @@ import {
   registerGoogleMeetCreateCommands,
 } from "./cli-space-commands.js";
 import { resolveGoogleMeetGatewayOperationTimeoutMs, type GoogleMeetConfig } from "./config.js";
-import {
-  parseGoogleMeetMode,
-  parseGoogleMeetTransport,
-  readGoogleMeetJoinOptions,
-} from "./join-options.js";
+import { parseGoogleMeetMode, parseGoogleMeetTransport } from "./join-options.js";
 import { createGoogleMeetSpace, fetchGoogleMeetSpace } from "./meet-api.js";
 import type { GoogleMeetOAuthRuntime } from "./oauth-owner.js";
 import {
@@ -329,7 +326,7 @@ export function registerGoogleMeetCli(params: {
     .action(async (url: string | undefined, options: JoinOptions) => {
       const payload = {
         url: resolveMeetingInput(context.config, url),
-        ...readGoogleMeetJoinOptions(options),
+        ...readCliJoinOptions(options),
       };
       const result = await callGoogleMeetRuntime(
         context,

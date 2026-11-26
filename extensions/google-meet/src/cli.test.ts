@@ -231,6 +231,20 @@ it("ignores join-only choices when creating a URL without joining", async () => 
   expect(json()).toMatchObject({ meetingUri: MEET_URL, joined: false });
 });
 
+it.each(["join", "create"])("preserves an explicitly empty intro on local %s", async (command) => {
+  const join = vi.fn<GoogleMeetRuntime["join"]>().mockResolvedValue({ session: meetSession() });
+  cli.stubJsonRoutes({
+    "https://meet.googleapis.com/v2/spaces": { name: "spaces/new", meetingUri: MEET_URL },
+  });
+  await run([command, ...(command === "join" ? [MEET_URL] : []), "--message", ""], {
+    config: { oauth: { accessToken: "fixture-token", expiresAt: Date.now() + 3_600_000 } },
+    runtime: { join },
+  });
+  expect(join).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ url: MEET_URL, message: "" }),
+  );
+});
+
 it.each([
   ["oauth-token", "https://oauth2.googleapis.com/token"],
   ["meet-spaces-get", "https://meet.googleapis.com/v2/spaces/existing"],

@@ -14,7 +14,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { formatDurationCompact } from "openclaw/plugin-sdk/time-runtime";
-import { parseGoogleMeetTransport } from "./join-options.js";
+import { parseGoogleMeetJoinRoute, parseGoogleMeetTransport } from "./join-options.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export type JoinOptions = {
@@ -26,6 +26,12 @@ export type JoinOptions = {
   pin?: string;
   dtmfSequence?: string;
 };
+
+export function readCliJoinOptions(options: JoinOptions) {
+  // An explicit empty CLI message suppresses the configured intro during local fallback.
+  const { message, dialInNumber, pin, dtmfSequence } = options;
+  return { ...parseGoogleMeetJoinRoute(options), message, dialInNumber, pin, dtmfSequence };
+}
 
 export type OAuthLoginOptions = {
   clientId?: string;

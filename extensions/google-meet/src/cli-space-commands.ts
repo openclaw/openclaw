@@ -10,6 +10,7 @@ import {
 import { writeCalendarEventsSummary, writeLatestConferenceRecordSummary } from "./cli-export.js";
 import {
   callGoogleMeetGateway,
+  readCliJoinOptions,
   type CreateOptions,
   type JsonOptions,
   type ResolveSpaceOptions,
@@ -17,7 +18,6 @@ import {
   writeStdoutLine,
 } from "./cli-shared.js";
 import { createSpaceFromParams, hasCreateSpaceConfigInput, hasGoogleMeetOAuth } from "./create.js";
-import { readGoogleMeetJoinOptions } from "./join-options.js";
 import {
   endGoogleMeetActiveConference,
   fetchLatestGoogleMeetConferenceRecord,
@@ -99,7 +99,7 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
     .option("--dtmf-sequence <sequence>", "Explicit Twilio DTMF sequence")
     .option("--json", "Print JSON output", false)
     .action(async (options: CreateOptions) => {
-      const joinOptions = options.join === false ? undefined : readGoogleMeetJoinOptions(options);
+      const joinOptions = options.join === false ? undefined : readCliJoinOptions(options);
       if (joinOptions) {
         const delegated = await callGoogleMeetGateway({
           method: "googlemeet.create",
