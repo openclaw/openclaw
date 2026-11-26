@@ -143,7 +143,7 @@ export async function captureWarmReloadColdCpu<T extends Probe>(
   let before: Metrics | undefined;
   let after: Metrics | undefined;
   const failures: unknown[] = [];
-  const attempt = async (action: () => Promise<void>) => {
+  const attempt = async (action: () => Promise<unknown>) => {
     try {
       await action();
     } catch (error) {
