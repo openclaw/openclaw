@@ -7,6 +7,8 @@ const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
 const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/i;
 const LEGACY_BRACKET_OPEN_HEADERS = ["[TOOL_CALL]", "[TOOL_RESULT]"];
+const MINIMAX_ENCODED_BOUNDARY = "<]minimax[>[";
+const MINIMAX_ENCODED_TOOL_CALL = "<tool_call>";
 const traceIconHeads = ["📊", "🛠️", "📖", "📝", "🔍", "🔎", "⚙️"].flatMap((icon) => [
   [icon],
   ["⚠️", icon],
@@ -57,21 +59,85 @@ const INTERNAL_TRACE_HEAD_RE = new RegExp(
  * Minimax sometimes embeds tool calls as XML in text blocks instead of
  * proper structured tool calls.
  */
-export function stripMinimaxToolCallXml(
+export type MinimaxToolCallScan = {
+  text: string;
+  /** An incomplete transport envelope or invocation still owns the reply suffix. */
+  pending: boolean;
+  /** One more character can decide whether the incomplete transport prefix is still a candidate. */
+  rescanWhileSuppressed?: boolean;
+};
+
+function findIncompleteEncodedToolCallStart(
+  text: string,
+  codeRegions: ReturnType<typeof findCodeRegions>,
+): number | undefined {
+  let boundary = text.lastIndexOf(MINIMAX_ENCODED_BOUNDARY);
+  while (boundary >= 0) {
+    const start = boundary > 0 && text[boundary - 1] === "]" ? boundary - 1 : boundary;
+    const tail = text.slice(boundary + MINIMAX_ENCODED_BOUNDARY.length).toLowerCase();
+    if (
+      tail.length < MINIMAX_ENCODED_TOOL_CALL.length &&
+      MINIMAX_ENCODED_TOOL_CALL.startsWith(tail) &&
+      !isInsideCode(start, codeRegions)
+    ) {
+      return start;
+    }
+    boundary = text.lastIndexOf(MINIMAX_ENCODED_BOUNDARY, boundary - 1);
+  }
+  return undefined;
+}
+
+function findIncompleteInvocationStart(
+  text: string,
+  codeRegions: ReturnType<typeof findCodeRegions>,
+): number | undefined {
+  let start = text.lastIndexOf("<");
+  while (start >= 0) {
+    const tag = parseXmlTagAt(text, start);
+    if (
+      tag?.isTruncated &&
+      tag.tagName === "invoke" &&
+      !tag.isClose &&
+      !isInsideCode(start, codeRegions)
+    ) {
+      return start;
+    }
+    start = text.lastIndexOf("<", start - 1);
+  }
+  return undefined;
+}
+
+export function scanMinimaxToolCallXml(
   text: string,
   options?: { recoverUnclosed?: boolean },
-): string {
+): MinimaxToolCallScan {
   const encodedTransportBoundaryRe = /\]?<\]minimax\[>\[/g;
   const encodedToolCallOpenRe = /\]?<\]minimax\[>\[<tool_call>/g;
   const encodedToolCallCloseRe = /\]?<\]minimax\[>\[<\/tool_call>/g;
-  if (!text || (!/minimax:tool_call/i.test(text) && !encodedToolCallOpenRe.test(text))) {
-    return text;
+  if (!text) {
+    return { text, pending: false };
+  }
+
+  const hasMinimaxMarker = /minimax:tool_call/i.test(text);
+  if (!hasMinimaxMarker && !text.includes(MINIMAX_ENCODED_BOUNDARY)) {
+    return { text, pending: false };
+  }
+
+  const sourceCodeRegions = findCodeRegions(text);
+  const incompleteEncodedStart = findIncompleteEncodedToolCallStart(text, sourceCodeRegions);
+  encodedToolCallOpenRe.lastIndex = 0;
+  if (
+    !hasMinimaxMarker &&
+    !encodedToolCallOpenRe.test(text) &&
+    incompleteEncodedStart === undefined
+  ) {
+    return { text, pending: false };
   }
   encodedToolCallOpenRe.lastIndex = 0;
 
-  const sourceCodeRegions = findCodeRegions(text);
   let normalized = "";
   let envelopeCursor = 0;
+  let pending = false;
   for (const openMatch of text.matchAll(encodedToolCallOpenRe)) {
     const start = openMatch.index;
     if (start < envelopeCursor || isInsideCode(start, sourceCodeRegions)) {
@@ -84,7 +150,10 @@ export function stripMinimaxToolCallXml(
       closeMatch = encodedToolCallCloseRe.exec(text);
     }
     if (!closeMatch) {
-      // A later opening cannot find a closing marker once this search reaches the end.
+      // The encoded envelope owns everything after an opening marker that has no close yet.
+      normalized += text.slice(envelopeCursor, start);
+      pending = true;
+      envelopeCursor = text.length;
       break;
     }
 
@@ -97,10 +166,19 @@ export function stripMinimaxToolCallXml(
     normalized += text.slice(start, end).replace(encodedTransportBoundaryRe, "");
     envelopeCursor = end;
   }
+  if (incompleteEncodedStart !== undefined && incompleteEncodedStart >= envelopeCursor) {
+    normalized += text.slice(envelopeCursor, incompleteEncodedStart);
+    envelopeCursor = text.length;
+    pending = true;
+  }
   normalized += text.slice(envelopeCursor);
 
   if (!/minimax:tool_call/i.test(normalized)) {
-    return normalized;
+    return {
+      text: normalized,
+      pending,
+      rescanWhileSuppressed: incompleteEncodedStart !== undefined,
+    };
   }
 
   const codeRegions = findCodeRegions(normalized);
@@ -116,6 +194,9 @@ export function stripMinimaxToolCallXml(
     if (match[1]) {
       const tag = parseXmlTagAt(normalized, start);
       if (!tag || tag.isTruncated) {
+        pending = true;
+        result += normalized.slice(cursor, start);
+        cursor = normalized.length;
         continue;
       }
       // Literal closers in JSON arguments or code do not end the invocation.
@@ -137,6 +218,11 @@ export function stripMinimaxToolCallXml(
         close = recoveryClose;
       }
       if (!close) {
+        // An unfinished invocation must never publish its arguments while the provider streams.
+        // Keeping the whole suffix hidden also preserves the boundary for a later real closer.
+        pending = true;
+        result += normalized.slice(cursor, start);
+        cursor = normalized.length;
         continue;
       }
       end = close.index + close[0].length;
@@ -144,8 +230,26 @@ export function stripMinimaxToolCallXml(
     result += normalized.slice(cursor, start);
     cursor = end;
   }
-  result += normalized.slice(cursor);
-  return result;
+  const incompleteInvocationStart = findIncompleteInvocationStart(normalized, codeRegions);
+  if (incompleteInvocationStart !== undefined && incompleteInvocationStart >= cursor) {
+    result += normalized.slice(cursor, incompleteInvocationStart);
+    cursor = normalized.length;
+    pending = true;
+  } else {
+    result += normalized.slice(cursor);
+  }
+  return {
+    text: result,
+    pending,
+    rescanWhileSuppressed: incompleteEncodedStart !== undefined,
+  };
+}
+
+export function stripMinimaxToolCallXml(
+  text: string,
+  options?: { recoverUnclosed?: boolean },
+): string {
+  return scanMinimaxToolCallXml(text, options).text;
 }
 
 export type LegacyBracketBlockScan = {
@@ -212,20 +316,28 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
   return scanLegacyBracketToolCallBlocks(text, findCodeRegions(text)).text;
 }
 
-export function stripRelevantMemoriesTags(text: string): string {
+export type RelevantMemoriesScan = {
+  text: string;
+  inMemoryBlock: boolean;
+};
+
+export function scanRelevantMemoriesTags(
+  text: string,
+  codeRegions?: ReturnType<typeof findCodeRegions>,
+): RelevantMemoriesScan {
   if (!text || !MEMORY_TAG_QUICK_RE.test(text)) {
-    return text;
+    return { text, inMemoryBlock: false };
   }
+  const resolvedCodeRegions = codeRegions ?? findCodeRegions(text);
   MEMORY_TAG_RE.lastIndex = 0;
 
-  const codeRegions = findCodeRegions(text);
   let result = "";
   let lastIndex = 0;
   let inMemoryBlock = false;
 
   for (const match of text.matchAll(MEMORY_TAG_RE)) {
     const idx = match.index;
-    if (isInsideCode(idx, codeRegions)) {
+    if (isInsideCode(idx, resolvedCodeRegions)) {
       continue;
     }
 
@@ -246,7 +358,11 @@ export function stripRelevantMemoriesTags(text: string): string {
     result += text.slice(lastIndex);
   }
 
-  return result;
+  return { text: result, inMemoryBlock };
+}
+
+export function stripRelevantMemoriesTags(text: string): string {
+  return scanRelevantMemoriesTags(text).text;
 }
 
 export function stripAssistantInternalTraceLines(text: string): string {

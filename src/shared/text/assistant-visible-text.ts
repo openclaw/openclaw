@@ -5,8 +5,9 @@ import {
 } from "../../../packages/tool-call-repair/src/payload.js";
 import { escapeRegExp } from "../regexp.js";
 import {
+  scanMinimaxToolCallXml,
   stripMinimaxToolCallXml,
-  stripRelevantMemoriesTags,
+  scanRelevantMemoriesTags,
   stripAssistantInternalTraceLines,
   stripLegacyBracketToolCallBlocks,
   scanLegacyBracketToolCallBlocks,
@@ -81,37 +82,119 @@ const profileFilters = new Map<string, readonly TextFilter[]>();
 // accumulated text, so the invocation shape may arrive first. A bare mention alone
 // satisfies neither shape nor marker (when required) and stays off the re-scan.
 // One char after a shape match is required to confirm a delta-split word boundary.
+type IncrementalTagScan = {
+  text: string;
+  suppressRawAppends?: boolean;
+  rescanWhileSuppressed?: boolean;
+};
+
 function createBoundedTagProjector(
   transform: (text: string) => string,
   shape: RegExp,
   requires?: RegExp,
+  scan?: (text: string) => IncrementalTagScan,
 ): TextProjector {
-  let tail = "";
+  let probeTail = "";
   let markerSeen = !requires;
   let shapeSeen = false;
   let active = false;
-  return createConditionalTextProjector(transform, (input) => {
-    if (active) {
-      return true;
-    }
-    const joined = (tail + (input.delta ?? input.text)).toLowerCase().replace(/\s+/g, " ");
+  let text = "";
+  let suppressRawAppends = false;
+  let rescanWhileSuppressed = false;
+  let codeSyntax = false;
+  let sourceTail = "";
+  const runCanonical = (source: string) => {
+    const projected = scan?.(source) ?? { text: transform(source) };
+    text = projected.text;
+    suppressRawAppends = projected.suppressRawAppends ?? false;
+    rescanWhileSuppressed = projected.rescanWhileSuppressed ?? false;
+    codeSyntax ||= /[`~]|\t| {4}/u.test(source);
+    sourceTail = source.slice(-3);
+  };
+  const observe = (source: string) => {
+    const joined = (probeTail + source).toLowerCase().replace(/\s+/g, " ");
     if (requires?.test(joined)) {
       markerSeen = true;
     }
     const match = shape.exec(joined);
-    if (match && match.index + match[0].length < joined.length) {
+    if (
+      (match && match.index + match[0].length < joined.length) ||
+      joined.endsWith("<]minimax[>[")
+    ) {
       shapeSeen = true;
     }
-    tail = joined.slice(-32);
+    probeTail = joined.slice(-32);
     active = markerSeen && shapeSeen;
-    return active;
-  });
+  };
+  return (input) => {
+    const previousText = text;
+    if (input.delta === "") {
+      return text === input.text ? input : { text, delta: "" };
+    }
+    if (input.delta === null) {
+      probeTail = "";
+      markerSeen = !requires;
+      shapeSeen = false;
+      active = false;
+      observe(input.text);
+      if (!active) {
+        text = input.text;
+        suppressRawAppends = false;
+        rescanWhileSuppressed = false;
+        codeSyntax = /[`~]|\t| {4}/u.test(input.text);
+        sourceTail = input.text.slice(-3);
+        return input;
+      }
+      runCanonical(input.text);
+      return { text, delta: null };
+    }
+    if (!active) {
+      observe(input.delta);
+      if (!active) {
+        text = input.text;
+        return input;
+      }
+      runCanonical(input.text);
+    } else {
+      const codeChanged =
+        /[`~]|\t| {4}/u.test(sourceTail + input.delta) ||
+        (codeSyntax && /[\x5b\x5d()<>"'\\]/u.test(input.delta));
+      codeSyntax ||= /[`~]|\t| {4}/u.test(sourceTail + input.delta);
+      if (
+        rescanWhileSuppressed ||
+        input.delta.includes("<") ||
+        input.delta.includes(">") ||
+        codeChanged
+      ) {
+        runCanonical(input.text);
+      } else if (!suppressRawAppends) {
+        text += input.delta;
+        sourceTail = input.text.slice(-3);
+      } else {
+        sourceTail = input.text.slice(-3);
+      }
+    }
+    if (text.startsWith(previousText)) {
+      const nextDelta = text.slice(previousText.length);
+      return text === input.text && nextDelta === input.delta ? input : { text, delta: nextDelta };
+    }
+    return { text, delta: null };
+  };
 }
 
 const memoriesShape = /<\s*\/?\s*relevant[-_]memories\b/;
 const memoriesTextFilter: TextFilter = {
-  transform: stripRelevantMemoriesTags,
-  create: () => createBoundedTagProjector(stripRelevantMemoriesTags, memoriesShape),
+  transform: (text) => scanRelevantMemoriesTags(text).text,
+  create: () =>
+    createBoundedTagProjector(
+      (text) => scanRelevantMemoriesTags(text).text,
+      memoriesShape,
+      undefined,
+      (source) => {
+        const scanned = scanRelevantMemoriesTags(source);
+        return { text: scanned.text, suppressRawAppends: scanned.inMemoryBlock };
+      },
+    ),
 };
 
 export function assistantVisibleTextFilters(
@@ -182,15 +265,26 @@ export function assistantVisibleTextFilters(
 // ``minimax:tool_call`` marker occurs, even without an exact envelope token, so
 // activation needs that marker plus an invocation/tag shape. A bare mention alone
 // has no such shape and stays off the whole-reply re-scan.
+const encodedMinimaxBoundary = escapeRegExp("<]minimax[>[");
 const encodedMinimaxOpen = escapeRegExp("<]minimax[>[<tool_call>");
-const minimaxShape = new RegExp(`<invoke\\b|<\\/?minimax:tool_call|${encodedMinimaxOpen}`);
-const minimaxRequires = new RegExp(`minimax:tool_call|${encodedMinimaxOpen}`);
+const minimaxShape = new RegExp(`<invoke\\b|<\\/?minimax:tool_call|${encodedMinimaxBoundary}`);
+const minimaxRequires = new RegExp(
+  `minimax:tool_call|${encodedMinimaxBoundary}|${encodedMinimaxOpen}`,
+);
 export function minimaxToolCallTextFilter(streaming = false): TextFilter {
   const transform = (text: string) =>
     stripMinimaxToolCallXml(text, { recoverUnclosed: !streaming });
   return {
     transform,
-    create: () => createBoundedTagProjector(transform, minimaxShape, minimaxRequires),
+    create: () =>
+      createBoundedTagProjector(transform, minimaxShape, minimaxRequires, (source) => {
+        const scanned = scanMinimaxToolCallXml(source, { recoverUnclosed: !streaming });
+        return {
+          text: scanned.text,
+          suppressRawAppends: scanned.pending,
+          rescanWhileSuppressed: scanned.rescanWhileSuppressed,
+        };
+      }),
   };
 }
 

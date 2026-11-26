@@ -124,6 +124,26 @@ it.each(["[docs](https://example.com) ", "Context: "])(
   },
 );
 
+it.each([16 * 1024, 64 * 1024])(
+  "consumes a completed inbound metadata block once before %i characters of reply",
+  (size) => {
+    const metadata = 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"id":"synthetic"}\n```\n\n';
+    const sentence =
+      "The quick brown fox jumps over the lazy dog while the operator reads the next line. ";
+    const body = sentence
+      .repeat(Math.ceil((size - metadata.length) / sentence.length))
+      .slice(0, size - metadata.length);
+    const stream = createAssistantVisibleStreamText();
+    stream.append(metadata);
+
+    inbound.mockClear();
+    streamChunks(body, 4, stream);
+
+    expect(stream.text).toBe(body);
+    expect(characters(inbound.mock.calls)).toBeLessThan(body.length * 2);
+  },
+);
+
 it.each([
   "[Mon 2026-10-24 12:34 UTC] Visible answer",
   ...MESSAGE_TOOL_DELIVERY_HINTS.map((hint) => `${hint}\nVisible answer`),

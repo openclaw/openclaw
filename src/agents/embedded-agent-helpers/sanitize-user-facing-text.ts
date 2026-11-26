@@ -6,6 +6,7 @@ import {
 } from "../../auto-reply/reply/history.js";
 import {
   createInboundMetadataProbe,
+  createInboundMetadataStreamProjector,
   stripInboundMetadata,
 } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { RUNTIME_CONTEXT_HEADER } from "../../llm/types.js";
@@ -485,8 +486,9 @@ export function userFacingTextFilters(
         },
     {
       transform: stripInboundMetadata,
-      create: () =>
-        createConditionalTextProjector(stripInboundMetadata, createInboundMetadataProbe()),
+      create: streaming
+        ? createInboundMetadataStreamProjector
+        : () => createConditionalTextProjector(stripInboundMetadata, createInboundMetadataProbe()),
     },
     minimaxToolCallTextFilter(streaming),
     toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }),

@@ -53,6 +53,22 @@ it("keeps a bare relevant-memories mention off the whole-reply re-scan", () => {
   expect(scanned).toBeLessThan(source.length * 8);
 });
 
+it.each(["relevant-memories", "relevant_memories"])(
+  "matches canonical %s filtering at every streamed prefix",
+  (tag) => {
+    const source = `Before.\n\n<${tag}>\nsecret\n</${tag}>\n\nAfter.`;
+    expectPrefixParity(
+      source,
+      () => createAssistantVisibleStreamText("final_answer"),
+      (text) => sanitizeAssistantVisibleStreamText(text, "final_answer"),
+    );
+    const final = sanitizeAssistantVisibleStreamText(source, "final_answer");
+    expect(final).not.toContain("secret");
+    expect(final).toContain("Before.");
+    expect(final).toContain("After.");
+  },
+);
+
 // A real ``<relevant-memories>`` tag still gates on and is stripped exactly once.
 it("strips a real relevant-memories tag when it appears", () => {
   const source = "Intro.\n\n<relevant-memories>\nsecret\n</relevant-memories>\n\nAfter.\n";

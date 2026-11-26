@@ -31,6 +31,41 @@ describe("MiniMax tool envelopes", () => {
 
   it.each([
     [
+      "XML invocation",
+      'Ready.\n<minimax:tool_call><invoke name="exec">TAIL_SENTINEL',
+      "</invoke></minimax:tool_call>\nDone.",
+    ],
+    [
+      "encoded invocation",
+      'Ready.\n]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">TAIL_SENTINEL',
+      "]<]minimax[>[</invoke>]<]minimax[>[</tool_call>]\nDone.",
+    ],
+  ])("never publishes an unfinished %s through one-character deltas", (_name, prefix, suffix) => {
+    const source = prefix + suffix;
+    const stream = createTextProjection(assistantVisibleTextFilters("final-answer-delivery", true));
+    let delivered = "";
+    for (let end = 1; end <= source.length; end += 1) {
+      const result = stream.append(source[end - 1]!);
+      delivered = result.delta === null ? result.text : delivered + result.delta;
+      const expected = sanitizeAssistantVisibleTextWithProfile(
+        source.slice(0, end),
+        "final-answer-delivery",
+        true,
+      );
+      expect(result.text, `prefix ${end}`).toBe(expected);
+      expect(delivered, `delivered prefix ${end}`).toBe(expected);
+      if (end <= prefix.length) {
+        expect(result.text).not.toContain("TAIL_SENTINEL");
+      }
+    }
+    expect(stream.text).toBe(
+      sanitizeAssistantVisibleTextWithProfile(source, "final-answer-delivery", true),
+    );
+    expect(stream.text).not.toContain("TAIL_SENTINEL");
+  });
+
+  it.each([
+    [
       "a quoted closing tag in JSON arguments",
       JSON.stringify({ command: 'printf "</invoke>"', note: "TAIL_SENTINEL" }),
     ],
@@ -99,7 +134,7 @@ describe("MiniMax tool envelopes", () => {
     expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toBe(input);
   });
 
-  it("stops searching after no closer exists for repeated incomplete openings", () => {
+  it("hides the suffix after repeated incomplete openings without repeated close searches", () => {
     const input = "]<]minimax[>[<tool_call>\n".repeat(256);
     const closeSource = "\\]?<\\]minimax\\[>\\[<\\/tool_call>";
     const exec = vi.spyOn(RegExp.prototype, "exec");
@@ -114,7 +149,7 @@ describe("MiniMax tool envelopes", () => {
     } finally {
       exec.mockRestore();
     }
-    expect(output).toBe(input);
+    expect(output).toBe("");
     expect(closeSearches).toBe(1);
   });
 
@@ -125,8 +160,8 @@ describe("MiniMax tool envelopes", () => {
     const payload = 'max[>[<tool_call>]<]minimax[>[<invoke name="exec">secret</invoke>';
     const closing = "]<]minimax[>[</tool_call>After";
     expect(projection.append(prefix)).toEqual({ text: prefix, delta: prefix });
-    expect(projection.append(payload)).toEqual({ text: prefix + payload, delta: payload });
-    expect(projection.append(closing)).toEqual({ text: "Before After", delta: null });
+    expect(projection.append(payload)).toEqual({ text: "Before", delta: null });
+    expect(projection.append(closing)).toEqual({ text: "Before After", delta: " After" });
     expect(projection.append(".")).toEqual({ text: "Before After.", delta: "." });
   });
 
