@@ -3,6 +3,7 @@ import {
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readMcpConnectAction } from "../agents/mcp-connect-action.js";
 import { readAutomationToolCreation } from "../chat/automation-job-result.js";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
@@ -112,6 +113,10 @@ export function projectToolResultDetails(
     if (reviews.length > 0) {
       projected.approvalReviews = reviews;
     }
+  }
+  const connect = readMcpConnectAction({ details: record });
+  if (connect) {
+    projected.mcpConnect = connect;
   }
   const reviewOutcome = record.approvalReviewOutcome;
   if (reviewOutcome === "approved" || reviewOutcome === "denied" || reviewOutcome === "reviewing") {

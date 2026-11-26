@@ -121,8 +121,6 @@ function TranscriptRows(props: {
       <div style={{ height: `${props.snapshot.headerHeight}px`, "transition-property": "none" }}>
         {props.snapshot.header}
       </div>
-      {/* The history edge follows the header, not temporary shifts of the measured rows. */}
-      {props.snapshot.overlay}
       <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
         <div
           class="chat-virtual-block"
@@ -160,7 +158,10 @@ function TranscriptRows(props: {
                     ref={[rowRef(String(virtualRow().key))]}
                     class={[
                       "chat-virtual-row",
-                      { "chat-virtual-row--first": virtualRow().index === 0 },
+                      {
+                        "chat-virtual-row--first": virtualRow().index === 0,
+                        "chat-virtual-row--compact-activity": row()?.compactActivity,
+                      },
                     ]}
                     style={{
                       "min-height":

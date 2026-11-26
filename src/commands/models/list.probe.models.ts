@@ -1,5 +1,9 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { normalizeProviderId, parseModelRef } from "../../agents/model-selection.js";
+import {
+  type LoadPreparedModelCatalogParams,
+  readPreparedModelCatalog,
+} from "../../agents/prepared-model-catalog.js";
 import { DEFAULT_PROVIDER } from "./shared.js";
 
 export function buildProbeCandidateMap(modelCandidates: string[]): Map<string, string> {
@@ -11,6 +15,20 @@ export function buildProbeCandidateMap(modelCandidates: string[]): Map<string, s
     }
   }
   return map;
+}
+
+export async function loadProbeModelCatalog(
+  scope: Pick<LoadPreparedModelCatalogParams, "config" | "agentId" | "agentDir" | "workspaceDir">,
+  providerDiscoveryProviderIds: string[],
+): Promise<ModelCatalogEntry[]> {
+  return providerDiscoveryProviderIds.length
+    ? readPreparedModelCatalog({
+        ...scope,
+        readOnly: true,
+        scopedLiveProviderDiscovery: true,
+        providerDiscoveryProviderIds,
+      })
+    : [];
 }
 
 function probePriority(provider: string, modelId: string): number {

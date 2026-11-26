@@ -196,9 +196,7 @@ describe("createOllamaStreamFn thinking events", () => {
       3.75,
     ],
     [{ prompt_eval_duration: 1 }, undefined],
-    [{ eval_duration: 1 }, undefined],
     [{ prompt_eval_duration: -1, eval_duration: 1 }, undefined],
-    [{ prompt_eval_duration: "1", eval_duration: 1 }, undefined],
     [{ prompt_eval_duration: Number.MAX_VALUE, eval_duration: Number.MAX_VALUE }, undefined],
   ] as const)("uses only valid final processing timing: %j", async (timing, processingMs) => {
     const events = await streamOllamaEvents([

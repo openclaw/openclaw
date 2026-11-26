@@ -3,6 +3,19 @@ import { createMemo, Show, type Accessor } from "solid-js";
 import type { PickerOption, PickerParams } from "./select-picker-types.ts";
 import { Icon } from "./solid/icon.tsx";
 
+function OptionLabel(props: { label: string; suffix?: string }) {
+  return (
+    <Show when={props.suffix} fallback={props.label}>
+      {(suffix) => (
+        <span class="picker-select__split-label" title={props.label}>
+          <span>{props.label.slice(0, -suffix().length)}</span>
+          <span>{suffix()}</span>
+        </span>
+      )}
+    </Show>
+  );
+}
+
 function Leading<Option extends PickerOption>(props: {
   option?: Option;
   params: PickerParams<Option>;
@@ -25,7 +38,7 @@ export function PickerOptionContent<Option extends PickerOption>(props: {
       {!props.row.grouped && <Leading option={props.row.option()} params={props.params} />}
       <span class="picker-select__copy">
         <span class="picker-select__label" style={props.row.option().labelStyle}>
-          {props.row.option().label}
+          <OptionLabel label={props.row.option().label} suffix={props.row.option().labelSuffix} />
         </span>
         <Show when={props.row.option().description}>
           <span class="picker-select__description">{props.row.option().description}</span>
@@ -52,7 +65,12 @@ export function PickerTriggerContent<Option extends PickerOption>(props: {
       </Show>
       <Leading option={props.selected()} params={props.params} />
       <span class="picker-select__copy">
-        <span class="picker-select__label">{props.selected()?.label ?? props.params.label}</span>
+        <span class="picker-select__label">
+          <OptionLabel
+            label={props.selected()?.label ?? props.params.label}
+            suffix={props.selected()?.labelSuffix}
+          />
+        </span>
         <Show when={props.params.showSelectedDescription && props.selected()?.description}>
           <span class="picker-select__description">{props.selected()?.description}</span>
         </Show>

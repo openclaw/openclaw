@@ -53,6 +53,8 @@ import {
   inspectActionsArtifactZipWithPolicy,
   sha256Digest,
 } from "./lib/actions-artifact-archive.mjs";
+import { artifactProducerSlots } from "./lib/full-release-publication-artifacts.mjs";
+import { INITIAL_NPM_PREPARATION_JOB } from "./lib/full-release-publication-inputs.mjs";
 import {
   dispatchReceiptRecovery,
   parseReceiptRecoveryArgs,
@@ -71,6 +73,7 @@ import {
 import {
   decodeReleaseValidationSource,
   evaluateReleaseChildPolicy,
+  isWaived,
   readReleaseValidationWaiversAsync,
   RELEASE_VALIDATION_WAIVERS_PATH,
 } from "./lib/release-validation-waivers.mjs";
@@ -678,7 +681,7 @@ async function legacyNpmRecoveryProducers(
   };
 }
 
-function artifactRecoveryJobs(workflow) {
+function artifactRecoveryJobs(workflow, inputs, attemptJobs) {
   let source;
   try {
     source = parseYaml(workflow);
@@ -690,7 +693,7 @@ function artifactRecoveryJobs(workflow) {
     return [];
   }
   const producers = [];
-  for (const job of Object.values(jobs)) {
+  for (const job of artifactProducerSlots(source, inputs, attemptJobs)) {
     if (!job || typeof job !== "object" || Array.isArray(job)) {
       continue;
     }
@@ -764,7 +767,11 @@ async function artifactRecoveryProducers(
   }
   const producers = [];
   let pending = false;
-  for (const { jobName, stage, allowsReuse } of artifactRecoveryJobs(workflow)) {
+  for (const { jobName, stage, allowsReuse } of artifactRecoveryJobs(
+    workflow,
+    plan.qualificationInputs,
+    parentJobs.filter((job) => Number(job.run_attempt) === plan.parentRunAttempt),
+  )) {
     const matches = parentJobs.filter(
       (job) => job.name === jobName && Number(job.run_attempt) === plan.parentRunAttempt,
     );
@@ -941,9 +948,14 @@ export async function preflightContinuation(
       "parent-owned publication artifacts do not survive parent reruns; start a fresh all-group FRV",
     );
   }
-  const missingChildren = selectedChildren(plan)
+  const waiverPolicy = await readReleaseWaiverPolicy(plan, client);
+  const scope = { targetVersion: plan.targetVersion, targetSha: plan.targetSha };
+  const children = selectedChildren(plan).filter(
+    ({ key }) => !isWaived({ ...scope, childRole: key }, waiverPolicy),
+  );
+  const missingChildren = children
     .filter((child) => !hasExactChildRunIdentity(child))
-    .map((child) => child.key)
+    .map(({ key }) => key)
     .toSorted();
   if (missingChildren.length > 0) {
     throw new Error(
@@ -1048,7 +1060,7 @@ export async function preflightContinuation(
     Boolean(selection),
   );
   const childObservations = await Promise.all(
-    selectedChildren(plan).map(async (child) => {
+    children.map(async (child) => {
       const sourceParentAttempt = child.sourceParentAttempt ?? source.sourceRunAttempt;
       const parentJob = exactParentJob(parentJobs, child, sourceParentAttempt);
       const [childRun, parentLog] = await Promise.all([
@@ -1196,7 +1208,11 @@ export async function inspectContinuation(plan, client, options = {}) {
   const waiverPolicy = await readReleaseWaiverPolicy(plan, client);
   const children = await Promise.all(
     selectedChildren(plan).map(async (child) => {
-      if (!hasExactChildRunIdentity(child)) {
+      const waived = isWaived(
+        { childRole: child.key, targetSha: plan.targetSha, targetVersion: plan.targetVersion },
+        waiverPolicy,
+      );
+      if (waived || !hasExactChildRunIdentity(child)) {
         return {
           compositeJobsSha256: "",
           conclusion: "",
@@ -1205,7 +1221,7 @@ export async function inspectContinuation(plan, client, options = {}) {
           passed: false,
           plannedRunAttempt: child.runAttempt ?? null,
           runId: String(child.runId ?? ""),
-          status: "missing",
+          status: waived ? "waived" : "missing",
           url: String(child.url ?? ""),
         };
       }
@@ -1377,7 +1393,9 @@ async function inspectQualificationStatus(plan, runId, client) {
           operationDeadline,
         );
         evidence = (await client.verifySeal(runId, plan, operationDeadline, attempts))
-          ? "accepted"
+          ? plan.rerunGroup === "build-only"
+            ? "prepared-validation-skipped"
+            : "accepted"
           : "needs-refresh";
       } catch {
         evidence = "unavailable";
@@ -1387,18 +1405,20 @@ async function inspectQualificationStatus(plan, runId, client) {
   }
   const qualification = {
     state:
-      evidence === "accepted"
-        ? "passed"
-        : evidence === "unavailable"
-          ? "observation-unavailable"
-          : decision && !["qualifying", "passed"].includes(decision.state)
-            ? "blocked"
-            : parent.status === "completed" ||
-                status.failed.length ||
-                status.missing.length ||
-                blockers.length
+      evidence === "prepared-validation-skipped"
+        ? "prepared-not-validated"
+        : evidence === "accepted"
+          ? "passed"
+          : evidence === "unavailable"
+            ? "observation-unavailable"
+            : decision && !["qualifying", "passed"].includes(decision.state)
               ? "blocked"
-              : "running",
+              : parent.status === "completed" ||
+                  status.failed.length ||
+                  status.missing.length ||
+                  blockers.length
+                ? "blocked"
+                : "running",
     evidence,
   };
   let candidate = releaseCandidateIdentity(plan);
@@ -1410,7 +1430,7 @@ async function inspectQualificationStatus(plan, runId, client) {
   const nextCommand = `pnpm frv ${
     status.active.length || parent.status !== "completed"
       ? "watch"
-      : qualification.state === "blocked"
+      : qualification.state === "blocked" && plan.rerunGroup !== "build-only"
         ? "continue --failed --dry-run"
         : "verify"
   } --run ${runId}`;
@@ -1470,7 +1490,7 @@ export function createClient(repository, dependencies = {}) {
       process.execPath,
       [
         "scripts/release-ci-summary.mjs",
-        "--validate-run",
+        plan.rerunGroup === "build-only" ? "--verify-build-only" : "--validate-run",
         runId,
         "--repo",
         repository,
@@ -2591,8 +2611,16 @@ export async function loadPlan(options, loadExecutionPlan = downloadExecutionPla
   if (plan.attemptEvidenceVersion === undefined) {
     throw new Error("run predates attempt-aware immutable plans; run a fresh all-group FRV");
   }
-  if (plan.rerunGroup !== "all") {
-    throw new Error("FRV continuation requires an all-group root");
+  if (
+    plan.rerunGroup !== "all" &&
+    !(
+      plan.rerunGroup === "build-only" &&
+      ["status", "watch", "verify", "cancel"].includes(options.command)
+    )
+  ) {
+    throw new Error(
+      "FRV continuation requires an all-group root; build-only permits status, watch, verify and cancel only",
+    );
   }
   return plan;
 }
@@ -3463,6 +3491,7 @@ const DISPATCHED_CHILD_PATTERN =
   /Dispatched ([\w.-]+\.ya?ml): https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)/gu;
 const ARTIFACT_DISPATCH_JOBS = [
   ["Prepare release npm artifacts", "artifact:npm"],
+  [INITIAL_NPM_PREPARATION_JOB, "artifact:npm"],
   ["Prepare release Docker artifacts", "artifact:docker"],
   ["Acquire full release candidate", "artifact:candidate"],
   ["Prepare exact plugin npm artifacts", "artifact:plugin-npm"],
@@ -4003,7 +4032,9 @@ function print(value, json) {
     );
     console.log(`candidate: ${value.candidate.sha}; tip: ${value.candidate.state}`);
     if (value.decision) {
-      console.log(formatReleaseStateOutcome(value.decision));
+      console.log(
+        formatReleaseStateOutcome(value.decision, { observedDrainStatus: value.drain.status }),
+      );
     }
     for (const error of value.observationErrors) {
       console.log(`observation: ${error}`);
@@ -4171,9 +4202,28 @@ async function main() {
   }
   const client = createClient(options.repository);
   if (options.command === "logs") {
-    const log = stripVTControlCharacters(
-      await client.getJobLog(positiveInteger(options.job, "--job")),
-    );
+    const jobId = positiveInteger(options.job, "--job");
+    let log;
+    try {
+      log = stripVTControlCharacters(await client.getJobLog(jobId));
+    } catch (error) {
+      if (!/\b(?:HTTP|returned status) 404\b/iu.test(String(error?.stderr ?? ""))) {
+        throw error;
+      }
+      // The archive can be missing while the job runs. A 404 alone cannot distinguish this
+      // from a missing job or expired logs, so only offer a retry for a confirmed active job.
+      const job = await ghJson(options.repository, `actions/jobs/${jobId}`, {}, true);
+      if (
+        job.id !== jobId ||
+        !["queued", "waiting", "pending", "requested", "in_progress"].includes(job.status)
+      ) {
+        throw error;
+      }
+      throw new Error(
+        `Job ${jobId} ${JSON.stringify(job.name)} is ${job.status}. Retry the log request after the job completes.`,
+        { cause: error },
+      );
+    }
     const output = options.grep
       ? log
           .split("\n")

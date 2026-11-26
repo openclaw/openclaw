@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import type { CyberAccessProgram } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { selectChatModel } from "../test-helpers/select-picker-e2e.ts";
+import { sendChat } from "./chat-flow-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Daybreak chat controls" });
@@ -10,7 +11,9 @@ const models = (
   [
     { id: "gpt-6.2-sol", name: "GPT-6.2 Sol", programs: ["standard", "daybreak_blue"] },
     { id: "gpt-6-cyber", name: "GPT-6 Cyber", programs: ["daybreak_red"] },
-  ] satisfies { id: string; name: string; programs: CyberAccessProgram[] }[]
+    { id: "sample-standard", name: "Sample Standard", programs: ["standard"] },
+    { id: "sample-unknown", name: "Sample Unknown" },
+  ] satisfies { id: string; name: string; programs?: CyberAccessProgram[] }[]
 ).map(({ id, name, programs }) => ({
   id,
   name,
@@ -18,7 +21,7 @@ const models = (
   reasoning: true,
   available: true,
   supportsFastMode: true,
-  availableAccessPrograms: { cyber: programs },
+  availableAccessPrograms: programs ? { cyber: programs } : undefined,
   cyberAccessProgramDefault: "standard" as const,
 }));
 
@@ -28,6 +31,11 @@ suite.define(() => {
     { model: "gpt-6-cyber", selected: "daybreak_red", scenario: "required" },
     { model: "gpt-6-cyber", selected: "daybreak_blue", scenario: "repair" },
     { model: "gpt-6.2-sol", selected: "daybreak_blue", scenario: "switch model" },
+    { model: "gpt-6.2-sol", selected: "daybreak_blue", scenario: "clear on switch" },
+    { model: "sample-standard", selected: "standard", scenario: "hide" },
+    { model: "sample-standard", selected: "daybreak_blue", scenario: "hide stale" },
+    { model: "sample-unknown", selected: "daybreak_blue", scenario: "preserve unknown" },
+    { model: "gpt-6-cyber", selected: "daybreak_blue", scenario: "remap on send" },
   ] satisfies { model: string; selected: CyberAccessProgram; scenario: string }[])(
     "Daybreak: $scenario",
     ({ model, selected, scenario }) =>
@@ -73,6 +81,65 @@ suite.define(() => {
         await trigger.click();
         const menu = picker.locator(".chat-controls__effort-menu");
         const toggle = menu.getByRole("switch", { name: "Daybreak", exact: true });
+        const sendAndReceive = async (program?: CyberAccessProgram, patched = true) => {
+          const request = await sendChat(page, gateway, "Check the selected model.");
+          expect(
+            (await gateway.getRequests())
+              .map(({ method }) => method)
+              .filter((method) => method === "sessions.patch" || method === "chat.send"),
+          ).toEqual(patched ? ["sessions.patch", "chat.send"] : ["chat.send"]);
+          expect((await gateway.getSessionRow(key)).cyberAccessProgram).toBe(program);
+          expect(typeof request.idempotencyKey).toBe("string");
+          const text = "The selected model replied.";
+          await gateway.emitChatFinal({ runId: String(request.idempotencyKey), text });
+          await page.locator(".chat-group.assistant", { hasText: text }).waitFor();
+        };
+
+        if (scenario === "preserve unknown" || scenario === "remap on send") {
+          await menu.waitFor();
+          const unknown = scenario === "preserve unknown";
+          expect(await toggle.count()).toBe(unknown ? 0 : 1);
+          await trigger.click();
+          await sendAndReceive(unknown ? "daybreak_blue" : "daybreak_red", !unknown);
+          return;
+        }
+
+        if (scenario === "hide" || scenario === "hide stale") {
+          await menu.waitFor();
+          if (scenario === "hide stale" && process.env.DAYBREAK_PROOF_IMAGE) {
+            await page.screenshot({
+              path: process.env.DAYBREAK_PROOF_IMAGE,
+              animations: "disabled",
+            });
+          }
+          expect(await toggle.count()).toBe(0);
+          if (scenario === "hide stale") {
+            await trigger.click();
+            await sendAndReceive();
+            expect(
+              (await gateway.getRequests("sessions.patch")).map(({ params }) => params),
+            ).toEqual([expect.objectContaining({ key, cyberAccessProgram: null })]);
+          }
+          return;
+        }
+
+        if (scenario === "clear on switch") {
+          expect(await toggle.isChecked()).toBe(true);
+          await trigger.click();
+          await selectChatModel(composer, "openai/sample-standard");
+          const patch = await gateway.waitForRequest("sessions.patch");
+          expect(patch.params).toMatchObject({
+            key,
+            model: "openai/sample-standard",
+            cyberAccessProgram: null,
+          });
+          await trigger.click();
+          await menu.waitFor();
+          expect(await toggle.count()).toBe(0);
+          await trigger.click();
+          await sendAndReceive();
+          return;
+        }
 
         if (scenario === "required" || scenario === "repair") {
           const required = "Required by this model";
@@ -138,4 +205,18 @@ suite.define(() => {
         await menu.getByText("Blue", { exact: true }).waitFor({ state: "detached" });
       }),
   );
+
+  it("omits Daybreak from a new-session draft on a Standard-only default", () =>
+    suite.withPage({}, async ({ page }) => {
+      await installMockGateway(page, {
+        agentModel: "openai/sample-standard",
+        models,
+        sessions: [],
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator('[data-chat-thinking-select="true"]').click();
+      const menu = page.locator(".chat-controls__effort-menu");
+      await menu.locator('[data-chat-speed-option="on"]').waitFor();
+      expect(await menu.getByRole("switch", { name: "Daybreak", exact: true }).count()).toBe(0);
+    }));
 });

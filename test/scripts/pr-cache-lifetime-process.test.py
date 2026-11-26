@@ -93,7 +93,8 @@ class RetirementTests(unittest.TestCase):
     def test_legacy_pid_incarnation_and_same_second_remain_safe(self):
         self.legacy()
         birth = getattr(os.stat(self.anchor), "st_birthtime", self.candidate["legacy"]["createdMs"] / 1000) * 1000
-        for start in (birth - 1000, birth, birth + 0.1):
+        last_ms_of_birth_second = int(birth / 1000) * 1000 + 999
+        for start in (birth - 1000, birth, last_ms_of_birth_second):
             with self.subTest(start=start):
                 self.assertEqual(self.retire(({1234: start}, set()))["reason"], "creator-live")
         self.assertEqual(self.retire(({1234: birth + 2000}, set()))["state"], "retired")
@@ -123,7 +124,8 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(self.retire(({}, set()))["state"], "retired")
 
     def test_missing_legacy_anchor_uses_modified_time_for_age_and_birth_for_pid(self):
-        now = time.time()
+        # Whole seconds round-trip through the millisecond payload exactly.
+        now = 1_795_525_000
         self.anchor.rmdir()
         self.candidate.pop("lease")
         self.candidate["legacy"] = {"pid": 1234, "createdMs": (now - 100) * 1000,
@@ -133,7 +135,7 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(OWNER.retire(self.candidate, ({1234: (now - 101) * 1000}, set()), now)["reason"], "creator-live")
         self.assertEqual(OWNER.retire(self.candidate, ({}, set()), now)["state"], "retired")
         self.candidate["legacy"].pop("createdMs")
-        self.assertEqual(self.retire(({}, set()))["reason"], "missing-anchor-timestamp")
+        self.assertEqual(OWNER.retire(self.candidate, ({}, set()), now)["reason"], "missing-anchor-timestamp")
 
     def test_successful_retirement_budget_does_not_count_live_candidates(self):
         blocked = {**self.candidate, "id": "blocked", "lease": {**self.candidate["lease"], "ino": "0"}}

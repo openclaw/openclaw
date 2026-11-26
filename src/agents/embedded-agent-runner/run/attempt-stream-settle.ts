@@ -21,6 +21,7 @@ import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveSelectedModelCredential } from "../../model-auth-selected-credential.js";
 import { configuredModelSupportsNativeVideo } from "../../model-input.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
@@ -362,7 +363,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   sandboxSessionKey: string;
   sandbox?: SandboxContext | null;
   codeModeControlsEnabled: boolean;
-  /** Hidden Tool Search directory entries that a direct call hydrates in this run. */
+  /** Hidden catalog entries that a direct call hydrates in this run (directory or on-demand). */
   getDeferredToolEntries?: () => readonly { name: string }[] | undefined;
   providerPromptState: {
     state: ProviderPromptState;
@@ -508,6 +509,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
         workspaceDir: input.workspaceDir,
         agentWorkspaceDir: attempt.workspaceDir,
         workspaceOnly: input.workspaceOnly,
+        maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
         localRoots: input.workspaceOnly
           ? undefined
           : () =>

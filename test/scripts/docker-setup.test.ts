@@ -4,7 +4,7 @@ import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { parseEnv } from "node:util";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { resolvePreferredOpenClawTmpDir } from "../../src/infra/tmp-openclaw-dir.js";
 import { createSuiteTempRootTracker } from "../../src/test-helpers/temp-dir.js";
@@ -74,6 +74,7 @@ if [[ "\${1:-}" == "compose" ]]; then
   case "$*" in
     *"config get gateway.controlUi.allowedOrigins"*) printf '%s\n' "\${DOCKER_STUB_CONTROL_UI_ORIGINS:-}"; exit 0 ;;
     *"config get gateway.publicOrigin"*) printf '%s\n' "\${DOCKER_STUB_PUBLIC_ORIGIN:-}"; exit 0 ;;
+    *"config get agents.defaults.sandbox.mode"*) printf '%s\n' "\${DOCKER_STUB_SANDBOX_MODE:-}"; exit 0 ;;
     *"config get tools.sandbox.tools --json"*) printf '%s\n' "\${DOCKER_STUB_SANDBOX_TOOLS_JSON:-$empty_json}"; exit 0 ;;
     *"config get agents --json"*) printf '%s\n' "\${DOCKER_STUB_AGENTS_JSON:-$empty_json}"; exit 0 ;;
   esac
@@ -253,8 +254,9 @@ describe("scripts/docker/setup.sh", () => {
     }));
   }
 
-  beforeAll(async () => {
-    await sandboxRootTracker.setup();
+  beforeAll(sandboxRootTracker.setup);
+
+  beforeEach(async () => {
     sandbox = await createDockerSetupSandbox();
   });
 
@@ -640,13 +642,75 @@ describe("scripts/docker/setup.sh", () => {
     }
   });
 
-  it("treats OPENCLAW_SANDBOX=0 as disabled", async () => {
-    const { result, log } = await runLoggedSetup({ OPENCLAW_SANDBOX: "0" });
+  it("preserves an existing sandbox on upgrade unless explicitly disabled", async () => {
+    const socketPath = path("existing-docker.sock");
+    const overlay = "docker-compose.sandbox.yml";
+    const existingOverlay = `services:\n  openclaw-gateway:\n    volumes:\n      - "${socketPath}:/var/run/docker.sock"\n    group_add:\n      - "1234"\n`;
+    await writeFile(
+      path(".env"),
+      `OPENCLAW_SANDBOX=1\nOPENCLAW_DOCKER_SOCKET=${socketPath}\nOPENCLAW_CONFIG_DIR=${path("config")}\n`,
+    );
+    await writeFile(path(overlay), existingOverlay);
+    await mkdir(path("scripts/docker/sandbox"), { recursive: true });
+    await writeFile(path("scripts/docker/sandbox/Dockerfile"), "FROM scratch\n");
+
+    await withUnixSocket(socketPath, async () => {
+      const interrupted = await runLoggedSetup({
+        OPENCLAW_SKIP_ONBOARDING: "1",
+        DOCKER_STUB_SANDBOX_MODE: "off",
+      });
+      expect(interrupted.result.status).not.toBe(0);
+      expect(interrupted.result.stderr).toContain("has no enabled sandbox configuration");
+      expect(interrupted.lines.filter(isGatewayStartLine)).toEqual([]);
+      expect(await read(overlay)).toBe(existingOverlay);
+
+      const upgrade = await runLoggedSetup({
+        OPENCLAW_SKIP_ONBOARDING: "1",
+        DOCKER_STUB_SANDBOX_MODE: "all",
+      });
+      expect(upgrade.result.status, upgrade.result.stderr).toBe(0);
+      expect(upgrade.lines.filter(isGatewayStartLine)).toEqual([
+        `compose compose -f ${path("docker-compose.yml")} -f ${path(overlay)} up -d openclaw-gateway`,
+      ]);
+      expect(upgrade.log).toContain("--build-arg OPENCLAW_INSTALL_DOCKER_CLI=1");
+      expect(upgrade.log).toContain("-t openclaw-sandbox:trixie-slim");
+      expect(upgrade.log).not.toContain("config set agents.defaults.sandbox.");
+      expect(await read(overlay)).toBe(existingOverlay);
+      expect(parseEnv(await read(".env"))).toMatchObject({
+        OPENCLAW_SANDBOX: "1",
+        OPENCLAW_DOCKER_SOCKET: socketPath,
+      });
+    });
+
+    const unavailable = await runLoggedSetup({ OPENCLAW_SKIP_ONBOARDING: "1" });
+    expect(unavailable.result.status).not.toBe(0);
+    expect(unavailable.result.stderr).toContain("Existing sandbox Docker socket not found");
+    expect(unavailable.lines.filter(isGatewayStartLine)).toEqual([]);
+    expect(unavailable.log).not.toContain("config set agents.defaults.sandbox.mode off");
+    expect(await read(overlay)).toBe(existingOverlay);
+
+    const disabled = await runLoggedSetup({ OPENCLAW_SANDBOX: "0" });
+    expect(disabled.result.status, disabled.result.stderr).toBe(0);
+    expect(disabled.log).toContain("config set agents.defaults.sandbox.mode off");
+    expect(disabled.log).not.toContain(overlay);
+    expect(disabled.log).not.toContain("--build-arg OPENCLAW_INSTALL_DOCKER_CLI=1");
+    expect(parseEnv(await read(".env")).OPENCLAW_SANDBOX).toBe("");
+    await expectMissingPath(path(overlay));
+  });
+
+  it("waits for Gateway health before runtime CLI config writes", async () => {
+    const { result, lines } = await runLoggedSetup();
     expect(result.status).toBe(0);
-    expect(await read(".env")).toContain("OPENCLAW_SANDBOX=");
-    expect(log).toContain("--build-arg OPENCLAW_INSTALL_DOCKER_CLI=");
-    expect(log).not.toContain("--build-arg OPENCLAW_INSTALL_DOCKER_CLI=1");
-    expect(log).toContain("config set agents.defaults.sandbox.mode off");
+    const gatewayStart = lines.findIndex(isGatewayStartLine);
+    const healthWait = lines.findIndex((line) =>
+      line.includes(" exec -T openclaw-gateway node dist/docker-healthcheck.js"),
+    );
+    const firstRuntimeWrite = lines.findIndex((line) =>
+      /\brun\b.*\bopenclaw-cli config set\b/u.test(line),
+    );
+    expect(gatewayStart).toBeGreaterThanOrEqual(0);
+    expect(healthWait).toBeGreaterThan(gatewayStart);
+    expect(firstRuntimeWrite).toBeGreaterThan(healthWait);
   });
 
   it("resets stale sandbox mode and overlay when sandbox is not active", async () => {
@@ -723,8 +787,11 @@ describe("scripts/docker/setup.sh", () => {
     const gateway = services["openclaw-gateway"];
     expect(services["openclaw-cli"]).toMatchObject({
       network_mode: "service:openclaw-gateway",
+      pid: "service:openclaw-gateway",
       depends_on: ["openclaw-gateway"],
     });
+    // docker-init warns on every run when it is not PID 1 in a shared PID namespace.
+    expect(services["openclaw-cli"]).not.toHaveProperty("init");
     const listenerPort = gateway.command[gateway.command.indexOf("--port") + 1];
     expect(listenerPort).toBe("18789");
     expect(gateway.ports).toContain(`\${OPENCLAW_GATEWAY_PORT:-18789}:${listenerPort}`);

@@ -177,6 +177,29 @@ function ranBeforeRestart(run: UpdateRunRecord): boolean {
   return drivers.every((driver) => driver !== undefined && ranInEarlierHostBoot(driver, current));
 }
 
+/** The run recorded its candidate serving, and that candidate is the core installed at `root`. */
+async function isVerifiedCandidateInstalled(
+  run: UpdateRunRecord,
+  pair: PluginCohortRecoveryPair,
+  root: string,
+): Promise<boolean> {
+  const { to } = pair.reservation;
+  const { verification } = run;
+  if (
+    verification.serviceRunning !== true ||
+    verification.versionMatch !== true ||
+    verification.runningVersion !== to.version ||
+    (to.buildId !== null && verification.runningBuildId !== to.buildId)
+  ) {
+    return false;
+  }
+  const [version, buildId] = await Promise.all([
+    readPackageVersion(root),
+    readBuiltGatewayBuildId(root),
+  ]);
+  return version === to.version && (buildId ?? null) === to.buildId;
+}
+
 /** Whose saved plugin cohort this is, seen from the installation at `installKey`. */
 export type PluginCohortInstallation =
   | { kind: "this" }
@@ -587,6 +610,19 @@ export async function inspectInterruptedUpdateRecovery(
       holder.startIdentity === driver.startIdentity;
     // A restart empties the temporary lease store, but also ends every process of the boot.
     const rebooted = !recorded && held.kind === "absent" && ranBeforeRestart(history);
+    // An executor releases its lease only after its command scope joined every child and
+    // confirmed their cleanup, and a later claim succeeds only once they are gone, so a lease
+    // missing from a store that still exists shows that update's processes ended (2026.11.10
+    // unwinds this way after losing its plugin lifecycle lease, #205167). Settle that only
+    // while the candidate it verified serving is still installed.
+    // Accepted edge: a store deleted and recreated in this boot while a killed driver's
+    // children still run looks the same.
+    const released =
+      !recorded &&
+      !rebooted &&
+      store !== undefined &&
+      held.kind === "absent" &&
+      (await isVerifiedCandidateInstalled(history, pair, root));
     return {
       pair,
       refuse,
@@ -596,7 +632,7 @@ export async function inspectInterruptedUpdateRecovery(
       store,
       rebooted,
       refused:
-        recorded || rebooted
+        recorded || rebooted || released
           ? undefined
           : refuse(
               "The update lease store no longer holds that update's lease, so this update cannot show that its processes are gone.",

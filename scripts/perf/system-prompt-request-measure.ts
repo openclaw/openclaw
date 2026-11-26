@@ -28,6 +28,7 @@ import { createAssistantMessageEventStream } from "../../packages/ai/src/utils/e
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../packages/ai/src/utils/system-prompt-cache-boundary.js";
 import * as promptBoundary from "../../packages/ai/src/utils/system-prompt-cache-boundary.js";
 import type { AssistantMessage, Model } from "../../packages/llm-core/src/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -178,12 +179,7 @@ observer.observe({ entryTypes: ["gc"] });
 const inspector = new Session();
 try {
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 16384,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 16384);
   }
   requests = 0;
   characters = 0;

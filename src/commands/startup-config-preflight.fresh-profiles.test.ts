@@ -9,6 +9,7 @@ import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseAsync,
   prepareOpenClawStateDatabaseSchema,
@@ -92,7 +93,7 @@ it.each([...producers, "native bootstrap"] as const)(
   },
 );
 
-it.each(producers)("keeps legacy runtime pins pending through %s", async (creation) => {
+it.each(producers)("preserves legacy runtime pin handoff through %s", async (creation) => {
   await withOpenClawTestState({ label: "legacy-runtime-pins" }, async (state) => {
     runOpenClawStateWriteTransaction(
       ({ db }) =>
@@ -114,6 +115,18 @@ it.each(producers)("keeps legacy runtime pins pending through %s", async (creati
     }
     expect((await migrateDaemonRuntimePins(state.env)).changes).toEqual([
       "Moved 1 daemon runtime pin(s) to local service intent.",
+    ]);
+    expect(readConfigMachineState("daemon-runtime-pin:legacy", { env: state.env })).toBeUndefined();
+    expect(
+      withDaemonRuntimePinStore(state.env, false, (db) =>
+        db.prepare("SELECT state_key, value_json, updated_at_ms FROM daemon_runtime_pins").all(),
+      ),
+    ).toEqual([
+      {
+        state_key: "daemon-runtime-pin:legacy",
+        value_json: '{"version":1,"runtime":"node"}',
+        updated_at_ms: 123,
+      },
     ]);
     expect(
       withDaemonRuntimePinStore(state.env, false, (db) =>

@@ -7,6 +7,7 @@ import {
   type CommandFlagKey,
 } from "../../config/commands.flags.js";
 import { logVerbose } from "../../globals.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { ReplyPayload } from "../types.js";
 import type {
@@ -43,7 +44,6 @@ export function defineAuthorizedTextCommand<T>(
     label: string;
     match: (body: string, params: HandleCommandsParams) => T | null;
     ownerOnly?: boolean | ((params: HandleCommandsParams, match: T) => boolean);
-    silentUnauthorized?: boolean;
   },
   run: (
     params: HandleCommandsParams,
@@ -60,7 +60,7 @@ export function defineAuthorizedTextCommand<T>(
     }
     const unauthorized = rejectUnauthorizedCommand(params, options.label);
     if (unauthorized) {
-      return options.silentUnauthorized ? { shouldContinue: false } : unauthorized;
+      return unauthorized;
     }
     const ownerOnly =
       typeof options.ownerOnly === "function"
@@ -81,7 +81,6 @@ export function defineGatewayControlCommand(
       label,
       match: (body) => (body === label ? true : null),
       ownerOnly: true,
-      silentUnauthorized: true,
     },
     async (params) => {
       if (!isRestartEnabled(params.cfg)) {
@@ -104,7 +103,7 @@ export function rejectUnauthorizedCommand(
       params.command.assertAuthorizedCurrent?.();
       return null;
     } catch {
-      // Preserve native refusals and silent text-command denial below.
+      // Fall through to the denial below.
     }
   }
   logVerbose(
@@ -112,6 +111,13 @@ export function rejectUnauthorizedCommand(
   );
   if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return commandReply("You are not authorized to use this command.");
+  }
+  // Gateway clients are authenticated operators: name the policy that denied them.
+  // External text senders stay silent so strangers in shared chats get no reply.
+  if (isInternalMessageChannel(params.command.channel)) {
+    return commandReply(
+      'You are not authorized to use this command: `commands.allowFrom` does not include this Gateway client. Add your Gateway user profile ID to `commands.allowFrom`, or move its `"*"` entries to per-channel keys so Control UI commands follow operator access.',
+    );
   }
   return { shouldContinue: false };
 }

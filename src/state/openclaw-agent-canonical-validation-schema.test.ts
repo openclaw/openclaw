@@ -364,6 +364,7 @@ it.each([false, true])(
             ({
               session_started_at: _sessionStartedAt,
               has_optional_references: _hasOptionalReferences,
+              archive_undo_marker: _archiveUndoMarker,
               ...row
             }) => row,
           ),

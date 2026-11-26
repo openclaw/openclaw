@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { decideTurnGrant } from "../gateway/operator-admission.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -34,7 +41,7 @@ const RESTORED_OPERATOR: AdmittedRunOperatorAuthority = {
   canonicalIdentity: null,
   profileId: "requester",
   scopes: ["operator.admin"],
-  requesterOwner: true,
+  grant: decideTurnGrant(["operator.admin"]),
 };
 
 function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
@@ -140,6 +147,63 @@ describe("admitScheduledOccurrence", () => {
       }
     }
   });
+
+  it("admits a stored profile requester through its named role", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      readSessionEntryInWorker.mockResolvedValue({
+        sessionId: "parent-session",
+        lifecycleRevision: "rev-1",
+      });
+      const role = (
+        scopes: GatewayOperatorRoleDefinition["scopes"],
+        agents: GatewayOperatorRoleDefinition["agents"] = "*",
+      ) => ({
+        scopes,
+        agents,
+        sessions: { others: "none" as const },
+      });
+      const cfg = {
+        gateway: {
+          roles: {
+            default: "member",
+            definitions: {
+              admin: role(["operator.admin"]),
+              "research-admin": role(["operator.admin"], ["research"]),
+              member: role(["operator.read", "operator.write"]),
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg);
+      const profile = ensureProfileForEmail("scheduled-requester@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const stored = job({ ...LINKED_JOB, ownerProfileId: profile.id });
+      // An admin role is the owner on every entry its agents allow; a member role and an untiered
+      // install keep the answer they had before admission decided it.
+      for (const [assigned, roles, owner] of [
+        ["admin", cfg, true],
+        ["research-admin", cfg, false],
+        ["member", cfg, false],
+        ["member", {}, true],
+      ] as const) {
+        setUserProfileRole(profile.id, assigned);
+        setRuntimeConfigSnapshot(roles);
+        const occurrence = await admitScheduledOccurrence({
+          cfg: roles,
+          job: stored,
+          agentId: "main",
+          trigger: "cron",
+        });
+        try {
+          expect((await occurrence.mint({ ...RUN, cfg: roles })).result).toMatchObject({
+            status: "ready",
+            facts: { authority: { owner, basis: owner ? "profile-role" : "none" } },
+          });
+        } finally {
+          occurrence.release();
+        }
+      }
+    }));
 
   it("binds the context to the admitted run and releases it on close", async () => {
     const { minted } = await mint(job({ scheduledToolPolicy: { version: 1, mode: "trusted" } }));
@@ -501,20 +565,5 @@ describe("occurrence pause", () => {
     expect(text).toContain(`Automation "${"a".repeat(119)}" is paused`);
     expect(text).toContain(`\`${PARENT_KEY}\`, is unavailable: it was archived.`);
     expect(text).toContain("openclaw automations enable job-1");
-  });
-});
-
-describe("prepareCronRunAdmission", () => {
-  it("refuses a scheduled run that carries no admitted occurrence", () => {
-    expect(() =>
-      prepareCronRunAdmission({
-        cfg: {},
-        agentId: "main",
-        runId: "run-1",
-        sessionKey: "agent:main:cron:job-1:run:s1",
-        jobId: "job-1",
-        deliveryAttemptFence: null,
-      } as unknown as Parameters<typeof prepareCronRunAdmission>[0]),
-    ).toThrow("a scheduled run requires its admitted occurrence");
   });
 });

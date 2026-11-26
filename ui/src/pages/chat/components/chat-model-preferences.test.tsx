@@ -444,10 +444,9 @@ it("retains the Access selection without borrowing entitlement from another runt
   const caption = () => view.container.querySelector(".chat-controls__access-caption")?.textContent;
   const readToggle = () =>
     view.container.querySelector<HTMLInputElement>(".chat-controls__access-head input");
-  const toggle = readToggle()!;
-  expect(toggle.checked).toBe(true);
-  expect(caption()).toBeUndefined();
+  expect(readToggle()).toBeNull();
   view.update({ selectedAgentRuntime: "openclaw" });
+  const toggle = expectDefined(readToggle(), "Daybreak toggle");
   expect(toggle.checked).toBe(false);
   expect(caption()).toBeUndefined();
   view.update({ requestedAccessProgram: undefined });
@@ -467,8 +466,7 @@ it("retains the Access selection without borrowing entitlement from another runt
   view.update({ modelCatalogState: { hasSnapshot: true, status: "loading", retired: true } });
   expect(readToggle()).toBeNull();
   view.update({ requestedAccessProgram: "daybreak_red" });
-  expect(caption()).toBeUndefined();
-  expect(readToggle()?.checked).toBe(true);
+  expect(readToggle()).toBeNull();
   view.update({
     modelCatalogState: { hasSnapshot: true, status: "ready" },
     modelCatalog: [{ ...model, available: false }],

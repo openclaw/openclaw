@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { getActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -45,7 +46,8 @@ export type BuildPreparedModelCatalogParams = {
 
 type ManifestModelCatalogCacheEntry = {
   snapshot: PluginMetadataSnapshot;
-  rows: ModelCatalogEntry[];
+  /** A long-lived registration config must not retain a superseded publication or its rows. */
+  rowsBySource: WeakMap<object, ModelCatalogEntry[]>;
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
 const loadModelSuppression = createLazyPromise(() => import("./model-suppression.js"));
@@ -225,9 +227,12 @@ function loadManifestModelCatalogRows(
   if (config.models?.mode === "replace") {
     return [];
   }
+  // The metadata snapshot keys manifest-only rows when there is no hosted publication.
+  const source = getActiveRemoteModelCatalog(config) ?? snapshot;
   const cached = manifestModelCatalogCache.get(config);
-  if (cached?.snapshot === snapshot) {
-    return cached.rows;
+  const cachedRows = cached?.snapshot === snapshot ? cached.rowsBySource.get(source) : undefined;
+  if (cachedRows) {
+    return cachedRows;
   }
   const plugins = resolveEligibleManifestCatalogPlugins(snapshot, config);
   const plan =
@@ -257,7 +262,7 @@ function loadManifestModelCatalogRows(
     }
     return entry;
   });
-  manifestModelCatalogCache.set(config, { snapshot, rows });
+  manifestModelCatalogCache.set(config, { snapshot, rowsBySource: new WeakMap([[source, rows]]) });
   return rows;
 }
 

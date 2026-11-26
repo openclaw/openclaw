@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -20,17 +20,16 @@ function request(candidateSha = "b".repeat(40), referenceSha = "a".repeat(40)): 
     policy: "approved-fast-track-v1",
     action: "Approve skipping release validation",
     repository: "openclaw/openclaw",
-    releaseTag: "v2026.11.2-beta.1",
-    channel: "beta",
+    releaseTag: "v2026.11.2",
+    channel: "latest",
     candidateSha,
     reference: {
       releaseTag: "v2026.11.1",
       targetSha: referenceSha,
-      validationEvidenceDigest: digest,
     },
     delta: { commits: 1, added: 1, deleted: 0 },
     artifacts: [{ name: "openclaw.tgz", digest }],
-    publicationScope: ["npm:openclaw:beta"],
+    publicationScope: ["npm:openclaw:latest"],
     run: { id: "123", attempt: "1" },
     requestId: "00000000-0000-4000-8000-000000000001",
     expiresAt: "2026-11-17T12:00:00.000Z",
@@ -68,7 +67,6 @@ function eligibility(
     validatedReference: {
       repository: value.repository,
       ...value.reference,
-      validationMode: "full-release-validation",
       published: true,
       ...anchorChanges,
     },
@@ -84,15 +82,14 @@ it("binds all immutable review fields while treating artifact and scope lists as
   const changes = [
     { candidateSha: "c".repeat(40) },
     { reference: { ...original.reference, targetSha: "c".repeat(40) } },
-    { reference: { ...original.reference, validationEvidenceDigest: `sha256:${"b".repeat(64)}` } },
     { artifacts: [{ name: "openclaw.tgz", digest: `sha256:${"b".repeat(64)}` }] },
-    { publicationScope: ["docker:openclaw:beta"] },
+    { publicationScope: ["docker:openclaw:latest"] },
     { run: { id: "124", attempt: "1" } },
     { run: { id: "123", attempt: "2" } },
     { expiresAt: "2026-11-17T13:00:00.000Z" },
     { delta: { commits: 2, added: 1, deleted: 0 } },
     { repository: "example/other" },
-    { releaseTag: "v2026.11.2-beta.2" },
+    { releaseTag: "v2026.11.3" },
     { requestId: "00000000-0000-4000-8000-000000000002" },
   ];
   for (const change of changes) {
@@ -101,7 +98,7 @@ it("binds all immutable review fields while treating artifact and scope lists as
   const pair = {
     ...original,
     artifacts: [...original.artifacts, { name: "other.tgz", digest }],
-    publicationScope: ["npm:other:beta", ...original.publicationScope],
+    publicationScope: ["npm:other:latest", ...original.publicationScope],
   };
   expect(fastTrackRequestDigest(pair)).toBe(
     fastTrackRequestDigest({
@@ -118,8 +115,10 @@ it.each([
   { action: "Approve release" },
   { policy: "authorized-beta-focused-v1" },
   { delta: { commits: -1, added: 0, deleted: 0 } },
-  { channel: "latest" },
+  { releaseTag: "v2026.11.2-beta.1" },
   { releaseTag: "v2026.11.33", channel: "latest" },
+  { reference: undefined },
+  { delta: undefined },
   { releaseTag: "v2026.11.2", channel: "extended-stable" },
   {
     artifacts: [
@@ -127,10 +126,34 @@ it.each([
       { name: "openclaw.tgz", digest },
     ],
   },
-  { publicationScope: ["npm:openclaw:beta", "npm:openclaw:beta"] },
+  { publicationScope: ["npm:openclaw:latest", "npm:openclaw:latest"] },
   { extra: "unreviewed" },
 ])("rejects ambiguous or malformed immutable requests %j", (change) => {
   expect(() => parseFastTrackRequest({ ...request(), ...change })).toThrow();
+});
+
+it("exempts beta prereleases from the reference release and delta ceiling", () => {
+  const { reference, delta, ...beta } = {
+    ...request(),
+    releaseTag: "v2026.11.2-beta.1",
+    channel: "beta" as const,
+  };
+  expect(parseFastTrackRequest(beta)).toEqual(beta);
+  expect(serializeFastTrackRequest(beta)).not.toContain("reference");
+  // Beta deltas are not measured, so a recorded baseline would be unverified evidence.
+  expect(() => parseFastTrackRequest({ ...beta, reference })).toThrow(/omit reference/u);
+  expect(() => parseFastTrackRequest({ ...beta, delta })).toThrow(/omit reference/u);
+  // A final version on the beta dist-tag can later move to latest, so it keeps the ceiling.
+  expect(() =>
+    parseFastTrackRequest({ ...beta, releaseTag: "v2026.11.2", channel: "beta" }),
+  ).toThrow(/require a published reference/u);
+  expect(() =>
+    collectFastTrackEligibility({
+      repositoryRoot: "unused",
+      request: beta,
+      validatedReference: undefined,
+    }),
+  ).toThrow(/no delta ceiling/u);
 });
 
 it("recomputes complete delta including generated files and detects caller count or anchor mismatches", () => {
@@ -147,7 +170,6 @@ it("recomputes complete delta including generated files and detects caller count
   expect(() => eligibility(h.root, value, { targetSha: candidate })).toThrow(
     "reference does not match",
   );
-  expect(() => eligibility(h.root, value, { validationMode: "approved-fast-track-v1" })).toThrow();
   expect(() => eligibility(h.root, value, { published: false })).toThrow();
 });
 
@@ -253,23 +275,23 @@ it("prepares an exact local packet without credentials, network access or approv
   vi.stubGlobal("fetch", network);
   const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   try {
-    await runReleasePublishPreflightCommand(["approval", "request", "--request", file]);
+    await runReleasePublishPreflightCommand(["fast-track", "request", "--request", file]);
     expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toMatchObject({
       requestId: value.requestId,
       digest: fastTrackRequestDigest(value),
       payload: serializeFastTrackRequest(value),
-      state: "awaiting-explicit-maintainer-approval",
+      state: "awaiting-npm-release-environment-approval",
       publicationAuthorized: false,
     });
     expect(network).not.toHaveBeenCalled();
     for (const operation of ["approve", "status", "reject"]) {
       await expect(
-        runReleasePublishPreflightCommand(["approval", operation, "--request", file]),
+        runReleasePublishPreflightCommand(["fast-track", operation, "--request", file]),
       ).rejects.toThrow(/no machine approval/u);
     }
     writeFileSync(file, JSON.stringify({ ...value, expiresAt: "2000-01-01T00:00:00.000Z" }));
     await expect(
-      runReleasePublishPreflightCommand(["approval", "request", "--request", file]),
+      runReleasePublishPreflightCommand(["fast-track", "request", "--request", file]),
     ).rejects.toThrow(/fresh expiry/u);
   } finally {
     output.mockRestore();
@@ -352,7 +374,6 @@ it("binds a separate partial-FRV approval to retained results without relaxing s
       validatedReference: {
         repository: original.repository,
         ...original.reference,
-        validationMode: "full-release-validation",
         published: true,
       },
     }),
@@ -360,4 +381,64 @@ it("binds a separate partial-FRV approval to retained results without relaxing s
   expect(() =>
     parseFastTrackRequest({ ...partial, policy: original.policy, action: original.action }),
   ).toThrow();
+});
+
+it("retains one string-attempt FRV record and its failed conclusion for stable closeout", () => {
+  const shell = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
+  const start = shell.indexOf("      ([.workflowRuns[]?");
+  const end = shell.indexOf("\n    '", start);
+  expect(start).toBeGreaterThan(0);
+  const filter = shell.slice(start, end);
+  const record = {
+    id: "12",
+    label: "Full Release Validation",
+    runAttempt: 1,
+    conclusion: "failure",
+  };
+  const result = JSON.parse(
+    execFileSync(
+      "jq",
+      [
+        "--arg",
+        "release_publish_run_id",
+        "30",
+        "--arg",
+        "validation_label",
+        record.label,
+        "--arg",
+        "validation_run_id",
+        record.id,
+        "--arg",
+        "validation_run_attempt",
+        "1",
+        "--arg",
+        "validation_target_sha",
+        "a".repeat(40),
+        "--arg",
+        "validation_url",
+        "https://github.com/openclaw/openclaw/actions/runs/12",
+        "--arg",
+        "validation_workflow_ref",
+        "main",
+        filter,
+      ],
+      {
+        input: JSON.stringify({
+          workflowRuns: [{ label: "Plugin NPM Release", id: "40" }, record],
+        }),
+        encoding: "utf8",
+      },
+    ),
+  );
+  expect(result.workflowRuns).toHaveLength(2);
+  expect(
+    result.workflowRuns.filter((item: { label: string }) => item.label === record.label),
+  ).toEqual([
+    expect.objectContaining({
+      id: "12",
+      runAttempt: "1",
+      conclusion: "failure",
+      targetSha: "a".repeat(40),
+    }),
+  ]);
 });

@@ -46,6 +46,7 @@ export type ServiceFileInspectionError = { source: string; message: string };
 export async function collectServiceFiles(params: {
   dir: string;
   extension: string;
+  includeEntry?: (entry: string) => boolean;
   isPotentialName: (name: string) => boolean;
   errors?: ServiceFileInspectionError[];
 }): Promise<ServiceFileEntry[]> {
@@ -60,7 +61,7 @@ export async function collectServiceFiles(params: {
     return out;
   }
   for (const entry of entries.toSorted()) {
-    if (!entry.endsWith(params.extension)) {
+    if (!entry.endsWith(params.extension) || (params.includeEntry && !params.includeEntry(entry))) {
       continue;
     }
     const name = entry.slice(0, -params.extension.length);
@@ -88,12 +89,14 @@ export async function scanSystemdDir(params: {
   dir: string;
   scope: "user" | "system";
   selectedName?: string;
+  includeEntry?: (entry: string) => boolean;
   errors?: ServiceFileInspectionError[];
 }): Promise<ScannedGatewayService[]> {
   const results: ScannedGatewayService[] = [];
   const candidates = await collectServiceFiles({
     dir: params.dir,
     extension: ".service",
+    includeEntry: params.includeEntry,
     isPotentialName: (name) => isPotentialGatewayServiceName(name, "linux", params.selectedName),
     errors: params.errors,
   });

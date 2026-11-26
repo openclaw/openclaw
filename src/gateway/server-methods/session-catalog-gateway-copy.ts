@@ -9,6 +9,7 @@ import {
 import type {
   ErrorShape,
   SessionsCatalogContinueParams,
+  SessionsCatalogResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
@@ -58,7 +59,9 @@ export async function resolveSessionCatalogGatewayConversation(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
   assertCurrent: () => void;
-}): Promise<{ ok: true; sessionKey?: string } | { ok: false; error: ErrorShape }> {
+}): Promise<
+  { ok: true; destination: SessionsCatalogResolveResult } | { ok: false; error: ErrorShape }
+> {
   params.assertCurrent();
   using sourceLease = {
     binding: await params.provider.resolveGatewayConversation?.({
@@ -73,7 +76,7 @@ export async function resolveSessionCatalogGatewayConversation(params: {
   const binding = sourceLease.binding;
   if (!binding) {
     params.assertCurrent();
-    return { ok: true };
+    return { ok: true, destination: null };
   }
   const admitted = await resolveSessionMutationAuthorizationAsync({
     client: params.client,
@@ -113,7 +116,7 @@ export async function resolveSessionCatalogGatewayConversation(params: {
     const origin = isRecord(extension) ? extension.catalogContinuation : undefined;
     assertCurrent();
     if (
-      !entry ||
+      !entry?.sessionId ||
       entry.initializationPending ||
       !isRecord(origin) ||
       origin.id !== binding.id ||
@@ -129,7 +132,11 @@ export async function resolveSessionCatalogGatewayConversation(params: {
         ),
       };
     }
-    return { ok: true, sessionKey: binding.sessionKey };
+    // Carry the incarnation from the same row whose catalog provenance was verified.
+    return {
+      ok: true,
+      destination: { sessionKey: binding.sessionKey, sessionId: entry.sessionId },
+    };
   } finally {
     prepared.release();
   }

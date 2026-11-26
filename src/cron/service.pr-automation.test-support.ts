@@ -75,6 +75,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
+import { admitScheduledOccurrence } from "./execution-context-admission.js";
 import {
   ensureAgentWorkspaceMock,
   loadRunCronIsolatedAgentTurn,
@@ -418,11 +419,10 @@ export async function createFixture(
       await addCron({ ...rpc("cron.add", definition), respond });
       expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
     }
-    const persisted = expectDefined(
+    return expectDefined(
       (await creator.read()).find((job) => job.declarationKey === definition.declarationKey),
       "persisted recipe",
     );
-    return persisted;
   };
   const selected = await add(target);
   if (authenticated) {
@@ -484,6 +484,8 @@ export async function createFixture(
           finished.resolve(event);
         }
       },
+      admitScheduledOccurrence: ({ job }) =>
+        admitScheduledOccurrence({ cfg: config, job, agentId: "main", trigger: "cron" }),
       runSessionEvent: (request) =>
         work.track(() =>
           runCronSessionTurn({

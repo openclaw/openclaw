@@ -24,6 +24,7 @@ import {
 } from "../../src/agents/embedded-agent-utils.js";
 import { assistantVisibleTextFilters } from "../../src/shared/text/assistant-visible-text.js";
 import { createTextProjection } from "../../src/shared/text/text-projection.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -169,12 +170,7 @@ for (const size of [16_384, 65_536, 262_144]) {
   }
   const inspector = new Session();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const cpu = process.cpuUsage();
   const started = performance.now();

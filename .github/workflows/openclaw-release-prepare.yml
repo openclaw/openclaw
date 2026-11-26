@@ -37,6 +37,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"
+  RELEASE_PREFLIGHT_FIRST_CONTRACT: "1"
   RELEASE_RECOVERY_CONTRACT: "1"
 
 jobs:
@@ -93,6 +94,16 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.22.1"
+
+      - name: Setup trusted readiness dependencies
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+      - name: Install trusted readiness dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
       - name: Dispatch non-publishing preparation
         id: dispatch
         env:
@@ -140,14 +151,25 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+
+      - name: Setup trusted readiness dependencies
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+      - name: Install trusted readiness dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+      # Set up trusted tooling before introducing candidate files into the workspace.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
           path: .release-source
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "24.22.1"
       - name: Fetch and verify every prepared package
         id: seal
         env:
