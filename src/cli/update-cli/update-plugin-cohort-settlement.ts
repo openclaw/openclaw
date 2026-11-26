@@ -720,7 +720,8 @@ export async function inspectInterruptedUpdateRecovery(
             }
           },
           admit: ({ action: outcome, originalCore, rollbackStarted }) => {
-            if (released && outcome !== "commit") {
+            // The cohort owner finishes a recorded rollback even after selecting commit.
+            if (released && (outcome !== "commit" || rollbackStarted)) {
               throw (blocked = refuse(
                 "That update released its lease without finishing, and settling it would roll back the version it verified.",
               ));
