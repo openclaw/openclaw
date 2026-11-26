@@ -426,6 +426,7 @@ export function createCopilotAgentHarness(
         return await runCopilotSideQuestion(params, getPool);
       }),
 
+    modelCatalogProviderIds: [...COPILOT_PROVIDER_IDS],
     loadModelCatalog: (params) =>
       trackOperation(async () => {
         if (disposed) {

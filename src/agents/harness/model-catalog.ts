@@ -183,17 +183,14 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   const requestedProviderIds = params.nativeSelection
     ? [params.nativeSelection.provider]
     : params.providerIds;
+  const includesProvider =
+    params.includesProvider ??
+    (requestedProviderIds
+      ? (provider: string) =>
+          requestedProviderIds.some((id) => normalizeProvider(id) === normalizeProvider(provider))
+      : undefined);
   let discovered = false;
   for (const [runtime, providers] of runtimeProviders) {
-    const scopedProviders = [...(requestedProviderIds ?? providers)].filter(
-      (provider) => !params.includesProvider || params.includesProvider(provider),
-    );
-    if (
-      (requestedProviderIds !== undefined || providers.size > 0) &&
-      scopedProviders.length === 0
-    ) {
-      continue;
-    }
     // The scoped lookup retains transient catalog resources for executable CLI cleanup.
     const harness = withPluginRuntimeRegistryScope(
       pluginRegistry,
@@ -202,10 +199,22 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     if (!harness?.loadModelCatalog) {
       continue;
     }
+    const discoveryProviders = harness.modelCatalogProviderIds ?? [...providers];
+    const scopedProviders = discoveryProviders.filter(
+      (provider) => !includesProvider || includesProvider(provider),
+    );
+    // An undeclared, unconfigured harness must be probed to learn its catalog.
+    if (
+      scopedProviders.length === 0 &&
+      (discoveryProviders.length > 0 ||
+        harness.modelCatalogProviderIds !== undefined ||
+        requestedProviderIds?.length === 0)
+    ) {
+      continue;
+    }
     for (const provider of scopedProviders) {
       params.onDiscoveryStarted?.(provider);
     }
-    const includesProvider = params.includesProvider;
     const outsideScope = ({ provider }: { provider: string }) =>
       includesProvider !== undefined && !includesProvider(provider);
     let listedRows: readonly ModelCatalogEntry[];

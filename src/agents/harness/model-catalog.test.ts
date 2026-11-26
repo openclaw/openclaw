@@ -78,10 +78,13 @@ const snapshot: ModelCatalogSnapshot = {
   ],
 };
 
-function catalogRegistry(loaders: Record<string, NonNullable<AgentHarness["loadModelCatalog"]>>) {
+function catalogRegistry(
+  loaders: Record<string, NonNullable<AgentHarness["loadModelCatalog"]>>,
+  extra: Partial<AgentHarness> = {},
+) {
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses = Object.entries(loaders).flatMap(
-    ([id, loadModelCatalog]) => harnessRegistry(id, { loadModelCatalog }).agentHarnesses,
+    ([id, loadModelCatalog]) => harnessRegistry(id, { loadModelCatalog, ...extra }).agentHarnesses,
   );
   return registry;
 }
@@ -166,7 +169,10 @@ describe("agent harness model catalog", () => {
     const result = await augmentPreparedModelCatalogWithAgentHarness({
       input: pickerInput(pickerConfig("native-one")),
       snapshot: catalog([]),
-      pluginRegistry: catalogRegistry({ "native-one": load }),
+      pluginRegistry: catalogRegistry(
+        { "native-one": load },
+        { modelCatalogProviderIds: ["github-copilot"] },
+      ),
       providerIds: ["github-copilot"],
       includesProvider: (provider) => provider === "github-copilot",
     });
