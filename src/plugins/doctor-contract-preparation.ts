@@ -1,3 +1,4 @@
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import {
@@ -20,6 +21,7 @@ import {
   withPluginSetupPreparation,
 } from "./plugin-setup-module.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import { prepareProviderModelPolicySurfaces } from "./provider-model-routes.js";
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
@@ -53,9 +55,11 @@ export async function preparePluginDoctorContractModules(
     for (const surface of surfaces) {
       const records =
         params.inventory?.records ??
-        (surface === "stateMigrations"
-          ? resolvePluginDoctorStateMigrationRecords(params)
-          : resolvePluginDoctorManifestRecords(params, surface === "configRepair"));
+        withEngineStoreAdmission(() =>
+          surface === "stateMigrations"
+            ? resolvePluginDoctorStateMigrationRecords(params)
+            : resolvePluginDoctorManifestRecords(params, surface === "configRepair"),
+        );
       await prepareDoctorContractRecords(
         surface === "sessionRouteStateOwners"
           ? records.filter((record) => record.sessionRouteStateOwners === undefined)
@@ -77,6 +81,9 @@ export async function preparePluginDoctorContractModules(
           includePersistedAuthState: false,
           includeSetupFallbackPlugins: true,
         });
+        assertCurrent();
+        // ...and installed provider policies through model identity checks.
+        await prepareProviderModelPolicySurfaces();
         assertCurrent();
       }
     }

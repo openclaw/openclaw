@@ -1,5 +1,8 @@
 import { isProxy } from "node:util/types";
-import type { MessageCreateParamsStreaming } from "@anthropic-ai/sdk/resources/messages.js";
+import type {
+  MessageCreateParams,
+  MessageCreateParamsStreaming,
+} from "@anthropic-ai/sdk/resources/messages.js";
 import type { Model } from "@openclaw/llm-core";
 import { getAiTransportHost } from "../host.js";
 import type { AnthropicOptions } from "../provider-options.js";
@@ -161,7 +164,7 @@ export async function applyAnthropicPayloadHook(
 
 /** Assemble immutable history bytes while encoding the envelope and mutable tail each time. */
 export function serializeAnthropicRequestBody(
-  payload: MessageCreateParamsStreaming,
+  payload: MessageCreateParams,
   messageSources?: readonly unknown[] | null,
 ): string | Uint8Array<ArrayBuffer> {
   const immutable = getAiTransportHost().immutableData;
@@ -212,6 +215,6 @@ export function serializeAnthropicRequestBody(
     body.set(part, offset);
     offset += part.byteLength;
   }
-  markEncodedModelRequestBody(body, payload.stream);
+  markEncodedModelRequestBody(body, payload.stream === true);
   return body;
 }

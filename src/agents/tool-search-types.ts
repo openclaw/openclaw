@@ -2,6 +2,7 @@ import type { TSchema } from "typebox";
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
@@ -47,6 +48,7 @@ export type ToolSearchCatalogToolExecutor = (params: {
 
 /** Per-run/session context used by Tool Search control tools. */
 export type ToolSearchToolContext = {
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority;
   modelContextWindowTokens?: number;
   config?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
@@ -75,6 +77,8 @@ export type ToolSearchCatalogEntry = {
   directVisible?: boolean;
   /** Its bare name also belongs to an eligible tool kept direct outside the catalog. */
   requiresExactId?: boolean;
+  /** Runs only as a direct call by name; catalog bridges refuse it. */
+  onDemand?: true;
   parameters?: unknown;
   outputSchema?: TSchema;
   tool: CatalogTool;
@@ -95,6 +99,15 @@ export type ToolSearchCatalogTelemetry = Omit<ToolSearchCatalogSession, "entries
 
 export type ToolSearchCatalogRef = {
   current?: ToolSearchCatalogSession;
+  /**
+   * Set by a runner that loads an on-demand tool on its first direct call by name. Without it,
+   * compaction keeps on-demand tools direct, like direct-only ones.
+   */
+  loadsOnDemandTools?: true;
+  /** On-demand tools this session already loaded; compaction keeps them direct. */
+  promotedToolNames?: ReadonlySet<string>;
+  /** Set by a runner that loads an on-demand tool as soon as the model looks it up. */
+  loadOnDemandTool?: (name: string) => void;
   directOnlyToolNames?: ReadonlySet<string>;
   baselineDirectOnlyToolNames?: ReadonlySet<string>;
   closedTelemetry?: ToolSearchCatalogTelemetry;

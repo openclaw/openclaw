@@ -5,6 +5,7 @@ import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-disp
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { isHiddenAssistantStreamText } from "../../lib/chat/message-visibility.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
+import type { prepareCheckpointReplay } from "./chat-history-progress.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
@@ -34,14 +35,19 @@ export function materializeVisibleAssistantStreamMessages(
 ): unknown[] {
   return materializeVisibleStreamState(messages, state, {
     ...opts,
-    persistCommentary: opts.persistCommentary ?? persistsChatCommentary(state),
-    isHiddenAssistantMessage: isAssistantHeartbeatAckForDisplay,
-    isHiddenStreamText: isHiddenAssistantStreamText,
+    ...historyStreamVisibility(state, opts.persistCommentary),
   });
 }
 
-export function persistsChatCommentary(state: ChatState): boolean {
-  return state.settings?.chatPersistCommentary !== false;
+export function historyStreamVisibility(
+  state: ChatState,
+  persistCommentary = state.settings?.chatPersistCommentary !== false,
+) {
+  return {
+    persistCommentary,
+    isHiddenAssistantMessage: isAssistantHeartbeatAckForDisplay,
+    isHiddenStreamText: isHiddenAssistantStreamText,
+  };
 }
 
 export function runProjectionsUnchanged(
@@ -103,6 +109,8 @@ export function readRunProjections(
 export type ChatHistoryRunApplication = {
   state: ChatState;
   run: ChatHistoryResult["inFlightRun"];
+  messages?: ChatHistoryResult["messages"];
+  replayProgress?: Awaited<ReturnType<typeof prepareCheckpointReplay>>;
   observedRunActivity?: boolean;
   sessionInfo: GatewaySessionRow | undefined;
   historyRun: ChatHistoryRunObservation | undefined;

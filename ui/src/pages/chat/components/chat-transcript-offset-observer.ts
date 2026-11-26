@@ -29,6 +29,10 @@ export class TranscriptOffsetState {
   touching = false;
   touchScrolling = false;
   nativeInputActive = false;
+  inputTargetsStart = false;
+  // WebKit starts a keyboard scroll a frame after keydown, so the previous movement's idle
+  // (timer or scrollend) can arrive in between. Only the input's own scrolling can end it.
+  inputAwaitingScroll = false;
   renderedTouchActive = false;
   maintenanceScrollOffset: number | null = null;
   pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null = null;
@@ -271,6 +275,10 @@ export function observeTranscriptOffset(
   const publishInput = (event: Event) => {
     publish({ type: "input", event, touching: owner.state.touching });
   };
+  // Reader input starts a gesture; a transcript write ends it. Native motion inside it belongs to
+  // the reader even after an early idle (virtual-core's debounce, or WebKit's scrollend firing
+  // before a smooth scroll finishes).
+  let inputGesture = false;
   const recordProgrammaticScroll = (before: number, after: number) => {
     const delta = before - nativeOffset;
     // Writers report after moving the element. Classify preceding movement at
@@ -286,6 +294,7 @@ export function observeTranscriptOffset(
     // composer correction can cover a browser clamp captured before layout.
     if (before !== after) {
       owner.state.nativeInputActive = false;
+      inputGesture = false;
       nativePolicyOffset = after;
       maintenanceTarget = owner.state.maintenanceScrollOffset = after;
       maintenanceRevision += 1;
@@ -312,6 +321,9 @@ export function observeTranscriptOffset(
     });
   };
   const recordVirtualizerScroll = (before: number, after: number, maintenance: boolean) => {
+    if (!maintenance) {
+      owner.state.inputTargetsStart = false;
+    }
     // Measurement retries can move the old end after the grown range commits.
     // Layout/composer receipts already carry their anchor correction separately.
     if (maintenance && before !== after) {
@@ -408,6 +420,9 @@ export function observeTranscriptOffset(
     // Capture arrival before the new window can grow the native extent.
     const atEnd = owner.endAnchor.recordViewport(element);
     if (delta !== 0 && !programmatic) {
+      if (inputGesture) {
+        owner.state.nativeInputActive = true;
+      }
       // Measurement can observe arrival before the native event unlocks pane following.
       if (delta > 0 && !owner.canFollowEnd() && (reachedRecordedEnd || atEnd)) {
         owner.onReaderScroll(true);
@@ -513,7 +528,9 @@ export function observeTranscriptOffset(
     }
   };
   const finishScroll = () => {
-    owner.state.nativeInputActive = false;
+    if (!owner.state.inputAwaitingScroll) {
+      owner.state.nativeInputActive = false;
+    }
     // Only touch scrolling holds history; wheel and trackpad settles need no render.
     if (!owner.state.touching && owner.state.touchScrolling) {
       owner.state.touchScrolling = false;
@@ -593,6 +610,9 @@ export function observeTranscriptOffset(
     owner.state.pendingInteractionAnchor = null;
     maintenanceTarget = owner.state.maintenanceScrollOffset = null;
     owner.state.nativeInputActive = true;
+    owner.state.inputTargetsStart = event instanceof KeyboardEvent && event.key === "Home";
+    inputGesture = true;
+    owner.state.inputAwaitingScroll = true;
     // Native scrolling may precede input delivery. Attribute the gesture before
     // cancellation or offset synchronization publishes that consumed movement.
     publishInput(event);
@@ -674,6 +694,7 @@ export function observeTranscriptOffset(
     }
     // Assign before callbacks: a nested delivery or disconnect wins this identity.
     const captured = (capturedNativeScroll = readNativeScroll(element.scrollTop));
+    owner.state.inputAwaitingScroll = false;
     owner.onComposerLayout(true);
     if (capturedNativeScroll !== captured || !currentViewport()) {
       if (capturedNativeScroll === captured) {
@@ -763,6 +784,7 @@ export function observeTranscriptOffset(
     owner.state.touching = false;
     owner.state.touchScrolling = false;
     owner.state.nativeInputActive = false;
+    owner.state.inputTargetsStart = false;
     listeners.abort();
   };
 }

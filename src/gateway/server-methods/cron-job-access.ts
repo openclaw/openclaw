@@ -172,6 +172,7 @@ export function respondCronJobNotFound(
 }
 
 type ScopedCronMethod =
+  | "cron.acknowledgeFailure"
   | "cron.get"
   | "cron.scratch.get"
   | "cron.scratch.set"
@@ -216,7 +217,10 @@ export function scopedCronJobHandler<P extends CronJobIdParams>(
       !job ||
       (isHumanCronMutation(method) && !canHumanManageCronJob(client, job)) ||
       (scope.checkVisibility &&
-        !(method === "cron.get" && isHumanCronJobOwner(client, job)) &&
+        !(
+          (method === "cron.get" || method === "cron.acknowledgeFailure") &&
+          isHumanCronJobOwner(client, job)
+        ) &&
         !cronJobIsVisible(job, visibility, context.cron.getDefaultAgentId())) ||
       !cronJobMatchesCallerScope({
         job,

@@ -63,7 +63,9 @@ import ai.openclaw.app.operatorScopesAllowAdmin
 import ai.openclaw.app.operatorScopesAllowRead
 import ai.openclaw.app.operatorScopesAllowWrite
 import ai.openclaw.app.providerDisplayName
+import ai.openclaw.app.providerQualifiedRef
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.selectedChatModelSendBlockingReason
 import ai.openclaw.app.ui.AppModalBottomSheet
 import ai.openclaw.app.ui.FoldAwareDropdownMenu
 import ai.openclaw.app.ui.FoldAwareMenuItem
@@ -86,6 +88,7 @@ import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberWindowDisplayFeatureState
 import ai.openclaw.app.ui.sessionPresentationTitle
 import ai.openclaw.app.ui.sidebarCatalogHosts
+import android.icu.text.BreakIterator
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -303,9 +306,6 @@ internal object ChatUserMessageDisclosurePolicy {
 
   fun collapsedPreview(text: String): String? {
     var end = minOf(text.length, collapsedCharacterLimit)
-    if (end in 1 until text.length && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) {
-      end -= 1
-    }
     var lineCount = 1
     for (index in 0 until end) {
       if (text[index] != '\n') continue
@@ -316,6 +316,10 @@ internal object ChatUserMessageDisclosurePolicy {
       lineCount += 1
     }
     if (end == text.length) return null
+    // One code point beyond the cutoff lets ICU recognize a cluster that crosses it.
+    val boundaries = BreakIterator.getCharacterInstance(Locale.ROOT)
+    boundaries.setText(text.substring(0, text.offsetByCodePoints(end, 1)))
+    if (!boundaries.isBoundary(end)) end = boundaries.preceding(end)
     return text.substring(0, end).trimEnd() + "…"
   }
 }
@@ -4420,7 +4424,7 @@ private fun ChatPermissionPicker(
             )
             if (!selectable) {
               Text(
-                text = nativeString("Full access requires operator.admin access."),
+                text = nativeString("You don’t have permission to turn on Full access."),
                 style = ClawTheme.type.caption,
                 color = ClawTheme.colors.warning,
               )

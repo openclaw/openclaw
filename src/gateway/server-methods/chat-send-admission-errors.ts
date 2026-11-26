@@ -1,10 +1,11 @@
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_RESTART_UNAVAILABLE_REASON } from "../../../packages/gateway-protocol/src/restart-unavailable.js";
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../process/gateway-work-admission.js";
@@ -12,17 +13,28 @@ import { errorShapeFromError } from "../error-shape.js";
 import { formatForLog } from "../ws-log.js";
 import { ACTIVE_LEAF_CHANGED_ERROR_REASON } from "./chat-send-active-leaf.js";
 import { SESSION_SETTINGS_CHANGED_ERROR_REASON } from "./chat-send-session-settings.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { respondError } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
+export const SESSION_INCARNATION_CHANGED = "session-incarnation-changed";
+
+export function chatSendIncarnationChangedError() {
+  return errorShape(
+    ErrorCodes.INVALID_REQUEST,
+    "The destination session changed. Resolve it again before sending.",
+    {
+      details: { reason: SESSION_INCARNATION_CHANGED },
+    },
+  );
+}
+
 /** Bind routing checks to the prepared session rather than rediscovering its target. */
 export function createChatSessionRoutingAssertion(
-  session: Pick<PreparedChatSendSession, "sessionRoutingChanged">,
+  sessionRoutingChanged: (config: OpenClawConfig) => boolean,
   context: Pick<GatewayRequestContext, "getRuntimeConfig">,
 ) {
   return () => {
-    if (session.sessionRoutingChanged(context.getRuntimeConfig())) {
+    if (sessionRoutingChanged(context.getRuntimeConfig())) {
       throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
     }
   };
@@ -67,6 +79,10 @@ export function respondChatSendAdmissionError(
       "This session still has active or queued work. Wait for it to finish, then retry the Goal.",
       { retryable: true, details: { reason: "goal-session-busy" } },
     );
+  }
+  if (reason === SESSION_INCARNATION_CHANGED) {
+    respond(false, undefined, chatSendIncarnationChangedError());
+    return;
   }
   if (reason === SESSION_ROUTING_CHANGED_ERROR_REASON) {
     return respondChatSessionRoutingChanged(respond);

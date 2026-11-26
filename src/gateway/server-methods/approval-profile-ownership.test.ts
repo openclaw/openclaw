@@ -1,9 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -181,10 +179,9 @@ describe("approval profile ownership", () => {
     Object.assign(record.request, { requestedByProfileId: "spoofed" });
     const requester = client("synthetic");
     requester.internal = {
-      operatorRunAuthority: createAdmittedRunOperatorAuthority({
+      operatorRunAuthority: createTestOperatorAuthority({
         profileId: "actual-turn",
         scopes: ["operator.approvals"],
-        assertCurrent() {},
       }),
     };
     bindApprovalRequesterMetadata({ record, client: requester });
@@ -203,10 +200,9 @@ describe("approval profile ownership", () => {
       "main",
       "test",
       undefined,
-      createAdmittedRunOperatorAuthority({
+      createTestOperatorAuthority({
         profileId: "admitted-profile",
         scopes: ["operator.approvals"],
-        assertCurrent() {},
       }),
     );
     try {

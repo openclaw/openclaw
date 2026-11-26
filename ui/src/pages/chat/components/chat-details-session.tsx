@@ -1,18 +1,17 @@
 import { For, Show, createMemo, createSignal, createStore, lazy, onSettled } from "solid-js";
-import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerSessionProgressEnglish } from "../../../i18n/locales/en-session-progress.ts";
-import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { projectSessionPeople } from "../chat-mobile-people.ts";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "../session-cache.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
@@ -223,27 +222,18 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               </span>
             </div>
           );
-          const people = () => session()?.expandedParticipants ?? session()?.participants ?? [];
-          const count = () => session()?.participantCount ?? people().length;
-          // The Gateway omits the count when the owner-excluded participant list is empty.
-          const partialPeople = () => count() > people().length;
-          const desktopPeople = createMemo(() => {
-            const union = new Map<string, SessionParticipant>();
-            const actors = [owner(), session()?.createdActor];
-            for (const person of [...actors, ...people()]) {
-              if (!person?.identity) {
-                continue;
-              }
-              const key = sessionParticipantIdentityKey(person.identity);
-              const previous = union.get(key);
-              union.set(key, {
-                identity: person.identity,
-                label: person.label ?? previous?.label,
-                avatarUrl: person.avatarUrl ?? previous?.avatarUrl,
-              });
-            }
-            return [...union.values()];
-          });
+          const participants = () =>
+            session()?.expandedParticipants ?? session()?.participants ?? [];
+          const people = () =>
+            projectSessionPeople({ participants: participants() }, props.props?.sharing);
+          const count = () =>
+            (session()?.participantCount ?? participants().length) +
+            people().length -
+            participants().length;
+          const partialPeople = () => (session()?.participantCount ?? 0) > participants().length;
+          const desktopPeople = createMemo(() =>
+            projectSessionPeople(session(), props.props?.sharing),
+          );
           const selfOnlyPeople = () => {
             const viewer = gateway?.read().snapshot.selfUser?.identity;
             const associatedPeople = desktopPeople();
@@ -346,6 +336,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               compact: true,
             };
           });
+          const publishedRequests = () =>
+            props.props?.displayPullRequests ?? props.props?.pullRequests ?? [];
           const outputsCount = () => {
             const data = outputs();
             return data ? getChatOutputsCount(data) : null;
@@ -517,7 +509,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                   {(requests) => (
                     <Show
                       when={
-                        requests().pullRequests.length > 0 ||
+                        publishedRequests().length > 0 ||
                         requests().publication?.result?.status === "published"
                       }
                     >
@@ -538,7 +530,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                                 );
                               }}
                             >
-                              <ChatPullRequests {...requests()} publishedOnly />
+                              <ChatPullRequests
+                                {...requests()}
+                                pullRequests={publishedRequests()}
+                                publishedOnly
+                              />
                             </ChatDetailsDesktopSection>
                           }
                         >
@@ -553,10 +549,14 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           >
                             <summary class="chat-details__caption">
                               {t("chat.sessionDetails.pullRequests")}
-                              <span>{props.props?.pullRequests?.length || null}</span>
+                              <span>{publishedRequests().length || null}</span>
                               <Icon name="chevronDown" />
                             </summary>
-                            <ChatPullRequests {...requests()} publishedOnly />
+                            <ChatPullRequests
+                              {...requests()}
+                              pullRequests={publishedRequests()}
+                              publishedOnly
+                            />
                           </details>
                         </Show>
                       </div>
@@ -679,6 +679,7 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
       </Show>
       {/* Keep the automation slot after Progress while its inventory revalidates. */}
       <DetailsAutomations props={props.props} presented={props.presented} desktop />
+      <p class="chat-details-desktop-empty">{t("chat.sessionDetails.empty")}</p>
     </>
   );
 }

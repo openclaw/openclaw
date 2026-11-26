@@ -14,6 +14,15 @@ const hasNativeShellClass = (...classNames: string[]) =>
     ...classNames,
   ].some((className) => document.documentElement.classList.contains(className));
 
+export function usesBrowserDrawer(mobileNavLayout: boolean): boolean {
+  return (
+    mobileNavLayout &&
+    !hasNativeShellClass("openclaw-native-desktop") &&
+    !isNativeEmbedHost() &&
+    !isNativeWebChromeHost()
+  );
+}
+
 export function mobileNavLayoutMediaQuery(): string {
   if (isNativeWebChromeHost()) {
     return `(max-width: ${NATIVE_WEB_CHROME_MOBILE_NAV_MAX_WIDTH}px)`;

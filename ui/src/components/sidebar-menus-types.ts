@@ -1,3 +1,4 @@
+import type { SessionCatalogProfileRelation } from "../../../packages/gateway-protocol/src/index.ts";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type {
   NavigationRouteId,
@@ -12,6 +13,7 @@ import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type {
+  SidebarSavedPinTime,
   SidebarEmptyGroupsMode,
   SidebarRecentSession,
   SidebarSessionSortMode,
@@ -33,6 +35,12 @@ export interface SidebarRouteView {
 }
 
 export interface SidebarMenusOwner extends SidebarRouteView {
+  prepareSessionNavigation(
+    sessionKey: string,
+    pathname: string,
+    profileRelation?: SessionCatalogProfileRelation,
+  ): void;
+  readonly gatewayTimeForSavedPin: SidebarSavedPinTime;
   sessionsGrouping: SidebarSessionsGrouping;
   sessionsShowCron: boolean;
   sessionsShowPreview: boolean;
@@ -66,7 +74,7 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   readonly sidebarEntries: readonly string[];
   readonly catalogProjectGrouping: CatalogProjectGrouping;
   setCatalogProjectGrouping(grouping: CatalogProjectGrouping): void;
-  hideSessionCatalog(catalogId: string): void;
+  readonly ownerDocument: Document;
   readonly sessionsEmptyGroupsMode: SidebarEmptyGroupsMode;
   setSessionsEmptyGroupsMode(mode: SidebarEmptyGroupsMode): void;
   effectiveSessionSortMode(): SidebarSessionSortMode;

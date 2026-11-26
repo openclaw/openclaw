@@ -58,6 +58,7 @@ it.each(["missing-auth", "auth-failed"] as const)(
         sessionKey: "agent:main:worker-test",
         sessionsResult: null,
         onSetup: () => undefined,
+        onOpenModels: () => undefined,
         activeSession: { ...session, placement },
         ...overrides,
       }).modelUnavailableBanner;
@@ -119,6 +120,7 @@ it("reads credential readiness from the session's selected runtime route", () =>
       sessionKey: "agent:main:main",
       sessionsResult: null,
       onSetup: () => undefined,
+      onOpenModels: () => undefined,
       activeSession: {
         key: "agent:main:main",
         kind: "direct",
@@ -132,6 +134,41 @@ it("reads credential readiness from the session's selected runtime route", () =>
   expect(banner(false, true, "claude-cli")).toBeUndefined();
   expect(banner(false, true)).toBeDefined();
   expect(banner(true, false, "claude-cli")).toBeDefined();
+});
+
+it("offers Models for a rejected sign-in instead of setup or chat commands", () => {
+  const opened: Array<string | undefined> = [];
+  const setup: string[] = [];
+  const banner = resolveChatModelSetup({
+    ...loaded,
+    agentModel: "gemini/gemini-flash",
+    chatModelCatalog: [
+      {
+        id: "gemini-flash",
+        name: "Gemini Flash",
+        provider: "gemini",
+        available: false,
+        unavailableReason: "auth-failed",
+      },
+    ],
+    modelOverrides: {},
+    sessionKey: "agent:main:main",
+    sessionsResult: null,
+    onSetup: () => setup.push("setup"),
+    onOpenModels: (provider) => opened.push(provider),
+    activeSession: {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 1,
+      model: "gemini-flash",
+      modelProvider: "gemini",
+    },
+  }).modelUnavailableBanner;
+  // The failed turn's reply asks for a new sign-in; the banner must not point elsewhere.
+  expect(banner?.text).not.toMatch(/\/models|\/help/u);
+  expect(banner?.actionLabel).toBe("Open Models");
+  banner?.onAction?.();
+  expect([opened, setup]).toEqual([["gemini"], []]);
 });
 
 it.each(["auth-failed", "cooldown"] as const)(

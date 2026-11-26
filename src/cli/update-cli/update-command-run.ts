@@ -113,26 +113,14 @@ import {
   resolveManagedServicePackageUpdatePlan,
 } from "./update-command-service-plan.js";
 import { preflightWindowsUpdateTask } from "./update-command-windows-preflight.js";
+import { verifyRecordedDataAtRiskBeforeUpdate } from "./update-data-at-risk-guidance.js";
 import { inspectInterruptedUpdateRecovery } from "./update-plugin-cohort-settlement.js";
 
 export {
   recordUpdateCommandTarget,
   withUpdatePreviewSignals,
 } from "./update-command-preview-signals.js";
-
-/** Admission follows the managed service root before a redirect or discovered install. */
-export function resolveUpdateCommandAdmissionRoot(
-  prepared: Pick<
-    Awaited<ReturnType<typeof prepareUpdateCommand>>,
-    "servicePlan" | "discoveredRoot"
-  >,
-): string {
-  return (
-    prepared.servicePlan?.serviceRoot ??
-    prepared.servicePlan?.rootRedirect?.root ??
-    prepared.discoveredRoot
-  );
-}
+export { resolveUpdateCommandAdmissionRoot } from "./update-command-admission-root.js";
 
 export async function resolveUpdateCommandAdmissionEnv(params: {
   opts: UpdateCommandOptions;
@@ -225,6 +213,12 @@ export async function admitUpdateCommandRun(params: {
       params.opts.run?.completionOwner === "gateway-restart" ||
       undefined,
   });
+  // A recorded data-at-risk mark is checked, never ignored, even when already current.
+  const settleMark =
+    params.opts.dryRun === true || env[POST_CORE_UPDATE_ENV] === "1"
+      ? undefined
+      : await verifyRecordedDataAtRiskBeforeUpdate(env, parseUpdateTimeoutMs(params.opts.timeout));
+  params.assertCurrent?.();
   // Read reporting policy first: nothing may yield between activation admission and creation.
   const reportResult = params.opts.dryRun !== true && (await readUpdateResultPolicy(env));
   assertUpdatePackageActivationAdmission(params.root, {
@@ -285,6 +279,7 @@ export async function admitUpdateCommandRun(params: {
   // Adoption grants this invocation the run; register its terminal owner before
   // any fallible enrichment can strand the committed row without a result.
   await params.onAdmitted?.(run);
+  settleMark?.(record.runId);
   params.assertCurrent?.();
   if (!params.opts.dryRun && !env[UPDATE_RUN_ID_ENV]?.trim()) {
     // Create the ledger before opening its reader; later update work may relocate it.
@@ -570,8 +565,8 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       "Immutable installations require the native immutable openclaw update entry point.",
     );
   }
-  if (opts.sha !== undefined) {
-    throw new Error("--sha requires an adopted immutable installation.");
+  if (opts.sha !== undefined && installKind !== "git") {
+    throw new Error("--sha requires a Git checkout or an adopted immutable installation.");
   }
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
     throw new Error(formatExternalSupervisorUpdateRequired());

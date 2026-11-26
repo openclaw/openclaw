@@ -23,10 +23,7 @@ import {
   loadSubagentBrowserCleanupModule,
 } from "./subagent-registry-deps.js";
 import { stopEndedSubagentProcesses } from "./subagent-registry-execution-cleanup.js";
-import {
-  ANNOUNCE_EXPIRY_MS,
-  GATEWAY_ADMISSION_RETRY_DELAY_MS,
-} from "./subagent-registry-helpers.js";
+import { GATEWAY_ADMISSION_RETRY_DELAY_MS } from "./subagent-registry-helpers.js";
 import { completeSubagentRunAttempt } from "./subagent-registry-lifecycle-completion.js";
 import { subagentRegistryLog as log } from "./subagent-registry-lifecycle-log.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
@@ -150,7 +147,6 @@ const {
   scheduleResume,
   completeCleanupBookkeeping,
   completeSubagentRun,
-  finalizeResumedAnnounceGiveUpInBackground,
   refreshFrozenResultFromSession,
   resumeRequesterSettleWake,
   resumePendingRequesterSettlements,
@@ -321,25 +317,6 @@ function resumeFinalizedSubagentRun(runId: string, entry: SubagentRunRecord) {
   if (entry.pauseReason === "sessions_yield" && entry.wakeOnDescendantSettle !== true) {
     return;
   }
-  // Required completions are deadline-driven; retry count is diagnostic only.
-  if (
-    entry.expectsCompletionMessage !== true &&
-    typeof entry.execution.endedAt === "number" &&
-    Date.now() - entry.execution.endedAt > ANNOUNCE_EXPIRY_MS
-  ) {
-    finalizeResumedAnnounceGiveUpInBackground(runId, entry, "expiry");
-    return;
-  }
-
-  const now = Date.now();
-  const earliestRetryAt = entry.delivery?.nextAttemptAt ?? 0;
-  if (entry.expectsCompletionMessage === true && now < earliestRetryAt) {
-    const waitMs = Math.max(1, earliestRetryAt - now);
-    scheduleResume(entry, waitMs);
-    resumedRuns.add(getSubagentRunRuntimeKey(entry));
-    return;
-  }
-
   if (typeof entry.execution.endedAt === "number" && entry.execution.endedAt > 0) {
     // Operation settlement or, without one, the sweeper owns provisional cancellation cleanup.
     if (
@@ -453,7 +430,6 @@ const subagentSweeper = createSubagentRegistrySweeper({
     subagentLifecycleController.sessionEffectsHostCurrent(entry),
   shouldSuppressSessionEffects: (entry, effects) =>
     subagentLifecycleController.shouldSuppressSessionEffects(entry, effects),
-  discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
   callGateway: callSubagentRegistryGateway,
   retireSupersededRun: retireSupersededSubagentRun,
   retireObligations: retireKilledSubagentObligations,

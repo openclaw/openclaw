@@ -5,7 +5,13 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+  buildRateLimitIdentityKey,
+  createGatewayAuthRateLimiter,
+} from "./auth-rate-limit.js";
 import {
   AUTH_NONE,
   AUTH_TOKEN,
@@ -93,6 +99,54 @@ it.each([
     { controlUiEnabled: enabled, controlUiBasePath: basePath },
     AUTH_TOKEN,
   ),
+);
+
+it.each(["token", "password", "trusted-proxy"] as const)(
+  "honors the browser lockout on media reads in %s mode",
+  async (mode) => {
+    const rateLimiter = createGatewayAuthRateLimiter(
+      { maxAttempts: 1, pruneIntervalMs: 0 },
+      { scheduler: createTestGatewayScheduler() },
+    );
+    onTestFinished(() => rateLimiter.dispose());
+    const address = "127.0.0.1";
+    const browserKey = buildRateLimitIdentityKey("control-ui-url", address);
+    rateLimiter.recordFailure(browserKey, "control-ui-url-credential");
+    const secret = "media-test-credential";
+    await withUiServer(
+      async (check) => {
+        if (mode === "trusted-proxy") {
+          const cfg = { gateway: { trustedProxies: [address] } };
+          setRuntimeConfigSnapshot(cfg, cfg);
+        }
+        const file = await saveMediaBuffer(Buffer.from("preview"), "text/plain");
+        const path = `/__openclaw__/assistant-media?meta=1&source=media://inbound/${file.id}`;
+        await check(`${path}&token=${secret}`, 429, { remoteAddress: address });
+        const local = { remoteAddress: address };
+        const bearer = { ...local, authorization: `Bearer ${secret}` };
+        await check(`${path}&token=ignored`, 200, bearer);
+        const preview = { ...local, headers: { "sec-fetch-site": "same-origin" } };
+        await check(`${path}&token=${secret}`, 200, preview);
+        await check(`${path}&token=retired-test-credential`, 401, preview);
+        rateLimiter.updateConfig({ exemptLoopback: false, maxAttempts: 1 });
+        await check(path, 429, bearer);
+        expect(rateLimiter.check(address, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN).allowed).toBe(
+          mode === "trusted-proxy",
+        );
+        await check(`${path}&token=${secret}`, 429, local);
+        await check(`${path}&token=${secret}`, 429, preview);
+      },
+      { rateLimiter },
+      mode === "trusted-proxy"
+        ? {
+            mode,
+            trustedProxy: { userHeader: "x-test-user" },
+            password: secret,
+            allowTailscale: false,
+          }
+        : { mode, [mode]: secret, allowTailscale: false },
+    );
+  },
 );
 
 it("rejects UI POST before startup fallback", () =>

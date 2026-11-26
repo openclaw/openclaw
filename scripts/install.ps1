@@ -1867,7 +1867,8 @@ function Publish-TextFileAtomically {
     [System.IO.File]::WriteAllText($temporaryPath, $Contents, $encoding)
     try {
         if (Test-Path -LiteralPath $Path) {
-            [System.IO.File]::Replace($temporaryPath, $Path, $null)
+            # PowerShell passes $null to a .NET string parameter as "", which File.Replace rejects as a backup path.
+            [System.IO.File]::Replace($temporaryPath, $Path, [NullString]::Value)
         } else {
             [System.IO.File]::Move($temporaryPath, $Path)
         }
@@ -2140,6 +2141,7 @@ function Install-OpenClawFromGit {
     $RepoDir = Resolve-GitCheckoutPath -RepoDir $RepoDir
     $repoUrl = "https://github.com/openclaw/openclaw.git"
     Write-Host "[*] Installing OpenClaw from GitHub ($repoUrl)..." -ForegroundColor Yellow
+    Write-Host "[i] Git installs compile OpenClaw locally. For a prebuilt installation on a small host, use -InstallMethod npm."
 
     Assert-GitCheckoutHasCommit -RepoDir $RepoDir
     if (-not (Test-Path -LiteralPath (Join-Path $RepoDir ".git"))) {
@@ -2166,6 +2168,11 @@ function Install-OpenClawFromGit {
 
     Resolve-NodePackageEngine -RepoDir $RepoDir
     if (-not (Ensure-Node)) { return $false }
+    $memoryCheck = Join-Path $RepoDir "scripts/lib/tsdown-memory-admission.mts"
+    if (Test-Path -LiteralPath $memoryCheck -PathType Leaf) {
+        & node $memoryCheck
+        if ($LASTEXITCODE -ne 0) { return $false }
+    }
 
     $prevPnpmChildConcurrency = $env:PNPM_CONFIG_CHILD_CONCURRENCY
     $prevPnpmNetworkConcurrency = $env:PNPM_CONFIG_NETWORK_CONCURRENCY
@@ -2252,13 +2259,13 @@ function Install-OpenClawFromGit {
         }
     }
 
-    $entryPath = Join-Path $RepoDir "dist\\entry.js"
+    $entryPath = Join-Path $RepoDir "dist\entry.js"
     if (-not (Test-Path $entryPath)) {
         Write-Host "[!] OpenClaw build did not produce $entryPath" -ForegroundColor Red
         return $false
     }
 
-    $binDir = Join-Path $env:USERPROFILE ".local\\bin"
+    $binDir = Join-Path $env:USERPROFILE ".local\bin"
     if (-not (Test-Path $binDir)) {
         New-Item -ItemType Directory -Force -Path $binDir | Out-Null
     }
@@ -2337,8 +2344,8 @@ function Refresh-GatewayServiceIfLoaded {
 function Test-PreviousGitWrapper {
     $wrapper = Join-Path (Join-Path $env:USERPROFILE ".local\bin") "openclaw.cmd"
     if (-not (Test-Path -LiteralPath $wrapper -PathType Leaf)) { return $false }
-    # `openclaw update` points a Git install's wrapper at the release launcher.
-    return ([System.IO.File]::ReadAllText($wrapper) -match '^@echo off\r?\nnode ".+([\\/]dist[\\/]entry\.js|[\\/]git-install[\\/]openclaw-launcher\.mjs)" %\*\r?\n?$')
+    # `openclaw update` points a Git install's wrapper at the release launcher (padded so a running cmd.exe exits cleanly).
+    return ([System.IO.File]::ReadAllText($wrapper) -match '^(@echo off\r?\nnode|@goto run\r?\n@rem x*\r?\n@exit /b %errorlevel%\r?\n:run\r?\n@node) ".+([\\/]dist[\\/]+entry\.js|[\\/]git-install[\\/]openclaw-launcher\.mjs)" %\*\r?\n?$')
 }
 
 function Remove-PreviousGitWrapper {

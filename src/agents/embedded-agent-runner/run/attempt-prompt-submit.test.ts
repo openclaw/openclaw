@@ -313,7 +313,9 @@ describe("submitEmbeddedAttemptPrompt", () => {
           revision += 1;
           await request();
           active = false;
-          await expect(request()).rejects.toThrow("admitted run authority is no longer active");
+          await expect(request()).rejects.toThrow(
+            "This agent run is no longer active. Start a new turn to retry.",
+          );
         },
       });
       expect(requests).toHaveLength(2);

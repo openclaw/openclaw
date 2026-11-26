@@ -64,6 +64,15 @@ export function createWorkerPlacementDispatchStartup(options: {
 }) {
   const { environments, placements } = options;
 
+  const resolvePlacementRequirement = (request: WorkerPlacementDispatchRequest) =>
+    request.devicePlacement ??
+    options.resolveDevicePlacementRequirement?.({
+      sessionId: request.sessionId,
+      sessionKey: request.sessionKey,
+      agentId: request.agentId,
+      executionMode: request.executionMode,
+    });
+
   const validateDevicePlacement = async (request: WorkerPlacementDispatchRequest) => {
     if (!request.deviceId) {
       return;
@@ -71,7 +80,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     const eligibility = await resolveDevicePlacementEligibility({
       environmentService: environments,
       deviceId: request.deviceId,
-      requirement: request.devicePlacement,
+      requirement: await resolvePlacementRequirement(request),
       executionMode: request.executionMode,
       config: getRuntimeConfig(),
     });
@@ -87,16 +96,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     if (!deviceId) {
       return undefined;
     }
-    const requirement =
-      request.devicePlacement ??
-      (options.resolveDevicePlacementRequirement
-        ? await options.resolveDevicePlacementRequirement({
-            sessionId: request.sessionId,
-            sessionKey: request.sessionKey,
-            agentId: request.agentId,
-            executionMode: request.executionMode,
-          })
-        : undefined);
+    const requirement = await resolvePlacementRequirement(request);
     if (!requirement) {
       throw new Error("Node-backed cloud placement has no authoritative runtime requirement");
     }

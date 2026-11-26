@@ -1,4 +1,4 @@
-import { resolveCompactionReplayEligibility } from "@openclaw/ai/transports";
+import { isOpenAIResponsesApi, resolveCompactionReplayEligibility } from "@openclaw/ai/transports";
 import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
@@ -10,6 +10,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { SESSION_WATCHDOG_MAINTENANCE_GRACE_MS } from "../../sessions/session-controller.watchdog-state.js";
 import {
   consumeCompactionSafeguardCancellation,
   getCompactionSafeguardRuntime,
@@ -200,10 +201,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           params.abortSignal,
         )));
     assertActive();
-    const responsesApi =
-      effectiveModel.api === "openai-responses" ||
-      effectiveModel.api === "azure-openai-responses" ||
-      effectiveModel.api === "openai-chatgpt-responses";
+    const responsesApi = isOpenAIResponsesApi(effectiveModel.api);
     const sessionManager = preparedSessionManager
       ? guardSessionManager(preparedSessionManager, {
           agentId: sessionAgentId,
@@ -286,14 +284,15 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       let resetCompactionTimeout: (() => void) | undefined;
       // Request/output progress and fallback preparation share the silence watchdog.
       const refreshCompactionWatchdogs = () => {
-        diagnosticOwner?.watchdogAttempt?.setExecutionDeadline(Date.now() + compactionTimeoutMs);
+        diagnosticOwner?.watchdogAttempt?.setExecutionDeadline(
+          Date.now() + compactionTimeoutMs + SESSION_WATCHDOG_MAINTENANCE_GRACE_MS,
+        );
         resetCompactionTimeout?.();
         params.compactionTimeoutReset?.();
       };
       try {
         if (sessionManager && resourceLoader) {
           ({ session } = await createAgentSession({
-            cleanupProviderSessionResourcesOnDispose: false,
             systemPrompt: systemPromptText,
             cwd: effectiveCwd,
             modelRegistry,

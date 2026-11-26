@@ -65,11 +65,9 @@ it("includes only the viewer's presentation data and redacts MCP credentials", a
     },
     entries: {
       "ui.themeMode": "light",
-      "ui.personalSessionGroups": [
-        { id: "focus", label: "Focus", sessionKeys: ["agent:main:work"] },
-      ],
     },
   });
+  expect(bootstrap?.entries).not.toHaveProperty(["ui.personalSessionGroups"]);
   expect(getCanonicalUserPreferences).toHaveBeenCalledWith(
     "synthetic-viewer",
     expect.arrayContaining(["ui.themeMode", "ui.railShortcuts"]),

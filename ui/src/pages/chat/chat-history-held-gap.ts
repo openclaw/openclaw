@@ -7,10 +7,12 @@ import {
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import {
   prepareChatHistoryPages,
-  nativeHistoryMessagePosition,
   oldestPositionedHistoryMessage,
 } from "./chat-history-page-preparation.ts";
-import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import {
+  nativeHistoryMessagePosition,
+  type ChatHistoryPagination,
+} from "./chat-history-pagination.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request-params.ts";
 import { requestOlderChatHistoryPage } from "./chat-history-request.ts";
 import {

@@ -304,6 +304,55 @@ it.each(["transient-timeout", "mixed"])(
   },
 );
 
+it("clears an earlier process's PID when the running service reports none", async () => {
+  mockProcessPlatform("linux");
+  const service = useService();
+  vi.mocked(service.readRuntime).mockResolvedValue({ status: "running" });
+  busyPort();
+  restart.callGateway.mockImplementation(healthResponse(candidate.version, candidate.buildId));
+  await listen();
+  await verifyGateway({ opts: withRun("pidless-service"), requireRunningService: true });
+  // Observations merge into the run: an omitted PID would keep the previous Gateway's.
+  const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
+  expect(facts).toMatchObject({ serviceRunning: true, runningVersion: candidate.version });
+  expect(facts).toHaveProperty("pid", undefined);
+});
+
+it.each([
+  { refusal: "none", advice: "Rollback: reinstall OpenClaw 2026.9.1" },
+  { refusal: "restart", advice: "Rollback: unavailable; update state was migrated" },
+  // Final recovery verifies again after rollback settled; the recorded refusal still holds.
+  { refusal: "recorded", advice: "Rollback: unavailable; update state was migrated" },
+  // No pre-activation baseline (PostgreSQL state) proves nothing was migrated.
+  { refusal: "unverified", advice: "Rollback: unavailable; rollback safety could not be verified" },
+])(
+  "offers the previous version only while rollback is allowed (refusal=$refusal)",
+  async ({ refusal, advice }) => {
+    gatewayFixture({
+      server: { version: candidate.version, buildId: candidate.buildId, bootId: "candidate-boot" },
+    });
+    await listen((req, res) => res.writeHead(req.url === "/readyz" ? 503 : 200).end());
+    result.before = { version: "2026.9.1" };
+    if (refusal === "recorded") {
+      result.rollbackOutcome = { status: "not-attempted", reason: "state-migrated-no-rollback" };
+    }
+    const rollbackBlockedReason =
+      refusal === "restart"
+        ? "state-migrated-no-rollback"
+        : refusal === "unverified"
+          ? "rollback-state-unverified"
+          : undefined;
+    const verification = verifyGateway({ waitForStartup: false, rollbackBlockedReason });
+    await expect(verification).resolves.toMatchObject({
+      ok: false,
+      summary: "readyz-unhealthy",
+    });
+    const printed = vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n");
+    expect(printed).toContain(advice);
+    expect(printed.includes("reinstall OpenClaw")).toBe(refusal === "none");
+  },
+);
+
 it("bounds foreground recovery observation with hung readiness", async () => {
   useService({ status: "unknown" });
   busyPort();
@@ -876,9 +925,15 @@ it.each([
     vi.mocked(service.readRuntime).mockResolvedValue({ status, systemd });
     const ancestry = { complete: true, pids: new Set([process.pid]) };
     vi.spyOn(stale, "inspectSelfAndAncestorPidsSync").mockReturnValue(ancestry);
-    const setFree = () =>
+    const setFree = () => {
       restart.inspectPortUsage.mockResolvedValue(restart.portUsage([], { port: gatewayPort }));
+      restart.readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+    };
     const staleError = new Error("gateway install changed; run: openclaw gateway restart");
+    const fileOwner = (pid: number) => ({ pid, port: gatewayPort, startTime: 123 });
+    restart.readActiveGatewayLockIdentity.mockResolvedValue(
+      fileOwner(port === "foreign" ? 8001 : running.pid),
+    );
     if (port === "free") {
       setFree();
     } else if (port === "woke") {
@@ -886,11 +941,6 @@ it.each([
     } else if (port !== "healthy") {
       rpc.mockRejectedValue(staleError);
     }
-    restart.readActiveGatewayLockIdentity.mockResolvedValue({
-      pid: port === "foreign" ? 8001 : running.pid,
-      port: gatewayPort,
-      startTime: 123,
-    });
     vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(
       port === "reused" ? 456 : 123,
     );
@@ -904,6 +954,7 @@ it.each([
       if (port === "leased") {
         const unknown = { ...successor, state: "unknown" as const };
         lease.mockImplementation((q) => (q?.current ? unknown : undefined));
+        restart.readActiveGatewayLockIdentity.mockResolvedValue(fileOwner(successor.pid));
       }
       if (replaces) {
         now.mockReturnValue(10_100);
@@ -914,6 +965,9 @@ it.each([
           pid: port === "unmatched" ? pid + 1 : pid,
         });
         serve(pid);
+        restart.readActiveGatewayLockIdentity.mockResolvedValue(
+          fileOwner(port === "unmatched" ? pid + 1 : pid),
+        );
       } else if (port !== "busy") {
         setFree();
       }

@@ -220,31 +220,29 @@ function stabilizeChatItems(
   // Same-role groups can grow at either edge. Preserve the existing row key
   // when loaded-history arrays retain message objects across prepend or append.
   const previousGroupByMessage = new WeakMap<object, MessageGroup>();
-  const previousGroupByMessageKey = new Map<string, MessageGroup>();
+  const previousGroupByKey = new Map<string, MessageGroup>();
   for (const item of previous) {
     if (item.kind !== "group") {
       continue;
+    }
+    if (item.compaction?.compactionId) {
+      previousGroupByKey.set(item.compaction.compactionId, item);
     }
     for (const message of item.messages) {
       if (message.message && typeof message.message === "object") {
         previousGroupByMessage.set(message.message, item);
       }
-      previousGroupByMessageKey.set(message.key, item);
+      previousGroupByKey.set(message.key, item);
     }
   }
   const nextNaturalGroupKeys = new Set(
     next.filter((item) => item.kind === "group").map((item) => item.key),
   );
   const claimedGroupKeys = new Set<string>();
-  const previousCompactions = new Map(
-    previous.flatMap((item) =>
-      item.kind === "divider" && item.compactionId ? [[item.compactionId, item.key] as const] : [],
-    ),
-  );
   const reconciled = next.map((item) => {
-    if (item.kind === "divider" && item.compactionId) {
-      const key = previousCompactions.get(item.compactionId);
-      return key ? { ...item, key } : item;
+    if (item.kind === "group" && item.compaction?.compactionId) {
+      const key = previousGroupByKey.get(item.compaction.compactionId)?.key;
+      return key && !nextNaturalGroupKeys.has(key) ? { ...item, key } : item;
     }
     if (item.kind !== "group") {
       return item;
@@ -253,9 +251,8 @@ function stabilizeChatItems(
     for (const [index, message] of item.messages.entries()) {
       const prior =
         message.message && typeof message.message === "object"
-          ? (previousGroupByMessage.get(message.message) ??
-            previousGroupByMessageKey.get(message.key))
-          : previousGroupByMessageKey.get(message.key);
+          ? (previousGroupByMessage.get(message.message) ?? previousGroupByKey.get(message.key))
+          : previousGroupByKey.get(message.key);
       if (
         !prior ||
         claimedGroupKeys.has(prior.key) ||

@@ -124,7 +124,7 @@ export function registerWorkerGatewayToolExecutionTests(
             ? "generic tool disabled by policy"
             : decision === "invalid-rewrite"
               ? "Invalid worker_probe arguments"
-              : "Worker tool authority changed",
+              : "Worker turn ended or lacks this tool",
         );
       }
     },

@@ -474,7 +474,8 @@ export async function buildStatusReplyParts(
     agentId: statusAgentId,
     allowPluginNormalization: false,
   });
-  const configuredDefaultModelLabel = `${configuredDefaultRef.provider}/${configuredDefaultRef.model}`;
+  const configuredDefaultModelLabel =
+    configuredDefaultRef && `${configuredDefaultRef.provider}/${configuredDefaultRef.model}`;
   const pluginHealthLine = Object.hasOwn(params, "pluginHealthLineOverride")
     ? params.pluginHealthLineOverride
     : await resolveRuntimePluginHealthLine();

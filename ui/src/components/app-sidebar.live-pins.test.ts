@@ -6,176 +6,112 @@ import { sessionsResult } from "../lib/sessions/session-capability.test-support.
 import "../test-helpers/app-sidebar-suite.ts";
 import {
   createGatewayHarness,
-  createContext,
-  mountSidebarContext,
   createSessionsHarness,
   mountSidebar,
-  TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { disposeRoster, mountRoster } from "./app-sidebar-freshness.test-support.ts";
 
-it("scopes personal sections without removing saved members or global rail shortcuts", async () => {
-  const keys = ["agent:main:release", "agent:research:interviews"];
-  const rows = keys.map((key) => ({
+it("keeps an off-page personal pin current and releases its observations", async () => {
+  const key = "agent:main:shared-pin";
+  let accessible = true;
+  let row = {
     key,
-    sessionId: key,
-    agentId: key.split(":")[1],
-    kind: "direct",
-    label: key,
+    sessionId: "shared-pin",
+    kind: "direct" as const,
+    label: "Shared research",
     updatedAt: 10,
+  };
+  const describe = vi.fn(() => ({
+    session: accessible ? row : null,
   }));
-  const mounted = await mountRoster((method, params) => {
+  const mounted = await mountRoster((method) => {
     if (method === "sessions.subscribe") {
       return { subscribed: true };
     }
     if (method === "sessions.list") {
       return sessionsResult([]);
     }
-    if (method === "sessions.describe") {
-      return { session: rows.find((row) => row.key === (params as { key: string }).key) };
+    return method === "sessions.describe" ? describe() : {};
+  });
+  const { sidebar, harness } = mounted;
+  const save = (saved: boolean) => {
+    sidebar.sidebarEntries = saved ? [`session:${key}`] : [];
+  };
+  const observations = vi.spyOn(mounted.sessions, "observeRow");
+  const released = () => {
+    expect(observations.mock.results.length).toBeGreaterThan(0);
+    for (const result of observations.mock.results) {
+      if (result.type === "return") {
+        expect(result.value.isCurrent()).toBe(false);
+      }
     }
-    return {};
-  }, TWO_AGENTS);
-  const { sidebar, context } = mounted;
-  const group = { id: "focus", label: "Focus", sessionKeys: keys };
+  };
   try {
     sidebar.connected = true;
-    sidebar.sidebarAgentsMode = "chip";
-    sidebar.sidebarEntries = [`session-rail:${keys[1]}`];
-    context.navigation.update({ personalSessionGroups: [group] });
-    const visibleKeys = () => sidebar.personalGroupSessionRows(group).map((row) => row.key);
-    await waitForFast(() => expect(visibleKeys()).toEqual([keys[0]]));
-    context.agentSelection.set("research");
-    await waitForFast(() => expect(visibleKeys()).toEqual([keys[1]]));
-    sidebar.sidebarAgentsMode = "roster";
-    await waitForFast(() => expect(visibleKeys()).toEqual(keys));
-    expect(context.navigation.snapshot.personalSessionGroups).toEqual([group]);
-    expect(sidebar.reconciledSidebarZone().entries).toContainEqual({
-      type: "session",
-      key: keys[1],
-      rail: true,
+    save(true);
+    await waitForFast(() => expect(sidebar.textContent).toContain("Shared research"));
+    expect(describe).toHaveBeenCalledTimes(1);
+    accessible = false;
+    vi.useFakeTimers();
+    harness.publishEvent("sessions.changed", {});
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settleLitElement(sidebar);
+    expect(sidebar.textContent).not.toContain("Shared research");
+    expect(sidebar.sidebarEntries).toEqual([`session:${key}`]);
+    expect(describe).toHaveBeenCalledTimes(2);
+
+    accessible = true;
+    harness.publishEvent("sessions.changed", {});
+    await vi.advanceTimersByTimeAsync(5_000);
+    await settleLitElement(sidebar);
+    expect(sidebar.textContent).toContain("Shared research");
+    expect(describe).toHaveBeenCalledTimes(3);
+
+    harness.publishEvent("sessions.changed", {
+      agentId: "main",
+      sessionKey: key,
+      reason: "patch",
+      session: { ...row, label: "Updated research", updatedAt: 20 },
+      ancestorSessions: [],
     });
+    await vi.advanceTimersByTimeAsync(0);
+    await settleLitElement(sidebar);
+    expect(sidebar.textContent).toContain("Updated research");
+    expect(describe).toHaveBeenCalledTimes(3);
+
+    // A history response can admit a new generation without a session event.
+    row = { ...row, sessionId: "successor-pin", label: "Recreated research", updatedAt: 30 };
+    const reconcile = mounted.sessions.captureReconcile();
+    expect(reconcile(row, undefined, { archivedFilter: "all" })).toBe(true);
+    // The next canonical page excludes the pin again after the supplemental read.
+    await mounted.sessions.refresh({ agentId: "main", force: true });
+    await vi.advanceTimersByTimeAsync(0);
+    await settleLitElement(sidebar);
+    expect(sidebar.textContent).toContain("Recreated research");
+    expect(mounted.sessions.state.result?.sessions).toEqual([]);
+    expect(describe).toHaveBeenCalledTimes(4);
+
+    save(false);
+    await settleLitElement(sidebar);
+    released();
+    harness.publishEvent("sessions.changed", {});
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(describe).toHaveBeenCalledTimes(4);
+
+    save(true);
+    await vi.advanceTimersByTimeAsync(0);
+    await settleLitElement(sidebar);
+    expect(sidebar.textContent).toContain("Recreated research");
+    mounted.provider.remove();
+    await vi.advanceTimersByTimeAsync(0);
+    released();
   } finally {
+    vi.useRealTimers();
     disposeRoster(mounted);
   }
 });
-
-it.each(["pin", "group"] as const)(
-  "keeps an off-page personal %s current and releases its observations",
-  async (placement) => {
-    const key = "agent:main:shared-pin";
-    let accessible = true;
-    let row = {
-      key,
-      sessionId: "shared-pin",
-      kind: "direct" as const,
-      label: "Shared research",
-      updatedAt: 10,
-    };
-    const describe = vi.fn(() => ({
-      session: accessible ? row : null,
-    }));
-    const mounted = await mountRoster((method) => {
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([]);
-      }
-      return method === "sessions.describe" ? describe() : {};
-    });
-    const { sidebar, harness } = mounted;
-    const save = (saved: boolean) => {
-      if (placement === "pin") {
-        sidebar.sidebarEntries = saved ? [`session:${key}`] : [];
-      } else {
-        mounted.context.navigation.update({
-          personalSessionGroups: saved ? [{ id: "focus", label: "Focus", sessionKeys: [key] }] : [],
-        });
-      }
-    };
-    const observations = vi.spyOn(mounted.sessions, "observeRow");
-    const released = () => {
-      expect(observations.mock.results.length).toBeGreaterThan(0);
-      for (const result of observations.mock.results) {
-        if (result.type === "return") {
-          expect(result.value.isCurrent()).toBe(false);
-        }
-      }
-    };
-    try {
-      sidebar.connected = true;
-      save(true);
-      await waitForFast(() => expect(sidebar.textContent).toContain("Shared research"));
-      expect(describe).toHaveBeenCalledTimes(1);
-      accessible = false;
-      vi.useFakeTimers();
-      harness.publishEvent("sessions.changed", {});
-      await vi.advanceTimersByTimeAsync(5_000);
-      await settleLitElement(sidebar);
-      expect(sidebar.textContent).not.toContain("Shared research");
-      if (placement === "pin") {
-        expect(sidebar.sidebarEntries).toEqual([`session:${key}`]);
-      } else {
-        expect(mounted.context.navigation.snapshot.personalSessionGroups).toEqual([
-          { id: "focus", label: "Focus", sessionKeys: [key] },
-        ]);
-      }
-      expect(describe).toHaveBeenCalledTimes(2);
-
-      accessible = true;
-      harness.publishEvent("sessions.changed", {});
-      await vi.advanceTimersByTimeAsync(5_000);
-      await settleLitElement(sidebar);
-      expect(sidebar.textContent).toContain("Shared research");
-      expect(describe).toHaveBeenCalledTimes(3);
-
-      harness.publishEvent("sessions.changed", {
-        agentId: "main",
-        sessionKey: key,
-        reason: "patch",
-        session: { ...row, label: "Updated research", updatedAt: 20 },
-        ancestorSessions: [],
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      await settleLitElement(sidebar);
-      expect(sidebar.textContent).toContain("Updated research");
-      expect(describe).toHaveBeenCalledTimes(3);
-
-      // A history response can admit a new generation without a session event.
-      row = { ...row, sessionId: "successor-pin", label: "Recreated research", updatedAt: 30 };
-      const reconcile = mounted.sessions.captureReconcile();
-      expect(reconcile(row, undefined, { archivedFilter: "all" })).toBe(true);
-      // The next canonical page excludes the pin again after the supplemental read.
-      await mounted.sessions.refresh({ agentId: "main", force: true });
-      await vi.advanceTimersByTimeAsync(0);
-      await settleLitElement(sidebar);
-      expect(sidebar.textContent).toContain("Recreated research");
-      expect(mounted.sessions.state.result?.sessions).toEqual([]);
-      expect(describe).toHaveBeenCalledTimes(4);
-
-      save(false);
-      await settleLitElement(sidebar);
-      released();
-      harness.publishEvent("sessions.changed", {});
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(describe).toHaveBeenCalledTimes(4);
-
-      save(true);
-      await vi.advanceTimersByTimeAsync(0);
-      await settleLitElement(sidebar);
-      expect(sidebar.textContent).toContain("Recreated research");
-      mounted.provider.remove();
-      await vi.advanceTimersByTimeAsync(0);
-      released();
-    } finally {
-      vi.useRealTimers();
-      disposeRoster(mounted);
-    }
-  },
-);
 
 it("keeps live pins across query replacement until their descriptors confirm absence", async () => {
   const keys = ["agent:main:mine", "agent:main:other"];
@@ -258,21 +194,4 @@ it("excludes a deleted pin before its retained descriptor settles", async () => 
     pending.resolve({ session: null });
     disposeRoster(mounted);
   }
-});
-
-it("hides unused sections but retains deliberately empty sections", async () => {
-  const gateway = createGatewayHarness({} as GatewayBrowserClient);
-  const sessions = createSessionsHarness("main", []);
-  const context = createContext(gateway.gateway, sessions.sessions);
-  context.navigation.update({ personalSessionGroups: [] });
-  const { sidebar } = await mountSidebarContext(context);
-  expect(sidebar.querySelector(".personal-session-groups")).toBeNull();
-  context.navigation.update({
-    personalSessionGroups: [{ id: "empty", label: "Reading", sessionKeys: [] }],
-  });
-  await settleLitElement(sidebar);
-  expect(sidebar.querySelector(".personal-session-groups")?.textContent).toContain("Reading");
-  context.navigation.update({ personalSessionGroups: [] });
-  await settleLitElement(sidebar);
-  expect(sidebar.querySelector(".personal-session-groups")).toBeNull();
 });

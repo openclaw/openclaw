@@ -536,7 +536,7 @@ suite.define(() => {
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
     await expect.poll(() => page.getByText("older question", { exact: true }).count()).toBe(1);
     await page.clock.runFor(500);
-    expect(await catalogPane.locator(".chat-history-sentinel").count()).toBe(0);
+    expect(await catalogPane.locator(".chat-history-boundary").count()).toBe(0);
     expect(await catalogPane.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);
     await page.close();
@@ -674,7 +674,7 @@ suite.define(() => {
       element.querySelector<HTMLButtonElement>(".chat-history-boundary__action")?.click();
     });
     await expect.poll(() => historyMessageCount(page.locator("openclaw-chat-pane"))).toBe(240);
-    await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
+    await expect.poll(() => page.locator(".chat-history-boundary").count()).toBe(0);
     expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await gateway.getRequests("chat.history")).toHaveLength(
       failedRequestCount + MAX_RESIDENT_SEGMENTS + 1,

@@ -124,14 +124,16 @@ export async function prepareSessionToolGates(params: {
     sessionKey,
   });
   const model = resolveSessionModelRef(config, sessionEntry, agentId);
-  const runBlock = resolveRunToolSurfaceBlock({
-    config,
-    agentId,
-    sessionKey,
-    provider: model.provider,
-    model: model.model,
-    sessionEntry,
-  });
+  const runBlock =
+    model &&
+    resolveRunToolSurfaceBlock({
+      config,
+      agentId,
+      sessionKey,
+      provider: model.provider,
+      model: model.model,
+      sessionEntry,
+    });
   const delivery = deliveryContextFromSession(sessionEntry);
   // Same precedence as the reply route a real turn resolves from this session.
   const chatType = normalizeChatType(

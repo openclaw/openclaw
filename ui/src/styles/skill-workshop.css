@@ -350,6 +350,11 @@
   white-space: nowrap;
 }
 
+.sw-tag--new {
+  background: var(--info-subtle);
+  color: var(--info);
+}
+
 .sw-badge {
   flex: none;
   border-radius: var(--radius-full);
@@ -488,13 +493,26 @@
 .sw-row__preview {
   max-height: 340px;
   overflow: auto;
-  border-radius: calc(12px * var(--openclaw-corner-radius-scale));
-}
-
-.sw-row__preview .sw-diff,
-.sw-row__preview .sw-well {
   background: var(--card);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.sw-row__preview,
+.sw-well,
+.sw-diff,
+.sw-file {
+  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+}
+
+.sw-row__preview::-webkit-scrollbar-track {
+  margin-block: 10px;
+}
+
+.sw-row__preview > .sw-diff,
+.sw-row__preview > .sw-well,
+.sw-row__preview > .sw-file {
+  border-radius: 0;
+  background: none;
 }
 
 .sw-row__foot {
@@ -611,7 +629,6 @@
 .sw-well {
   min-width: 0;
   padding: 22px 24px;
-  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
   background: var(--sw-tone);
 }
 
@@ -678,7 +695,6 @@
 /* Diffs sit on a quiet tonal block; the legend reads inside it. */
 .sw-diff {
   overflow: hidden;
-  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
   background: var(--sw-tone);
 }
 
@@ -756,7 +772,6 @@
 .sw-file {
   margin: 0;
   padding: 14px 16px;
-  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
   background: var(--sw-tone);
   font-family: var(--mono);
   font-size: 12.5px;
@@ -1136,13 +1151,9 @@
 
   /* One slot width on a phone too, so every row's text ends at the same line. */
   .sw-grid .sw-row__aside {
+    align-self: center;
     width: 92px;
     padding-inline-end: 8px;
-  }
-
-  .sw-grid .sw-row__aside,
-  .sw-row__aside--history {
-    align-self: center;
   }
 
   .sw-row--history .sw-row__main {
@@ -1172,10 +1183,6 @@
     grid-area: 3 / 2 / 4 / 3;
     justify-self: start;
     padding-inline-start: 0;
-  }
-
-  .sw-row__aside--history {
-    padding-inline-end: 10px;
   }
 
   .sw-row__aside .btn,

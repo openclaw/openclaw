@@ -64,9 +64,13 @@ it("uses live evidence when a failed-job rerun retains an earlier preview", () =
     "${{ steps.prepared_plan.outputs.evidence_attempt }}",
   );
   expect(step(jobs.preview_plugins_npm, "Read qualified npm preparation").run).toContain(
-    'echo "evidence_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"',
+    '--evidence-output "$RUNNER_TEMP/plugin-npm-evidence.json"',
+  );
+  expect(step(jobs.preview_plugins_npm, "Upload immutable publication evidence").if).toBe(
+    "steps.prepared_plan.outputs.evidence_attempt != ''",
   );
   for (const [previewAttempt, currentAttempt, expectedId] of [
+    ["", "1", ""],
     ["1", "1", "900"],
     ["1", "2", ""],
     ["2", "2", "900"],

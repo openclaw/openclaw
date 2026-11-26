@@ -167,6 +167,51 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     },
   );
 
+  it("sends decimal labels for nested Markdown lists and HTML list starts", async () => {
+    const text = [
+      "- parent",
+      "  1. first",
+      "  2. second",
+      "",
+      '<ol start="3"><li>third</li><li>fourth</li></ol>',
+    ].join("\n");
+    await sendPayload(
+      { text },
+      { cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } } },
+    );
+    expectMethods("sendRichMessage");
+    expectFields({
+      rich_message: {
+        blocks: [
+          {
+            type: "list",
+            items: [
+              {
+                blocks: [
+                  { type: "paragraph", text: "parent" },
+                  {
+                    type: "list",
+                    items: [
+                      { type: "1", value: 1 },
+                      { type: "1", value: 2 },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            type: "list",
+            items: [
+              { type: "1", value: 3 },
+              { type: "1", value: 4 },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
   it("rejects ambiguous account ownership before dispatch and sends with an explicit owner", async () => {
     const ownerCfg: OpenClawConfig = {
       ...cfg,

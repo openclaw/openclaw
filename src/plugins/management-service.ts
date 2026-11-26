@@ -28,7 +28,7 @@ import {
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
 import { resolvePluginCredentialDescriptors } from "./credential-descriptors.js";
-import { inspectPluginCredentialValue } from "./credential-inspection.js";
+import { inspectPluginCredentialPresence } from "./credential-inspection.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import {
   emptyInstalledPluginComponents,
@@ -90,6 +90,7 @@ import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
+import { hasProviderModelSignIn } from "./provider-login-options.js";
 import { projectPluginInstallHealth } from "./status-snapshot.js";
 
 const CLAWHUB_CATEGORY_BATCH_LIMIT = 200;
@@ -632,6 +633,10 @@ export const inspectManagedPlugin = withManagedPluginCache(
       const mcpAuth = enabled
         ? await readPluginMcpAuthStatus({ config: params.config, pluginId, metadata })
         : undefined;
+      const providerSignIn =
+        enabled &&
+        manifest?.providerAuthChoices?.length &&
+        hasProviderModelSignIn({ ...params, pluginId, env, metadataSnapshot: metadata });
       return {
         ok: true,
         plugin: {
@@ -653,22 +658,12 @@ export const inspectManagedPlugin = withManagedPluginCache(
         components: projectInstalledPluginComponents({ manifest, declared }),
         overview: readInstalledPluginOverview(manifest),
         credentials: manifest
-          ? resolvePluginCredentialDescriptors(manifest).map((descriptor) => {
-              const credential = inspectPluginCredentialValue(params.config, descriptor, env);
-              // Public inspection carries presence only. Private values and reference
-              // identifiers remain behind the administrator credential editor.
-              const status: NonNullable<PluginsInspectResult["credentials"]>[number]["status"] =
-                credential.kind === "reference"
-                  ? credential.unresolved
-                    ? "unresolved"
-                    : "configured"
-                  : credential.kind === "literal" || credential.kind === "environment"
-                    ? "configured"
-                    : credential.kind;
-              return Object.assign({}, descriptor, { status });
-            })
+          ? resolvePluginCredentialDescriptors(manifest).map((descriptor) =>
+              inspectPluginCredentialPresence(params.config, descriptor, env),
+            )
           : [],
         ...(mcpAuth ? { mcpAuth } : {}),
+        ...(providerSignIn ? { providerSignIn: true } : {}),
         reviewToken: computeDeclaredSurfaceHash(declared),
         ...(trust ? { trust } : {}),
       };

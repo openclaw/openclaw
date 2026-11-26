@@ -25,6 +25,22 @@ export const workflowOperator = {
   installs: 200,
   updatedAtMs: 1_790_000_000_000,
 } satisfies ClawHubTemplateCatalogEntry;
+export const weeklyAutomations = [
+  {
+    name: "Weekly brief",
+    schedule: "0 9 * * 1",
+    timezone: "UTC",
+    enabled: false,
+    message: "Summarize last week's work.\n\nList anything still waiting on a decision.",
+  },
+  {
+    name: "Midweek nudge",
+    schedule: "0 21 * * 3",
+    timezone: "UTC",
+    enabled: false,
+    message: "Remind me of anything due before Friday.",
+  },
+] satisfies ClawHubTemplateCatalogDetail["contents"]["automations"];
 export const auditUrl = "https://clawhub.ai/openclaw/templates/workflow-operator/security-audit";
 export const publishedAtMs = 1_780_000_000_000;
 export const soulExcerpt = "Keep the owner informed about approved workflows. ".repeat(24);
@@ -35,7 +51,7 @@ export const agentsList = makeBootRoster({ agents: [{ id: "main", name: "Main" }
 
 export function createTemplateCatalogFixture(runtime: () => { browser: Browser; baseUrl: string }) {
   return async function fixture(
-    viewport = { width: 1440, height: 900 },
+    viewport: { width: number; height: number; timezoneId?: string } = { width: 1440, height: 900 },
     entry: ClawHubTemplateCatalogEntry = workflowOperator,
     detailPublisher: Partial<Pick<ClawHubTemplateCatalogEntry, "ownerHandle" | "official">> = {},
     loading = false,
@@ -48,6 +64,7 @@ export function createTemplateCatalogFixture(runtime: () => { browser: Browser; 
       colorScheme,
       locale: "en-US",
       serviceWorkers: "block",
+      timezoneId: viewport.timezoneId,
       viewport: { width: viewport.width, height: viewport.height },
     });
     onTestFinished(() => context.close());

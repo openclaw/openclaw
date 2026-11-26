@@ -1,8 +1,12 @@
 import { elementScroll, Virtualizer, type VirtualizerOptions } from "@tanstack/virtual-core";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
-import { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
+import {
+  observeTranscriptOffset,
+  TranscriptOffsetState,
+} from "./chat-transcript-offset-observer.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
 
@@ -144,11 +148,24 @@ it("preserves a near-end reader when a deferred measurement shrinks the native r
   expect(distanceFromEnd()).toBe(4);
 });
 
-it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as const)(
+const predecessorMeasurementPhases = [
+  "settled",
+  "scrolling",
+  "touch-after-prepend",
+  "touch-at-start",
+  "home-at-start",
+  "idle-gap",
+  "start",
+  "start-growth",
+  "programmatic",
+] as const;
+
+it.each(predecessorMeasurementPhases)(
   "reconciles first predecessor measurements while %s",
   async (phase) => {
-    const estimate = phase === "start-growth" ? 60 : 120;
-    const offset = phase.startsWith("start") ? 0 : 500;
+    const atStart = phase === "touch-at-start" || phase === "home-at-start";
+    const estimate = phase === "start-growth" || atStart ? 60 : 120;
+    const offset = phase.startsWith("start") ? 0 : atStart ? 200 : 500;
     const { viewport, content, column } = readerViewport(400, 12000, offset + 2 * estimate);
     const retained = column.appendChild(row(2));
     viewport.scrollTop = offset;
@@ -160,7 +177,26 @@ it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as con
     virtualizer.elementsCache.set("2", retained);
     const offsetState = new TranscriptOffsetState();
     offsetState.nativeInputActive = phase !== "settled" && phase !== "programmatic";
-    const anchor = readerAnchor(virtualizer, { viewport, content, column }, { offsetState });
+    offsetState.touching = phase === "touch-at-start";
+    const prependAnchor = new TranscriptPrependAnchor(
+      new Map([["2", retained]]),
+      () => {},
+      () => false,
+    );
+    if (phase === "touch-after-prepend") {
+      retained.dataset.messageId = "2";
+      prependAnchor.messageKeys = new Set(["2"]);
+      prependAnchor.capture(viewport, false);
+      prependAnchor.messageKeys = new Set(["older", "2"]);
+      prependAnchor.capture(viewport, false);
+      offsetState.touching = true;
+      expect(prependAnchor.messageKey).toBe("2");
+    }
+    const anchor = readerAnchor(
+      virtualizer,
+      { viewport, content, column },
+      { offsetState, prependAnchor },
+    );
     const rows = [retained];
     onTestFinished(() => {
       rows.forEach((element) => anchor.unobserve(element));
@@ -196,11 +232,70 @@ it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as con
       return;
     }
     expect(measuredTop).toBe(top);
-    if (phase === "scrolling") {
+    if (phase === "home-at-start") {
+      onTestFinished(
+        observeTranscriptOffset(
+          {
+            state: offsetState,
+            getScrollElement: () => viewport,
+            prependAnchor,
+            endAnchor: new TranscriptEndAnchor(() => {}),
+            canFollowEnd: () => false,
+            isProgrammaticScroll: () => false,
+            isMaintenanceScroll: () => false,
+            cancelScroll: () => {},
+            onLayoutCorrection: () => {},
+            invalidate: () => {},
+            onOffset: () => {},
+            onReaderScroll: () => {},
+            onComposerLayout: () => {},
+          },
+          virtualizer,
+          (observedOffset, scrolling) => {
+            virtualizer.scrollOffset = observedOffset;
+            virtualizer.isScrolling = scrolling;
+          },
+        ),
+      );
+      viewport.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    }
+    if (atStart) {
+      expect(column.style.marginTop).toBe("-40px");
+      viewport.scrollTop = 0;
+      const beforeSettle = retained.getBoundingClientRect().top;
+      expect(beforeSettle).toBeLessThan(viewport.getBoundingClientRect().bottom);
+      anchor.settle();
+      expect(retained.getBoundingClientRect().top).toBe(beforeSettle);
+      offsetState.touching = false;
+      offsetState.nativeInputActive = false;
+      virtualizer.isScrolling = false;
+      anchor.settle();
+      if (phase === "home-at-start") {
+        expect(viewport.scrollTop).toBe(0);
+      } else {
+        expect(retained.getBoundingClientRect().top).toBe(beforeSettle);
+        expect(viewport.scrollTop).toBe(40);
+      }
+      expect(column.style.marginTop).toBe("");
+    } else if (phase === "scrolling") {
       expect(viewport.scrollTop).toBe(500);
       viewport.scrollTop = 40;
       anchor.settle();
       expect(viewport.scrollTop).toBe(0);
+      expect(column.style.marginTop).toBe("");
+    } else if (phase === "idle-gap") {
+      // Virtual-core's debounce lapses between two frames of a slow native smooth scroll. The
+      // input's own scrolling continues, so a write here would cancel it.
+      virtualizer.isScrolling = false;
+      anchor.settle();
+      expect(viewport.scrollTop).toBe(500);
+      expect(column.style.marginTop).not.toBe("");
+      // The input's own idle arrives after virtual-core's idle flush; the next frame settles.
+      offsetState.nativeInputActive = false;
+      const frame = Promise.withResolvers<number>();
+      requestAnimationFrame(frame.resolve);
+      await frame.promise;
+      expect(viewport.scrollTop).toBe(420);
       expect(column.style.marginTop).toBe("");
     } else if (phase === "programmatic") {
       expect(viewport.scrollTop).toBe(420);

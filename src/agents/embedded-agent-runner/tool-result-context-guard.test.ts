@@ -336,6 +336,29 @@ describe("installContextEngineLoopHook", () => {
     },
   );
 
+  it("keeps the admitted user message when the pre-prompt count points past it", async () => {
+    const engine = makeEngine();
+    const stored = makeUser("stored history");
+    engine.assemble.mockResolvedValue({ messages: [stored], estimatedTokens: 0 });
+    const history = makeUser("earlier turn");
+    const user = castAgentMessage({ ...makeUser("please answer"), idempotencyKey: "run:user" });
+    const carrier = castAgentMessage({
+      role: "custom",
+      customType: "openclaw.runtime-context",
+      content: "turn facts",
+      display: false,
+      timestamp: 1,
+    });
+    const { run } = hook(engine, {
+      deferredTurn: { prompt: "please answer", availableTools: new Set<string>() },
+      getPrePromptMessageCount: () => 2,
+      getCurrentUserIdempotencyKey: () => "run:user",
+    });
+
+    expect(await run([history, user, carrier])).toEqual([stored, user, carrier]);
+    expect(engine.assemble).toHaveBeenCalledWith(expect.objectContaining({ messages: [history] }));
+  });
+
   it("advances the ingest fence and checkpoints only new iterations", async () => {
     const engine = makeEngine();
     const onAfterTurnCheckpoint = vi.fn();

@@ -1,8 +1,10 @@
+import type { SkillsCategoriesResult } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { SkillCategoryDirectory } from "../../lib/skills/clawhub-search.ts";
 import type {
   ClawHubSkillDetail,
   ClawHubSkillSecurityVerdict,
@@ -40,6 +42,7 @@ export type SkillsPresentation = {
   /** The installed skill whose page is open, from the address. */
   skillsDetailKey: string | null;
   clawhubSearchQuery: string;
+  clawhubCategory: SkillsCategoriesResult["categories"][number] | null;
 };
 
 export type SkillsProps = {
@@ -51,6 +54,11 @@ export type SkillsProps = {
   readClawHubDetail: () => ClawHubSkillDetail | null;
   readClawHubVerdicts: () => Record<string, ClawHubSkillSecurityVerdict>;
   readClawHubSearch: () => boolean;
+  readCategories: () => SkillCategoryDirectory | null;
+  onRetryCategories: () => void;
+  onCategoryChange: (category: SkillsPresentation["clawhubCategory"]) => void;
+  hasNextPage: boolean;
+  onLoadMore: () => void;
   clawhubSearchEpoch: number;
   surface?: "discovery" | "settings";
   /** Undefined until the library owner accepts its first inventory. */

@@ -24,6 +24,7 @@ import type { CronJob } from "../../cron/types.js";
 import { retireSessionControllerSourceCancellation } from "../../sessions/session-controller.mailbox.js";
 import { requestRpcSourceCancellation } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "../../state/openclaw-agent-db-maintenance-lease.js";
 import { migrateOpenClawAgentDatabaseForMaintenance } from "../../state/openclaw-agent-db-maintenance.js";
 import {
@@ -456,6 +457,7 @@ describe("pending input read boundary", () => {
       {
         using old = new DatabaseSync(filename);
         old.exec(`
+          ALTER TABLE session_members DROP COLUMN access;
           ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
           ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
           PRAGMA user_version = 42;
@@ -478,10 +480,12 @@ describe("pending input read boundary", () => {
         log: { info: vi.fn(), warn: vi.fn() },
       });
       const admitted = openOpenClawAgentDatabase(options).db;
-      expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+      expect(admitted.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
       expect(
         admitted.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-      ).toEqual({ schema_version: 43 });
+      ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
       expect(
         admitted
           .prepare("SELECT message_json FROM session_pending_inputs WHERE input_id = ?")

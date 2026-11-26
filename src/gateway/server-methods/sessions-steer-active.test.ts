@@ -256,10 +256,10 @@ it("joins concurrent duplicates and never retries an unconfirmed native acceptan
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
 it.each(["replacement", "completed", "scope-revoked"])(
-  "does not deliver after %s during approval",
+  "retains the admitted permission but fences target %s during approval",
   async (change) => {
     await using f = await createFixture({ preserveContent: true });
-    human(f);
+    const profile = human(f);
     const original = vi.fn();
     const replacement = vi.fn();
     const op = attach(f, async () => {
@@ -281,10 +281,27 @@ it.each(["replacement", "completed", "scope-revoked"])(
       }
     });
     const response = await send(f);
-    expect(response.mock.calls[0]?.[1]).not.toMatchObject({ status: "accepted" });
-    expect(f.readTranscript()).toEqual(f.activeTranscript);
+    if (change === "scope-revoked") {
+      expect(response.mock.calls[0]?.[1]).toMatchObject({ status: "accepted" });
+      const transcript = f.readTranscript();
+      expect(transcript.slice(0, -1)).toEqual(f.activeTranscript);
+      expect(transcript.at(-1)).toMatchObject({
+        message: {
+          role: "user",
+          content: "/stop literal",
+          idempotencyKey: "active-steer-input:user",
+          __openclaw: { requesterOrigin: { operatorProfileId: profile.id } },
+        },
+      });
+      expect((await send(f, { idempotencyKey: "after-revocation" })).mock.calls[0]?.[0]).toBe(
+        false,
+      );
+    } else {
+      expect(response.mock.calls[0]?.[1]).not.toMatchObject({ status: "accepted" });
+      expect(f.readTranscript()).toEqual(f.activeTranscript);
+    }
     expect(f.beforeApprove).toHaveBeenCalled();
-    expect(original).not.toHaveBeenCalled();
+    expect(original).toHaveBeenCalledTimes(change === "scope-revoked" ? 1 : 0);
     expect(replacement).not.toHaveBeenCalled();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   },

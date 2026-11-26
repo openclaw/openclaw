@@ -9,7 +9,8 @@ import { requestChatAbort } from "./chat-abort-request.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { getChatPendingInputs, mutateChatPendingInput } from "./chat-pending-inputs.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { captureChatComposerReplacement } from "./composer-draft-storage.ts";
@@ -21,6 +22,16 @@ import { scheduleChatScroll } from "./scroll.ts";
 
 export function cancelPendingQueuedChatInput(state: ChatHistoryHost, id: string): boolean {
   const view = getChatPendingInputs(state);
+  const cancelled = view?.page.items.find(
+    (item) =>
+      `pending-input:${item.id}` === id &&
+      item.state === "cancelled" &&
+      item.endCause === "revoked",
+  );
+  if (cancelled) {
+    void mutateChatPendingInput(state, { kind: "dismiss", inputId: cancelled.id });
+    return true;
+  }
   const input = view?.queuedInputs.find(
     (item) => `pending-input:${item.id}` === id && item.queued && item.state === "queued",
   );
@@ -28,9 +39,12 @@ export function cancelPendingQueuedChatInput(state: ChatHistoryHost, id: string)
   if (!view || !input?.runId) {
     return false;
   }
-  if (!client || !state.connected) {
+  if (!client || !state.connected || view.cancelling?.has(input.id)) {
     return true;
   }
+  const cancelling = (view.cancelling ??= new Set());
+  cancelling.add(input.id);
+  chatRunPresentation(state).publish();
   const connectionIsCurrent = captureChatConnectionOwner(state);
   const current = () => getChatPendingInputs(state) === view && connectionIsCurrent();
   void requestChatAbort(client, {
@@ -38,16 +52,23 @@ export function cancelPendingQueuedChatInput(state: ChatHistoryHost, id: string)
     agentId: view.agentId,
     runId: input.runId,
     ...(isIncognitoComposerScope(state, view) ? {} : { discardPendingInput: true }),
-  }).then(async (result) => {
-    if (!current()) {
-      return;
-    }
-    if (!result.ok) {
-      state.chatError = formatUiError(result.error);
-      return;
-    }
-    await loadChatHistory(state, { supersedeInFlight: true });
-  });
+  })
+    .then(async (result) => {
+      if (!current()) {
+        return;
+      }
+      if (!result.ok) {
+        state.chatError = formatUiError(result.error);
+        return;
+      }
+      await loadChatHistory(state, { supersedeInFlight: true });
+    })
+    .finally(() => {
+      cancelling.delete(input.id);
+      if (getChatPendingInputs(state) === view) {
+        chatRunPresentation(state).publish();
+      }
+    });
   return true;
 }
 

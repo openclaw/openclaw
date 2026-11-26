@@ -213,6 +213,8 @@ suite.define(() => {
       expect(await page.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
 
       expect((await page.reload())?.status()).toBe(200);
+      // Back to defaults, the advanced rows start folded again.
+      await page.locator("[data-models-more-settings]").click();
       const reloadedThinkingRow = settingsRow(page, "Effort");
       const reloadedFastModeRow = settingsRow(page, "Speed");
       await expectDefaultInfo(reloadedThinkingRow, thinkingDefaultExplanation);

@@ -258,9 +258,7 @@ describe("registered correlated completion recovery custody", () => {
             expect(readChild()?.delivery?.status).toBe("in_progress");
           }
         } else {
-          expect(readChild()?.delivery?.status).toBe(
-            outcome === "recovered" ? "delivered" : "suspended",
-          );
+          expect(readChild()?.delivery?.status).toBe("delivered");
           expect(queueStatus()).toBe(outcome === "recovered" ? "completed" : "failed");
           if (change === "successor") {
             expect(successor).toBeDefined();

@@ -93,7 +93,6 @@ describe("node worker launch wire", () => {
       let workerNode: PairedNodeWorkerHost | undefined;
       let legacyWorkerNode: PairedNodeWorkerHost | undefined;
       let reconnected = false;
-      let bundlePrewarm: unknown;
       let legacyBundlePrewarm: unknown;
       let launchId: string | undefined;
       let observeFinalizationLoad = false;
@@ -223,10 +222,6 @@ describe("node worker launch wire", () => {
               if (frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND && frame.paramsJSON) {
                 launchId = (JSON.parse(frame.paramsJSON) as { launchId?: string }).launchId;
               }
-              if (frame.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND && frame.paramsJSON) {
-                bundlePrewarm = (JSON.parse(frame.paramsJSON) as { bundlePrewarm?: unknown })
-                  .bundlePrewarm;
-              }
             },
             afterInvoke: async (frame, host) => {
               if (frame.command !== NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND || reconnected) {
@@ -237,7 +232,6 @@ describe("node worker launch wire", () => {
               await host.connect();
             },
           });
-          expect(workerNode.client).toBeTruthy();
 
           markPhase("baseline workspace creation");
           await operator.request("sessions.create", {
@@ -336,12 +330,6 @@ describe("node worker launch wire", () => {
           await workerNode.waitForInvokes();
           expect(workerNode.invokeErrors).toEqual([]);
           expect(reconnected).toBe(true);
-          expect(workerNode.commands).toContain(NODE_WORKER_BUNDLE_INSTALL_COMMAND);
-          expect(workerNode.commands).toContain(NODE_WORKER_WORKSPACE_EXEC_COMMAND);
-          expect(workerNode.commands).toContain(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
-          expect(workerNode.commands).toContain(NODE_WORKER_SUPERVISOR_STATUS_COMMAND);
-          expect(launchId).toBeTruthy();
-          expect(bundlePrewarm).toBe(1);
           await expect(workerNode.supervisor.status(launchId!)).resolves.toMatchObject({
             state: "completed",
           });

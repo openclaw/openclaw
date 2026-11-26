@@ -12,6 +12,7 @@ import {
 } from "../../lib/chat/row-display-facts.ts";
 import { parseSnapshot } from "../../lib/snapshot-json.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import { sameChatHistoryPagination } from "./chat-history-pagination.ts";
 import { prepareChatHistorySegment, selectChatHistoryResidency } from "./chat-history-window.ts";
 import { withoutChatLocalOutputs } from "./chat-local-outputs.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
@@ -524,7 +525,7 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.details === snapshot.details &&
     existing.snapshot.rowDisplay === snapshot.rowDisplay &&
     existing.snapshot.avatarSources === snapshot.avatarSources &&
-    samePagination(existing.snapshot.pagination, snapshot.pagination)
+    sameChatHistoryPagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;
   }
@@ -555,28 +556,6 @@ export function readChatSessionSnapshot(
   target: ChatMessageCacheTarget,
 ): ChatSessionSnapshot | null {
   return getSessionCacheValue(cache, resolveChatSnapshotKey(host, target))?.snapshot ?? null;
-}
-
-function samePagination(left: ChatHistoryPagination, right: ChatHistoryPagination): boolean {
-  if (
-    left.hasMore !== right.hasMore ||
-    left.totalMessages !== right.totalMessages ||
-    left.intrinsicSource !== right.intrinsicSource ||
-    left.hasNewer !== right.hasNewer ||
-    left.newerCursor !== right.newerCursor ||
-    left.needsNewerBoundary !== right.needsNewerBoundary ||
-    JSON.stringify(left.segments) !== JSON.stringify(right.segments)
-  ) {
-    return false;
-  }
-  if (left.hasMore && right.hasMore) {
-    return (
-      left.nextOffset === right.nextOffset &&
-      left.olderCursor === right.olderCursor &&
-      left.needsBoundary === right.needsBoundary
-    );
-  }
-  return !left.hasMore && !right.hasMore && left.completeSnapshot === right.completeSnapshot;
 }
 
 function trimChatSessionSnapshotCache(cache: ChatMessageCache, updatedKey: string): void {

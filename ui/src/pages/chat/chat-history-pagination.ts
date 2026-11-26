@@ -1,4 +1,47 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { readTranscriptDisplayPosition } from "../../../../src/chat/transcript-display-position.ts";
 import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
+
+export function nativeHistoryMessagePosition(message: unknown) {
+  return readTranscriptDisplayPosition(
+    asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.transcriptPosition,
+  );
+}
+
+/** A trimmed snapshot must retain a physical suffix that its older cursor can refill. */
+export function chatHistoryTrimOrder(messages: readonly unknown[]): Uint32Array | undefined {
+  const positions = messages.map(nativeHistoryMessagePosition);
+  let order: Uint32Array | undefined;
+  for (let start = 0; start < positions.length;) {
+    const first = positions[start];
+    let end = start + 1;
+    if (first) {
+      let previous = first;
+      let relocated = Boolean(first.activity);
+      let inverted = false;
+      while (end < positions.length) {
+        const next = positions[end];
+        // Unpositioned rows and distinct transcript generations are ordering barriers.
+        if (!next || next.source !== first.source) {
+          break;
+        }
+        inverted ||= next.rawSeq < previous.rawSeq;
+        relocated ||= Boolean(next.activity);
+        previous = next;
+        end++;
+      }
+      if (relocated && inverted) {
+        order ??= Uint32Array.from({ length: messages.length }, (_, index) => index);
+        const physical = order
+          .subarray(start, end)
+          .toSorted((a, b) => positions[a]!.rawSeq - positions[b]!.rawSeq);
+        order.set(physical, start);
+      }
+    }
+    start = end;
+  }
+  return order;
+}
 
 /** Mounted geometry custody contains source names only, never transcript bodies. */
 export type ChatTranscriptReaderSnapshot = {
@@ -65,6 +108,31 @@ export function trimmedChatHistoryPagination(
     ...(pagination.hasNewer ? { hasNewer: true as const, needsNewerBoundary: true as const } : {}),
     ...(pagination.totalMessages !== undefined ? { totalMessages: pagination.totalMessages } : {}),
   };
+}
+
+export function sameChatHistoryPagination(
+  left: ChatHistoryPagination,
+  right: ChatHistoryPagination,
+): boolean {
+  if (
+    left.hasMore !== right.hasMore ||
+    left.totalMessages !== right.totalMessages ||
+    left.intrinsicSource !== right.intrinsicSource ||
+    left.hasNewer !== right.hasNewer ||
+    left.newerCursor !== right.newerCursor ||
+    left.needsNewerBoundary !== right.needsNewerBoundary ||
+    JSON.stringify(left.segments) !== JSON.stringify(right.segments)
+  ) {
+    return false;
+  }
+  if (left.hasMore && right.hasMore) {
+    return (
+      left.nextOffset === right.nextOffset &&
+      left.olderCursor === right.olderCursor &&
+      left.needsBoundary === right.needsBoundary
+    );
+  }
+  return !left.hasMore && !right.hasMore && left.completeSnapshot === right.completeSnapshot;
 }
 
 /** Traversal changes navigation, not the original held packet's body certificate. */

@@ -1,3 +1,4 @@
+import { PROVIDER_STATE_SCOPE } from "@openclaw/ai/provider-types";
 import { normalizeCodexResponsesBaseUrlForOpenAISdk } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
@@ -277,6 +278,7 @@ export const executePreparedWorkerInference = async (
           {
             runId: request.runId,
             sessionId: request.sessionId,
+            authScope: agentDir,
             accountRoute: prepared.auth.profileId
               ? `profile:${prepared.auth.profileId}`
               : "direct:openai",
@@ -368,6 +370,9 @@ export const executePreparedWorkerInference = async (
         ...(reasoning !== undefined ? { reasoning: mapThinkingLevel(reasoning) } : {}),
         signal: providerSignal,
         sessionId: request.sessionId,
+        ...(promptCacheContext.providerStateScope
+          ? { [PROVIDER_STATE_SCOPE]: promptCacheContext.providerStateScope }
+          : {}),
         ...(authValue ? { apiKey: authValue } : {}),
         promptCacheKey: resolveSessionBoundaryPromptCacheKey({
           ...promptCacheContext,

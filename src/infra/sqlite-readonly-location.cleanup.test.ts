@@ -7,8 +7,7 @@ import {
   registerSignalExitBarrier,
   waitForSignalExitBarriers,
 } from "../cli/signal-exit-barrier.js";
-import { setLoggerOverride } from "../logging/logger.js";
-import { testApi } from "../logging/logger.test-support.js";
+import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import {
@@ -39,7 +38,7 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
     setLoggerOverride(null);
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -307,7 +306,7 @@ it("does not throw when the onCleanupFailure callback itself throws", async () =
   expect(prepared.cleanup()).toBe(false);
   expect([processWarning.mock.calls, consoleWarning.mock.calls]).toEqual([[], []]);
   vi.restoreAllMocks();
-  await testApi.flushFileLogQueueForTests();
+  await flushLogger();
   const records = fs
     .readFileSync(log, "utf8")
     .trim()

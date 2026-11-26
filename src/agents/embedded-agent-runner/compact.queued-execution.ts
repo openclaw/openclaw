@@ -242,7 +242,6 @@ export async function executeQueuedContextEngineCompaction(input: {
             rawBytes: undefined,
             maxBytes: maxActiveTranscriptBytes,
             runtime: preparedParams,
-            contextTokenBudget,
             signal: params.abortSignal,
           });
           assertCallerActive();
@@ -314,6 +313,7 @@ export async function executeQueuedContextEngineCompaction(input: {
           compact: async (backendParams) => {
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                operatorAuthority: host.sourceAuthority.operatorAuthority,
                 hostOwnsCompactionLifecycle: engineOwnsCompaction,
                 requestBudget: host.requestBudget,
                 pendingUserEntryId: host.pendingUserEntryId,

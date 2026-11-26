@@ -8,6 +8,7 @@ import {
   formatFastModeValue,
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolveAgentHarnessOperatorPolicyError } from "../../agents/operator-access-program.js";
 import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
@@ -185,13 +186,18 @@ export async function handleDirectiveOnly(
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
+  // Thinking and fast mode are capabilities of a model; the other session settings apply without one.
+  if (!resolvedModel && (directives.hasThinkDirective || directives.hasFastDirective)) {
+    return rejectModelTransaction(NO_MODEL_CONFIGURED_MESSAGE);
+  }
   const preparedModel = modelSelection
     ? await prepareModelSelectionRuntime({
         cfg: params.cfg,
         agentId: activeAgentId,
         workspaceDir: params.workspaceDir,
-        provider: resolvedProvider,
-        model: resolvedModel,
+        provider: modelSelection.provider,
+        previousProvider: provider,
+        model: modelSelection.model,
         catalog: thinkingCatalog ?? [],
         rawRuntime: directives.rawModelRuntime,
         sessionEntry,
@@ -209,22 +215,26 @@ export async function handleDirectiveOnly(
     preparedModel?.validateRuntimeSelection?.();
   const prospectiveSessionEntry = { ...sessionEntry };
   applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
-  const selectedCatalogEntry = findSelectedCatalogEntry({
-    catalog: thinkingCatalog,
-    provider: resolvedProvider,
-    model: resolvedModel,
-  });
+  const selectedCatalogEntry = resolvedModel
+    ? findSelectedCatalogEntry({
+        catalog: thinkingCatalog,
+        provider: resolvedProvider,
+        model: resolvedModel,
+      })
+    : undefined;
   const resolveThinkingRuntime = (entry: typeof sessionEntry) =>
-    resolveEffectiveAgentRuntime({
-      cfg: params.cfg,
-      provider: resolvedProvider,
-      modelId: resolvedModel,
-      modelApi: selectedCatalogEntry?.api,
-      modelBaseUrl: selectedCatalogEntry?.baseUrl,
-      agentId: activeAgentId,
-      sessionKey: runtimePolicySessionKey,
-      sessionEntry: entry,
-    });
+    resolvedModel
+      ? resolveEffectiveAgentRuntime({
+          cfg: params.cfg,
+          provider: resolvedProvider,
+          modelId: resolvedModel,
+          modelApi: selectedCatalogEntry?.api,
+          modelBaseUrl: selectedCatalogEntry?.baseUrl,
+          agentId: activeAgentId,
+          sessionKey: runtimePolicySessionKey,
+          sessionEntry: entry,
+        })
+      : undefined;
   const thinkingRuntime = resolveThinkingRuntime(prospectiveSessionEntry);
   const thinkingPolicy = {
     provider: resolvedProvider,

@@ -309,6 +309,16 @@ openclaw-browser-panel {
     flex: 1 1 auto;
     min-height: 100px;
   }
+  .bp-native-backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top left;
+    pointer-events: none;
+    user-select: none;
+  }
   .bp-native-loading {
     display: block;
     padding: var(--space-2);
@@ -407,6 +417,27 @@ openclaw-browser-panel {
   }
   .bp-note--error {
     color: var(--danger);
+
+    > div {
+      display: inline-block;
+      max-inline-size: 100%;
+      padding-inline-end: 0.5em;
+      overflow-wrap: anywhere;
+
+      /* The shared text baseline keeps this gap below the copy when the toggle wraps. */
+      &:not(:last-child) {
+        margin-block-end: 6px;
+      }
+    }
+
+    /* Keep the toggle in the message line; expanded diagnostics take a full line. */
+    .lazy-view-error__details {
+      display: inline;
+    }
+
+    .lazy-view-error__summary {
+      margin-block-start: 0;
+    }
   }
 }
 

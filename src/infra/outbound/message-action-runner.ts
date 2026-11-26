@@ -486,8 +486,8 @@ async function handleInternalSourceReplySendAction(
     dryRun,
   };
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
-  // A WebChat user turn shows this transcript to its user. An inter-session result turn may
-  // have no viewer here, so claim no visible delivery.
+  // A WebChat transcript shows this reply to its user. An inter-session turn in a session bound
+  // to an external chat may have no viewer here, so claim no visible delivery.
   const receipt = input.sourceReplyTranscriptOnly
     ? payload.dryRun
       ? "Prepared reply for the current chat history."

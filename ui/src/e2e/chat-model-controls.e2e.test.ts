@@ -37,7 +37,11 @@ suite.define(() => {
           await setup.press("Enter");
         }
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
-        await page.getByRole("dialog", { name: "Add an account", exact: true }).waitFor();
+        // The connect link lands on the provider catalog with its search focused.
+        const search = page.locator("[data-models-catalog-search]");
+        await expect
+          .poll(() => search.evaluate((node) => node === document.activeElement))
+          .toBe(true);
       });
     },
   );

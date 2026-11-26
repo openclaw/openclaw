@@ -147,11 +147,12 @@ export type TestChatPane = HTMLElement &
     handleTranscriptScroll: (scroll: TranscriptNativeScroll) => void;
     handleTranscriptHistoryIntent: (event: Event) => void;
     historyAutoLoadBlocked: boolean;
-    historyObserverArmed: boolean;
-    syncHistoryObserver: () => void;
+    historyReaderIntent: boolean;
+    evaluateHistoryEdge: () => void;
     loadCatalogSession: ChatPaneRuntime["loadCatalogSession"];
     prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
     loadOlderMessages: (readerIntent?: boolean) => Promise<boolean>;
+    loadNewerMessages: () => Promise<boolean>;
     readTranscriptReaderSnapshot: () =>
       | import("./chat-history-pagination.ts").ChatTranscriptReaderSnapshot
       | null;

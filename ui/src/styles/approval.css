@@ -127,6 +127,10 @@
   margin: 16px 0 18px;
 }
 
+.approval-page__heading h1 {
+  width: fit-content;
+}
+
 .approval-page__heading h1,
 .approval-page__state h1 {
   margin: 0;
@@ -332,6 +336,10 @@
   place-items: center;
   align-content: center;
   text-align: center;
+}
+
+.question-page .chat-question-summary {
+  text-align: start;
 }
 
 .approval-page__state p {
@@ -637,7 +645,6 @@
     border-radius: 0;
     background: none;
     font-size: var(--control-ui-text-md);
-    text-align: start;
   }
 
   .question-page .chat-question-summary__prompt {

@@ -62,6 +62,9 @@ function appCaller(): Caller {
     operatorRoleActor: { kind: "operator", profileId: "person-alice" },
     remoteIngressPrincipal: {
       bindingId: "synthetic-app",
+      pluginId: "mcp-relay",
+      audienceId: RELAY,
+      principal: { kind: "person", profileId: "person-alice" },
       admission: "opaque-local-admission",
       authenticatedUserProfile: { ...client.authenticatedUserProfile!, avatarRevision: "" },
       preparedSessionProfile: { profileId: "person-alice", role: null, aliases: new Set() },

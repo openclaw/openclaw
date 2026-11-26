@@ -52,10 +52,9 @@ describe("chat history pagination", () => {
 
     renderChatInto(container);
     expect(container.querySelector(".chat-history-boundary")).toBeNull();
-    expect(container.querySelector(".chat-history-sentinel")).toBeNull();
   });
 
-  it("loads older history from upward wheel and keyboard intent across transcript updates", async () => {
+  it("forwards upward wheel and keyboard intent across transcript updates", async () => {
     const historyInput = new TranscriptHistoryInput();
     const onBoundaryRead = vi.fn();
     const onHistoryIntent = (event: Event) => {
@@ -80,10 +79,9 @@ describe("chat history pagination", () => {
       onHistoryIntent,
     };
     const container = renderChatView(props);
-    const sentinel = await waitForElement(container, ".chat-history-sentinel");
     const thread = requireElement(container, ".chat-thread", "chat thread");
+    await waitForElement(container, ".chat-history-boundary");
 
-    expect(sentinel.querySelector("button")).toBeNull();
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
     thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
     expect(onBoundaryRead).toHaveBeenCalledTimes(2);
@@ -92,8 +90,6 @@ describe("chat history pagination", () => {
       ...props,
       messages: [...props.messages, { role: "assistant", content: "Updated history" }],
     });
-    expect(container.querySelector(".chat-history-sentinel")).toBe(sentinel);
-    expect(thread.contains(sentinel)).toBe(true);
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
     expect(onBoundaryRead).toHaveBeenCalledTimes(3);
     const end = new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true });
@@ -103,7 +99,6 @@ describe("chat history pagination", () => {
     expect(onBoundaryRead).toHaveBeenCalledTimes(3);
 
     renderChatInto(container, { messages: props.messages, onHistoryIntent });
-    expect(container.querySelector(".chat-history-sentinel")).toBeNull();
-    expect(thread.contains(sentinel)).toBe(false);
+    expect(container.querySelector(".chat-history-boundary")).toBeNull();
   });
 });
