@@ -31,22 +31,20 @@ export function ComposerDictationReview(props: {
               ? ` ${t(`chat.dictation.punctuation.undoOutcome.${current().undoOutcome}`)}`
               : ""}
           </p>
-          <Show when={current().limitation !== "source-revoked"}>
-            <label>
-              <span>{t("chat.dictation.punctuation.original")}</span>
-              <textarea rows={3} readonly value={current().rawText} />
-            </label>
-            <label>
-              <span>
-                {t(
-                  current().selected === "original"
-                    ? "chat.dictation.punctuation.selectedOriginal"
-                    : "chat.dictation.punctuation.proposed",
-                )}
-              </span>
-              <textarea rows={3} readonly value={current().result.text} />
-            </label>
-          </Show>
+          <label>
+            <span>{t("chat.dictation.punctuation.original")}</span>
+            <textarea rows={3} readonly value={current().rawText} />
+          </label>
+          <label>
+            <span>
+              {t(
+                current().selected === "original"
+                  ? "chat.dictation.punctuation.selectedOriginal"
+                  : "chat.dictation.punctuation.proposed",
+              )}
+            </span>
+            <textarea rows={3} readonly value={current().result.text} />
+          </label>
           <details>
             <summary>{t("chat.dictation.punctuation.changePolicy")}</summary>
             <DictationPunctuationFields

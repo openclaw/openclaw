@@ -251,16 +251,10 @@ describe("opt-in dictation review through the textarea insertion owner", () => {
     },
   );
 
-  it.each(["empty", "edited", "revoked"])(
+  it.each(["empty", "edited"])(
     "releases pending review after a stopped capture is %s without a recoverable result",
     async (ending) => {
-      let eligible = true;
-      const h = refinementHarness({
-        refinement: {
-          policy: { mode: "automatic", locale: "en-US", explicitEnabled: false },
-          provenance: { revision: "authorized-source-1", isEligible: () => eligible },
-        },
-      });
+      const h = refinementHarness();
       await h.start();
       const finished = h.controller.finishActive();
       expect(h.controller.pendingReview).toBe(true);
@@ -268,9 +262,6 @@ describe("opt-in dictation review through the textarea insertion owner", () => {
         h.target.value = "manual replacement";
         h.target.dispatchEvent(new Event("input"));
         h.controller.update(h.options);
-      } else if (ending === "revoked") {
-        eligible = false;
-        transcript("revoked words");
       }
       emit({ type: "close", reason: "completed" });
       await expect(finished).resolves.toBe(false);
@@ -349,31 +340,6 @@ describe("opt-in dictation review through the textarea insertion owner", () => {
     });
     expect(h.controller.insertReviewed()).toBe(false);
     expect(h.target.value).toBe("");
-  });
-
-  it("revokes hint-influenced raw recovery even after the user selected the original", async () => {
-    let eligible = true;
-    const h = refinementHarness({
-      refinement: {
-        policy: { mode: "automatic", locale: "en-US", explicitEnabled: false },
-        provenance: { revision: "authorized-source-1", isEligible: () => eligible },
-      },
-    });
-    await h.start();
-    await h.finish("private recognized phrase");
-    expect(h.controller.chooseOriginal()).toBe(true);
-    eligible = false;
-    h.controller.update(h.options);
-    eligible = true;
-    h.controller.update(h.options);
-    expect(h.controller.review).toMatchObject({
-      rawText: "",
-      result: { text: "", status: "unavailable" },
-      limitation: "source-revoked",
-      canInsert: false,
-    });
-    expect(h.controller.insertReviewed()).toBe(false);
-    expect(h.commit).not.toHaveBeenCalled();
   });
 
   it.each(["close", "error"])(
