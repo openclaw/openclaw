@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import net from "node:net";
@@ -23,29 +24,33 @@ function registerBaselineSeed(api, fixture) {
     started = true;
     // gateway_start is a notification, not a minutes-long startup barrier. The
     // receipt is the controller's only completion signal; no readiness is faked.
-    void seed(context).catch(async (error) => {
-      const fs = await import("node:fs");
-      fs.writeFileSync(
-        fixture.receiptPath + ".tmp",
-        JSON.stringify({ status: "error", error: error.stack ?? String(error) }) + "\n",
-      );
-      fs.renameSync(fixture.receiptPath + ".tmp", fixture.receiptPath);
-    });
+    void seed(context).catch(
+      /** @param {unknown} error */
+      async (error) => {
+        const failureFiles = await import("node:fs");
+        const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+        failureFiles.writeFileSync(
+          fixture.receiptPath + ".tmp",
+          JSON.stringify({ status: "error", error: detail }) + "\n",
+        );
+        failureFiles.renameSync(fixture.receiptPath + ".tmp", fixture.receiptPath);
+      },
+    );
   });
 
   async function seed(context) {
-    const { default: assert } = await import("node:assert/strict");
-    const { default: fs } = await import("node:fs");
-    const { createHash, randomBytes, randomUUID } = await import("node:crypto");
+    const { default: seedAssert } = await import("node:assert/strict");
+    const { default: seedFiles } = await import("node:fs");
+    const { createHash, randomBytes: payloadBytes, randomUUID } = await import("node:crypto");
     const { resolveStorePath, upsertSessionEntry } = await import(fixture.sdk.sessionStore);
     const { appendSessionTranscriptMessagesByIdentity } = await import(fixture.sdk.transcript);
     const { createPluginStateSyncKeyedStore } = await import(fixture.sdk.pluginState);
     const { readOccupiedSqliteBytes } = await import(fixture.factsUrl);
-    assert.equal(typeof resolveStorePath, "function");
-    assert.equal(typeof upsertSessionEntry, "function");
-    assert.equal(typeof appendSessionTranscriptMessagesByIdentity, "function");
-    assert.equal(typeof createPluginStateSyncKeyedStore, "function");
-    assert(context.abortSignal, "Released gateway_start must supply its drain signal");
+    seedAssert.equal(typeof resolveStorePath, "function");
+    seedAssert.equal(typeof upsertSessionEntry, "function");
+    seedAssert.equal(typeof appendSessionTranscriptMessagesByIdentity, "function");
+    seedAssert.equal(typeof createPluginStateSyncKeyedStore, "function");
+    seedAssert(context.abortSignal, "Released gateway_start must supply its drain signal");
     context.abortSignal.throwIfAborted();
 
     const agentId = "nightly";
@@ -65,7 +70,7 @@ function registerBaselineSeed(api, fixture) {
       key: "sentinel",
       value: {
         label: "Published baseline shared state — 東京",
-        nonce: randomBytes(32).toString("hex"),
+        nonce: payloadBytes(32).toString("hex"),
       },
     };
     const store = createPluginStateSyncKeyedStore(shared.pluginId, {
@@ -75,7 +80,7 @@ function registerBaselineSeed(api, fixture) {
       env: process.env,
     });
     store.register(shared.key, shared.value);
-    assert.deepEqual(store.lookup(shared.key), shared.value);
+    seedAssert.deepEqual(store.lookup(shared.key), shared.value);
 
     const hash = (text) => createHash("sha256").update(text).digest("hex");
     let firstWitness;
@@ -96,7 +101,7 @@ function registerBaselineSeed(api, fixture) {
           message: {
             role: "user",
             timestamp: now,
-            content: [{ type: "text", text: randomBytes(192 * 1024).toString("base64") }],
+            content: [{ type: "text", text: payloadBytes(192 * 1024).toString("base64") }],
           },
         };
       });
@@ -115,10 +120,10 @@ function registerBaselineSeed(api, fixture) {
         config: api.config,
         messages,
       });
-      assert.equal(results.length, messages.length, "Baseline writer dropped message inputs");
+      seedAssert.equal(results.length, messages.length, "Baseline writer dropped message inputs");
       for (const [index, result] of results.entries()) {
-        assert.equal(result.appended, true, "Baseline writer did not append fresh input");
-        assert.equal(result.messageId, messages[index].eventId);
+        seedAssert.equal(result.appended, true, "Baseline writer did not append fresh input");
+        seedAssert.equal(result.messageId, messages[index].eventId);
       }
       messageCount += messages.length;
       batches += 1;
@@ -136,34 +141,33 @@ function registerBaselineSeed(api, fixture) {
       batches,
       witnesses: { agentId, sessionKey, sessionId, transcript, shared },
     };
-    fs.writeFileSync(fixture.receiptPath + ".tmp", JSON.stringify(receipt, null, 2) + "\n");
-    fs.renameSync(fixture.receiptPath + ".tmp", fixture.receiptPath);
+    seedFiles.writeFileSync(fixture.receiptPath + ".tmp", JSON.stringify(receipt, null, 2) + "\n");
+    seedFiles.renameSync(fixture.receiptPath + ".tmp", fixture.receiptPath);
   }
 }
 
 async function availablePort() {
   const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const listening = once(server, "listening");
+  server.listen(0, "127.0.0.1");
+  await listening;
   const port = server.address().port;
-  await new Promise((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
+  const closed = once(server, "close");
+  server.close();
+  await closed;
   return port;
 }
 
 export async function seedBaselineMigrationFixture({
-  baselineRoot,
-  root,
-  artifacts,
+  baselineRoot: baselineInput,
+  root: rootInput,
+  artifacts: artifactsInput,
   minimumBytes = MIN_MIGRATION_BYTES,
 }) {
   assert(Number.isSafeInteger(minimumBytes) && minimumBytes > 0, "Invalid occupied-byte target");
-  baselineRoot = fs.realpathSync(baselineRoot);
-  root = path.resolve(root);
-  artifacts = path.resolve(artifacts);
+  const baselineRoot = fs.realpathSync(baselineInput);
+  const root = path.resolve(rootInput);
+  const artifacts = path.resolve(artifactsInput);
   const packageJsonPath = path.join(baselineRoot, "package.json");
   const baselineManifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
   const catalog = JSON.parse(
