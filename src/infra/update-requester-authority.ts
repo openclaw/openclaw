@@ -180,6 +180,7 @@ async function captureManagedUpdateRequester(
               }
             : undefined,
         });
+      let migrationDeferredChannels: string[] = [];
       await ensureCliPluginRegistryLoaded({
         scope: "configured-channels",
         routeLogsToStderr: true,
@@ -190,6 +191,9 @@ async function captureManagedUpdateRequester(
         if (!(error instanceof PluginLoadFailureError && error.onlyPendingStateMigrations)) {
           throw error;
         }
+        migrationDeferredChannels = error.registry.plugins
+          .filter((plugin) => plugin.status === "error")
+          .flatMap((plugin) => plugin.channelIds);
       });
       const authority =
         authorizationSource === "configured-owner"
@@ -210,7 +214,7 @@ async function captureManagedUpdateRequester(
             () => {
               const config = readCurrentConfig();
               return authorizationSource === "configured-owner"
-                ? isConfiguredCommandOwner(config, admittedRequester)
+                ? isConfiguredCommandOwner(config, admittedRequester, { migrationDeferredChannels })
                 : authority?.source === authorizationSource && authority.isCurrent(config);
             },
             { current: { env: authorityEnv } },
