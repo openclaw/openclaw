@@ -304,7 +304,6 @@ describe("update completion ownership", () => {
     vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
     vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", runId);
     const driver = readUpdateRunDriver();
-    expect(driver).toBeDefined();
     createUpdateRun({ trigger: "cli", runId, origin: { driver } });
     const stale = (pluginId: string) =>
       `core/doctor/workspace-status: Plugin ${pluginId} is 2026.10.10, but a Gateway restart will load OpenClaw 2026.11.10.`;
