@@ -81,7 +81,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     provider,
     modelId,
     requestedModelId,
-    expectedHarnessArtifact,
+    expectedHarnessArtifact: expectedArtifact,
     nativeModelOwned,
     authStorage,
     modelRegistry,
@@ -208,7 +208,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const toolAuthProfileStore = agentHarnessBuildsOpenClawTools(runtime.agentHarness.id)
     ? attemptAuthProfileStore
     : undefined;
-  const captureRuntimeArtifact = Boolean(params.onSuccessfulAuthBinding || expectedHarnessArtifact);
+  const captureRuntimeArtifact = Boolean(params.onSuccessfulAuthBinding || expectedArtifact);
   const beforeAgentFinalizeRevisionAttempts = terminalRetryState.beforeFinalizeRevisionAttempts;
   const fallbackActive =
     modelId !== requestedModelId ||
@@ -396,6 +396,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     continuation: sessionPromptState.continuation,
     runCleanupSettlement: params.runCleanupSettlement,
     joinObservation: params.joinObservation,
+    onMemoryFlushModelProgress: params.onMemoryFlushModelProgress,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,
@@ -520,9 +521,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
         }
       : {}),
     ...(captureRuntimeArtifact ? { captureRuntimeArtifact: true } : {}),
-    ...(expectedHarnessArtifact?.artifact
-      ? { expectedRuntimeArtifact: expectedHarnessArtifact?.artifact }
-      : {}),
+    ...(expectedArtifact?.artifact && { expectedRuntimeArtifact: expectedArtifact.artifact }),
     ...(params.sessionKey
       ? {
           agentHarnessCompletionScope: createAgentHarnessCompletionScope({

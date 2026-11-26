@@ -63,6 +63,8 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   }) => Promise<string>;
   /** A recovery checkpoint must not compact away the history it is trying to save. */
   disableCompactionRecovery?: true;
+  /** Reports content deltas from a detached memory flush without exposing them to its parent. */
+  onMemoryFlushModelProgress?: () => void;
   /** Original admitted settings, retained by the host across private runtime selection. */
   joinObservation?: ReplyMessageJoinObservation;
   /** The logical run already invoked model routing before preparing its candidate chain. */
@@ -125,6 +127,7 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     | "onCompactionRequestBudget"
     | "runCleanupSettlement"
     | "joinObservation"
+    | "onMemoryFlushModelProgress"
   > & {
     /** Spawn preference from the exact session entry already captured by run admission. */
     toolUsageRankingSeed?: InternalSessionEntry["toolUsageRankingSeed"];

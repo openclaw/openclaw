@@ -10,6 +10,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { SESSION_WATCHDOG_MAINTENANCE_GRACE_MS } from "../../sessions/session-controller.watchdog-state.js";
 import {
   consumeCompactionSafeguardCancellation,
   getCompactionSafeguardRuntime,
@@ -286,7 +287,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       let resetCompactionTimeout: (() => void) | undefined;
       // Request/output progress and fallback preparation share the silence watchdog.
       const refreshCompactionWatchdogs = () => {
-        diagnosticOwner?.watchdogAttempt?.setExecutionDeadline(Date.now() + compactionTimeoutMs);
+        diagnosticOwner?.watchdogAttempt?.setExecutionDeadline(
+          Date.now() + compactionTimeoutMs + SESSION_WATCHDOG_MAINTENANCE_GRACE_MS,
+        );
         resetCompactionTimeout?.();
         params.compactionTimeoutReset?.();
       };
