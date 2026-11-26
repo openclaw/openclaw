@@ -4840,7 +4840,6 @@ describe("requester settle wake trigger", () => {
   registerCleanupBurstAuthorityTest({
     createRunEntry,
     createLifecycleController,
-    waitForLifecycleState,
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

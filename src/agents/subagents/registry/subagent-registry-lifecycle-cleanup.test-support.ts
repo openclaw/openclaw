@@ -1,4 +1,5 @@
 import { expect, it, vi, type Mock } from "vitest";
+import { withinTest } from "../../../../test/helpers/promise.js";
 import * as transcripts from "../../../config/sessions/transcript-write-context.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
@@ -36,9 +37,10 @@ function capturePostimage(entry: SubagentRunRecord) {
 export function registerCleanupBurstAuthorityTest({
   createRunEntry,
   createLifecycleController,
-  waitForLifecycleState,
-}: fixtures.LifecycleTestDrivers) {
-  it("bounds a cleanup burst while retaining admitted work when admission closes", async () => {
+}: Pick<fixtures.LifecycleTestDrivers, "createRunEntry" | "createLifecycleController">) {
+  it("bounds a cleanup burst while retaining admitted work when admission closes", async ({
+    signal,
+  }) => {
     rootWork.resetGatewayWorkAdmission();
     const joinCleanup = observeRootWork();
     const entries = Array.from({ length: 130 }, (_, index) =>
@@ -51,9 +53,14 @@ export function registerCleanupBurstAuthorityTest({
     );
     const runs = new Map(entries.map((entry) => [entry.runId, entry]));
     const gate = createDeferredCore();
+    const firstPairEntered = createDeferredCore();
+    let entered = 0;
     const started: string[] = [];
     const announce = vi.fn(
       async (_params: Parameters<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>[0]) => {
+        if (++entered === 2) {
+          firstPairEntered.resolve();
+        }
         await gate.promise;
         return "delivered" as const;
       },
@@ -78,10 +85,11 @@ export function registerCleanupBurstAuthorityTest({
       for (const entry of entries) {
         expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
       }
-      await waitForLifecycleState(() => expect(announce).toHaveBeenCalledTimes(2));
+      await withinTest(firstPairEntered.promise, signal);
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
+      expect(announce).toHaveBeenCalledTimes(2);
       expect(started).toEqual(entries.slice(0, 2).map((entry) => entry.childSessionKey));
       expect(rootWork.getActiveGatewayRootWorkCount()).toBe(entries.length);
       rootWork.markGatewayRestartDraining();

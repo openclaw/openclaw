@@ -565,11 +565,9 @@ export function registerLifecycleDeliveryReceiptCases({
       { endedAt: 4_000, retainAttachmentsOnKeep: true },
     );
 
-    await completeRun(controller, entry, { triggerCleanup: true });
+    await completeAndJoinCleanup(controller, entry, { triggerCleanup: true });
 
-    await waitForLifecycleState(() =>
-      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number"),
-    );
+    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
     expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
     expectUndefinedFields(readLifecycleRun(entry).delivery, [
       "lastError",
