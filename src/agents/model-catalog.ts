@@ -128,21 +128,9 @@ function createModelCatalogSnapshot(
   routeVariants: ModelCatalogRouteVariantCollector,
   providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"],
 ): ModelCatalogSnapshot {
-  return {
-    entries: sortModelCatalogEntries(applyReadyCatalogModelOrder(entries, providerOutcomes)),
-    routeVariants: sortModelCatalogEntries(
-      applyReadyCatalogModelOrder(routeVariants.entries, providerOutcomes),
-    ),
-  };
-}
-
-function applyReadyCatalogModelOrder(
-  entries: ModelCatalogEntry[],
-  outcomes?: ModelCatalogSnapshot["providerOutcomes"],
-): ModelCatalogEntry[] {
   const keyOf = createModelCatalogIdentityKeyResolver();
   const orders = new Map<string, Map<string, number>>();
-  for (const outcome of outcomes ?? []) {
+  for (const outcome of providerOutcomes ?? []) {
     if (outcome.status !== "ready" || !outcome.modelOrder?.length) {
       continue;
     }
@@ -156,10 +144,8 @@ function applyReadyCatalogModelOrder(
     }
     orders.set(provider, order);
   }
-  if (orders.size === 0) {
-    return entries;
-  }
-  return entries.map((entry) => {
+  // Both projections use the same ready publication, but each owns its ranked row objects.
+  const rankEntry = (entry: ModelCatalogEntry): ModelCatalogEntry => {
     const order = orders.get(normalizeProviderId(entry.provider));
     if (!order) {
       return entry;
@@ -170,7 +156,10 @@ function applyReadyCatalogModelOrder(
       providerOrder:
         rank ?? (entry.providerOrder === undefined ? undefined : order.size + entry.providerOrder),
     };
-  });
+  };
+  const sortRows = (rows: ModelCatalogEntry[]) =>
+    sortModelCatalogEntries(orders.size === 0 ? rows : rows.map(rankEntry));
+  return { entries: sortRows(entries), routeVariants: sortRows(routeVariants.entries) };
 }
 
 export function loadManifestModelCatalog(params: {
