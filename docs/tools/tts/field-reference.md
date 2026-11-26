@@ -52,7 +52,7 @@ and resolved values still fail startup or reject the update.
       Provider-owned settings keyed by speech provider id. Legacy direct blocks (`tts.openai`, `.elevenlabs`, `.microsoft`, `.edge`) are rewritten by `openclaw doctor --fix`; commit only `tts.providers.<id>`.
     </ParamField>
     <ParamField path="maxTextLength" type="number" default="4096">
-      Hard cap for TTS input characters. `/tts audio`, `tts.convert`, and `tts.speak` fail if exceeded.
+      Hard cap for TTS input characters. `/tts latest`, `/tts audio`, `tts.convert`, and `tts.speak` fail if exceeded. Both slash commands display the input length and the limit.
     </ParamField>
     <ParamField path="timeoutMs" type="number" default="30000">
       Request timeout in milliseconds. A per-call `timeoutMs` (agent tool, gateway) wins when set; otherwise an explicitly configured `tts.timeoutMs` wins over any plugin-authored provider default. When neither is set, DeepInfra and OpenRouter default to `120000` because hosted Kokoro synthesis can exceed 30 seconds.

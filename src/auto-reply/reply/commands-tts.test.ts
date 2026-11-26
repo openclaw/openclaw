@@ -37,7 +37,8 @@ vi.mock("../../globals.js", () => ({
 }));
 
 // mock-isolation: Keep command fixtures independent of installed speech-provider plugins.
-vi.mock("../../tts/provider-registry.js", () => ({
+vi.mock("../../tts/provider-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/provider-registry.js")>()),
   getSpeechProvider: vi.fn(() => null),
   listSpeechProviders: vi.fn(() => []),
 }));
@@ -306,6 +307,33 @@ describe("handleTtsCommands status fallback reporting", () => {
       expect(ttsMocks.textToSpeech.mock.lastCall?.[0]?.text).toBe("latest visible reply");
       expect(sessionEntry.lastTtsReadLatestHash).toMatch(/^[a-f0-9]{64}$/);
       expect(sessionEntry.lastTtsReadLatestAt).toBeGreaterThanOrEqual(beforeTtsRead);
+    },
+  );
+
+  it.each([
+    { cfg: {}, length: 4097, limit: 4096 },
+    {
+      cfg: { agents: { entries: { reader: { tts: { maxTextLength: 100 } } } } },
+      length: 101,
+      limit: 100,
+    },
+  ])(
+    "explains the $limit-character synthesis limit in /tts latest",
+    async ({ cfg, length, limit }) => {
+      const { scope, ...fixture } = await transcriptFixture("reader", "agent:reader:tts-latest");
+      appendTranscriptMessageSync(scope, {
+        message: { role: "assistant", content: [{ type: "text", text: "a".repeat(length) }] },
+      });
+      const { textToSpeech } =
+        await vi.importActual<typeof import("../../tts/tts.js")>("../../tts/tts.js");
+      ttsMocks.textToSpeech.mockImplementationOnce(textToSpeech);
+
+      const rejected = await reply("/tts latest", { ...fixture, cfg, agentId: "main" });
+
+      expect(rejected.text).toBe(
+        `⚠️ Text is too long for TTS (${length} characters, limit ${limit}). Use \`/tts audio\` with a shorter excerpt.`,
+      );
+      expect(fixture.sessionEntry.lastTtsReadLatestHash).toBeUndefined();
     },
   );
 

@@ -116,8 +116,10 @@ type TtsRequestSetup = {
   providerRegistry: TtsProviderRegistry;
 };
 
+type TtsInputLengthFailure = { error: string; exceededTextLengthLimit: number };
+
 type AcquiredTtsRequest =
-  | { error: string }
+  | TtsInputLengthFailure
   | ({ setup: TtsRequestSetup } & Pick<
       Awaited<ReturnType<typeof acquirePluginCapabilityProviders<"speechProviders">>>,
       "run" | "release"
@@ -137,6 +139,7 @@ export async function acquireTtsRequest(
   if (params.text.length > config.maxTextLength) {
     return {
       error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
+      exceededTextLengthLimit: config.maxTextLength,
     };
   }
   const prefs = await readTtsPrefsAsync(prefsPath);
@@ -211,7 +214,7 @@ export async function acquireTtsRequest(
 /** Finite speech calls finish their work before returning a materialized result. */
 export async function withOwnedTtsRequest<T>(
   params: TtsRequestSetupParams,
-  run: (setup: TtsRequestSetup | { error: string }) => T | Promise<T>,
+  run: (setup: TtsRequestSetup | TtsInputLengthFailure) => T | Promise<T>,
 ): Promise<T> {
   const acquired = await acquireTtsRequest(params);
   if ("error" in acquired) {

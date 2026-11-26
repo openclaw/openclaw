@@ -102,6 +102,8 @@ type TtsAttemptOutcome = {
 
 type TtsMediaOutcome = TtsAttemptOutcome & {
   outputFormat?: string;
+  /** Effective hard limit when batch synthesis rejects oversized input. */
+  exceededTextLengthLimit?: number;
 };
 
 type TtsProviderMediaOutcome = TtsMediaOutcome & {
