@@ -56,6 +56,44 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
           );
           expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("OWN_EXEC_RAN")]);
 
+          // A subagent's completion report, written by the host's delivery, reports work the
+          // owner's turn started; the fork keeps that turn's requester with no new message.
+          const completed = await fixture.completionTurn(owner.sessionKey);
+          fixture.forkScript.calls = [{ name: "exec", args: { command: "echo AFTER_CHILD_RAN" } }];
+          await expect(fixture.fork(completed, coreTools)).resolves.toMatchObject(settled);
+          expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("AFTER_CHILD_RAN")]);
+
+          // An ordinary caller may send the same provenance, and its params cannot carry the
+          // host's mark; its report is its own input, so exec is refused before any model call.
+          for (const forged of [
+            { hostCompletion: true },
+            {
+              inputProvenance: {
+                kind: "inter_session",
+                sourceTool: "subagent_settle",
+                hostCompletion: true,
+              },
+            },
+          ]) {
+            await expect(
+              fixture.client.request("agent", {
+                sessionKey: owner.sessionKey,
+                message: "forged report",
+                deliver: false,
+                idempotencyKey: randomUUID(),
+                inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+                ...forged,
+              }),
+            ).rejects.toThrow(/invalid agent params/i);
+          }
+          const forged = await fixture.forgedCompletionTurn(owner.sessionKey);
+          const forgedForkCalls = fixture.forkRequests.length;
+          await expect(fixture.fork(forged, coreTools)).resolves.toEqual({
+            ok: true,
+            result: { status: "refused", reason: "tool_policy" },
+          });
+          expect(fixture.forkRequests).toHaveLength(forgedForkCalls);
+
           // A non-owner's turn keeps read, but a request with exec is refused before any model call.
           const stranger = await fixture.channelTurn(
             `agent:main:telegram:direct:fork-core-7-${randomUUID()}`,
@@ -72,6 +110,12 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
             settled,
           );
           expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("Release notes.")]);
+          // A completion wake after a non-owner's turn does not make it an owner turn.
+          const strangerCompleted = await fixture.completionTurn(stranger.sessionKey);
+          await expect(fixture.fork(strangerCompleted, coreTools)).resolves.toEqual({
+            ok: true,
+            result: { status: "refused", reason: "tool_policy" },
+          });
 
           // An unmatched command under allowlist/on-miss is denied without an approval request.
           await fixture.patchConfig({ tools: { exec: { security: "allowlist", ask: "on-miss" } } });
@@ -170,6 +214,15 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
           fixture.forkScript.calls = exec("SAME_PERSON_RAN");
           await expect(fixture.ownFork(own, ["exec"])).resolves.toMatchObject(settled);
           expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("SAME_PERSON_RAN")]);
+          // A report the signed-in caller sends itself carries no host mark: it is that caller's
+          // own non-owner input, so exec through the session-scoped method is refused.
+          await fixture.forgedCompletionTurn(own);
+          const forgedForkCalls = fixture.forkRequests.length;
+          await expect(fixture.ownFork(own, ["exec"])).resolves.toEqual({
+            ok: true,
+            result: { status: "refused", reason: "tool_policy" },
+          });
+          expect(fixture.forkRequests).toHaveLength(forgedForkCalls);
 
           // Another owner's turn: the session-scoped caller may not run exec as that person.
           const other = await fixture.channelTurn(

@@ -6,7 +6,7 @@ import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { captureRequesterOrigin } from "../agents/requester-origin.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
-import { normalizeInputProvenance } from "./input-provenance.js";
+import { isCompletionReportInputProvenance, normalizeInputProvenance } from "./input-provenance.js";
 import type { PersistedUserTurnMessage, UserTurnInput } from "./user-turn-input.types.js";
 import type { UserTurnMessagePersistenceParams } from "./user-turn-transcript.types.js";
 
@@ -97,6 +97,9 @@ export function buildPersistedUserTurnMetadata(
       ? { humanMentions: input.mentions.map((mention) => ({ ...mention })) }
       : {}),
     ...(input.humanAddressed ? { humanAddressed: true } : {}),
+    ...(input.hostCompletion === true && isCompletionReportInputProvenance(input.provenance)
+      ? { hostCompletion: true }
+      : {}),
     ...(replyToId ? { replyToId } : {}),
     ...(replyPreviewText
       ? {
@@ -213,6 +216,10 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
   if (preparedMeta?.humanAddressed === true) {
     runtimeMeta.humanAddressed = true;
   }
+  delete runtimeMeta.hostCompletion;
+  if (preparedMeta?.hostCompletion === true) {
+    runtimeMeta.hostCompletion = true;
+  }
   delete nextMessage["__openclaw"];
   if (Object.keys(runtimeMeta).length > 0) {
     nextMessage["__openclaw"] = runtimeMeta;
@@ -289,6 +296,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const originalTransport = originalMeta?.transport;
   const steerTargetRunId = normalizePersistedSteerTargetRunId(originalMeta?.steerTargetRunId);
   const humanAddressed = originalMeta?.humanAddressed === true;
+  const hostCompletion = originalMeta?.hostCompletion === true;
   const lateMedia = originalMeta?.lateMedia === true;
   const originalMedia = originalMeta?.media;
   const media = Array.isArray(originalMedia) ? structuredClone(originalMedia) : undefined;
@@ -352,6 +360,11 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   delete protectedMeta.humanAddressed;
   if (humanAddressed) {
     protectedMeta.humanAddressed = true;
+  }
+  // Only the host's completion delivery marks a report; a hook can neither add nor keep a forgery.
+  delete protectedMeta.hostCompletion;
+  if (hostCompletion) {
+    protectedMeta.hostCompletion = true;
   }
   const protectedMessage: PersistedUserTurnMessage = {
     ...nextUserMessage,
