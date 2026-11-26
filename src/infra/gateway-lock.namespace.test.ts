@@ -567,7 +567,7 @@ describe("gateway lock namespaces", () => {
     }
   });
 
-  it("immediately replaces a fresh lock from the previous run of the same container", async () => {
+  it("replaces a fresh same-container lock only when namespace proof is optional", async () => {
     const env = await makeEnv();
     vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(true);
     vi.spyOn(os, "hostname").mockReturnValue("0123456789ab");
@@ -586,6 +586,14 @@ describe("gateway lock namespaces", () => {
         fsSync.mkdirSync(path.dirname(file), { recursive: true });
         fsSync.writeFileSync(file, record);
       }
+      vi.stubEnv("OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF", "1");
+      await expect(acquireForTest(env).then((lock) => lock?.release())).rejects.toThrow(
+        "cannot verify Gateway ownership",
+      );
+      for (const file of [paths.ownerLockPath, paths.stateLockPath]) {
+        expect(fsSync.readFileSync(file, "utf8")).toBe(record);
+      }
+      vi.unstubAllEnvs();
       const onWait = vi.fn();
       const lock = await acquireForTest(env, { onWait });
       try {
@@ -596,6 +604,7 @@ describe("gateway lock namespaces", () => {
         await lock?.release();
       }
     } finally {
+      vi.unstubAllEnvs();
       vi.mocked(os.hostname).mockRestore();
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       readGatewayLockProcessNamespace();

@@ -3,10 +3,16 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { formatSignalMediaText } from "../media-text.js";
+import { resetSignalReplyAuthorsForTests } from "../reply-authors.test-helpers.js";
 import type { SignalDataMessage, SignalEventHandlerDeps } from "./event-handler.types.js";
 
 const hooks = vi.hoisted(() => ({
   trigger: vi.fn(async () => undefined),
+}));
+const signalRpcRequest = vi.hoisted(() => vi.fn());
+vi.mock("../client-adapter.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../client-adapter.js")>()),
+  signalRpcRequest,
 }));
 vi.mock("openclaw/plugin-sdk/hook-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/hook-runtime")>();
@@ -38,11 +44,13 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
-  { resolveSignalReplyContextWithPersistence },
+  { registerSignalReplyContext, resolveSignalReplyContextWithPersistence },
+  { sendMessageSignal },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
   import("./event-handler.js"),
   import("../reply-authors.js"),
+  import("../send.js"),
 ]);
 
 function groupEvent(
@@ -104,6 +112,7 @@ async function expectSkippedGroupHistory(
 }
 
 beforeEach(() => {
+  resetSignalReplyAuthorsForTests();
   capturedCtx = undefined;
   groupHistories.clear();
 });
@@ -454,6 +463,231 @@ it("records quote text in pending history for skipped quote-only group messages"
     groupEvent("", { quote: { text: "quoted context" } }),
     "quoted context",
   );
+});
+
+const sentQuoteId = 1700000002000;
+const humanQuoteId = 1700000003000;
+
+it("includes only the sender's recent photo when a verified bot quote triggers a reply", async () => {
+  const account = "+15550002222";
+  const cfg: OpenClawConfig = {
+    messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
+    channels: {
+      signal: {
+        account,
+        implicitMentions: { quotedBot: true },
+        groups: { g1: { requireMention: true } },
+      },
+    },
+  };
+  const fetchAttachment = vi.fn(async () => ({ path: "/tmp/own.jpg" }));
+  const handler = createMentionHandler({
+    cfg,
+    account,
+    historyLimit: 5,
+    ignoreAttachments: false,
+    fetchAttachment,
+  });
+  const otherPhotoId = 1700000000001;
+  const otherSender = "+15550003333";
+  await handler(groupEvent("", { attachments: [{ id: "own", contentType: "image/jpeg" }] }));
+  await handler(
+    groupEvent(
+      "",
+      { attachments: [{ id: "other", contentType: "image/jpeg" }] },
+      { sourceNumber: otherSender, sourceUuid: null, timestamp: otherPhotoId },
+    ),
+  );
+  await handler(
+    groupEvent(
+      "What is this?",
+      { quote: { id: otherPhotoId, authorNumber: otherSender } },
+      { timestamp: otherPhotoId + 1 },
+    ),
+  );
+  expect(capturedCtx).toBeUndefined();
+  expect(fetchAttachment).not.toHaveBeenCalled();
+
+  signalRpcRequest.mockResolvedValueOnce({
+    timestamp: sentQuoteId,
+    results: [{ type: "success" }],
+  });
+  await sendMessageSignal("group:g1", "Earlier answer", { cfg, baseUrl: "http://localhost" });
+  await handler(
+    groupEvent(
+      "What is in my photo?",
+      { quote: { id: sentQuoteId, authorNumber: account, text: "Earlier answer" } },
+      { timestamp: sentQuoteId + 1 },
+    ),
+  );
+
+  expect(fetchAttachment).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ attachment: { id: "own", contentType: "image/jpeg" } }),
+  );
+  expect(getCapturedCtx()).toMatchObject({
+    WasMentioned: true,
+    media: [{ kind: "image", path: "/tmp/own.jpg" }],
+  });
+});
+
+it.each([
+  { name: "own quote without opt-in", authorUuid: "bot-uuid", dispatched: false },
+  { name: "bot UUID", authorUuid: "bot-uuid", quotedBot: true, dispatched: true },
+  { name: "bot phone", authorNumber: "+15550002222", quotedBot: true, dispatched: true },
+  { name: "legacy bot phone", author: "+15550002222", quotedBot: true, dispatched: true },
+  { name: "another author", authorUuid: "other-user", quotedBot: true, dispatched: false },
+  {
+    name: "human message from the same account",
+    authorNumber: "+15550002222",
+    quoteId: humanQuoteId,
+    quotedBot: true,
+    dispatched: false,
+  },
+  {
+    name: "same account without a quote ID",
+    authorUuid: "bot-uuid",
+    quoteId: null,
+    quotedBot: true,
+    dispatched: false,
+  },
+  {
+    name: "message sent to a different group",
+    authorUuid: "bot-uuid",
+    sentTo: "group:g2",
+    quotedBot: true,
+    dispatched: false,
+  },
+  {
+    name: "message sent from a different account",
+    authorUuid: "bot-uuid",
+    sentFrom: "work",
+    quotedBot: true,
+    dispatched: false,
+  },
+  {
+    name: "failed group send",
+    authorUuid: "bot-uuid",
+    deliveryFailed: true,
+    quotedBot: true,
+    dispatched: false,
+  },
+  {
+    name: "explicit mention with a human quote",
+    authorNumber: "+15550002222",
+    quoteId: humanQuoteId,
+    quotedBot: true,
+    explicit: true,
+    dispatched: true,
+  },
+  {
+    name: "disabled quote activation",
+    authorUuid: "bot-uuid",
+    quotedBot: false,
+    dispatched: false,
+  },
+  {
+    name: "shared default is not an account opt-in",
+    authorUuid: "bot-uuid",
+    defaultQuotedBot: true,
+    dispatched: false,
+  },
+  {
+    name: "shared disable takes precedence over account opt-in",
+    authorUuid: "bot-uuid",
+    quotedBot: true,
+    defaultQuotedBot: false,
+    dispatched: false,
+  },
+  {
+    name: "named account opt-in",
+    authorUuid: "bot-uuid",
+    accountId: "work",
+    workQuotedBot: true,
+    dispatched: true,
+  },
+  {
+    name: "default and other accounts cannot opt in a named account",
+    authorUuid: "bot-uuid",
+    accountId: "personal",
+    quotedBot: true,
+    workQuotedBot: true,
+    dispatched: false,
+  },
+  {
+    name: "denied sender",
+    authorUuid: "bot-uuid",
+    quotedBot: true,
+    senderAllowed: false,
+    dispatched: false,
+  },
+])("applies Signal quote activation rules: $name", async (testCase) => {
+  const groupAllowFrom = testCase.senderAllowed === false ? ["+15550003333"] : ["group:g1"];
+  const account = "+15550002222";
+  const accountId = testCase.accountId ?? "default";
+  const cfg: OpenClawConfig = {
+    messages: { inbound: { debounceMs: 0 }, groupChat: { mentionPatterns: ["@bot"] } },
+    channels: {
+      defaults: { implicitMentions: { quotedBot: testCase.defaultQuotedBot } },
+      signal: {
+        account,
+        implicitMentions: { quotedBot: testCase.quotedBot },
+        accounts: { work: { account, implicitMentions: { quotedBot: testCase.workQuotedBot } } },
+        groups: { g1: { requireMention: true } },
+        groupPolicy: "allowlist",
+        groupAllowFrom,
+      },
+    },
+  };
+  const handler = createMentionHandler({
+    account,
+    accountUuid: "bot-uuid",
+    accountId,
+    groupPolicy: "allowlist",
+    groupAllowFrom,
+    cfg,
+  });
+  const quoteId = testCase.quoteId === null ? undefined : (testCase.quoteId ?? sentQuoteId);
+  if (quoteId === humanQuoteId) {
+    await registerSignalReplyContext({
+      accountId,
+      to: "group:g1",
+      replyToId: String(quoteId),
+      author: account,
+      body: "Earlier answer",
+    });
+  } else {
+    const sendId = sentQuoteId;
+    signalRpcRequest.mockResolvedValueOnce({
+      timestamp: sendId,
+      results: [{ type: testCase.deliveryFailed ? "network_failure" : "success" }],
+    });
+    const send = sendMessageSignal(testCase.sentTo ?? "group:g1", "Earlier answer", {
+      cfg,
+      baseUrl: "http://localhost",
+      accountId: testCase.sentFrom ?? accountId,
+    });
+    if (testCase.deliveryFailed) {
+      await expect(send).rejects.toThrow("Signal send failed");
+    } else {
+      await expect(send).resolves.toMatchObject({ messageId: String(sendId) });
+    }
+  }
+  await handler(
+    groupEvent(testCase.explicit ? "@bot, a follow-up" : "A follow-up", {
+      quote: {
+        id: quoteId,
+        author: testCase.author,
+        authorNumber: testCase.authorNumber,
+        authorUuid: testCase.authorUuid,
+        text: "Earlier answer",
+      },
+    }),
+  );
+  if (testCase.dispatched) {
+    expect(getCapturedCtx()).toMatchObject({ WasMentioned: true, ReplyToBody: "Earlier answer" });
+  } else {
+    expect(capturedCtx).toBeUndefined();
+  }
 });
 
 it.each([

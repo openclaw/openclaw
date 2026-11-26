@@ -7,7 +7,6 @@ import {
   readPositiveIntegerParam,
   jsonResult,
 } from "../agents/tools/common.js";
-import { callGatewayFromCli } from "../cli/gateway-rpc.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
@@ -16,6 +15,7 @@ import type { OpenClawPluginNodeInvokePolicy } from "../plugins/plugin-registrat
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import type { MeetingPluginConfig as SharedMeetingPluginConfig } from "./plugin-config.js";
 import type { MeetingPluginJoinRequest } from "./session-types.js";
+import { callMeetingToolGateway } from "./tool-gateway.js";
 import {
   createMeetingTranscriptSourceProvider,
   type MeetingTranscriptSourceRuntime,
@@ -86,12 +86,6 @@ export type MeetingPluginEntryOptions<
   };
   unknownActionMessage: string;
 };
-
-function readErrorDetails(error: unknown): unknown {
-  return error && typeof error === "object" && "details" in error
-    ? (error as { details?: unknown }).details
-    : undefined;
-}
 
 export function createMeetingPluginEntryOptions<
   Config extends MeetingPluginConfig,
@@ -175,36 +169,6 @@ export function createMeetingPluginEntryOptions<
       return invalidRequest(formatErrorMessage(error));
     }
   };
-  const gatewayMethod = (action: MeetingToolAction) => `${options.gatewayMethodPrefix}.${action}`;
-  const callGatewayFromTool = async (params: {
-    action: MeetingToolAction;
-    config: Config;
-    raw: Record<string, unknown>;
-    runtime?: OpenClawPluginApi["runtime"];
-  }) => {
-    try {
-      const timeoutMs = options.resolveGatewayTimeoutMs(params.config);
-      if (params.runtime) {
-        return await params.runtime.gateway.request(gatewayMethod(params.action), params.raw, {
-          timeoutMs,
-          scopes: ["operator.admin"],
-        });
-      }
-      return await callGatewayFromCli(
-        gatewayMethod(params.action),
-        { json: true, timeout: String(timeoutMs) },
-        params.raw,
-        { progress: false, scopes: ["operator.admin"] },
-      );
-    } catch (error) {
-      const details = readErrorDetails(error);
-      if (details && typeof details === "object") {
-        return details;
-      }
-      throw error;
-    }
-  };
-
   return {
     id: options.id,
     name: options.name,
@@ -343,15 +307,17 @@ export function createMeetingPluginEntryOptions<
               }
               const runtimeForTool = await options.resolveToolRuntime(api, agentId);
               return jsonResult(
-                await callGatewayFromTool({
-                  action,
-                  config,
-                  raw: {
+                await callMeetingToolGateway({
+                  method: `${options.gatewayMethodPrefix}.${action}`,
+                  gateway: runtimeForTool?.gateway,
+                  timeoutMs: options.resolveGatewayTimeoutMs(config),
+                  scopes: ["operator.admin"],
+                  loadGatewayCli: () => import("../cli/gateway-rpc.js"),
+                  params: {
                     ...raw,
                     ...(requesterSessionKey ? { requesterSessionKey } : {}),
                     ...(runtimeForTool && agentId ? { agentId } : {}),
                   },
-                  runtime: runtimeForTool,
                 }),
               );
             } catch (error) {

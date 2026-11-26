@@ -1801,14 +1801,12 @@ AFTER_CD
     expect(evaluateWorkflowExpression(job["runs-on"], manualDispatch)).toBe("ubuntu-24.04");
     expect(evaluateWorkflowExpression(parallelism!, manualDispatch)).toBe(1);
     const prepareRun = expectDefined(prepare.run, "Docker smoke package preparation");
-    expect(prepareRun).toContain("pnpm build:ci-artifacts");
-    const declarations =
-      "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts";
-    expect(prepareRun).toContain(declarations);
-    expect(prepareRun.indexOf("pnpm build:ci-artifacts")).toBeLessThan(
-      prepareRun.indexOf(declarations),
-    );
-    expect(prepareRun.indexOf(declarations)).toBeLessThan(
+    const build = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 pnpm build";
+    expect(prepareRun).toContain(build);
+    expect(prepareRun).not.toContain("build:ci-artifacts");
+    expect(prepareRun).not.toContain("scripts/write-unified-entry-dts.ts");
+    expect(prepareRun.indexOf("pnpm clean:dist")).toBeLessThan(prepareRun.indexOf(build));
+    expect(prepareRun.indexOf(build)).toBeLessThan(
       prepareRun.indexOf("node scripts/package-openclaw-for-docker.mjs --skip-build"),
     );
     expect(prepareRun).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");

@@ -457,6 +457,29 @@ describe("memory embedding policy", () => {
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
+  it("does not retry or split a retired document batch on a transport failure", async () => {
+    const controller = new AbortController();
+    const retired = new Error("Manager retired");
+    const run = vi.fn(async () => {
+      controller.abort(retired);
+      throw new Error("fetch failed");
+    });
+    const waitForRetry = vi.fn(async () => {});
+    const onSplit = vi.fn();
+    await expect(
+      runMemoryEmbeddingBatchRetryWithSplit({
+        items: ["a", "b"],
+        signal: controller.signal,
+        run,
+        waitForRetry,
+        onSplit,
+      }),
+    ).rejects.toBe(retired);
+    expect(run).toHaveBeenCalledOnce();
+    expect(waitForRetry).not.toHaveBeenCalled();
+    expect(onSplit).not.toHaveBeenCalled();
+  });
+
   it("splits recoverable transport failures and batch watchdog timeouts", async () => {
     const splittableMessages = [
       "TypeError: fetch failed | other side closed",

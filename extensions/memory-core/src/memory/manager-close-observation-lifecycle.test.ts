@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
+import { DatabaseSync } from "node:sqlite";
+import type {
+  EmbeddingInput,
+  EmbeddingProviderCallOptions,
+} from "openclaw/plugin-sdk/embedding-providers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -30,7 +34,10 @@ const observer = await vi.hoisted(async () => {
 const embedding = vi.hoisted(() => ({
   close: vi.fn<() => Promise<void>>(),
   embed: vi.fn<() => Promise<number[]>>(),
-  embedBatch: vi.fn<(inputs: EmbeddingInput[]) => Promise<number[][]>>(),
+  embedBatch:
+    vi.fn<
+      (inputs: EmbeddingInput[], options: EmbeddingProviderCallOptions) => Promise<number[][]>
+    >(),
 }));
 vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
   ...(await original<typeof import("openclaw/plugin-sdk/file-access-runtime")>()),
@@ -49,6 +56,9 @@ vi.mock("./embeddings.js", async (importOriginal) => ({
 
 type CloseFields = {
   closed: boolean;
+  closing: boolean;
+  markMemoryWatchDirty(): void;
+  syncBackground: (params: { reason: string; force: boolean }) => Promise<void>;
   fileWatcher: MemoryFileWatcher;
   publishedDatabase: MemoryIndexDatabase;
   sessionUnsubscribe: (() => void) | null;
@@ -178,6 +188,101 @@ describe("MemoryIndexManager observation close lifecycle", () => {
       }
     },
   );
+
+  it.each([false, true])(
+    "cancels an unclaimed background embedding on close (foreground joined: %s)",
+    async (joined) => {
+      const { manager, fields, entry, release } = await open(() => {});
+      entry.close.mockResolvedValue(undefined);
+      const entered = createDeferred<AbortSignal>();
+      const finish = createDeferred<void>();
+      embedding.embedBatch.mockImplementation(async (inputs, { signal }) => {
+        if (!signal) {
+          throw new Error("Expected embedding watchdog signal");
+        }
+        entered.resolve(signal);
+        await finish.promise;
+        return inputs.map(() => [1, 0]);
+      });
+      const indexing = fields.syncBackground({ reason: "watch", force: true });
+      let pending: PromiseSettledResult<void>[];
+      const calls = [indexing];
+      try {
+        const signal = await Promise.race([
+          entered.promise,
+          indexing.then(() => {
+            throw new Error("Expected document embedding");
+          }),
+        ]);
+        if (joined) {
+          calls.push(manager.sync({ reason: "explicit-sync" }));
+        }
+        calls.push(manager.close());
+        await vi.waitFor(() => expect(fields.closing).toBe(true));
+        expect(signal.aborted).toBe(!joined);
+        expect(release).not.toHaveBeenCalled();
+      } finally {
+        finish.resolve();
+        pending = await Promise.allSettled(calls);
+      }
+      expect(pending.map((call) => call.status)).toEqual(
+        joined ? ["fulfilled", "fulfilled", "fulfilled"] : ["rejected", "fulfilled"],
+      );
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("publishes the next watch generation adopted by a waiting foreground sync through close", async () => {
+    const { manager, fields, entry } = await open(() => {});
+    entry.close.mockResolvedValue(undefined);
+    await manager.sync({ reason: "initial", force: true });
+    const dbPath = (await manager.statusAsync()).dbPath!;
+    const note = path.join(state.workspaceDir, "memory", "note.md");
+    const first = createDeferred<void>();
+    const second = createDeferred<void>();
+    const finishFirst = createDeferred<void>();
+    const finishSecond = createDeferred<void>();
+    embedding.embedBatch
+      .mockImplementationOnce(async (inputs) => {
+        first.resolve();
+        await finishFirst.promise;
+        return inputs.map(() => [1, 0]);
+      })
+      .mockImplementationOnce(async (inputs, { signal }) => {
+        second.resolve();
+        await finishSecond.promise;
+        signal?.throwIfAborted();
+        return inputs.map(() => [1, 0]);
+      });
+    const calls: Promise<void>[] = [];
+    const watch = () => fields.syncBackground({ reason: "watch", force: false });
+    try {
+      await fs.writeFile(note, "first watch generation");
+      fields.markMemoryWatchDirty();
+      calls.push(watch());
+      await first.promise;
+      await fs.writeFile(note, "second watch generation");
+      fields.markMemoryWatchDirty();
+      // The background waiter claims the newer generation before the explicit caller joins it.
+      calls.push(watch(), manager.sync({ reason: "explicit-sync" }));
+      finishFirst.resolve();
+      await second.promise;
+      calls.push(manager.close());
+      finishSecond.resolve();
+      await Promise.all(calls);
+      using db = new DatabaseSync(dbPath, { readOnly: true });
+      const row = db
+        .prepare("SELECT text FROM memory_index_chunks WHERE path = ?")
+        .get("memory/note.md");
+      expect(row?.text).toBe("second watch generation");
+    } finally {
+      finishFirst.resolve();
+      finishSecond.resolve();
+      await Promise.allSettled(calls);
+      await manager.close();
+      await fs.writeFile(note, "Alpha memory.");
+    }
+  });
 
   it("joins accepted sync work and retains the database lease until its worker closes", async () => {
     const workerFailure = new Error("publication worker join failed");

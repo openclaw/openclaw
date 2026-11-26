@@ -1,5 +1,9 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/gateway/talk/client-agent-runtime-dispatch.test.ts",
+  "src/gateway/talk/client-agent-runtime.scope.test.ts",
+  "src/gateway/talk/client-gateway-control.mailbox.test.ts",
+  "src/gateway/test/talk-client-agent-consult.requester-final.test.ts",
   "src/update/gateway-trial.test.ts",
   "src/update/prepare.test.ts",
   "src/update/prepare-failure.test.ts",
@@ -434,6 +438,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-command-execution.test.ts",
   "src/cli/update-cli/update-command-family-admission.test.ts",
   "src/cli/update-cli/update-command-run.test.ts",
+  "src/cli/update-cli/update-command-run-service-ownership.test.ts",
   "src/cli/update-cli/update-command-package-doctor.test.ts",
   "src/cli/update-cli/update-command-execution-validation.test.ts",
   "src/cli/update-cli/update-command-maintenance-contention.test.ts",

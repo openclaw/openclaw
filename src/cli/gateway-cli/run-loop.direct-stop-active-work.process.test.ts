@@ -134,6 +134,13 @@ posixIt.for(["SIGTERM", "SIGUSR2", "historical-SIGTERM"] as const)(
   async (stopSignal, { signal }) => {
     const historical = stopSignal === "historical-SIGTERM";
     const env = createFixtureEnv("openclaw-retained-shutdown-", historical);
+    if (historical) {
+      // This case verifies that shutdown reaps the Linux spawn broker.
+      fs.writeFileSync(
+        env.OPENCLAW_CONFIG_PATH,
+        JSON.stringify({ gateway: { resources: { profile: "standard" } } }),
+      );
+    }
     const child = spawn(
       historical ? resolveTestNodeExecPath() : process.execPath,
       historical
