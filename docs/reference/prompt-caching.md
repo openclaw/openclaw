@@ -231,8 +231,6 @@ separate `agents.defaults.compaction.model`. Manual `/compact` and overflow
 recovery keep their existing paths. See
 [Compaction](/concepts/compaction#warm-request-compaction).
 
-<a id="idle-keep-warm" />
-
 ## Idle keep-warm
 
 When an interactive session goes idle with a large cached prompt, the Gateway
