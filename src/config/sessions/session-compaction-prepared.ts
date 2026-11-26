@@ -3,11 +3,7 @@ import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-re
 import type { SessionPreparedCompactionInput } from "./session-compaction-prepared.types.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 
-/**
- * Each call captures current source custody; a plan never retains a reader across inference.
- * Compaction callers pass their configured compaction timeout so preparing a large window is
- * not cut at the default worker read deadline.
- */
+/** Each call captures current source custody; a plan never retains a reader across inference. */
 export function readPreparedSessionCompactionInWorker(
   target: SessionTranscriptRuntimeTarget,
   operation: SessionPreparedCompactionInput["operation"],

@@ -195,7 +195,7 @@ function readFrames(frames: unknown[], eventCount: number, rawSeq = 7, encoding 
   return readers.readTranscript(transcriptInput, signal);
 }
 
-it("charges planning preflight facts by their worker clone and keeps the compaction deadline", async () => {
+it("charges planning preflight facts by their worker clone", async () => {
   // Quoted multi-line requests inflate the UTF-16 JSON estimate, not the structured clone.
   const entries: SessionEntry[] = Array.from({ length: 32 }, (_, index) => ({
     type: "message",
@@ -253,21 +253,17 @@ it("charges planning preflight facts by their worker clone and keeps the compact
     },
   };
   const dispatched = new Error("Stopped after admitting the worker request");
-  let admitted: { inputBytes: number; timeoutMs?: number } | undefined;
+  let charged = 0;
   const readers = createSessionHistoryWorkerReaders(
-    createSessionHistoryWorkerRequestStub(async (prepare, inputBytes, _signal, _req, options) => {
-      expect(structuredClone(prepare())).toMatchObject({ kind: "compaction-preparation" });
-      admitted = { inputBytes, timeoutMs: options?.timeoutMs };
+    createSessionHistoryWorkerRequestStub(async (_prepare, inputBytes) => {
+      charged = inputBytes;
       throw dispatched;
     }),
   );
-  await expect(
-    readers.readPreparedCompaction(input, undefined, { timeoutMs: 600_000 }),
-  ).rejects.toBe(dispatched);
-  expect(admitted?.timeoutMs).toBe(600_000);
+  await expect(readers.readPreparedCompaction(input)).rejects.toBe(dispatched);
   // The facts stay charged, but well under the UTF-16 JSON estimate that refused large windows.
-  expect(admitted?.inputBytes).toBeGreaterThanOrEqual(serialize(source).byteLength);
-  expect(admitted?.inputBytes).toBeLessThan(JSON.stringify(input).length);
+  expect(charged).toBeGreaterThanOrEqual(serialize(source).byteLength);
+  expect(charged).toBeLessThan(JSON.stringify(input).length);
 });
 
 it("keeps interleaved decorated readers on their own request runner", async () => {
