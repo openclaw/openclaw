@@ -17,7 +17,7 @@ export function prepareBtwIsolatedAuthorization(params: {
   const { harness, model, resolvedAttempt, authProfileStore } = params;
   return "auth" in resolvedAttempt
     ? prepareIsolatedHostAuthorization(harness, {
-        owner: "host",
+        owner: "host" as const,
         model,
         auth: resolvedAttempt.auth,
       })
