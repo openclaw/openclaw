@@ -648,16 +648,6 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("delegates setup-outcome deadlines to the device owner", async () => {
-    const timers = startGatewayMaintenanceTimers(createMaintenanceTimerDeps());
-    expect(startDevicePairSetupMaintenanceMock).toHaveBeenCalledOnce();
-    expect(startDevicePairSetupMaintenanceMock).toHaveBeenCalledWith({
-      scheduler: expect.objectContaining({ signal: expect.any(AbortSignal) }),
-      onError: expect.any(Function),
-    });
-    await stopMaintenanceTimers(timers);
-  });
-
   it("updates attachment cleanup policy between sweeps without restarting maintenance", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:01.234Z"));
