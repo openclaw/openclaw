@@ -14,7 +14,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { formatDurationCompact } from "openclaw/plugin-sdk/time-runtime";
-import type { GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
+import { parseGoogleMeetTransport } from "./join-options.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export type JoinOptions = {
@@ -133,40 +133,6 @@ export type CreateOptions = OAuthOptions &
     entryPointAccess?: string;
     join?: boolean;
   };
-
-export function parseGoogleMeetMode(value: string | undefined): GoogleMeetModeInput | undefined {
-  if (
-    value === undefined ||
-    value === "agent" ||
-    value === "bidi" ||
-    value === "transcribe" ||
-    value === "realtime"
-  ) {
-    return value;
-  }
-  throw new Error(`mode must be agent, bidi, transcribe, or realtime; received ${value}`);
-}
-
-export function parseGoogleMeetTransport(
-  value: string | undefined,
-): GoogleMeetTransport | undefined {
-  if (value === undefined || value === "chrome" || value === "chrome-node" || value === "twilio") {
-    return value;
-  }
-  throw new Error(`transport must be chrome, chrome-node, or twilio; received ${value}`);
-}
-
-export function resolveCliJoinRequest(url: string, options: JoinOptions) {
-  return {
-    url,
-    transport: parseGoogleMeetTransport(options.transport),
-    mode: parseGoogleMeetMode(options.mode),
-    message: options.message,
-    dialInNumber: options.dialInNumber,
-    pin: options.pin,
-    dtmfSequence: options.dtmfSequence,
-  };
-}
 
 export function parseGoogleMeetBrowserTransport(
   value: string | undefined,

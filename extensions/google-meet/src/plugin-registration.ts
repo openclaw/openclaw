@@ -10,12 +10,8 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { GoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
-import {
-  resolveGoogleMeetGatewayOperationTimeoutMs,
-  type GoogleMeetConfig,
-  type GoogleMeetMode,
-  type GoogleMeetTransport,
-} from "./config.js";
+import { resolveGoogleMeetGatewayOperationTimeoutMs, type GoogleMeetConfig } from "./config.js";
+import { normalizeMode, normalizeTransport } from "./join-options.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
 
@@ -37,17 +33,6 @@ const loadGoogleMeetGatewayRuntimeModule = createLazyRuntimeModule(
 type GoogleMeetGatewayErrorCode = NonNullable<
   Parameters<GatewayRequestHandlerOptions["respond"]>[2]
 >["code"];
-
-export function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
-  return value === "chrome" || value === "chrome-node" || value === "twilio" ? value : undefined;
-}
-
-export function normalizeMode(value: unknown): GoogleMeetMode | undefined {
-  if (value === "realtime") {
-    return "agent";
-  }
-  return value === "agent" || value === "bidi" || value === "transcribe" ? value : undefined;
-}
 
 export function resolveMeetingInput(config: GoogleMeetConfig, value: unknown): string {
   const meeting = normalizeOptionalString(value) ?? config.defaults.meeting;
