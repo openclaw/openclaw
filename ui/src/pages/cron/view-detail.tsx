@@ -97,14 +97,14 @@ export function DetailView(
                       <AttentionDetails
                         job={current().job}
                         onReviewRun={(() => {
-                          const job = current().job;
+                          const currentJob = current().job;
                           // A retained blocker may predate the last quiet run. Only execution
                           // failures identify that last run; never link an old result to it.
-                          if (resolveCronJobAttention(job) !== "error") {
+                          if (resolveCronJobAttention(currentJob) !== "error") {
                             return undefined;
                           }
-                          const runId = failedRunId(job);
-                          return runId ? () => props.onSelectJob(job, runId) : undefined;
+                          const runId = failedRunId(currentJob);
+                          return runId ? () => props.onSelectJob(currentJob, runId) : undefined;
                         })()}
                       />
                     )}
