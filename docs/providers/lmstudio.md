@@ -276,9 +276,9 @@ does not trigger this recovery.
 ### Embedding model fails to load on a small host
 
 Memory indexing fails with `Model is unloaded` when LM Studio cannot allocate the embedding model's
-context. With no `models.providers.lmstudio.models` entry for it, OpenClaw requests 64,000 tokens,
-capped to the model's maximum, so a 32,768-token embedding model can exhaust a 16 GB host. Add an
-entry with a small `contextTokens` and OpenClaw requests that instead:
+context. In OpenClaw 2026.11.3, a missing `models.providers.lmstudio.models` entry requested
+64,000 tokens, capped to the model's maximum. Loading a 32,768-token embedding model this way
+could exhaust a 16 GB host. Set a small `contextTokens` in the model entry to request a fixed budget:
 
 ```json5
 {
