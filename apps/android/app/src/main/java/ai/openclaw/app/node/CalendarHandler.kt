@@ -12,6 +12,7 @@ import android.provider.CalendarContract
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import java.time.DateTimeException
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -280,15 +281,28 @@ class CalendarHandler internal constructor(
     )
   }
 
-  private fun parseAllDayRange(rawStart: String?, rawEnd: String?): Pair<Instant, Instant>? {
-    val startAt = parseOffsetDateTime(rawStart) ?: return null
-    val endAt = parseOffsetDateTime(rawEnd) ?: return null
+  private fun parseAllDayRange(
+    rawStart: String?,
+    rawEnd: String?,
+  ): Pair<Instant, Instant>? {
+    val startAt = parseAllDayBound(rawStart) ?: return null
+    val endAt = parseAllDayBound(rawEnd) ?: return null
     if (!endAt.isAfter(startAt)) return startAt.toInstant() to endAt.toInstant()
     // Android stores all-day events as UTC midnights. Keep the calendar date the caller wrote,
     // so "2026-07-05T00:00:00+10:00" stays July 5 instead of falling back to July 4 in UTC.
     val start = startAt.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant()
     val end = endAt.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant()
     return start to maxOf(end, start.plus(1, ChronoUnit.DAYS))
+  }
+
+  private fun parseAllDayBound(raw: String?): OffsetDateTime? {
+    val value = raw?.trim() ?: return null
+    return try {
+      // Keep an ordinary offset's civil date. ISO_INSTANT also accepts 24:00 and UTC leap seconds.
+      parseOffsetDateTime(value) ?: Instant.parse(value).atOffset(ZoneOffset.UTC)
+    } catch (_: DateTimeException) {
+      null
+    }
   }
 
   private fun parseInstant(raw: String?): Instant? {

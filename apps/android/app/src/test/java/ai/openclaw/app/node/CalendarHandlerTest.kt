@@ -249,6 +249,38 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
   }
 
   @Test
+  fun handleCalendarAdd_acceptsUtcEndOfDayForAllDayEvents() {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler(appContext(), source)
+
+    val result =
+      handler.handleCalendarAdd(
+        """{"title":"Holiday","startISO":"2026-07-05T00:00:00Z","endISO":"2026-07-05T24:00:00Z","isAllDay":true}""",
+      )
+
+    assertTrue(result.ok)
+    val request = source.addedRequest ?: error("missing add request")
+    assertEquals(Instant.parse("2026-07-05T00:00:00Z").toEpochMilli(), request.startMs)
+    assertEquals(Instant.parse("2026-07-06T00:00:00Z").toEpochMilli(), request.endMs)
+  }
+
+  @Test
+  fun handleCalendarAdd_keepsLeapSecondDateAndOffsetEndDateForAllDayEvents() {
+    val source = FakeCalendarDataSource(canRead = true, canWrite = true)
+    val handler = CalendarHandler(appContext(), source)
+
+    val result =
+      handler.handleCalendarAdd(
+        """{"title":"Holiday","startISO":"2016-12-31T23:59:60Z","endISO":"2017-01-02T00:00:00+10:00","isAllDay":true}""",
+      )
+
+    assertTrue(result.ok)
+    val request = source.addedRequest ?: error("missing add request")
+    assertEquals(Instant.parse("2016-12-31T00:00:00Z").toEpochMilli(), request.startMs)
+    assertEquals(Instant.parse("2017-01-02T00:00:00Z").toEpochMilli(), request.endMs)
+  }
+
+  @Test
   fun handleCalendarAdd_preservesTimedInstantsAndDeviceTimezone() {
     val source = FakeCalendarDataSource(canRead = true, canWrite = true)
     val handler = CalendarHandler(appContext(), source)
