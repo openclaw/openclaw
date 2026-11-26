@@ -21,7 +21,7 @@ import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 /** Copied chat history is searchable storage, not an estimate of the next runnable prompt. */
 export function shouldEstimatePreflightTranscript(
   entry: SessionEntry,
-  scope: { sessionId: string; sessionKey?: string },
+  key: string | undefined,
   runtimeId: string,
   freshTokens: number | undefined,
 ): boolean {
@@ -29,11 +29,10 @@ export function shouldEstimatePreflightTranscript(
     freshTokens === undefined &&
     !(
       runtimeId === "openclaw" &&
-      scope.sessionKey !== undefined &&
-      entry.sessionId === scope.sessionId &&
+      key !== undefined &&
       entry.forkSource !== undefined &&
       entry.forkSource.entryId === undefined &&
-      isExplicitChatFork(scope.sessionKey, entry.createdVia, entry.spawnDepth)
+      isExplicitChatFork(key, entry.createdVia, entry.spawnDepth)
     )
   );
 }

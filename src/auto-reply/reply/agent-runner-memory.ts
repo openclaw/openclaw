@@ -178,7 +178,7 @@ export async function runSessionCompactionIfNeeded(
   const shouldCheckActiveTranscriptBytes = maxActiveTranscriptBytes !== undefined;
   const transcriptUsageTokens = shouldEstimatePreflightTranscript(
     entry,
-    params.followupRun.run,
+    compactionSessionKey,
     runtimeId,
     freshPersistedTokens,
   )
@@ -563,7 +563,7 @@ export async function runMemoryFlushIfNeeded(
 
   const shouldReadTranscript = shouldEstimatePreflightTranscript(
     entry,
-    params.followupRun.run,
+    params.sessionKey ?? params.followupRun.run.sessionKey,
     runtimeId,
     persistedPromptTokens,
   );

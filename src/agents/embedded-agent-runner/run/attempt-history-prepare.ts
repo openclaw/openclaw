@@ -127,7 +127,6 @@ export async function prepareEmbeddedAttemptHistory(
       attempt.sessionKey &&
       sessionEntry?.forkSource &&
       sessionEntry.forkSource.entryId === undefined &&
-      sessionEntry.sessionId === attempt.sessionId &&
       isExplicitChatFork(attempt.sessionKey, sessionEntry.createdVia, sessionEntry.spawnDepth)
         ? sessionManager[sessionManagerInheritedMessages]?.()
         : undefined;
