@@ -39,7 +39,7 @@ struct ChatCodeBlockView: View {
             .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(self.attributedCode)
-                    .font(OpenClawChatTypography.mono(size: 13 * self.textScale, relativeTo: .footnote))
+                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote, textScale: self.textScale))
                     .foregroundStyle(OpenClawChatTheme.assistantText)
                     .lineSpacing(2)
                     .textSelection(.enabled)

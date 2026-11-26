@@ -123,10 +123,15 @@ enum OpenClawChatTypography {
         #endif
     }
 
-    static func mono(size: CGFloat, weight: Font.Weight = .regular, relativeTo textStyle: Font.TextStyle) -> Font {
+    static func mono(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        relativeTo textStyle: Font.TextStyle,
+        textScale: CGFloat = 1) -> Font
+    {
         #if os(iOS)
         let name = weight == .semibold ? Self.monoSemiBoldPostScriptName : Self.monoPostScriptName
-        return Font.custom(name, size: Self.scaled(size), relativeTo: textStyle)
+        return Font.custom(name, size: Self.scaled(size) * textScale, relativeTo: textStyle)
         #elseif os(macOS)
         return Font.custom(self.macMonospacedSystemFontName(size: size), size: size, relativeTo: textStyle)
             .weight(weight)
