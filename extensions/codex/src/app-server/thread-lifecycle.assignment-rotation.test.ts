@@ -308,7 +308,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
     });
     const current = buildCodexAppServerRuntimeFingerprint({ appServer, runtimeIdentity });
     expect(saved).not.toEqual(current);
-    const owner = f.assignments[0].owner;
+    const owner = f.assignments[0]?.owner;
     assert(owner);
     const receipt = {
       parentTurnId: "parent-turn",
@@ -336,7 +336,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
     expect(next.threadId).toBe(f.parent.threadId);
     const resumes = f.request.mock.calls.filter(([method]) => method === "thread/resume");
     expect(resumes).toHaveLength(1);
-    expect(resumes[0][1]).toMatchObject({ threadId: f.parent.threadId });
+    expect(resumes[0]?.[1]).toMatchObject({ threadId });
     expect(next.appServerRuntimeFingerprint).toBe(saved);
     expect(f.store.read(f.identity)?.appServerRuntimeFingerprint).toBe(saved);
     expect(await f.store.readNativeSubagentSubmissions(f.identity, owner)).toEqual([receipt]);
