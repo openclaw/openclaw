@@ -217,13 +217,16 @@ describe("composer attachment origin", () => {
   );
 });
 
-it("retains an explicit headerless CSV declaration in chat history", async () => {
+it.each([
+  String.raw`text/csv; charset=utf-8; HEADER="Abse\nt"`,
+  'text/csv; name=Q4-12".csv; header=absent',
+])("retains an explicit headerless CSV declaration in chat history for %s", async (mimeType) => {
   const fileName = "names.csv";
   const bytes = Buffer.from("Alice,42\nBob,17");
   saveMediaBufferMock.mockResolvedValueOnce(savedMedia(fileName, "text/csv", bytes.length));
   const parsed = await parseMessageWithAttachments("Read this", [
     {
-      mimeType: String.raw`text/csv; charset=utf-8; HEADER="Abse\nt"`,
+      mimeType,
       fileName,
       content: bytes.toString("base64"),
     },
@@ -233,7 +236,10 @@ it("retains an explicit headerless CSV declaration in chat history", async () =>
     text: "Read this",
     media: persisted.entries.map((entry) => entry.fact),
   });
-  const [history] = sanitizeChatHistoryMessages([message]);
+  const history = expectDefined(
+    asOptionalRecord(sanitizeChatHistoryMessages([message])[0]),
+    "projected history message",
+  );
   expect(readPersistedMediaFacts(history)?.[0]).toMatchObject({
     fileName,
     contentType: "text/csv; header=absent",

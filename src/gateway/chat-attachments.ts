@@ -1,8 +1,8 @@
+import { MIMEType } from "node:util";
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
 import {
   extensionForMime,
   HEADERLESS_CSV_MIME_TYPE,
-  isHeaderlessCsvMime,
   kindFromMime,
   normalizeMimeType,
 } from "@openclaw/media-core/mime";
@@ -273,6 +273,17 @@ function ensureExtension(label: string, mime: string): string {
   return ext ? `${label}${ext}` : label;
 }
 
+function hasHeaderlessCsvDeclaration(mime: string): boolean {
+  try {
+    const declared = new MIMEType(mime);
+    return (
+      declared.essence === "text/csv" && declared.params.get("header")?.toLowerCase() === "absent"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function normalizeAttachment(att: ChatAttachment, idx: number): NormalizedAttachment {
   const mime = att.mimeType ?? "";
   const content = att.content;
@@ -473,7 +484,7 @@ export async function parseMessageWithAttachments(
         path: savedMedia.path,
         kind: kindFromMime(finalMime) ?? "unknown",
         mimeType:
-          finalMime === "text/csv" && isHeaderlessCsvMime(mime)
+          finalMime === "text/csv" && hasHeaderlessCsvDeclaration(mime)
             ? HEADERLESS_CSV_MIME_TYPE
             : finalMime,
         label,

@@ -178,22 +178,9 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
 export const HEADERLESS_CSV_MIME_TYPE = "text/csv; header=absent";
 
 export function isHeaderlessCsvMime(mime: string): boolean {
-  if (normalizeMimeType(mime) !== "text/csv") {
-    return false;
-  }
-  for (const [, name, value] of mime.matchAll(
-    /;\s*([^=;\s]+)\s*=\s*("(?:[^"\\]|\\.)*"\s*(?=;|$)|[^;]*)/g,
-  )) {
-    if (name?.toLowerCase() === "header") {
-      const parameter = value?.trim() ?? "";
-      const decoded =
-        parameter.startsWith('"') && parameter.endsWith('"')
-          ? parameter.slice(1, -1).replace(/\\(.)/g, "$1")
-          : parameter;
-      return decoded.toLowerCase() === "absent";
-    }
-  }
-  return false;
+  return /^\s*text\/csv\s*(?:;(?!\s*header\s*=)(?:[^";]|"(?:[^"\\]|\\.)*")*)*;\s*header\s*=\s*(?:absent|"\\?a\\?b\\?s\\?e\\?n\\?t")\s*(?:;|$)/i.test(
+    mime,
+  );
 }
 
 async function sniffMime(buffer?: Buffer): Promise<string | undefined> {

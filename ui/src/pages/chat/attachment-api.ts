@@ -8,23 +8,19 @@ registerChatComposerEnglish();
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
   const commaIndex = dataUrl.indexOf(",");
-  if (!dataUrl.startsWith("data:") || commaIndex < 0) {
+  if (commaIndex < 0) {
     return null;
   }
   // FileReader may include MIME parameters. Validate metadata separately from
   // the payload, so neither repeated parameters nor image bytes need a capture regex.
-  const mediaType = dataUrl.slice(5, commaIndex);
-  const [mimeType, ...parameters] = mediaType.split(";");
-  if (
-    !mimeType ||
-    parameters.pop() !== "base64" ||
-    parameters.some((parameter) => !/^[^=]+=[\s\S]*$/.test(parameter))
-  ) {
-    return null;
-  }
+  const metadata = dataUrl.slice(0, commaIndex);
+  const mimeType = /^data:([^;]+)(?:;[^=;]+=[^;]*)*;base64$/.exec(metadata)?.[1];
   const content = dataUrl.slice(commaIndex + 1);
-  return content && !/[\r\n\u2028\u2029]/.test(content)
-    ? { mimeType: isHeaderlessCsvMime(mediaType) ? HEADERLESS_CSV_MIME_TYPE : mimeType, content }
+  return mimeType && content && !/[\r\n\u2028\u2029]/.test(content)
+    ? {
+        mimeType: isHeaderlessCsvMime(metadata.slice(5)) ? HEADERLESS_CSV_MIME_TYPE : mimeType,
+        content,
+      }
     : null;
 }
 
