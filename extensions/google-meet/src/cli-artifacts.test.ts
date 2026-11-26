@@ -344,7 +344,7 @@ it("keeps namesakes distinct across a conference's transcript exports", async ()
     expect(first).toContain("unlisted: Missing roster entry.");
     expect(first).toContain(file === "summary.md" ? "- Unattributed." : "- unknown: Unattributed.");
   }
-  expect(JSON.parse(readOutput("artifacts.json"))).toEqual(JSON.parse(JSON.stringify(artifacts)));
+  expect(JSON.parse(readOutput("artifacts.json"))).toEqual(artifacts);
 });
 
 it("includes artifact warnings in export summaries and manifests", async () => {
