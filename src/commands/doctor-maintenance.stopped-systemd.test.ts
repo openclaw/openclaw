@@ -170,3 +170,27 @@ it("leaves state and the stopped Gateway alone while an update run is active", a
     }
   });
 });
+
+// Recovery path: a run whose driver exited mid-swap must not block repair forever.
+it("repairs state beside the stopped Gateway when the recorded update driver is dead", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { DatabaseSync } = requireNodeSqlite();
+    const { databasePath } = await prepareInactiveSystemdGateway(state, "current-policy");
+    const live = readUpdateRunDriver();
+    expect(live).toBeDefined();
+    // A different start identity for this PID proves the recorded driver exited.
+    const dead = { ...live!, startIdentity: String(Number(live!.startIdentity) + 1) };
+    createUpdateRun({ trigger: "cli", origin: { driver: dead } });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    try {
+      await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+      const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
+      expect(runtime.exit, output).not.toHaveBeenCalled();
+      expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+      using migrated = new DatabaseSync(databasePath, { readOnly: true });
+      expect(migrated.prepare("PRAGMA user_version").get()).not.toEqual({ user_version: 1 });
+    } finally {
+      mocks.servicePlatform = undefined;
+    }
+  });
+});
