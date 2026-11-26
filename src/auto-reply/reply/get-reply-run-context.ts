@@ -202,23 +202,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
-  const sourceConversationContext = (mode: typeof sourceReplyDeliveryMode) =>
-    buildSourceConversationContext({
-      sourceReplyDeliveryMode: mode,
-      sessionCtx: promptSessionCtx,
-    });
-  const sourceConversationContextByMode = {
-    automatic: sourceConversationContext("automatic"),
-    message_tool_only: sourceConversationContext("message_tool_only"),
-  };
-  // CLI sessions keep their creation-time conversation prompt. Embedded attempts
-  // can instead select the variant owned by their final prepared harness.
-  const sessionStableConversationContext =
-    sourceConversationContextByMode[sessionPromptSourceReplyDeliveryMode ?? "automatic"];
-  // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
-  const groupIntro = isGroupChat
-    ? buildGroupIntro({ activation: conversation.activation, defaultActivation })
-    : "";
   const terminalReplyExpectation =
     opts?.replyExpectation ??
     resolveSourceReplyExpectation({
@@ -226,6 +209,32 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       cfg,
       scheduledAutomation: opts?.scheduledAutomation !== undefined,
     });
+  const sourceConversationContext = (
+    mode: typeof sourceReplyDeliveryMode,
+    resultRequired?: boolean,
+  ) =>
+    buildSourceConversationContext({
+      sourceReplyDeliveryMode: mode,
+      sessionCtx: promptSessionCtx,
+      resultRequired,
+    });
+  const resultRequired = terminalReplyExpectation === "result-required";
+  const sourceConversationContextByMode = {
+    automatic: sourceConversationContext("automatic", resultRequired),
+    message_tool_only: sourceConversationContext("message_tool_only", resultRequired),
+  };
+  const sessionPromptMode = sessionPromptSourceReplyDeliveryMode ?? "automatic";
+  // CLI sessions keep their creation-time conversation prompt. Embedded attempts
+  // can instead select the variant owned by their final prepared harness.
+  const sessionStableConversationContext = sourceConversationContext(sessionPromptMode);
+  // A result-required turn cannot end silently; only this turn's copy says so,
+  // so the CLI binding hash stays session-stable. Accepted cost: a warm CLI
+  // process restarts when a session alternates between the two copies.
+  const turnConversationContext = sourceConversationContextByMode[sessionPromptMode];
+  // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
+  const groupIntro = isGroupChat
+    ? buildGroupIntro({ activation: conversation.activation, defaultActivation })
+    : "";
   const replyOperationRunState = resolveReplyOperationRunState(opts);
   const setReplyCompletion = (evidence: Parameters<typeof resolveReplyCompletion>[1]) => {
     if (replyOperationRunState) {
@@ -248,21 +257,24 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     fullAccessAvailable: fullAccessState.available,
     fullAccessBlockedReason: fullAccessState.blockedReason,
   });
+  const configuredSystemPromptParts = [groupIntro, groupSystemPrompt, execOverridePromptHint];
   const staticSystemPromptParts = [
     sessionStableConversationContext,
-    groupIntro,
-    groupSystemPrompt,
-    execOverridePromptHint,
+    ...configuredSystemPromptParts,
   ].filter(Boolean);
-  const extraSystemPromptParts = [inboundMetaPrompt, ...staticSystemPromptParts].filter(Boolean);
+  const extraSystemPromptParts = [
+    inboundMetaPrompt,
+    turnConversationContext,
+    ...configuredSystemPromptParts,
+  ].filter(Boolean);
   // Metadata and conversation guidance vary per turn; configured policy and exec hints do not.
-  const turnContextText = [inboundMetaPrompt, sessionStableConversationContext, groupIntro]
+  const turnContextText = [inboundMetaPrompt, turnConversationContext, groupIntro]
     .filter(Boolean)
     .join("\n\n");
   const extraSystemPromptTurnContext = turnContextText
     ? { start: 0, text: turnContextText }
     : undefined;
-  const sourceConversationContextPromptOffset = sessionStableConversationContext
+  const sourceConversationContextPromptOffset = turnConversationContext
     ? inboundMetaPrompt
       ? inboundMetaPrompt.length + 2
       : 0

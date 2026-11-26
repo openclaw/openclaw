@@ -29,7 +29,7 @@ import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-f
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
-import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
+import { isSyntheticSourceReplyTurn, resolveCommandReplyExpectation } from "../reply-completion.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
@@ -281,6 +281,15 @@ export async function prepareEmbeddedSessionState(params: {
     const shared = ctx.ChatType === "group" || ctx.ChatType === "channel";
     const sourceContext = buildSourceConversationContext({
       sessionCtx: ctx,
+      // Same inputs as the attempt's completion check, so the prompt cannot offer silence it rejects.
+      resultRequired:
+        resolveCommandReplyExpectation({
+          cfg,
+          sessionKey,
+          sessionEntry,
+          messageChannel: runContext.messageChannel,
+          opts,
+        }) === "result-required",
       sourceReplyDeliveryMode: await resolveSessionStableReplyMode({
         cfg,
         ctx,
