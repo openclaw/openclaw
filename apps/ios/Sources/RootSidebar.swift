@@ -8,6 +8,7 @@ struct RootSidebar: View {
     @Environment(\.displayScale) private var displayScale
     @Bindable var model: RootSidebarModel
     @State private var scrollAnchor = RootSidebarScrollAnchor()
+    @State private var pullToSearch = RootSidebarPullTracker()
     @State private var collapsedParents: Set<String> = []
     @State private var presentedAttention: OpenClawChatAttentionPresentation?
     @AppStorage("sidebar.pinnedSessionsCollapsed") private var pinnedSessionsCollapsed = false
@@ -64,6 +65,7 @@ struct RootSidebar: View {
             .modifier(RootSidebarAnchoredContent(anchor: self.scrollAnchor))
         }
         .scrollEdgeEffectStyle(.soft, for: .vertical)
+        .modifier(RootSidebarPullToSearchTracking(tracker: self.pullToSearch, openSearch: self.openSearch))
         .safeAreaBar(edge: .top, spacing: 0) {
             self.agentHeader
         }
@@ -100,6 +102,7 @@ struct RootSidebar: View {
                 systemName: "magnifyingglass",
                 label: String(localized: "Search"),
                 action: self.openSearch)
+                .modifier(RootSidebarPullIndicator(tracker: self.pullToSearch))
                 .accessibilityIdentifier("RootTabs.Sidebar.Search")
         }
         .padding(.horizontal, 16)
