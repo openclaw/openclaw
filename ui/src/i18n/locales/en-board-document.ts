@@ -21,7 +21,6 @@ const enBoardDocument = {
     widget: {
       cellLabel:
         "Dashboard widget: {title}. Use arrow keys to navigate. Hold Alt and press an arrow key to move it.",
-      moveHandle: "Move {title}",
       resizeHandle: en.board.widget.resizeHandle,
       menuLabel: en.board.widget.menuLabel,
       moveToTab: en.board.widget.moveToTab,

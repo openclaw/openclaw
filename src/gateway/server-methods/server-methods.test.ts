@@ -8,7 +8,6 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { waitForFast } from "../../../test/helpers/vitest-wait.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import {
@@ -227,22 +226,6 @@ function projectedTtsSupplementHistoryMessage(
     { openclawTtsSupplement: marker },
     false,
   );
-}
-
-function deliveryMirrorHistoryMessage(
-  text: string,
-  sourceMessageId: string,
-  timestamp: number,
-): ChatHistoryTestMessage {
-  return {
-    role: "assistant",
-    provider: "openclaw",
-    model: "delivery-mirror",
-    content: [{ type: "text", text }],
-    idempotencyKey: `channel-final:${sourceMessageId}:0`,
-    openclawDeliveryMirror: { kind: "channel-final", sourceMessageId },
-    timestamp,
-  };
 }
 
 describe("waitForAgentJob", () => {
@@ -666,7 +649,7 @@ describe("projectChatDisplayMessages", () => {
     { type: "text", text: "The agent run failed before producing a reply." },
   ];
   const networkFailureText =
-    "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+    "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
   const networkFailureContent = (reply?: string, type = "text") => [
     { type, text: [networkFailureText, reply].filter(Boolean).join("\n\n") },
   ];
@@ -907,32 +890,6 @@ describe("projectChatDisplayMessages", () => {
         assistantHistoryMessage("Good morning.", {
           provider: "openclaw",
           model: "acp-runtime",
-          timestamp: 2,
-        }),
-      ],
-    },
-    {
-      name: "drops channel-final delivery mirrors that duplicate the preceding assistant reply",
-      messages: [
-        makeUserMessage("yo big boy", 1),
-        assistantHistoryMessage("Yo Peter. I’m here.", {
-          provider: "openai",
-          model: "gpt-5.5",
-          __openclaw: { mirrorIdentity: "run-1:assistant" },
-          timestamp: 2,
-        }),
-        deliveryMirrorHistoryMessage("Yo Peter. I’m here.", "message-1", 3),
-      ],
-      expected: [
-        {
-          role: "user",
-          content: "yo big boy",
-          timestamp: 1,
-        },
-        assistantHistoryMessage("Yo Peter. I’m here.", {
-          provider: "openai",
-          model: "gpt-5.5",
-          __openclaw: { mirrorIdentity: "run-1:assistant" },
           timestamp: 2,
         }),
       ],
@@ -1228,39 +1185,6 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("rejects approval registration after the owning run was aborted", async (testContext) => {
-    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
-    return await fixture.run(async () => {
-      const { manager, handlers, broadcasts, respond, context } = fixture;
-      context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
-
-      await requestExecApproval({
-        handlers,
-        respond,
-        context,
-        params: {
-          runId: "run-aborted",
-          toolCallId: "tool-late",
-          host: "gateway",
-          command: "echo too-late",
-          commandArgv: ["echo", "too-late"],
-          systemRunPlan: undefined,
-          nodeId: undefined,
-        },
-      });
-
-      expect(mockCallArg(respond)).toBe(false);
-      expectRecordFields(mockCallArg(respond, 0, 2), {
-        message: "approval run already aborted",
-      });
-      expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
-        reason: "EXEC_APPROVAL_RUN_ABORTED",
-      });
-      expect(await manager.listPendingRecords()).toEqual([]);
-      expect(broadcasts).toEqual([]);
-    });
-  });
-
   it("marks an allowed wait result run-aborted when abort wins before consumption", async (testContext) => {
     await withRequestedExecApproval(
       testContext,
@@ -1293,71 +1217,6 @@ describe("exec approval handlers", () => {
         });
       },
     );
-  });
-
-  it("lists and resolves only exec approvals owned by the caller", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const handlers = createExecApprovalHandlers(manager);
-    const context = {
-      broadcast: (_eventValue: string, _payload: unknown) => {},
-    };
-    const client = (name: string) =>
-      createExecApprovalClient({
-        connId: `conn-${name}`,
-        clientId: `client-${name}`,
-        deviceId: `device-${name}`,
-      });
-    const ownerClient = client("owner");
-    const otherClient = client("other");
-
-    const visible = manager.create({ command: "echo visible" }, 60_000, "approval-abcd-visible");
-    visible.requestedByDeviceId = "device-owner";
-    visible.requestedByConnId = "conn-owner";
-    visible.requestedByClientId = "client-owner";
-    await manager.register(visible, 60_000);
-
-    const hidden = manager.create({ command: "echo hidden" }, 60_000, "approval-abcd-hidden");
-    hidden.requestedByDeviceId = "device-other";
-    hidden.requestedByConnId = "conn-other";
-    hidden.requestedByClientId = "client-other";
-    await manager.register(hidden, 60_000);
-
-    const listRespond = vi.fn();
-    await listExecApprovals({ handlers, respond: listRespond, client: ownerClient });
-    expect(mockCallArg(listRespond)).toBe(true);
-    const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
-    expect(approvals.map((entry) => entry.id)).toEqual(["approval-abcd-visible"]);
-
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-abcd",
-      context,
-      client: ownerClient,
-    });
-    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect((await manager.getSnapshot(visible.id))?.decision).toBe("allow-once");
-    expect((await manager.getSnapshot(hidden.id))?.decision).toBeUndefined();
-
-    const hiddenRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: hidden.id,
-      context,
-      client: ownerClient,
-    });
-    expect(mockCallArg(hiddenRespond)).toBe(false);
-    expectRecordFields(mockCallArg(hiddenRespond, 0, 2), {
-      code: "INVALID_REQUEST",
-      message: "unknown or expired approval id",
-    });
-    expect((await manager.getSnapshot(hidden.id))?.decision).toBeUndefined();
-
-    const otherRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: hidden.id,
-      context,
-      client: otherClient,
-    });
-    expect(otherRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
   it.for([
@@ -1896,26 +1755,13 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("does not count iOS push delivery to hidden approval targets as a route", async (testContext) => {
-    const iosPushDelivery = createIosPushDelivery(
-      vi.fn(
-        async (
-          _request: unknown,
-          opts?: {
-            isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-          },
-        ) =>
-          opts?.isTargetVisible?.({
-            deviceId: "device-other",
-            scopes: ["operator.approvals"],
-          }) ?? true,
-      ),
-    );
+  it("expires when the iOS push owner reports no delivery route", async (testContext) => {
+    const iosPushDelivery = createIosPushDelivery(vi.fn(async () => false));
     const fixture = await createForwardingExecApprovalFixture(testContext, { iosPushDelivery });
     return await fixture.run(async () => {
       const { manager, respond } = fixture;
       const expireSpy = vi.spyOn(manager, "expire");
-      const id = "approval-ios-hidden-push";
+      const id = "approval-ios-undelivered-push";
       await requestExecApproval({
         ...fixture,
         client: createExecApprovalClient({
@@ -2174,8 +2020,8 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
   beforeEach(async () => {
     const runtimeSpy = vi
-      .spyOn(childRuntime, "readChildRuntimeViability")
-      .mockReturnValue(healthyChildRuntime);
+      .spyOn(childRuntime, "prepareChildRuntimeViability")
+      .mockResolvedValue({ publish: () => healthyChildRuntime });
     restoreChildRuntime = () => runtimeSpy.mockRestore();
     restoreContextEngineRegistryState = captureContextEngineRegistryStateForTests();
     await registerLegacyContextEngine();

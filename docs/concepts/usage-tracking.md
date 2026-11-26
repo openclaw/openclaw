@@ -60,8 +60,9 @@ totals.
 The Control UI checks incomplete provider usage again after 5, 10, and 20 seconds.
 Session usage refreshes as its background projection publishes progress. Until a
 cold cache has any usage data, the page shows a loading placeholder instead of
-zero totals. Available partial totals stay visible; if a refresh fails, select
-**Refresh** to try again.
+zero totals. Session rows without a usage summary show **—**, not zero; measured
+zero values remain visible as zero. Available partial totals stay visible; if a
+refresh fails, select **Refresh** to try again.
 
 In a selected session's conversation details, search ignores case and matches
 canonically equivalent composed and decomposed Unicode text. Filtering does not
@@ -71,7 +72,11 @@ Detailed report batches share one short wait per agent for pending usage updates
 Session reports have a 15-second data-read budget. If it expires, completed
 batches remain visible as a partial report, with a hint to narrow the date
 range or select a session. Partial totals are not complete billing totals.
-Disconnecting still cancels the request without publishing a response.
+Disconnecting still cancels the request without publishing a response. The
+`usage.cost` method has the same 15-second budget; when no summary is available
+in time, it returns an unavailable error rather than zero totals. Its
+request-owned refresh stops when the response is sent. Independently scheduled
+projection updates continue, and the overview retains its background backfill.
 
 Session reports preserve agent attribution when agents share a session store. A
 background usage refresh does not invalidate a selected report when its session
@@ -122,16 +127,24 @@ backfill yields between completed transcripts after ten seconds of scanning or
 50 transcripts, whichever comes first. One large transcript or the initial
 inventory can take longer. Transcripts
 remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
-order of floating-point cost additions. Cached SQLite detail reads use the rollup's
-recorded checkpoint and current transcript mutation facts instead of rescanning
-all transcript rows for their size and event count.
+order of floating-point cost additions. SQLite summary and detail reads use recorded quarter aggregates, checkpoints,
+and transcript mutation facts instead of recounting transcript payloads. Complete
+cost summaries and session reports remain reusable until the owning usage, transcript,
+session, pricing, profile, or visibility facts change. Unchanged detail polls do not
+reread stored rollups just because 30 seconds have passed. Detailed month reads use indexed
+session ranges even when SQLite statistics describe an older, smaller cache.
+Cold SQLite statistics are read in cancellable pages;
+refresh discovery applies its batch limit before collecting those statistics.
+Hot payload reads yield between pages, with physical reads paced to 16 MiB/s where
+kernel accounting is available. A single oversized row can exceed a page budget.
+Cold archives retain whole-archive verification, with cancellation checks between records.
 After an append, background refresh also reuses the checkpoint's size and event
 count and reads only the appended rows. A transcript rewrite or missing checkpoint
 still requires a full recount before the new totals are published.
 
-Background refresh budgets, detailed-result cache freshness, and the Control UI's
+Background refresh budgets, result-cache eviction, and the Control UI's
 context-breakdown retry backoff use elapsed time, so wall-clock corrections do not
-extend the quiet period, keep expired results fresh, or shorten retry delays.
+extend the quiet period, retain idle cache entries longer, or shorten retry delays.
 Report dates and recorded timestamps still follow the wall clock.
 
 ## Usage date ranges
@@ -439,7 +452,8 @@ provider-neutral for CLI, app, and Control UI consumers.
 - **Anthropic (Claude)**: OAuth tokens in auth profiles. If the OAuth token lacks
   `user:profile` scope, falls back to a `claude.ai` web session (`CLAUDE_AI_SESSION_KEY`,
   `CLAUDE_WEB_SESSION_KEY`, or a `sessionKey=` cookie in `CLAUDE_WEB_COOKIE`) when set.
-  Model-scoped limits and enabled extra-usage monthly spend/budgets are included
+  Stored setup-token profiles never call the OAuth usage endpoint: they use that web
+  session, and Anthropic usage is skipped when none is set. Model-scoped limits and enabled extra-usage monthly spend/budgets are included
   when Anthropic reports them. An explicit Anthropic Admin API key, or an
   auto-detected `sk-ant-admin...` provider profile, instead shows 30-day
   organization cost and Messages API history.

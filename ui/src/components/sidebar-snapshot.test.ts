@@ -42,14 +42,9 @@ const model: SidebarSnapshotModel = {
   footer: { id: "profile-a", name: "Juniper" },
 };
 
-function fixture(
-  initialAgentId = "main",
-  initialPageScopeId: string | null = null,
-  mode: "chip" | "roster" = "roster",
-) {
+function fixture(initialAgentId = "main", mode: "chip" | "roster" = "roster") {
   let selectedAgentId = initialAgentId;
   let sidebarMode = mode;
-  let pageScopeId = initialPageScopeId;
   const publication = createApplicationGateway(
     createApplicationGatewaySnapshot({ phase: "connecting" }),
   );
@@ -81,11 +76,6 @@ function fixture(
     sessionDataContext: {
       gateway,
       connectionBootstrap: foreground,
-      agentSelection: {
-        get state() {
-          return { scopeId: pageScopeId };
-        },
-      },
     },
     expandedAgentId: () => selectedAgentId,
     captureSidebarSnapshot: capture,
@@ -114,10 +104,6 @@ function fixture(
     host,
     snapshotOwner,
     restored: restored.promise,
-    selectPageScope(scopeId: string | null) {
-      pageScopeId = scopeId;
-      snapshotOwner.synchronize();
-    },
     selectMode(nextMode: "chip" | "roster") {
       sidebarMode = nextMode;
       snapshotOwner.synchronize();
@@ -155,6 +141,7 @@ describe("sidebar snapshot lifecycle", () => {
     vi.stubGlobal("localStorage", createStorageMock());
   });
   afterEach(async () => {
+    document.documentElement.removeAttribute("data-openclaw-warm-frame");
     for (const dispose of disposers.splice(0)) {
       dispose();
     }
@@ -308,11 +295,12 @@ describe("sidebar snapshot lifecycle", () => {
         }),
       };
       await store.writeSidebar(sidebarSnapshotScopeKey(scope), chip, parseSidebarSnapshot);
-      const test = fixture(timing === "before" ? "other" : "main", null, "chip");
+      const test = fixture(timing === "before" ? "other" : "main", "chip");
       disposers.push(
         admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
         () => test.snapshotOwner.disconnect(),
       );
+      document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
       test.snapshotOwner.connect();
       if (timing === "before") {
         await new Promise<void>((resolve) => {
@@ -326,10 +314,12 @@ describe("sidebar snapshot lifecycle", () => {
       } else {
         await test.restored;
         expect(test.host.sidebarSnapshot).toEqual(chip);
+        expect(document.documentElement.getAttribute("data-openclaw-warm-frame")).toBe("holding");
         test.selectAgent("other");
       }
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.snapshotOwner.read().saved).toBe(false);
+      expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
     },
   );
 
@@ -340,7 +330,7 @@ describe("sidebar snapshot lifecycle", () => {
       store.connect();
       disposers.push(() => store.disconnect());
       await store.writeSidebar(sidebarSnapshotScopeKey(scope), model, parseSidebarSnapshot);
-      const test = fixture("main", null, timing === "before" ? "chip" : "roster");
+      const test = fixture("main", timing === "before" ? "chip" : "roster");
       disposers.push(
         admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
         () => test.snapshotOwner.disconnect(),
@@ -370,63 +360,17 @@ describe("sidebar snapshot lifecycle", () => {
       admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
       () => test.snapshotOwner.disconnect(),
     );
+    document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
     test.snapshotOwner.connect();
     expect(test.snapshotOwner.read().pending).toBe(true);
+    expect(document.documentElement.getAttribute("data-openclaw-warm-frame")).toBe("holding");
     void test.settle();
     test.publish();
     expect(test.snapshotOwner.read().pending).toBe(false);
+    expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
     stalled.resolve(model);
     await vi.dynamicImportSettled();
     expect(test.host.sidebarSnapshot).toBeNull();
-  });
-
-  it.each(["before", "after"] as const)(
-    "rejects a Pages snapshot when its agent filter changes %s restoration",
-    async (timing) => {
-      const store = new SessionSnapshotStore();
-      store.connect();
-      disposers.push(() => store.disconnect());
-      const pages = { ...model, navigationView: "pages" as const, pageScopeId: "main" };
-      await store.writeSidebar(sidebarSnapshotScopeKey(scope), pages, parseSidebarSnapshot);
-      const test = fixture("main", timing === "before" ? "other" : "main");
-      disposers.push(
-        admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
-        () => test.snapshotOwner.disconnect(),
-      );
-      test.snapshotOwner.connect();
-      if (timing === "before") {
-        await new Promise<void>((resolve) => {
-          const stop = test.snapshotOwner.subscribe(() => {
-            if (!test.snapshotOwner.read().pending) {
-              stop();
-              resolve();
-            }
-          });
-        });
-      } else {
-        await test.restored;
-        test.selectPageScope("other");
-      }
-      expect(test.host.sidebarSnapshot).toBeNull();
-      expect(test.snapshotOwner.read().saved).toBe(false);
-    },
-  );
-
-  it("keeps an all-agent Pages snapshot when only the selected chat agent changes", async () => {
-    const store = new SessionSnapshotStore();
-    store.connect();
-    disposers.push(() => store.disconnect());
-    const pages: SidebarSnapshotModel = { ...model, navigationView: "pages", pageScopeId: null };
-    await store.writeSidebar(sidebarSnapshotScopeKey(scope), pages, parseSidebarSnapshot);
-    const test = fixture();
-    disposers.push(
-      admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
-      () => test.snapshotOwner.disconnect(),
-    );
-    test.snapshotOwner.connect();
-    await test.restored;
-    test.selectAgent("other");
-    expect(test.host.sidebarSnapshot).toEqual(pages);
   });
 
   it("restores before hello and saves only after rendering the settled live projection", async () => {

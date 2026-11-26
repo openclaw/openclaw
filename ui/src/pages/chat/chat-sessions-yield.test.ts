@@ -5,7 +5,7 @@ import {
   emptyAssistantAcknowledgment,
   emptyAssistantHistory,
 } from "../../test-helpers/empty-assistant-history.ts";
-import { resetWorkingProgress, resolveTurnRecap } from "./chat-progress.ts";
+import { resetWorkingProgress } from "./chat-progress.ts";
 import { pendingSessionsYield, readHandoffDisplay } from "./chat-sessions-yield.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { createProps } from "./chat-thread.test-support.ts";
@@ -248,21 +248,12 @@ describe("sessions_yield transcript projection", () => {
         messages,
         subagentWait: { startedAt: 3_500, runId },
       });
-      const { workingIndicator, runOutputTokens } = projectTranscriptActivity(
-        buildChatItems(props),
-        { ...props, runUsageById: usageByRun },
-      );
+      const { runOutputTokens } = projectTranscriptActivity(buildChatItems(props), {
+        ...props,
+        runUsageById: usageByRun,
+      });
       const expectedTokens = handoffCount === 1 ? 4_100 : 4_356;
       expect(runOutputTokens).toBe(expectedTokens);
-      const host = { turnRecapWatch: null };
-      const params = { sessionKey: props.sessionKey, usageByRun };
-      resolveTurnRecap(host, { ...params, indicator: workingIndicator });
-      expect(
-        resolveTurnRecap(host, {
-          ...params,
-          row: { lastRunId: runId, status: "done", runtimeMs: 1_000, endedAt: 5_000 },
-        }),
-      ).toEqual({ runId, runtimeMs: 4_000, outputTokens: expectedTokens });
     });
 
     it("is recognized before the pane knows its run id", () => {

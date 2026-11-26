@@ -120,6 +120,11 @@ export async function startOAuthLoopbackCallbackServer(params: {
   resolveCorsOrigin?: CorsOriginResolver;
   renderSuccess?: () => RenderedResponse;
   renderError?: (message: string) => RenderedResponse;
+  /**
+   * When set, a provider refusal (`error=`) keeps the listener open so the user can go back
+   * and allow access; the refusal is reported here instead of settling the wait.
+   */
+  onRefusal?: (error: string) => void;
 }): Promise<OAuthLoopbackCallbackServer> {
   const redirectUrl = new URL(params.redirectUrl);
   const redirectHostname = unbracket(redirectUrl.hostname);
@@ -218,7 +223,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
       body: renderOAuthPage({
         title: "Authorization received",
         heading: "Authorization received",
-        message: "Return to the terminal while OpenClaw finishes.",
+        message: "Return to OpenClaw while it finishes signing in.",
       }),
       contentType: "text/html; charset=utf-8",
     }));
@@ -278,6 +283,13 @@ export async function startOAuthLoopbackCallbackServer(params: {
           url.searchParams.get("state") !== params.expectedState
         ) {
           respond(response, 400, renderError("Invalid OAuth state."));
+        } else if (url.searchParams.has("error") && params.onRefusal) {
+          respond(
+            response,
+            400,
+            renderError("Sign-in was not allowed. Go back to the sign-in page and allow access."),
+          );
+          params.onRefusal(url.searchParams.get("error")!);
         } else if (url.searchParams.has("error")) {
           const error = url.searchParams.get("error")!;
           const errorDescription = url.searchParams.get("error_description") ?? undefined;

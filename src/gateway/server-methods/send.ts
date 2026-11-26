@@ -8,7 +8,6 @@ import {
   ErrorCodes,
   errorShape,
   validateMessageActionParams,
-  validatePollParams,
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
@@ -31,7 +30,6 @@ import { maybeResolvePluginMessagingTarget } from "../../infra/outbound/target-n
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
-import { normalizePollInput } from "../../polls.js";
 import {
   isAgentHarnessSessionKey,
   resolveMissingAgentHarnessSessionError,
@@ -71,6 +69,8 @@ import {
   resolveGatewayOutboundTarget,
   resolveRequestedChannel,
 } from "./send-channel-resolution.js";
+import { pollHandler } from "./send-poll.js";
+import { authorizeMessageActionSendAgent } from "./send-role-authorization.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -104,8 +104,6 @@ export const sendHandlers: GatewayRequestHandlers = {
     });
     const messageAuthority = createMessageActionRuntimeAuthority({
       client,
-      context,
-      respond,
       sessionMutationCommitGuard,
       request,
       authorization: trustedContext.messageActionAuthorization,
@@ -192,21 +190,11 @@ export const sendHandlers: GatewayRequestHandlers = {
               if (sourceReplyOwner && !sourceReplyOwner.ok) {
                 return { ok: false, error: sourceReplyOwner.error, meta: { channel } };
               }
-              // Default-agent resolution may fail, so role-free sends must not enter this policy path.
-              if (request.action === "send" && cfg.gateway?.roles) {
-                const actionAgent =
-                  agentId ??
-                  sourceReplyOwner?.agentId ??
-                  resolveRequestedSessionAgentId(cfg, "main");
-                if (typeof actionAgent !== "string" && !actionAgent.ok) {
-                  return { ok: false, error: actionAgent.error, meta: { channel } };
-                }
-                const actionAgentId =
-                  typeof actionAgent === "string" ? actionAgent : actionAgent.agentId;
-                const agentAccessError = authorizeGatewaySessionCreation({
+              if (request.action === "send") {
+                const agentAccessError = authorizeMessageActionSendAgent({
                   cfg,
                   client,
-                  agentId: actionAgentId,
+                  agentId: agentId ?? sourceReplyOwner?.agentId,
                 });
                 if (agentAccessError) {
                   return { ok: false, error: agentAccessError, meta: { channel } };
@@ -246,6 +234,9 @@ export const sendHandlers: GatewayRequestHandlers = {
                 ...(resolvedMediaAccess.workspaceDir
                   ? { workspaceDir: resolvedMediaAccess.workspaceDir }
                   : {}),
+                ...(resolvedMediaAccess.blockedHostnames
+                  ? { blockedHostnames: resolvedMediaAccess.blockedHostnames }
+                  : {}),
               };
               if (request.action === "send") {
                 await hydrateAttachmentParamsForAction({
@@ -274,11 +265,10 @@ export const sendHandlers: GatewayRequestHandlers = {
                 replyToIsExplicit: request.reply?.source === "explicit",
                 idempotencyKey: request.idempotencyKey,
                 toolCallId: trustedContext.sourceReplyToolCallId,
-                ...(trustedContext.sourceReplyFinal !== undefined
-                  ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
-                  : {}),
+                sourceReplyFinal: trustedContext.sourceReplyFinal,
+                runId: client?.internal?.agentRuntimeIdentity?.operationalRunInstance.runId,
               };
-              // Attachment preparation can outlive the admitted run.
+              // Attachment preparation may outlive the caller's turn capability.
               if (!authorize()) {
                 return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
               }
@@ -323,21 +313,17 @@ export const sendHandlers: GatewayRequestHandlers = {
                     Boolean(trustedContext.messageActionAuthorization?.scheduled)),
               };
               let payload: unknown;
-              if (canonicalAction || messageAuthority.assertScheduledWriteCurrent) {
+              const useMessageRunner = request.action === "send" || canonicalAction;
+              if (useMessageRunner || messageAuthority.assertScheduledWriteCurrent) {
                 const { runMessageAction } =
                   await import("../../infra/outbound/message-action-runner.js");
                 const result = await runMessageAction({
                   ...actionContext,
                   gatewayOwnedDelivery: true,
-                  // The delegating client records the confirmed send in its destination.
-                  callerRecordsDestinationHistory: true,
-                  ...(request.action === "send"
-                    ? {
-                        actionOrigin: trustedContext.runtimeAgentId
-                          ? ("message-tool" as const)
-                          : undefined,
-                      }
-                    : {}),
+                  actionOrigin:
+                    request.action === "send" && trustedContext.runtimeAgentId
+                      ? ("message-tool" as const)
+                      : undefined,
                   params: {
                     ...request.params,
                     channel,
@@ -350,20 +336,21 @@ export const sendHandlers: GatewayRequestHandlers = {
                 await messageAuthority.beforeDeliveryAttempt();
                 assertDirectAdapterHandoff?.();
                 const handled = await dispatchChannelMessageAction(actionContext);
-                if (handled) {
-                  payload = extractToolPayload(handled);
-                } else {
-                  const error = errorShape(
-                    ErrorCodes.INVALID_REQUEST,
-                    `Message action ${request.action} not supported for channel ${channel}.`,
-                  );
+                if (!handled) {
                   return createGatewayInflightResult({
                     context,
                     dedupeKey,
                     channel,
-                    result: { ok: false, error },
+                    result: {
+                      ok: false,
+                      error: errorShape(
+                        ErrorCodes.INVALID_REQUEST,
+                        `Message action ${request.action} not supported for channel ${channel}.`,
+                      ),
+                    },
                   });
                 }
+                payload = extractToolPayload(handled);
               }
               await scheduleDeliveredSourceReplyTranscriptMirror({
                 context,
@@ -424,16 +411,13 @@ export const sendHandlers: GatewayRequestHandlers = {
     const messageActionConfig = resolveAgentRuntimeMessageActionConfig(client);
     const messageAuthority = createMessageActionRuntimeAuthority({
       client,
-      context,
-      respond,
       sessionMutationCommitGuard,
       request: { action: "send", accountId: request.accountId, params: {} },
       authorization: messageActionAuthorization,
       assertClientUploadAllowed,
     });
-    const agentRuntimeAuthority = messageAuthority.agentRuntimeAuthority;
     const hasAgentRuntimeAuthority = client?.internal?.agentRuntimeIdentity !== undefined;
-    const commitAgentRuntimeAuthority = messageAuthority.assertDirectAdapterHandoff;
+    const assertDirectAdapterHandoff = messageAuthority.assertDirectAdapterHandoff;
     const onPlatformSendDispatch = messageAuthority.onPlatformSendDispatch;
     await withMessageOperationRoute({
       context,
@@ -482,7 +466,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             };
           }
           const idLikeTarget = await withChannelReadAuthority(
-            messageActionAuthorization?.scheduled ? commitAgentRuntimeAuthority : undefined,
+            messageActionAuthorization?.scheduled ? assertDirectAdapterHandoff : undefined,
             () =>
               maybeResolvePluginMessagingTarget({
                 cfg,
@@ -580,7 +564,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             const { canonicalKey, entry } = await loadGatewaySessionEntryReadOnlyInWorker({
               cfg,
               key: outboundSessionKey,
-              assertActive: commitAgentRuntimeAuthority,
+              assertActive: assertDirectAdapterHandoff,
               excludeInternalEffects: true,
             });
             const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
@@ -609,7 +593,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               channel,
               accountId,
               route: derivedRoute,
-              workerGuard: { assertCurrent: commitAgentRuntimeAuthority },
+              workerGuard: { assertCurrent: assertDirectAdapterHandoff },
               creation: resolveSandboxedSessionCreation(client, cfg),
               sourceSessionKey: client?.internal?.agentRuntimeIdentity?.sessionKey,
             });
@@ -622,12 +606,11 @@ export const sendHandlers: GatewayRequestHandlers = {
             conversationType: derivedRoute?.chatType,
           });
           // Target, attachment, route, and session preparation may all yield.
-          // The durable provider handoff is the final authority commit point.
           if (!authorize()) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
           await messageAuthority.beforeDeliveryAttempt();
-          commitAgentRuntimeAuthority?.();
+          assertDirectAdapterHandoff?.();
           const send = await sendDurableMessageBatchCore(
             {
               cfg,
@@ -652,10 +635,8 @@ export const sendHandlers: GatewayRequestHandlers = {
                   }
                 : {}),
               onDeliveryResult: commitOutboundSessionRoute,
-              // Runtime-bound sends cannot outlive their operational run. Keep
-              // recovery from replaying them after the live authority closes.
               onPlatformSendDispatch,
-              assertDirectAdapterHandoff: commitAgentRuntimeAuthority,
+              assertDirectAdapterHandoff,
               skipQueue: hasAgentRuntimeAuthority,
               transcriptRoute: derivedRoute ?? undefined,
             },
@@ -692,124 +673,10 @@ export const sendHandlers: GatewayRequestHandlers = {
             channel,
           });
         } catch (err) {
-          return createGatewayInflightFailure(
-            { context, dedupeKey, channel, err },
-            () => !hasAgentRuntimeAuthority || agentRuntimeAuthority.hasActive(),
-          );
+          return createGatewayInflightFailure({ context, dedupeKey, channel, err }, authorize);
         }
       },
     });
   },
-  poll: async ({ params: request, respond, context, client, sessionMutationCommitGuard }) => {
-    if (!assertValidParams(request, validatePollParams, "poll", respond)) {
-      return;
-    }
-    const messageAuthority = createMessageActionRuntimeAuthority({
-      client,
-      context,
-      respond,
-      sessionMutationCommitGuard,
-      request: { action: "poll", accountId: request.accountId, params: {} },
-      authorization: resolveAgentRuntimeMessageActionAuthorization(client),
-    });
-    const messageActionConfig = resolveAgentRuntimeMessageActionConfig(client);
-    const agentRuntimeAuthority = messageAuthority.agentRuntimeAuthority;
-    const hasAgentRuntimeAuthority = client?.internal?.agentRuntimeIdentity !== undefined;
-    const commitAgentRuntimeAuthority = messageAuthority.assertDirectAdapterHandoff;
-    const onPlatformSendDispatch = messageAuthority.onPlatformSendDispatch;
-    await withMessageOperationRoute({
-      context,
-      prefix: "poll",
-      idempotencyKey: request.idempotencyKey,
-      respond,
-      requestChannel: request.channel,
-      bindingAccountIds: [request.accountId],
-      routeAccountIds: (binding) => [request.accountId, binding?.reservedRoute?.accountId],
-      conflictMessage: "poll account selections do not match",
-      authority: messageAuthority,
-      resolveChannel: async (requestChannel) => {
-        const resolved = await resolveRequestedChannel({
-          requestChannel,
-          unsupportedMessage: (input) => `unsupported poll channel: ${input}`,
-          context,
-          config: messageActionConfig,
-        });
-        if ("error" in resolved) {
-          respond(false, undefined, resolved.error);
-          return undefined;
-        }
-        const { cfg, channel } = resolved;
-        const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-        const outbound = plugin?.outbound;
-        // Reject channel-specific options before normalization can silently truncate them.
-        for (const [parameter, capability] of [
-          ["durationSeconds", "supportsPollDurationSeconds"],
-          ["isAnonymous", "supportsAnonymousPolls"],
-        ] as const) {
-          if (request[parameter] !== undefined && outbound?.[capability] !== true) {
-            respondError(
-              respond,
-              ErrorCodes.INVALID_REQUEST,
-              `${parameter} is not supported for ${channel} polls`,
-            );
-            return undefined;
-          }
-        }
-        if (!plugin || !outbound?.sendPoll) {
-          respondError(respond, ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`);
-          return undefined;
-        }
-        return { cfg, channel, plugin, outbound, sendPoll: outbound.sendPoll };
-      },
-      work: async ({ cfg, channel, accountId, idem, dedupeKey, authorize, outbound, sendPoll }) => {
-        const poll = {
-          question: request.question,
-          options: request.options,
-          maxSelections: request.maxSelections,
-          durationSeconds: request.durationSeconds,
-          durationHours: request.durationHours,
-        };
-        const threadId = normalizeOptionalString(request.threadId);
-        try {
-          const resolvedTarget = await resolveGatewayOutboundTarget({
-            channel,
-            to: request.to.trim(),
-            cfg,
-            accountId,
-          });
-          if (!resolvedTarget.ok) {
-            return { ok: false, error: resolvedTarget.error };
-          }
-          const normalized = outbound.pollMaxOptions
-            ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
-            : normalizePollInput(poll);
-          if (!authorize()) {
-            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
-          }
-          await messageAuthority.beforeDeliveryAttempt();
-          commitAgentRuntimeAuthority?.();
-          const result = await sendPoll({
-            cfg,
-            to: resolvedTarget.to,
-            poll: normalized,
-            accountId,
-            threadId,
-            silent: request.silent,
-            isAnonymous: request.isAnonymous,
-            gatewayClientScopes: client?.connect?.scopes ?? [],
-            onPlatformSendDispatch,
-            assertDirectAdapterHandoff: commitAgentRuntimeAuthority,
-          });
-          const payload = buildGatewayDeliveryPayload({ runId: idem, channel, result });
-          return createGatewayInflightSuccess({ context, dedupeKey, payload, channel });
-        } catch (err) {
-          return createGatewayInflightFailure(
-            { context, dedupeKey, channel, err },
-            () => !hasAgentRuntimeAuthority || agentRuntimeAuthority.hasActive(),
-          );
-        }
-      },
-    });
-  },
+  poll: pollHandler,
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

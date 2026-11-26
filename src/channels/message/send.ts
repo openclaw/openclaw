@@ -4,7 +4,6 @@ import {
   assertSessionWriterDeliveryAuthorized,
   prepareSessionWriterDeliveryAuthority,
 } from "../../auto-reply/reply/session-writer-delivery-authority.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { DeliveryQueueStateContext } from "../../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -24,6 +23,7 @@ import type { DeliveryMirror } from "../../infra/outbound/mirror.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { normalizeOutboundReplyFacts } from "../../infra/outbound/reply-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
 import { createLiveMessageState, markLiveMessagePreviewUpdated } from "./live.js";
 import { createMessageReceiptFromOutboundResults } from "./receipt.js";
 import { createRenderedMessageBatch } from "./rendered-batch.js";
@@ -367,7 +367,7 @@ export async function sendDurableMessageBatchCore(
   params: DurableMessageSendContextParams,
   conversationDeliveryTarget?: ConversationDeliveryTarget,
   queueContext?: DeliveryQueueStateContext,
-  sessionGeneration?: SessionDeliveryGeneration,
+  sessionGeneration?: ChatRef,
   admittedReasoning?: true,
 ): Promise<DurableMessageBatchSendResult> {
   return await sendMessageBatch(
@@ -386,7 +386,7 @@ export async function sendStructuredDurableMessageBatchCore(
   input: Omit<DurableMessageSendContextParams, "payloads"> & {
     plan: readonly OutboundPayloadPlan[];
   },
-  sessionGeneration?: SessionDeliveryGeneration,
+  sessionGeneration?: ChatRef,
 ): Promise<DurableMessageBatchSendResult> {
   const { plan, ...params } = input;
   return await sendMessageBatch(

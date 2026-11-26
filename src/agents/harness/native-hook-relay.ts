@@ -228,7 +228,6 @@ function registerNativeHookRelayInternal(
       ...(params.requester ? { requester: params.requester } : {}),
       ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
       allowedEvents,
-      preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
       requirePreToolUse: params.requirePreToolUse,
       expiresAtMs,
       preToolUseFailureProjections: new Map(),
@@ -713,6 +712,7 @@ export async function dispatchNativeHookRelayHttpCallback(
     return;
   }
   if (!registration || !bridge?.remoteEnabled) {
+    log.warn("native hook remote callback refused", { relayId, status: 403 });
     res.writeHead(403).end();
     return;
   }

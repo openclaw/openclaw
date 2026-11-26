@@ -12,7 +12,7 @@ struct ChatDictationActivityRow: View {
                 HStack(spacing: 8) {
                     if self.control.phase == .listening {
                         TalkWaveformView(phase: .listening(
-                            level: self.control.level,
+                            level: self.control.resolvedLevel,
                             speechActive: !self.control.partialTranscript.isEmpty))
                             .frame(width: 28, height: 18)
                             .accessibilityHidden(true)

@@ -9,6 +9,7 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { writeConsoleDiagnosticWarning } from "../logging/json-console-line.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPidAlive, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
@@ -17,7 +18,6 @@ import {
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permissions.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
@@ -43,22 +43,25 @@ import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
+import { drainGatewayLockResources } from "./gateway-lock-release.js";
 import {
   acquireGatewayOwnerLease,
   assertGatewayOwnerLeaseStopped,
   type GatewayOwnerLease,
 } from "./gateway-owner-lease.js";
 import type { GatewayOwnerSupervisor } from "./gateway-owner-lease.types.js";
+import { createGatewayPostgresCustody } from "./gateway-postgres-custody.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { captureStalledGatewayStartup } from "./gateway-startup-owner.js";
+import { createGatewayStateProjection } from "./gateway-state-owner-lifecycle.js";
 import {
   acquireGatewayStateOwner,
-  createGatewayStateProjection,
   type GatewayStateProjection,
   GatewayStateOwnerContentionError,
   resolveGatewayStateOwnerPath,
   tryBorrowGatewayStateOwner,
 } from "./gateway-state-owner.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 
 export type GatewayLockHandle = {
   previousOwner?: GatewayOwnerLease["previousOwner"];
@@ -70,6 +73,12 @@ export type GatewayLockHandle = {
   release: () => Promise<void>;
   run<T>(operation: () => T): T;
   markListening?: () => void;
+  publishExternalRestartReceipt?: () => Promise<void>;
+  /**
+   * Takes PostgreSQL custody for an engine selection resolved after this lock, as cold CLI
+   * owners do. Its loss retires this owner; release ends it.
+   */
+  acquireConfiguredPostgresOwner?: () => Promise<void>;
 };
 
 export type GatewayLockOptions = {
@@ -250,26 +259,6 @@ export function readLockPayloadSync(
     }
     return null;
   }
-}
-
-function shouldReclaimGatewayLock(params: {
-  lockPath: string;
-  payload: LockPayload | null;
-  platform: NodeJS.Platform;
-}): boolean {
-  if (classifyGatewayLockProcessNamespace(params.payload, params.lockPath) === "unknown") {
-    throw new GatewayLockNamespaceError(params.payload ?? {}, params.lockPath);
-  }
-  const ownerPid = params.payload?.pid;
-  const ownerStatus = ownerPid
-    ? resolveGatewayOwnerStatusSync(ownerPid, params.payload, params.platform, {
-        lockPath: params.lockPath,
-      })
-    : "unknown";
-  if (ownerPid) {
-    return ownerStatus === "dead";
-  }
-  return false;
 }
 
 export function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
@@ -487,9 +476,15 @@ export async function acquireGatewayLock(
   }
   let databaseFailure: { error: unknown } | undefined;
   let waited = false;
+  // A waiter does not own the state directory where default file logs are written.
+  const onWait = opts.onWait ?? writeConsoleDiagnosticWarning;
   // Lock file that blocked the failing attempt, named in the timeout error.
   let contendedLockPath: string | undefined;
   let projection: GatewayStateProjection | undefined;
+  // database.postgres.ownership installation: the install's PostgreSQL session lock excludes other hosts too.
+  const postgres = createGatewayPostgresCustody();
+  // Retained schema leases keep the process owner, so its PostgreSQL session ends with it.
+  let postgresEnded: Promise<void> | undefined;
   let stateOwner: ReturnType<typeof acquireGatewayStateOwner>;
   try {
     stateOwner =
@@ -510,6 +505,11 @@ export async function acquireGatewayLock(
             payload,
             projectionPath: paths.stateLockPath,
             getProjection: () => projection,
+            // PostgreSQL custody loss retires the process owner that admits all state work.
+            custody: postgres.signal(),
+            onReleased: () => {
+              postgresEnded = postgres.release();
+            },
           });
           try {
             if (opts.databasePortRecovery) {
@@ -521,6 +521,9 @@ export async function acquireGatewayLock(
               assertDatabasePortStartupAllowed(paths.stateDir);
             }
             await assertHistoricalGatewayOwnerStopped(paths, opts, (contended) => {
+              contendedLockPath = contended;
+            });
+            await postgres.acquire((contended) => {
               contendedLockPath = contended;
             });
             if (!opts.databasePortRecovery && opts.databaseAccess !== "none") {
@@ -543,6 +546,7 @@ export async function acquireGatewayLock(
             if (error instanceof GatewayStateOwnerContentionError) {
               contendedLockPath ??= paths.ownerLockPath;
             }
+            await postgres.release();
             owner.release();
             throw error;
           }
@@ -552,13 +556,17 @@ export async function acquireGatewayLock(
             error instanceof GatewayLockNamespaceError &&
             (role === "gateway" || role === "sqlite-maintenance")
           ) {
+            // A crashed foreign owner's heartbeat goes stale within this wait.
             const remaining = Math.min(deadlineMs, heartbeatDeadlineMs) - now();
+            const age = error.heartbeatAgeMs;
             if (remaining <= 0) {
               return false;
             }
             if (!waited) {
-              (opts.onWait ?? log.warn)(
-                `Waiting up to ${Math.ceil(remaining / 1000)} seconds for the previous Gateway to release state; an unverifiable owner will not be reclaimed automatically. ${error.message}`,
+              onWait(
+                age === undefined
+                  ? error.message
+                  : `waiting for the previous Gateway to stop (last heartbeat ${Math.floor(age / 1000)}s ago)`,
               );
             }
             waited = true;
@@ -571,7 +579,7 @@ export async function acquireGatewayLock(
             return false;
           }
           if (!waited && deadlineMs > startedAt && role === "gateway") {
-            log.warn(
+            onWait(
               `waiting for Gateway state ownership held by another OpenClaw process, up to ${Math.ceil((deadlineMs - startedAt) / 1000)} s`,
             );
           }
@@ -608,7 +616,12 @@ export async function acquireGatewayLock(
       parentMaintenance?.assertOwnerCurrent(access);
     }
     stateOwner.assertCurrent();
-    if (projection && !projection.verifyStillHeld()) {
+    if (
+      role !== "gateway" &&
+      role !== "agent-embedded" &&
+      projection &&
+      !projection.verifyStillHeld()
+    ) {
       throw new Error("OpenClaw Gateway ownership projection is no longer current");
     }
     if (assertPolicy) {
@@ -637,12 +650,15 @@ export async function acquireGatewayLock(
     assertStateOwnerCurrent(opts.assertCurrent);
     // Shipped Gateways discover this PID sidecar before starting. Synchronous
     // schema work retains the same fs-safe owner through its final reference.
-    const shouldReclaim = ({ payload: previous }: { payload: unknown }) =>
-      shouldReclaimGatewayLock({
-        lockPath: paths.stateLockPath,
-        payload: LockPayloadSchema.safeParse(previous).data ?? null,
-        platform: opts.platform ?? process.platform,
-      });
+    const shouldReclaim = ({ payload: previous }: { payload: unknown }) => {
+      const holder = LockPayloadSchema.safeParse(previous).data;
+      return (
+        holder !== undefined &&
+        resolveGatewayOwnerStatusSync(holder.pid, holder, opts.platform ?? process.platform, {
+          lockPath: paths.stateLockPath,
+        }) === "dead"
+      );
+    };
     if (!borrowedOwner) {
       projection = createGatewayStateProjection(
         acquireFileLockSync(paths.stateLockPath, {
@@ -676,6 +692,7 @@ export async function acquireGatewayLock(
   } catch (error) {
     await ownerLease?.release();
     projection?.release();
+    await postgres.release();
     stateOwner.release();
     throw new GatewayLockError(
       "failed to acquire gateway state ownership",
@@ -691,6 +708,7 @@ export async function acquireGatewayLock(
     stateDir: paths.stateDir,
     assertCurrent: assertStateOwnerCurrent,
     assertDatabaseAccess,
+    publishExternalRestartReceipt: ownerLease?.publishExternalRestartReceipt,
     markListening: () => {
       assertStateOwnerCurrent();
       try {
@@ -699,6 +717,12 @@ export async function acquireGatewayLock(
         assertStateOwnerCurrent();
         log.warn("Gateway listener bound, but startup readiness could not be recorded");
       }
+    },
+    acquireConfiguredPostgresOwner: async () => {
+      assertStateOwnerCurrent();
+      // No-op once held, after release, or for a borrowed owner covered by its parent.
+      await postgres.acquire();
+      assertStateOwnerCurrent();
     },
     run: (operation) => {
       if (resources) {
@@ -710,11 +734,11 @@ export async function acquireGatewayLock(
     },
     release: () =>
       (released ??= (async () => {
-        await ownerLease?.release();
-        await resources?.close();
+        await drainGatewayLockResources(ownerLease, resources, role);
         projection?.release();
         projection = undefined;
         stateOwner.release();
+        await postgresEnded;
       })().catch((error: unknown) => {
         released = undefined;
         throw error;

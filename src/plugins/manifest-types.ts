@@ -2,6 +2,7 @@ import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-ca
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ManifestModelIdNormalizationProvider } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
+import type { MediaUnderstandingProviderMetadata } from "../../packages/media-understanding-common/src/types.js";
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelMessageActionName } from "../channels/plugins/message-action-names.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
@@ -273,6 +274,8 @@ export type PluginManifestSetup = {
 };
 
 export type PluginManifestDoctorContract = {
+  /** Explicit recovery subtrees, beneath this plugin's declared CLI roots. */
+  recoveryCli?: string[][];
   configRepair?: boolean;
   resolveSessionStoreAgentIds?: boolean;
   /**
@@ -395,6 +398,7 @@ export type PluginManifestConfigContracts = {
 export type PluginManifestCatalog = {
   featured?: boolean;
   order?: number;
+  sidebar?: boolean;
 };
 
 export type PluginManifestTranscriptSource = {
@@ -464,6 +468,12 @@ export type PluginManifest = {
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
   autoEnableWhenConfiguredProviders?: string[];
   kind?: PluginKind | PluginKind[];
+  /**
+   * Memory slot owner opt-in: while this plugin owns `plugins.slots.memory`, every other
+   * enabled memory plugin loads as a passive backend it can open. Per-plugin
+   * `plugins.entries.<id>.memoryBackend: false` keeps one out.
+   */
+  memoryBackends?: boolean;
   /** Context engine registration IDs owned by this plugin before runtime loading. */
   contextEngineIds?: string[];
   /** How a reload of this plugin treats agent turns that are running when it starts. */
@@ -575,10 +585,7 @@ export type PluginManifest = {
   /** Setup descriptors keyed by ids owned in contracts.transcriptSourceProviders. */
   transcriptSources?: Record<string, PluginManifestTranscriptSource>;
   /** Cheap media-understanding provider defaults without importing plugin runtime. */
-  mediaUnderstandingProviderMetadata?: Record<
-    string,
-    PluginManifestMediaUnderstandingProviderMetadata
-  >;
+  mediaUnderstandingProviderMetadata?: Record<string, MediaUnderstandingProviderMetadata>;
   /** Cheap image-generation provider auth metadata without importing plugin runtime. */
   imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   /** Cheap video-generation provider auth metadata without importing plugin runtime. */
@@ -595,24 +602,6 @@ export type PluginManifest = {
 export type PluginManifestContracts = Partial<
   Record<(typeof PLUGIN_MANIFEST_CONTRACT_KEYS)[number], string[]>
 >;
-
-export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
-
-export type PluginManifestMediaUnderstandingProviderMetadata = {
-  capabilities?: PluginManifestMediaUnderstandingCapability[];
-  defaultModels?: Partial<Record<PluginManifestMediaUnderstandingCapability, string>>;
-  autoPriority?: Partial<Record<PluginManifestMediaUnderstandingCapability, number>>;
-  nativeDocumentInputs?: Array<"pdf">;
-  documentModels?: Partial<
-    Record<
-      "pdf",
-      {
-        textExtraction?: string;
-        image?: string | false;
-      }
-    >
-  >;
-};
 
 export type PluginManifestProviderBaseUrlGuard = {
   provider: string;

@@ -1,20 +1,28 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sessionActorReplicaTargetKey } from "../config/sessions/session-actor-replica-index.js";
-import type { SessionTranscriptMaintenanceFacts } from "../config/sessions/session-transcript-hydration.types.js";
+import type {
+  SessionTranscriptMaintenanceFacts,
+  SessionTranscriptMaintenanceCheckpoint,
+} from "../config/sessions/session-transcript-hydration.types.js";
 import { sameSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptActor,
 } from "../config/sessions/transcript-write-context.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { registerOpenClawAgentDatabaseSyncResource } from "../state/openclaw-agent-db-resources.js";
 import { stringifyCodeModeJsonSafe } from "./code-mode-json.js";
+import {
+  CODE_MODE_STORE_CUSTOM_TYPE as CUSTOM_TYPE,
+  collectCodeModeStoreWrites,
+  readCodeModeStoreKey as readKey,
+  type CodeModeStoreWrites,
+} from "./code-mode-session-store-replay.js";
 import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
 import type { SessionManager } from "./sessions/session-manager.js";
 import type { ToolSearchCatalogRef, ToolSearchToolContext } from "./tool-search-types.js";
 
-const CUSTOM_TYPE = "openclaw.code-mode-store";
 const MAX_VALUE_BYTES = 256 * 1024;
 const MAX_TOTAL_BYTES = 1024 * 1024;
 type StoredValue = { json: string; bytes: number; networkContent: boolean };
@@ -34,8 +42,7 @@ type SessionStore = {
 const stores = new WeakMap<ToolSearchCatalogRef, SessionStore>();
 
 type ReplaySnapshot = {
-  generation: string;
-  ids: string[];
+  checkpoint: SessionTranscriptMaintenanceCheckpoint;
   projection: Projection;
   sessionKey: string;
   bytes: number;
@@ -65,50 +72,35 @@ function discardReplaySnapshot(key: string) {
   replaySnapshots.entries.delete(key);
 }
 
-function replayAdmitted(
-  entries: NonNullable<SessionTranscriptMaintenanceFacts["events"]>,
-  generation: string | null | undefined,
-  target: Parameters<typeof getOwnedSessionTranscriptActor>[0],
-): Projection {
+function replayKey(target: Parameters<typeof getOwnedSessionTranscriptActor>[0]): string {
   const binding = getOwnedSessionTranscriptActor(target);
-  if (!binding || !generation) {
-    return replay(entries);
-  }
-  const key = JSON.stringify([
-    sessionActorReplicaTargetKey(binding.actor.target),
+  return JSON.stringify([
+    binding && sessionActorReplicaTargetKey(binding.actor.target),
     target.sessionId,
   ]);
-  const cached = replaySnapshots.entries.get(key);
-  // Custom-entry rewrites rotate generation; appends preserve earlier IDs and bytes.
-  const prefix =
-    cached?.generation === generation &&
-    cached.ids.length <= entries.length &&
-    cached.ids.every((id, index) => {
-      const entry = entries[index];
-      return isRecord(entry) && entry.id === id;
-    })
-      ? cached
-      : undefined;
-  if (prefix && prefix.ids.length === entries.length) {
-    replaySnapshots.entries.delete(key);
-    replaySnapshots.entries.set(key, prefix);
-    return prefix.projection;
-  }
-  discardReplaySnapshot(key);
-  const projection = replay(entries, prefix?.projection, prefix?.ids.length);
-  // Bound metadata as well as JSON. Large histories keep the uncached replay path.
-  if (entries.length > 4096 || projection.size > 1024) {
+}
+
+function replayAdmitted(
+  result: SessionTranscriptMaintenanceFacts,
+  leafEntryId: string | null,
+  target: Parameters<typeof getOwnedSessionTranscriptActor>[0],
+  cached: ReplaySnapshot | undefined,
+): Projection {
+  const projection = applyReplayWrites(
+    result.store!.writes,
+    result.store!.incremental ? cached?.projection : undefined,
+  );
+  const binding = getOwnedSessionTranscriptActor(target);
+  const version = result.version;
+  if (!binding || !version?.generation || version.rawSeq === null) {
     return projection;
   }
-  const ids: string[] = [];
-  let bytes = key.length * 2 + 256;
-  for (const entry of entries) {
-    if (!isRecord(entry) || typeof entry.id !== "string") {
-      return projection;
-    }
-    ids.push(entry.id);
-    bytes += entry.id.length * 2 + 32;
+  const key = replayKey(target);
+  discardReplaySnapshot(key);
+  if (projection.size > 1024) {
+    return projection;
   }
+  let bytes = key.length * 2 + 256;
   for (const [name, value] of projection) {
     bytes += (name.length + value.json.length) * 2 + 128;
   }
@@ -132,8 +124,7 @@ function replayAdmitted(
     close: () => discardReplaySnapshot(key),
   });
   replaySnapshots.entries.set(key, {
-    generation,
-    ids,
+    checkpoint: { generation: version.generation, rawSeq: version.rawSeq, leafEntryId },
     projection,
     sessionKey: binding.actor.target.sessionKey,
     bytes,
@@ -186,15 +177,6 @@ export function bindCodeModeSessionStore(
   });
 }
 
-function readKey(key: unknown): string {
-  if (typeof key !== "string" || key.length === 0 || key.length > 256) {
-    throw new TypeError(
-      "Code Mode store key must be a non-empty string of at most 256 characters.",
-    );
-  }
-  return key;
-}
-
 function encode(value: unknown, networkContent: boolean): StoredValue {
   const json = stringifyCodeModeJsonSafe(value);
   const bytes = Buffer.byteLength(json, "utf8");
@@ -207,6 +189,9 @@ function encode(value: unknown, networkContent: boolean): StoredValue {
 }
 
 function applyWrites(projection: Projection, writes: ReadonlyMap<string, StoredValue | null>) {
+  if (writes.size === 0) {
+    return projection;
+  }
   const next = new Map(projection);
   for (const [key, value] of writes) {
     if (value === null) {
@@ -227,37 +212,11 @@ function applyWrites(projection: Projection, writes: ReadonlyMap<string, StoredV
   return next;
 }
 
-function replay(entries: readonly unknown[], initial?: Projection, start = 0): Projection {
-  const writes = new Map<string, { value: unknown; networkContent: boolean } | null>();
-  for (let index = start; index < entries.length; index++) {
-    const entry = entries[index];
-    if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== CUSTOM_TYPE) {
-      continue;
-    }
-    const data = entry.data;
-    if (
-      !isRecord(data) ||
-      !isRecord(data.set) ||
-      !Array.isArray(data.delete) ||
-      !isRecord(data.networkContent)
-    ) {
-      throw new Error(
-        "Code Mode session store contains an invalid transcript entry; repair the session before using store/load.",
-      );
-    }
-    for (const [key, value] of Object.entries(data.set)) {
-      const networkContent = data.networkContent[key];
-      if (typeof networkContent !== "boolean") {
-        throw new Error(
-          "Code Mode session store contains invalid content provenance; repair the session before using store/load.",
-        );
-      }
-      writes.set(readKey(key), { value, networkContent });
-    }
-    for (const key of data.delete) {
-      writes.set(readKey(key), null);
-    }
-  }
+function replay(entries: readonly unknown[]): Projection {
+  return applyReplayWrites(collectCodeModeStoreWrites(entries));
+}
+
+function applyReplayWrites(writes: CodeModeStoreWrites, initial?: Projection): Projection {
   // Commit admission checks historical budgets. Encode only surviving writes;
   // applyWrites checks the final budget and leaves earlier readers' maps intact.
   return applyWrites(
@@ -354,21 +313,24 @@ export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, sig
           const reader = prepareSessionManagerHydration(target, { signal: replaySignal, manager });
           const assertOwned = captureOwnedTranscriptWriteAssertion(reader.target);
           assertOwned();
-          const { events, version } = await reader
+          const cached = replaySnapshots.entries.get(replayKey(reader.target));
+          const result = await reader
             .readMaintenance({
-              operation: "custom-branch",
+              operation: "code-mode-store",
               leafEntryId: leaf,
-              customType: CUSTOM_TYPE,
+              checkpoint: cached?.checkpoint,
             })
             .finally(assertOwned);
           reader.assertCurrent();
           assertOwner();
-          if (manager.getLeafId() !== leaf || !events) {
+          if (manager.getLeafId() !== leaf || !result.store) {
             throw new Error(
               "Code Mode session store could not match the active transcript branch; retry in a new reply.",
             );
           }
-          return replayAdmitted(events, version?.generation, reader.target);
+          return runWithMainThreadTask("sessions.transcript-maintenance:apply", () =>
+            replayAdmitted(result, leaf, reader.target, cached),
+          );
         });
       }
       return replay(manager.getBranch());

@@ -235,15 +235,22 @@ export async function generateTeamShapeFixture(
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
     // Resolvers capture environment on import; bind the fixture before loading storage owners.
-    const [{ seedTeamShapeSessions }, { seedTeamShapeExtras }, agentDb, stateDb] =
-      await Promise.all([
-        import("./team-shape-sessions.ts"),
-        import("./team-shape-extras.ts"),
-        import("../../src/state/openclaw-agent-db.js"),
-        import("../../src/state/openclaw-state-db.js"),
-      ]);
+    const [
+      { seedTeamShapeSessions },
+      { seedTeamShapeExtras },
+      agentDb,
+      stateDb,
+      { retainOpenClawStateDatabaseForIdle },
+    ] = await Promise.all([
+      import("./team-shape-sessions.ts"),
+      import("./team-shape-extras.ts"),
+      import("../../src/state/openclaw-agent-db.js"),
+      import("../../src/state/openclaw-state-db.js"),
+      import("../../src/state/openclaw-state-db-cache.js"),
+    ]);
     const agent = agentDb.openOpenClawAgentDatabase({ agentId: options.agentId ?? "main" });
     const state = stateDb.openOpenClawStateDatabase();
+    const releaseState = retainOpenClawStateDatabaseForIdle(state);
     let summary;
     try {
       // This offline writer owns checkpoints; join periodic work before a long bulk load.
@@ -278,6 +285,7 @@ export async function generateTeamShapeFixture(
         node: process.version,
       };
     } finally {
+      releaseState();
       await agentDb.closeOpenClawAgentDatabasesAsync();
       await stateDb.closeOpenClawStateDatabaseAsync();
     }

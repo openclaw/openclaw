@@ -6,7 +6,13 @@ fi
 set -euo pipefail
 
 # Direct callers use the same total envelope as CI; never restart an inherited budget.
-CELL_DEADLINE_EPOCH_SECONDS="${CELL_DEADLINE_EPOCH_SECONDS:-$(( $(date +%s) + 1125 ))}"
+# Follow-up updates by the candidate's own updater each add one update to the envelope.
+cell_budget=1125
+case "${OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP:-}" in
+  switch | rollback | in-place) cell_budget=2025 ;;
+  rebind | launcher) cell_budget=2925 ;;
+esac
+CELL_DEADLINE_EPOCH_SECONDS="${CELL_DEADLINE_EPOCH_SECONDS:-$(( $(date +%s) + cell_budget ))}"
 if ! [[ "$CELL_DEADLINE_EPOCH_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid published-driver cell deadline" >&2
   exit 2
@@ -25,8 +31,19 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-ARTIFACT_DIR="${2:-$ROOT_DIR/.artifacts/published-driver-update}"
-DRIVER_TAG="${3:-latest}"
+# The plugin publication cell drives its own first update with official npm plugins installed,
+# and keeps its diagnostics apart from the other published-driver cells.
+CELL_ENTRY=published-driver.mjs
+DEFAULT_ARTIFACT_DIR="$ROOT_DIR/.artifacts/published-driver-update"
+DEFAULT_DRIVER=latest
+if [ "${OPENCLAW_PUBLISHED_DRIVER_PLUGIN_PUBLICATION:-0}" = "1" ]; then
+  CELL_ENTRY=published-driver-plugin-publication.mjs
+  DEFAULT_ARTIFACT_DIR="$ROOT_DIR/.artifacts/published-driver-plugin-publication"
+  # Its plugin fixtures are versioned from the driver, so it needs a release, not a dist-tag.
+  DEFAULT_DRIVER=2026.11.5
+fi
+ARTIFACT_DIR="${2:-$DEFAULT_ARTIFACT_DIR}"
+DRIVER_TAG="${3:-$DEFAULT_DRIVER}"
 mkdir -p "$ARTIFACT_DIR"
 ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd)"
 printf 'prepare-container\n' > "$ARTIFACT_DIR/phase.txt"
@@ -37,7 +54,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image openclaw-published-driver-update-e2e)"
 docker_e2e_build_or_reuse "$IMAGE_NAME" published-driver-update \
   "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
-DRIVER_ARGS=(-e GITHUB_EVENT_NAME -e OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE -e OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE)
+DRIVER_ARGS=(-e GITHUB_EVENT_NAME -e OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE -e OPENCLAW_PUBLISHED_DRIVER_LINKED_ROOT -e OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX -e OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP -e OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE -e OPENCLAW_PUBLISHED_DRIVER_PLUGIN_FAULT)
 if [ "${OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE:-0}" = "1" ]; then
   fixture_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"
   DRIVER_ARGS+=(-v "$fixture_root/test/fixtures/sqlite/openclaw-agent-schema-v26.sql:/app/test/fixtures/sqlite/openclaw-agent-schema-v26.sql:ro")
@@ -59,5 +76,5 @@ docker_e2e_run_with_harness \
   -v "$ARTIFACT_DIR:/tmp/published-driver-artifacts" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
-  node scripts/e2e/lib/upgrade-survivor/published-driver.mjs \
+  node "scripts/e2e/lib/upgrade-survivor/$CELL_ENTRY" \
     /tmp/openclaw-current.tgz /tmp/published-driver-artifacts "$DRIVER_TAG"

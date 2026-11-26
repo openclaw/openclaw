@@ -20,6 +20,13 @@ export function isCanonicalClawHubPackageName(value: string): boolean {
   return PACKAGE_NAME_PATTERN.test(value);
 }
 
+/** Templates install by `@publisher/slug`, like skills; creator-published packages keep an unscoped stored name. */
+export function clawHubTemplateRef(packageName: string, ownerHandle: string | undefined): string {
+  return packageName.startsWith("@") || !ownerHandle
+    ? packageName
+    : `@${ownerHandle}/${packageName}`;
+}
+
 export function isSafeTemplateRelativePath(value: string): boolean {
   const normalized = value.replaceAll("\\", "/");
   if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {

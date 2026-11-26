@@ -1,15 +1,21 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
+import { summarizeMockInferenceRequest } from "../../../scripts/e2e/lib/mock-inference-facts.ts";
+import { loadCronStore, saveCronStore } from "../../../src/cron/store.ts";
+import type { CronStoredJob } from "../../../src/cron/types.ts";
 import { writeToolCall } from "../../../src/gateway/gateway-provider-fixture.test-support.ts";
+import { closeOpenClawStateDatabaseForTest } from "../../../src/state/openclaw-state-db.ts";
 import {
   setDisplayName,
   setUserProfileRole,
 } from "../../../src/state/user-profile-writes.worker.ts";
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
+import { withEnvAsync } from "../../../src/test-utils/env.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
 import {
@@ -22,7 +28,8 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { selectChatModel, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
@@ -39,7 +46,15 @@ const proxies: ViteDevServer[] = [];
 const urls: string[] = [];
 const profiles: string[] = [];
 const providerAuthorizations: (string | undefined)[] = [];
+const namingPrompt = "Every morning, check the water level in the fictional garden.";
+const namingTitle = "Morning garden watering";
+const namingModels: unknown[] = [];
 let heldProviderResponse: ServerResponse | undefined;
+const legacyRunKey = "agent:main:legacy-admin-run";
+let legacyOperation: "model" | "cap" | "run" | undefined;
+let legacyCalls = 0;
+let legacyWitness = "";
+const legacyModels: unknown[] = [];
 const suite = createControlUiE2eSuite({
   name: "Human automation ownership through the real Gateway",
   startServerBeforeBrowser: true,
@@ -48,12 +63,66 @@ const suite = createControlUiE2eSuite({
       offsets: [0],
       createListener: () =>
         createServer((request, response) => {
-          request.resume().once("end", () => {
+          void (async () => {
             if (request.method !== "POST" || request.url !== "/v1/responses") {
+              request.resume();
               response.writeHead(404).end();
               return;
             }
+            const body: { model?: unknown; input?: unknown } = JSON.parse(
+              (await buffer(request)).toString("utf8"),
+            );
+            if (summarizeMockInferenceRequest(body).purpose === "activity-recap") {
+              writeOpenAiResponsesText(response, {
+                text: "Legacy automation execution completed.",
+                messageId: "activity-recap-message",
+                responseId: "activity-recap-response",
+              });
+              return;
+            }
+            if (JSON.stringify(body.input)?.includes(namingPrompt)) {
+              namingModels.push(body.model);
+              writeOpenAiResponsesText(response, {
+                text: namingTitle,
+                messageId: "garden-message",
+                responseId: "garden-response",
+              });
+              return;
+            }
             providerAuthorizations.push(request.headers.authorization);
+            if (legacyOperation) {
+              legacyModels.push(body.model);
+              if (legacyCalls++ === 0) {
+                if (legacyOperation === "run") {
+                  writeToolCall(response, "write", {
+                    path: path.join(instance.state.workspaceDir, "legacy-bound", "executed.txt"),
+                    content: legacyWitness,
+                  });
+                } else {
+                  writeToolCall(response, "automations", {
+                    action: "update",
+                    jobId: "legacy-agent-edit",
+                    job: {
+                      payload:
+                        legacyOperation === "model"
+                          ? { model: "fixture/edited", fallbacks: ["fixture/echo"] }
+                          : {
+                              kind: "agentTurn",
+                              message: "Write the execution witness after the prompt edit.",
+                              toolsAllow: ["write"],
+                            },
+                    },
+                  });
+                }
+              } else {
+                writeOpenAiResponsesText(response, {
+                  text: "Legacy automation " + legacyOperation + " completed.",
+                  messageId: "legacy-message-" + legacyOperation,
+                  responseId: "legacy-response-" + legacyOperation,
+                });
+              }
+              return;
+            }
             if (providerAuthorizations.length === 1) {
               writeToolCall(response, "write", {
                 path: path.join(instance.state.workspaceDir, "before-transfer.txt"),
@@ -70,7 +139,9 @@ const suite = createControlUiE2eSuite({
               messageId: "owner-message",
               responseId: "owner-response",
             });
-          });
+          })().catch((error: unknown) =>
+            response.destroy(error instanceof Error ? error : undefined),
+          );
         }),
     });
     const close = () =>
@@ -133,10 +204,15 @@ const suite = createControlUiE2eSuite({
           },
           cron: { enabled: false },
           plugins: { allow: [] },
+          tools: { profile: "full", codeMode: false, toolSearch: false },
           agents: {
             defaults: {
               model: "fixture/echo",
-              models: { "fixture/echo": { agentRuntime: { id: "openclaw" } } },
+              utilityModel: "fixture/edited",
+              models: {
+                "fixture/echo": { agentRuntime: { id: "openclaw" } },
+                "fixture/edited": { agentRuntime: { id: "openclaw" } },
+              },
               skipBootstrap: true,
               skills: [],
             },
@@ -149,7 +225,10 @@ const suite = createControlUiE2eSuite({
                 apiKey: "synthetic-owner-test",
                 baseUrl: `http://127.0.0.1:${provider.claim.port}/v1`,
                 request: { allowPrivateNetwork: true },
-                models: [{ id: "echo", name: "Fixture" }],
+                models: [
+                  { id: "echo", name: "Fixture" },
+                  { id: "edited", name: "Edited fixture" },
+                ],
               },
             },
           },
@@ -171,6 +250,38 @@ const suite = createControlUiE2eSuite({
         }
         urls.push(url);
       }
+      // Seed historical definitions through the store owner before the isolated
+      // Gateway starts. No runtime authority or management decision is mocked.
+      await withEnvAsync(instance.state.envVars, async () => {
+        const jobs: CronStoredJob[] = ["legacy-ui-edit", "legacy-agent-edit"].map(
+          (id): CronStoredJob => ({
+            id,
+            name: id,
+            agentId: "main",
+            ownerProfileId: profiles[0],
+            enabled: false,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            schedule: { kind: "every", everyMs: 3_600_000 },
+            sessionTarget: `session:${legacyRunKey}`,
+            wakeMode: "now",
+            payload: {
+              kind: "agentTurn",
+              message: "Write the execution witness.",
+              model: "fixture/echo",
+              toolsAllow: ["write"],
+            },
+            scheduledToolPolicy: { version: 1, mode: "trusted" },
+            delivery: { mode: "none" },
+            state: {},
+          }),
+        );
+        try {
+          await saveCronStore(instance.state.statePath("cron", "jobs.json"), { version: 1, jobs });
+        } finally {
+          closeOpenClawStateDatabaseForTest();
+        }
+      });
       const config = JSON.parse(await readFile(instance.configPath, "utf8"));
       delete config.gateway.auth.token;
       config.gateway.controlUi.allowedOrigins = urls.map((url) => new URL(url).origin);
@@ -200,6 +311,38 @@ async function rpc<T>(page: Page, method: string, params: unknown): Promise<T> {
 }
 
 suite.define(() => {
+  it("creates a prompt-only automation with its utility model title", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    await page.goto(new URL("automations?new", urls[0]).toString());
+    await waitForControlUiGatewayReady(page);
+    await page.locator("#cron-payload-text").fill(namingPrompt);
+    expect(await page.locator("#cron-name").count()).toBe(0);
+    await page.locator('[data-test-id="cron-submit"]').click();
+    await page.getByText(namingTitle, { exact: true }).first().waitFor();
+    const { jobs } = await rpc<{ jobs: CronJob[] }>(page, "cron.list", { includeDisabled: true });
+    const created = jobs.filter((job) => job.name === namingTitle);
+    expect(created).toHaveLength(1);
+    await page.goto(new URL(`automations?job=${created[0]!.id}`, urls[0]).toString());
+    await page.locator('[data-test-id="cron-edit"]').click();
+    await page.locator("#cron-name").fill("");
+    expect(await page.locator("#cron-name").getAttribute("placeholder")).toBe(namingTitle);
+    await page.locator('[data-test-id="cron-submit"]').click();
+    await page.locator('[data-test-id="cron-edit"]').waitFor();
+    expect((await rpc<CronJob>(page, "cron.get", { id: created[0]!.id })).name).toBe(namingTitle);
+    const menu = page.locator(".cron-detail-actions .cron-job-menu");
+    await menu.locator(".cron-job-menu__trigger").click();
+    await menu.locator('[data-value="clone"]').click();
+    const name = page.locator("#cron-name");
+    expect(await name.inputValue()).toBe(`${namingTitle} copy`);
+    await name.fill("Second garden");
+    await page.locator('[data-test-id="cron-submit"]').click();
+    await page.getByText("Second garden", { exact: true }).first().waitFor();
+    const copies = await rpc<{ jobs: CronJob[] }>(page, "cron.list", { includeDisabled: true });
+    expect(copies.jobs.filter((job) => job.name === "Second garden")).toHaveLength(1);
+    expect(namingModels).toEqual(["edited"]);
+  });
+
   it("saves and transfers an owned automation, then denies the former owner", async () => {
     const pages: Page[] = [];
     for (let index = 0; index < people.length; index++) {
@@ -252,6 +395,7 @@ suite.define(() => {
     for (const [index, page] of pages.entries()) {
       await page.goto(new URL("automations?job=" + job.id, urls[index]).toString());
       await waitForControlUiGatewayReady(page);
+      await page.locator('[data-test-id="cron-edit"]').click();
       await page.locator("#cron-name").waitFor();
     }
     expect(await alice.locator("#cron-name").isDisabled()).toBe(false);
@@ -275,6 +419,8 @@ suite.define(() => {
     await expect
       .poll(async () => (await rpc<CronJob>(admin, "cron.get", { id: job.id })).name)
       .toBe("Hourly ping edited by Alice");
+    await alice.locator('[data-test-id="cron-edit"]').click();
+    await alice.locator('[data-test-id="cron-advanced"]').click();
     await selectPickerValue(ownerPicker, profiles[2]!);
     await alice.locator('[data-test-id="cron-submit"]').click();
     await expect
@@ -282,12 +428,14 @@ suite.define(() => {
       .toBe(profiles[2]);
     const transferred = await rpc<CronJob>(admin, "cron.get", { id: job.id });
     expect(transferred.enabled).toBe(false);
+    await alice.locator('[data-test-id="cron-edit"]').click();
     await expect.poll(() => alice.locator("#cron-name").isDisabled()).toBe(true);
     await expect(
       rpc(alice, "cron.update", { id: job.id, patch: { name: "Former owner cannot edit" } }),
     ).rejects.toThrow();
     await bob.reload();
     await waitForControlUiGatewayReady(bob);
+    await bob.locator('[data-test-id="cron-edit"]').click();
     await expect.poll(() => bob.locator("#cron-name").isDisabled()).toBe(false);
     await bob.locator("#cron-name").fill("Hourly ping edited by Bob");
     await bob.locator('[data-test-id="cron-submit"]').click();
@@ -307,5 +455,92 @@ suite.define(() => {
       // Check only after the run settles: an enqueue acknowledgment cannot prove no I/O.
       expect(providerAuthorizations).toEqual(Array(3).fill("Bearer synthetic-owner-test"));
     }
+
+    const boundWorkspace = path.join(instance.state.workspaceDir, "legacy-bound");
+    await mkdir(boundWorkspace);
+    await rpc(admin, "sessions.create", {
+      key: legacyRunKey,
+      agentId: "main",
+      cwd: boundWorkspace,
+    });
+    const executeLegacy = async (id: string, witness: string) => {
+      legacyOperation = "run";
+      legacyCalls = 0;
+      legacyModels.length = 0;
+      legacyWitness = witness;
+      expect(
+        await rpc(admin, "cron.run", { id, mode: "force", waitTimeoutMs: 30_000 }),
+      ).toMatchObject({ run: { status: "ok" } });
+      expect(await readFile(path.join(boundWorkspace, "executed.txt"), "utf8")).toBe(witness);
+      expect(legacyModels).toEqual(["edited", "edited"]);
+    };
+    // The same administrator edits a fresh legacy job through the actual page.
+    await admin.goto(new URL("automations?job=legacy-ui-edit", urls[0]).toString());
+    await waitForControlUiGatewayReady(admin);
+    await admin.locator('[data-test-id="cron-edit"]').click();
+    await admin.locator("#cron-name").waitFor();
+    await selectChatModel(admin.locator(".cron-prompt__run-controls"), "fixture/edited");
+    await admin.locator('[data-test-id="cron-submit"]').click();
+    await expect
+      .poll(async () => (await rpc<CronJob>(admin, "cron.get", { id: "legacy-ui-edit" })).payload)
+      .toMatchObject({ model: "fixture/edited", toolsAllow: ["write"] });
+    await executeLegacy("legacy-ui-edit", "UI-edited legacy job executed.");
+
+    const editorKey = "agent:main:legacy-admin-editor";
+    await rpc(admin, "sessions.create", { key: editorKey, agentId: "main" });
+    await admin.goto(controlUiSessionUrl(urls[0]!, editorKey));
+    await waitForControlUiGatewayReady(admin);
+    const pane = admin.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+    for (const operation of ["model", "cap"] as const) {
+      legacyOperation = operation;
+      legacyCalls = 0;
+      await pane
+        .getByRole("textbox", { name: "Chat composer", exact: true })
+        .fill(
+          operation === "model"
+            ? "Change only the legacy automation model and fallback."
+            : "Resave the legacy automation prompt and existing tool cap.",
+        );
+      await pane.getByRole("button", { name: "Send message", exact: true }).click();
+      await pane
+        .locator(".chat-bubble")
+        .getByText("Legacy automation " + operation + " completed.", { exact: true })
+        .waitFor({ timeout: 30_000 });
+      expect(
+        (await rpc<CronJob>(admin, "cron.get", { id: "legacy-agent-edit" })).payload,
+      ).toMatchObject({
+        model: "fixture/edited",
+        fallbacks: ["fixture/echo"],
+        message:
+          operation === "model"
+            ? "Write the execution witness."
+            : "Write the execution witness after the prompt edit.",
+        toolsAllow: ["write"],
+      });
+      await executeLegacy(
+        "legacy-agent-edit",
+        "Agent-edited legacy job executed after " + operation + ".",
+      );
+    }
+    // Read the private execution envelope only after this disposable Gateway
+    // stops; public cron.get intentionally omits these authority fields.
+    await instance.stopGateway();
+    await withEnvAsync(instance.state.envVars, async () => {
+      try {
+        const stored = await loadCronStore(instance.state.statePath("cron", "jobs.json"));
+        for (const id of ["legacy-ui-edit", "legacy-agent-edit"]) {
+          const saved = stored.jobs.find((entry) => entry.id === id)!;
+          expect(saved).toBeDefined();
+          expect(saved.owner).toBeUndefined();
+          expect(saved.ownerProfileId).toBe(profiles[0]);
+          expect(saved.sessionTarget).toBe("session:" + legacyRunKey);
+          expect(saved.scheduledToolPolicy).toEqual({ version: 1, mode: "trusted" });
+          expect(saved.toolsAllowProvenance).toBeUndefined();
+          expect(saved.operatorSource).toBeUndefined();
+        }
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+      }
+    });
   }, 120_000);
 });

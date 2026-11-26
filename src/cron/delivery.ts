@@ -11,7 +11,6 @@ import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-load
 import { normalizeAnyChannelId } from "../channels/registry-normalize.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
-import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import { outboundDeliveryQueueName } from "../infra/outbound/delivery-queue-namespaces.js";
@@ -19,6 +18,7 @@ import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import type { OutboundSessionRoute } from "../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
+import type { ChatRef } from "../sessions/chat-ref.js";
 import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
 import {
   buildDirectCronDeliveryIdempotencyKey,
@@ -63,9 +63,8 @@ export async function sendCronAnnouncePayloadStrict(params: {
   bestEffort?: boolean;
   tts?: { auto?: TtsAutoMode };
   inspectionUrl?: string;
-  sessionGeneration?: SessionDeliveryGeneration;
+  sessionGeneration?: ChatRef;
   transcriptRoute?: OutboundSessionRoute;
-  transcriptExpectedGeneration?: { sessionId: string; lifecycleRevision?: string };
   onTranscriptDiagnostic?: (message: string) => void;
   completion?: {
     job: CronJob;
@@ -159,7 +158,6 @@ export async function sendCronAnnouncePayloadStrict(params: {
           payloads,
           session,
           transcriptRoute: params.transcriptRoute,
-          transcriptExpectedGeneration: params.transcriptExpectedGeneration,
           onTranscriptDiagnostic: params.onTranscriptDiagnostic,
           // Completion rows name the run that produced them; alerts have no run result.
           ...(params.completion

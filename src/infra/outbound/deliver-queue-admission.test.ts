@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   restoreQueuedDeliveryCustody,
@@ -59,13 +60,11 @@ describe("stageAndEnqueueOutboundDelivery", () => {
       to: "original",
       preparedBatch: createUnmodifiedPreparedOutboundBatch(payloads),
     };
-    const generation = {
+    const generation = chatRef({
       agentId: "main",
       storePath: "/synthetic/agent.sqlite",
       sessionKey: "agent:main:test",
-      sessionId: "original",
-      lifecycleRevision: null,
-    };
+    });
     expect(
       restoreQueuedDeliveryCustody({ ...params, sessionGeneration: generation }, entry),
     ).toMatchObject({

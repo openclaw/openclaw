@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   readDatabasePathIdentity,
+  assertDatabasePathIdentityAsync,
   readDatabasePathIdentitySync as readIdentity,
   assertExistingDatabaseIdentity as assertExisting,
 } from "./sqlite-worker-identity.js";
@@ -39,8 +40,13 @@ it("shares prospective and existing file identities between sync capture and asy
   const prospective = readIdentity(nativePath);
   expect(prospective.key).toBe(`path:${prospective.canonicalPath}`);
   expect(await readDatabasePathIdentity(pathname)).toEqual(prospective);
+  await expect(assertDatabasePathIdentityAsync(pathname, prospective)).resolves.toBeUndefined();
   writeFileSync(pathname, "");
   const existing = readIdentity(nativePath);
+  await expect(assertDatabasePathIdentityAsync(pathname, prospective)).rejects.toThrow(
+    /identity changed/,
+  );
+  await expect(assertDatabasePathIdentityAsync(pathname, existing)).resolves.toBeUndefined();
   expect(await readDatabasePathIdentity(pathname)).toEqual(existing);
   const birthtime =
     process.platform === "linux" || process.platform === "android"
@@ -58,6 +64,9 @@ it("shares prospective and existing file identities between sync capture and asy
   replaceFile(pathname);
   expect(readIdentity(pathname).key).not.toBe(existing.key);
   expect(() => assertExisting(pathname, existing.key, birthtime)).toThrow(/identity changed/);
+  await expect(assertDatabasePathIdentityAsync(pathname, existing)).rejects.toThrow(
+    /identity changed/,
+  );
 });
 
 it.each(["linux", "android"] as const)(

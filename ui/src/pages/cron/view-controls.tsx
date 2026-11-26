@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, Errored, Loading } from "solid-js";
+import { createMemo, createUniqueId, Errored, Loading, Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { iconButtonClass, ROW_GLYPH_STROKE } from "../../components/solid/icon-button.tsx";
 import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
@@ -40,6 +40,24 @@ export function NoticeBanner(props: { notice: string | null }) {
     </>
   );
 }
+/** Without a sidebar listing the automations, the page's own list is the way back. */
+export function BackRow(props: Pick<CronProps, "listsJobs" | "busy" | "onClosePanel">) {
+  return (
+    <Show when={props.listsJobs}>
+      <div class="cron-back-row">
+        <button
+          type="button"
+          class="cron-back"
+          data-test-id="cron-back"
+          disabled={props.busy}
+          onClick={() => props.onClosePanel()}
+        >
+          <Icon name="arrowLeft" /> {t("cron.detail.back")}
+        </button>
+      </div>
+    </Show>
+  );
+}
 export function AdminRequired(props: CronProps) {
   return (
     <>
@@ -70,16 +88,6 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
       trigger={sessionIcon("moreHorizontal", 12, ROW_GLYPH_STROKE)}
       placement="bottom-end"
       items={[
-        ...(props.job.schedule.kind === "event"
-          ? []
-          : [
-              {
-                id: "run-if-due",
-                label: t("cron.actions.runIfDue"),
-                class: "cron-job-menu__item",
-                disabled: props.busy || !props.connected || !props.canManage,
-              },
-            ]),
         {
           id: "clone",
           label: t("cron.actions.clone"),
@@ -99,9 +107,6 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
           return;
         }
         switch (item.id) {
-          case "run-if-due":
-            props.onRun(props.job, "due");
-            break;
           case "clone":
             if (!(props.canCreate ?? props.canManage)) {
               return;

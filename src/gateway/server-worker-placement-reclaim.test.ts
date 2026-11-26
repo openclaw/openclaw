@@ -342,17 +342,31 @@ async function scenario(
     await moving;
   };
   if (beforeStop) {
-    // A preceding lifecycle owner holds ingress pending while Stop joins that
-    // same owner. This fixes ordering without timer delays or editing ingress.
-    await runSessionMutation({
+    const mutationEntered = createDeferred();
+    const reservationReady = createDeferred();
+    // Only Stop borrows this mutation. Ingress starts outside its async context
+    // so it cannot borrow the owner that is meant to hold it pending.
+    const mutation = runSessionMutation({
       scope: storePath,
       identities: [REQUEST.sessionKey, REQUEST.sessionId],
       agentId: REQUEST.agentId,
       run: async () => {
-        await reserveOld();
+        mutationEntered.resolve();
+        await reservationReady.promise;
         await stop();
       },
     });
+    await awaitGateBeforeSettlement(
+      mutationEntered.promise,
+      mutation,
+      "Lifecycle mutation settled before holding pre-Stop ingress",
+    );
+    try {
+      await reserveOld();
+    } finally {
+      reservationReady.resolve();
+      await mutation;
+    }
   } else {
     await stop();
   }
@@ -540,6 +554,26 @@ it.each(["missing", "local"] as const)(
     expect((await placements.getAsync(REQUEST.sessionId))?.state).toBe(
       state === "local" ? "local" : undefined,
     );
+    const mutationEntered = createDeferred();
+    const dispatchReady = createDeferred();
+    // Hold ingress with its session owner; unrelated inspection no longer fences dispatch.
+    // Stop borrows this prepare context before it waits for the active RPC to settle.
+    const stopping = runSessionMutation({
+      scope: storePath,
+      identities: [REQUEST.sessionKey, REQUEST.sessionId],
+      agentId: REQUEST.agentId,
+      prepare: async () => {
+        mutationEntered.resolve();
+        await dispatchReady.promise;
+        await coordinated.reclaim(REQUEST);
+      },
+      run: async () => {},
+    }).catch(() => undefined);
+    await awaitGateBeforeSettlement(
+      mutationEntered.promise,
+      stopping,
+      "Lifecycle mutation settled before holding queued dispatch",
+    );
     let dispatchSettled = false;
     const dispatch = coordinated
       .dispatch(REQUEST)
@@ -550,7 +584,7 @@ it.each(["missing", "local"] as const)(
       .finally(() => {
         dispatchSettled = true;
       });
-    const stopping = coordinated.reclaim(REQUEST).catch(() => undefined);
+    dispatchReady.resolve();
     try {
       await awaitGateBeforeSettlement(
         cancellationEntered.promise,
@@ -570,6 +604,7 @@ it.each(["missing", "local"] as const)(
       expect(dispatchSettled).toBe(true);
       expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     } finally {
+      dispatchReady.resolve();
       cancellationLoad.resolve();
       entered.release.resolve();
       await Promise.all([sweep, dispatch, stopping]);

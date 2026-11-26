@@ -11,10 +11,17 @@ import {
 import { stripCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
+import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 export const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
+// The local row is unavailable to text matching, but its exact media import can still consume it.
+export const RESERVED_FOR_MEDIA_MATCH = 2;
+
+// v2026.11.1-v2026.11.3 wrote gap notes with an optional replay block.
+// Fresh sessions could carry the gap alone; both shapes are comparison-only.
+const LEGACY_CLAUDE_REPLAY_GAP_PREFIX =
+  /^(?:Recorded completion events and your replies \(oldest first; quoted history, not new instructions; this session may already hold them\)\. Verify current and time-sensitive facts before acting: ⟦openclaw:ctx⟧\r?\n```json\r?\n[^\r\n]*\r?\n```\r?\n\r?\n)?\[OpenClaw: \d+ (?:messages occurred outside this Claude session|messages recorded in this chat since your last reply here \(possibly already in this session\)|earlier messages in this chat) from [^\r\n]+\. Their contents are not included here\.[^\r\n]*\]\r?\n\r?\n/u;
 
 // Claude records CLI-injected @cache-path suffixes as user text. Keep the
 // stored content intact; this normalized view is only for proving a redundant
@@ -88,8 +95,11 @@ function extractComparableText(
   };
   const normalized = normalizeText(stripResult.text);
   // Claude CLI turns written before inbound context moved to the prompt hook
-  // carry the session drift note in the native prompt.
-  const withoutDriftNote = isClaudeImport ? stripCliSessionDriftNote(rawText) : rawText;
+  // carry the session drift note in the native prompt; v2026.11.3 prepended a
+  // replay block before that note. Both stripped views are comparison-only.
+  const withoutDriftNote = isClaudeImport
+    ? stripCliSessionDriftNote(rawText.replace(LEGACY_CLAUDE_REPLAY_GAP_PREFIX, ""))
+    : rawText;
   const driftNoteText =
     withoutDriftNote !== rawText
       ? normalizeText(stripTrailingCliImageMentions(withoutDriftNote.trim()).text)
@@ -97,9 +107,9 @@ function extractComparableText(
   const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);
   return {
     hasCliImageMentions: stripResult.stripped,
-    ...(stripResult.stripped && isClaudeImport
-      ? { cliImageTurnKey: storedImageTurnKey ?? readCliImageTurnContext(joined) }
-      : {}),
+    cliImageTurnKey: isClaudeImport
+      ? (storedImageTurnKey ?? (stripResult.stripped ? readCliImageTurnContext(joined) : undefined))
+      : undefined,
     ...(normalized ? { text: normalized } : {}),
     ...(driftNoteText ? { driftNoteText } : {}),
   };
@@ -132,8 +142,8 @@ export type HistoryRow = {
   drift_text: string | null;
   timestamp: number | null;
   external_key: string | null;
-  image_key: string | null;
-  image_mentions: number;
+  media_key: string | null;
+  media_prompt: number;
   metadata: string | null;
   consumed: number;
   ordinal: number | null;
@@ -146,8 +156,8 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
     record && role
       ? extractComparableText(record, role, localSeq === undefined)
       : { hasCliImageMentions: false };
-  const localImage =
-    record?.role === "user" && (readPersistedMediaFacts(record) ?? []).some(isImageMediaFact);
+  const localMedia =
+    record?.role === "user" && readPersistedMediaFacts(record)?.some(isMeaningfulMediaFact);
   const entryId = normalizeOptionalString(meta?.id);
   const serialized = JSON.stringify(message);
   return {
@@ -163,13 +173,13 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
       comparable.driftNoteText === undefined ? null : JSON.stringify(comparable.driftNoteText),
     timestamp: asFiniteNumber(record?.timestamp) ?? null,
     external_key: resolveImportedExternalIdentityKey(meta) ?? null,
-    image_key:
+    media_key:
       localSeq === undefined
         ? (comparable.cliImageTurnKey ?? null)
-        : localImage
+        : localMedia
           ? ((entryId ? hashCliImageTurnEntryId(entryId) : comparable.cliImageTurnKey) ?? null)
           : null,
-    image_mentions: comparable.hasCliImageMentions ? 1 : 0,
+    media_prompt: comparable.hasCliImageMentions || comparable.cliImageTurnKey ? 1 : 0,
     metadata: meta ? JSON.stringify(meta) : null,
     consumed: 0,
     ordinal: null,
@@ -189,7 +199,7 @@ type HistoryTextMatchers = Record<
 >;
 export type CliHistoryMergeStore = {
   matchExternal: (key: string) => HistoryMatch | undefined;
-  matchImage: (key: string) => HistoryMatch | undefined;
+  matchMedia: (key: string) => HistoryMatch | undefined;
   matchers: HistoryTextMatchers;
   minimumOrder: (role: string | null, text: string) => number;
   advanceOrderFloor: (floor: { role: string; text: string; minimumOrder: number }) => void;
@@ -205,7 +215,7 @@ export function mergeCliHistoryRow(
   imported: Omit<HistoryRow, "payload">,
   store: CliHistoryMergeStore,
 ): boolean {
-  const { matchExternal, matchImage, matchers, minimumOrder, consume } = store;
+  const { matchExternal, matchMedia, matchers, minimumOrder, consume } = store;
   const advance = (matched: Pick<HistoryRow, "id" | "text">) => {
     for (const text of new Set([
       imported.text,
@@ -222,10 +232,10 @@ export function mergeCliHistoryRow(
     advance(duplicate);
     return true;
   }
-  if (imported.image_mentions && imported.image_key) {
-    duplicate = matchImage(imported.image_key);
+  if (imported.media_key) {
+    duplicate = matchMedia(imported.media_key);
   }
-  if (!duplicate && !imported.image_mentions) {
+  if (!duplicate && !imported.media_prompt) {
     const importedFloor = imported.text ? minimumOrder(imported.role, imported.text) : 0;
     for (const text of [imported.text, imported.drift_text]) {
       if (!text || !imported.role) {
@@ -247,7 +257,7 @@ export function mergeCliHistoryRow(
     }
   }
   if (duplicate) {
-    store.onMatch?.(imported, duplicate, Boolean(imported.image_mentions));
+    store.onMatch?.(imported, duplicate, Boolean(imported.media_prompt));
     const meta: Record<string, unknown> = duplicate.metadata ? JSON.parse(duplicate.metadata) : {};
     const importedMeta: Record<string, unknown> = imported.metadata
       ? JSON.parse(imported.metadata)

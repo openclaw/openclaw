@@ -48,6 +48,10 @@ import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { withSqliteSnapshotReuse } from "./sqlite-snapshot-reuse.js";
+import {
+  formatEarlyGitReleaseRefusal,
+  inspectEarlyGitReleaseSchemaChange,
+} from "./update-candidate-check-early-release.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
@@ -58,7 +62,7 @@ import {
   writeUpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
 import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";
-import { resolveUpdateInstallRoot } from "./update-install-root.js";
+import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
 import {
   commitReadyUpdatePluginCohort,
   settleDelegatedUpdatePluginCohort,
@@ -89,6 +93,19 @@ let pluginCohortSettlementResult: UpdatePluginCohortSettlementResult | undefined
 async function finalizeMigratedUpdate(): Promise<void> {
   // This executable bypasses CLI bootstrap but owns the same one-shot database work.
   installDatabaseProcessRole("cli-oneshot");
+  if (process.argv[2] === "--early-release-recovery") {
+    const recovery = await import("./update-early-release-recovery.js");
+    const { plan, finish } = recovery.readEarlyGitReleaseRecoveryArgs(process.argv.slice(3));
+    const deps = recovery.defaultRunnerDeps();
+    if (finish) {
+      await recovery.finishEarlyGitReleaseRecovery(plan, finish, deps);
+    } else {
+      // On success the finishing step removed the release this process runs from; nothing more
+      // loads from it. A recovery that did not finish shows as failed in `systemctl --user status`.
+      process.exitCode = (await recovery.runEarlyGitReleaseRecovery(plan, deps)) ? 0 : 1;
+    }
+    return;
+  }
   const settlePluginCohort = process.argv[2] === "--settle-plugin-cohort";
   const commitPluginCohort = process.argv[2] === "--commit-plugin-cohort";
   if (settlePluginCohort || commitPluginCohort) {
@@ -101,6 +118,19 @@ async function finalizeMigratedUpdate(): Promise<void> {
     routeLogsToStderr();
     if (typeof finishUpdateRun !== "function") {
       throw new Error("Update recovery writer is unavailable.");
+    }
+    const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+    const early = root ? inspectEarlyGitReleaseSchemaChange(root) : null;
+    if (early) {
+      const { startEarlyGitReleaseRecovery } =
+        await import("./update-early-release-recovery-start.js");
+      const recovery = await startEarlyGitReleaseRecovery(early);
+      // The early release updater reports this stderr as the failed check before any change.
+      process.stderr.write(`${formatEarlyGitReleaseRefusal(early, recovery)}\n`);
+      // A started recovery moved this release out of the updater's cleanup path. The cleanup
+      // below loads nothing more, because the check opened no database through its owners.
+      process.exitCode = 1;
+      return;
     }
     process.stdout.write(
       JSON.stringify({
@@ -295,7 +325,7 @@ async function runDelegatedPostCore(input: DecodedUpdatePostCoreInput): Promise<
     process.env[POST_CORE_UPDATE_ENV] !== "1" ||
     process.env[UPDATE_RUN_ID_ENV] !== input.runId ||
     !executingRoot ||
-    resolveUpdateInstallRoot(executingRoot) !== resolveUpdateInstallRoot(input.root)
+    !updateInstallRootsMatch(executingRoot, input.root)
   ) {
     throw new Error("Post-core update does not match its delegated run and installed runtime.");
   }

@@ -103,6 +103,8 @@ struct AppStateIsolationTests {
             #expect(await manager._testAttachExistingGatewayIfAvailable(port: port))
             let failure = manager.lastFailureReason ?? ""
             #expect(failure.contains("already owned by another process"))
+            #expect(failure.contains("connect in Remote mode"))
+            #expect(failure.contains("start a local Gateway, set gateway.port to a free port"))
             let endpointState = await GatewayEndpointStore.shared.currentState()
             let revision = GatewayEndpointStore.shared.routeRevision
             #expect(endpointState == .unavailable(mode: .local, reason: failure, routeRevision: revision))

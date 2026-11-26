@@ -106,9 +106,15 @@ type HostDesktopInspectionParams = {
   managedDesktop?: ManagedLinuxDesktop;
 };
 
-/** Probes the configured host desktop without reading or exposing password material. */
+type HostDesktopProbeAuthority = {
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
+};
+
+/** Probes the configured host desktop and does not return password material. */
 export async function inspectHostDesktop(
   params: HostDesktopInspectionParams,
+  authority?: HostDesktopProbeAuthority,
 ): Promise<HostDesktopInspection> {
   if (params.config?.enabled !== true) {
     return {
@@ -120,14 +126,14 @@ export async function inspectHostDesktop(
       detail: "disabled; enable the Desktop lab with desktop.host.enabled=true",
     };
   }
-  return inspectConfiguredHostDesktop(params);
+  return inspectConfiguredHostDesktop(params, true, authority);
 }
 
 /** Setup inspection discovers a source without enabling access or starting a desktop. */
 export async function inspectHostDesktopSetup(
   params: Omit<HostDesktopInspectionParams, "managedDesktop">,
 ): Promise<NonNullable<EnvironmentSummary["desktopSetup"]>> {
-  const inspection = await inspectConfiguredHostDesktop(params);
+  const inspection = await inspectConfiguredHostDesktop(params, false);
   if (inspection.status.state === "attached") {
     return { state: "ready" };
   }
@@ -140,15 +146,53 @@ export async function inspectHostDesktopSetup(
   };
 }
 
+async function readConfiguredVncPassword(
+  passwordFile: string | undefined,
+): Promise<{ password?: string; error?: string }> {
+  if (!passwordFile) {
+    return {};
+  }
+  let raw: string;
+  try {
+    raw = await fs.readFile(passwordFile, "utf8");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      error: `could not read desktop.host.passwordFile ${passwordFile}: ${reason}; fix the absolute path or remove desktop.host.passwordFile so the UI can prompt`,
+    };
+  }
+  const password = raw.replace(/[\r\n]+$/u, "");
+  if (!password) {
+    return {
+      error:
+        "desktop.host.passwordFile is empty; write the VNC password or remove desktop.host.passwordFile so the UI can prompt",
+    };
+  }
+  registerSecretValueForRedaction(password);
+  return { password };
+}
+
 async function inspectConfiguredHostDesktop(
   params: HostDesktopInspectionParams,
+  authenticate: boolean,
+  authority?: HostDesktopProbeAuthority,
 ): Promise<HostDesktopInspection> {
   const port = params.config?.port ?? DEFAULT_HOST_DESKTOP_PORT;
   const platform = params.platform ?? process.platform;
+  // Disabled setup discovery stays credential-free. Enabled readiness finishes
+  // VncAuth when the password file can be read, so TigerVNC does not blacklist it.
+  authority?.assertCurrent?.();
+  const configuredPassword = authenticate
+    ? await readConfiguredVncPassword(params.config?.passwordFile)
+    : {};
+  authority?.assertCurrent?.();
   const probe = await probeRfbServer({
     host: "127.0.0.1",
     port,
     timeoutMs: HOST_DESKTOP_PROBE_TIMEOUT_MS,
+    signal: authority?.signal,
+    assertCurrent: authority?.assertCurrent,
+    ...(configuredPassword.password ? { vncPassword: configuredPassword.password } : {}),
   });
   const unavailable = (
     detail: string,
@@ -175,6 +219,13 @@ async function inspectConfiguredHostDesktop(
   }
   if (probe.kind === "not-rfb") {
     return unavailable(nonRfbError(port), "not-rfb");
+  }
+  if (probe.kind === "auth-rejected") {
+    return unavailable(
+      "VNC authentication failed; check desktop.host.passwordFile and retry",
+      "unsupported",
+      "VncAuth",
+    );
   }
   const auth = classifyRfbSecurity(probe.securityTypes);
   const security =
@@ -213,6 +264,7 @@ export function createHostDesktopSource(params: {
 
   const acquireAttached = async (
     probe: Extract<RfbProbeResult, { kind: "rfb" }>,
+    vncPassword?: string,
   ): Promise<HostDesktopAcquireResult> => {
     const security = classifyRfbSecurity(probe.securityTypes);
     if (security === "none") {
@@ -226,28 +278,6 @@ export function createHostDesktopSource(params: {
         `${name} is not supported; configure a VncAuth server and desktop.host.passwordFile, then retry`,
       );
     }
-
-    let vncPassword: string | undefined;
-    if (params.config.passwordFile) {
-      try {
-        vncPassword = (await fs.readFile(params.config.passwordFile, "utf8")).replace(
-          /[\r\n]+$/u,
-          "",
-        );
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `could not read desktop.host.passwordFile ${params.config.passwordFile}: ${reason}; fix the absolute path or remove desktop.host.passwordFile so the UI can prompt`,
-          { cause: error },
-        );
-      }
-      if (!vncPassword) {
-        throw new Error(
-          "desktop.host.passwordFile is empty; write the VNC password or remove desktop.host.passwordFile so the UI can prompt",
-        );
-      }
-      registerSecretValueForRedaction(vncPassword);
-    }
     return {
       attachment: { kind: "tcp", host: "127.0.0.1", port },
       auth: security,
@@ -258,10 +288,14 @@ export function createHostDesktopSource(params: {
   const acquire = async (assertCurrent?: () => void): Promise<HostDesktopAcquireResult> => {
     assertCurrent?.();
     selectedManagedDesktop = false;
+    const configuredPassword = await readConfiguredVncPassword(params.config.passwordFile);
+    assertCurrent?.();
     const probe = await probeRfbServer({
       host: "127.0.0.1",
       port,
       timeoutMs: HOST_DESKTOP_PROBE_TIMEOUT_MS,
+      assertCurrent,
+      ...(configuredPassword.password ? { vncPassword: configuredPassword.password } : {}),
     });
     assertCurrent?.();
     if (probe.kind === "unreachable" || probe.kind === "timeout") {
@@ -282,7 +316,13 @@ export function createHostDesktopSource(params: {
     if (probe.kind === "not-rfb") {
       throw new Error(nonRfbError(port));
     }
-    return await acquireAttached(probe);
+    if (configuredPassword.error) {
+      throw new Error(configuredPassword.error);
+    }
+    if (probe.kind === "auth-rejected") {
+      throw new Error("VNC authentication failed; check desktop.host.passwordFile and retry");
+    }
+    return await acquireAttached(probe, configuredPassword.password);
   };
 
   return {
@@ -301,12 +341,15 @@ export function createHostDesktopSource(params: {
           return managedDesktop.stop();
         }
       : undefined,
-    inspect: () =>
-      inspectHostDesktop({
-        config: params.config,
-        platform,
-        managedDesktop,
-      }),
+    inspect: (authority?: HostDesktopProbeAuthority) =>
+      inspectHostDesktop(
+        {
+          config: params.config,
+          platform,
+          managedDesktop,
+        },
+        authority,
+      ),
   };
 }
 
@@ -498,7 +541,13 @@ export function createHostDesktopService(params: {
       if (!runtime) {
         return (await inspectHostDesktop({ config: params.getConfig() })).status;
       }
-      return (await runtime.source.inspect()).status;
+      assertCurrent(runtime);
+      return (
+        await runtime.source.inspect({
+          assertCurrent: () => assertCurrent(runtime),
+          signal: runtime.controller.signal,
+        })
+      ).status;
     },
     reconcileRuntimePolicy,
   };

@@ -1,17 +1,13 @@
+import { DatabaseSync } from "node:sqlite";
 import { workerData } from "node:worker_threads";
-const { register } = await import(workerData.sourceLoaderUrl);
-register();
-const { requireNodeSqlite, resolveNodeSqliteLocation } = await import("../../infra/node-sqlite.ts");
-const sqlite = requireNodeSqlite();
-const target = workerData.databasePath && resolveNodeSqliteLocation(workerData.databasePath);
-// oxlint-disable-next-line typescript/unbound-method -- The fault wrapper calls the captured method with its database receiver.
-const close = sqlite.DatabaseSync.prototype.close;
+// Capture the native method without a source import; every call below passes its receiver.
+const close = Reflect.get(DatabaseSync.prototype, "close");
 let failed = false;
-sqlite.DatabaseSync.prototype.close = function () {
-  if (target && !failed && this.location() === target) {
+DatabaseSync.prototype.close = function () {
+  if (!failed && this.location() === workerData.databasePath) {
     failed = true;
     throw new Error("Synthetic native shared-state close failure");
   }
   return close.call(this);
 };
-await import("./session-transcript-reconcile.worker.ts");
+await import(workerData.workerUrl);

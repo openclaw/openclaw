@@ -84,9 +84,11 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
+  readonly retainedInstances?: readonly PluginInstanceHandle[];
   readonly holdsPendingReplacement?: boolean;
   readonly pendingReplacementInstances?: readonly PluginInstanceHandle[];
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
+  retainInvocation?: (instance: PluginInstanceHandle) => void;
 };
 
 export type PluginInstanceOwner = {
@@ -110,6 +112,11 @@ export const pluginInvocationContext = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInvocationContext"),
   () => new AsyncLocalStorage<PluginInvocationContext>(),
 );
+
+/** Host-owned work admits a fresh plugin call without inheriting a finished turn's lease. */
+export function runOutsidePluginInvocationScope<T>(run: () => T): T {
+  return pluginInvocationContext.exit(() => pluginInstanceInvocation.exit(run));
+}
 
 /** Compatibility query for callers holding a published plugin invocation context. */
 export function currentPluginWorkHoldsPendingReplacement(): boolean {

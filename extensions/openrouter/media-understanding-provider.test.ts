@@ -90,6 +90,20 @@ it.each([
   });
 });
 
+it("forwards other provider options to the upstream provider named by the model", async () => {
+  respond();
+  await transcribe({
+    model: "elevenlabs/scribe-v2",
+    query: { tag_audio_events: false, temperature: 0 },
+  });
+  expect(firstPostJsonRequest().body).toEqual({
+    model: "elevenlabs/scribe-v2",
+    input_audio: inputAudio("audio", "wav"),
+    temperature: 0,
+    provider: { options: { elevenlabs: { tag_audio_events: false } } },
+  });
+});
+
 it("throws when format cannot be resolved", async () => {
   await expect(
     transcribe({ fileName: "voice.bin", mime: "application/octet-stream" }),

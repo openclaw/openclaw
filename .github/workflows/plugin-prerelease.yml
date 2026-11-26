@@ -209,6 +209,8 @@ jobs:
           sparse-checkout: |
             scripts/frv-test-exclusions.mjs
             scripts/lib/ci-blacksmith-capacity.mjs
+            scripts/lib/ci-node-test-capacity.mts
+            scripts/lib/vitest-shard-metadata.mts
             scripts/lib/release-upgrade-baseline.mjs
             scripts/lib/release-version.mjs
             scripts/lib/canonical-json.mjs
@@ -263,10 +265,42 @@ jobs:
       - name: Install manifest dependencies
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
+      - name: Resolve hourly Boat allowance
+        id: boat_allowance
+        if: github.repository == 'openclaw/openclaw' && github.event_name == 'schedule' && github.run_attempt == 1 && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat'
+        env:
+          BOAT_API_KEY: ${{ secrets.BOAT_API_KEY }}
+          BOAT_ORG: ${{ vars.BOAT_ORG }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+          import { resolveBoatNodeJobBudget } from "./.frv-tooling/scripts/lib/ci-node-test-capacity.mts";
+          let budget = 0;
+          try {
+            const key = process.env.BOAT_API_KEY;
+            const org = process.env.BOAT_ORG;
+            if (!key || !org) throw new Error("missing account scope");
+            const response = await fetch("https://boat.dev/api/v1/limits", {
+              headers: { Authorization: `Bearer ${key}`, "X-Boat-Org": org },
+              signal: AbortSignal.timeout(5000),
+            });
+            if (!response.ok) throw new Error("limits unavailable");
+            const limits = await response.json();
+            if (limits.teamId !== org) throw new Error("account scope mismatch");
+            budget = resolveBoatNodeJobBudget(limits);
+          } catch {
+            console.warn("::warning::Boat limits unavailable; using GitHub-hosted runners for hourly tests.");
+          }
+          console.log(`Boat admission: up to ${budget} hourly jobs; remaining jobs use GitHub-hosted runners.`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `job_limit=${budget}\n`);
+          EOF
+
       - name: Build plugin prerelease manifest
         id: manifest
         env:
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+          OPENCLAW_CI_RUNNER_BACKEND: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}
+          OPENCLAW_CI_BOAT_NODE_JOB_LIMIT: ${{ steps.boat_allowance.outputs.job_limit }}
           OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ inputs.test_runtime_policy }}
           PHASE: ${{ github.event_name == 'schedule' && 'independent' || inputs.phase }}
           NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ steps.node_test_exclusions.outputs.patterns_json }}
@@ -278,9 +312,25 @@ jobs:
 
           import { blacksmithRunnerLabel } from "./.frv-tooling/scripts/lib/ci-blacksmith-capacity.mjs";
 
-          const createMatrix = (include) => ({
+          const hourlyBoat = process.env.GITHUB_REPOSITORY === "openclaw/openclaw" &&
+            process.env.GITHUB_EVENT_NAME === "schedule" &&
+            process.env.GITHUB_RUN_ATTEMPT === "1" &&
+            process.env.OPENCLAW_CI_RUNNER_BACKEND === "boat";
+          const allowance = Number(process.env.OPENCLAW_CI_BOAT_NODE_JOB_LIMIT);
+          let boatJobsRemaining = hourlyBoat && Number.isSafeInteger(allowance) && allowance > 0
+            ? Math.min(20, allowance) : 0;
+          const boatRunners = {
+            "blacksmith-2vcpu-ubuntu-2404": "boat",
+            "blacksmith-4vcpu-ubuntu-2404": "boat-large",
+          };
+          const createMatrix = (include, active) => ({
             include: include.map((row) => {
-              const label = row.runner_label ?? blacksmithRunnerLabel(row.runner);
+              const physicalLabel = row.runner_label ?? blacksmithRunnerLabel(row.runner);
+              const boatLabel = boatRunners[physicalLabel];
+              // Mixed extension batches can exhaust Boat RAM and swap; keep them on hosted runners.
+              const useBoat = active && row.task === "extension-file-shard" && boatJobsRemaining > 0 && boatLabel;
+              if (useBoat) boatJobsRemaining -= 1;
+              const label = useBoat ? boatLabel : hourlyBoat ? "ubuntu-24.04" : physicalLabel;
               return label ? { ...row, runner_label: label } : row;
             }),
           });
@@ -295,6 +345,7 @@ jobs:
 
           let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
           let resolveExtensionRuntime = () => ({ test_runtime_policy: "node", requires_bun: false });
+          let resolveExtensionRuntimes;
           let extensionShards = [];
           let nodeShards = [];
 
@@ -303,6 +354,7 @@ jobs:
             "extension-test-plan": "./scripts/lib/extension-test-plan.mts",
             "bundled-plugin-source-utils": "./scripts/lib/bundled-plugin-source-utils.mts",
             "ci-node-test-plan": "./scripts/lib/ci-node-test-plan.mts",
+            "vitest-build-prerequisites": "./scripts/lib/vitest-build-prerequisites.mts",
           };
           const targetPlanPath = (name) => {
             const mtsPath = targetPlanPaths[name];
@@ -316,6 +368,9 @@ jobs:
             pluginPrereleasePlan = planner.assertPluginPrereleaseTestPlanComplete();
             if (typeof planner.resolvePluginPrereleaseExtensionRuntime === "function") {
               resolveExtensionRuntime = planner.resolvePluginPrereleaseExtensionRuntime;
+            }
+            if (typeof planner.resolvePluginPrereleaseExtensionRuntimes === "function") {
+              resolveExtensionRuntimes = planner.resolvePluginPrereleaseExtensionRuntimes;
             }
           } catch (error) {
             const errorCode =
@@ -337,6 +392,10 @@ jobs:
 
           try {
             const planner = await import(targetPlanPath("extension-test-plan"));
+            const buildPrerequisitesPath = targetPlanPath("vitest-build-prerequisites");
+            const buildPrerequisites = existsSync(buildPrerequisitesPath)
+              ? await import(buildPrerequisitesPath)
+              : undefined;
             const extensionVitestArgs = JSON.parse(
               process.env.EXTENSION_TEST_EXCLUDE_PATTERNS_JSON || "[]",
             ).map((file) => `--exclude=${file}`);
@@ -383,7 +442,7 @@ jobs:
                   .flatMap((shard) => shard.extensionIds)
                   .filter((extensionId) => !fileSplitExtensionIds.includes(extensionId))
               : [];
-            const batchShards = await Promise.all((
+            const batchShards = (await Promise.all((
               hasJobSplitter
                 ? planner.createExtensionTestShards({
                     extensionIds: genericExtensionIds,
@@ -399,8 +458,17 @@ jobs:
               if (runtimePolicy && (runtime.test_runtime_policy !== runtimePolicy || runtime.requires_bun !== (runtimePolicy !== "node"))) {
                 throw new Error(`Target ref does not support requested test_runtime_policy: ${runtimePolicy}`);
               }
-              return {
-                check_name: shard.checkName,
+              const runtimes = fullReleaseValidation && resolveExtensionRuntimes
+                ? await resolveExtensionRuntimes({
+                    planGroups: shard.planGroups,
+                    fullReleaseValidation,
+                    vitestArgs: extensionVitestArgs,
+                  })
+                : [runtime];
+              return runtimes.map((selectedRuntime) => ({
+                check_name: selectedRuntime.test_runtime
+                  ? `${shard.checkName} (${selectedRuntime.test_runtime})`
+                  : shard.checkName,
                 extensions_csv: shard.extensionIds.join(","),
                 exclusion_configs: shard.planGroups.map((group) => ({
                   config: group.config,
@@ -419,9 +487,9 @@ jobs:
                       : "blacksmith-4vcpu-ubuntu-2404",
                 shard_index: shard.index + 1,
                 task: "extensions-batch",
-                ...runtime,
-              };
-            }));
+                ...selectedRuntime,
+              }));
+            }))).flat();
             const telegramShards = [];
             for (const group of [
               ...fileSplitPlanGroups,
@@ -454,6 +522,9 @@ jobs:
                   extensions_csv: [...new Set(includePatterns.map((file) => file.split("/")[1]))].join(","),
                   includePatterns,
                   vitest_config: group.config,
+                  pretest_build_mode: buildPrerequisites?.resolveVitestPretestBuildMode?.([
+                    { configs: [group.config], includePatterns },
+                  ]),
                   exclusion_configs: [{ config: group.config, includePatterns }],
                   vitest_max_workers: 1,
                   runner: "blacksmith-8vcpu-ubuntu-2404",
@@ -553,11 +624,11 @@ jobs:
           const manifest = {
             run_plugin_prerelease_suite: runSuite,
             run_plugin_prerelease_static: runStatic,
-            plugin_prerelease_static_matrix: createMatrix(staticChecks),
+            plugin_prerelease_static_matrix: createMatrix(staticChecks, runStatic),
             run_plugin_prerelease_node: runNode,
-            plugin_prerelease_node_matrix: createMatrix(nodeShards),
+            plugin_prerelease_node_matrix: createMatrix(nodeShards, runNode),
             run_plugin_prerelease_extensions: runExtensions,
-            plugin_prerelease_extension_matrix: createMatrix(extensionShards),
+            plugin_prerelease_extension_matrix: createMatrix(extensionShards, runExtensions),
             run_plugin_prerelease_inspector: runInspector,
             run_plugin_prerelease_docker: runDocker,
             plugin_prerelease_docker_lanes: dockerLanes.join(" "),
@@ -702,8 +773,8 @@ jobs:
     name: ${{ matrix.check_name || 'plugin-prerelease-extension-shard' }}
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner_label || matrix.runner)))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner_label || matrix.runner)) }}
-    timeout-minutes: ${{ matrix.test_runtime_policy == 'dual-all' && 120 || 60 }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'ubuntu-24.04' || (matrix.runner_label || matrix.runner)))) || ((github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'ubuntu-24.04' || (matrix.runner_label || matrix.runner)) }}
+    timeout-minutes: ${{ !matrix.test_runtime && matrix.test_runtime_policy == 'dual-all' && 120 || 60 }}
     strategy:
       fail-fast: false
       max-parallel: 12
@@ -730,8 +801,17 @@ jobs:
 
       - *checkout_exclusion_tooling
 
+      - name: Build extension test runtime
+        if: matrix.pretest_build_mode != null
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_BUILD_PRIVATE_QA: ${{ matrix.pretest_build_mode == 'private-qa' && '1' || '0' }}
+          VITEST: "1"
+        run: pnpm build qaRuntime
+
       - name: Run extension shard
         env:
+          BOAT_TEST_RUNNER: ${{ github.event_name != 'workflow_dispatch' && github.run_attempt == 1 && startsWith(matrix.runner_label || matrix.runner, 'boat') }}
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
@@ -740,6 +820,7 @@ jobs:
           OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_EXTENSION_TASK: ${{ matrix.task }}
           OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ matrix.test_runtime_policy || 'node' }}
+          OPENCLAW_CI_TEST_RUNTIME: ${{ matrix.test_runtime }}
           FRV_TEST_EXCLUDE_PATHS_JSON: ${{ needs.preflight.outputs.extension_test_exclude_patterns_json }}
           FRV_TEST_EXCLUDE_SCOPE: extensions
           FRV_TEST_CONFIGS_JSON: ${{ toJson(matrix.exclusion_configs) }}
@@ -747,13 +828,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          prefix=()
+          if [[ "$BOAT_TEST_RUNNER" == "true" ]]; then
+            # Boat CI runners inherit read/search bypass; tests need ordinary Unix permissions.
+            prefix=(setpriv --inh-caps=-dac_read_search --ambient-caps=-dac_read_search)
+          fi
           case "$OPENCLAW_EXTENSION_TASK" in
             extensions-batch)
               # The batch planner also uses exclusions when composing process targets.
               mapfile -t exclude_args < <(jq -r '.[] | "--exclude=" + .' <<< "$FRV_TEST_EXCLUDE_PATHS_JSON")
               exclusion_options=()
               if (( ${#exclude_args[@]} > 0 )); then exclusion_options=(--allow-empty-after-exclude); fi
-              node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" "${exclusion_options[@]}" -- "${exclude_args[@]}"
+              "${prefix[@]}" node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" "${exclusion_options[@]}" -- "${exclude_args[@]}"
               ;;
             extension-file-shard)
               include_file="${RUNNER_TEMP}/extension-test-include-${GITHUB_JOB}.json"
@@ -769,7 +855,7 @@ jobs:
           EOF
               OPENCLAW_TEST_PROJECTS_PARALLEL=2 \
                 OPENCLAW_VITEST_INCLUDE_FILE="$include_file" \
-                node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test -- "$OPENCLAW_EXTENSION_VITEST_CONFIG"
+                "${prefix[@]}" node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test -- "$OPENCLAW_EXTENSION_VITEST_CONFIG"
               trap - EXIT
               rm -f -- "$include_file"
               ;;

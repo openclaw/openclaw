@@ -3,6 +3,7 @@ import { readControlUiProofOption } from "../../scripts/lib/control-ui-proof-arg
 
 describe("readControlUiProofOption", () => {
   it.each([
+    ["absent option", ["node", "script"], undefined],
     ["first inline", ["node", "script", "--label=first", "--label=second"], "first"],
     ["first split", ["node", "script", "--label", "first", "--label", "second"], "first"],
     ["split then inline", ["node", "script", "--label", "split", "--label=inline"], "inline"],

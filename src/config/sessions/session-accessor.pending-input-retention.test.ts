@@ -1,6 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -10,6 +10,7 @@ import { forceFullGc } from "../../test-utils/retention.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import {
+  bindSessionPendingInputMentionInvitation,
   bindSessionPendingInputSources,
   stageSessionPendingInput,
 } from "./session-accessor.pending-inputs.js";
@@ -49,9 +50,14 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
 });
 
-it.each([false, true])(
-  "releases settled input authority while its timer remains pending (collected: %s)",
-  async (collected) => {
+it.each([
+  { collected: false, invitation: false },
+  { collected: true, invitation: false },
+  { collected: false, invitation: true },
+  { collected: true, invitation: true },
+])(
+  "releases settled input authority while its timer remains pending (collected: $collected, invitation: $invitation)",
+  async ({ collected, invitation }) => {
     const makeTimer = () => setTimeout(() => {}, 60_000);
     async function settle() {
       const entry = { sessionId, skillsSnapshot: { prompt: "synthetic prompt", skills: [] } };
@@ -63,11 +69,23 @@ it.each([false, true])(
           expect(entry.sessionId).toBe(sessionId);
         },
       }))!;
+      if (invitation) {
+        bindSessionPendingInputMentionInvitation(receipt, () => ({
+          invitation: {
+            addedBy: "sender",
+            expectedEntry: { sessionId },
+            profiles: [{ profileId: "guest", aliases: ["guest"], tokens: ["@guest"] }],
+          },
+          assertCurrent: () => {
+            expect(entry.sessionId).toBe(sessionId);
+          },
+        }));
+      }
       const execution = collected
         ? bindSessionPendingInputSources([receipt], message("collected-retention"))!
         : receipt;
       const timer = execution.run(makeTimer);
-      execution.finish("cancelled");
+      execution.finish("cancelled", "failed");
       await execution.settled?.();
       expect(() => execution.run(() => {})).toThrow(SessionPendingInputCustodyError);
       return { reference, timer };

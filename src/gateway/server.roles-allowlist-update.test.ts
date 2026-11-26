@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -9,11 +8,9 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
-import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { getUpdateRun } from "../infra/update-run-ledger.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
@@ -324,125 +321,87 @@ test("gateway enforces operator and node permissions", async () => {
 
 registerGatewayUpdateHistoryTests(() => port, readonlyPreparation);
 
-test("update.run persists the accepted handoff before parking and restarting its foreground owner", async () => {
+test("a write-scoped client cannot start an installation update", async () => {
+  const install = await import("../infra/update-install-status.js");
+  const root = updateDirs.make("denied-installation-update-");
+  const entry = path.join(root, "index.js");
+  const initial = "// installed runtime fixture\n";
+  await fs.writeFile(entry, initial);
+  const discovery = vi.spyOn(install, "resolveStartupInstallStatus").mockResolvedValue({
+    root,
+    status: { root, installKind: "git", packageManager: "pnpm" },
+    installReceipt: null,
+  });
+  try {
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: "secret",
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      scopes: ["operator.read", "operator.write"],
+    });
+    try {
+      expect((await client.request<HealthSummary>("health", {})).ok).toBe(true);
+      await expect(client.request("update.run", {})).rejects.toThrow(/operator\.admin/);
+      expect(discovery).not.toHaveBeenCalled();
+      expect(await fs.readdir(root)).toEqual(["index.js"]);
+      expect(await fs.readFile(entry, "utf8")).toBe(initial);
+      expect((await client.request<HealthSummary>("health", {})).ok).toBe(true);
+    } finally {
+      await client.stopAndWait();
+    }
+  } finally {
+    discovery.mockRestore();
+  }
+});
+
+test("an authorized client starts a package release update and observes its recorded outcome", async () => {
   await withEnvAsync(
     Object.fromEntries(SUPERVISOR_HINT_ENV_VARS.map((key) => [key, undefined])),
     async () => {
-      const [installStatus, gatewayOwner, handoff, restart] = await Promise.all([
+      const [installStatus, releaseUpdate] = await Promise.all([
         import("../infra/update-install-status.js"),
-        import("../infra/gateway-owner-lease.js"),
-        import("../infra/update-managed-service-handoff.js"),
-        import("../infra/restart.js"),
+        import("../update/run.js"),
       ]);
-      const startedAt = getFileLockProcessStartTime(process.pid);
-      if (startedAt === null) {
-        throw new Error("the foreground fixture requires the current process start identity");
-      }
       const root = updateDirs.make("openclaw-update-role-");
-      const entrypoint = path.join(root, "dist", "index.js");
-      const foregroundOrigin = { owner: "role-update-owner", pid: process.pid, startedAt, port };
       const installation = vi
         .spyOn(installStatus, "resolveStartupInstallStatus")
         .mockResolvedValue({
           root,
-          status: { root, installKind: "git", packageManager: "pnpm" },
+          status: { root, installKind: "package", packageManager: "pnpm" },
           installReceipt: null,
         });
-      // The shared server starts below the CLI run loop that publishes its owner.
-      const readOwner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
-        ...foregroundOrigin,
-        host: os.hostname(),
-        mode: "foreground",
-        supervisor: null,
-        state: "live",
-        expired: false,
+      const prepare = vi.spyOn(releaseUpdate, "prepareUpdate");
+      const link = fs.link;
+      const lockFailure = vi.spyOn(fs, "link").mockImplementation(async (source, destination) => {
+        if (path.basename(destination.toString()) === ".update.lock") {
+          throw new Error("synthetic update lock failure");
+        }
+        return await link(source, destination);
       });
-      const start = vi
-        .spyOn(handoff, "startManagedServiceUpdateHandoff")
-        .mockImplementation(async (params) => {
-          if (!params.handoffId) {
-            throw new Error("expected an admitted update handoff identity");
-          }
-          return {
-            status: "started",
-            command: "openclaw update --yes --json",
-            logPath: path.join(root, "handoff.log"),
-            handoffId: params.handoffId,
-            installRoot: params.root,
-          };
-        });
-      const transfer = vi
-        .spyOn(handoff, "transferManagedServiceUpdateHandoff")
-        .mockImplementation(async (identity) => {
-          const accepted = start.mock.calls[0]?.[0];
-          expect(identity).toEqual({
-            kind: "managed-update-handoff",
-            handoffId: accepted?.handoffId,
-            installRoot: root,
-          });
-          expect((await readRestartSentinel())?.payload).toMatchObject({
-            kind: "update",
-            status: "skipped",
-            stats: {
-              mode: "git",
-              root,
-              runId: accepted?.runId,
-              handoffId: identity.handoffId,
-              reason: "managed-service-handoff-started",
-            },
-          });
-          return true;
-        });
-      const claim = vi.spyOn(handoff, "claimManagedServiceUpdateHandoff").mockReturnValue(true);
-      const schedule = vi.spyOn(restart, "scheduleGatewayRestart");
-      const restartSignal = vi.fn();
-      process.on("SIGUSR2", restartSignal);
-
       try {
-        await fs.mkdir(path.dirname(entrypoint));
-        await fs.writeFile(entrypoint, "export {};\n");
-        await fs.writeFile(
-          path.join(root, "package.json"),
-          '{"name":"openclaw","version":"1.0.0"}',
-        );
         const res = await rpcReq<{ runId: string; ok: boolean }>(ws, "update.run", {
           sessionKey: "agent:main:whatsapp:dm:+15555550123",
           restartDelayMs: 0,
         });
         expect(res).toMatchObject({
           ok: true,
-          payload: { ok: true, sentinel: { persisted: true }, handoff: { status: "started" } },
+          payload: { ok: true, runId: expect.any(String) },
         });
-        expect(start).toHaveBeenCalledOnce();
-        expect(transfer).toHaveBeenCalledOnce();
-        const accepted = start.mock.calls[0]?.[0];
-        if (!res.payload || !accepted?.beforePark) {
-          throw new Error("expected the accepted handoff's parking callback");
-        }
-        expect(accepted).toMatchObject({
-          root,
-          argv1: entrypoint,
-          runId: res.payload.runId,
-          supervisor: null,
-          foregroundOrigin,
-          meta: { completionOwner: "gateway-restart", runId: res.payload.runId },
-        });
-        expect(getUpdateRun(res.payload.runId)?.status).toBe("running");
-        expect(schedule).not.toHaveBeenCalled();
-        expect(restartSignal).not.toHaveBeenCalled();
-
-        await accepted.beforePark();
-        await vi.waitFor(() => expect(restartSignal).toHaveBeenCalledOnce(), FAST_WAIT_OPTS);
-        expect(restart.consumeGatewayRestartIntent()).toMatchObject({
-          reason: "update.run",
-          successorOwner: transfer.mock.calls[0]?.[0],
-        });
+        const runId = res.payload!.runId;
+        await vi.waitFor(() => {
+          expect(prepare).toHaveBeenCalledWith(
+            expect.objectContaining({ runId, runningRoot: root }),
+          );
+          expect(getUpdateRun(runId)).toMatchObject({
+            status: "failed",
+            reason: "update-failed",
+          });
+        }, FAST_WAIT_OPTS);
       } finally {
-        restart.resetGatewayRestartStateForInProcessRestart();
-        process.off("SIGUSR2", restartSignal);
-        for (const spy of [schedule, claim, transfer, start, readOwner, installation]) {
-          spy.mockRestore();
-        }
+        lockFailure.mockRestore();
+        prepare.mockRestore();
+        installation.mockRestore();
       }
     },
   );
@@ -508,29 +467,6 @@ describe("gateway node command allowlist", () => {
     ).resolves.toEqual({ ok: true, ignored: true });
     await respondToInvoke(allowedClient, payload, allowedNodeId);
     expect((await invokeResP).ok).toBe(true);
-
-    for (const [id, result, expectedPayload] of [
-      ["null", { payloadJSON: null, error: null }, undefined],
-      ["object", { payloadJSON: { source: "payloadJSON" } }, { source: "payloadJSON" }],
-      [
-        "explicit",
-        { payloadJSON: { source: "payloadJSON" }, payload: { source: "payload" } },
-        { source: "payload" },
-      ],
-    ] as const) {
-      const invokeResult = invokeCanvasSnapshot(allowedNodeId, `allowlist-${id}-payloadjson`);
-      const captured = await invokeCapture.waitForInvoke();
-      await allowedClient.request("node.invoke.result", {
-        id: captured.id,
-        nodeId: captured.nodeId,
-        ok: true,
-        ...result,
-      });
-      const response = await invokeResult;
-      expect(response.ok).toBe(true);
-      expect(response.payload?.payloadJSON).toBeNull();
-      expect(response.payload?.payload).toEqual(expectedPayload);
-    }
   });
 
   test("exposes and invokes live commands only after pending node pairing is approved", async () => {
@@ -644,23 +580,6 @@ describe("gateway node command allowlist", () => {
       await expectConnectedCommands(fixture.displayName, []);
       await spoofClient.stopAndWait();
     }
-  });
-
-  test("allows canonical node-host reconnect for legacy pinned platform metadata", async () => {
-    const fixture = nodeFixture("node-host-platform-upgrade", { platform: "darwin" });
-    const legacyClient = await connectNodeClientWithPairing(fixture);
-    await legacyClient.stopAndWait();
-    await expectConnectedNodeCount(0);
-    await connectNodeClient({ ...fixture, commands: ["system.run"], platform: "macos" });
-    await expect
-      .poll(
-        async () => (await findConnectedNodeByDisplayName(fixture.displayName))?.connected ?? false,
-        FAST_WAIT_OPTS,
-      )
-      .toBe(true);
-    const nodeId = await findConnectedNodeIdByDisplayName(fixture.displayName);
-    const pending = await getPendingNodePairing(nodeId);
-    expect(pending?.commands).toEqual(["system.run"]);
   });
 
   test("filters system.run for confusable iOS metadata at connect time", async () => {

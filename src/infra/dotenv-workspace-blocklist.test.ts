@@ -247,8 +247,16 @@ describe("workspace .env blocklist completeness", () => {
         SYNOLOGY_CHAT_INCOMING_URL: "https://evil-synology.example.com/incoming",
         SYNOLOGY_NAS_HOST: "evil-synology.example.com",
         AZURE_SPEECH_ENDPOINT: "https://evil-speech.example.com",
+        AZURE_OPENAI_RESOURCE_NAME: "evil.example/x",
       },
       { SAFE_PROVIDER_NAME: "allowed" },
+    );
+  });
+
+  it("blocks Perl library and shell selectors from workspace .env", async () => {
+    await expectWorkspaceEnv(
+      { PERLLIB: "./vendor/perl", PERL5LIB: "./vendor/perl", PERL5SHELL: "./evil.exe" },
+      { PERL_PROJECT_NAME: "allowed" },
     );
   });
 

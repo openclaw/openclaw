@@ -32,6 +32,8 @@ type PendingChatCreate = Readonly<{
   canDisplay: () => boolean;
   composer?: CreationComposer;
   displayName?: string;
+  /** Inline image shown as the new agent's avatar until its own identity is saved. */
+  avatarUrl?: string;
   /** Custom group requested by the create; its admitted row lands in that section. */
   category?: string;
   /** A background start the Gateway refused; its route offers Try again. */
@@ -47,7 +49,7 @@ export function createChatSubmissions() {
   let pendingCreate: PendingChatCreate | undefined;
   // Accepted metadata survives admission without retaining the draft's message or composer.
   let acceptedCreate: AcceptedChatCreate | undefined;
-  // Background starts never navigate; each previews only its own session route.
+  // Background starts and displaced admitted drafts preview only their own session route.
   const backgroundCreates = new Map<string, PendingChatCreate>();
   const readCreateFor = (sessionKey: string) => {
     const pending =
@@ -110,12 +112,32 @@ export function createChatSubmissions() {
     retain,
     // Display-only admission state; no run id, outbox attempt or accepted send.
     beginCreate: (pending: PendingChatCreate) => {
+      if (pendingCreate && pendingCreate.composer?.canRecover()) {
+        // Starting another chat cannot revoke an admitted agent's setup recovery.
+        backgroundCreates.set(pendingCreate.creation.sessionKey, pendingCreate);
+      }
       setPendingCreate(pending);
       return () => {
         if (pendingCreate === pending) {
           setPendingCreate(undefined);
         }
+        const key = pending.creation.sessionKey;
+        if (backgroundCreates.get(key) === pending) {
+          backgroundCreates.delete(key);
+          createListeners.publish();
+        }
       };
+    },
+    /** Move the existing setup custody when the Gateway chooses its canonical session. */
+    retargetCreate: (creation: { sessionKey: string; admitted: boolean }, sessionKey: string) => {
+      const previousKey = creation.sessionKey;
+      const background = backgroundCreates.get(previousKey);
+      creation.sessionKey = sessionKey;
+      if (background?.creation === creation) {
+        backgroundCreates.delete(previousKey);
+        backgroundCreates.set(sessionKey, background);
+      }
+      createListeners.publish();
     },
     /** Display-only preview of a background start until its owner admits or retires it. */
     beginBackgroundCreate: (pending: PendingChatCreate) => {
@@ -167,7 +189,21 @@ export function createChatSubmissions() {
     },
     readCreateMessage: (sessionKey: string) => readCreateFor(sessionKey)?.message ?? null,
     readCreateComposer: (sessionKey: string) => readCreateFor(sessionKey)?.composer,
+    /** Live panes may be docked independently of the provisional page route. */
+    readSessionSetupComposer: (sessionKey: string) => {
+      const pending =
+        pendingCreate?.creation.sessionKey === sessionKey
+          ? pendingCreate
+          : backgroundCreates.get(sessionKey);
+      const composer = pending?.composer;
+      return pending?.creation.admitted &&
+        composer?.acceptedSessionKey === sessionKey &&
+        composer.canDisplay()
+        ? composer
+        : undefined;
+    },
     subscribeCreate: createListeners.subscribe,
+    notifyCreate: createListeners.publish,
     readInitial,
     observeInitialSession: (sessionKey: string, owner: object | null, sessionId: string | null) => {
       const submission = readInitial(sessionKey, owner);

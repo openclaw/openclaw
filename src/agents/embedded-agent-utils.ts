@@ -1,7 +1,7 @@
 import { readAssistantThinkingAppend } from "@openclaw/ai/internal/shared";
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-import type { AssistantMessage, ThinkingContent } from "../llm/types.js";
+import type { AssistantHistoryMessage, ThinkingContent } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   isAssistantTextContentBlockType,
@@ -26,7 +26,7 @@ import type { AgentMessage } from "./runtime/index.js";
 
 export { stripDowngradedToolCallText } from "../shared/text/downgraded-tool-call-text.js";
 
-export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
+export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantHistoryMessage {
   return msg?.role === "assistant";
 }
 
@@ -230,14 +230,14 @@ export function extractAssistantVisibleText(
 }
 
 export function extractAssistantCommentaryText(
-  msg: AssistantMessage,
+  msg: AssistantHistoryMessage,
   prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
   projection?: ReturnType<typeof createTextProjection>,
 ): string {
   return prepareEmbeddedAssistantTextForPhase(msg, "commentary", prepareText, projection)();
 }
 
-export function extractEmbeddedAssistantText(msg: AssistantMessage): string {
+export function extractEmbeddedAssistantText(msg: AssistantHistoryMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {
       sanitizeText: (text) => sanitizeAssistantText(text),
@@ -252,7 +252,7 @@ export function extractEmbeddedAssistantText(msg: AssistantMessage): string {
 }
 
 /** Extract native thinking block text; signature-only blocks (no summary) surface nothing. */
-export function extractAssistantThinking(msg: AssistantMessage): string {
+export function extractAssistantThinking(msg: AssistantHistoryMessage): string {
   if (!Array.isArray(msg.content)) {
     return "";
   }
@@ -286,7 +286,7 @@ export function createAssistantThinkingStream() {
     get text() {
       return reasoningText;
     },
-    update(input: string | AssistantMessage["content"], fallback?: string) {
+    update(input: string | AssistantHistoryMessage["content"], fallback?: string) {
       let tail: ThinkingContent | undefined;
       let prefixLength = 0;
       let prefixUnchanged = typeof input !== "string" && reasoningRaw !== undefined;
@@ -455,7 +455,7 @@ function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   return blocks.some((block) => block.type === "thinking") ? blocks : null;
 }
 
-export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
+export function promoteThinkingTagsToBlocks(message: AssistantHistoryMessage): void {
   if (
     !Array.isArray(message.content) ||
     message.content.some((block) => block && typeof block === "object" && block.type === "thinking")
@@ -463,7 +463,7 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
     return;
   }
 
-  const next: AssistantMessage["content"] = [];
+  const next: AssistantHistoryMessage["content"] = [];
   let changed = false;
 
   for (const block of message.content) {

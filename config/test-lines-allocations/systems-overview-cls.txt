@@ -1,2 +1,0 @@
-# Route entry, delayed machine/backup arrival and worker selection preserve desktop geometry.
-61

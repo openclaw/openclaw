@@ -54,7 +54,7 @@ function assertExistingOpenClawStateRuntimeMetadata(
     undefined,
     context,
   );
-  if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+  if (readStateSchemaContentVersion(database) < OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new Error(
       `Existing shared-state database ${pathname} requires schema migration by its owning installation; run openclaw doctor --fix there before using it.`,
     );

@@ -6,6 +6,7 @@ import {
 } from "../../../src/infra/update-run-history-projection.ts";
 import {
   isAcknowledgedAbandonedUpdateRun,
+  isUpdateRepairRun,
   type UpdateRunRecord,
   type UpdateRunStep,
 } from "../../../src/infra/update-run-record.ts";
@@ -23,21 +24,71 @@ export function updateRunStepOwner(step: string): string {
   return step.replace(/^(?:diagnostic|warning):(.+?)(?::\d+)?$/u, "$1");
 }
 
+function isServingUpdateTarget(
+  run: UpdateRunRecord,
+  { version, buildId }: UpdateRunServingIdentity,
+) {
+  const { reason, before, after, target, verification } = run;
+  const rollback = verification.rollbackOutcome?.status;
+  // Rollback can rewrite `after` with the restored package, even at the same version.
+  if (
+    (reason !== "post-update-failed" &&
+      reason !== "version-mismatch" &&
+      reason !== "build-id-mismatch") ||
+    rollback === "succeeded" ||
+    rollback === "failed" ||
+    verification.recovery?.packageRollbackVerified ||
+    (after.version && after.version !== version) ||
+    (target.version && target.version !== version) ||
+    (target.sha && target.sha !== after.sha)
+  ) {
+    return false;
+  }
+  return after.buildId
+    ? buildId === after.buildId &&
+        buildId !== before.buildId &&
+        buildId !== verification.runningBuildId
+    : reason !== "build-id-mismatch" &&
+        target.kind === "package" &&
+        Boolean(
+          version &&
+          target.version === version &&
+          verification.runningVersion &&
+          version !== verification.runningVersion &&
+          version !== before.version,
+        );
+}
+
 export function projectUpdateRun(
   run: UpdateRunRecord,
   connected = true,
   serving?: UpdateRunServingIdentity,
 ) {
   const terminal = run.status !== "running";
+  // Machine lint receipts stay in saved diagnostics, not user-facing steps or output.
+  const visibleSteps = run.steps.filter(({ step }) => !step.startsWith("finalize:doctor-lint:"));
+  const repairRun = isUpdateRepairRun(run);
   const managedByOcm = run.target.installationMethod === "ocm";
   const historical = connected ? projectUpdateRunHistory(run, serving) : null;
+  const targetNote =
+    historical && serving && isServingUpdateTarget(run, serving)
+      ? t("updates.run.servingTarget")
+      : null;
   const report = historical
-    ? { headline: historical, lines: [], markdown: historical }
+    ? {
+        headline: historical,
+        lines: targetNote ? [targetNote] : [],
+        markdown: targetNote ? `${historical}\n\n${targetNote}` : historical,
+      }
     : renderUpdateRunReport(run);
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
-    const recorded = run.steps.find((step) => step.step === phase);
-    if (phase === "repairing" && !recorded && phase !== run.phase) {
+    const recorded = visibleSteps.find((step) => step.step === phase);
+    if (
+      !recorded &&
+      phase !== run.phase &&
+      (phase === "repairing" || (repairRun && phase !== "finished"))
+    ) {
       return [];
     }
     let status: UpdateRunStep["status"] = recorded?.status ?? "pending";
@@ -59,7 +110,7 @@ export function projectUpdateRun(
     return [{ step: phase, status, label: t(`updates.run.phase.${phase}`) }];
   });
   // Supplemental receipts share the ledger but do not represent installation steps.
-  const steps = run.steps.filter(
+  const steps = visibleSteps.filter(
     (step) =>
       !step.step.startsWith("notice:") &&
       !step.step.startsWith("diagnostic:") &&
@@ -68,10 +119,10 @@ export function projectUpdateRun(
   // An active operation owns the panel even before it has emitted diagnostic text.
   const detailStep =
     steps.findLast((step) => step.status === "in_progress") ??
-    run.steps.findLast((step) => step.status === "in_progress" && step.detail) ??
-    run.steps.findLast((step) => step.detail);
+    visibleSteps.findLast((step) => step.status === "in_progress" && step.detail) ??
+    visibleSteps.findLast((step) => step.detail);
   const groupedDetails = new Map<string, string[]>();
-  for (const step of run.steps) {
+  for (const step of visibleSteps) {
     if (!step.detail) {
       continue;
     }
@@ -92,21 +143,31 @@ export function projectUpdateRun(
   const booleanState = (value: boolean | undefined): "pass" | "warn" | "fail" | "pending" =>
     value === undefined ? (terminal ? "warn" : "pending") : value ? "pass" : "fail";
   const oracles = [
-    { name: "service", state: booleanState(facts.serviceRunning) },
+    {
+      name: "service",
+      state: booleanState(facts.serviceRunning),
+      observed: facts.serviceRunning !== undefined,
+    },
     {
       name: "version",
       state:
         identity.kind === "unavailable"
           ? "warn"
           : booleanState(identity.kind === "unobserved" ? undefined : identity.kind === "verified"),
+      observed: identity.kind !== "unobserved",
     },
     {
       name: "plugins",
       state: booleanState(
         facts.pluginErrors === undefined ? undefined : facts.pluginErrors.length === 0,
       ),
+      observed: facts.pluginErrors !== undefined,
     },
-    { name: "channels", state: booleanState(facts.channelsReady) },
+    {
+      name: "channels",
+      state: booleanState(facts.channelsReady),
+      observed: facts.channelsReady !== undefined,
+    },
   ] as const;
   const completed = phases.filter((phase) => phase.status === "completed").length;
   const total = phases.filter((phase) => phase.status !== "skipped").length;
@@ -138,6 +199,7 @@ export function projectUpdateRun(
     })),
     detailStep: detailStep?.step,
     details,
-    oracles: managedByOcm ? [] : oracles,
+    historicalVerificationLabel: historical ? t("updates.run.recordedVerification") : undefined,
+    oracles: managedByOcm ? [] : oracles.filter((oracle) => !terminal || oracle.observed),
   };
 }

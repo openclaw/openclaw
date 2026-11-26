@@ -64,9 +64,13 @@ it("uses live evidence when a failed-job rerun retains an earlier preview", () =
     "${{ steps.prepared_plan.outputs.evidence_attempt }}",
   );
   expect(step(jobs.preview_plugins_npm, "Read qualified npm preparation").run).toContain(
-    'echo "evidence_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"',
+    '--evidence-output "$RUNNER_TEMP/plugin-npm-evidence.json"',
+  );
+  expect(step(jobs.preview_plugins_npm, "Upload immutable publication evidence").if).toBe(
+    "steps.prepared_plan.outputs.evidence_attempt != ''",
   );
   for (const [previewAttempt, currentAttempt, expectedId] of [
+    ["", "1", ""],
     ["1", "1", "900"],
     ["1", "2", ""],
     ["2", "2", "900"],
@@ -306,6 +310,7 @@ it("records the resolved candidate and already-published dispositions without pr
         all.map((entry) => ({ ...entry, localPath: "/producer/private" })),
       ),
       CANDIDATES: JSON.stringify([all[0]]),
+      CORE_DEFERRALS: "[]",
     },
   });
   expect(result.status, result.stderr).toBe(0);
@@ -313,6 +318,7 @@ it("records the resolved candidate and already-published dispositions without pr
     sourceSha: "a".repeat(40),
     all,
     candidates: [all[0]],
+    coreDeferrals: [],
     skippedPublished: [all[1]],
   });
 });
@@ -322,17 +328,9 @@ it.each([
   ["qualified full publication", "full", "latest", "full-release-validation", true],
   ["beta publication", "beta", "beta", "full-release-validation", false],
   ["focused beta evidence", "beta", "latest", "authorized-beta-focused-v1", false],
-  [
-    "retired waiver cannot qualify stable publication",
-    "beta",
-    "latest",
-    "full-release-validation",
-    false,
-    "Operator approved soak waiver",
-  ],
 ])(
   "creates bootstrap approval only with qualified evidence: %s",
-  (_name, profile, distTag, evidenceMode, expected, waiver = "") => {
+  (_name, profile, distTag, evidenceMode, expected) => {
     const parent = parse(
       readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
     ) as Workflow;
@@ -355,7 +353,7 @@ it.each([
           },
           needs: {
             resolve_release_target: {
-              outputs: { release_profile: profile, stable_soak_waiver: JSON.stringify(waiver) },
+              outputs: { release_profile: profile },
             },
           },
         }),
@@ -390,16 +388,6 @@ it.skipIf(process.platform === "win32").each([
     { approval: { releaseTag: "v2026.9.33" }, env: { PACKAGE_VERSION: "2026.9.33" } },
   ],
   ["profile", { approval: { releaseProfile: "beta" } }],
-  [
-    "retired waiver",
-    {
-      approval: {
-        releaseProfile: "beta",
-        stableSoakWaiver: "2026.9.3 approved",
-        stableSoakWaiverSource: "explicit",
-      },
-    },
-  ],
   ["attestation", { attestationExit: 1 }],
   ["tag moved", { tagSha: "c".repeat(40) }],
   ["target", { approval: { targetSha: "c".repeat(40) } }],
@@ -497,6 +485,7 @@ it.each([
     for (const script of [
       "release-tooling-identity.mjs",
       "lib/record-shared.mjs",
+      "lib/plain-gh.mjs",
       "openclaw-npm-extended-stable-release.mjs",
       "plugin-sdk-api-release-evidence.mjs",
       "lib/release-version.mjs",
@@ -697,12 +686,13 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
 );
 
 it.each([
-  ["main-pinned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, true, true],
-  ["mismatched transport", `refs/heads/release-ci/${"c".repeat(12)}-123`, true, false],
-  ["untrusted tooling", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, false],
+  ["main-pinned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, true, true, "a"],
+  ["candidate-owned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, true, "b"],
+  ["mismatched transport", `refs/heads/release-ci/${"c".repeat(12)}-123`, true, false, "a"],
+  ["untrusted tooling", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, false, "a"],
 ])(
   "admits extended-stable FRV preflight through %s",
-  (_label, workflowRef, toolingReachable, admitted) => {
+  (_label, workflowRef, toolingReachable, admitted, sourcePrefix) => {
     const root = tempDirs.make("plugin-extended-stable-preflight-");
 
     writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2026.8.33" }));
@@ -715,7 +705,7 @@ class GitFailure(Exception):
 target = os.environ["SOURCE_REF"]
 def git_output(_workspace, *args):
     if args[0] == "rev-parse":
-        return target
+        return args[1] if args[1] == os.environ["WORKFLOW_SHA"] else target
     raise RuntimeError("unexpected git_output call")
 def run_git(_workspace, *args, **_kwargs):
     if args[0] == "merge-base":
@@ -737,6 +727,7 @@ sys.modules["ci_git_owner"] = types.SimpleNamespace(
       {
         REQUIRE_NPM_PUBLISH_ENVIRONMENT: "false",
         WORKFLOW_REF: workflowRef,
+        SOURCE_REF: sourcePrefix.repeat(40),
         TOOLING_REACHABLE: String(toolingReachable),
         PREFLIGHT_ONLY: "true",
         NPM_DIST_TAG: "extended-stable",
@@ -891,11 +882,12 @@ it("binds preflight to an exact source SHA without release-publish approval", ()
     ).toBe(expected);
   }
   const sourceSetup = step(preview, "Setup Node environment");
-  const preparedSetup = step(preview, "Setup trusted Node for prepared publication");
+  const preparedSetup = step(preview, "Setup qualification verifier dependencies");
+  const preparedInstall = step(preview, "Install qualification verifier dependencies");
   const preparedPlan = step(preview, "Read qualified npm preparation");
   const toolingInstall = step(preview, "Install trusted plugin tooling dependencies");
   const preparationSteps = previewSteps.filter((candidate) =>
-    [sourceSetup, preparedSetup, preparedPlan, toolingInstall].includes(candidate),
+    [sourceSetup, preparedSetup, preparedInstall, preparedPlan, toolingInstall].includes(candidate),
   );
   for (const preparedArtifact of ["", "qualified-preparation"]) {
     const enabled = preparationSteps.filter(
@@ -905,17 +897,40 @@ it("binds preflight to an exact source SHA without release-publish approval", ()
     );
     expect(enabled.map((candidate) => candidate.name)).toEqual(
       preparedArtifact
-        ? ["Setup trusted Node for prepared publication", "Read qualified npm preparation"]
+        ? [
+            "Setup qualification verifier dependencies",
+            "Install qualification verifier dependencies",
+            "Read qualified npm preparation",
+          ]
         : ["Setup Node environment", "Install trusted plugin tooling dependencies"],
     );
   }
   expect(sourceSetup.uses).toBe("./.github/actions/setup-node-env");
   expect(sourceSetup.if).toBe("inputs.prepared_artifact == ''");
   expect(preparedSetup.if).toBe("inputs.prepared_artifact != ''");
+  expect(preparedSetup.uses).toBe("./.release-tooling/.github/actions/setup-pnpm-store-cache");
+  expect(preparedSetup.with).toMatchObject({
+    "cache-mode": "off",
+    "package-manager-file": ".release-tooling/package.json",
+    "lockfile-path": ".release-tooling/pnpm-lock.yaml",
+    "node-version": "${{ env.NODE_VERSION }}",
+  });
+  expect(preparedInstall.if).toBe(preparedSetup.if);
+  expect(preparedInstall["working-directory"]).toBe(".release-tooling");
+  expect(preparedInstall.env).toMatchObject({ CI: "true" });
+  expect(preparedInstall.run).toBe(
+    "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+  );
   expect(preparedPlan.if).toBe(preparedSetup.if);
+  expect(preparedInstall.if).toBe(preparedSetup.if);
+  expect(preparedInstall["working-directory"]).toBe(".release-tooling");
+  expect(preparedSetup.uses).toBe("./.release-tooling/.github/actions/setup-pnpm-store-cache");
   expect(previewSteps.indexOf(sourceSetup)).toBeGreaterThan(trustedIndex);
   expect(previewSteps.indexOf(preparedSetup)).toBeGreaterThan(trustedIndex);
-  expect(previewSteps.indexOf(preparedPlan)).toBeGreaterThan(previewSteps.indexOf(preparedSetup));
+  expect(previewSteps.indexOf(preparedInstall)).toBeGreaterThan(
+    previewSteps.indexOf(preparedSetup),
+  );
+  expect(previewSteps.indexOf(preparedPlan)).toBeGreaterThan(previewSteps.indexOf(preparedInstall));
   expect(trusted.env).toMatchObject({
     RELEASE_CANDIDATE_BRANCH:
       "${{ github.event_name == 'workflow_dispatch' && inputs.release_candidate_branch || '' }}",

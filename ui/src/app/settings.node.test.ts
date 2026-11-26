@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
+import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { openSlot } from "../pages/chat/sidebar-layout.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createMediaQueryList } from "../test-helpers/media-query.ts";
@@ -348,14 +349,14 @@ describe("gateway settings and layout persistence", () => {
     expect(loadSettings().navWidth).toBe(258);
     expect(readStored()).not.toHaveProperty("navCollapsed");
 
-    // Corrupt the persisted list; load falls back to the empty rail.
+    // Corrupt the persisted list; load falls back to the default rail.
     writeStored({
       ...readStored(),
       railShortcuts: "route:tasks",
       navWidth: 220,
       navCollapsed: true,
     });
-    expect(loadSettings().sidebarEntries).toEqual([]);
+    expect(loadSettings().sidebarEntries).toEqual(DEFAULT_SIDEBAR_ENTRIES);
     expect(loadSettings().navWidth).toBe(258);
     expect(loadSettings().navCollapsed).toBe(false);
   });
@@ -389,13 +390,13 @@ describe("gateway settings and layout persistence", () => {
         themeMode: "dark",
         navWidth: 300,
       });
-      expect(settings.sidebarEntries).toEqual([]);
+      expect(settings.sidebarEntries).toEqual(DEFAULT_SIDEBAR_ENTRIES);
       saveSettings(settings);
       expect(readStored().sessionsByGateway).toEqual(sessionsByGateway);
       expect(readStored()).toMatchObject({
         sidebarEntries,
         sidebarPinnedRoutes,
-        railShortcuts: [],
+        railShortcuts: DEFAULT_SIDEBAR_ENTRIES,
       });
       expect(loadSettings()).toEqual(settings);
     },

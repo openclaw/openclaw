@@ -14,6 +14,7 @@ const { syncBuiltinESMExports } = require("node:module");
 const sqlite = require("node:sqlite");
 const expected = ${JSON.stringify(databasePath)};
 const root = ${JSON.stringify(fs.realpathSync(path.dirname(directory)))};
+Object.assign(process.env, { TMPDIR: root, TMP: root, TEMP: root });
 const relativePath = (from, to) => path.relative(path.toNamespacedPath(from), path.toNamespacedPath(to));
 const original = sqlite.DatabaseSync;
 sqlite.DatabaseSync = new Proxy(original, {
@@ -45,7 +46,7 @@ sqlite.DatabaseSync = new Proxy(original, {
       const relative = relativePath(root, absolute);
       const physicalRelative = relativePath(root, physical);
       const within = (value) => !path.isAbsolute(value) && value !== ".." && !value.startsWith(".." + path.sep);
-      assert(relative !== "" && within(relative), "SQLite must stay in its owned fixture");
+      assert(relative !== "" && within(relative), "SQLite must stay in its owned fixture: " + JSON.stringify({ database: relative, temporaryRoot: relativePath(root, process.env.TMPDIR || process.env.TMP || process.env.TEMP || process.cwd()), stateRoot: process.env.OPENCLAW_STATE_DIR ? relativePath(root, process.env.OPENCLAW_STATE_DIR) : null }));
       assert(within(physicalRelative), "SQLite alias escaped its owned fixture");
     }
     if (path.basename(location) === "managed-update-handoffs.sqlite") {
