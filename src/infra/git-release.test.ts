@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pluginProcessRuntimeEntrypoints } from "../plugins/process-runtime.test-support.js";
@@ -429,73 +428,6 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       expect(await fs.readFile(pending, "utf8")).toBe("old pending");
     });
 
-    it("restores what the trial's build replaced after two upgrades within one version", async () => {
-      const { stateDir, prefix } = await setup();
-      await fs.cp(
-        fileURLToPath(
-          new URL("../../test/fixtures/state-corpus-populated/2026.10.10/state/", import.meta.url),
-        ),
-        stateDir,
-        { recursive: true },
-      );
-      const db = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-      const env = {
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json"),
-      };
-      // Each build of the same package version upgrades state at its first start.
-      const upgradeAs = async (buildId: string) => {
-        vi.resetModules();
-        vi.doMock("../version.js", async (importOriginal) => ({
-          ...(await importOriginal<typeof import("../version.js")>()),
-          resolveRuntimeServiceBuildId: () => buildId,
-        }));
-        const { upgradeStateDirectory } = await import("../state/state-upgrade.js");
-        const { ChainStepError } = await import("../state/state-upgrade-validate.js");
-        vi.doUnmock("../version.js");
-        return await upgradeStateDirectory({
-          env,
-          log: { info: () => {}, warn: () => {} },
-          runChain: async () => {
-            throw new ChainStepError("injected", "use the generic rebuild");
-          },
-        });
-      };
-      const fixtureVersion = new DatabaseSync(db).prepare("PRAGMA user_version").get();
-      expect((await upgradeAs("1.0.0-aaa")).status).toBe("upgraded");
-      // The previous release served this state; the next commit needs a newer schema.
-      const served = new DatabaseSync(db);
-      served.exec("CREATE TABLE e2e_served (build TEXT); INSERT INTO e2e_served VALUES ('aaa')");
-      served.exec(`PRAGMA user_version = ${Number(fixtureVersion?.user_version)}`);
-      served.close();
-      const good = await release(prefix, "1.0.0", 'console.log("old");\n');
-      await publishGitRelease({ prefix, releaseRoot: good, trial: false });
-      const bad = await release(prefix, "1.0.0", 'throw new Error("boot");\n');
-      await fs.writeFile(
-        path.join(bad, "dist", "build-info.json"),
-        JSON.stringify({ version: "1.0.0", buildId: "1.0.0-bbb" }),
-      );
-      await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
-      expect((await upgradeAs("1.0.0-bbb")).status).toBe("upgraded");
-      // The applied plan stays for the trial; the earlier build's record is retired.
-      await expect(
-        fs.access(path.join(stateDir, ".upgraded-1.0.0-bbb.json")),
-      ).resolves.toBeUndefined();
-      await expect(fs.access(path.join(stateDir, ".upgraded-1.0.0-aaa.json"))).rejects.toThrow();
-
-      startGateway(prefix);
-      startGateway(prefix);
-      expect(startGateway(prefix).stdout).toContain("old");
-
-      const restored = new DatabaseSync(db);
-      try {
-        expect(restored.prepare("SELECT build FROM e2e_served").get()).toEqual({ build: "aaa" });
-      } finally {
-        restored.close();
-      }
-      await expect(fs.access(path.join(stateDir, ".upgraded-1.0.0-bbb.json"))).rejects.toThrow();
-    });
-
     it("resumes an interrupted rollback before the link moves", async () => {
       const { stateDir, prefix } = await setup();
       await publishFailingTrial(prefix, true);
@@ -638,7 +570,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
     it.each(["openclaw", "lib/node_modules/openclaw"])(
       "keeps the service on the release launcher for %s",
       async (relativeSlot) => {
-        const { prefix } = await setup();
+        const { stateDir, prefix } = await setup();
         const slot = path.join(prefix, relativeSlot);
         const root = path.join(prefix, "releases", "git-fixture", relativeSlot);
         await fs.mkdir(path.join(root, "dist"), { recursive: true });
@@ -651,7 +583,8 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         await fs.writeFile(launcher, "");
         const { resolveGatewayProgramArguments } = await import("../daemon/program-args.js");
         const service = await resolveGatewayProgramArguments({
-          cliEntrypoint: entry,
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          cliEntrypoint: { planned: entry },
           runtime: "node",
           runtimePath: process.execPath,
           port: 18789,

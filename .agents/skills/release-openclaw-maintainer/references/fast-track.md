@@ -7,48 +7,36 @@ checks. The `authorized-beta-focused-v1` evidence mode remains supported.
 
 ## Approval model
 
-Use the normal release-managers group and existing release approval process.
+The sole approval gate is the existing GitHub Actions `npm-release` environment,
+reviewed by an eligible npm release manager. In the release publish run, choose
+**Review deployments**, select **npm-release**, then **Approve and deploy**.
+That decision authorizes the exact workflow inputs, including the validation
+exception. `scripts/release-approval-receipt.mjs` verifies the environment approval
+history and binds the exception packet to the publication receipt.
+This replaces the duplicate conversation/approval-URL gate that blocked fast-track
+release use ([#204820](https://github.com/openclaw/openclaw/pull/204820)).
 
-**An agent must never approve a fast-track release, including through a token
-that happens to belong to a release manager.** Before taking any fast-track
-action, obtain explicit approval from **a human in the release-managers
-group**. That human may be the release manager who requested the fast-track;
-an agent may prepare the request but never decide it. Generic release
-ownership, permission to prepare/publish, silence, a previous approval or an
-agent's interpretation of intent is not explicit fast-track approval.
-
-The human must review the exact action, candidate, artifacts, scope, run/attempt,
-expiry and request digest. Record the approver, explicit decision, timestamp,
-permalink and exact request/digest alongside normal release evidence. The group
-conversation provides the decision history; the existing `npm-release`
-environment and `scripts/release-approval-receipt.mjs` remain the publication
-approval record. Neither substitutes for the other. Reject/expired/changed
-requests require a fresh explicit approval; changed contents require a new ID.
-
-This is a deliberate **procedural trust boundary**. Shared human GitHub tokens
-can technically be used by agents. A GitHub identity, environment approval or
-receipt cannot prove an independent human acted. The release skills prohibit
-agent self-approval; this design does not claim to technically prevent it.
-Use the existing release-manager membership, not a new email allowlist or
-domain-wide approval access.
+There is no separate fast-track approval service, Firebase record, chat/group
+conversation, issue comment, approval URL, or manually supplied approver/time.
+Do not ask the requester to create one. Agents may prepare exception evidence
+and dispatch within their task authority, but must never approve the GitHub
+environment using a human's token. Leave that approval to the release manager.
 
 ## Prepare a request
 
 ```sh
-pnpm release:publish-preflight approval request --request request.json
+pnpm release:publish-preflight fast-track request --request request.json
 ```
 
-This local-only command validates the request and prints its canonical payload,
-SHA-256 digest, pending-human-review instructions and `publicationAuthorized:
-false`. It does not post a message, record a decision, contact a service, poll
-status, dispatch a workflow or authorize validation skipping. Share the request
-and digest in the normal release-managers group. Inspect decisions in that
-conversation and publication approvals through the existing GitHub workflow.
-There is no `approval approve`, `reject` or `status` command.
+This local-only command validates the request and prints its canonical payload
+and digest. It does not approve publication, contact a service or dispatch a
+workflow. Assemble the packet below from the request and digest; do not add an
+`approval` object. Preflight and artifact preparation do not require a separate
+human chat decision. Publication still waits for the GitHub environment approval.
 
 The contract in `scripts/lib/release-fast-track-contract.mts` binds repository,
-release tag/channel, candidate commit, published reference release/commit and
-validation-evidence digest, complete delta, policy, exact artifact digests,
+release tag/channel, candidate commit, published reference release/commit,
+complete delta, policy, exact artifact digests,
 publication scope, run/attempt, lowercase UUIDv4 request ID, expiry and explicit
 action. Canonical serialization sorts artifacts and scope before hashing.
 Persist the exact packet with release evidence; a digest alone is not approval.
@@ -56,7 +44,11 @@ Persist the exact packet with release evidence; a digest alone is not approval.
 ## Publication policies
 
 - `approved-fast-track-v1`: **at most 20 commits AND 15,000 total added/deleted
-  lines** since a published, fully validated ancestor. Exclude only files named
+  lines** since a published ancestor release that was not itself fast-tracked.
+  The publisher checks only that the reference GitHub release is published, not
+  a draft, targets the reference commit and carries no fast-track assets. It does
+  not replay the reference's historical validation evidence: shipping already
+  passed that release's own publication gates. Exclude only files named
   `package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`,
   `yarn.lock`, `bun.lock` or `bun.lockb` at any depth from LOC. All commits still
   count, including dependency-only commits. Count other generated files. Blob
@@ -76,10 +68,49 @@ publication authorization. Publishers retain original FRV evidence and record
 **validation skipped by approved fast-track**, not fictional success. An artifact
 that was never built and sealed successfully cannot be authorized by approval.
 
-## Publish an approved request
+## Prepare artifacts without validation
+
+When the explicit maintainer instruction is to fast-track, do not run a full
+validation cycle merely to obtain artifacts. Use the existing isolated FRV
+dispatcher with `-f rerun_group=build-only` and the normal exact candidate,
+publication-selection and C/Q/P admission inputs. This mode builds and seals
+npm, plugin and Docker publication artifacts but does not dispatch CI,
+prerelease, release-check, live, soak or performance validation. npm source,
+SDK, dependency and contents validation also stays skipped. Build/package and
+artifact-integrity checks remain mandatory. Do not use the normal full-validation
+checklist to prepare a fast-track.
+
+```sh
+node scripts/full-release-validation-at-sha.mjs \
+  --sha <C> --target-ref <release-branch> --workflow-sha <Q> \
+  --admission-workflow-sha <P> --admission-workflow-ref main \
+  -f validation_purpose=publish -f rerun_group=build-only \
+  -f release_profile=stable -f publication_selection_json="$PUBLICATION_SELECTION"
+```
+
+Use the actual intended publication selection and release profile, as in the
+normal admission flow. This example does not grant dispatch or publication
+authority.
+
+Both the independently admitted qualification tooling Q and trusted publisher
+P must contain build-only support. For an older candidate C, select a reviewed
+Q containing this support rather than changing C or falling back to
+`rerun_group=all`. Unsupported tooling is a blocker, not permission to start
+hours of validation. No build-only dispatch or publication is authorized by
+this instruction alone; retain the explicit human fast-track direction.
+
+Wait for successful artifact preparation. The dispatcher and `pnpm frv verify`
+report preparation separately from validation. Retain the immutable manifest,
+which honestly records skipped validation, then prepare the exact exception
+packet against its run/attempt and sealed artifacts. Build-only evidence is
+never normal successful-validation evidence, reusable qualification or a fully
+validated baseline. Publish only through the existing fast-track approval path
+below. Failed builds or missing seals still block publication.
+
+## Publish through GitHub environment approval
 
 Keep `release_evidence_mode=full-release-validation`. Supply one additional
-`fast_track_approval` JSON input to the existing publisher; the preflight helper
+`fast_track_request` JSON input to the existing publisher; the preflight helper
 reads that JSON from a local file:
 
 ```sh
@@ -89,24 +120,18 @@ pnpm release:publish-preflight \
   --full-release-validation-run-attempt <original-frv-attempt> \
   --workflow-sha <trusted-publisher-sha> \
   --npm-dist-tag latest \
-  --fast-track-approval approved-request.json
+  --fast-track-request fast-track-request.json
 ```
 
-The normal preflight prints the dispatch command with the approval packet
+The normal preflight prints the dispatch command with the exception packet
 included. Dispatch only within the separately granted publication authority.
 Do not change the candidate, rebuild publication artifacts, or replace the
 original FRV merely to fit the exception.
 
 The packet contains:
 
-- `request`: the existing immutable `FastTrackRequest` reviewed by the human.
+- `request`: the immutable `FastTrackRequest` describing this validation exception.
 - `digest`: `fastTrackRequestDigest(request)`, including its `sha256:` prefix.
-- `approval`: `approver` (human identity), `decidedAt` (ISO timestamp) and `url`
-  (the explicit decision permalink in the release-managers group).
-- `referenceRunId` and `referenceRunAttempt`: required for
-  `approved-fast-track-v1`, identifying the strictly successful validation of
-  the published, fully validated reference. A previous fast-track is ineligible.
-  The partial-FRV policy does not require these baseline-run fields.
 
 Publishers compare the request with independently authenticated candidate,
 original FRV attempt, admitted publication selection and sealed artifacts:
@@ -128,15 +153,15 @@ and selection digests. A caller-supplied digest or summary is not authenticated
 evidence.
 
 The original FRV manifest remains unchanged, including failed or incomplete
-results. Retain the approval packet separately with the release evidence;
+results. Retain the exception packet separately with the release evidence;
 postpublish, recovery and closeout must use that same publication binding.
 Neither approved policy establishes a new fully validated baseline. Without a
 packet, the ordinary strict validation requirements still apply.
 
 ### Expiry and replay
 
-Approval must be explicit, unexpired and bound to unchanged contents when
-publication starts. An already admitted publisher may finish after expiry;
+The request must be unexpired and bound to unchanged contents when the
+GitHub environment-approved publication starts. An already admitted publisher may finish after expiry;
 recovery and closeout reuse its exact original packet only through the existing
 publication receipt. The receipt binds the full packet digest and its verified
 approval-job start timestamp must precede request expiry. An expired packet
@@ -155,13 +180,9 @@ node scripts/run-vitest.mjs run --config test/manual-release-approval.config.ts
 
 The suite stays outside normal CI discovery and refuses execution with `CI` set.
 
-## Public approval packets
+## Public request packets
 
-Approval packets are public release evidence. Include only public-safe risk descriptions
-and decision references. Never copy private release-managers messages, incident details,
-credentials or access-bearing URLs into the request. Keep the private discussion in its
-original group; disclose a conversation permalink only when the human authorizes making
-that reference public. The packet does not copy or authenticate that conversation.
-
-Context: [publisher integration #204520](https://github.com/openclaw/openclaw/pull/204520)
-retains these packets in public Actions artifacts and publication receipts.
+Request packets are public release evidence. Include only public-safe risk
+reasons and artifact/validation evidence. Do not include private conversations,
+credentials or access-bearing URLs. The GitHub environment history and existing
+publication receipt are the approval record, not a chat permalink.

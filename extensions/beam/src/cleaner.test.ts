@@ -61,7 +61,7 @@ describe("packaged Beam cleaner", () => {
       );
       vi.mocked(runCommandBuffered).mockImplementation(runtime.runCommandBuffered);
       const { raw, packet } = await cleanBeamCandidate(
-        candidate,
+        JSON.stringify(candidate),
         new AbortController().signal,
         createBeamExecutableResolver(process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT!),
       );
@@ -84,7 +84,7 @@ describe("packaged Beam cleaner", () => {
       });
     `);
     const result = await cleanBeamCandidate(
-      candidate,
+      JSON.stringify(candidate),
       new AbortController().signal,
       resolveExecutable,
     );
@@ -99,7 +99,7 @@ describe("packaged Beam cleaner", () => {
   ])("rejects failed or invalid child output", async (script, expected) => {
     await fixture(script);
     const error: unknown = await cleanBeamCandidate(
-      candidate,
+      JSON.stringify(candidate),
       new AbortController().signal,
       resolveExecutable,
     ).catch((reason: unknown) => reason);
@@ -111,7 +111,7 @@ describe("packaged Beam cleaner", () => {
   it("rejects oversized input before resolving the executable", async () => {
     const large = { ...candidate, title: "x".repeat(4 * 1024 * 1024) };
     await expect(
-      cleanBeamCandidate(large, new AbortController().signal, resolveExecutable),
+      cleanBeamCandidate(JSON.stringify(large), new AbortController().signal, resolveExecutable),
     ).rejects.toThrow("4 MiB");
     expect(resolveExecutable).not.toHaveBeenCalled();
   });
@@ -119,7 +119,9 @@ describe("packaged Beam cleaner", () => {
   it("stops a pending native clean when its service is deactivated", async () => {
     await fixture("process.stdin.resume();setInterval(() => {}, 1000)");
     const signal = AbortSignal.timeout(100);
-    await expect(cleanBeamCandidate(candidate, signal, resolveExecutable)).rejects.toMatchObject({
+    await expect(
+      cleanBeamCandidate(JSON.stringify(candidate), signal, resolveExecutable),
+    ).rejects.toMatchObject({
       name: "TimeoutError",
     });
     expect(runCommandBuffered).toHaveBeenCalledOnce();

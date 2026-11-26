@@ -141,6 +141,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   });
   const archive = createSessionRowProjectionArchive({
     rows,
+    indexes,
     dirty,
     put,
     config: () => cfg,
@@ -158,8 +159,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       recents.track(row);
     },
   });
-  const markRelated = (row: records.Row, includeChildren = true) =>
-    archive.markRelated(row, indexes, includeChildren);
+  const { markRelated } = archive;
   function remove(id: string) {
     archive.forget(id);
     transcriptUpdates.remove(id);
@@ -243,7 +243,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     runAsOwner: inOwnerContext,
     registryFactsReady: () => Boolean(inOwnerContext(subagents.snapshotIdentity)),
     acquireEntry,
-    markRelated,
     placement: placementFacts,
     invalidateFacts: (row, domain) => {
       const categoryOnly = rowFacts.invalidate(row, domain);
@@ -273,7 +272,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     put,
     acquire(row, entry) {
       enqueue(acquireEntry(row, entry));
-      markRelated(row);
     },
     setConfig(next) {
       cfg = next;

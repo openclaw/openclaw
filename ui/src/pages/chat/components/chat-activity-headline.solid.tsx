@@ -111,7 +111,7 @@ export function createActivityHeadlinePresentation(props: {
 
 export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
   const shown = () => props.activity;
-  const name = () => shown()?.name;
+  const name = () => (shown()?.compaction ? undefined : shown()?.name);
   return (
     <>
       <Show
@@ -123,7 +123,10 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
             aria-label={name()}
             aria-hidden={name() ? undefined : "true"}
           >
-            <Show when={name()} fallback={<Icon name="listTree" />}>
+            <Show
+              when={name()}
+              fallback={<Icon name={shown()?.compaction ? "layers" : "listTree"} />}
+            >
               {(tool) => (
                 <ChatToolIcon
                   style={{ display: "contents" }}

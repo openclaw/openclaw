@@ -19,6 +19,12 @@ An update request alone does not authorize switching installation methods.
 
 Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. Before retiring an old source wrapper, the updater rechecks its identity and contents and confirms that it still owns the update. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
 
+On Linux and macOS, when `openclaw update --channel stable` or
+`openclaw update --channel beta` switches a Git release installation back to npm,
+the update also moves its managed Gateway to the npm package if the update can
+verify and rewrite the service definition. A switch with `--no-restart` leaves
+the service definition alone. Git-to-Git release updates keep the Git launcher.
+
 Candidate validation failures leave the old Gateway serving. After activation,
 package recovery can restore the retained previous package only when the shared
 and affected pre-existing per-agent database schema versions are unchanged and

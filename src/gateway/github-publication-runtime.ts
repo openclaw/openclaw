@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
+import { isMemoryPressureHigh } from "../infra/host-memory.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -147,7 +147,7 @@ export function createGitHubPublicationRuntime(params: {
     reconcileNeeded = true;
   };
   const reconcilePublications = async (isStopping?: () => boolean) => {
-    const isPaused = () => isStopping?.() || isConstrainedProcessLowOnMemory();
+    const isPaused = () => isStopping?.() || isMemoryPressureHigh();
     if (isPaused()) {
       return;
     }

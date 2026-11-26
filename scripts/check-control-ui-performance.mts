@@ -126,8 +126,10 @@ const controlUiPerformanceBudgets = {
   // Ayaan accepted the automations (#200808, #200817) and catalog/Skill Workshop (#202515,
   // #202537, #202531, #202572, #202532) redesign styles (2026-11-22): measured on main 265577c4
   // at 344,948 B gzip / 1,779,112 B raw, with no added headroom. Trim tracked in #203445.
-  totalCssGzipBytes: 344_948,
-  totalCssRawBytes: 1_779_112,
+  // Vyctor approved the Gridlines layout-fix batch (2026-11-25): main b21965c2 plus 30 of its
+  // 34 CSS PRs measured 348,171 B gzip / 1,792,058 B raw; 512 B / 2,048 B cover the other four.
+  totalCssGzipBytes: 348_683,
+  totalCssRawBytes: 1_794_106,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

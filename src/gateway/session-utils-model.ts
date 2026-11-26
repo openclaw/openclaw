@@ -46,6 +46,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
+import { resolveSessionProjectedAutoRuntime } from "./session-runtime-resolution.js";
 import {
   createSessionRowModelCacheKey,
   type GatewayModelThinkingFacts,
@@ -194,7 +195,7 @@ type GatewaySessionThinkingProjectionParams = Parameters<
 export function resolveGatewaySessionThinkingProjectionInternal(
   params: GatewaySessionThinkingProjectionParams,
 ) {
-  const { acpMeta, agentRuntime, runtimeSelectionLocked } =
+  const { acpMeta, agentRuntime, runtimeSelectionLocked, configuredRuntime, embeddedAutoRuntime } =
     resolveGatewaySessionRuntimeProjection(params);
   // ACP owns runtime selection, but context-window projection still needs model metadata.
   const logicalEntry = params.modelCatalog
@@ -207,17 +208,24 @@ export function resolveGatewaySessionThinkingProjectionInternal(
     ? concretizeAgentRuntime(acpMeta.backend ?? agentRuntime.id)
     : agentRuntime.source === "session"
       ? agentRuntime.id
-      : (params.runtimeResolution?.effective(params, logicalEntry) ??
-        resolveEffectiveAgentRuntime({
-          cfg: params.cfg,
-          provider: params.provider,
-          modelId: params.model,
-          modelApi: logicalEntry?.api,
-          modelBaseUrl: logicalEntry?.baseUrl,
-          agentScope: { kind: "prepared", agentId: params.agentId },
-          sessionKey: params.sessionKey,
-          sessionEntry: params.entry,
-        }));
+      : !logicalEntry?.api && !normalizeOptionalString(logicalEntry?.baseUrl)
+        ? configuredRuntime === "auto"
+          ? (embeddedAutoRuntime ??
+            params.runtimeResolution?.effective(params) ??
+            resolveSessionProjectedAutoRuntime(params))
+          : configuredRuntime
+        : (params.runtimeResolution?.effective(params, logicalEntry, embeddedAutoRuntime) ??
+          resolveEffectiveAgentRuntime({
+            cfg: params.cfg,
+            provider: params.provider,
+            modelId: params.model,
+            modelApi: logicalEntry?.api,
+            modelBaseUrl: logicalEntry?.baseUrl,
+            preparedAutoRuntime: embeddedAutoRuntime,
+            agentScope: { kind: "prepared", agentId: params.agentId },
+            sessionKey: params.sessionKey,
+            sessionEntry: params.entry,
+          }));
   const catalogEntry =
     logicalEntry && params.modelCatalogRouteVariants
       ? (params.rowContext?.selectModelCatalogRuntimeEntry ?? selectModelCatalogRuntimeEntry)({

@@ -6,12 +6,20 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
-import type { AdmittedRunOperatorRoleFacts } from "../agents/admitted-run-operator-authority.types.js";
+import type {
+  AdmittedRunOperatorRoleFacts,
+  TurnGrant,
+} from "../agents/admitted-run-operator-authority.types.js";
 import {
   prepareOperatorModelPolicy,
+  readOperatorModelPolicyMembership,
   restoreOperatorModelPolicySnapshot,
+  type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
-import { isConfiguredCommandOwner } from "../auto-reply/command-auth.js";
+import {
+  isConfiguredCommandOwner,
+  prepareCommandOwnerAuthority,
+} from "../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import {
@@ -21,10 +29,7 @@ import {
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
-import {
-  GatewayDispatchUnavailableError,
-  GatewayOperatorRecoveryAuthorizationError,
-} from "../infra/restart-recovery-errors.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -49,7 +54,11 @@ import type {
 import { resolveGatewayAuthPolicyGrant } from "./auth-policy.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { gatewayPersonPrincipalAuthError, type ResolvedGatewayAuth } from "./auth.js";
-import { prepareChannelOperatorAuthority } from "./channel-operator-authority.js";
+import {
+  prepareChannelOperatorAdmin,
+  prepareChannelOperatorAuthority,
+} from "./channel-operator-authority.js";
+import type { CronAuthenticatedChannelRequester } from "./cron-creator-authority-grant.types.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   readOpenClawIdTunnelPrincipal,
@@ -60,17 +69,13 @@ import {
   GatewayOperatorAccessDeniedError,
   resolvePreparedGatewayOperatorAccessAuthority,
 } from "./operator-access-policy.js";
-import { operatorRoleSubject } from "./operator-role-enforcement.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
+import { isOperatorRoleEnforcedFor, operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import { intersectOperatorRunModelPolicy } from "./operator-run-authority.js";
-import {
-  hasAutomationAdminDelegation,
-  type QueuedOperatorRecoverySource,
-  type RestartRecoveryOperatorSource,
-} from "./operator-run-recovery-source.codec.js";
+import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
-import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
 
 export type OperatorAdmissionContext = Pick<
@@ -82,9 +87,7 @@ export type OperatorAdmissionContext = Pick<
 >;
 
 type Facts = (
-  | (Extract<QueuedOperatorRecoverySource, { kind: "gateway" }> & {
-      source?: RestartRecoveryOperatorSource;
-    })
+  | Extract<QueuedOperatorRecoverySource, { kind: "gateway" }>
   | Extract<QueuedOperatorRecoverySource, { kind: "channel" }>
   | {
       kind: "recorded";
@@ -94,6 +97,8 @@ type Facts = (
       > & { assignedRole: string | null; githubLogin?: string | null };
     }
   | { kind: "live"; authority: AdmittedRunOperatorAuthority }
+  // A session's person with no recorded source: a background turn admits only their role.
+  | { kind: "person"; snapshot: { profileId: string } }
 ) & { agentId?: string };
 type PreparedOperatorAdmission = {
   config: OpenClawConfig;
@@ -113,7 +118,6 @@ type PreparedOperatorAdmission = {
         };
       }
     | undefined;
-  channelIdentity: UserChannelIdentity | undefined;
   ingressAuth: ResolvedGatewayAuth;
 };
 
@@ -131,13 +135,13 @@ function admissionError(error: unknown, facts: Facts): never {
     ((facts.kind === "gateway" && facts.snapshot.sourceIngress === "principal") ||
       (facts.kind === "live" && facts.authority.ingress?.signal.aborted))
   ) {
-    throw new GatewayOperatorRecoveryAuthorizationError(undefined, { cause: error });
+    throw new OperatorRefusalError("sign-in-ended", { cause: error });
   }
   if (
     error instanceof GatewayOperatorAccessDeniedError ||
     error instanceof UserProfileNotFoundError
   ) {
-    throw new GatewayOperatorRecoveryAuthorizationError(error.message, { cause: error });
+    throw new OperatorRefusalError("access-ended", { cause: error });
   }
   throw error;
 }
@@ -213,7 +217,6 @@ export async function prepareOperatorAdmission(
       ingress,
       paired,
       channel,
-      channelIdentity,
       ingressAuth,
     };
   } catch (error) {
@@ -223,11 +226,106 @@ export async function prepareOperatorAdmission(
   }
 }
 
+/** The only producer of what a turn may do; every entry kind reaches it through admission. */
+export function decideTurnGrant(scopes: readonly string[]): TurnGrant {
+  const owner = operatorScopeSatisfied("operator.admin", scopes);
+  const sessionsWrite = operatorScopeSatisfied("operator.sessions.write", scopes);
+  return Object.freeze({
+    owner,
+    automations: owner
+      ? "manage"
+      : operatorScopeSatisfied("operator.cron", scopes)
+        ? "self"
+        : "none",
+    skillAuthoring: sessionsWrite,
+    questionReplace: sessionsWrite,
+    commands: owner ? "all" : "none",
+  });
+}
+
+/** A process the operator runs on this host (CLI, standalone MCP, MCP owner token) is the owner. */
+export const LOCAL_HOST = Object.freeze({ grant: decideTurnGrant(["operator.admin"]) });
+
+/** A request may do what its admitted run may; a bare connection gets what its scopes decide. */
+export const readGatewayRequestAdmission = (client?: GatewayClient | null) => ({
+  grant:
+    client?.internal?.operatorRunAuthority?.grant ?? decideTurnGrant(client?.connect?.scopes ?? []),
+});
+
+/** What channel ingress knows about a sender; admission decides what it may do. */
+export type ChannelSenderFacts = Readonly<
+  UserChannelIdentity & { authentication: "verified" | "asserted" }
+>;
+
+const isChannelOwner = (config: OpenClawConfig, sender: UserChannelIdentity) =>
+  isConfiguredCommandOwner(config, { ...sender, channel: sender.channelId });
+
+/** Gather a channel sender's link, operator profile and command-owner policy once, at ingress. */
+export async function prepareChannelSenderAdmission(
+  { authentication, ...principal }: ChannelSenderFacts,
+  getConfig: () => OpenClawConfig,
+) {
+  const verified = authentication === "verified";
+  const requester = verified ? await prepareUserChannelIdentityAuthority(principal) : undefined;
+  // An asserted identifier can match a configured owner, never a personal link.
+  const owner = verified || isChannelOwner(getConfig(), principal) ? principal : undefined;
+  const prepared = { identity: principal, prepared: requester };
+  return {
+    requester,
+    operatorAuthority: verified
+      ? await prepareChannelOperatorAuthority(getConfig(), prepared)
+      : undefined,
+    commandOwnerPrincipal: owner,
+    commandOwnerAuthority: owner && (await prepareCommandOwnerAuthority(getConfig(), prepared)),
+  };
+}
+
+/** A verified sender in the global `commands.ownerAllowFrom` is the owner principal. */
+export function decideChannelOwnerPrincipal(config: OpenClawConfig, sender: UserChannelIdentity) {
+  return isChannelOwner(config, sender)
+    ? {
+        profileId: GATEWAY_OWNER_PROFILE_ID,
+        canonicalIdentity: null,
+        assignedRole: null,
+        scopes: ["operator.admin"],
+        gatewayAccessGrant: null,
+        channelOwner: { ...sender },
+      }
+    : undefined;
+}
+
+/** A plugin-run ingress turn gets the grant of its sender's channel owner principal, if any. */
+export const readIngressSenderAdmission = (
+  config: OpenClawConfig,
+  opts: { messageChannel?: string; accountId?: string; senderId?: string | null },
+) => ({
+  grant: decideTurnGrant(
+    decideChannelOwnerPrincipal(config, {
+      channelId: opts.messageChannel ?? "",
+      accountId: opts.accountId ?? "",
+      senderId: opts.senderId ?? "",
+    })?.scopes ?? [],
+  ),
+});
+
+function intersectOperatorRunModelPolicy(
+  original: PreparedOperatorModelPolicy | undefined,
+  current: PreparedOperatorModelPolicy | undefined,
+): PreparedOperatorModelPolicy | undefined {
+  return original &&
+    current &&
+    readOperatorModelPolicyMembership(original) !== readOperatorModelPolicyMembership(current)
+    ? Object.freeze({
+        models: Object.freeze(current.models.filter(original.allows)),
+        allows: (ref: Parameters<typeof original.allows>[0]) =>
+          original.allows(ref) && current.allows(ref),
+      })
+    : (current ?? original);
+}
+
 type OperatorAdmissionDecision = {
   authority: AdmittedRunOperatorAuthority;
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
-  automationAdmin: boolean;
-  controlUiAdmin: boolean;
   release: () => void;
 };
 
@@ -241,7 +339,7 @@ export function decideOperatorAdmission(
 ): OperatorAdmissionDecision;
 /** Decide once from prepared owners and committed config; the run keeps only frozen facts. */
 export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperatorAdmission) {
-  const { config, identity, ingress, paired, channel, channelIdentity, context } = prepared;
+  const { config, identity, ingress, paired, channel, context } = prepared;
   const live = facts.kind === "live" ? facts.authority : undefined;
   const snapshot = facts.kind === "live" ? facts.authority : facts.snapshot;
   const gateway = facts.kind === "gateway" ? facts.snapshot : undefined;
@@ -261,21 +359,21 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     }
     if (principal) {
       if (config.gateway?.openclawId?.enabled === false) {
-        throw new GatewayOperatorRecoveryAuthorizationError();
+        throw new OperatorRefusalError("sign-in-ended");
       }
       try {
         if (readOpenClawIdTunnelPrincipal(principal.peerKey) === null) {
           if (config.gateway?.openclawId?.enabled) {
             throw new GatewayOperatorAccessUnavailableError();
           }
-          throw new GatewayOperatorRecoveryAuthorizationError();
+          throw new OperatorRefusalError("sign-in-ended");
         }
         if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
-          throw new GatewayOperatorRecoveryAuthorizationError();
+          throw new OperatorRefusalError("sign-in-ended");
         }
       } catch (error) {
         if (
-          error instanceof GatewayOperatorRecoveryAuthorizationError ||
+          error instanceof OperatorRefusalError ||
           error instanceof GatewayOperatorAccessUnavailableError
         ) {
           throw error;
@@ -288,12 +386,20 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     const profile = identity?.readCurrentFacts(gateway?.aliasBindingIds).profile;
     const profileId = profile?.profileId ?? snapshot.profileId;
     const refuse = () => {
-      throw new GatewayOperatorRecoveryAuthorizationError();
+      throw new OperatorRefusalError("sign-in-ended");
     };
+    if (live?.channelOwner && !isChannelOwner(config, live.channelOwner)) {
+      throw new OperatorRefusalError("owner-removed");
+    }
     if (profileId !== snapshot.profileId || (binding && binding.profileId !== profileId)) {
       refuse();
     }
-    let scopes = snapshot.scopes;
+    let scopes =
+      facts.kind === "person"
+        ? ["operator.admin"]
+        : facts.kind === "live"
+          ? facts.authority.scopes
+          : facts.snapshot.scopes;
     let grant = channel
       ? channel.operatorProfile.gatewayAccessGrant
       : live
@@ -307,7 +413,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         channel.operatorProfile.profileId !== snapshot.profileId ||
         !channel.isCurrent(config)
       ) {
-        throw new GatewayOperatorRecoveryAuthorizationError();
+        throw new OperatorRefusalError("access-ended");
       }
       scopes = intersectOperatorScopes(scopes, channel.operatorProfile.scopes);
     }
@@ -419,7 +525,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
       const boundProfileId =
         bound.principal.kind === "owner" ? GATEWAY_OWNER_PROFILE_ID : bound.principal.profileId;
       if (bound.signal.aborted || boundProfileId !== snapshot.profileId) {
-        throw new GatewayOperatorRecoveryAuthorizationError();
+        refuse();
       }
       scopes = intersectOperatorScopes(scopes, bound.scopeCeiling);
     }
@@ -427,19 +533,17 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
       profile &&
       (gateway?.sourceIngress === "principal" || live?.ingress) &&
       !principal &&
-      profileId !== GATEWAY_OWNER_PROFILE_ID
-    ) {
-      const error = gatewayPersonPrincipalAuthError(
+      profileId !== GATEWAY_OWNER_PROFILE_ID &&
+      gatewayPersonPrincipalAuthError(
         prepared.ingressAuth,
         config,
         profile.emails,
         operatorRoleSubject(profile),
-      );
-      if (error) {
-        throw new GatewayOperatorRecoveryAuthorizationError(error);
-      }
+      )
+    ) {
+      throw new OperatorRefusalError("access-ended");
     }
-    if (profile && (gateway || live || facts.kind === "recorded")) {
+    if (profile && facts.kind !== "channel") {
       const access =
         principal?.kind === "owner"
           ? null
@@ -468,17 +572,18 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     );
     if (role) {
       scopes = intersectOperatorScopes(scopes, role.scopes);
+    } else if (facts.kind === "person" && profileId !== GATEWAY_OWNER_PROFILE_ID) {
+      // Without a recorded source, a person has only what a named role gives them.
+      scopes = [];
     }
     const agents = role?.agents ?? (!identity ? live?.rolePolicy?.agents : undefined);
     if (facts.agentId && agents && agents !== "*" && !agents.includes(facts.agentId)) {
-      throw new GatewayOperatorRecoveryAuthorizationError(
-        `Your operator role cannot create sessions for agent "${facts.agentId}".`,
-      );
+      throw new OperatorRefusalError("role-denies", {
+        action: `start a session for agent "${facts.agentId}"`,
+      });
     }
     if (scopes.length === 0) {
-      throw new GatewayOperatorRecoveryAuthorizationError(
-        "Gateway access is not active for this requester; ask an administrator to restore access.",
-      );
+      throw new OperatorRefusalError("role-denies");
     }
     const originalModels =
       live?.modelPolicy ??
@@ -493,18 +598,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         manifestPlugins: getProcessGatewayPluginMetadataSnapshot() ?? [],
       }),
     );
-    const requesterOwner =
-      facts.kind === "channel"
-        ? channelIdentity !== undefined &&
-          (isConfiguredCommandOwner(config, {
-            channel: channelIdentity.channelId,
-            accountId: channelIdentity.accountId,
-            senderId: channelIdentity.senderId,
-          }) ||
-            operatorScopeSatisfied("operator.admin", scopes))
-        : facts.kind === "gateway" && facts.source && facts.source.kind !== "gateway"
-          ? principal?.kind !== "member"
-          : operatorScopeSatisfied("operator.admin", scopes);
     const authority = createAdmittedRunOperatorAuthority({
       profileId,
       canonicalIdentity: identity ? { profileId } : null,
@@ -525,7 +618,8 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         facts.kind === "channel"
           ? { reference: facts.snapshot.reference, modelPolicy: originalModels }
           : undefined,
-      requesterOwner,
+      channelOwner: live?.channelOwner,
+      grant: decideTurnGrant(scopes),
       modelPolicy,
       rolePolicy: role
         ? {
@@ -556,14 +650,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     return {
       authority,
       authenticatedUserProfile,
-      automationAdmin: Boolean(
-        gateway &&
-        hasAutomationAdminDelegation(gateway) &&
-        operatorScopeSatisfied("operator.admin", scopes),
-      ),
-      controlUiAdmin: Boolean(
-        gateway?.controlUiAdmin && operatorScopeSatisfied("operator.admin", scopes),
-      ),
       release: () => identity?.release(),
     };
   } catch (error) {
@@ -571,5 +657,45 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     return admissionError(error, facts);
   } finally {
     ingress?.release();
+  }
+}
+
+/**
+ * A source-less scheduled job's requester grant (configured owner, linked admin, or the profile
+ * as a session person); the run takes only this grant. Undefined when admission refuses.
+ */
+export async function admitScheduledRequesterGrant(
+  config: OpenClawConfig,
+  agentId: string,
+  requester:
+    | { kind: "channel"; requester: CronAuthenticatedChannelRequester }
+    | { kind: "profile"; profileId: string },
+): Promise<TurnGrant | undefined> {
+  try {
+    if (requester.kind === "channel") {
+      const { channel, accountId, senderId } = requester.requester;
+      const sender = { channelId: channel, accountId, senderId };
+      const scopes =
+        decideChannelOwnerPrincipal(config, sender)?.scopes ??
+        (await prepareChannelOperatorAdmin(config, sender))?.operatorProfile.scopes;
+      return scopes && decideTurnGrant(scopes);
+    }
+    const { profileId } = requester;
+    const subject = operatorRoleSubject(
+      captureResidentUserProfileAccess(profileId).readCurrentFacts(),
+    );
+    // Accepted edge: without named roles, a profile requester has always been the owner.
+    if (!isOperatorRoleEnforcedFor(config, subject)) {
+      return decideTurnGrant(["operator.admin"]);
+    }
+    const facts = { kind: "person", snapshot: { profileId }, agentId } as const;
+    const admitted = decideOperatorAdmission(
+      facts,
+      await prepareOperatorAdmission(facts, { getRuntimeConfig: () => config }),
+    );
+    admitted.release();
+    return admitted.authority.grant;
+  } catch {
+    return undefined;
   }
 }

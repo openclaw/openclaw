@@ -11,6 +11,10 @@ if (process.env.CI) {
 export default createScopedVitestConfig(
   [
     "test/manual-release-approval.checks.ts",
+    "test/manual-build-only-workflow.checks.ts",
+    "test/manual-build-only-artifacts.checks.ts",
+    "test/manual-build-only-evidence.checks.ts",
+    "test/manual-build-only-parent.checks.ts",
     "test/manual-fast-track-publication.checks.ts",
     "test/manual-fast-track-receipt.checks.ts",
     "test/manual-fast-track-button.checks.ts",

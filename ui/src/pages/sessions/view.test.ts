@@ -370,13 +370,63 @@ describe("sessions view", () => {
     expect(keyboardContextMenu.defaultPrevented).toBe(true);
   });
 
-  it("keeps pinned sessions above newer unpinned sessions", async () => {
+  it("does not import a historical shared pin into an empty personal layout", async () => {
     await renderSettled([
       createRow("newer", { updatedAt: 200 }),
       createRow("pinned", { updatedAt: 100, pinned: true, pinnedAt: 300 }),
     ]);
 
-    expectTexts("tbody .session-data-row .session-key-cell__primary", ["pinned", "newer"]);
+    expectTexts("tbody .session-data-row .session-key-cell__primary", ["newer", "pinned"]);
+  });
+
+  it("keeps eligible personal pins in sidebar order before column sorting, including after a reorder", async () => {
+    const rows = [
+      createRow("rail", { updatedAt: 100 }),
+      createRow("a", { updatedAt: 50 }),
+      createRow("z", { updatedAt: 1 }),
+      createRow("archived", { updatedAt: 30, archived: true }),
+    ];
+    const selector = "tbody .session-data-row .session-key-cell__primary";
+    await renderSettled(rows, {
+      personalSidebarEntries: [
+        "session-rail:rail",
+        "session:missing",
+        "session:archived",
+        "session:z",
+        "session:a",
+      ],
+    });
+    expectTexts(selector, ["z", "a", "rail", "archived"]);
+    await renderSettled(rows, {
+      personalSidebarEntries: ["session:a", "session:z"],
+      sortColumn: "key",
+      sortDir: "asc",
+    });
+    expectTexts(selector, ["a", "z", "archived", "rail"]);
+  });
+
+  it("returns two snoozed pins to their saved positions on successive deadlines without new inputs", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    vi.setSystemTime(1_000);
+    const selector = "tbody .session-data-row .session-key-cell__primary";
+    await renderSettled(
+      [
+        createRow("ordinary", { updatedAt: 100 }),
+        createRow("second", { updatedAt: 50, snoozedUntil: 2_000 }),
+        createRow("first", { updatedAt: 1, snoozedUntil: 3_000 }),
+      ],
+      { personalSidebarEntries: ["session:first", "session:second"] },
+    );
+    expectTexts(selector, ["ordinary", "second", "first"]);
+    vi.advanceTimersByTime(1_001);
+    flush();
+    expectTexts(selector, ["second", "ordinary", "first"]);
+    vi.advanceTimersByTime(1_000);
+    flush();
+    expectTexts(selector, ["first", "second", "ordinary"]);
   });
 
   it("keeps session filters in the header popover without a count badge", async () => {

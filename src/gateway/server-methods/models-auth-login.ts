@@ -7,6 +7,7 @@ import {
 import { resolveNativeModelPrimary } from "../../agents/agent-scope-config.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { runModelsAuthLoginFlowForGateway } from "../../commands/models/auth.js";
+import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveManifestDeclaredProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
 import {
@@ -102,10 +103,11 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
           throw new Error("That provider login is no longer available.");
         }
       };
-      // An agent without a chosen model gets this account's recommended model (else its
-      // first available one), verified and selected by the saved-sign-in activation owner.
+      // An agent without a chosen model gets the model the sign-in recommends (as
+      // `openclaw onboard` applies it), else the catalog's recommended model, else the
+      // first available one, verified and selected by the saved-sign-in activation owner.
       // A primary set by the operator, before or during sign-in, is never replaced.
-      const resolveFirstModel = async (profileId: string) => {
+      const resolveFirstModel = async (profileId: string, signInModel: string | undefined) => {
         const config = context.getRuntimeConfig();
         const agentId = params.agentId ?? resolveDefaultAgentId(config);
         if (resolveNativeModelPrimary(config, agentId)) {
@@ -118,25 +120,34 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
           // Discover the new account's own catalog before choosing from it.
           params: { agentId, provider: choice.providerId, refresh: true },
         });
-        const usable = models.filter(
-          (model) =>
-            normalizeProviderId(model.provider) === provider &&
-            model.available === true &&
-            model.manualSelectionAllowed !== false,
-        );
-        const model = usable.find((entry) => entry.recommended === true) ?? usable[0];
-        if (!model) {
+        const usable = models
+          .filter(
+            (model) =>
+              normalizeProviderId(model.provider) === provider &&
+              model.available === true &&
+              model.manualSelectionAllowed !== false,
+          )
+          .map((model) => ({
+            model,
+            ref: model.id.startsWith(`${model.provider}/`)
+              ? model.id
+              : `${model.provider}/${model.id}`,
+          }));
+        const recommended = signInModel && normalizeAgentModelRefForConfig(signInModel);
+        const first =
+          usable.find(({ ref }) => normalizeAgentModelRefForConfig(ref) === recommended) ??
+          usable.find(({ model }) => model.recommended === true) ??
+          usable[0];
+        if (!first) {
           context.logGateway.info(
             `${choice.choiceLabel}: sign-in saved; the account lists no available model to select`,
           );
         }
-        return model
+        return first
           ? {
               kind: toSavedAuthSetupKind(profileId),
               ...(params.agentId ? { agentId: params.agentId } : {}),
-              modelRef: model.id.startsWith(`${model.provider}/`)
-                ? model.id
-                : `${model.provider}/${model.id}`,
+              modelRef: first.ref,
               selectModel: true,
             }
           : undefined;
@@ -247,7 +258,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
               const profileId = result.profiles[0]?.profileId;
               const activation =
                 params.selectModel === true && profileId
-                  ? await resolveFirstModel(profileId)
+                  ? await resolveFirstModel(profileId, result.defaultModel)
                   : undefined;
               if (activation) {
                 try {
