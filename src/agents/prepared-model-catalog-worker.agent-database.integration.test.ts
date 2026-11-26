@@ -147,9 +147,19 @@ describe("Gateway catalog worker agent database readers", () => {
         } finally {
           writer.close();
         }
+        using survivorPosts = vi.spyOn(catalogWorkers[0]!, "postMessage");
         const survivorAuth = await loadPreparedModelRuntimeAuth(fixture.snapshots[1]!, {
           providerIds: [survivorProfile.provider],
         });
+        if (workspaces === "distinct") {
+          const tasks = survivorPosts.mock.calls
+            .map(([message]) => message)
+            .filter(
+              (message) => isRecord(message) && isRecord(message.input) && "value" in message.input,
+            );
+          expect(tasks).toHaveLength(1);
+          expect(tasks[0]).not.toHaveProperty("input.value.pluginMetadataSnapshot");
+        }
         expect(survivorAuth?.authStore.profiles[survivorProfileId]).toEqual(survivorProfile);
         expect(readCatalogWorkers()).toEqual(catalogWorkers);
         expect(catalogWorkers[0]!.threadId).not.toBe(-1);
