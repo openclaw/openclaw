@@ -64,38 +64,45 @@ const log = createSubsystemLogger("models-auth-status");
 const PROVIDER_REVOKE_TIMEOUT_MS = 30_000;
 
 /**
- * The auth method that declares account actions for a provider's saved OAuth sign-ins,
- * read from the loaded plugin registry; a status read never loads a plugin.
+ * A provider's auth methods from the loaded plugin registry; a status read never
+ * loads a plugin to find its account actions.
  */
-function findOAuthAccountMethod(provider: string): ProviderAuthMethod | undefined {
+function listLoadedAuthMethods(provider: string): readonly ProviderAuthMethod[] {
   const registry =
     getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
   const providerId = normalizeProviderId(provider);
-  return registry?.providers
-    .find((entry) => normalizeProviderId(entry.provider.id) === providerId)
-    ?.provider.auth.find((method) => method.revoke || method.accountManagementUrl);
+  return (
+    registry?.providers.find((entry) => normalizeProviderId(entry.provider.id) === providerId)
+      ?.provider.auth ?? []
+  );
 }
 
 function projectOAuthAccountActions(
   provider: string,
 ): ModelAuthStatusProvider["oauthAccountActions"] {
-  const method = findOAuthAccountMethod(provider);
-  if (!method) {
+  const methods = listLoadedAuthMethods(provider);
+  // Disconnect and the manage link may come from different auth methods.
+  const revoking = methods.find((method) => method.revoke);
+  const managing = methods.find(
+    (method) =>
+      method.accountManagementUrl && URL.parse(method.accountManagementUrl)?.protocol === "https:",
+  );
+  const disconnectLabel = revoking?.disconnectLabel?.trim();
+  const manageLabel = managing?.accountManagementLabel?.trim();
+  if (!revoking && !managing?.accountManagementUrl) {
     return undefined;
   }
-  const disconnectLabel = method.disconnectLabel?.trim();
-  const manageLabel = method.accountManagementLabel?.trim();
-  const manageUrl =
-    method.accountManagementUrl && URL.parse(method.accountManagementUrl)?.protocol === "https:"
-      ? method.accountManagementUrl
-      : undefined;
-  const actions: NonNullable<ModelAuthStatusProvider["oauthAccountActions"]> = {
-    ...(method.revoke ? { disconnect: disconnectLabel ? { label: disconnectLabel } : {} } : {}),
-    ...(manageUrl
-      ? { manage: { url: manageUrl, ...(manageLabel ? { label: manageLabel } : {}) } }
+  return {
+    ...(revoking ? { disconnect: disconnectLabel ? { label: disconnectLabel } : {} } : {}),
+    ...(managing?.accountManagementUrl
+      ? {
+          manage: {
+            url: managing.accountManagementUrl,
+            ...(manageLabel ? { label: manageLabel } : {}),
+          },
+        }
       : {}),
   };
-  return actions.disconnect || actions.manage ? actions : undefined;
 }
 
 function resolveAuthRefreshScope(cfg: OpenClawConfig): {
@@ -357,8 +364,8 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       if (revoke) {
         const profileId = removedProfiles[0]!;
         const credential = store.profiles[profileId];
-        const method = findOAuthAccountMethod(provider);
-        if (credential?.type !== "oauth" || !method?.revoke) {
+        const revokeGrant = listLoadedAuthMethods(provider).find((method) => method.revoke)?.revoke;
+        if (credential?.type !== "oauth" || !revokeGrant) {
           respondError(
             respond,
             ErrorCodes.INVALID_REQUEST,
@@ -368,7 +375,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         }
         // The saved sign-in stays until the provider confirms the grant is gone.
         try {
-          await method.revoke({
+          await revokeGrant({
             profileId,
             credential,
             config: cfg,

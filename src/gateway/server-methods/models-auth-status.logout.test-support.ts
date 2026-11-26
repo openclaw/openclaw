@@ -190,7 +190,15 @@ export function registerModelAuthLogoutTests({
         provider: {
           id: "acme",
           label: "Acme Cloud Plan",
+          // A management-only method declared first must not hide the revoking one.
           auth: [
+            {
+              id: "device",
+              label: "Sign in on another device",
+              kind: "device_code",
+              run: vi.fn(),
+              accountManagementUrl: "https://acme.example/connections",
+            },
             {
               id: "oauth",
               label: "Sign in with Acme",
@@ -198,7 +206,6 @@ export function registerModelAuthLogoutTests({
               run: vi.fn(),
               revoke,
               disconnectLabel: "Disconnect Acme Account",
-              accountManagementUrl: "https://acme.example/connections",
             },
           ],
         },
