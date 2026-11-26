@@ -3,7 +3,6 @@ import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 // Doctor health contributions preserve the ordered interactive doctor flow while
 // exposing the same checks to structured lint and repair commands.
-import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
@@ -36,6 +35,7 @@ import {
   resolveDoctorMode,
   resolveDoctorWorkspaceDir,
   shouldDeferPostActivationInspections,
+  measureDoctorContribution,
 } from "./doctor-health-contribution-utils.js";
 import {
   recordDoctorHealthWarnings,
@@ -610,7 +610,7 @@ async function runDoctorHealthContributionList(
         await withDoctorProgress(
           contribution.label,
           () =>
-            measureGatewayBootstrapStep(`doctor.contribution.${contribution.id}`, async () => {
+            measureDoctorContribution(ctx, contribution, async () => {
               if (!runWithPluginMetadataSnapshot) {
                 await run();
               } else {
