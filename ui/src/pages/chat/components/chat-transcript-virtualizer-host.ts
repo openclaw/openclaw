@@ -88,23 +88,21 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.scrollToEnd({ source: "auto", behavior });
   readonly #reconcileCommittedPosition = () => this.#reconcilePosition(true);
   readonly #reconcilePosition = (committed = false) => {
-    if (this.connected && !this.offsetState.pendingInteractionAnchor) {
-      if (
-        !this.offsetState.touchActive &&
-        this.prependAnchor.update(this.virtualizer, this.#readerAnchor.rowsMeasured, committed)
-      ) {
-        this.offsetState.syncNativeOffset?.();
-        this.#presentation.commitChange(this.invalidate, true);
+    const { offsetState, prependAnchor, virtualizer } = this;
+    if (this.connected && !offsetState.pendingInteractionAnchor) {
+      if (!offsetState.touchActive && prependAnchor.messageKey !== null) {
+        // Native movement can precede its scroll event and this queued restoration.
+        offsetState.syncNativeOffset?.();
+        if (prependAnchor.update(virtualizer, this.#readerAnchor.rowsMeasured, committed)) {
+          offsetState.syncNativeOffset?.();
+          this.#presentation.commitChange(this.invalidate, true);
+        }
       }
       this.#commitComposerResize(true);
       // Initial layout owns positioning until the visible range is measured.
       if (!this.initialRange.pending) {
-        this.#endAnchor.reconcile(
-          this.scrollElement,
-          this.canFollowEnd,
-          this.offsetState.pendingScrollOffset !== null || this.offsetState.touchActive,
-          this.#followEnd,
-        );
+        const held = offsetState.pendingScrollOffset !== null || offsetState.touchActive;
+        this.#endAnchor.reconcile(this.scrollElement, this.canFollowEnd, held, this.#followEnd);
       }
     }
   };
