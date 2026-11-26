@@ -3102,6 +3102,23 @@ openclaw-chat-ci-details {
     display: none;
   }
 
+  /* An unavailable Dictation tap opens the shared desktop picker from mobile.
+     Keep its anchor rendered without adding a second mic to the action row. */
+  .agent-chat__input--chat
+    .agent-chat__composer-actions
+    > .chat-talk-control:has(.chat-talk-input-picker[open]) {
+    position: absolute;
+    inset-inline-end: 0;
+    display: inline-flex;
+  }
+
+  .agent-chat__input--chat
+    .agent-chat__composer-actions
+    > .chat-talk-control:has(.chat-talk-input-picker[open])
+    > openclaw-tooltip {
+    display: none;
+  }
+
   .agent-chat__input--chat :is(.chat-mobile-dictation-action, .chat-mobile-primary-action),
   .agent-chat__input--chat .chat-mobile-primary-action > .chat-mobile-talk-action {
     display: inline-flex;

@@ -686,6 +686,26 @@ suite.define(() => {
       },
     ));
 
+  it("shows unavailable dictation feedback at mobile width", () =>
+    suite.withPage(
+      { permissions: ["microphone"], viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          historyMessages: [TALK_READY_HISTORY_MESSAGE],
+          methodResponses: { "talk.catalog": catalog(false, false) },
+        });
+        await installTalkBrowserFixtures(page);
+        await page.goto(suite.server.baseUrl + "chat");
+        await page.getByText(TALK_READY_HISTORY_MESSAGE.content, { exact: true }).waitFor();
+        await button(page, "Dictation").click();
+        const feedback = page
+          .locator(".chat-talk-input-picker__menu")
+          .getByRole("alert")
+          .filter({ hasText: "No transcription provider is configured" });
+        await feedback.waitFor({ state: "visible" });
+      },
+    ));
+
   it("gates unavailable voice capabilities in the microphone picker", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
