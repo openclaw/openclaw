@@ -13,9 +13,9 @@ import { MIN_MIGRATION_BYTES } from "./sqlite-migration-facts.mjs";
 const pluginId = "upgrade-survivor-nightly";
 const shutdownGraceMs = 120_000;
 
-// Serialized into the one trusted fixture plugin. All SDK URLs below come from
-// createRequire(installedBaseline/package.json), never the candidate checkout.
-function registerBaselineSeed(api, fixture) {
+// Imported natively by the baseline plugin, never serialized from Vitest's
+// transformed function body. SDK URLs belong to the installed baseline.
+export function registerBaselineSeed(api, fixture) {
   api.logger.info("nightly seed: fixture registered");
   let started = false;
   api.on("gateway_start", (_event, context) => {
@@ -275,7 +275,7 @@ export async function seedBaselineMigrationFixture({
   };
   fs.writeFileSync(
     path.join(pluginRoot, "index.mjs"),
-    `const fixture = ${JSON.stringify(fixture)};\n${registerBaselineSeed.toString()}\nexport default { id: ${JSON.stringify(pluginId)}, register(api) { registerBaselineSeed(api, fixture); } };\n`,
+    `import { registerBaselineSeed } from ${JSON.stringify(import.meta.url)};\nconst fixture = ${JSON.stringify(fixture)};\nexport default { id: ${JSON.stringify(pluginId)}, register(api) { registerBaselineSeed(api, fixture); } };\n`,
     { flag: "wx", mode: 0o600 },
   );
   const port = await availablePort();

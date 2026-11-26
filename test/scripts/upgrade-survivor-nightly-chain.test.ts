@@ -78,6 +78,28 @@ it("rejects overlapping or out-of-owner copy intervals instead of hiding schema 
   );
 });
 
+const fixturePreflightRoot = process.env.OPENCLAW_NIGHTLY_FIXTURE_PREFLIGHT_ROOT;
+it.runIf(Boolean(fixturePreflightRoot))(
+  "seeds the native baseline plugin when its controller is loaded by Vitest",
+  async () => {
+    const baselineRoot = process.env.OPENCLAW_NIGHTLY_BASELINE_ROOT;
+    const artifacts = process.env.OPENCLAW_NIGHTLY_ARTIFACT_ROOT;
+    assert(fixturePreflightRoot && baselineRoot && artifacts);
+    const minimumBytes = 64 * 1024 ** 2;
+    const fixture = await seedBaselineMigrationFixture({
+      baselineRoot,
+      root: fixturePreflightRoot,
+      artifacts,
+      minimumBytes,
+    });
+    const facts = readMigrationFileFacts(fixture.agentPath);
+    expect(facts.occupiedBytes).toBeGreaterThanOrEqual(minimumBytes);
+    expect(facts.walBytes).toBe(0);
+    readMigrationRows(fixture, fixture.witnesses);
+  },
+  600_000,
+);
+
 type CopyObservation = {
   source: string;
   target: string;
