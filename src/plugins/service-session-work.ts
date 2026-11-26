@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { captureAmbientGatewayOperatorAuthority } from "../gateway/operator-invocation-authority.js";
+import { OperatorRefusalError } from "../gateway/operator-refusal.js";
 import type { OperatorRunRecoverySnapshot } from "../gateway/operator-run-recovery-source.codec.js";
 import {
   restoreGatewayOperatorSource,
@@ -20,10 +21,7 @@ import {
 import { SessionMutationAuthorizationChangedError } from "../gateway/session-mutation-authorization-error.js";
 import { requireSessionRowProjection } from "../gateway/session-row-projection-access.js";
 import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
-import {
-  GatewayDispatchUnavailableError,
-  GatewayOperatorRecoveryAuthorizationError,
-} from "../infra/restart-recovery-errors.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { createCorePluginStateKeyedStoreV2 } from "../plugin-state/plugin-state-store.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
@@ -391,7 +389,7 @@ export function createPluginServiceSessionWork(params: {
         }
         if (
           !(error instanceof SessionMutationAuthorizationChangedError) &&
-          !(error instanceof GatewayOperatorRecoveryAuthorizationError) &&
+          !(error instanceof OperatorRefusalError) &&
           !(error instanceof SessionWorkAuthorizationError)
         ) {
           throw error;

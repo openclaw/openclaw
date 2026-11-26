@@ -420,6 +420,7 @@ function renderSidebarMenus(
         const assignmentAccess = createMemo(() =>
           view.readSessionMutationAccess({
             method: "sessions.assignOwner",
+            missingScopeReasonKey: "sessionsView.assignPermissionDenied",
             params: {
               key: session().key,
               owner: { type: "human", id: selfUser()?.id ?? "profile" },
@@ -462,6 +463,7 @@ function renderSidebarMenus(
               effectiveCommunication: session().effectiveCommunication,
               archived: allArchived(),
               snoozedUntil: session().snoozedUntil ?? null,
+              snoozeTime: view.gatewayTimeForSavedPin(session()),
               archiving: rows().some(
                 (row) => context()?.sessions.archiveVisibility(row.key) === "pending",
               ),

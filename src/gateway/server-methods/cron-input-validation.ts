@@ -7,7 +7,11 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveAgentDir, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
-import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
+import {
+  AuthProfileAuthorizationError,
+  type AuthProfileAuthorization,
+} from "../../agents/auth-profiles/authorization-contract.js";
+import { captureAuthProfileAuthorization } from "../../agents/auth-profiles/authorization.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { captureScheduledOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
@@ -464,6 +468,11 @@ export async function captureCronCreatorSession(
       });
     }
     const operatorAuthority = captured?.authority ?? inheritedAuthority;
+    if (operatorAuthority?.participationCeiling && job.payload.kind === "systemEvent") {
+      throw new TypeError(
+        "Participating inputs require an agentTurn automation with retained authority.",
+      );
+    }
     const parentLinked =
       callerScope &&
       loaded &&
@@ -476,7 +485,9 @@ export async function captureCronCreatorSession(
     const operatorSource =
       operatorAuthority &&
       operatorScopeSatisfied("operator.cron", operatorAuthority.scopes) &&
-      (independent || (legacyParent && job.payload.kind === "agentTurn"))
+      (independent ||
+        operatorAuthority.participationCeiling ||
+        (legacyParent && job.payload.kind === "agentTurn"))
         ? captureScheduledOperatorSource({
             authority: operatorAuthority,
             entry: creatorSession,
@@ -505,7 +516,7 @@ export async function captureCronCreatorSession(
             independent,
           })
         : undefined;
-    if (independent && !operatorSource) {
+    if ((independent || operatorAuthority?.participationCeiling) && !operatorSource) {
       throw new TypeError(
         "This requester cannot retain the authenticated execution authority for the automation.",
       );
@@ -534,7 +545,7 @@ export async function captureCronCreatorSession(
   }
 }
 
-/** Only an explicitly selected account changes an existing job’s inference ownership. */
+/** Account edits replace ownership; a plain-model edit can release a deleted account onto a key. */
 export async function captureCronUpdatedInferenceBinding(
   nextJob: CronStoredJob,
   patch: CronJobPatch,
@@ -551,8 +562,34 @@ export async function captureCronUpdatedInferenceBinding(
   const selection = model
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
     : null;
-  // Native capture validates the actual execution route before authorizing a clear;
-  // other empty captures must never release an existing stored account.
+  let recoverMissingAccount = false;
+  if (
+    model &&
+    selection &&
+    !selection.profileId &&
+    nextJob.inferenceBinding &&
+    patch.agentId === undefined
+  ) {
+    try {
+      const authority = await captureAuthProfileAuthorization({
+        profileId: nextJob.inferenceBinding.profileId,
+        cfg,
+        agentDir: resolveAgentDir(cfg, agentId),
+        assertCurrent() {},
+      });
+      authority.dispose();
+    } catch (error) {
+      if (
+        !(error instanceof AuthProfileAuthorizationError) ||
+        error.code !== "MCP_AUTHORIZATION_RETIRED"
+      ) {
+        throw error;
+      }
+      recoverMissingAccount = true;
+    }
+  }
+  // Capture validates the execution route before authorizing a clear; an empty
+  // capture alone must never release an existing stored account.
   const cliExecution = selection
     ? resolveCliRuntimeExecutionProvider({
         cfg,
@@ -562,7 +599,7 @@ export async function captureCronUpdatedInferenceBinding(
         authProfileId: selection.profileId,
       })
     : undefined;
-  if (!model || !selection?.profileId) {
+  if (!model || !selection || (!selection.profileId && !recoverMissingAccount)) {
     if (patch.agentId !== undefined && nextJob.inferenceBinding) {
       // A move may keep the account only when the new agent sees the same credential owner.
       const authority = await acquireCronInferenceAuthorization({
@@ -579,7 +616,10 @@ export async function captureCronUpdatedInferenceBinding(
     return undefined;
   }
   // An account edit keeps the runtime the job records; otherwise it resolves the way create does.
-  const recordedRuntime = nextJob.inferenceBinding?.runtime;
+  const recordedRuntime =
+    recoverMissingAccount && selection.provider !== nextJob.inferenceBinding?.provider
+      ? undefined
+      : nextJob.inferenceBinding?.runtime;
   const executionKey = resolveCronSessionTargetSessionKey(nextJob.sessionTarget);
   const runtimeSessionEntry = await loadCronRuntimeSessionEntry({
     cfg,
@@ -593,6 +633,15 @@ export async function captureCronUpdatedInferenceBinding(
     { cfg, agentId, model, runtimeSessionEntry, recordedRuntime },
     caller,
   );
+  if (recoverMissingAccount) {
+    if (inference.inferenceBinding === null) {
+      return inference;
+    }
+    inference.disposeInferenceAuthorization();
+    throw new Error(
+      "Recover this automation with a model using a key in the environment or provider config, or select a stored account explicitly with model@profile.",
+    );
+  }
   if (inference.inferenceBinding === undefined) {
     if (cliExecution && !nextJob.inferenceBinding) {
       return undefined;

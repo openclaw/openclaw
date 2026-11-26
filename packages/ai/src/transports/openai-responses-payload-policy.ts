@@ -82,8 +82,8 @@ function resolveOpenAIResponsesEndpointClass(baseUrl: unknown) {
   return "custom";
 }
 
-function isOpenAIResponsesApi(api: string | undefined): boolean {
-  return api !== undefined && OPENAI_RESPONSES_APIS.has(api);
+export function isOpenAIResponsesApi(api: string | null | undefined): boolean {
+  return api != null && OPENAI_RESPONSES_APIS.has(api);
 }
 
 function readCompatPayloadBoolean(

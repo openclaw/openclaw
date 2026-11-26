@@ -311,7 +311,7 @@ src/agents/command/post-run.ts	9
 src/agents/command/session-store.ts	8
 src/agents/command/session.ts	8
 src/agents/command/transcript-persistence.ts	4
-src/agents/cron-creator-authority-context.ts	38
+src/agents/cron-creator-authority-context.ts	31
 src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.ts	3
 src/agents/embedded-agent-runner/cli-backend-dispatch.ts	3
 src/agents/embedded-agent-runner/compact.queued-execution.ts	8
@@ -698,7 +698,6 @@ src/context-engine/delegate.ts	2
 src/context-engine/transcript-byte-limit.ts	2
 src/cron/active-jobs.ts	4
 src/cron/isolated-agent/run-prepare-runtime.ts	2
-src/cron/isolated-agent/run-prompt-executor.ts	1
 src/cron/isolated-agent/run-session-state.ts	2
 src/cron/isolated-agent/session-cleanup.ts	2
 src/cron/run-continuation-cleanup.ts	2
@@ -791,7 +790,6 @@ src/gateway/github-publication-coordinator-methods.ts	5
 src/gateway/github-publication-defer.worker.ts	3
 src/gateway/github-publication-discovery.ts	4
 src/gateway/github-publication-git-index.ts	2
-src/gateway/github-publication-requester.ts	3
 src/gateway/github-publication-shared-read.kernel.ts	10
 src/gateway/github-publication-shared-read.ts	10
 src/gateway/github-publication-store.worker.ts	6
@@ -864,7 +862,7 @@ src/gateway/server-methods/chat-abort-handler.ts	11
 src/gateway/server-methods/chat-abort-runtime.ts	2
 src/gateway/server-methods/chat-abort-session-plan.ts	10
 src/gateway/server-methods/chat-aborted-partial.ts	7
-src/gateway/server-methods/chat-history-handler.ts	6
+src/gateway/server-methods/chat-history-handler.ts	2
 src/gateway/server-methods/chat-history-recovery.ts	2
 src/gateway/server-methods/chat-history-session-read.ts	6
 src/gateway/server-methods/chat-inject.ts	4
@@ -1056,7 +1054,6 @@ src/gateway/session-row-provider-review.ts	2
 src/gateway/session-row-selection-facts.ts	2
 src/gateway/session-row-transcript-backfill.ts	2
 src/gateway/session-send-delivery.ts	4
-src/gateway/session-sharing-authorization-async.ts	2
 src/gateway/session-sharing-authorization.ts	2
 src/gateway/session-sharing-policy.ts	4
 src/gateway/session-sharing-preparation.ts	4
@@ -1065,7 +1062,6 @@ src/gateway/session-sharing-target-read.ts	4
 src/gateway/session-sharing.ts	5
 src/gateway/session-subagent-reactivation.ts	4
 src/gateway/session-subagent-resume.ts	14
-src/gateway/session-system-turn-authority.ts	2
 src/gateway/session-transcript-files.fs.ts	4
 src/gateway/session-transcript-memory-reader.ts	3
 src/gateway/session-transcript-read-kernel.ts	2
@@ -1073,7 +1069,6 @@ src/gateway/session-transcript-title-reader.worker.ts	4
 src/gateway/session-utils-read-lifetime.ts	4
 src/gateway/sessions-history-http.ts	8
 src/gateway/sessions-patch-admission.ts	2
-src/gateway/sessions-patch-display-metadata.ts	2
 src/gateway/sessions-resolve.ts	3
 src/gateway/subagent-completion-tool-handoff.ts	4
 src/gateway/talk/client-agent-consult.ts	8
@@ -1492,7 +1487,6 @@ src/state/openclaw-state-db-open.ts	1
 src/state/openclaw-state-db-task-delivery-recovery.ts	1
 src/state/openclaw-state-worker-context.ts	1
 src/state/session-repository-workspaces.kernel.ts	3
-src/state/state-upgrade-tree.ts	1
 src/state/user-github-connections.types.ts	2
 src/state/user-github-connections.worker.ts	2
 src/state/user-preferences-publication.ts	1

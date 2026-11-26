@@ -187,6 +187,10 @@ export const SQLITE_READONLY_CHILD_ARG = ${JSON.stringify(SQLITE_READONLY_CHILD_
   "./update-cli/update-command-config.ts": `
 import { readConfigFileSnapshot } from ${JSON.stringify(sourceUrl("../config/config.ts"))};
 export const readUpdateConfigFileSnapshot = readConfigFileSnapshot;
+export const readUpdateChannelConfig = async () => {
+  const configSnapshot = await readConfigFileSnapshot();
+  return { configSnapshot, storedChannel: configSnapshot.config.update.channel };
+};
 export const capturePreUpdateSourceConfig = ({sourceConfig, parsed}) => ({ sourceConfig, authoredConfig: parsed });
 export const readPostCorePreUpdateSourceConfig = async () => {
   ${scenario === "phase-hang" ? "await new Promise(resolve => setTimeout(resolve, 1_200));" : ""}

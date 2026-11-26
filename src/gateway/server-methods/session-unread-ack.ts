@@ -18,12 +18,16 @@ export type SessionPatchTargetIdentity = Pick<
   | "key"
 >;
 
-const CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS = new Set([
-  "agentId",
-  "expectedLifecycleRevision",
-  "expectedMarkedUnreadAt",
-  "expectedSessionId",
+export const SESSION_PATCH_ADDRESS_KEYS = [
   "key",
+  "agentId",
+  "expectedSessionId",
+  "expectedLifecycleRevision",
+] as const;
+
+const CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS = new Set([
+  ...SESSION_PATCH_ADDRESS_KEYS,
+  "expectedMarkedUnreadAt",
   "unread",
 ]);
 

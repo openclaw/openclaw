@@ -11,6 +11,7 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
+import { OperatorRefusalError } from "../../gateway/operator-refusal.js";
 import {
   pairedOperator,
   persistDevices,
@@ -18,7 +19,6 @@ import {
 } from "../../gateway/operator-run-recovery.test-support.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -53,7 +53,6 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
       getActiveMcpLoopbackRuntime: () => ({
         port: 31783,
         ownerToken: "loopback-owner-token",
-        nonOwnerToken: "loopback-non-owner-token",
       }),
       mintMcpLoopbackClientGrant: createTestMcpLoopbackClientGrant,
       bindMcpLoopbackClientGrantAdmission: () => true,
@@ -159,7 +158,7 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
           if (revocation === "explicit stop") {
             await expect(prepare).rejects.toThrow("agent run aborted");
           } else if (revocation !== "none") {
-            await expect(prepare).rejects.toBeInstanceOf(GatewayOperatorRecoveryAuthorizationError);
+            await expect(prepare).rejects.toBeInstanceOf(OperatorRefusalError);
           } else {
             await prepare;
           }

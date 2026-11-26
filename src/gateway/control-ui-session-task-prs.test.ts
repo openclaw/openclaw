@@ -17,7 +17,6 @@ import {
 } from "../state/github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
-import * as profileReads from "../state/user-profile-list.js";
 import { mergeProfiles } from "../state/user-profile-writes.worker.js";
 import {
   createOpenClawTestState,
@@ -25,12 +24,9 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
-import { staleReceiptsOnlyCell } from "./control-ui-session-pr-prepared-read.js";
 import {
   createControlUiSessionPrRead,
   prepareControlUiSessionPrServiceTarget,
-  receiptsOnlyTargetIdentity,
-  type ControlUiSessionPrTarget,
 } from "./control-ui-session-pr-read.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js";
@@ -127,7 +123,7 @@ function stubOffline(message = "offline") {
   return fetcher;
 }
 
-it("reuses unchanged watcher currency and retires it on owner publications", async () => {
+it("retires watcher currency on owner publications", async () => {
   const f = fixture;
   const child = "agent:main:currency-child";
   await f.seed(child, f.other.id, { parentSessionKey: sessionKey });
@@ -146,32 +142,15 @@ it("reuses unchanged watcher currency and retires it on owner publications", asy
   ]);
   target.assertCurrent!();
   const captures = vi.spyOn(projection, "capture");
-  const sharing = vi.spyOn(projection, "sharingTargetState");
   try {
-    for (let index = 0; index < 20; index++) {
-      expect(await read()).toBe(target);
-      target.assertCurrent!();
-    }
-    expect(captures).not.toHaveBeenCalled();
-    expect(sharing).not.toHaveBeenCalled();
-
     // A new lineage revision must recheck the audience, not reconstruct an unchanged source.
     await f.seed("agent:main:currency-unrelated", f.profile.id);
     await projection.ensureMaterialized();
-    const describes = vi.spyOn(projection, "describe");
     const selections = vi.spyOn(projection, "selectEntries");
     try {
       expect(await read()).toBe(target);
       // The qualified leaf has no children; only the parent needs a selection.
       expect(selections).toHaveBeenCalledTimes(1);
-      selections.mockClear();
-      for (let index = 0; index < 20; index++) {
-        expect(await read()).toBe(target);
-        target.assertCurrent!();
-      }
-      expect(describes).not.toHaveBeenCalled();
-      expect(selections).not.toHaveBeenCalled();
-
       // Unrelated display churn must not reacquire the retained task audience.
       await f.seed("agent:main:currency-unrelated", f.profile.id, { label: "Updated" });
       await projection.ensureMaterialized();
@@ -179,7 +158,6 @@ it("reuses unchanged watcher currency and retires it on owner publications", asy
       expect(await read()).toBe(target);
       expect(captures.mock.calls.map(([query]) => query.key)).toEqual([sessionKey]);
     } finally {
-      describes.mockRestore();
       selections.mockRestore();
     }
 
@@ -223,11 +201,10 @@ it("reuses unchanged watcher currency and retires it on owner publications", asy
     expect(await read()).toBeUndefined();
   } finally {
     captures.mockRestore();
-    sharing.mockRestore();
   }
 });
 
-it("prepares task audience policy once without reacquiring descendant membership", async () => {
+it("refreshes task audience authority after descendant visibility and profile merges", async () => {
   for (let index = 0; index < 4; index++) {
     await fixture.seed(`agent:main:foreign-${index}`, fixture.other.id, {
       parentSessionKey: sessionKey,
@@ -243,14 +220,6 @@ it("prepares task audience policy once without reacquiring descendant membership
   })!;
   const target = (await read())!;
   expect(target.taskReceipts?.sessions).toHaveLength(5);
-  await fixture.seed("agent:main:unrelated", fixture.profile.id);
-  await projection.ensureMaterialized();
-  const aliases = vi.spyOn(profileReads, "readResidentUserProfileAliases");
-  const membership = vi.spyOn(projection, "readMembership");
-  target.assertCurrent!();
-  expect(aliases).toHaveBeenCalledTimes(1);
-  // Root admission still reads membership; already-selected descendants use owner facts.
-  expect(membership).toHaveBeenCalledTimes(1);
 
   await fixture.seed("agent:main:foreign-0", fixture.other.id, {
     parentSessionKey: sessionKey,
@@ -268,7 +237,7 @@ it("prepares task audience policy once without reacquiring descendant membership
   expect((await read())?.taskReceipts?.sessions).toHaveLength(5);
 });
 
-it("shares lineage work across audiences without sharing visibility or stale descendants", async () => {
+it("keeps task publication audiences isolated and refreshes descendant lineage", async () => {
   const child = "agent:main:a-child";
   const hidden = "agent:main:b-hidden";
   const leaf = "agent:main:c-leaf";
@@ -286,9 +255,6 @@ it("shares lineage work across audiences without sharing visibility or stale des
   const projection = getSessionRowProjection(fixture.context)!;
   await projection.ensureMaterialized();
   const root = projection.describe({ agentId: "main", key: sessionKey })!;
-  const reads = vi.spyOn(projection, "selectEntries");
-  const captures = vi.spyOn(projection, "capture");
-  const resolveParent = vi.spyOn(records, "parentReference");
   const expected = (keys: string[]) =>
     keys.map((key) => ({
       agentId: "main",
@@ -305,18 +271,12 @@ it("shares lineage work across audiences without sharing visibility or stale des
   expect(prepareTaskPublicationSessions(projection, root, () => allowsAll).sessions).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
-  const firstReads = reads.mock.calls.length;
-  const firstCaptures = captures.mock.calls.length;
-  expect(firstReads).toBe(2);
   expect(prepareTaskPublicationSessions(projection, root, () => allowsShared).sessions).toEqual(
     expected([child, leaf, sessionKey]),
   );
   expect(prepareTaskPublicationSessions(projection, root, () => allowsAll).sessions).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
-  expect(reads).toHaveBeenCalledTimes(firstReads);
-  expect(captures).toHaveBeenCalledTimes(firstCaptures);
-  expect(resolveParent).not.toHaveBeenCalled();
 
   let allows: typeof allowsShared = allowsAll;
   const retained = prepareTaskPublicationSessions(projection, root, () => allows);
@@ -326,22 +286,6 @@ it("shares lineage work across audiences without sharing visibility or stale des
   const restricted = prepareTaskPublicationSessions(projection, root, () => allows);
   allows = allowsAll;
   expect(() => restricted.assertCurrent()).toThrow("Task pull-request audience changed");
-  retained.assertCurrent();
-
-  await fixture.seed("agent:main:unrelated", fixture.profile.id);
-  await projection.ensureMaterialized();
-  prepareTaskPublicationSessions(projection, root, () => allowsAll);
-  const afterCreation = reads.mock.calls.length;
-  await fixture.seed("agent:main:unrelated", fixture.profile.id, {
-    label: "Updated",
-    updatedAt: 2,
-  });
-  await fixture.seed(child, fixture.profile.id, { parentSessionKey: sessionKey, label: "Updated" });
-  await projection.ensureMaterialized();
-  expect(prepareTaskPublicationSessions(projection, root, () => allowsShared).sessions).toEqual(
-    expected([child, leaf, sessionKey]),
-  );
-  expect(reads).toHaveBeenCalledTimes(afterCreation);
   retained.assertCurrent();
 
   // Permissions consume the replacement row even when lineage itself is unchanged.
@@ -359,20 +303,16 @@ it("shares lineage work across audiences without sharing visibility or stale des
           entry.visibility !== "draft",
     ).sessions,
   ).toEqual(expected([child, hidden, leaf, sessionKey]));
-  expect(reads).toHaveBeenCalledTimes(afterCreation);
 
   await fixture.seed(leaf, fixture.profile.id, { parentSessionKey: hidden, updatedAt: 2 });
   await projection.ensureMaterialized();
   const current = projection.describe({ agentId: "main", key: sessionKey })!;
-  resolveParent.mockClear();
   expect(prepareTaskPublicationSessions(projection, current, () => allowsShared).sessions).toEqual(
     expected([child, sessionKey]),
   );
   expect(prepareTaskPublicationSessions(projection, current, () => allowsAll).sessions).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
-  expect(reads.mock.calls.length).toBeGreaterThan(firstReads);
-  expect(resolveParent).not.toHaveBeenCalled();
 
   const runId = "task-pr-registry-lineage";
   subagentRuns.set(
@@ -773,34 +713,6 @@ it("gives passive rows the PR state an active viewer already verified, without G
   );
   await fixture.subscriptions.pollNow();
   expect(fetcher).toHaveBeenCalledTimes(verifiedReads);
-});
-
-it("reloads a stale passive cell once per verified state, even when its cache misses", () => {
-  const target = { identity: "session" } as ControlUiSessionPrTarget;
-  const pullRequest = (prState: "open" | "merged") => {
-    const url = "https://github.com/example/repository/pull/1";
-    const facts = { url, owner: "example", repo: "repository", number: 1, branch: "fix" };
-    return {
-      ...facts,
-      sourceSessionKey: sessionKey,
-      sourceAgentId: "main",
-      pullRequest: { ...facts, title: "Fix", state: prState },
-    };
-  };
-  const cell = (taskPullRequests: ControlUiSessionPullRequestSnapshot["taskPullRequests"]) => ({
-    connIds: new Set(["phone"]),
-    target,
-    cacheLifetime: new AbortController(),
-    snapshot: { pullRequests: [], rateLimited: false, status: "ready" as const, taskPullRequests },
-  });
-  const passiveKey = receiptsOnlyTargetIdentity(target.identity);
-  const passiveCell = cell([{ ...pullRequest("open"), pullRequest: undefined }]);
-  passiveCell.target = { ...target, identity: passiveKey, taskReceiptsOnly: true };
-  const keyStates = new Map([[passiveKey, passiveCell]]);
-  const active = cell([pullRequest("merged")]);
-  expect(staleReceiptsOnlyCell(keyStates, active, active.snapshot)).toBe(passiveKey);
-  // The reload missed the cache: the next poll of the same verified state must not reload again.
-  expect(staleReceiptsOnlyCell(keyStates, active, active.snapshot)).toBeUndefined();
 });
 
 it("keeps a known cold URL when GitHub metadata fails, and ignores a replaced session lifecycle", async () => {

@@ -324,7 +324,11 @@ tool authority before invoking it. Recheck native availability inside `submit`,
 so a turn that finalized during preparation refuses before writing. Reject when
 the input never started, so the host replays it as an ordinary queued turn rather
 than losing it; the host records a started input in the session transcript, so a
-runtime must not also write it there. `options.promptOrigin` and
+runtime must not also write it there. If the runtime records its own transcript,
+`queueMessage` can return `{ cliSessionId, externalId }` to identify the
+acknowledged input in that transcript. OpenClaw uses those IDs to match a message
+with attachments to its native row without comparing text.
+`options.promptOrigin` and
 `options.promptContext` belong to that queued input, with the same contracts as the
 initial prompt: deliver its context through the native private context mechanism,
 and never inherit the running turn's origin. Set `acceptsImages: true` on the sink

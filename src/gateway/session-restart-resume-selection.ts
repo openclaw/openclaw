@@ -17,6 +17,7 @@ import {
   listLiveAgentRunIds,
 } from "../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import { getSessionControllerEntryForOperation } from "../sessions/session-controller.identity.js";
 import { findSessionControllerOperationByRunId } from "../sessions/session-controller.queries.js";
 import { getRpcSourceForSignal } from "../sessions/session-controller.rpc-sources.js";
@@ -26,8 +27,34 @@ import {
   hasCommittedReplyOperationOutcome,
 } from "../sessions/session-controller.state.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
+import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import type { createRestartResumeSummary } from "./session-restart-resume-log.js";
-import { captureSessionRestartOperatorSource } from "./session-system-turn-authority.js";
+
+/** Capture the interrupted execution's source, never a later steering participant. */
+function captureSessionRestartOperatorSource(
+  operation: ReplyOperation,
+): QueuedOperatorRecoverySource | undefined {
+  try {
+    const requester = operation.personalToolParticipants?.resolve(undefined, {
+      allowTurnOwner: () => true,
+    });
+    if (requester) {
+      return captureQueuedOperatorRecoverySource(requester.operatorAuthority);
+    }
+    const claim = getSessionControllerEntryForOperation(operation).mailbox?.claim;
+    const sources =
+      claim?.operation === operation && !claim.released && !claim.releaseRequested
+        ? claim.sources
+        : [];
+    return sources.length > 1
+      ? { kind: "unavailable" }
+      : captureQueuedOperatorRecoverySource(sources[0]?.operatorAuthority);
+  } catch {
+    // A failed known source cannot fall back to the session principal.
+    return { kind: "unavailable" };
+  }
+}
 
 export type SessionIdentity = {
   agentId: string;

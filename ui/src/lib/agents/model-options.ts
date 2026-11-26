@@ -138,9 +138,9 @@ export function createPrimaryModelExclusion(
   };
 }
 
-export function buildModelOptions(
+/** Build the scoped catalog once; only the picker with an unlisted selection adds it. */
+export function createAgentModelOptions(
   configForm: Record<string, unknown> | null,
-  current?: string | null,
   catalog?: ModelCatalogEntry[],
   agentId?: string,
 ) {
@@ -194,14 +194,21 @@ export function buildModelOptions(
     addOption(option);
   }
 
-  if (current && !seen.has(normalizeAgentModelRefForConfig(current))) {
-    const separator = current.indexOf("/");
-    options.unshift({
-      value: current,
-      label: current,
-      provider: separator > 0 ? current.slice(0, separator) : undefined,
-    });
-  }
-
-  return options;
+  return {
+    options,
+    withCurrent(current?: string | null): ConfiguredModelOption[] {
+      if (!current || seen.has(normalizeAgentModelRefForConfig(current))) {
+        return options;
+      }
+      const separator = current.indexOf("/");
+      return [
+        {
+          value: current,
+          label: current,
+          provider: separator > 0 ? current.slice(0, separator) : undefined,
+        },
+        ...options,
+      ];
+    },
+  };
 }

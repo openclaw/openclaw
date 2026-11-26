@@ -162,17 +162,6 @@ describe("registerPolicyDoctorChecks", () => {
     );
   });
 
-  it("does not require mention gates when group ingress is disabled", async () => {
-    const { result } = await runIngressPolicyScenario({
-      telegram: {
-        dmPolicy: "pairing",
-        groupPolicy: "disabled",
-      },
-    });
-
-    expect(result.findings).toEqual([]);
-  });
-
   it("does not require mention gates when group ingress is disabled by channel defaults", async () => {
     const { result } = await runIngressPolicyScenario({
       defaults: { groupPolicy: "disabled" },

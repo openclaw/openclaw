@@ -338,17 +338,48 @@ it("offers current-PR preparation and lists actions gated by the Gateway", () =>
   }
   check({ action: "ready", publishingSessionKey: "another" });
   check({ action: "edit", publishingSessionKey: "another" });
-  expect(tool.description).toContain("omit action to append accepted changes to the original PR");
+  expect(tool.description).toContain("- prepare_pr: continue an existing PR by pullRequestUrl.");
   expect(tool.description).not.toContain("Imported source publication is not available");
-  expect(tool.description).toContain("used only when creating a PR");
-  expect(tool.description).toContain("retain requestId, finish the turn and await its result here");
-  expect(tool.description).toContain("do not submit another publication to recover it");
-  expect(tool.description).toContain("Edit never synchronizes, stages, commits or pushes");
   const actionOnly = createGitHubPublishTool({
     publicationAvailable: false,
   });
   expect(Value.Check(actionOnly.parameters, { action: "edit" })).toBe(false);
   expect(Value.Check(actionOnly.parameters, prepare)).toBe(false);
+});
+
+it("keeps the definition short and delivers each procedure in the result that needs it", async () => {
+  for (const [options, max] of [
+    [{}, 800],
+    [{ publicationAvailable: false }, 600],
+    [{ observationOnly: true }, 300],
+  ] as const) {
+    expect(createGitHubPublishTool(options).description.length).toBeLessThanOrEqual(max);
+  }
+  const { callGateway, execute } = setup();
+  const next = async (args: unknown) => {
+    const [block] = (await execute(args)).content;
+    return block?.type === "text" ? String(JSON.parse(block.text).next ?? "") : "";
+  };
+  const published = await execute({ title: "Change" });
+  expect(published.details).toEqual(publication);
+  expect(await next({ title: "Change" })).toContain(
+    "retain requestId, finish the turn and await its result here; do not submit another publication",
+  );
+  callGateway.mockResolvedValue({ status: "failed", requestId: "r", error: "no" });
+  expect(await next({ title: "Change" })).toBe("");
+  callGateway.mockResolvedValue({
+    headCommit: "a".repeat(40),
+    custody: { kind: "bound_workspace" },
+  });
+  for (const [args, guidance] of [
+    [{ action: "edit" }, "send this headCommit as expectedHeadCommit"],
+    [{ action: "edit", title: "New", expectedTitle: "T" }, "read again with edit"],
+    [{ action: "request_review" }, 'Only "@clawsweeper re-review" was posted'],
+    [{ action: "inspect" }, "full operator write access, after review and required checks pass"],
+    [{ action: "readiness" }, "never resubmit it"],
+  ] as const) {
+    expect(await next(args), args.action).toContain(guidance);
+  }
 });
 
 it.each(["responseId", "turnId"] as const)(

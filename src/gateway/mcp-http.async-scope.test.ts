@@ -452,7 +452,7 @@ it("keeps requester grant minting at execution when management needs a construct
   admissions.push(admission);
   const admittedRunContext = await admission.admit("gateway", runId);
   const scope = expectDefined(
-    createCronCreatorAuthorityCapability(runId, { kind: "local" }, { source: "control-ui-admin" }),
+    createCronCreatorAuthorityCapability(runId, { kind: "local" }, { source: "operator" }),
     "Cron run scope",
   );
   const constructionIssuers: boolean[] = [];

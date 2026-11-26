@@ -1,10 +1,8 @@
-// Offline check: use the metadata-only `plugins list` loader, not a Gateway invocation.
-// Tool construction requires admitted invocation authority and canonical-schema state
-// (tool-resolution.ts and tool-construction-preparation.ts). It runs only at boot;
-// the supervised trial catches a release whose Gateway cannot start.
-import fs from "node:fs/promises";
+// Offline check: inspect candidate metadata without booting or migrating live state.
 import path from "node:path";
 import { quietPluginJsonLogger } from "../cli/plugins-json-logger.js";
+import { planLegacyConfigForUpdateChannel } from "../commands/doctor/legacy-config-repair.js";
+import { createConfigIO } from "../config/io.factory.js";
 import {
   normalizeConfigIoDeps,
   parseConfigJson5,
@@ -13,34 +11,29 @@ import {
   resolveConfigIncludesForRead,
   resolveConfigPathForDeps,
 } from "../config/io.read-helpers.js";
+import { resolveConfigIncludeWriteBoundary } from "../config/mutate.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
-import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { openNodeSqliteDatabase, resolveReadOnlyShmSqliteFileUri } from "../infra/node-sqlite.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import { collectRegisteredPaths } from "../infra/update-candidate-state.shared.js";
 import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
+import { isConfiguredPluginPathDiagnosticCode } from "../plugins/discovery-availability.js";
 import { getPersistedInstalledPluginIndexCacheEntry } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import {
-  readPluginMetadataStateRowsInDatabase,
-  type PluginMetadataStateRow,
-} from "../plugins/plugin-metadata-state.kernel.js";
 import { buildPluginRegistrySnapshotReport } from "../plugins/status-snapshot.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
-import {
-  OPENCLAW_AGENT_SCHEMA_VERSION,
-  OPENCLAW_STATE_SCHEMA_VERSION,
-} from "../state/openclaw-schema-versions.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { preflightStateUpgrade } from "../state/state-upgrade-databases.js";
-import { listStateDatabases } from "./preflight.js";
+import { isUpgradeRestorePath, preflightStateUpgrade } from "../state/state-upgrade-databases.js";
 
 type ReleaseSurface = { plugin: string; surface: string; error?: string };
-export type CheckReleaseResult = { ok: boolean; reason?: string; surfaces: ReleaseSurface[] };
+export type CheckReleaseResult = {
+  ok: boolean;
+  reason?: string;
+  surfaces: ReleaseSurface[];
+  // Older releases do not include warnings in their result.
+  warnings?: { code: string; message: string }[];
+};
 
-/** No canonical state open: even a valid older schema must pass without migration. */
+/** The upgrade inventory owns schema and recovery admission before the old Gateway stops. */
 export async function checkRelease(
   options: {
     env?: NodeJS.ProcessEnv;
@@ -49,57 +42,14 @@ export async function checkRelease(
 ): Promise<CheckReleaseResult> {
   const env = { ...(options.env ?? process.env) };
   const surfaces: ReleaseSurface[] = [];
-  const refuse = (reason: string): CheckReleaseResult => ({ ok: false, reason, surfaces });
+  const warnings: NonNullable<CheckReleaseResult["warnings"]> = [];
+  const refuse = (reason: string): CheckReleaseResult => ({
+    ok: false,
+    reason,
+    surfaces,
+    warnings,
+  });
   try {
-    const stateDir = resolveStateDir(env);
-    const statePath = resolveOpenClawStateSqlitePath(env);
-    const agentPaths = new Set(
-      (await listStateDatabases(stateDir)).filter(
-        (file) => path.basename(file) === "openclaw-agent.sqlite",
-      ),
-    );
-    let metadataRows: PluginMetadataStateRow[] = [];
-    const inspect = async (file: string, kind: "state" | "agent") => {
-      try {
-        await fs.access(file);
-      } catch (error) {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return;
-        }
-        throw error;
-      }
-      // readonly_shm retains committed WAL changes without modifying source sidecars.
-      const db = openNodeSqliteDatabase(resolveReadOnlyShmSqliteFileUri(file), {
-        readOnly: true,
-        timeout: 5000,
-      });
-      try {
-        const version = readSqliteUserVersion(db);
-        const supported =
-          kind === "state" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
-        if (version > supported) {
-          throw new Error(
-            `${kind}-schema-newer: on-disk schema ${version} is newer than this build's ${supported}`,
-          );
-        }
-        if (kind === "state") {
-          metadataRows = readPluginMetadataStateRowsInDatabase(db, [
-            "plugins.installedIndex",
-            "plugins.bundledDiscovery",
-          ]);
-          // The update inspection owner reads registries of any schema age, read-only.
-          for (const { source } of collectRegisteredPaths(db, statePath, new Map())) {
-            agentPaths.add(source);
-          }
-        }
-      } finally {
-        db.close();
-      }
-    };
-    await inspect(statePath, "state");
-    for (const file of agentPaths) {
-      await inspect(file, "agent");
-    }
     const deps = normalizeConfigIoDeps({ env, configPath: options.configPath, observe: false });
     const configPath = resolveConfigPathForDeps(deps);
     const parsed = parseConfigJson5(readConfigFileIfPresent(deps, configPath) ?? "{}");
@@ -109,18 +59,43 @@ export async function checkRelease(
     const included = resolveConfigIncludesForRead(parsed.parsed, configPath, deps);
     const { resolvedConfigRaw } = resolveConfigForRead(included, env);
     const validated = validateConfigObjectRaw(resolvedConfigRaw, { env });
-    if (!validated.ok) {
-      return refuse(
-        `config-invalid: ${validated.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`,
-      );
+    let config: OpenClawConfig;
+    if (validated.ok) {
+      config = validated.config;
+    } else {
+      // Admission projects the same captured include repair that startup commits;
+      // candidate checks never publish it or flatten the authored include graph.
+      const { snapshot, writeOptions } = await createConfigIO({
+        env,
+        configPath,
+        observe: false,
+        pluginValidation: "core-only",
+      }).readConfigFileSnapshotForWrite();
+      const plan = snapshot.includedPaths?.length
+        ? withArtifactPreservingStateReads(() =>
+            planLegacyConfigForUpdateChannel(snapshot, writeOptions),
+          )
+        : undefined;
+      if (!plan?.changes.length) {
+        return refuse(
+          `config-invalid: ${validated.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`,
+        );
+      }
+      const boundary = resolveConfigIncludeWriteBoundary({ snapshot, nextConfig: plan.nextConfig });
+      const includeTarget =
+        boundary && writeOptions.includeFileTargetsForWrite?.[boundary.includePath];
+      if (
+        includeTarget &&
+        !isUpgradeRestorePath(path.resolve(resolveStateDir(env)), includeTarget)
+      ) {
+        return refuse(
+          `The release trial cannot restore changed included config ${includeTarget}. Run openclaw doctor --fix before retrying the update. Nothing live was changed.`,
+        );
+      }
+      config = plan.config;
     }
-    const config = validated.config;
-    // Decide copy versus in-place before checking copy-only privileges.
-    const reason = await preflightStateUpgrade(env, config);
+    const { metadataRows } = await preflightStateUpgrade(env, config);
     return await withPluginCache(createPluginCache(), async () => {
-      // Feed the production inventory owner its existing metadata, read directly above.
-      // Its normal state reader enforces today's schema and would reject an upgrade
-      // from an older schema before boot has had an opportunity to migrate it.
       const activateDiscovery = await prepareBundledDiscoveryMode(env, async () =>
         metadataRows.find((row) => row.state_key === "plugins.bundledDiscovery"),
       );
@@ -142,6 +117,12 @@ export async function checkRelease(
           });
         }
         for (const diagnostic of [...report.diagnostics, ...report.registryDiagnostics]) {
+          if (
+            diagnostic.level === "warn" &&
+            isConfiguredPluginPathDiagnosticCode(diagnostic.code)
+          ) {
+            warnings.push({ code: diagnostic.code, message: diagnostic.message });
+          }
           if (diagnostic.level === "error") {
             surfaces.push({
               plugin: diagnostic.pluginId ?? "core",
@@ -151,9 +132,7 @@ export async function checkRelease(
           }
         }
         const coreError = surfaces.find((surface) => surface.plugin === "core" && surface.error);
-        return coreError
-          ? refuse(coreError.error!)
-          : { ok: true, ...(reason ? { reason } : {}), surfaces };
+        return coreError ? refuse(coreError.error!) : { ok: true, surfaces, warnings };
       });
     });
   } catch (error) {
