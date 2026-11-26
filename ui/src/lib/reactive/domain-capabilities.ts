@@ -13,19 +13,23 @@ export function projectChannels(source: Pick<ChannelCapability, "state" | "subsc
   return projectOwner(source, (channels) => channels.state);
 }
 
-export function projectRuntimeConfig(
-  source: Pick<
+export function readRuntimeConfig(
+  config: Pick<
     RuntimeConfigCapability,
     "state" | "subscribe" | "canSet" | "canApply" | "canPatch" | "canOpenFile"
   >,
 ) {
-  return projectOwner(source, (config) => ({
+  return {
     state: config.state,
     canSet: config.canSet,
     canApply: config.canApply,
     canPatch: config.canPatch,
     canOpenFile: config.canOpenFile,
-  }));
+  };
+}
+
+export function projectRuntimeConfig(source: Parameters<typeof readRuntimeConfig>[0]) {
+  return projectOwner(source, readRuntimeConfig);
 }
 
 /** Query membership and admission remain with the session capability. */

@@ -1,2 +1,0 @@
-# Budget regression: hash-only renames, sidecar eligibility, and real code growth.
-66

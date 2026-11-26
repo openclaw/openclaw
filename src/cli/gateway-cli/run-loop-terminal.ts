@@ -119,8 +119,9 @@ export function createGatewayRunTerminal(params: {
         return;
       }
       const committed =
+        (await eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)) &&
+        sameManagedUpdateOwner(getManagedUpdateOwner(), owner) &&
         sameManagedUpdateOwner(owner, ownerToCommit) &&
-        eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner) &&
         (await eagerLifecycleRuntime.commitManagedServiceUpdateHandoff(owner, commitOutcome));
       if (!(await waitForTerminalSignals())) {
         finishLoop(code);
@@ -128,8 +129,8 @@ export function createGatewayRunTerminal(params: {
       }
       if (
         committed &&
-        sameManagedUpdateOwner(getManagedUpdateOwner(), owner) &&
-        eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)
+        (await eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)) &&
+        sameManagedUpdateOwner(getManagedUpdateOwner(), owner)
       ) {
         // Keep exact request ownership live through the synchronous terminal decision.
         finishLoop(code);

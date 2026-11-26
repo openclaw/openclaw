@@ -51,6 +51,12 @@ export type ParsedResumeArgs = {
   help?: boolean;
 };
 
+export type CodexReviewTarget =
+  | { type: "uncommittedChanges" }
+  | { type: "baseBranch"; branch: string }
+  | { type: "commit"; sha: string }
+  | { type: "custom"; instructions: string };
+
 const CONNECTION_OPTIONS = {
   bind: new Map([
     ["--cwd", "cwd"],
@@ -147,13 +153,23 @@ export function isMenuVerb(rest: readonly string[]): boolean {
 }
 
 export function splitArgs(value: string | undefined): string[] {
+  return splitArgsWithTail(value).args;
+}
+
+export function splitArgsWithTail(value: string | undefined): {
+  args: string[];
+  tail: string;
+  hasUnclosedQuote: boolean;
+} {
   const input = value ?? "";
   const args: string[] = [];
+  let tail = "";
   let current = "";
   let quote: '"' | "'" | undefined;
   let escaping = false;
   let tokenStarted = false;
-  for (const char of input) {
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input.charAt(index);
     if (escaping) {
       current += char;
       escaping = false;
@@ -169,6 +185,10 @@ export function splitArgs(value: string | undefined): string[] {
       quote = char;
     } else if (/\s/.test(char)) {
       if (tokenStarted) {
+        if (args.length === 0) {
+          // Skip only the command separator, not whitespace inside its free-text tail.
+          tail = input.slice(index + 1);
+        }
         args.push(current);
         current = "";
         tokenStarted = false;
@@ -185,7 +205,34 @@ export function splitArgs(value: string | undefined): string[] {
   if (tokenStarted) {
     args.push(current);
   }
-  return args;
+  return { args, tail, hasUnclosedQuote: quote !== undefined };
+}
+
+export function parseReviewArgs(
+  args: readonly string[],
+  tail: string,
+  hasUnclosedQuote: boolean,
+): CodexReviewTarget | undefined {
+  if (args.length === 0) {
+    return { type: "uncommittedChanges" };
+  }
+  // A quoted flag is prose, not an explicit target selector.
+  const selector = /^\s*(--base|--commit)(?:\s|$)/u.exec(tail)?.[1];
+  if (selector) {
+    const value =
+      !hasUnclosedQuote && args.length === 2 ? readRequiredOptionValue(args, 0) : undefined;
+    if (!value) {
+      return undefined;
+    }
+    if (selector === "--base") {
+      return { type: "baseBranch", branch: value };
+    }
+    return /^[a-f0-9]{7,40}$/i.test(value) ? { type: "commit", sha: value } : undefined;
+  }
+  if (args.every((arg) => !arg.trim())) {
+    return undefined;
+  }
+  return { type: "custom", instructions: tail };
 }
 
 export function parseBindArgs(args: readonly string[]): ParsedBindArgs {

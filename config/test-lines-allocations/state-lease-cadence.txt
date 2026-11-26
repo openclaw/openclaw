@@ -1,2 +1,0 @@
-# Long-TTL persisted-renewal regression and Gateway heartbeat cadence boundary.
-18

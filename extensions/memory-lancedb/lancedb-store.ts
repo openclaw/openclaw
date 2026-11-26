@@ -18,9 +18,8 @@ import {
 } from "./lancedb-schema.js";
 
 // LanceDB's CJS serializer needs Arrow datatypes from the same module instance.
-const { Field, FixedSizeList, Float32, Float64, Schema, Utf8 }: typeof Arrow = createRequire(
-  import.meta.url,
-)("apache-arrow");
+const { Field, FixedSizeList, Float32, Float64, Schema, Utf8, makeBuilder, Table }: typeof Arrow =
+  createRequire(import.meta.url)("apache-arrow");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -181,7 +180,30 @@ export class MemoryDB {
         createdAt: Date.now(),
       };
       const storedEntry: StoredMemoryRow = { ...fullEntry, agentId };
-      await table.add([storedEntry]);
+      // The write shape is already known; avoid LanceDB's row inference and Arrow's
+      // generated null-sentinel predicates. Keep the existing nullable table schema.
+      const schema = createMemoryTableSchema(this.vectorDim);
+      const columns: Record<string, Arrow.Data> = {};
+      for (const field of schema.fields) {
+        // SAFETY: createMemoryTableSchema enumerates exactly the StoredMemoryRow keys.
+        const value = storedEntry[field.name as keyof StoredMemoryRow];
+        const builder = makeBuilder({ type: field.type });
+        if (value == null) {
+          builder.setValid(0, false);
+        } else {
+          builder.append(value);
+          if (field.name === "vector") {
+            // Native float builders would otherwise coerce null elements to zero.
+            for (let index = 0; index < Math.min(entry.vector.length, this.vectorDim); index++) {
+              if (entry.vector[index] === null) {
+                builder.children[0]!.setValid(index, false);
+              }
+            }
+          }
+        }
+        columns[field.name] = builder.finish().toVector().data[0]!;
+      }
+      await table.add(new Table(schema, columns));
       return fullEntry;
     });
   }

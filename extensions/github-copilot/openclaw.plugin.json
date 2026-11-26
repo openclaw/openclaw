@@ -327,6 +327,7 @@
       "choiceLabel": "GitHub Copilot",
       "choiceHint": "Device login with your GitHub account",
       "assistantPriority": 1,
+      "onboardingFeatured": true,
       "groupId": "copilot",
       "groupLabel": "Copilot",
       "groupHint": "GitHub, GitHub Enterprise + Local Proxy",

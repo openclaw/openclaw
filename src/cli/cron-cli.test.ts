@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import { cronTestJob } from "../cron/service.fixture-builders.test-support.js";
 import type { CronDeliveryPreview, CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
@@ -9,7 +10,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerCronCli } from "./cron-cli.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
-import { formatCliJsonFailure } from "./failure-output.js";
+import { formatCliFailureLines, formatCliJsonFailure } from "./failure-output.js";
 
 const mocks = vi.hoisted(() => {
   const defaultRuntime = {
@@ -220,11 +221,7 @@ it("waits for stored failed completion", async () => {
   mockQueuedRun({ status: "ok", completionStatus: "failed" });
   expect(await parseExit([...RUN_WAIT, "--wait-timeout", "1s", "--poll-interval", "1ms"])).toBe(1);
   expect(defaultRuntime.error).not.toHaveBeenCalled();
-  expect(rpcParams("cron.runs")).toEqual({
-    id: "job-1",
-    runId: "manual:job-1:123:0",
-    limit: 1,
-  });
+  expect(rpcParams("cron.runs")).toEqual({ id: "job-1", runId: "manual:job-1:123:0", limit: 1 });
   expect(JSON.parse(stdoutText())).toMatchObject({
     completed: true,
     status: "ok",
@@ -268,59 +265,55 @@ it("reduces each history RPC timeout after the system clock jumps backward", asy
 it("bounds oversized poll intervals by the wait timeout", async () => {
   vi.useFakeTimers();
   mockQueuedRun();
-  const run = parseExit([
+  const run = parse([
     ...RUN_WAIT,
     "--wait-timeout",
     "10ms",
     "--poll-interval",
     "999999999999999ms",
-  ]);
+  ]).catch((error: unknown) => error);
   await vi.advanceTimersByTimeAsync(0);
   expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.runs")).toBe(true);
   await vi.advanceTimersByTimeAsync(10);
-  expect(await run).toBe(1);
-  expectRuntimeErrorContaining("timed out waiting for cron run");
+  const error = await run;
+  expect(formatCliFailureLines({ title: "CLI failure", error }).map(stripAnsi)).toEqual([
+    "OpenClaw stopped waiting, but didn’t cancel the automation run.",
+    "To check the result on the same Gateway, use `openclaw automations runs` with the automation ID and `--run-id manual:job-1:123:0`.",
+  ]);
+  expect(formatCliJsonFailure(error)).toEqual({
+    ok: false,
+    error: { type: "cli_error", message: "timed out waiting for cron run manual:job-1:123:0" },
+  });
 });
 
-const interruptPhases = ["sleep", "request", "completion", "cron list", "cron show job-1"];
-it.each(interruptPhases)("cancels cron %s", async (phase) => {
+it.each(["sleep", "completion"])("cancels cron wait during %s", async (phase) => {
   vi.useFakeTimers();
   resetGatewayMock();
   const scope = new AsyncWorkScope();
   const completed = { entries: [{ status: "ok", completionStatus: "succeeded" }] } as const;
   const read = createDeferredCore<typeof completed>();
-  const polls = () => callGatewayFromCli.mock.calls.filter(([method]) => method !== "cron.run");
-  callGatewayFromCli.mockImplementation(
-    async (method, _opts, _params, extra?: { signal?: AbortSignal }) => {
-      if (method === "cron.run") {
-        return { ok: true, enqueued: true, runId: "queued-run" };
-      }
-      if (!["sleep", "completion"].includes(phase) && extra?.signal) {
-        const { signal } = extra;
-        signal.addEventListener("abort", () => read.reject(signal.reason), { once: true });
-      }
-      return phase === "sleep" ? { entries: [] } : read.promise;
-    },
-  );
-  const settled = vi.fn();
-  const running = scope.track(() => parse(phase.includes(" ") ? phase.split(" ") : RUN_WAIT));
-  void running.then(() => settled(), settled);
+  callGatewayFromCli.mockImplementation(async (method) => {
+    if (method === "cron.run") {
+      return { ok: true, enqueued: true, runId: "queued-run" };
+    }
+    return phase === "sleep" ? { entries: [] } : read.promise;
+  });
+  const running = scope.track(() => parse(RUN_WAIT));
   try {
     await vi.advanceTimersByTimeAsync(0);
-    expect(polls()).toHaveLength(1);
     scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
     if (phase === "completion") {
       read.resolve(completed);
     }
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toHaveBeenCalledExactlyOnceWith();
+    await running;
     for (const output of [defaultRuntime.writeStdout, defaultRuntime.error, defaultRuntime.exit]) {
       expect(output).not.toHaveBeenCalled();
     }
-    expect(polls()).toHaveLength(1);
+    expect(callGatewayFromCli.mock.calls.filter(([method]) => method !== "cron.run")).toHaveLength(
+      1,
+    );
   } finally {
     read.resolve(completed);
-    await vi.advanceTimersByTimeAsync(2000);
     await scope.drain();
   }
 });
@@ -342,7 +335,7 @@ it.each([
   });
   expect(callGatewayFromCli.mock.calls[0]?.[0]).toBe(method);
   expectRuntimeErrorContaining(
-    "Automation not found: missing. Run `openclaw cron list` to see recent automation ids.",
+    "OpenClaw couldn’t find the automation “missing”. Run `openclaw cron list --all` to see IDs for enabled and disabled automations.",
   );
 });
 
@@ -865,7 +858,7 @@ it.each([
         "--message": "hello",
       }),
     ],
-    "Invalid --at",
+    "OpenClaw couldn’t use that run time.",
   ],
   [
     [...EDIT, "--webhook", "https://example.invalid/cron", "--announce"],

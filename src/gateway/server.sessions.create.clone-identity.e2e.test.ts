@@ -43,7 +43,7 @@ afterEach(async () => {
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 test.each(
-  (["clone", "refresh"] as const).flatMap((operation) =>
+  (["clone", "refresh", "default base"] as const).flatMap((operation) =>
     (["allowed", "retired", "rotated"] as const).map((identity) => ({ operation, identity })),
   ),
 )(
@@ -69,7 +69,7 @@ test.each(
     setRuntimeConfigSnapshot(selected);
     const runCommand = processExec.runCommandWithTimeout;
     vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
-      if (argv[0] !== "git" || !argv.some((arg) => [REPOSITORY_URL, git.endpoint].includes(arg))) {
+      if (argv[0] !== "git") {
         return runCommand(argv, options);
       }
       // Translate HTTPS into this owned authenticated endpoint; the production
@@ -79,7 +79,18 @@ test.each(
         argv.map((arg) => (arg === REPOSITORY_URL ? git.endpoint : arg)),
         {
           ...commandOptions,
-          env: { ...commandOptions.env, GIT_CONFIG_KEY_0: `http.${git.endpoint}/.extraHeader` },
+          env: Object.fromEntries(
+            Object.entries(commandOptions.env ?? {}).map(([key, value]) => [
+              key,
+              // Test-only routing retains the selected auth header and its config index.
+              // nosemgrep: security.opengrep.ghsa-j425-whc4-4jgc.openclaw-dangerous-host-env-override-pivots
+              key.startsWith("GIT_CONFIG_KEY_") &&
+              (value === `http.${new URL(REPOSITORY_URL).origin}/.extraHeader` ||
+                value === `http.${REPOSITORY_URL}.extraHeader`)
+                ? `http.${git.endpoint}/.extraHeader`
+                : value,
+            ]),
+          ),
         },
       );
     });
@@ -157,6 +168,13 @@ test.each(
       vi.spyOn(gitTransport, "withGitObjectStoreTransport").mockImplementation(
         (cwd, command, run) =>
           transport(cwd, command, async (staging, objects) => {
+            if (operation === "default base") {
+              expect(git.requests.length).toBeGreaterThan(0);
+              expect(git.requests.every((authorization) => authorization === AUTHORIZATION)).toBe(
+                true,
+              );
+              git.requests.length = 0;
+            }
             await revoke();
             return await run(staging, objects);
           }),

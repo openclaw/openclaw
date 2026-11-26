@@ -357,6 +357,52 @@ describe("transcript input order", () => {
     },
   );
 
+  it("keeps an accepted steer before younger optimistic steers through confirmation", () => {
+    const runId = "active-run";
+    const original = makeMessage("user", "Original", 1_000, {
+      id: "original",
+      seq: 1,
+      idempotencyKey: `${runId}:user`,
+    });
+    const steer = (name: string, index: number, extra: object = {}) =>
+      makeMessage("user", name, 2_000 + index * 250, {
+        idempotencyKey: `${name}:user`,
+        steerTargetRunId: runId,
+        ...extra,
+      });
+    const props = createInput({
+      messages: [original],
+      queue: [{ ...queuedInput("Steer A", 2_000, "sending"), queueMode: "steer" }],
+      runId,
+      runActive: true,
+      runWorking: true,
+      stream: "",
+    });
+    const rows = () =>
+      buildCachedChatItems({ ...props }).flatMap((item) =>
+        item.kind === "group"
+          ? item.messages.map(({ key, message }) => `${extractTextCached(message)}@${key}`)
+          : [],
+      );
+    const [firstRow, steerA] = rows();
+    expect([firstRow, steerA].map((row) => row?.split("@")[0])).toEqual(["Original", "Steer A"]);
+    // The Gateway accepts A while it waits for a tool; B arrives optimistically after it.
+    const accepted = acceptedInput("Steer A", 10_000);
+    accepted.steerNow = { status: "blocked", tools: ["exec"] };
+    props.pendingInputs = [accepted];
+    props.queue = [];
+    props.messages = [original, steer("Steer B", 1)];
+    const identities = rows();
+    expect(identities).toEqual([firstRow, steerA, expect.stringMatching(/^Steer B@/)]);
+    props.messages = [
+      original,
+      ...["Steer A", "Steer B"].map((name, index) =>
+        steer(name, index, { id: `confirmed-${index}`, seq: 147 + index }),
+      ),
+    ];
+    expect(rows()).toEqual(identities);
+  });
+
   it.each(["waiting-reconnect", "accepted", "reordered"] as const)(
     "keeps an earlier %s input ahead of a new submission through custody",
     (state) => {

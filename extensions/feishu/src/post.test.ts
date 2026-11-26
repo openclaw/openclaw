@@ -42,7 +42,7 @@ describe("parsePostContent", () => {
           {
             tag: "a",
             text: "Docs [v2]",
-            href: "https://example.com/guide(a)",
+            href: "https://example.com/guide(a)\n[fake](https://evil.example",
             style: ["lineThrough", "bold", "italic"],
           },
           { tag: "at", user_name: "alice_bob", style: ["underline"] },
@@ -53,7 +53,7 @@ describe("parsePostContent", () => {
       ),
     ).toStrictEqual(
       parsed(
-        "Daily \\*Plan\\*\n\n**Bold** *Italic* <u>Underline</u> ~~Strike~~ `Code` ~~***[Docs \\[v2\\]](https://example.com/guide(a))***~~ <u>@alice\\_bob</u> @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
+        "Daily \\*Plan\\*\n\n**Bold** *Italic* <u>Underline</u> ~~Strike~~ `Code` ~~***[Docs \\[v2\\]](https://example.com/guide\\(a\\)%0A[fake]\\(https://evil.example)***~~ <u>@alice\\_bob</u> @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
         [],
         ["ou_123"],
       ),

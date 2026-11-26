@@ -168,7 +168,7 @@ export async function prepareNodeHostRuntime(params?: {
   // cannot advertise or enable this command on the host's behalf.
   const claudePath =
     params?.enableAgentRuns === true && config.nodeHost?.agentRuns?.claude?.enabled === true
-      ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
+      ? await resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
   let workerRunsEnabled =
     !commandAllowlist &&
@@ -184,6 +184,7 @@ export async function prepareNodeHostRuntime(params?: {
   const platformTrust = dedicatedNodeExecution ? captureNodeWorkerPlatformTrust(env) : undefined;
   const workspaceOptions = {
     env,
+    filesystemIsolation: config.nodeHost?.workerRuns?.isolation === "filesystem",
     ephemeral: params?.ephemeral,
     managedIdentityTransport,
     platformTrust,
@@ -235,9 +236,7 @@ export async function prepareNodeHostRuntime(params?: {
         capacity: config.nodeHost?.workerRuns?.capacity,
         workspace: preparedWorkerWorkspace,
         containerEngine,
-        ...(config.nodeHost?.workerRuns?.containerImage
-          ? { containerImage: config.nodeHost.workerRuns.containerImage }
-          : {}),
+        containerImage: config.nodeHost?.workerRuns?.containerImage || undefined,
         onCapacityChanged: (capacity) => {
           preparedContainerCapacity = capacity;
           publishContainerCapacity?.(capacity);
@@ -331,6 +330,7 @@ export async function prepareNodeHostRuntime(params?: {
               env,
               capacity: config.nodeHost?.workerRuns?.capacity,
               nativeInferenceSnapshot,
+              filesystemIsolation: config.nodeHost?.workerRuns?.isolation === "filesystem",
               managedIdentityTransport,
               platformTrust,
               onCapacityChanged: onRunnerCapacityChanged,

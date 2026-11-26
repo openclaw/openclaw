@@ -1,4 +1,3 @@
-import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronListParams } from "../../../../packages/gateway-protocol/src/schema/cron.types.ts";
 import { sortCronJobs } from "../../../../src/cron/service/list-page-sort.ts";
@@ -16,40 +15,18 @@ import {
   type Inventory,
   type Runtime,
 } from "./inventory-connection.ts";
+import { applyFullCronRuntime, applyCompactCronRuntime } from "./runtime-projection.ts";
 
-function updateFull(page: CronJobsListResult, event: Runtime, params: CronListParams) {
+function updateFull(page: CronJobsListResult, event: Runtime) {
   const index = page.jobs.findIndex((job) => job.id === event.jobId);
   const previous = page.jobs[index];
   if (!previous || previous.updatedAtMs > event.job.updatedAtMs) {
     return page;
   }
-  const jobs = page.jobs.with(index, {
-    ...previous,
-    updatedAtMs: event.job.updatedAtMs,
-    state: {
-      ...previous.state,
-      nextRunAtMs: event.job.state.nextRunAtMs,
-      lastRunAtMs: event.job.state.lastRunAtMs,
-      lastRunStatus: event.job.state.lastRunStatus,
-      lastStatus: event.job.state.lastStatus,
-      runningAtMs: event.job.state.runningAtMs,
-      autoDisabled: event.job.state.autoDisabled,
-      admissionDeferred: event.job.state.admissionDeferred,
-      lastDurationMs: event.job.state.lastDurationMs,
-      lastMeaningfulResult: event.job.state.lastMeaningfulResult,
-      lastTriggerEvalAtMs: event.job.state.lastTriggerEvalAtMs,
-      ...(event.action === "finished"
-        ? { lastError: event.error, lastDurationMs: event.durationMs }
-        : {}),
-    },
-  });
   return {
     ...page,
     snapshotRevision: `runtime:${event.revision}`,
-    jobs:
-      params.sortBy === "name"
-        ? jobs
-        : sortCronJobs(jobs, params.sortBy ?? "nextRunAtMs", params.sortDir ?? "asc"),
+    jobs: page.jobs.with(index, applyFullCronRuntime(previous, event)),
   };
 }
 
@@ -59,28 +36,10 @@ function updateCompact(page: CronJobsListResult<CronCompactJob>, event: Runtime)
   if (!previous || previous.updatedAtMs > event.job.updatedAtMs) {
     return page;
   }
-  const runtime = event.job.state;
   return {
     ...page,
     snapshotRevision: `runtime:${event.revision}`,
-    jobs: page.jobs.with(index, {
-      ...previous,
-      updatedAtMs: event.job.updatedAtMs,
-      nextRunAt: timestampMsToIsoString(runtime.nextRunAtMs) ?? null,
-      nextRunAtMs: runtime.nextRunAtMs ?? null,
-      lastRunAt: timestampMsToIsoString(runtime.lastRunAtMs) ?? null,
-      lastRunAtMs: runtime.lastRunAtMs ?? null,
-      lastRunStatus: runtime.lastRunStatus ?? runtime.lastStatus ?? null,
-      runningAtMs: runtime.runningAtMs,
-      autoDisabled: runtime.autoDisabled,
-      admissionDeferred: runtime.admissionDeferred,
-      lastDurationMs: runtime.lastDurationMs,
-      lastMeaningfulResult: runtime.lastMeaningfulResult,
-      lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
-      ...(event.action === "finished"
-        ? { lastRunError: event.error ?? null, lastDurationMs: event.durationMs }
-        : {}),
-    }),
+    jobs: page.jobs.with(index, applyCompactCronRuntime(previous, event)),
   };
 }
 
@@ -88,7 +47,6 @@ type ReadOptions = {
   refresh?: boolean;
   signal?: AbortSignal;
   canRead?: () => boolean;
-  legacyCache?: boolean;
 };
 type CompactParams = CronListParams & { compact: true };
 type FullParams = CronListParams & { compact?: false };
@@ -108,66 +66,57 @@ export function readCronInventory(
   params: CronListParams,
   options: ReadOptions = {},
 ) {
-  options.signal?.throwIfAborted();
-  const owner = getCronInventory(client);
-  if (!owner.supported && !options.legacyCache) {
-    return options.signal
-      ? client.request<CronJobsListResult | CronJobsListResult<CronCompactJob>>(
-          "cron.list",
-          params,
-          { signal: options.signal },
-        )
-      : client.request<CronJobsListResult | CronJobsListResult<CronCompactJob>>(
-          "cron.list",
-          params,
-        );
+  if (params.compact) {
+    return readCompactCronInventory(client, params, options).then((page) =>
+      selectPage(
+        page,
+        params,
+        (job) => job.lastRunStatus,
+        (jobs) =>
+          sortCronJobs(
+            jobs.map((job) => ({
+              id: job.id,
+              name: job.name,
+              updatedAtMs: job.updatedAtMs,
+              state: { nextRunAtMs: job.nextRunAtMs ?? undefined },
+              job,
+            })),
+            params.sortBy ?? "nextRunAtMs",
+            params.sortDir ?? "asc",
+          ).map(({ job }) => job),
+      ),
+    );
   }
-  const source = {
-    params: owner.supported ? inventoryQuery(params) : params,
-    complete: owner.supported,
-  };
-  return params.compact
-    ? readRows(
-        client,
-        owner,
-        owner.compact,
-        source.params,
-        source.complete,
-        updateCompact,
-        options,
-      ).then((page) =>
-        source.complete
-          ? selectPage(
-              page,
-              params,
-              (job) => job.lastRunStatus,
-              (jobs) =>
-                sortCronJobs(
-                  jobs.map((job) => ({
-                    id: job.id,
-                    name: job.name,
-                    updatedAtMs: job.updatedAtMs,
-                    state: { nextRunAtMs: job.nextRunAtMs ?? undefined },
-                    job,
-                  })),
-                  params.sortBy ?? "nextRunAtMs",
-                  params.sortDir ?? "asc",
-                ).map(({ job }) => job),
-            )
-          : page,
-      )
-    : readRows(client, owner, owner.full, source.params, source.complete, updateFull, options).then(
-        (page) =>
-          source.complete
-            ? selectPage(
-                page,
-                params,
-                (job) => job.state.lastRunStatus ?? job.state.lastStatus,
-                (jobs) =>
-                  sortCronJobs(jobs, params.sortBy ?? "nextRunAtMs", params.sortDir ?? "asc"),
-              )
-            : page,
-      );
+  const owner = getCronInventory(client);
+  return readRows(client, owner, owner.full, inventoryQuery(params), updateFull, options).then(
+    (page) =>
+      selectPage(
+        page,
+        params,
+        (job) => job.state.lastRunStatus ?? job.state.lastStatus,
+        (jobs) => sortCronJobs(jobs, params.sortBy ?? "nextRunAtMs", params.sortDir ?? "asc"),
+      ),
+  );
+}
+
+/** All scoped jobs, without the table's runtime filters, ordering or paging. */
+export function readCompactCronInventory(
+  client: GatewayBrowserClient,
+  params: Pick<
+    CronListParams,
+    "agentId" | "sessionKey" | "sessionAgentId" | "query" | "scheduleKind" | "trigger"
+  >,
+  options: ReadOptions = {},
+) {
+  const owner = getCronInventory(client);
+  return readRows(
+    client,
+    owner,
+    owner.compact,
+    inventoryQuery({ ...params, compact: true }),
+    updateCompact,
+    options,
+  );
 }
 
 function selectPage<Row extends { enabled: boolean }>(
@@ -204,22 +153,18 @@ function readRows<Row>(
   owner: Inventory,
   entries: Map<string, Entry<Row>>,
   params: CronListParams,
-  complete: boolean,
-  update: (
-    page: CronJobsListResult<Row>,
-    event: Runtime,
-    params: CronListParams,
-  ) => CronJobsListResult<Row>,
+  update: (page: CronJobsListResult<Row>, event: Runtime) => CronJobsListResult<Row>,
   options: ReadOptions,
 ): Promise<CronJobsListResult<Row>> {
-  const key = queryKey(params, complete);
+  options.signal?.throwIfAborted();
+  const key = queryKey(params);
   let entry = entries.get(key);
   if (!entry) {
     entry = {
       version: -1,
       applyRuntime(runtime) {
         if (this.value) {
-          this.value = update(this.value, runtime, params);
+          this.value = update(this.value, runtime);
         }
       },
     };
@@ -235,7 +180,7 @@ function readRows<Row>(
   if (!options.refresh && current.version === owner.version && current.value) {
     return Promise.resolve(current.value);
   }
-  if (current.pending) {
+  if (current.pending && !current.pending.controller.signal.aborted) {
     return subscribeToSharedRequest(current.pending, subscriber, options.signal);
   }
   {
@@ -264,37 +209,49 @@ function readRows<Row>(
           assertPresented();
           const version = owner.version;
           const runtimeRevision = owner.runtimeRevision;
-          let response = await client.request<CronJobsListResult<Row>>("cron.list", params, {
+          const response = await client.request<CronJobsListResult<Row>>("cron.list", params, {
             signal: pending.controller.signal,
           });
-          if (complete) {
-            const first = readCanonicalCronListPage<Row>(response, params.limit ?? 50);
-            resolveCronListPageNextOffset(first, 0);
-            const jobs = [...first.jobs];
-            let page = first;
-            while (page.hasMore && version === owner.version) {
-              const offset = resolveCronListPageNextOffset(page, page.offset);
-              if (offset === null) {
-                break;
+          // An invalidated response cannot establish current membership, even when malformed.
+          if (version !== owner.version) {
+            continue;
+          }
+          const first = readCanonicalCronListPage<Row>(response, params.limit ?? 50);
+          const jobs: Row[] = [];
+          let page = first;
+          let offset = 0;
+          for (;;) {
+            const nextOffset = resolveCronListPageNextOffset(page, offset);
+            for (const job of page.jobs) {
+              // A partial or malformed response must not replace the last valid scoped inventory.
+              if (
+                !isRecord(job) ||
+                typeof job.id !== "string" ||
+                !job.id ||
+                typeof job.enabled !== "boolean"
+              ) {
+                throw new Error("cron.list returned an invalid inventory job");
               }
-              assertPresented();
-              const next = await client.request(
-                "cron.list",
-                { ...params, offset },
-                { signal: pending.controller.signal },
-              );
-              if (version !== owner.version) {
-                break;
-              }
-              page = readCanonicalCronListPage<Row>(next, params.limit ?? 50);
-              resolveCronListPageNextOffset(page, offset);
-              // Name order and membership hold until the advertised definition invalidation.
-              if (first.total !== page.total) {
-                throw new Error("Automation inventory changed. Refresh and try again.");
-              }
-              jobs.push(...page.jobs);
+              jobs.push(job);
             }
-            response = { ...first, jobs, limit: jobs.length, hasMore: false, nextOffset: null };
+            if (nextOffset === null || version !== owner.version) {
+              break;
+            }
+            assertPresented();
+            offset = nextOffset;
+            const next = await client.request(
+              "cron.list",
+              { ...params, offset },
+              { signal: pending.controller.signal },
+            );
+            if (version !== owner.version) {
+              break;
+            }
+            page = readCanonicalCronListPage<Row>(next, params.limit ?? 50);
+            // Name order and membership hold until the definition invalidation.
+            if (first.total !== page.total) {
+              throw new Error("Automation inventory changed. Refresh and try again.");
+            }
           }
           pending.controller.signal.throwIfAborted();
           if (!isCurrentCronInventory(client, owner)) {
@@ -303,22 +260,27 @@ function readRows<Row>(
           if (version !== owner.version) {
             continue;
           }
-          let page =
-            owner.supported && !complete
-              ? readCanonicalCronListPage<Row>(response, params.limit ?? 50)
-              : response;
+          let result: CronJobsListResult<Row> = {
+            ...first,
+            jobs,
+            limit: jobs.length,
+            hasMore: false,
+            nextOffset: null,
+          };
           for (const runtime of owner.runtime.values()) {
             if (runtime.revision > runtimeRevision) {
-              page = update(page, runtime, params);
+              result = update(result, runtime);
             }
           }
-          current.value = page;
+          current.value = result;
           current.version = version;
-          return page;
+          return result;
         }
       } catch (error) {
-        current.version = -1;
-        current.value = undefined;
+        if (current.pending === pending) {
+          current.version = -1;
+          current.value = undefined;
+        }
         throw error;
       } finally {
         if (current.pending === pending) {
@@ -348,14 +310,13 @@ function inventoryQuery(params: CronListParams) {
   };
 }
 
-function queryKey(params: CronListParams, complete: boolean) {
-  return JSON.stringify([
-    complete,
+function queryKey(params: CronListParams) {
+  return JSON.stringify(
     Object.keys(params)
       .toSorted()
       .filter((key) => Reflect.get(params, key) !== undefined)
       .map((key) => [key, Reflect.get(params, key)]),
-  ]);
+  );
 }
 
 /** Runtime cannot introduce membership; the canonical scope includes every runtime-filter candidate. */
@@ -373,7 +334,7 @@ export function cronInventoryHasJob(
   }
   const owner = getCronInventory(client);
   const source = inventoryQuery(params);
-  const key = queryKey(source, true);
+  const key = queryKey(source);
   const page = params.compact ? owner?.compact.get(key)?.value : owner?.full.get(key)?.value;
   return page?.jobs.some((job) => job.id === payload.jobId) === true;
 }

@@ -22,6 +22,7 @@ import {
 
 beforeEach(installTranscriptDomMocks);
 afterEach(() => {
+  document.documentElement.removeAttribute("data-openclaw-warm-frame");
   cleanupSolid();
   resetChatViewState();
   resetTranscriptTestDom();
@@ -48,12 +49,14 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
       flush();
     }
   };
-  function mountPane(paneId: string, restoring = false) {
+  function mountPane(paneId: string, restoring = false, initialSubmission = false) {
     const chat = createChatProps({
       paneId,
       sessionKey: `agent:main:${paneId}`,
+      selectedSession: { key: `agent:main:${paneId}`, kind: "direct", hasMessages: true },
       messages: [{ role: "assistant", content: "Initial history", timestamp: 1 }],
       restoring,
+      initialSubmission,
     });
     chat.transcript.start();
     onTestFinished(() => chat.transcript.dispose());
@@ -164,4 +167,36 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   expect(restored.container.querySelector('.chat-thread[role="log"]')).not.toBeNull();
   expect(restored.container.querySelector(".chat-conversation-loading")).toBeNull();
   restored.unmount();
+
+  const created = mountPane("mount-created", false, true);
+  expect(created.container.querySelector('.chat-thread[role="log"]')).not.toBeNull();
+  expect(created.container.querySelector(".chat-conversation-loading")).toBeNull();
+  created.unmount();
+
+  document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
+  const warmYield = Promise.withResolvers<void>();
+  vi.stubGlobal("scheduler", { yield: () => warmYield.promise });
+  const warm = mountPane("mount-held-warm", true);
+  const warmComposer = warm.getByRole("textbox");
+  expect(warm.container.querySelector('.chat-thread[role="log"]')).toBeNull();
+  expect(warm.container.querySelector(".chat-conversation-loading")).toBeNull();
+  warm.update({ chat: { ...warm.chat, messages: latest.messages } });
+  warmYield.resolve();
+  await warmYield.promise;
+  flush();
+  expect(warm.getByRole("textbox")).toBe(warmComposer);
+  expect(warm.container.querySelector('.chat-thread[role="log"]')).not.toBeNull();
+  await settlePaints();
+  expect(warm.container.textContent).toContain("Latest history");
+  expect(warm.container.textContent).not.toContain("Initial history");
+  warm.unmount();
+
+  const closedWarmYield = Promise.withResolvers<void>();
+  vi.stubGlobal("scheduler", { yield: () => closedWarmYield.promise });
+  const closedWarm = mountPane("mount-closed-warm", true);
+  closedWarm.unmount();
+  closedWarmYield.resolve();
+  await closedWarmYield.promise;
+  flush();
+  expect(closedWarm.chat.transcript.renderedSessionKey).toBeNull();
 });

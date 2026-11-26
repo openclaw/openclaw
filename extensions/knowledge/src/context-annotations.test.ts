@@ -54,7 +54,7 @@ async function setup() {
     );
   f.annotate = async (id: any, annotations: any, extra = {}) => {
     const r = (
-      await f.service.record({ id, includeMetadata: true, includeEvidence: true }, f.owner)
+      await f.service.record_detail({ id, includeMetadata: true, includeEvidence: true }, f.owner)
     ).record;
     const input = {
       requestId: randomUUID(),
@@ -93,7 +93,7 @@ it("context annotations preserve assertion text/lifecycle, append evidence, and 
     },
     { addEvidence: f.evidence },
   );
-  const read = await f.service.record(
+  const read = await f.service.record_detail(
     { id: second.id, includeMetadata: true, includeEvidence: true },
     f.owner,
   );
@@ -104,16 +104,20 @@ it("context annotations preserve assertion text/lifecycle, append evidence, and 
   expect(read.record!.metadata!.continuity![0]!.id).toBe(original.id);
   expect(read.relatedStatements![0]!.incoming).toBe(false);
   expect(read.relatedStatements![0]!.text).toBe("x".repeat(3999));
-  const reverse = await f.service.record({ id: original.id, includeEvidence: true }, f.owner);
+  const reverse = await f.service.record_detail(
+    { id: original.id, includeEvidence: true },
+    f.owner,
+  );
   expect(reverse.relatedStatements![0]!.record.id).toBe(second.id);
   expect(reverse.relatedStatements![0]!.incoming).toBe(true);
   expect(reverse.relatedStatements![0]!.source!.id).toBe(f.source.id);
-  const inventory = await f.service.records({ kind: "claim", query: "reaffirmed" }, f.owner);
+  const inventory = await f.service.records_detail({ kind: "claim", query: "reaffirmed" }, f.owner);
   expect(inventory.total).toBe(1);
   expect(inventory.facets!.kinds.commitment).toBe(2);
   expect(inventory.facets!.origins.source).toBe(2);
   expect(
-    (await f.service.records({ kind: "claim", assertionOrigin: "agent_inference" }, f.owner)).total,
+    (await f.service.records_detail({ kind: "claim", assertionOrigin: "agent_inference" }, f.owner))
+      .total,
   ).toBe(0);
   expect(
     (await f.service.annotate(input, f.owner)).revision,
@@ -126,7 +130,9 @@ it("context annotations preserve assertion text/lifecycle, append evidence, and 
     f.service.annotate({ ...input, annotations: { body: "Changed meaning" } }, f.owner),
   ).rejects.toThrow(/Invalid/);
   await expect(f.service.annotate(input, f.operator)).rejects.toThrow(/chat/);
-  expect((await f.service.record({ id: original.id }, f.owner)).record!.lifecycle).toBe("active");
+  expect((await f.service.record_detail({ id: original.id }, f.owner)).record!.lifecycle).toBe(
+    "active",
+  );
 });
 
 it("uncertain identity and attribution retain evidence; cross-scope guesses and forged evidence are rejected", async () => {
@@ -172,13 +178,13 @@ it("uncertain identity and attribution retain evidence; cross-scope guesses and 
       },
     }),
   ).rejects.toThrow(/hash|match/i);
-  const read = await f.service.record(
+  const read = await f.service.record_detail(
     { id: person.id, includeMetadata: true, includeEvidence: true },
     f.owner,
   );
   expect(read.record!.metadata!.identity!.status).toBe("partial");
   expect(
-    (await f.service.records({ type: "person" }, f.owner)).total,
+    (await f.service.records_detail({ type: "person" }, f.owner)).total,
     "Candidates never merge identities",
   ).toBe(2);
 });
@@ -187,19 +193,21 @@ it("fixture classification consistently removes records from current views witho
   const f = await setup(),
     claim = await f.claim({ title: "Fixture canary" });
   await f.annotate(claim.id, { record_class: "fixture" });
-  expect((await f.service.records({ kind: "claim" }, f.owner)).total).toBe(0);
+  expect((await f.service.records_detail({ kind: "claim" }, f.owner)).total).toBe(0);
   expect((await f.service.lookup({ query: "Fixture canary" }, f.owner)).total).toBe(0);
   expect((await f.service.grep({ query: "Fixture canary" }, f.owner)).total).toBe(0);
   expect(
-    (await f.service.connections({ id: f.source.id }, f.owner)).connections.some(
-      (r: any) => r.record.id === claim.id,
+    (await f.service.connections_detail({ id: f.source.id }, f.owner)).connections.some(
+      (r: any) => r.id === claim.id,
     ),
   ).toBe(false);
   expect((await f.service.recent({}, f.owner)).items.some((r: any) => r.id === claim.id)).toBe(
     false,
   );
-  expect((await f.service.records({ kind: "claim", lifecycle: "all" }, f.owner)).total).toBe(1);
-  const exact = await f.service.record(
+  expect((await f.service.records_detail({ kind: "claim", lifecycle: "all" }, f.owner)).total).toBe(
+    1,
+  );
+  const exact = await f.service.record_detail(
     { id: claim.id, includeMetadata: true, includeEvidence: true },
     f.owner,
   );
@@ -245,7 +253,7 @@ it("new records with shared annotation evidence serialize without YAML aliases a
     f.owner,
   );
   for (const receipt of [claim, relationship, page]) {
-    const read = await f.service.record(
+    const read = await f.service.record_detail(
       { id: receipt.id, includeMetadata: true, includeEvidence: true },
       f.owner,
     );
@@ -270,13 +278,13 @@ it("new records with shared annotation evidence serialize without YAML aliases a
   await f.annotate(claim.id, { continuity });
   expect(
     (
-      await f.service.record(
+      await f.service.record_detail(
         { id: claim.id, includeMetadata: true, includeEvidence: true },
         f.owner,
       )
     ).record!.metadata!.continuity!.length,
   ).toBe(2);
-  const saved = (await f.service.record({ id: page.id }, f.owner)).record;
+  const saved = (await f.service.record_detail({ id: page.id }, f.owner)).record;
   const candidate = await f.page("Alex candidate", "person");
   const identity = {
     status: "partial",
@@ -300,8 +308,12 @@ it("new records with shared annotation evidence serialize without YAML aliases a
     f.owner,
   );
   expect(
-    (await f.service.record({ id: page.id, includeMetadata: true, includeEvidence: true }, f.owner))
-      .record!.metadata!.identity!.candidates!.length,
+    (
+      await f.service.record_detail(
+        { id: page.id, includeMetadata: true, includeEvidence: true },
+        f.owner,
+      )
+    ).record!.metadata!.identity!.candidates!.length,
   ).toBe(2);
   expect((await f.service.diagnostics({}, f.owner)).total).toBe(0);
 });
@@ -401,7 +413,7 @@ it("Recent batches attendee summaries only for the current group page", async ()
     (await f.service.recent({ ...input, includeEndpoints: false }, f.owner)).items[0]!.group!
       .endpoints,
   ).toBe(undefined);
-  const record = (await f.service.record({ id: person.id }, f.owner)).record;
+  const record = (await f.service.record_detail({ id: person.id }, f.owner)).record;
   await f.service.withdraw(
     {
       requestId: randomUUID(),
@@ -424,23 +436,28 @@ it("entity annotations link a claim by ID without changing its assertion, and re
     alex = await f.page("Alex", "person"),
     sam = await f.page("Sam", "person"),
     claim = await f.claim();
-  const before = (await f.service.record({ id: claim.id, includeMetadata: true }, f.owner)).record;
+  const before = (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner))
+    .record;
   expect(before!.metadata!.entities).toBe(undefined);
   const { input } = await f.annotate(
     claim.id,
     {},
     { entities: [alex.id], reason: "Relink unique subject" },
   );
-  const linked = (await f.service.record({ id: claim.id, includeMetadata: true }, f.owner)).record;
+  const linked = (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner))
+    .record;
   expect(linked!.metadata!.entities).toStrictEqual([alex.id]);
   expect(linked!.body).toBe(before!.body);
   expect(linked!.lifecycle).toBe("active");
   expect(linked!.metadata!.supersedes).toBe(undefined);
   expect(linked!.metadata!.evidence).toStrictEqual(before!.metadata!.evidence);
   expect(linked!.revision).toBe(before!.revision + 1);
-  const connected = await f.service.connections({ id: alex.id, direction: "claims" }, f.owner);
+  const connected = await f.service.connections_detail(
+    { id: alex.id, direction: "claims" },
+    f.owner,
+  );
   expect(
-    connected.connections.some((c: any) => c.record.id === claim.id),
+    connected.connections.some((c: any) => c.id === claim.id),
     "The subject page now lists the claim",
   ).toBeTruthy();
   // Exact replay returns the same receipt; a stale revision conflicts.
@@ -450,7 +467,7 @@ it("entity annotations link a claim by ID without changing its assertion, and re
   ).rejects.toThrow(/conflict/);
   await expect(f.annotate(claim.id, {}, { entities: [claim.id] })).rejects.toThrow(/active pages/);
   await expect(f.annotate(alex.id, {}, { entities: [sam.id] })).rejects.toThrow(/require a claim/);
-  const samRecord = (await f.service.record({ id: sam.id }, f.owner)).record;
+  const samRecord = (await f.service.record_detail({ id: sam.id }, f.owner)).record;
   await f.service.withdraw(
     {
       requestId: randomUUID(),
@@ -464,7 +481,7 @@ it("entity annotations link a claim by ID without changing its assertion, and re
   await expect(f.annotate(claim.id, {}, { entities: [sam.id] })).rejects.toThrow(/active pages/);
   await f.annotate(claim.id, {}, { entities: [] });
   expect(
-    (await f.service.record({ id: claim.id, includeMetadata: true }, f.owner)).record!.metadata!
-      .entities,
+    (await f.service.record_detail({ id: claim.id, includeMetadata: true }, f.owner)).record!
+      .metadata!.entities,
   ).toBe(undefined);
 });

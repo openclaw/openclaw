@@ -56,7 +56,7 @@ suite.define(() => {
         },
       });
 
-      await openRoute("cron", page.locator(".cron-page"));
+      await openRoute("cron", page.locator(".cron-overview-empty"));
 
       const [padding, listGap, listFontSize, ...cronStyles] = await probeStyles(
         page,

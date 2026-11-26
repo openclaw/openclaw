@@ -50,7 +50,7 @@ describe("manual delegated sign-in", () => {
           log: (message) => {
             authUrl = new URL(message.match(/https:\/\/\S+/u)![0]);
           },
-          prompt: async () => {
+          prompt: async ({ validate }) => {
             const callback = new URL(MSTEAMS_OAUTH_REDIRECT_URI);
             callback.searchParams.set("code", "callback-code");
             if (stateKind !== "missing") {
@@ -59,6 +59,12 @@ describe("manual delegated sign-in", () => {
                 stateKind === "valid" ? authUrl!.searchParams.get("state")! : "wrong-state",
               );
             }
+            // A wrong-attempt paste keeps the prompt open instead of ending setup.
+            expect(validate(callback.toString())).toBe(
+              stateKind === "mismatched"
+                ? "This address belongs to a different sign-in attempt. Use the link from this sign-in."
+                : undefined,
+            );
             return callback.toString();
           },
           progress: { update: vi.fn(), stop: vi.fn() },
@@ -69,8 +75,9 @@ describe("manual delegated sign-in", () => {
           clientSecret: "synthetic-client-secret", // pragma: allowlist secret
         },
       );
-      if (stateKind !== "valid") {
-        await expect(login).rejects.toThrow(/state/u);
+      // PKCE binds a state-less callback to this attempt.
+      if (stateKind === "mismatched") {
+        await expect(login).rejects.toThrow("different sign-in attempt");
         expect(fetchSpy).not.toHaveBeenCalled();
         return;
       }

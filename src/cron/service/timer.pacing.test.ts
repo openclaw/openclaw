@@ -93,7 +93,10 @@ it.each(["recurring retry", "pacing"])(
       consecutiveErrors: 1,
     });
     expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
-    expect(deferredNotifications).toHaveLength(1);
+    // The schedule-error notice, plus the failed retry's own first-failure alert.
+    expect(deferredNotifications.map(({ kind }) => kind)).toEqual(
+      retry ? ["auto-disabled", "failure-alert"] : ["auto-disabled"],
+    );
   },
 );
 

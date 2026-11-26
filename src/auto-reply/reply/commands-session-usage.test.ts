@@ -104,6 +104,7 @@ function buildCostTotals(overrides: Partial<CostUsageTotals> = {}): CostUsageTot
     cacheReadCost: 0,
     cacheWriteCost: 0,
     missingCostEntries: 0,
+    cacheUnmeasuredInput: 0,
     ...overrides,
   };
 }

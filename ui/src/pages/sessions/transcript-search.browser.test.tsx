@@ -18,8 +18,8 @@ it("preserves the focused transcript query when Escape cancels IME composition",
     />
   ));
   try {
-    await page.getByRole("button", { name: "Search transcripts", exact: true }).click();
-    const input = page.getByRole("searchbox", { name: "Search session transcripts" });
+    await page.getByRole("button", { name: "Search chats", exact: true }).click();
+    const input = page.getByRole("searchbox", { name: "Search chats" });
     const element = input.element();
     await waitForSolid(() => expect(document.activeElement).toBe(element));
     element.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));

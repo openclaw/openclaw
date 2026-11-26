@@ -73,6 +73,8 @@ export type EmbeddedAgentCompactResult = {
     status?: number;
     code?: string;
     rawError?: string;
+    /** A deferred summary refusal; the route owner may retry the summary on another route. */
+    summaryRefused?: true;
   };
   result?: {
     /** Identifies summaryless provider compaction in RPC and UI consumers. */

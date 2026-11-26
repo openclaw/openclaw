@@ -805,6 +805,7 @@ if (
 }
 let measuredPhaseRound: number | undefined;
 const turnStartPhases: Array<Record<string, unknown>> = [];
+const unmeasuredTurnStartPhases: Array<Record<string, unknown>> = [];
 const turnStartSamples: TurnStartSample[] = [];
 const turnStartTimeline: Array<Record<string, unknown>> = [];
 let turnStartTimelineDropped = 0;
@@ -1481,7 +1482,7 @@ applyMockOpenAiModelConfig(cfg, {
 if (values["auth-availability-storm"]) {
   cfg.models.providers.openai.apiKey = "openai:auth-availability-storm";
 }
-if (verifyHistoryReplay) {
+if (verifyHistoryReplay || (values["turn-start-phases"] && historyTurns > 0)) {
   for (const model of cfg.models.providers.openai.models) {
     // The synthetic provider must fit the seed plus turns accumulated across restarts.
     model.contextWindow = 2_097_152;
@@ -1751,6 +1752,7 @@ if (isMainThread) {
     if (phase !== "completed") return;
     observe("worker-request", { kind, requestClass, queueDepth, queueWaitMs, durationMs,
       timing: numbers(timing, ["enqueued", "dispatched", "posted", "postFinished", "received", "inputReady",
+        "backendLoadStarted", "backendLoadFinished", "openGrantStarted", "openGrantFinished", "factoryStarted", "factoryFinished",
         "executeStarted", "executeFinished", "serialized", "replied", "replyReceived"]) });
   });
   const timer = setInterval(flush, 250);
@@ -4379,13 +4381,13 @@ async function rpc(
   return response.payload;
 }
 function latencySummary(latenciesMs: number[]) {
-  const sorted = latenciesMs.toSorted((a, b) => a - b);
+  const { count, p50, p95, p99, max } = summarizeLatencies(latenciesMs);
   return {
-    count: sorted.length,
-    p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
-    p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
-    p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
-    maxMs: sorted.at(-1) ?? null,
+    count,
+    p50Ms: p50,
+    p95Ms: p95,
+    p99Ms: p99,
+    maxMs: max,
     latenciesMs,
   };
 }
@@ -5848,12 +5850,10 @@ try {
           turnStartTimelineDropped = message.dropped;
         }
       }
-      if (
-        isRecord(message) &&
-        isRecord(message.turnStartPhase) &&
-        measuredPhaseRound !== undefined
-      ) {
-        turnStartPhases.push({ round: measuredPhaseRound, ...message.turnStartPhase });
+      if (isRecord(message) && isRecord(message.turnStartPhase)) {
+        const phases =
+          measuredPhaseRound === undefined ? unmeasuredTurnStartPhases : turnStartPhases;
+        phases.push({ round: measuredPhaseRound, ...message.turnStartPhase });
       }
     });
   }
@@ -9104,7 +9104,13 @@ try {
     writeFileSync(
       path.join(output, "turn-start-phases.json"),
       JSON.stringify(
-        { providerDelayMs, coldSessionRounds, phases: turnStartPhases, turns: turnStartSamples },
+        {
+          providerDelayMs,
+          coldSessionRounds,
+          phases: turnStartPhases,
+          unmeasuredPhases: unmeasuredTurnStartPhases,
+          turns: turnStartSamples,
+        },
         null,
         2,
       ),

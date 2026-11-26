@@ -20,6 +20,7 @@ import type {
 } from "./exec-approval-manager.types.js";
 import { InvalidApprovalIdError } from "./exec-approval-registration.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
+import { cancelAgentRuntimeBoundApprovals } from "./server-methods/approval-run-cancellation.js";
 
 async function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
   const result = await getOperatorApprovalDetailed({ nowMs: Date.now(), ...params });
@@ -583,32 +584,42 @@ describe("ExecApprovalManager", () => {
     expect(await readStored()).toMatchObject({ decision: "allow-once", consumedAtMs: null });
   });
 
-  it("cancels a parked waiter when delegated authority closes", async () => {
-    const { manager, runtime, bind } = delegatedManager();
+  it("cancels a parked waiter through run-close observation", async () => {
+    const { manager, bind } = delegatedManager();
     const { id, snapshot } = await bind();
-    runtime.active = false;
-    await expect(manager.awaitDecision(id)).resolves.toBeNull();
+    const waiter = manager.awaitDecision(id);
+    const publish = vi.fn();
+    expect(
+      await cancelAgentRuntimeBoundApprovals({
+        authority: delegatedAuthority,
+        manager,
+        publish,
+      }),
+    ).toBe(1);
+    await expect(waiter).resolves.toBeNull();
     expect(await snapshot()).toMatchObject({ status: "cancelled", terminalReason: "run-aborted" });
+    expect(publish).toHaveBeenCalledOnce();
   });
 
-  it("denies stale non-deny resolution and retained allow-once redemption", async () => {
+  it("keeps an approval consumable for a started request after run-close observation", async () => {
     const { manager, runtime, bind } = delegatedManager();
-    const { record: stalePending } = await bind("approval-closed-resolve");
+    const { record, allow } = await bind();
+    expect(await allow()).toMatchObject({ outcome: "resolved" });
     runtime.active = false;
     expect(
-      await manager.resolveDetailed(stalePending.id, "allow-once", { kind: "device", id: "ui" }),
-    ).toMatchObject({ outcome: "already-resolved", retry: "conflict" });
-    expect(await manager.getSnapshot(stalePending.id)).toMatchObject({ status: "cancelled" });
-    runtime.active = true;
-    const { record: retained } = await bind("approval-closed-consume");
-    expect(await manager.resolve(retained.id, "allow-once", "ui")).toBe(true);
-    runtime.active = false;
-    expect(manager.projectDecisionIfActive(retained.id, "allow-once")).toBeNull();
-    expect(await manager.consumeAllowOnce(retained.id)).toBe(false);
+      await cancelAgentRuntimeBoundApprovals({
+        authority: delegatedAuthority,
+        manager,
+        publish: vi.fn(),
+      }),
+    ).toBe(0);
+    expect(manager.projectDecisionIfActive(record.id, "allow-once")).toBe("allow-once");
+    expect(await manager.consumeAllowOnce(record.id, "started-request")).toBe(true);
+    expect(await manager.consumeAllowOnce(record.id, "another-request")).toBe(false);
   });
 
   it("keeps delegated authority independent from optional audit evidence", async () => {
-    const { manager, runtime, bind } = delegatedManager();
+    const { manager, bind } = delegatedManager();
     const { record, snapshot } = await bind("approval", {
       executionIdentityToken: {
         tokenVersion: 1,
@@ -619,11 +630,13 @@ describe("ExecApprovalManager", () => {
       },
     });
     delete record.executionIdentityToken;
-    expect(await manager.forceDenyIfRuntimeAuthorityClosed(record.id)).toBeNull();
     expect((await snapshot())?.resolvedAtMs).toBeUndefined();
-    runtime.active = false;
-    expect(await manager.forceDenyIfRuntimeAuthorityClosed(record.id)).toMatchObject({
-      outcome: "denied",
-    });
+    expect(
+      await cancelAgentRuntimeBoundApprovals({
+        authority: delegatedAuthority,
+        manager,
+        publish: vi.fn(),
+      }),
+    ).toBe(1);
   });
 });

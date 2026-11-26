@@ -25,6 +25,7 @@ export { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";
 export { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+export { isReplySessionInitConflictError } from "../auto-reply/reply/session-init-conflict-retry.js";
 export { finalizeInboundContextForSdk as finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 export {
   createInboundDebouncer,
@@ -48,7 +49,7 @@ export type {
 export type {
   ReplyDispatcherOptions,
   ReplyDispatcherWithTypingOptions,
-} from "../auto-reply/reply/reply-dispatcher.js";
+} from "../auto-reply/reply/reply-dispatcher.types.js";
 export { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 export type {
   GetReplyOptions,

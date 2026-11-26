@@ -308,7 +308,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
         resolveLlamaServerEndpoint(value);
         return undefined;
       } catch {
-        return "Enter a valid HTTP or HTTPS URL without embedded credentials (e.g. http://localhost:8080).";
+        return "Enter a valid HTTP or HTTPS URL without embedded credentials (e.g. http://localhost:9931).";
       }
     },
   });

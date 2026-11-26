@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startChatSendDiagnostics } from "../../gateway/server-methods/chat-send-diagnostics.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
+import { withWorktreePreparationTiming } from "../worktrees/preparation-timing.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   prepareSandboxDependencyTemplate,
@@ -101,7 +102,46 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
-async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn()) {
+it("changes dependency identity when a mutable image is rebuilt or the engine target changes", async () => {
+  const config = { ...cfg, backend: "podman" };
+  const target = { key: "first", globalArgs: ["--url", "unix:///first.sock"] };
+  vi.mocked(resolvePodmanSandboxRuntimeInfo).mockResolvedValue({
+    machine: false,
+    rootless: true,
+    version: "5.7.0",
+    target,
+  });
+  vi.mocked(bindPodmanSandboxEngine).mockImplementation((selected) => ({
+    id: "podman",
+    command: "podman",
+    displayName: "Podman",
+    globalArgs: selected.globalArgs,
+  }));
+  const options = { assertCurrent: () => {} };
+  const first = await resolveSandboxDependencyTemplateIdentity(config, options);
+  const rebuilt = `sha256:${"c".repeat(64)}`;
+  mocks.exec.mockResolvedValue({ code: 0, stdout: rebuilt, stderr: "" });
+  const second = await resolveSandboxDependencyTemplateIdentity(config, options);
+  expect(first?.image).toBe(image);
+  expect(second?.image).toBe(rebuilt);
+  expect(second?.key).not.toBe(first?.key);
+  vi.mocked(resolvePodmanSandboxRuntimeInfo).mockResolvedValue({
+    machine: false,
+    rootless: true,
+    version: "5.7.0",
+    target: { key: "second", globalArgs: ["--url", "unix:///second.sock"] },
+  });
+  const third = await resolveSandboxDependencyTemplateIdentity(config, options);
+  expect(third?.key).not.toBe(second?.key);
+  expect(mocks.exec.mock.lastCall?.[0].globalArgs).toEqual(["--url", "unix:///second.sock"]);
+});
+
+async function prepare(
+  config = cfg,
+  signal?: AbortSignal,
+  rollbackGuard = vi.fn(),
+  idleIoPriority?: boolean,
+) {
   const identity = await resolveSandboxDependencyTemplateIdentity(config, {
     assertCurrent: () => {},
   });
@@ -116,6 +156,7 @@ async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn
           cfg: config,
           scopeKey: "fixture",
           identity: identity!,
+          idleIoPriority,
           signal,
           assertCurrent: () => {},
           rollbackGuard,
@@ -137,7 +178,17 @@ it.each([undefined, "PNPM_CONFIG_STORE_DIR", "npm_config_store_dir"])(
             ...cfg,
             docker: { ...cfg.docker, env: { ...cfg.docker.env, [key]: storeDir } },
           };
-    expect(await prepare(config)).toEqual({ installed: true });
+    const spans = new Map<string, number>();
+    const prepared = await withDiagnosticsTimelineObserver(
+      (name, _attributes, duration) => {
+        if (duration !== undefined) {
+          spans.set(name, duration);
+        }
+      },
+      () => withWorktreePreparationTiming("managed", () => prepare(config)),
+    );
+    expect(prepared).toEqual({ installed: true });
+    expect(spans.get("worktree.managed.templateRetire")).toEqual(expect.any(Number));
     const admitted = mocks.ensure.mock.calls[0]![0];
     expect(admitted.cfg.docker).toMatchObject({
       image,
@@ -287,12 +338,28 @@ it.each(["ENOSPC", "No space left on device", "No space left\n      on device (o
   },
 );
 
-it("uses offline installation without skipping source lifecycle scripts", async () => {
-  const offlineCfg = { ...cfg, docker: { ...cfg.docker, network: "none" } };
-  await prepare(offlineCfg);
-  expect(mocks.exec.mock.calls.find(([, args]) => args[0] === "exec")?.[1]).toContain(
-    'exec pnpm install --offline --frozen-lockfile --config.optimistic-repeat-install=false --store-dir "$PNPM_CONFIG_STORE_DIR"',
-  );
+it.each([false, true])(
+  "installs offline with lifecycle scripts at the requested IO priority (idle=%s)",
+  async (idle) => {
+    const offlineCfg = { ...cfg, docker: { ...cfg.docker, network: "none" } };
+    await prepare(offlineCfg, undefined, undefined, idle);
+    expect(mocks.exec.mock.calls.find(([, args]) => args[0] === "exec")?.[1].at(-1)).toContain(
+      `exec ${idle ? "ionice -c 3 " : ""}pnpm install --offline --frozen-lockfile --config.optimistic-repeat-install=false --store-dir "$PNPM_CONFIG_STORE_DIR"`,
+    );
+  },
+);
+
+it("leaves foreground installation available when the image lacks idle IO support", async () => {
+  mocks.exec.mockImplementation(async (_engine, args: string[]) => ({
+    code: args[0] === "exec" ? 127 : 0,
+    stdout: args[0] === "image" ? image : containerId,
+    stderr:
+      args[0] === "exec"
+        ? "Background dependency preparation requires ionice in the sandbox image\n"
+        : "",
+  }));
+  await expect(prepare(cfg, undefined, undefined, true)).rejects.toThrow("requires ionice");
+  expect(mocks.retire).toHaveBeenCalledOnce();
 });
 
 it("settles cancellation through independent cleanup authority", async () => {

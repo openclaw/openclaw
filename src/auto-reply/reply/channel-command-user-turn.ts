@@ -79,7 +79,7 @@ export async function prepareChannelCommandUserTurn(params: {
   if (raced) {
     return raced;
   }
-  const senderIsOwner = ownerAuthority.isCurrent();
+  const senderIsOwner = operatorAuthority.grant.owner;
   const timestamp = normalizeMessageTimestampMs(ctx.Timestamp);
   // Dispatch fixed this route-scoped id before hooks; a continuing agent turn and restart
   // recovery require the same source-keyed admission.

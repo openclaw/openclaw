@@ -108,6 +108,17 @@ describe("TuiSessionRunCoordinator", () => {
     expect(coordinator.sessionRuns.size).toBeLessThanOrEqual(200);
     expect(coordinator.sessionRuns.has("run-orphan-0")).toBe(false);
   });
+  it("restores a retained terminal error after history reloads only until a newer run", async () => {
+    const { coordinator, restoreTerminalError } = createCoordinator();
+    coordinator.noteSessionRun("run-error");
+    coordinator.liveTerminalErrorMessages.set("run-error", "run error: rate limited");
+    coordinator.noteFinalizedRun("run-error", { displayedFinal: true });
+    await coordinator.queueHistoryReload();
+    expect(restoreTerminalError).toHaveBeenCalledExactlyOnceWith("run error: rate limited");
+    coordinator.noteSessionRun("run-newer");
+    await coordinator.queueHistoryReload();
+    expect(restoreTerminalError).toHaveBeenCalledOnce();
+  });
   it("promotes a lifecycle-confirmed run instead of newer orphan deltas", () => {
     const { coordinator } = createCoordinator();
     coordinator.noteSessionRun("run-confirmed", { protectStream: true });

@@ -1,2 +1,0 @@
-65
-# Redacted Darwin argument images (mdworker no-read-procargs) trusted only for entitled sealed system binaries.

@@ -306,7 +306,7 @@ describe("gateway harness questions", () => {
           await replacement;
         } finally {
           try {
-            sourceRecorder.finishPendingInput?.("interrupted");
+            sourceRecorder.finishPendingInput?.("interrupted", "failed");
           } finally {
             host.closeHost();
             host.closeAdmission();

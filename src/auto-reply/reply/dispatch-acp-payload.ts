@@ -5,9 +5,9 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
+import { resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
 import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
@@ -34,7 +34,7 @@ export async function maybeApplyAcpTts(params: {
   if (params.skipTts || isReplyPayloadStatusNotice(params.payload)) {
     return params.payload;
   }
-  const ttsStatus = resolveStatusTtsSnapshot({
+  const { autoMode } = resolveTtsSettingsSnapshot({
     cfg: params.cfg,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sessionAuto: params.ttsAuto,
@@ -42,7 +42,7 @@ export async function maybeApplyAcpTts(params: {
     channelId: params.channel,
     accountId: params.accountId,
   });
-  if (!ttsStatus || (ttsStatus.autoMode === "inbound" && !params.inboundAudio)) {
+  if (autoMode === "off" || (autoMode === "inbound" && !params.inboundAudio)) {
     return params.payload;
   }
   if (

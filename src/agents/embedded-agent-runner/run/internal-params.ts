@@ -13,7 +13,8 @@ import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-
 import type { ReplyDeliveryFactsObserver } from "../../reply-completion.js";
 import type { BoundAgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/preparation.types.js";
+import type { RunToolUsageRecorder } from "../../tool-usage-recorder.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { ResolvedRunEntryModelSelection } from "../run-entry.types.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
@@ -93,6 +94,8 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   agentHarnessRuntimePreparationHint?: string;
   /** Keep staged setup config and credentials outside configured Gateway ownership. */
   preparedModelRuntimeMode?: "isolated-read-only";
+  /** Setup may initialize missing account catalog facts before its live inference probe. */
+  refreshModelCatalog?: boolean;
   /** Ring-zero tool override, supplied only by the OpenClaw orchestrator. */
   systemAgentTool?: SystemAgentToolOptions;
   /** Gateway-private lifecycle generation selected before command admission. */
@@ -123,6 +126,10 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     | "runCleanupSettlement"
     | "joinObservation"
   > & {
+    /** Spawn preference from the exact session entry already captured by run admission. */
+    toolUsageRankingSeed?: InternalSessionEntry["toolUsageRankingSeed"];
+    /** Best-effort, attempt-owned accumulator; never forwarded to other harnesses. */
+    toolUsageRecorder?: RunToolUsageRecorder;
     bindWatchdogAttempt?: (attempt: SessionControllerWatchdogAttempt) => void;
     /** The dispatch owner already selected this target, including any compaction successor. */
     preparedSessionTarget?: {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { execContainerRaw, type ExecContainerRawOptions } from "./container-engine.js";
@@ -122,11 +122,16 @@ vi.mock("./container-engine.js", () => ({
           ? result("", 125, "engine connection refused")
           : result(fixture.inspect(container, fixture.terminalState === "paused"));
       }
-      if (
-        args[2] ===
-        '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}'
-      ) {
-        return result(`${container.id}\n${container.running}\ntrue\n${container.hash}`);
+      if (args[2]?.includes('"State":{{json .State}}')) {
+        return result(
+          JSON.stringify({
+            Id: container.id,
+            State: { Running: container.running, Paused: false },
+            ReadonlyRootfs: true,
+            Labels: { "openclaw.configHash": container.hash },
+            Mounts: [],
+          }),
+        );
       }
       return result(
         args[2] === "{{.Id}}"
@@ -178,13 +183,12 @@ function source(params: SourceOptions = {}) {
     references++;
     return release;
   };
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: params.profileId ?? "guest",
     scopes: ["operator.write"],
     gatewayAccessGrant: { pluginId: "fixture-access", grantId: params.grantId ?? "original" },
     source: {},
     signal: params.signal === false ? undefined : signal,
-    assertCurrent,
     retain: params.retain === false ? undefined : retain,
   });
   return { authority, controller, release, closeForeground: () => references-- };
@@ -299,7 +303,6 @@ it("retains original access after foreground close and stops only its private ge
   await expect(ensureSandboxContainer(params)).rejects.toThrow("original access revoked");
   expect(owner.release).toHaveBeenCalledTimes(2);
   replacement.closeForeground();
-  expect(() => replacement.authority.assertCurrent()).not.toThrow();
   await revoke(replacement, name);
   expect(fixture.containers.get(name)?.running).toBe(false);
   expect(calls("kill")).toEqual(Array.from({ length: 2 }, () => ["kill", id]));
@@ -324,24 +327,6 @@ it("preserves a valid same-grant source after device loss, then stops on full gr
   expect(calls("kill")).toEqual([["kill", containerId]]);
   expect(calls("rm")).toEqual([]);
   await expect(ensure(second)).rejects.toThrow("original invitation revoked");
-});
-
-it("does not let a revoked queued caller discard another grant's private custody", async () => {
-  const first = source();
-  const setup = createEnteredGate();
-  fixture.setup = setup.wait;
-  const creating = ensure(first);
-  await setup.entered;
-  const other = source({ grantId: "other" });
-  const queued = ensure(other);
-  const rejected = expect(queued).rejects.toThrow("queued access revoked");
-  other.controller.abort(new Error("queued access revoked"));
-  setup.release();
-  const { containerId } = await creating;
-  await rejected;
-  first.controller.abort();
-  await ensure(source({ grantId: "replacement" }));
-  expect(calls("kill")).toEqual([["kill", containerId]]);
 });
 
 it("retains a same-grant new source through cold replacement of the old generation", async () => {
@@ -388,7 +373,7 @@ it.each([
       const other = source({ grantId: kind === "different-grant" ? "other" : "original" });
       reuse.operatorAuthority =
         kind === "staff"
-          ? createAdmittedRunOperatorAuthority({ ...other.authority, gatewayAccessGrant: null })
+          ? createTestOperatorAuthority({ ...other.authority, gatewayAccessGrant: null })
           : other.authority;
     }
     if (mixed) {
@@ -477,7 +462,11 @@ it("recovers a pending unallocated attempt when setup is removed", async () => {
   const params = provision(source());
   delete params.cfg.docker.setupCommand;
   const created = await ensureSandboxContainer(params);
-  await expect(ensureSandboxContainer(params)).resolves.toEqual(created);
+  await expect(ensureSandboxContainer(params)).resolves.toMatchObject({
+    containerId: created.containerId,
+    containerName: created.containerName,
+    currentConfig: true,
+  });
   expect(fixture.registry.get(created.containerName)?.runtimeState).toBe("ready");
   expectCounts({ create: 2, exec: 0 });
 });

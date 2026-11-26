@@ -66,6 +66,15 @@ const carrier = resolveGlobalSingleton(
   () => new AsyncLocalStorage<AsyncWorkScope>(),
 );
 
+it("exposes an already-aborted signal when first read after drain", async () => {
+  const scope = makeScope();
+  await scope.drain();
+  const signal = scope.signal;
+  expect(signal.aborted).toBe(true);
+  expect(signal.reason).toMatchObject({ name: "AbortError" });
+  expect(scope.signal).toBe(signal);
+});
+
 it.each([false, true])("restores synchronous context (throws=%s)", async (throws) => {
   const scope = makeScope();
   const caller = new AsyncLocalStorage<string>();

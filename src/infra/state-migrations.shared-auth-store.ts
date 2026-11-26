@@ -54,7 +54,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   recordLegacyMigrationRun,

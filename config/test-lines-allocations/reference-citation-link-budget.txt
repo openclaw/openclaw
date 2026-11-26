@@ -1,2 +1,0 @@
-# Real HTTP and processor regression for reference citations displacing pasted URLs.
-25

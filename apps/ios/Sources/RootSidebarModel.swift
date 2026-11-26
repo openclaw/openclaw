@@ -146,7 +146,18 @@ extension NodeAppModel {
                         agentID: sourceAgentID,
                         offset: offset)
                     let data = try await self.operatorSession.request(request, ifCurrentRoute: route)
-                    return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+                    let response: Result<OpenClawChatSessionsListResponse, Error>
+                    do {
+                        response = try await .success(GatewayPayloadDecoding.decode(
+                            OpenClawChatSessionsListResponse.self, from: data))
+                    } catch {
+                        response = .failure(error)
+                    }
+                    // Decoding suspends this owner; a retired page or error cannot publish a partial roster.
+                    guard await self.operatorSession.currentRoute(ifGatewayID: sourceGatewayID) == route else {
+                        throw CancellationError()
+                    }
+                    return try response.get()
                 }
                 guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID),
                       self.chatDeliveryAgentId == sourceAgentID
@@ -291,6 +302,8 @@ final class RootSidebarModel {
             activeAgentID: activeAgentID,
             groups: groups,
             excludesMainSession: true,
+            // Empty headers are move targets while browsing, not search results.
+            includeEmptyGroups: !isSearching,
             query: query,
             sessionRoutingContract: sessionRoutingContract)
     }
@@ -359,6 +372,7 @@ final class RootSidebarModel {
     }
 
     func refreshSessions(appModel: NodeAppModel) async {
+        await appModel.sessionGroups.refresh(appModel: appModel)
         self.rosterGeneration &+= 1
         self.sessionChangesDuringLoad = [:]
         let rosterGeneration = self.rosterGeneration
@@ -375,6 +389,7 @@ final class RootSidebarModel {
         switch loadedRoster {
         case let .success(roster):
             self.applyRoster(roster, activeAgentID: appModel.chatDeliveryAgentId)
+            appModel.sessionGroups.pruneCollapsed(for: self.sessions)
         case let .failure(message):
             self.sessionErrorText = message
         case .cancelled:
@@ -654,7 +669,7 @@ final class RootSidebarModel {
         return snapshot?.jobs
     }
 
-    private func request<T: Decodable>(
+    private func request<T: Decodable & Sendable>(
         _ type: T.Type,
         appModel: NodeAppModel,
         method: String,
@@ -665,7 +680,7 @@ final class RootSidebarModel {
                 method: method,
                 paramsJSON: paramsJSON,
                 timeoutSeconds: 12)
-            return try JSONDecoder().decode(type, from: data)
+            return try await GatewayPayloadDecoding.decode(type, from: data)
         } catch {
             return nil
         }

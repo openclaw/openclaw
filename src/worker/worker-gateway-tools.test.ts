@@ -5,6 +5,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
+import { readInstalledSkill } from "../agents/installed-skill-catalog.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import { getToolContractFailureCode } from "../agents/tool-contract-error.js";
 import { ToolSearchRuntime } from "../agents/tool-search-runtime.js";
@@ -93,6 +94,78 @@ it("installs canonical definitions unchanged and forwards invocation and updates
     90_000, 660_000,
   ]);
   expect(JSON.stringify(toToolDefinitions(tools))).not.toContain("paddingMs");
+});
+
+it("serves the delivered skill copy only after Gateway authorization", async () => {
+  const { surface, client } = fixture();
+  surface.tools[0]!.definition.name = "skills_read";
+  const location = "/worker/skills/guide/SKILL.md";
+  const content =
+    "Keep the literal /gateway/skills/guide/SKILL.md example.\nSupporting files were omitted.";
+  const readInstructions = vi.fn((name: string, _location: string, signal?: AbortSignal) =>
+    readInstalledSkill(
+      [
+        {
+          name: "guide",
+          description: "Guide",
+          location,
+          source: { filePath: location, readContent: content },
+        },
+      ],
+      name,
+      signal,
+    ),
+  );
+  const [tool] = createWorkerGatewayToolProxies(surface, client, {
+    rewriteReferences: (text) => text.replace("/gateway/skills/", "/worker/skills/"),
+    readInstructions,
+  });
+  client.invokeGatewayTool.mockResolvedValueOnce({
+    type: "res",
+    id: "denied",
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "Skill access revoked",
+      details: { reason: "method-not-allowed" },
+    },
+  });
+  await expect(tool!.execute("denied", { name: "guide" })).rejects.toThrow("Skill access revoked");
+  expect(readInstructions).not.toHaveBeenCalled();
+  client.invokeGatewayTool.mockResolvedValueOnce(
+    response({
+      content: [{ type: "text", text: "Gateway instructions" }],
+      details: {
+        name: "guide",
+        location: "/gateway/skills/guide/SKILL.md",
+        content: "Gateway instructions",
+        locationNote: "Only available on the Gateway",
+      },
+    }),
+  );
+  await expect(tool!.execute("allowed", { name: "guide" })).resolves.toEqual({
+    content: [
+      {
+        type: "text",
+        text: `Skill location: ${location}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${content}`,
+      },
+    ],
+    details: { name: "guide", location, content },
+  });
+  const companion = {
+    content: [{ type: "text" as const, text: "Gateway companion bytes" }],
+    details: {
+      name: "guide",
+      location: "/gateway/skills/guide/SKILL.md",
+      relativePath: "reference.md",
+      content: "Gateway companion bytes",
+    },
+  };
+  client.invokeGatewayTool.mockResolvedValueOnce(response(companion));
+  await expect(
+    tool!.execute("companion", { name: "guide", relativePath: "reference.md" }),
+  ).resolves.toEqual({ ...companion, details: { ...companion.details, location } });
+  expect(readInstructions).toHaveBeenCalledTimes(1);
 });
 
 it("cancels the same issued invocation and rejects a late result", async () => {

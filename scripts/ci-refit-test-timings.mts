@@ -10,7 +10,7 @@ import { isRetryableGhJsonErrorMessage } from "./ci-run-timings.mjs";
 import { refitTestTimings, type CiTimingRun } from "./lib/ci-test-timings-refit.mts";
 import { CI_TIMING_PROFILES, ciTestTimingsSchema } from "./lib/ci-test-timings-schema.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
-import { execPlainGh } from "./lib/plain-gh.mjs";
+import { execPlainGhAsync } from "./lib/plain-gh.mjs";
 
 const jobPageSchema = z.object({
   total_count: z.number().int().nonnegative(),
@@ -38,16 +38,18 @@ async function readGh(args: string[]): Promise<string> {
   const retryDelays = [1000, 3000, 6000];
   for (let attempt = 0; ; attempt += 1) {
     try {
-      return execPlainGh(args, {
-        encoding: "utf8",
+      // Awaited so retries stay inside this try; the transport bounds concurrent children.
+      return await execPlainGhAsync(args, {
         timeout: 120_000,
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
-      if (
-        attempt === retryDelays.length ||
-        !isRetryableGhJsonErrorMessage(error instanceof Error ? error.message : String(error))
-      ) {
+      // The async transport reports its child timeout as code ETIMEDOUT, not in the message.
+      const detail =
+        error instanceof Error
+          ? `${(error as NodeJS.ErrnoException).code ?? ""} ${error.message}`
+          : String(error);
+      if (attempt === retryDelays.length || !isRetryableGhJsonErrorMessage(detail)) {
         throw error;
       }
       await setTimeout(retryDelays[attempt]);
@@ -106,6 +108,7 @@ async function main() {
     ? ["--allow-escape-sequences"]
     : [];
   const runs: CiTimingRun[] = [];
+  const packedReleaseRunIds = new Set<number>();
   const seenRuns = new Map<number, string>();
   const seenJobs = new Map<number, string>();
   type TimingSource = "main" | "release" | "pull-request" | "tooling" | "packed-release";
@@ -178,12 +181,16 @@ async function main() {
           afterCutoff ||= Date.parse(job.completed_at) > Date.parse(upper);
           const compactJob = /^checks-node-(?:changed-(?:config-)?)?compact-/u.test(job.name);
           const extensionJob =
-            /^checks-node-changed-extensions-(?:bundle-\d+|config(?:-\d+)?)$/u.test(job.name);
+            /^checks-node-changed-extensions-(?:bundle-\d+|config(?:-\d+)?)(?: \(node\)| \(bun\))?$/u.test(
+              job.name,
+            );
           const kind =
             source === "packed-release"
-              ? job.name.startsWith("checks-node-release-packed-")
-                ? "release-packed"
-                : undefined
+              ? compactJob
+                ? "compact"
+                : job.name.startsWith("checks-node-release-packed-")
+                  ? "release-packed"
+                  : undefined
               : source === "release"
                 ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
                   ? "repoE2e"
@@ -217,20 +224,18 @@ async function main() {
     }
     for (const [index, timingJobs] of jobsByAttempt.entries()) {
       const attempt = index + 1;
-      const attemptLogs: CiTimingRun["logs"] = [];
-      for (const job of timingJobs) {
-        console.error(`[ci-timings] ${run.id} attempt ${attempt}: ${job.name}`);
-        const text = await readGh([
-          "api",
-          `repos/${repo}/actions/jobs/${job.id}/logs`,
-          ...logFlags,
-        ]);
-        attemptLogs.push({
-          kind: job.kind,
-          labels: job.labels,
-          text,
-        });
-      }
+      // Job logs dominate the refit: release validation runs carry ~180 timing jobs per attempt.
+      const attemptLogs: CiTimingRun["logs"] = await Promise.all(
+        timingJobs.map(async (job) => {
+          console.error(`[ci-timings] ${run.id} attempt ${attempt}: ${job.name}`);
+          const text = await readGh([
+            "api",
+            `repos/${repo}/actions/jobs/${job.id}/logs`,
+            ...logFlags,
+          ]);
+          return { kind: job.kind, labels: job.labels, text };
+        }),
+      );
       const { contributingRunIds } = refitTestTimings([
         { id: run.id, createdAt: run.created_at, logs: attemptLogs, completeInventory },
       ]);
@@ -355,6 +360,9 @@ async function main() {
               : contributingRunIds.repoE2e.length > 0;
         if (contributes) {
           runs.push(timingRun);
+          if (source === "packed-release") {
+            packedReleaseRunIds.add(run.id);
+          }
         }
         if (source === "release" || contributes) {
           sampled += 1;
@@ -454,11 +462,6 @@ async function main() {
   const { blacksmith, github, boat, toolingBlacksmith, toolingGithub, toolingBoat } =
     contributingRunIds;
   const prRunIds = new Set(runs.filter((run) => run.pullRequestMergeRef).map((run) => run.id));
-  const packedReleaseRunIds = new Set(
-    runs
-      .filter((run) => run.logs.some((log) => log.kind === "release-packed"))
-      .map((run) => run.id),
-  );
   const mainBlacksmith = blacksmith.filter(
     (id) => !prRunIds.has(id) && !packedReleaseRunIds.has(id),
   );

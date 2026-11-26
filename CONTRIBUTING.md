@@ -88,6 +88,13 @@ must declare their own development dependencies rather than rely on hoisting.
 - An explicit maintainer repair-and-land request covers internal database scheduling, admission, and lifecycle decisions. The implementer owns the design and its verification. Get separate design acceptance when changing public contracts, schemas, durability, retention, or permissions; see the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
 - Follow the [PR template](.github/pull_request_template.md): lead with the plain-language problem and concrete user impact, then a brief explanation and useful evidence. Keep technical inventories in the diff or optional details, not the opening summary. Keep important risks, migrations, required actions, and evidence gaps visible; do not invent a user benefit for internal-only work.
+
+  Internal-only example:
+  - **Problem:** When a release check fails, the release operator opens each job log to find the failed package.
+  - **Impact:** The operator can find that package in the job summary. No user-visible change.
+  - **Why:** The check already knows the package name, so it can report it alongside the failure.
+  - **Evidence:** A local failure fixture produced a summary naming the expected package. The hosted release job was not run; its displayed summary is unverified.
+
 - When ClawSweeper, Barnacle, or a maintainer asks for more context or evidence, edit the PR description instead of only replying in a new comment. Keep **What Problem This Solves**, **User Impact**, **Why This Change Was Made**, and **Evidence** current; a short comment can point reviewers to the update, but the PR body should remain the durable explanation for maintainers and bots.
 - Keep PRs takeover-ready: open them from a branch maintainers can push to. For fork PRs, leave GitHub's **Allow edits by maintainers** option enabled so maintainers can finish urgent fixes or merge prep when needed. If GitHub shows **Allow edits and access to secrets by maintainers**, enable it only when that workflow/secrets access is acceptable and say so in the PR.
 - Do not edit the generated `CHANGELOG.md` index or release-owned `CHANGELOG/**` entries and contribution records in normal PRs or at merge. Initial changelogs are generated at release time from merged PRs and commits; keep release-note context in PR bodies or commit messages until then. Explicit release-docs publication changes follow the [release artifact procedure](.agents/skills/openclaw-changelog-update/SKILL.md#post-release-docs-mirrors).
@@ -114,19 +121,29 @@ must declare their own development dependencies rather than rely on hoisting.
 - Check that CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
-- **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
+- **Make visual changes easy to review** — follow the [PR visual-proof standard](.agents/skills/openclaw-pr-maintainer/references/media.md#pr-visual-proof) for visible clean and annotated before/after comparisons of the affected web or native UI.
 - Use American English spelling and grammar in code, comments, docs, and UI strings
 
 ## Security-sensitive changes
 
 Changes to authentication, credentials, secret handling, sandboxing, or execution
 permissions receive a security-review notice with the affected files and review
-guidance. A PR author with a GitHub user account and repository `maintain` or
-`admin` access needs no additional security approval. Other authors need a
-command comment from a user with either role:
+guidance. For sensitive product changes, a PR author with a GitHub user account and
+repository `maintain` or `admin` access needs no additional security approval.
+Other authors need a command comment from a user with either role. Dependency
+changes generally require a repository admin or an active member of
+`@openclaw/openclaw-secops`, either as the PR author or as the command approver:
 
 - `/allow-security-sensitive-change` for sensitive product changes.
-- `/allow-dependencies-change` for dependency changes that require approval.
+- `/allow-dependencies-change` from a repository admin or SecOps member for dependency changes that require approval.
+
+Maintain authors also qualify when all dependency-sensitive edits are release-version
+alignment in existing manifests: top-level `version` in the root, the `ai`,
+`gateway-client`, and `gateway-protocol` packages, and `extensions/*/package.json`;
+bundled plugins may also update existing `devDependencies.openclaw` and
+`peerDependencies.openclaw` release floors. This exemption does not let Maintain
+commenters approve another author's dependencies. See the
+[exact release-alignment scope](https://docs.openclaw.ai/ci/pipeline#security-review-checks).
 
 Wait for the guard notice to show the current PR commit, then post the applicable
 command on its own line in a new PR comment. Use only command lines in that
@@ -140,7 +157,7 @@ these command requirements.
 PR updates, approval comment events, and CI completion run security review
 automatically. Approval comments update the review result without rerunning the
 test suite. Missing approval fails the check. Automation using a GitHub user
-account follows the same role checks; GitHub App bot identities do not qualify.
+account follows the same guard-specific authority checks; GitHub App bot identities do not qualify.
 Open PRs targeting the same branch must have distinct head commits. GitHub shares
 commit statuses across PRs, so duplicate heads block security approval. Close the
 duplicate PR or push a distinct commit; security review evaluates automatically.

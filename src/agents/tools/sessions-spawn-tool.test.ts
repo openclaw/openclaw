@@ -19,6 +19,7 @@ import { readParentExecutionIdentity } from "../subagents/spawn/execution-identi
 import {
   expectRegisteredSubagentRun,
   supportedSpawnModelChoice,
+  withSpawnTestModel,
 } from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
@@ -109,23 +110,22 @@ describe("sessions_spawn tool", () => {
     return gateway.call;
   }
 
-  function makeTool(options: SpawnOptions = {}) {
-    return createTool({ agentSessionKey: "agent:main:main", ...options });
-  }
+  const makeTool = (options: SpawnOptions = {}) =>
+    createTool({ agentSessionKey: "agent:main:main", ...options });
 
   function createTool(options: SpawnOptions = {}) {
-    setRuntimeConfigSnapshot(options.config ?? {});
-    return createSessionsSpawnTool(options);
+    const config = withSpawnTestModel(options.config);
+    setRuntimeConfigSnapshot(config);
+    return createSessionsSpawnTool({ ...options, config });
   }
 
-  function makeVisibleTool(options: SpawnOptions = {}) {
-    return makeTool({
+  const makeVisibleTool = (options: SpawnOptions = {}) =>
+    makeTool({
       config: { agents: { entries: { main: {} } } },
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
       ...options,
     });
-  }
 
   registerSessionsSpawnCompletionTests({
     createTool,

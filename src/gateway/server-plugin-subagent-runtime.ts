@@ -11,8 +11,10 @@ import {
 } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../agents/model-selection-config.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import type { NormalizedUsage } from "../agents/usage.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -33,7 +35,7 @@ import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.
 import { CommandLane } from "../process/lanes.js";
 import { ADMIN_SCOPE, hasGatewayAdminScope } from "./operator-scopes.js";
 import type { GatewayContextResolver, GatewayRequestOptions } from "./server-methods/types.js";
-import { runPluginForkedTurn } from "./server-plugin-forked-turn.js";
+import { forkPluginSession, runPluginForkedTurn } from "./server-plugin-forked-turn.js";
 import {
   dispatchGatewayMethodInProcess,
   getInProcessGatewayRequestContext,
@@ -222,13 +224,19 @@ export function createGatewaySubagentRuntime(
       throw new Error("Plugin session fork requires an active Gateway binding.");
     }
     const assertConversationAccess = (cfg: OpenClawConfig) => {
-      const origin =
-        scope?.pluginOrigin ??
-        getActivePluginRegistry()?.plugins.find((plugin) => plugin.id === pluginId)?.origin ??
-        "config";
-      if (!resolveConversationAccessAllowed(origin, cfg.plugins?.entries?.[pluginId]?.hooks)) {
+      const loaded = getActivePluginRegistry()?.plugins.find((plugin) => plugin.id === pluginId);
+      const origin = scope?.pluginOrigin ?? loaded?.origin ?? "config";
+      if (
+        !resolveConversationAccessAllowed(
+          origin,
+          cfg.plugins?.entries?.[pluginId]?.hooks,
+          loaded?.trust?.conversationAccessAccepted,
+        )
+      ) {
         throw new Error(
-          `Plugin session fork requires plugins.entries.${pluginId}.hooks.allowConversationAccess.`,
+          `Plugin session fork requires conversation access: declare contracts.conversationAccess ` +
+            `["read"] and approve the plugin's capabilities, or set ` +
+            `plugins.entries.${pluginId}.hooks.allowConversationAccess.`,
         );
       }
     };
@@ -299,6 +307,9 @@ export function createGatewaySubagentRuntime(
                   throw new Error(`No active session context for "${params.sessionKey}".`);
                 }
                 const model = resolveSessionModelRef(cfg, target.entry, agentId);
+                if (!model) {
+                  throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+                }
                 assertOperatorModelAllowed(execution.operatorAuthority, model);
                 const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000);
                 const runSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
@@ -309,6 +320,18 @@ export function createGatewaySubagentRuntime(
                 assertCurrent();
                 signal.throwIfAborted();
                 let usage: LlmCompleteUsage | undefined;
+                const recordUsage = (value: NormalizedUsage | undefined) => {
+                  usage = value
+                    ? {
+                        inputTokens: value.input,
+                        outputTokens: value.output,
+                        cacheReadTokens: value.cacheRead,
+                        cacheWriteTokens: value.cacheWrite,
+                        totalTokens: value.total,
+                        costUsd: value.cost?.total,
+                      }
+                    : undefined;
+                };
                 const result = await execution.run(() =>
                   runBtwSideQuestion({
                     cfg,
@@ -325,19 +348,38 @@ export function createGatewaySubagentRuntime(
                     allowGatewaySubagentBinding: true,
                     assertCurrent,
                     operatorAuthority: execution.operatorAuthority,
-                    toolCalls: "deny",
                     opts: { abortSignal: runSignal, timeoutOverrideMs: timeoutMs },
-                    onUsage: (value) => {
-                      usage = value
-                        ? {
-                            inputTokens: value.input,
-                            outputTokens: value.output,
-                            cacheReadTokens: value.cacheRead,
-                            cacheWriteTokens: value.cacheWrite,
-                            totalTokens: value.total,
-                            costUsd: value.cost?.total,
+                    onUsage: recordUsage,
+                    // The session's harness decides who forks: Codex runs its own tool-free
+                    // side question; the built-in runtime forks through `runSessionFork`.
+                    sessionFork: async () => {
+                      const forked = await forkPluginSession({
+                        cfg,
+                        agentId,
+                        pluginId,
+                        session: {
+                          key: target.canonicalKey,
+                          storePath: target.storePath,
+                          sessionId: sessionEntry.sessionId,
+                          entry: sessionEntry,
+                        },
+                        prompt: params.message,
+                        tools: [],
+                        operatorAuthority: execution.operatorAuthority,
+                        runId: randomUUID(),
+                        timeoutMs,
+                        abortSignal: runSignal,
+                        assertCurrent,
+                        run: (work) => work(),
+                        onSettled: (outcome, value) => {
+                          if (!outcome.ok) {
+                            throw outcome.error;
                           }
-                        : undefined;
+                          recordUsage(value);
+                          return outcome.text ?? "";
+                        },
+                      });
+                      return { text: forked.status === "settled" ? forked.value : "" };
                     },
                   }),
                 );
@@ -481,12 +523,14 @@ export function createGatewaySubagentRuntime(
                 },
               }),
             );
-            runSignal.throwIfAborted();
-            assertCurrent();
             const result = fallbackResult.result;
-            assertOperatorModelAllowed(execution.operatorAuthority, result);
-            finalizePluginLlmCompletion({
+            await finalizePluginLlmCompletion({
               cfg,
+              assertCurrent: () => {
+                runSignal.throwIfAborted();
+                assertCurrent();
+                assertOperatorModelAllowed(execution.operatorAuthority, result);
+              },
               hostPluginId: pluginId,
               rawUsage: result.usage,
               result: {

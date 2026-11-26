@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
@@ -54,7 +54,7 @@ async function createFixture(database: OpenClawAgentDatabase) {
     );
     receipts.push(receipt);
     if (disposition) {
-      receipt.finish(disposition);
+      receipt.finish(disposition, "failed");
       await receipt.settled?.();
     }
     return receipt.inputId;
@@ -96,7 +96,7 @@ it.aroundEach(async (run) => {
     try {
       await run();
     } finally {
-      f.receipts.forEach((receipt) => receipt.finish("cancelled"));
+      f.receipts.forEach((receipt) => receipt.finish("cancelled", "failed"));
       await Promise.all(f.receipts.map(async (receipt) => receipt.settled?.()));
     }
   });

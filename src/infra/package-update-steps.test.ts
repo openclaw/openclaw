@@ -16,6 +16,7 @@ import {
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
+import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import { runStep as runCommandStep } from "./update-runner-command.js";
 
@@ -581,6 +582,7 @@ it.each([
     attempts: 1,
   },
   { manager: "npm", code: "ECONNRESET", spec: "", repaired: false, attempts: 2 },
+  { manager: "npm", code: "ERESOLVE", spec: "", repaired: true, attempts: 2 },
   { manager: "bun", code: "ETARGET", spec: "file-type@22.1.1", repaired: true, attempts: 2 },
 ] as const)(
   "bounds $manager $code retry for $spec (repaired=$repaired)",
@@ -644,14 +646,14 @@ it.each([
         }),
     });
     expect(installs).toHaveLength(attempts);
-    const refresh = attempts === 2 && code !== "ECONNRESET";
+    const refresh = attempts === 2 && ["E404", "EINTEGRITY", "ETARGET"].includes(code);
     expect(
       installs
         .flatMap(({ argv }) => argv)
         .filter((arg) => arg === "--prefer-online" || arg === "--no-cache"),
     ).toEqual(refresh ? [manager === "npm" ? "--prefer-online" : "--no-cache"] : []);
     expect(installs.flatMap(({ argv }) => argv).includes("--omit=optional")).toBe(
-      code === "ECONNRESET",
+      code === "ECONNRESET" || code === "ERESOLVE",
     );
     if (attempts === 2) {
       expect(installs[1]!.root).not.toBe(installs[0]!.root);
@@ -669,6 +671,22 @@ it.each([
     const warnings = updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep));
     expect(
       warnings.some((message) => message.includes(`Repaired stale package cache for ${spec}`)),
-    ).toBe(repaired);
+    ).toBe(repaired && refresh);
+    if (repaired) {
+      expect(result.steps[0]?.exitCode).toBe(1);
+      expect(result.steps[0]?.stderrTail).toContain(stderr);
+      const report = renderUpdateRunReport(
+        updateRunReportInputFromResult({
+          status: "ok",
+          mode: manager,
+          durationMs: 0,
+          steps: result.steps,
+        }),
+      );
+      expect(report.lines.some((line) => line.startsWith("Failed:"))).toBe(false);
+      if (!refresh) {
+        expect(warnings).toContain("Package install succeeded with optional dependencies omitted.");
+      }
+    }
   },
 );

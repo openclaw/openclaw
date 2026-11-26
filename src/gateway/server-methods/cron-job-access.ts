@@ -10,7 +10,6 @@ import {
   createAgentDatabaseAdmissionErrorShape,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   cronJobMatchesCallerScope,
   cronTrustedJobOwnedByCaller,
@@ -107,8 +106,9 @@ export function assertTrustedJobNarrowingOwner(
   callerScope: CronCallerScope | undefined,
 ): void {
   if (!callerScope || !cronTrustedJobOwnedByCaller(job, callerScope, { requireAccount: true })) {
+    const reason = job.owner ? "its owner record has no account" : "it has no owner conversation";
     throw new TypeError(
-      "This automation runs with operator access and its owner record has no account, so from " +
+      `This automation runs with operator access and ${reason}, so from ` +
         "here you can only pause, resume, reschedule or remove it. To change what it runs or its name, " +
         "where it reports or where failures alert, create a new automation here or use the Automations page.",
     );
@@ -125,16 +125,12 @@ export function respondRefusedCronAgent(agentId: string | undefined, respond: Re
 }
 
 export function assertCronReadCurrent(
-  options: Pick<
-    GatewayRequestHandlerOptions,
-    "client" | "context" | "signal" | "hasCurrentClientAuthority"
-  >,
+  options: Pick<GatewayRequestHandlerOptions, "signal" | "hasCurrentClientAuthority">,
 ) {
   options.signal?.throwIfAborted();
   if (options.hasCurrentClientAuthority?.() === false) {
     throw new Error("Cron history authority closed");
   }
-  assertActiveAgentRuntimeAuthority(options.client, options.context);
 }
 
 export function resolveCronJobId(params: CronJobIdParams): string | undefined {
@@ -176,6 +172,7 @@ export function respondCronJobNotFound(
 }
 
 type ScopedCronMethod =
+  | "cron.acknowledgeFailure"
   | "cron.get"
   | "cron.scratch.get"
   | "cron.scratch.set"
@@ -220,7 +217,10 @@ export function scopedCronJobHandler<P extends CronJobIdParams>(
       !job ||
       (isHumanCronMutation(method) && !canHumanManageCronJob(client, job)) ||
       (scope.checkVisibility &&
-        !(method === "cron.get" && isHumanCronJobOwner(client, job)) &&
+        !(
+          (method === "cron.get" || method === "cron.acknowledgeFailure") &&
+          isHumanCronJobOwner(client, job)
+        ) &&
         !cronJobIsVisible(job, visibility, context.cron.getDefaultAgentId())) ||
       !cronJobMatchesCallerScope({
         job,

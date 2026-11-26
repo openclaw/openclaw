@@ -2,6 +2,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
@@ -174,6 +175,7 @@ describe("administrative CLI state owner routing", () => {
       resolveGatewayLockPaths(env).ownerLockPath,
     );
     Object.assign(env, sqliteWorkerPreloadEnv(preloadPath));
+    env.OPENCLAW_TEST_SQLITE_WORKER_PRELOAD ??= pathToFileURL(preloadPath).href;
     const cfg = {
       gateway: {
         mode: "local" as const,

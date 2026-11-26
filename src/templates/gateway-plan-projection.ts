@@ -19,6 +19,7 @@ import {
 } from "./gateway-disclosure.js";
 import { projectTemplateManifestDisclosure } from "./gateway-manifest-disclosure.js";
 import { digestTemplateMcpServer } from "./mcp.js";
+import { templatePluginAllowlistReviewMessage } from "./plugin-allowlist-blocker.js";
 import { isSafeTemplateRelativePath } from "./schema-portability.js";
 import { mcpServerSchema } from "./schema.js";
 import { collectTemplateSkillWarningReviews } from "./skill-warning-review.js";
@@ -30,6 +31,21 @@ type SkillArtifact = NonNullable<
 
 function skillArtifact(details: Record<string, unknown> | undefined): SkillArtifact {
   const source = details?.source;
+  if (
+    details &&
+    source === "bundled" &&
+    typeof details.path === "string" &&
+    isSafeTemplateRelativePath(details.path) &&
+    typeof details.name === "string" &&
+    details.name &&
+    typeof details.snapshot === "object" &&
+    details.snapshot !== null &&
+    "digest" in details.snapshot &&
+    typeof details.snapshot.digest === "string" &&
+    /^sha256:[a-f0-9]{64}$/.test(details.snapshot.digest)
+  ) {
+    return { source, path: details.path, name: details.name, digest: details.snapshot.digest };
+  }
   const ref = details?.ref;
   const version = details?.version;
   const rawIntegrity = details?.integrity;
@@ -48,7 +64,20 @@ function skillArtifact(details: Record<string, unknown> | undefined): SkillArtif
   return { source, ref, version, integrity };
 }
 
-function assertSkillActionTarget(action: { id: string; target: string }, artifact: SkillArtifact) {
+function assertSkillActionTarget(
+  action: { id: string; target: string; digest?: string },
+  artifact: SkillArtifact,
+) {
+  if (artifact.source === "bundled") {
+    if (
+      action.id !== `skill:bundled:${artifact.path}` ||
+      action.target !== `bundled:${artifact.path}` ||
+      action.digest !== artifact.digest
+    ) {
+      throw new Error("Template bundled skill action does not match its artifact.");
+    }
+    return;
+  }
   if (
     action.id !== `skill:${artifact.ref}` ||
     action.target !== `${artifact.source}:${artifact.ref}@${artifact.version}`
@@ -205,6 +234,17 @@ export function plansMatchAcrossSourceRoots(params: {
   );
 }
 
+/** Gateway reviews keep local diagnostics private; allowlist blockers name only the runtime id. */
+function projectPlanBlockerMessage(diagnostic: TemplateAddPlan["blockers"][number]): string {
+  if (diagnostic.code !== "plugin_disabled") {
+    return "Resolve this OpenClaw state conflict before continuing.";
+  }
+  // Preflight sets this field only after displayableTemplatePluginId accepted the id.
+  return diagnostic.allowlistPluginId
+    ? templatePluginAllowlistReviewMessage(diagnostic.allowlistPluginId)
+    : "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed.";
+}
+
 export function projectTemplateAddPlan(
   plan: TemplateAddPlan,
   sourceRoot: string,
@@ -261,7 +301,9 @@ export function projectTemplateAddPlan(
         assertSkillActionTarget(action, desired);
         if (
           !action.digest ||
-          normalizeClawHubSha256Integrity(action.digest) !== desired.integrity
+          (desired.source === "clawhub"
+            ? normalizeClawHubSha256Integrity(action.digest) !== desired.integrity
+            : action.digest !== desired.digest)
         ) {
           throw new Error("Template skill package integrity does not match its preflight.");
         }
@@ -324,17 +366,16 @@ export function projectTemplateAddPlan(
         reason: change.reason,
       })),
       pluginReviews,
-      skillReviews: collectTemplateSkillWarningReviews(plan).map((review) =>
-        Object.assign(review, { reviewToken: digestTemplateValue(review) }),
-      ),
+      skillReviews: collectTemplateSkillWarningReviews(plan).map((review) => {
+        const sourcedReview =
+          "path" in review ? review : Object.assign(review, { source: "clawhub" as const });
+        return Object.assign(sourcedReview, { reviewToken: digestTemplateValue(sourcedReview) });
+      }),
       blockers: [
         ...plan.blockers.map((diagnostic) => ({
           code: diagnostic.code,
           path: diagnostic.path,
-          message:
-            diagnostic.code === "plugin_disabled"
-              ? "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed."
-              : "Resolve this OpenClaw state conflict before continuing.",
+          message: projectPlanBlockerMessage(diagnostic),
         })),
         ...effectBlockers,
         ...requestedPolicyBlockers(plan.agent.config, configuredAccess),

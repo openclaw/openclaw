@@ -1,0 +1,4 @@
+# Gateway bootstrap regression: real foreign schema/offline owners acquired after host
+# admission and before actual worker execution. The child-process boundary catches
+# the observed handoff refusal; mocked admission cannot. Exact net test growth.
+61

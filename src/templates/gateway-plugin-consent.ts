@@ -25,7 +25,7 @@ export function bindTemplatePluginInstallConsent(
       ? required.map((review) => {
           if (review.riskWarning) {
             throw new TemplateGatewayConsentError(
-              `Plugin ${review.ref} needs approval before this Template can be installed.`,
+              `Plugin ${review.source === "bundled" ? review.path : review.ref} needs approval before this Template can be installed.`,
             );
           }
           return {

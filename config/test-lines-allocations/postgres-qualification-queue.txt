@@ -1,4 +1,0 @@
-# PostgreSQL qualification: preserve pending manual runs when a schedule arrives.
-# Exact +5 lines extend the existing schedule test with GitHub's shared queue contract.
-# Keep the scalar baseline unchanged; no new test or fixture is added.
-5

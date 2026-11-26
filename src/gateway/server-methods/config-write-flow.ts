@@ -11,6 +11,8 @@ import {
   replaceConfigFile,
   resolveConfigSnapshotHash,
 } from "../../config/config.js";
+import { redactConfigObject } from "../../config/redact-snapshot.js";
+import { invalidateGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -24,16 +26,24 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewayRestart } from "../../infra/restart.js";
+import { redactToolDetail } from "../../logging/redact.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { isRecord } from "../../utils.js";
 import { resolveGatewayAuth } from "../auth.js";
-import { buildGatewayReloadPlan, isNoopGatewayReloadPlan } from "../config-reload-plan.js";
+import { diffGatewayReloadPaths } from "../config-diff.js";
+import {
+  buildGatewayReloadPlan,
+  isNoopGatewayReloadPlan,
+  listConfigReloadRefinementPrefixes,
+} from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
+import { openClawIdAccessWarning } from "../openclaw-id/access-plugin.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { resolveSharedGatewaySessionGeneration } from "../server/ws-shared-generation.js";
+import { replyWithBillingRouteWarnings } from "./config-write-reply.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -183,7 +193,7 @@ function isCliRoutedConfigPatch(
  */
 export function respondConfigWriteApplicationOutcome(params: {
   outcome: RuntimeConfigWriteApplicationStatus;
-  mode: "config.patch" | "config.apply";
+  mode: "config.set" | "config.patch" | "config.apply";
   client: Parameters<typeof resolveControlPlaneActor>[0];
   respond: RespondFn;
   success: Record<string, unknown>;
@@ -197,17 +207,30 @@ export function respondConfigWriteApplicationOutcome(params: {
     params.respond(true, { ...params.success, restartPending: true }, undefined);
     return true;
   }
-  const message =
-    outcome === "applied-restart-required"
+  const deferred =
+    typeof outcome === "object"
+      ? {
+          ...outcome,
+          reason: redactToolDetail(outcome.reason),
+          appliesWhen: redactToolDetail(outcome.appliesWhen),
+        }
+      : undefined;
+  const status = typeof outcome === "object" ? outcome.status : outcome;
+  const message = deferred
+    ? `${mode} saved but deferred: ${deferred.reason} ${deferred.appliesWhen}`
+    : outcome === "applied-restart-required"
       ? `${mode} persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision`
       : outcome === "restart-pending"
         ? `${mode} persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision`
-        : `${mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
+        : `${mode} persisted but was not applied to the active Gateway (${status}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
   params.respond(
     false,
     undefined,
     errorShape(ErrorCodes.UNAVAILABLE, message, {
-      details: { persistedConfig: params.persistedConfig },
+      details: {
+        persistedConfig: params.persistedConfig,
+        ...(deferred ? { application: deferred } : {}),
+      },
     }),
   );
   return true;
@@ -215,7 +238,7 @@ export function respondConfigWriteApplicationOutcome(params: {
 
 /** Returns whether a managed config write can settle without restarting the Gateway. */
 export function shouldAwaitGatewayConfigApplication(params: {
-  changedPaths: string[];
+  changedPaths?: string[];
   previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
 }): boolean {
@@ -223,7 +246,16 @@ export function shouldAwaitGatewayConfigApplication(params: {
   // application could only report failure; the write applies at the next restart.
   return (
     resolveGatewayReloadSettings(params.nextConfig).mode !== "off" &&
-    !resolveConfigRestartRequirement(params).requiresRestart
+    !resolveConfigRestartRequirement({
+      ...params,
+      changedPaths:
+        params.changedPaths ??
+        diffGatewayReloadPaths(
+          params.previousConfig,
+          params.nextConfig,
+          listConfigReloadRefinementPrefixes(),
+        ),
+    }).requiresRestart
   );
 }
 
@@ -271,7 +303,7 @@ async function collectConfigWriteBillingRouteWarnings(params: {
     }
     const { collectModelBillingRouteMigrationWarnings } =
       await import("../../commands/doctor/shared/model-billing-route-migration.js");
-    const warnings = collectModelBillingRouteMigrationWarnings({
+    const warnings = await collectModelBillingRouteMigrationWarnings({
       before,
       after,
       // The published snapshot can predate this write's plugin changes; a write that also
@@ -284,28 +316,6 @@ async function collectConfigWriteBillingRouteWarnings(params: {
     params.context?.logGateway?.warn(`billing route comparison skipped: ${String(error)}`);
     return [];
   }
-}
-
-/**
- * Success replies carry and log the write's billing-route warnings. Error replies, including a
- * write that persisted but was not applied, moved no route and stay unchanged.
- */
-export function replyWithBillingRouteWarnings(
-  respond: RespondFn | undefined,
-  warnings: readonly string[],
-  context: GatewayRequestContext | undefined,
-): RespondFn {
-  return (...args) => {
-    const [ok, payload] = args;
-    if (ok && warnings.length > 0 && isRecord(payload)) {
-      for (const warning of warnings) {
-        context?.logGateway?.warn(warning);
-      }
-      args[1] = { ...payload, billingRouteWarnings: warnings };
-    }
-    // Forward the caller's exact arguments; responders and tests observe their arity.
-    respond?.(...args);
-  };
 }
 
 /** Persists a gateway config write and returns follow-up work that must run after response. */
@@ -351,7 +361,12 @@ export async function commitGatewayConfigWrite(params: {
     path: resolveGatewayConfigPath(params.snapshot),
     config: result.nextConfig,
     ...(billingRouteWarnings.length > 0 ? { billingRouteWarnings } : {}),
-    reply: replyWithBillingRouteWarnings(params.respond, billingRouteWarnings, params.context),
+    reply: replyWithBillingRouteWarnings(
+      params.respond,
+      billingRouteWarnings,
+      params.context,
+      openClawIdAccessWarning(result.nextConfig),
+    ),
     // Acknowledge this commit; a later config.get can observe an external edit.
     hash: result.persistedHash,
     ...(application
@@ -377,6 +392,42 @@ export async function commitGatewayConfigWrite(params: {
       }
     },
   };
+}
+
+/** Complete a saved configuration write only after its runtime owner reports the outcome. */
+export async function finishGatewayConfigWrite(params: {
+  write: Awaited<ReturnType<typeof commitGatewayConfigWrite>>;
+  context: GatewayRequestContext;
+  client: Parameters<typeof resolveControlPlaneActor>[0];
+  uiHints: Parameters<typeof redactConfigObject>[1];
+  successDetails: Record<string, unknown>;
+}): Promise<void> {
+  const { write } = params;
+  invalidateGatewayRuntimeConfigSchema();
+  const persistedConfig = {
+    ...(write.hash
+      ? { hash: params.context.configRevisionProjector.projectRawHash(write.hash) }
+      : {}),
+    config: redactConfigObject(write.config, params.uiHints),
+  };
+  if (
+    !write.application ||
+    !respondConfigWriteApplicationOutcome({
+      outcome: await write.application,
+      mode: "config.set",
+      client: params.client,
+      respond: write.reply,
+      success: {},
+      persistedConfig,
+    })
+  ) {
+    write.reply(
+      true,
+      { ok: true, path: write.path, ...persistedConfig, ...params.successDetails },
+      undefined,
+    );
+  }
+  write.queueFollowUp();
 }
 
 export async function resolveGatewayConfigRestartWriteResult(params: {

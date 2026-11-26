@@ -12,6 +12,12 @@
  * shares these frozen payloads; admitted identities also model detached retries and
  * live replies retained for finalization. The entry-point regression exercises real
  * in-memory append/read admission. This is owner cost, not Gateway latency or DB scale.
+ * --hydrated uses decoded snapshot admission instead of append normalization;
+ * --snapshot-owner selects an adjacent baseline transcript-snapshot module.
+ * Example: --hydrated --histories 32 --messages 1500 --tool-rows 32 --iterations 128.
+ * Use 16 histories and 4998 messages for the larger shape, and one history for
+ * the warm control. --restored recreates decoded identities before measurement.
+ * Hydration CPU is reported separately; it excludes decoding and storage access.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -39,12 +45,17 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "1024" },
     allocation: { type: "boolean", default: false },
     restored: { type: "boolean", default: false },
+    "tool-rows": { type: "string", default: "0" },
+    hydrated: { type: "boolean", default: false },
+    "snapshot-owner": { type: "string" },
   },
 });
 const histories = Number(values.histories);
 const messages = Number(values.messages);
 const iterations = Number(values.iterations);
+const toolRows = Number(values["tool-rows"]);
 assert([histories, messages, iterations].every((n) => Number.isSafeInteger(n) && n > 0));
+assert(Number.isSafeInteger(toolRows) && toolRows >= 0);
 assert.equal(messages % 3, 0);
 assert(global.gc, "Pass --expose-gc");
 const {
@@ -55,6 +66,33 @@ const {
       ? pathToFileURL(values.owner).href
       : "../../src/agents/embedded-agent-runner/run/attempt-history-prepare.js"
   );
+const {
+  freezeTranscriptSnapshot,
+}: typeof import("../../src/config/sessions/transcript-snapshot.js") = await import(
+  values["snapshot-owner"]
+    ? pathToFileURL(values["snapshot-owner"]).href
+    : "../../src/config/sessions/transcript-snapshot.js"
+);
+let hydrationCpuUs = 0;
+let hydrationCount = 0;
+function hydrate(retained: AgentMessage[]) {
+  const snapshot = {
+    events: retained.map((message, index) => ({
+      type: "message" as const,
+      id: String(index),
+      parentId: index ? String(index - 1) : null,
+      timestamp: new Date(0).toISOString(),
+      message,
+    })),
+    version: { generation: "synthetic", rawSeq: retained.length, updatedAt: 1 },
+  };
+  const before = process.threadCpuUsage();
+  freezeTranscriptSnapshot(snapshot);
+  const cpu = process.threadCpuUsage(before);
+  hydrationCpuUs += cpu.user + cpu.system;
+  hydrationCount++;
+  return snapshot.events;
+}
 const text = "Synthetic tool payload. ".repeat(400).slice(0, 8192);
 const assistant = (id: number): AgentMessage => ({
   role: "assistant",
@@ -93,14 +131,25 @@ const fixtures = Array.from({ length: histories }, (_history, history) => {
       toolCallId: `call_${index}`,
       toolName: "read",
       content: [{ type: "text" as const, text }],
+      details: {
+        files: Array.from({ length: toolRows }, (_row, line) => ({
+          path: `synthetic-${history}-${index}-${line}.ts`,
+          line,
+          bytes: 8192,
+        })),
+      },
       timestamp: index,
       isError: false,
     },
   ]).flat();
-  for (const message of retained) {
-    normalizeTranscriptJsonValue({ message }, "");
+  if (values.hydrated) {
+    hydrate(retained);
+  } else {
+    for (const message of retained) {
+      normalizeTranscriptJsonValue({ message }, "");
+    }
+    assert(retained.every(isOwnedTranscriptPayload));
   }
-  assert(retained.every(isOwnedTranscriptPayload));
   const agent = { state: { messages: retained } };
   const input = {
     attempt: {
@@ -154,14 +203,17 @@ function restorePrivateViews() {
   }
   assert(iterations <= histories, "Restored measurement visits each private view once");
   for (const fixture of fixtures) {
+    const fresh = structuredClone(fixture.retained);
     const entries = projectSessionModelContextEntries(
-      fixture.retained.map((message, index) => ({
-        type: "message",
-        id: String(index),
-        parentId: index ? String(index - 1) : null,
-        timestamp: new Date(0).toISOString(),
-        message,
-      })),
+      values.hydrated
+        ? hydrate(fresh)
+        : fresh.map((message, index) => ({
+            type: "message",
+            id: String(index),
+            parentId: index ? String(index - 1) : null,
+            timestamp: new Date(0).toISOString(),
+            message,
+          })),
     );
     fixture.retained = entries.flatMap((entry) =>
       entry.type === "message" ? [entry.message] : [],
@@ -181,7 +233,13 @@ const digest = hash("sha256", JSON.stringify(proof));
 for (let i = 0; i < Math.max(128, histories); i++) {
   await run(i);
 }
+const hydrationBeforeRestore = hydrationCpuUs;
+const countBeforeRestore = hydrationCount;
 restorePrivateViews();
+const restoredHydrationCpuUs =
+  hydrationCount > countBeforeRestore
+    ? (hydrationCpuUs - hydrationBeforeRestore) / (hydrationCount - countBeforeRestore)
+    : undefined;
 await setImmediate();
 global.gc();
 const profiler = values.allocation ? new Session() : undefined;
@@ -222,6 +280,11 @@ times.sort((a, b) => a - b);
 console.log(
   JSON.stringify({
     restored: values.restored,
+    hydrated: values.hydrated,
+    snapshotOwner: values["snapshot-owner"] ?? "candidate",
+    hydrationCpuUs: hydrationCount ? hydrationCpuUs / hydrationCount : undefined,
+    restoredHydrationCpuUs,
+    toolRows,
     histories,
     messages,
     iterations,
