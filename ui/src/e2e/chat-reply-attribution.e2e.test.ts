@@ -99,6 +99,7 @@ suite.define(() => {
           await thread.hover();
           await page.mouse.wheel(0, -1200);
           await latest.click();
+          await expect.poll(() => chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(1);
           await waitForChatScrollIdle(page);
           expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(1);
 
@@ -110,6 +111,7 @@ suite.define(() => {
           expect(await chatThreadDistanceFromBottom(page)).toBeGreaterThan(900);
           await expect.poll(() => latest.count()).toBe(1);
           await latest.click();
+          await expect.poll(() => chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(1);
           await waitForChatScrollIdle(page);
           expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(1);
           expect((await visibleChatBubbleTexts(page)).join("\n")).toContain("Field note 78");

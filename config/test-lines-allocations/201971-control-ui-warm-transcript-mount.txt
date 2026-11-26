@@ -23,5 +23,7 @@
 # Preserve the first populated transcript budget after loading/empty receipts,
 # with cheap/cached/submission immediacy, one-yield continuity and disposal.
 # These real-pane owner cases add 125 lines using the existing mount fixture.
-# Full branch growth is 1472 lines; the shared allowance remains 400.
-1072
+# On the refreshed baseline, 39 lines cover Latest destination polling and the
+# existing deferred scroll owner across stable geometry, commit and both frames.
+# Full branch growth is 1509 lines; the shared allowance remains 400.
+1109

@@ -282,6 +282,43 @@ it("resets state for new chat session", () => {
 describe("programmatic scroll ownership", () => {
   beforeEach(immediateFrames);
 
+  it("keeps a manual return pending across idle geometry until its commit and frames run", () => {
+    const frames = installAnimationFrameQueue();
+    const { host, container, commit } = createScrollHost({ scrollTop: 500 }, true);
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    host.chatScrollToEnd.mockImplementation(() => {
+      container.scrollTop = container.scrollHeight - container.clientHeight;
+      return true;
+    });
+    const geometry = () => [container.clientHeight, container.scrollHeight, container.scrollTop];
+    const before = geometry();
+    scheduleChatScroll(host, true, true, { source: "manual" });
+
+    // The idle helper's quiet window can finish while afterCommit still owns the command.
+    vi.advanceTimersByTime(180);
+    for (let frame = 0; frame < 2; frame++) {
+      window.requestAnimationFrame(() => {});
+      frames.runNext();
+    }
+    expect(geometry()).toEqual(before);
+    expect(hasPendingManualChatScroll(host)).toBe(true);
+    expect(container.scrollHeight - container.clientHeight - container.scrollTop).toBeGreaterThan(
+      1,
+    );
+    expect(host.chatScrollToEnd).not.toHaveBeenCalled();
+
+    commit();
+    frames.runNext();
+    expect(host.chatScrollToEnd).not.toHaveBeenCalled();
+    frames.runNext();
+    expect(host.chatScrollToEnd).toHaveBeenCalledExactlyOnceWith({
+      behavior: "smooth",
+      source: "manual",
+    });
+    expect(container.scrollHeight - container.clientHeight - container.scrollTop).toBe(0);
+    expect(hasPendingManualChatScroll(host)).toBe(false);
+  });
+
   it("keeps resize-anchor motion out of reader policy until explicit takeover", () => {
     const { host: base, container } = createScrollHost({ scrollTop: 1500, clientHeight: 400 });
     const host = Object.assign(base, { chatIsMaintenanceScroll: () => true });
