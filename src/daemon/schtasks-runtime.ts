@@ -1,6 +1,7 @@
 import { spawnSync, type SpawnOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import { hasErrnoCode } from "../infra/errno.js";
+import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLeaseAsync } from "../infra/gateway-owner-lease.js";
 import { findVerifiedGatewayListenerPidsOnPort } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
@@ -602,12 +603,14 @@ async function resolveListenerBackedScheduledTaskRuntime(
   env: GatewayServiceEnv,
   deadlineMs?: number,
   installedCommand?: GatewayServiceCommandConfig | null,
+  stateCustodyTransferred?: boolean,
 ): Promise<Pick<GatewayServiceRuntime, "status" | "pid" | "detail"> | null> {
   // A task lease proves control ownership, not that its process uses today's definition.
   const observed = await readBoundedScheduledTaskProcess(
     env,
     deadlineMs ?? performance.now() + 5_000,
     installedCommand,
+    stateCustodyTransferred,
   );
   if (!observed) {
     return {
@@ -621,6 +624,19 @@ async function resolveListenerBackedScheduledTaskRuntime(
       pid: observed.pid,
       detail: `Matching installed process detected for gateway port ${observed.port}.`,
     };
+  }
+  if (stateCustodyTransferred) {
+    const identity = await readActiveGatewayLockIdentity({
+      env: mergeGatewayServiceEnv(env, observed.command),
+      requireInspection: true,
+      timeoutMs: deadlineMs === undefined ? 5_000 : deadlineMs - performance.now(),
+    });
+    return identity?.port === observed.port
+      ? {
+          status: "unknown",
+          detail: "A live file-lock owner remains, but the task command could not be verified.",
+        }
+      : null;
   }
   const owner = await readGatewayOwnerLeaseAsync({
     env: mergeGatewayServiceEnv(env, observed.command),
@@ -655,6 +671,9 @@ export async function readScheduledTaskRuntime(
   const deadlineMs = opts?.timeoutMs === undefined ? undefined : performance.now() + opts.timeoutMs;
   const probe = probeScheduledTaskState(resolveTaskName(env), opts?.timeoutMs);
   if (probe.status === "missing") {
+    if (opts?.stateCustodyTransferred) {
+      return { status: "stopped", missingUnit: true };
+    }
     return (await isStartupEntryInstalled(env, deadlineMs, opts?.requireEffective))
       ? resolveFallbackRuntime(env, undefined, "observe", deadlineMs)
       : { status: "stopped", missingUnit: true };
@@ -687,13 +706,18 @@ export async function readScheduledTaskRuntime(
     env,
     deadlineMs,
     installedCommand,
+    opts?.stateCustodyTransferred,
   );
   return {
     ...observedRuntime,
     status:
       status === "unknown"
         ? status
-        : (observedRuntime?.status ?? (status === "running" ? "unknown" : status)),
+        : opts?.stateCustodyTransferred &&
+            status !== "running" &&
+            observedRuntime?.status === "running"
+          ? "unknown"
+          : (observedRuntime?.status ?? (status === "running" ? "unknown" : status)),
     ...(!observedRuntime && status === "running"
       ? {
           detail:

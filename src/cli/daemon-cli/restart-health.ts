@@ -99,6 +99,7 @@ type GatewayRestartWaitOptions = {
   expectedBuildId?: string | null;
   requireRunningService?: boolean;
   requireHealthRpc?: boolean;
+  stateCustodyTransferred?: boolean;
   requireChannelHealth?: boolean;
   requireOwnedListener?: boolean;
   allowUnattributedDiagnosticProbe?: boolean;
@@ -264,6 +265,7 @@ export async function waitForGatewayHealthyRestart(
         env: params.env,
         expectedVersion: params.expectedVersion,
         expectedBuildId: params.expectedBuildId,
+        stateCustodyTransferred: params.stateCustodyTransferred,
         requireChannelHealth: params.requireChannelHealth,
         requireOwnedListener: params.requireOwnedListener,
         allowUnattributedDiagnosticProbe: params.allowUnattributedDiagnosticProbe,
@@ -364,7 +366,10 @@ export async function waitForGatewayHealthyRestart(
       let missingLegacyOwner = false;
       let startupMigrationInactive = false;
       const diagnosticAbsence = missingServiceFree || portHeldByForeignProcess;
-      if (diagnosticAbsence) {
+      if (diagnosticAbsence && params.stateCustodyTransferred) {
+        missingLegacyOwner = !reportedStartupPhase;
+        startupMigrationInactive = !reportedStartupPhase;
+      } else if (diagnosticAbsence) {
         try {
           const legacyOwner = await read("legacy-owner", () =>
             readActiveGatewayLockIdentity({
@@ -392,7 +397,8 @@ export async function waitForGatewayHealthyRestart(
         elapsedMs = Math.max(0, performance.now() - startedAtMs);
       }
       const owner =
-        stoppedFree || missingServiceFree || portHeldByForeignProcess
+        !params.stateCustodyTransferred &&
+        (stoppedFree || missingServiceFree || portHeldByForeignProcess)
           ? await read("owner", async () =>
               readGatewayOwnerLease({ env: params.env, port: params.port }),
             )
@@ -431,6 +437,7 @@ export async function waitForGatewayHealthyRestart(
       // startup grace for it and for published 2026.9.3 processes without owner rows.
       if (
         !missingServiceFree &&
+        (!params.stateCustodyTransferred || !reportedStartupPhase) &&
         (!owner || owner.state === "dead") &&
         !params.supervisorKeepsAlive &&
         attempt >= minAttemptForEarlyExit &&
@@ -445,7 +452,7 @@ export async function waitForGatewayHealthyRestart(
         consecutiveStoppedFreeCount = 0;
       }
 
-      if (snapshot.runtime.status !== "running") {
+      if (params.stateCustodyTransferred || snapshot.runtime.status !== "running") {
         migrationActive = false;
       } else if (elapsedMs >= nextMigrationActivityPollMs) {
         try {

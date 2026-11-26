@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { ForegroundUpdateStop } from "../../infra/update-managed-service-handoff.js";
@@ -67,6 +68,7 @@ export class GatewayUpdateSuccessor {
     params: {
       port?: number;
       host?: string;
+      config?: OpenClawConfig;
       foreground: boolean;
       beforeWait: () => void;
       isCurrent: () => boolean;
@@ -82,6 +84,9 @@ export class GatewayUpdateSuccessor {
             port: params.port,
             child,
             probeHosts: [params.host ?? "127.0.0.1"],
+            ...(params.foreground
+              ? { stateCustodyTransferred: true, config: params.config ?? {} }
+              : {}),
             requireRunningService: true,
             requireOwnedListener: true,
           })

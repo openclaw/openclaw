@@ -65,6 +65,42 @@ export function registerUpdateRespawnTests(f: UpdateRespawnFixtures): void {
     );
   }
 
+  it("persists the Scheduled Task predecessor outcome before releasing its lock", async () => {
+    f.setPlatform("win32");
+    vi.stubEnv("OPENCLAW_WINDOWS_TASK_NAME", "OpenClaw Gateway Custody Test");
+    f.consumeGatewayRestartIntent.mockReturnValueOnce({ reason: "update.run" });
+    f.restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
+    const persisted = createDeferred();
+    const completeBoot = vi.fn(() => persisted.promise);
+    const lockRelease = vi.fn(async () => {});
+    f.acquireGatewayLock.mockResolvedValueOnce({ release: lockRelease });
+    await f.withRunningGateway(
+      async ({ captureSignal, exited }) => {
+        try {
+          captureSignal("SIGUSR2")();
+          await waitForCalls(completeBoot);
+          expect(completeBoot).toHaveBeenCalledWith({
+            outcome: "planned_restart",
+            reason: "restart (SIGUSR2: update.run)",
+          });
+          await waitForCalls(f.writeGatewayRestartHandoff);
+          expect(f.writeGatewayRestartHandoff).toHaveBeenCalledWith(
+            expect.objectContaining({ restartKind: "update-process", supervisorMode: "schtasks" }),
+            expect.any(Function),
+          );
+          expectUncalled(lockRelease, f.restartGatewayProcessWithFreshPid);
+        } finally {
+          persisted.resolve();
+        }
+        await expect(exited).resolves.toBe(0);
+        expect(lockRelease).toHaveBeenCalledOnce();
+        expect(f.writeGatewayRestartHandoff).toHaveBeenCalledOnce();
+      },
+      true,
+      { completeBoot },
+    );
+  });
+
   it("joins failed provider cleanup cancellation before restoring the runtime", async () => {
     const cancellation = createDeferred<"restored-in-process">();
     f.hasManagedProviderLocalServices.mockReturnValue(true);

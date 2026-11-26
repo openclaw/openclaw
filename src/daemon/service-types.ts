@@ -216,6 +216,8 @@ export type SystemdGatewayInstallation =
 export type GatewayServiceReadOptions = {
   /** Inspect systemd environment sources and mount mappings before comparing state. */
   inspectStateIdentity?: boolean;
+  /** During update recovery, observe the native task without borrowing Gateway state. */
+  stateCustodyTransferred?: boolean;
   systemdReadTarget?: SystemdServiceReadTarget;
   systemdReadBinding?: SystemdServiceReadBinding;
   timeoutMs?: number;
