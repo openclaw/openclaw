@@ -251,6 +251,58 @@ it("keeps same-named authors and mentioned users apart in the transcript", async
   expect(day).toContain("14:15 Sam#U1: ask @Sam#U2 and @Sam#U3");
 });
 
+it("names an author whose own lookup failed from a later read's mention", async () => {
+  const dir = tempDirs.make("slack-read-author-fallback-");
+  const file = (name: string) => path.join(dir, name);
+  await writeFile(
+    file("first.json"),
+    JSON.stringify({
+      channelId: "C1",
+      messages: [{ ts: "1790000100.000200", user: "U1", text: "hello" }],
+    }),
+  );
+  await writeFile(
+    file("second.json"),
+    JSON.stringify({
+      channelId: "C1",
+      messages: [
+        {
+          ts: "1790000200.000300",
+          user: "U2",
+          user_profile: { display_name: "Bo" },
+          text: "thanks <@U1>",
+        },
+      ],
+      userProfiles: { U1: { display_name: "Sam" } },
+    }),
+  );
+  run("slack-read-normalize.mjs", [
+    "--team",
+    "T1",
+    "--channel",
+    "C1",
+    "--input",
+    file("first.json"),
+    "--input",
+    file("second.json"),
+    "--output",
+    file("m.jsonl"),
+  ]);
+  run("chat-transcript.mjs", [
+    "--input",
+    file("m.jsonl"),
+    "--output-dir",
+    file("tx"),
+    "--channel",
+    "#c",
+    "--source-key",
+    "slack:T1/C1",
+  ]);
+  const day = await readFile(path.join(file("tx"), "2026-09-21.txt"), "utf8");
+  expect(day).toContain("14:15 Sam: hello");
+  expect(day).toContain("14:16 Bo: thanks @Sam");
+});
+
 it("keeps an unchanged reply's hash whether or not its root was read, and changes it on an edit", async () => {
   const dir = tempDirs.make("slack-read-normalize-");
   const file = (name: string) => path.join(dir, name);

@@ -63,7 +63,8 @@ async function run(argv) {
   }
 
   // Gives each author and mentioned user a display label; display names shared by different IDs
-  // get an ID suffix. An author's own name wins over a name a mention carries.
+  // get an ID suffix. An author's own name wins over a name a mention carries, but a mention's
+  // name replaces an author shown only by ID.
   function userLabels(rows) {
     const names = new Map();
     for (const { payload } of rows) {
@@ -71,7 +72,7 @@ async function run(argv) {
     }
     for (const { payload } of rows) {
       for (const [id, name] of Object.entries(payload.mention_names ?? {})) {
-        if (!names.has(id)) {
+        if (!names.has(id) || names.get(id) === id) {
           names.set(id, name);
         }
       }
