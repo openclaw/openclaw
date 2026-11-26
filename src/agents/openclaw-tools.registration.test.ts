@@ -560,6 +560,7 @@ describe("gateway client capability tool filtering", () => {
         config,
         agentId: "main",
         sessionId: session.sessionId,
+        runId: "project-move-run",
         sessionKey: scenario.sessionKey,
         sessionFile: scenario.sessionKey,
         workspaceDir: scenario.workspaceDir,
