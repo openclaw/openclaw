@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
@@ -7,10 +9,10 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js";
 
-const googlePlanRefusal = "This request requires an active Google AI Ultra subscription.";
+const providerMessage = "This request needs the fixture team plan.";
 
-function createFailureSuite(provider: "fixture" | "google") {
-  const google = provider === "google";
+function createFailureSuite(provider: "fixture" | "message-fixture") {
+  const custom = provider === "message-fixture";
   let instance: OpenClawTestInstance;
   const requestedProviders: string[] = [];
   const suite = createControlUiE2eSuite({
@@ -27,13 +29,13 @@ function createFailureSuite(provider: "fixture" | "google") {
                 response.end(JSON.stringify({ data: [{ id: "current" }] }));
                 return;
               }
-              const googleRequest = request.url?.startsWith("/v1beta/") === true;
-              requestedProviders.push(googleRequest ? "google" : "fixture");
-              response.writeHead(googleRequest ? 403 : 401, { "content-type": "application/json" });
+              const customRequest = request.url?.startsWith("/fallback/") === true;
+              requestedProviders.push(customRequest ? "message-fixture" : "fixture");
+              response.writeHead(customRequest ? 403 : 401, { "content-type": "application/json" });
               response.end(
                 JSON.stringify({
-                  error: googleRequest
-                    ? { code: 403, status: "PERMISSION_DENIED", message: googlePlanRefusal }
+                  error: customRequest
+                    ? { code: "insufficient_quota", message: "fixture_plan_required" }
                     : { message: "Incorrect API key provided", code: "invalid_api_key" },
                 }),
               );
@@ -53,26 +55,24 @@ function createFailureSuite(provider: "fixture" | "google") {
         identity: "Assistant",
         model: "current",
         ...primary,
-        defaults: google
+        defaults: custom
           ? {
-              model: { primary: "fixture/current", fallbacks: ["google/current"] },
-              modelPolicy: { allow: ["fixture/*", "google/*"] },
+              model: { primary: "fixture/current", fallbacks: ["message-fixture/current"] },
+              modelPolicy: { allow: ["fixture/*", "message-fixture/*"] },
             }
           : undefined,
         config: {
           update: { checkOnStart: false },
           browser: { enabled: false },
-          ...(google
+          ...(custom
             ? {
-                plugins: { allow: ["google"], entries: { google: { enabled: true } } },
                 models: {
                   catalogRefresh: { enabled: false },
                   providers: {
                     fixture: primary,
-                    google: {
+                    "message-fixture": {
                       ...primary,
-                      api: "google-generative-ai",
-                      baseUrl: `${origin}/v1beta`,
+                      baseUrl: `${origin}/fallback/v1`,
                     },
                   },
                 },
@@ -89,6 +89,35 @@ function createFailureSuite(provider: "fixture" | "google") {
           await upstream.claim.release();
         }
       };
+      if (custom) {
+        const pluginDir = instance.state.path("message-provider");
+        await fs.mkdir(pluginDir, { recursive: true });
+        await fs.writeFile(
+          path.join(pluginDir, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: "message-provider",
+            providers: ["message-fixture"],
+            configSchema: { type: "object", properties: {} },
+          }),
+        );
+        await fs.writeFile(
+          path.join(pluginDir, "index.js"),
+          `export default { id: "message-provider", register(api) {
+            api.registerProvider({ id: "message-fixture", label: "Message fixture", auth: [],
+              classifyFailoverReason: ({ errorMessage }) => errorMessage.includes("fixture_plan_required") ? "billing" : undefined,
+              formatUserFacingError: ({ errorMessage }) => errorMessage.includes("fixture_plan_required") ? ${JSON.stringify(providerMessage)} : undefined,
+            });
+          } };`,
+        );
+        await instance.state.writeConfig({
+          ...JSON.parse(await fs.readFile(instance.configPath, "utf8")),
+          plugins: {
+            allow: ["message-provider"],
+            load: { paths: [pluginDir] },
+            entries: { "message-provider": { enabled: true } },
+          },
+        });
+      }
       await instance.startGateway().catch(async (error: unknown) => {
         await close();
         throw error;
@@ -159,14 +188,14 @@ suite.define(() => {
   });
 });
 
-const google = createFailureSuite("google");
+const custom = createFailureSuite("message-fixture");
 
-google.suite.define(() => {
-  it("shows Google's plan refusal when fallback fails, including after reload", async () => {
-    await google.suite.withPage(
+custom.suite.define(() => {
+  it("preserves the final provider message through fallback and reload", async () => {
+    await custom.suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
-        await page.goto(await google.open("chat"));
+        await page.goto(await custom.open("chat"));
         await waitForControlUiGatewayReady(page);
         await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill("Hello");
         await page.getByRole("button", { name: "Send message", exact: true }).click();
@@ -176,10 +205,10 @@ google.suite.define(() => {
           await failure.locator(".chat-run-failure__toggle").click();
           const details = page.locator(".chat-run-failure__log");
           await details.waitFor();
-          expect([...new Set(google.requestedProviders)]).toEqual(["fixture", "google"]);
-          expect(await details.textContent()).toBe(googlePlanRefusal);
+          expect([...new Set(custom.requestedProviders)]).toEqual(["fixture", "message-fixture"]);
+          expect(await details.textContent()).toBe(providerMessage);
           expect(await failure.locator(".chat-run-failure__title").textContent()).toBe(
-            googlePlanRefusal,
+            providerMessage,
           );
         };
         await checkMessage();
