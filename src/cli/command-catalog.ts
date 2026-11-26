@@ -222,6 +222,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
   {
+    commandPath: ["gateway", "recover-lock"],
+    exact: true,
+    // Recovery must reach the lock before config preflight can request state ownership.
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["gateway", "call"],
     exact: true,
     policy: PASSIVE_STARTUP_POLICY,
