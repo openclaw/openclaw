@@ -1,5 +1,4 @@
-import { validateAgentProfile } from "agentprofiles";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { BUILT_IN_AGENT_PROFILES, indexBuiltInAgentProfiles } from "./builtins.js";
 import { resolveOpenClawAgentProfileExtension } from "./openclaw-extension.js";
 
@@ -20,27 +19,18 @@ describe("built-in Agent Profile resources", () => {
     );
   });
 
-  it("passes every resource through the released portable validator", () => {
+  it("keeps every resource structurally valid for agentprofiles.io/v1", () => {
+    const ids = new Set(BUILT_IN_AGENT_PROFILES.map((profile) => profile.id));
     for (const profile of BUILT_IN_AGENT_PROFILES) {
-      expect(validateAgentProfile(profile.resource)).toBe(profile.resource);
-    }
-  });
-
-  it("loads the built-ins without loading the portable validator", async () => {
-    vi.resetModules();
-    vi.doMock("agentprofiles", () => {
-      throw new Error("agentprofiles must not load at import time");
-    });
-    try {
-      const fresh = await import("./builtins.js");
-      expect(fresh.BUILT_IN_AGENT_PROFILES.map((profile) => profile.id)).toEqual([
-        "openclaw/base",
-        "openclaw/small",
-        "openclaw/compact",
-      ]);
-    } finally {
-      vi.doUnmock("agentprofiles");
-      vi.resetModules();
+      const { resource } = profile;
+      expect(resource.apiVersion).toBe("agentprofiles.io/v1");
+      expect(resource.kind).toBe("AgentProfile");
+      expect(`${resource.metadata.namespace}/${resource.metadata.name}`).toBe(profile.id);
+      expect(resource.spec.common).toBeDefined();
+      if (resource.extends !== undefined) {
+        expect(ids.has(resource.extends)).toBe(true);
+        expect(resource.extends).not.toBe(profile.id);
+      }
     }
   });
 

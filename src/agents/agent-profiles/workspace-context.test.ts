@@ -1,17 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { validateAgentProfile } from "agentprofiles";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveOpenClawAgentProfileExtension } from "./openclaw-extension.js";
 import { resolveAgentProfile } from "./resolve.js";
 import type { ResolvedAgentProfile } from "./resolve.js";
+import type { AgentProfileResource } from "./spec-types.js";
 import { prepareAgentProfileWorkspaceContext } from "./workspace-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function resolvedProfile(extension?: unknown): ResolvedAgentProfile {
-  const resource = validateAgentProfile({
+  const resource: AgentProfileResource = {
     apiVersion: "agentprofiles.io/v1",
     kind: "AgentProfile",
     metadata: { namespace: "test", name: "profile" },
@@ -19,7 +19,7 @@ function resolvedProfile(extension?: unknown): ResolvedAgentProfile {
       common: {},
       ...(extension === undefined ? {} : { "openclaw.ai": extension }),
     },
-  });
+  };
   return {
     profile: {
       id: "openclaw/base",

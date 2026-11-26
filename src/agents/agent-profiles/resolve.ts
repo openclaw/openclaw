@@ -1,4 +1,3 @@
-import type { AgentProfileCommon } from "agentprofiles";
 import type { AgentProfileId, AgentProfileSelector } from "../../config/agent-profile-ids.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -13,6 +12,7 @@ import {
   resolveOpenClawAgentProfileExtension,
   type OpenClawAgentProfileExtension,
 } from "./openclaw-extension.js";
+import type { AgentProfileCommon } from "./spec-types.js";
 
 type AgentProfileSelectionSource = "agent-explicit" | "defaults-explicit" | "fallback";
 

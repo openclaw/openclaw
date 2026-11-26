@@ -1,13 +1,13 @@
-import type { AgentProfileResource } from "agentprofiles";
 import type { AgentProfileId } from "../../config/agent-profile-ids.js";
+import type { AgentProfileResource } from "./spec-types.js";
 
 export type BuiltInAgentProfile = {
   id: AgentProfileId;
   resource: AgentProfileResource;
 };
 
-// The built-ins are typed constants. The released portable validator checks them in
-// builtins.test.ts, so loading this module does not compile a validator.
+// The built-ins are typed constants. builtins.test.ts checks their structure, so loading
+// this module does not compile a validator.
 function defineBuiltInAgentProfile(
   id: AgentProfileId,
   resource: AgentProfileResource,

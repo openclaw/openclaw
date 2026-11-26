@@ -1,9 +1,9 @@
-import { validateAgentProfile, type AgentProfileResource } from "agentprofiles";
 import { describe, expect, it } from "vitest";
 import { resolveOpenClawAgentProfileExtension } from "./openclaw-extension.js";
+import type { AgentProfileResource } from "./spec-types.js";
 
 function profile(params: { name: string; extension?: unknown }): AgentProfileResource {
-  return validateAgentProfile({
+  return {
     apiVersion: "agentprofiles.io/v1",
     kind: "AgentProfile",
     metadata: { namespace: "openclaw", name: params.name },
@@ -11,7 +11,7 @@ function profile(params: { name: string; extension?: unknown }): AgentProfileRes
       common: {},
       ...(params.extension === undefined ? {} : { "openclaw.ai": params.extension }),
     },
-  });
+  };
 }
 
 describe("OpenClaw Agent Profile extension", () => {

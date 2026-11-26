@@ -1,5 +1,5 @@
-import type { AgentProfileResource } from "agentprofiles";
 import { z } from "zod";
+import type { AgentProfileResource } from "./spec-types.js";
 
 const AGENT_PROFILE_EXTENSION_SECTION = "openclaw.ai";
 
