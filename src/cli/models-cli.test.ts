@@ -13,8 +13,6 @@ const mocks = vi.hoisted(() => ({
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesListCommand: vi.fn().mockResolvedValue(undefined),
-  modelsFallbacksListCommand: vi.fn().mockResolvedValue(undefined),
-  modelsImageFallbacksListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
@@ -173,16 +171,6 @@ describe("models cli", () => {
       "does not support --agent",
       mocks.modelsAccountsListCommand,
     ],
-    [
-      "models --agent other-person fallbacks list",
-      "does not support --agent",
-      mocks.modelsFallbacksListCommand,
-    ],
-    [
-      "models --agent other-person image-fallbacks list",
-      "does not support --agent",
-      mocks.modelsImageFallbacksListCommand,
-    ],
   ] as const)("rejects unsupported agent scope: %s", async (args, message, command) => {
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
@@ -192,6 +180,25 @@ describe("models cli", () => {
     expect(error).toHaveBeenCalledWith(expect.stringContaining(message));
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(command).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "models --agent other-person fallbacks list",
+      "does not support --agent",
+    ],
+    [
+      "models --agent other-person image-fallbacks list",
+      "does not support --agent",
+    ],
+  ] as const)("rejects unsupported agent scope: %s", async (args, message) => {
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      throw new ExitError(code);
+    });
+    await expect(runModelsCommand(args)).rejects.toMatchObject({ code: 1 });
+    expect(error).toHaveBeenCalledWith(expect.stringContaining(message));
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 
   it("selects the image model field for set-image", async () => {
