@@ -807,7 +807,7 @@ var External = [
     /(^agentId$)/u,
     /(^agentId$|^limit$|^beforeMs$)/u,
     /(^agentId$|^name$|^filePath$|^versionId$|^draftId$)/u,
-    /(^agentId$|^name$|^reason$)/u,
+    /(^agentId$|^name$|^reason$|^undoRestoreChangeId$)/u,
     /(^agentId$|^name$|^versionId$)/u,
     /(^agentId$|^runId$)/u,
     /(^agentId$|^skillKey$)/u,
@@ -5237,7 +5237,10 @@ var External = [
     ) &&
     (value.agentId === void 0 || !("agentId" in value) || check_65(value.agentId)) &&
     check_6(value.name) &&
-    (value.reason === void 0 || !("reason" in value) || check_653(value.reason)),
+    (value.reason === void 0 || !("reason" in value) || check_653(value.reason)) &&
+    (value.undoRestoreChangeId === void 0 ||
+      !("undoRestoreChangeId" in value) ||
+      check_65(value.undoRestoreChangeId)),
   check_653 = (value) =>
     typeof value == "string" &&
     (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
