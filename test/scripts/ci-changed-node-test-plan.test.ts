@@ -707,7 +707,13 @@ describe("CI changed Node test plan", () => {
         ],
       },
     ].flatMap((fixture) =>
-      ["blacksmith", "github", "hybrid"].map((runnerBackend) => ({ ...fixture, runnerBackend })),
+      ["blacksmith", "github", "hybrid"].map((runnerBackend) => ({
+        name: fixture.name,
+        unrelatedEligible: fixture.unrelatedEligible,
+        changedPaths: fixture.changedPaths,
+        targets: fixture.targets,
+        runnerBackend,
+      })),
     ),
   )(
     "selects $name shell fixtures from their owner without enabling unrelated tooling ($runnerBackend)",
