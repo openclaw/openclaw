@@ -3669,11 +3669,15 @@ server.listen(0, "127.0.0.1", () => {
   it("rebuilds only new hosted Linux pnpm store generations without losing bootstrap assets", () => {
     const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
     const steps = warmer.jobs.dependencies.steps as WorkflowStep[];
-    const fresh = requiredWorkflowStep(steps, "Populate fresh hosted Linux dependency store");
+    const setup = requiredWorkflowStep(steps, "Setup Node environment");
+    expect(setup.with?.["install-deps"]).toBe("false");
+    const fresh = requiredWorkflowStep(steps, "Prepare fresh hosted Linux dependency store");
+    const install = requiredWorkflowStep(steps, "Install publisher dependencies");
     const outputs = {
       "cache-mode": "read-write",
       "pnpm-store-cache-key": "new-dependency-generation",
       "pnpm-store-cache-hit": "false",
+      "dependency-cache-hit": "false",
     };
     const context = {
       eventName: "schedule" as const,
@@ -3705,7 +3709,26 @@ server.listen(0, "127.0.0.1", () => {
         }),
       ).toBe(false);
     }
-    expect(steps.indexOf(fresh)).toBeLessThan(
+    for (const [platform, hit, dependencyCache] of [
+      ["linux", "true", "true"],
+      ["linux", "false", "true"],
+      ["linux-hosted", "", "false"],
+      ["macos", "", "false"],
+    ] as const) {
+      const installContext = {
+        ...context,
+        matrix: { platform },
+        steps: { "setup-node-env": { outputs: { ...outputs, "dependency-cache-hit": hit } } },
+      };
+      expect(evaluateWorkflowExpression(install.env?.DEPENDENCY_CACHE, installContext)).toBe(
+        dependencyCache,
+      );
+      expect(evaluateWorkflowExpression(install.env?.DEPENDENCY_CACHE_HIT, installContext)).toBe(
+        hit,
+      );
+    }
+    expect(steps.indexOf(fresh)).toBeLessThan(steps.indexOf(install));
+    expect(steps.indexOf(install)).toBeLessThan(
       steps.indexOf(requiredWorkflowStep(steps, "Save exact dependency cache")),
     );
 
@@ -3730,7 +3753,7 @@ server.listen(0, "127.0.0.1", () => {
     writeFileSync(path.join(store, "toolchain", "pnpm.tgz"), "authenticated bootstrap bytes");
     writeFileSync(
       path.join(root, ".github/actions/setup-node-env/install-dependencies.sh"),
-      'test "$DEPENDENCY_CACHE_HIT" = false && test "$FROZEN_LOCKFILE" = true && touch installed\n',
+      'test "$DEPENDENCY_CACHE_HIT" = false && test "$FROZEN_LOCKFILE" = true && echo install >> installed\n',
     );
     const result = runWorkflowShellScript(expectDefined(fresh.run, "fresh store script"), {
       cwd: root,
@@ -3743,7 +3766,28 @@ server.listen(0, "127.0.0.1", () => {
       },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(existsSync(path.join(root, "installed"))).toBe(true);
+    expect(existsSync(path.join(root, "installed"))).toBe(false);
+    const installation = runWorkflowShellScript(expectDefined(install.run, "publisher install"), {
+      cwd: root,
+      env: {
+        ...process.env,
+        ...Object.fromEntries(
+          Object.entries(install.env ?? {}).map(([key, value]) => [
+            key,
+            typeof value === "string" && value.startsWith("${{")
+              ? String(
+                  evaluateWorkflowExpression(value, {
+                    ...context,
+                    matrix: { platform: "linux-hosted" },
+                  }),
+                )
+              : String(value),
+          ]),
+        ),
+      },
+    });
+    expect(installation.status, installation.stderr).toBe(0);
+    expect(readFileSync(path.join(root, "installed"), "utf8")).toBe("install\n");
     expect(readFileSync(path.join(store, "toolchain", "pnpm.tgz"), "utf8")).toBe(
       "authenticated bootstrap bytes",
     );
