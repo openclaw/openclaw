@@ -24,11 +24,11 @@ import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-cons
 import { buildBudgetedMemoryAppend } from "./memory-budget-append.js";
 import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import { pruneMemoryEntryOrigins, reserveMemoryEntryOrigins } from "./memory-entry-origins.js";
+import { commitMemoryRewrite } from "./memory-rewrite.js";
 import { readWorkspaceFile } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   buildPromotionMarker,
-  commitMemoryContent,
   extractPromotionKeys,
   hashMemoryContent,
   isAtomicReplacePermissionError,
@@ -505,10 +505,11 @@ export async function applyShortTermPromotions(
           operations: consolidationPlan.operations,
         });
         try {
-          await commitMemoryContent({
+          await commitMemoryRewrite({
             workspaceDir,
             workspaceFileMode: options.workspaceFileMode,
             filePath: memoryWritePath,
+            relativePath: path.basename(memoryPath),
             tempPrefix: `${path.basename(memoryPath)}.promotion`,
             expectedHash: consolidationBaseMemoryHash,
             content: consolidationResult.content,
@@ -572,10 +573,11 @@ export async function applyShortTermPromotions(
           } else {
             // Append fallback keeps the historical read-modify-replace contract. Policy accepts
             // its external-editor race because OpenClaw writers remain serialized by this sweep lock.
-            await commitMemoryContent({
+            await commitMemoryRewrite({
               workspaceDir,
               workspaceFileMode: options.workspaceFileMode,
               filePath: memoryWritePath,
+              relativePath: path.basename(memoryPath),
               tempPrefix: `${path.basename(memoryPath)}.promotion`,
               expectedHash: hashMemoryContent(existingMemory),
               expectedContent: existingMemory,
