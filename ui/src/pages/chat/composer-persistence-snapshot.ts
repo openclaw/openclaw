@@ -1,4 +1,5 @@
 import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
+import { readComposerFileReferences } from "../../lib/chat/file-references.ts";
 import { readHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
   resolveUiConversationIdentity,
@@ -39,6 +40,7 @@ export function captureChatComposerDraftSnapshot(
   const goalMode = state.chatGoalDraftMode ?? undefined;
   const replyTarget = state.chatReplyTarget ?? undefined;
   const mentions = readHumanMentions(state.chatMessage, state.chatMentions);
+  const fileReferences = readComposerFileReferences(state.chatMessage, state.chatFileReferences);
   const attachments = state.chatAttachments ?? [];
   const writeId = `${draftRevision}:${Math.random().toString(36).slice(2)}`;
   const durable = durableScope
@@ -57,6 +59,7 @@ export function captureChatComposerDraftSnapshot(
             : writeId),
         text,
         ...(mentions ? { mentions } : {}),
+        ...(fileReferences?.length ? { fileReferences } : {}),
         ...(goalMode ? { goalMode } : {}),
         ...(replyTarget ? { replyTarget } : {}),
         storedAttachments: captureDurableChatAttachments(attachments),
@@ -71,6 +74,7 @@ export function captureChatComposerDraftSnapshot(
     sessionKey: state.sessionKey,
     chatMessage: text,
     ...(mentions ? { mentions } : {}),
+    ...(fileReferences?.length ? { fileReferences } : {}),
     ...(goalMode ? { goalMode } : {}),
     ...(replyTarget ? { replyTarget } : {}),
     expectedDraftRevision,

@@ -305,7 +305,8 @@ export function createPageState(
     scheduleChatScroll(state, true, Boolean(options?.smooth), { source: "manual" });
   };
   state.handleChatScroll = (event) => handleChatScroll(state, event);
-  state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
+  state.handleChatDraftChange = (next, mentions, fileReferences) =>
+    handleChatDraftChange(state, next, mentions, fileReferences);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
   initializeChatPaneSettings(state, page);
   attachChatRealtimeActions(

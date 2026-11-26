@@ -6,6 +6,7 @@ import type {
   ChatReplyTarget,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
+import type { ComposerFileReference } from "../../lib/chat/file-references.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
 export type PaneSessionHandoff = {
@@ -15,6 +16,7 @@ export type PaneSessionHandoff = {
   composerFallbacks?: Record<string, ChatComposerMemoryFallback>;
   draft: string;
   mentions?: readonly HumanMention[];
+  fileReferences?: readonly ComposerFileReference[];
   send?: boolean;
 };
 

@@ -44,6 +44,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "sessions.files.list",
   "sessions.files.get",
   "sessions.files.stat",
+  "sessions.files.references",
   "sessions.files.download",
   "sessions.files.assets",
   "sessions.files.preview",

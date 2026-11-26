@@ -67,6 +67,7 @@ export function createChatState<TState extends ChatPageHost>(
   const composerDraft = createComposerDraftSource(() => ({
     draft: stateValue?.chatMessage ?? "",
     mentions: stateValue?.chatMentions ?? emptyMentions,
+    fileReferences: stateValue?.chatFileReferences,
     attachments: stateValue?.chatAttachments ?? [],
     pendingAttachmentReads: attachmentReadsValue.pendingReads,
     attachmentReadRevision: attachmentReadsValue.revision,
@@ -298,8 +299,8 @@ export function createChatState<TState extends ChatPageHost>(
         ),
       );
       const commitDraftChange = state.handleChatDraftChange;
-      state.handleChatDraftChange = (next, mentions) => {
-        commitDraftChange(next, mentions);
+      state.handleChatDraftChange = (next, mentions, fileReferences) => {
+        commitDraftChange(next, mentions, fileReferences);
         composerPersistence.schedule();
         publishComposerDraft();
       };
@@ -384,6 +385,7 @@ export function createChatState<TState extends ChatPageHost>(
         state.chatGoalDraftMode ||
         state.chatReplyTarget ||
         state.chatMentions?.length ||
+        state.chatFileReferences?.length ||
         attachmentReadsValue.pendingReads,
       )
     );
@@ -399,7 +401,8 @@ export function createChatState<TState extends ChatPageHost>(
           fallback.attachments.length ||
           fallback.goalMode ||
           fallback.replyTarget ||
-          fallback.mentions?.length,
+          fallback.mentions?.length ||
+          fallback.fileReferences?.length,
         )
       );
     });
@@ -418,6 +421,7 @@ export function createChatState<TState extends ChatPageHost>(
     const { sessionKey, connectionEpoch } = state;
     const chatMessage = fallback?.[1].message ?? state.chatMessage;
     const chatMentions = fallback ? fallback[1].mentions : state.chatMentions;
+    const chatFileReferences = fallback ? fallback[1].fileReferences : state.chatFileReferences;
     const chatGoalDraftMode = fallback ? fallback[1].goalMode : state.chatGoalDraftMode;
     const chatReplyTarget = fallback ? fallback[1].replyTarget : state.chatReplyTarget;
     const attachments = [...(fallback?.[1].attachments ?? state.chatAttachments)];
@@ -436,6 +440,7 @@ export function createChatState<TState extends ChatPageHost>(
           ? state.chatComposerFallbackByScope[fallback[0]] === fallback[1]
           : state.chatMessage === chatMessage &&
             state.chatMentions === chatMentions &&
+            state.chatFileReferences === chatFileReferences &&
             state.chatGoalDraftMode === chatGoalDraftMode &&
             state.chatReplyTarget === chatReplyTarget &&
             attachmentReadsValue === reads &&
@@ -470,7 +475,7 @@ export function createChatState<TState extends ChatPageHost>(
         state.chatAttachments = [];
         state.chatGoalDraftMode = null;
         state.chatReplyTarget = null;
-        state.handleChatDraftChange("", []);
+        state.handleChatDraftChange("", [], []);
       }
       const retained = state.captureComposerRecoveryOwner?.()?.retainedAttachmentIds(attachments);
       releaseDisplacedChatAttachmentPayloads(
@@ -524,6 +529,7 @@ export function createChatState<TState extends ChatPageHost>(
       attachmentReadsValue !== publishedAttachmentReads ||
       draft.draft !== publishedDraft.draft ||
       draft.mentions !== publishedDraft.mentions ||
+      draft.fileReferences !== publishedDraft.fileReferences ||
       draft.attachments !== publishedDraft.attachments ||
       draft.pendingAttachmentReads !== publishedDraft.pendingAttachmentReads ||
       draft.attachmentReadRevision !== publishedDraft.attachmentReadRevision ||

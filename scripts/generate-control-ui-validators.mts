@@ -21,6 +21,11 @@ import { ProgressCardSchema } from "../packages/gateway-protocol/src/schema/prog
 import { SessionParticipantIdentitySchema } from "../packages/gateway-protocol/src/schema/session-participant.js";
 import { SessionsCreateParamsSchema } from "../packages/gateway-protocol/src/schema/sessions-create.js";
 import {
+  FileReferenceSchema,
+  FileReferenceCapabilitySchema,
+  FileReferenceResultSchema,
+} from "../packages/gateway-protocol/src/schema/sessions-file-references.js";
+import {
   SessionsGoalClearParamsSchema,
   SessionsGoalUpdateParamsSchema,
 } from "../packages/gateway-protocol/src/schema/sessions-goal.js";
@@ -57,12 +62,31 @@ type Group =
   | "transcript"
   | "board"
   | "history-state"
-  | "sender-identity";
+  | "sender-identity"
+  | "file-reference";
 const additionalLintRules: Partial<Record<Group, string[]>> = {
   activity: ["eslint/curly"],
   approvals: ["unicorn/no-useless-length-check"],
 };
 const validators: Array<[name: string, schema: TSchema, type: string, group: Group]> = [
+  [
+    "FileReference",
+    FileReferenceSchema,
+    'import("../schema/sessions-file-references.js").FileReference',
+    "file-reference",
+  ],
+  [
+    "FileReferenceCapability",
+    FileReferenceCapabilitySchema,
+    'import("../schema/sessions-file-references.js").FileReferenceCapability',
+    "file-reference",
+  ],
+  [
+    "FileReferenceResult",
+    FileReferenceResultSchema,
+    'import("../schema/sessions-file-references.js").FileReferenceResult',
+    "file-reference",
+  ],
   [
     "BoardSnapshot",
     BoardSnapshotSchema,
@@ -236,6 +260,7 @@ async function main() {
     "transcript",
     "history-state",
     "sender-identity",
+    "file-reference",
     "board",
   ] as const) {
     const selected = validators.filter((entry) => entry[3] === group);
@@ -284,8 +309,8 @@ async function main() {
       ["d.ts", declaration],
     ]) {
       const outputPath =
-        group === "sender-identity"
-          ? `packages/gateway-protocol/src/compiled/sender-identity.${extension}`
+        group === "sender-identity" || group === "file-reference"
+          ? `packages/gateway-protocol/src/compiled/${group}.${extension}`
           : `${outputBase}/${group}.${extension}`;
       const generatedHeader = standaloneValidatorHeader("pnpm ui:validators:gen", {
         declaration: extension === "d.ts",

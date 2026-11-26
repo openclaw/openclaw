@@ -1,12 +1,12 @@
+import { createEffect, flush } from "solid-js";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-typing.test/"} */
-
-import { createEffect, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionTypingEvent } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { PresencePayload } from "../../app/user-profile.ts";
+import { composerFileReferenceFixture } from "../../lib/chat/file-references.test-support.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
@@ -504,6 +504,17 @@ describe("chat pane typing presence", () => {
     expect(summary?.textContent).toBe(longName + " is typing…");
     expect(query(".agent-chat__typing-name")?.getAttribute("title")).toBe(longName);
     expect(all("script")).toHaveLength(0);
+  });
+
+  it("omits draft previews while opaque file references are present", () => {
+    const { pane, state, request } = createTypingPane();
+    state.chatMessage = "@src/example.ts";
+    state.chatFileReferences = [composerFileReferenceFixture];
+    pane.sendTypingState(true, state.chatMessage);
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ typing: true });
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("preview");
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("cursor");
   });
 
   it("sends the last 300 draft code points including whitespace and omits previews when typing stops", () => {

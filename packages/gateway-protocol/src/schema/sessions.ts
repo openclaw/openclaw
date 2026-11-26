@@ -195,6 +195,7 @@ export const SessionOperationEventSchema = closedObject({
 });
 
 export * from "./sessions-files.js";
+export * from "./sessions-file-references.js";
 
 export const SessionDiffFileStatusSchema = stringLiteralUnion([
   "added",

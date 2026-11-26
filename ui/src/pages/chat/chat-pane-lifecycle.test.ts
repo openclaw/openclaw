@@ -15,6 +15,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { composerFileReferenceFixture } from "../../lib/chat/file-references.test-support.ts";
 import { registerComposerEditor } from "../../lib/composer-input.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
@@ -460,12 +461,13 @@ it("does not let a stale add completion clear a newer session operation", async 
   expect(pane.collaboration.addOperation).toBeUndefined();
 });
 
-it.each(["attachments", "mentions"] as const)(
+it.each(["attachments", "mentions", "file references"] as const)(
   "rejects suggestion submission while %s remain",
   async (content) => {
     const request = vi.fn();
     const { pane, state } = createSuggestionPane(request);
-    state.chatMessage = "@Alex text only";
+    state.chatMessage = content === "file references" ? "@src/example.ts" : "@Alex text only";
+    state.chatFileReferences = content === "file references" ? [composerFileReferenceFixture] : [];
     state.chatAttachments =
       content === "attachments"
         ? [{ id: "attachment", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" }]
@@ -477,13 +479,17 @@ it.each(["attachments", "mentions"] as const)(
     expect(request).not.toHaveBeenCalled();
     expect(state.chatError).toBe(
       t(
-        content === "mentions"
-          ? "chat.mentions.unsupported"
-          : "chat.sessionSuggestions.attachmentsUnsupported",
+        content === "file references"
+          ? "chat.fileReferences.sendUnsupported"
+          : content === "mentions"
+            ? "chat.mentions.unsupported"
+            : "chat.sessionSuggestions.attachmentsUnsupported",
       ),
     );
     expect(state.lastErrorDetail).toBe(EXPECTED_CHAT_REFUSAL);
-    expect(state.chatMessage).toBe("@Alex text only");
+    expect(state.chatMessage).toBe(
+      content === "file references" ? "@src/example.ts" : "@Alex text only",
+    );
   },
 );
 

@@ -3,6 +3,11 @@ import * as Checks from "../compiled/protocol.generated/validators-sessions.js";
 import { createProtocolValidator } from "../protocol-validator.js";
 import * as S from "../schema-modules.js";
 
+export const validateSessionsFilesReferencesParams = createProtocolValidator(
+  S.SessionsFilesReferencesParamsSchema,
+  Checks.isSessionsFilesReferencesParams,
+);
+
 // Runs before the schema: compare only numeric boundaries and leave type errors to the schema.
 function checkPulseBoundaries(data: unknown) {
   const boundaries = asNullableRecord(data)?.activityPulseBoundaries;

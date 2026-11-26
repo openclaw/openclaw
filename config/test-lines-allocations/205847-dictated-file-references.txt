@@ -1,0 +1,7 @@
+# M09 identity binding: actual filesystem and editor, authorization and cleanup,
+# capture finality, stale scope/remount ownership, atomic undo and idempotence,
+# persistence/recovery/schema fences, and refusal to send unrepresentable identity.
+# Includes actual-composer metadata-only Undo/Redo and borrowed goal-edit refusal.
+# +2226 net test lines: 400 ordinary allowance plus 1826 allocated lines.
+# Native IndexedDB/rollback cases remain authored and unrun; see PR evidence.
+1826

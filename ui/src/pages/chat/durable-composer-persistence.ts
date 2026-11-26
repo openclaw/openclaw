@@ -26,7 +26,13 @@ type RestoreBaseline = {
 
 type RestoredDraft = Pick<
   DurableComposerDraft,
-  "revision" | "attachmentVersion" | "text" | "mentions" | "goalMode" | "replyTarget"
+  | "revision"
+  | "attachmentVersion"
+  | "text"
+  | "mentions"
+  | "fileReferences"
+  | "goalMode"
+  | "replyTarget"
 > & {
   attachments: ChatAttachment[];
 };
@@ -109,6 +115,9 @@ export async function writeDurableComposerSnapshot(snapshot: DurableChatComposer
         : {}),
       text: payloadUnavailable ? "" : snapshot.text,
       ...(snapshot.mentions?.length && !payloadUnavailable ? { mentions: snapshot.mentions } : {}),
+      ...(snapshot.fileReferences?.length && !payloadUnavailable
+        ? { fileReferences: snapshot.fileReferences }
+        : {}),
       ...(snapshot.goalMode ? { goalMode: snapshot.goalMode } : {}),
       ...(snapshot.replyTarget ? { replyTarget: snapshot.replyTarget } : {}),
       ...(snapshot.modelSelection ? { modelSelection: snapshot.modelSelection } : {}),
@@ -237,6 +246,7 @@ export class DurableChatComposerPersistence {
         attachmentVersion,
         text: draft ? draft.text : "",
         ...(draft?.mentions ? { mentions: draft.mentions } : {}),
+        ...(draft?.fileReferences ? { fileReferences: draft.fileReferences } : {}),
         ...(draft?.goalMode ? { goalMode: draft.goalMode } : {}),
         ...(draft?.replyTarget ? { replyTarget: draft.replyTarget } : {}),
         attachments,

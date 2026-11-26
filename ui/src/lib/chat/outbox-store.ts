@@ -71,6 +71,7 @@ export function notifyDraftPresence(
 export function clearStoredComposerDraftInput(session: {
   draft?: unknown;
   draftMentions?: unknown;
+  draftFileReferences?: unknown;
   draftAttachmentVersion?: unknown;
   goalMode?: unknown;
   replyTarget?: unknown;
@@ -78,6 +79,7 @@ export function clearStoredComposerDraftInput(session: {
   if (
     !session.draft &&
     !session.draftMentions &&
+    !session.draftFileReferences &&
     session.draftAttachmentVersion === undefined &&
     !session.goalMode &&
     !session.replyTarget
@@ -86,6 +88,7 @@ export function clearStoredComposerDraftInput(session: {
   }
   delete session.draft;
   delete session.draftMentions;
+  delete session.draftFileReferences;
   delete session.draftAttachmentVersion;
   delete session.goalMode;
   delete session.replyTarget;
@@ -378,7 +381,7 @@ export function readStoredOutboxStore(
       };
   if (raw) {
     if (
-      store.version !== 4 ||
+      (store.version !== 4 && store.version !== 5) ||
       store.gatewayOwner !== target.gatewayOwner ||
       !store.sessions ||
       !store.recovery
@@ -651,8 +654,18 @@ export function writeStoredOutboxStore(
   if (pendingLegacyTransfers.has(store) && retained.length < entries.length) {
     throw new Error("Chat outbox migration exceeds retention; source retained");
   }
+  const identityRows = [
+    ...retained.map(([, session]) => session),
+    ...Object.values(store.recovery).map((entry) => entry.session),
+  ];
+  // Version 5 fences older binaries, whose v4 readers would silently strip object identity.
+  const hasFileReferences = identityRows.some(
+    (session) =>
+      session.draftFileReferences !== undefined ||
+      session.queue?.some((item) => item.fileReferences !== undefined),
+  );
   const retainedStore: StoredComposerState = {
-    version: 4,
+    version: hasFileReferences ? 5 : 4,
     gatewayOwner: target.gatewayOwner,
     sessions: Object.fromEntries(retained),
     recovery: store.recovery,

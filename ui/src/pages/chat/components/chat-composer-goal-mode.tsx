@@ -1,4 +1,5 @@
 import type { SessionGoal } from "../../../api/types.ts";
+import { registerChatFileReferencesEnglish } from "../../../i18n/locales/en-chat-file-references.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
@@ -10,6 +11,7 @@ import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts"
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 registerEnglishCatalog(registerChatGoalsEnglish);
+registerEnglishCatalog(registerChatFileReferencesEnglish);
 
 export function createGoalComposer(readProps: () => ChatComposerProps, state: ChatComposerState) {
   const mode = () => readProps().goalDraftMode ?? null;
@@ -47,6 +49,17 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
   const begin = (goal?: SessionGoal, commandObjective?: string) => {
     const props = readProps();
     if (!props.onGoalSubmit || !props.onGoalDraftModeChange || pendingNow(liveMode(props))) {
+      return false;
+    }
+    // Goal mode borrows text only; entering it must not discard a bound reference.
+    const fileReferences = props.draftSource
+      ? props.draftSource.read().fileReferences
+      : (props.getFileReferences?.() ?? props.fileReferences);
+    if (fileReferences?.length) {
+      const error = t("chat.fileReferences.sendUnsupported");
+      state.updatePresentation((presentation) => {
+        presentation.dictationError = error;
+      });
       return false;
     }
     const previousDraft = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;

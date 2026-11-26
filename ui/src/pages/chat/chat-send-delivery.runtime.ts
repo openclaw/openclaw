@@ -1,5 +1,7 @@
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import { t } from "../../i18n/index.ts";
+import { registerChatFileReferencesEnglish } from "../../i18n/locales/en-chat-file-references.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
@@ -53,6 +55,8 @@ import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.
 import { resetToolStream } from "./tool-stream-state.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
+registerChatFileReferencesEnglish();
+
 export { chatOutboxDrainDependencies } from "./chat-send-delivery.ts";
 
 export async function sendPreparedChatQueueItem(
@@ -64,6 +68,10 @@ export async function sendPreparedChatQueueItem(
   allowNativeRecovery: boolean,
   retryOwnerIsCurrent: () => boolean,
 ): Promise<QueuedChatSendResult> {
+  if (preparedItem.fileReferences?.length) {
+    setChatError(host, t("chat.fileReferences.sendUnsupported"));
+    return "failed";
+  }
   let queued = preparedItem;
   const id = queued.id;
   const storageMode = options?.storageMode ?? "durable";

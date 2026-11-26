@@ -55,6 +55,7 @@ export function clearSubmittedComposerState(
       undefined,
       host.chatMentions,
       host.chatReplyTarget,
+      host.chatFileReferences,
     ) !==
     chatAttachmentDraftSignature(
       submittedDraft,
@@ -68,6 +69,7 @@ export function clearSubmittedComposerState(
   }
   host.chatMessage = "";
   host.chatMentions = [];
+  host.chatFileReferences = [];
   host.chatReplyTarget = null;
   // Submission always consumes pasted-text cards: their text is already in the message and
   // no queued row owns their payload. Recovery snapshots carry their own data URLs.
@@ -345,6 +347,7 @@ function strictComposerRestore(host: ChatHost, snapshot: PendingComposerSnapshot
       if (draft) {
         host.chatMessage = snapshot.previousDraft ?? "";
         host.chatMentions = snapshot.previousMentions ?? [];
+        host.chatFileReferences = [];
         host.chatReplyTarget = snapshot.previousReplyTarget ?? null;
       }
       if (attachments) {

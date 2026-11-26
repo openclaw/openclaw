@@ -8,6 +8,7 @@ import type {
   ComposerDictationSession,
   placeComposerDictation,
 } from "./composer-dictation-session.ts";
+import type { DictationReferenceReceipt } from "./composer-file-references.ts";
 import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
@@ -29,7 +30,11 @@ type ComposerDictationOwnerOptions = {
   enabled: boolean;
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
-  onCommit: (text: string, late?: true, preservePreview?: true) => void;
+  onCommit: (text: string, late?: true, preservePreview?: true) => DictationReferenceReceipt | void;
+  onCapture?: () =>
+    | ((receipt: DictationReferenceReceipt | undefined, final: boolean) => void)
+    | undefined;
+  onCancelCapture?: () => void;
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onTap?: () => void;
   onDictationUnavailable?: () => void;
@@ -52,6 +57,10 @@ export class ComposerDictationOwner extends EventTarget {
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   // Created with the lazy capture module, before the first transcript exists.
   private commits: ComposerDictationCommits | undefined;
+  private readonly capturedReviews = new WeakMap<
+    ComposerDictationSession,
+    ReturnType<NonNullable<ComposerDictationOwnerOptions["onCapture"]>>
+  >();
   private disposed = false;
 
   constructor(private options: ComposerDictationOwnerOptions) {
@@ -225,6 +234,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   cancel(): void {
+    this.options.onCancelCapture?.();
     this.clearClickSuppression();
     this.playback.stop();
     if (this.commits?.size) {
@@ -325,6 +335,7 @@ export class ComposerDictationOwner extends EventTarget {
     this.clearPointerGesture();
     const captureStart = {};
     this.captureStart = captureStart;
+    const review = this.options.onCapture?.();
     this.setPhase("connecting");
     if (this.captureStart !== captureStart) {
       return;
@@ -378,6 +389,7 @@ export class ComposerDictationOwner extends EventTarget {
         { sessionKey },
       );
       this.session = session;
+      this.capturedReviews.set(session, review);
       await session.start();
     } catch (error) {
       if (this.captureStart !== captureStart || this.disposed || this.finalizing) {
@@ -412,26 +424,30 @@ export class ComposerDictationOwner extends EventTarget {
     }
     // Capture and typing unlock immediately. Stopped recordings retain ownership
     // and commit in capture order, even when a later provider finishes first.
-    const committed = this.commits!.add(session, (lateTranscript) => {
-      this.releasePlayback();
-      this.pendingCommitsChanged();
-      if (
-        !lateTranscript ||
-        !wasActive ||
-        this.disposed ||
-        !this.options.enabled ||
-        this.options.realtimeTalkActive
-      ) {
-        return false;
-      }
-      if (this.active) {
-        this.options.onCommit(lateTranscript, true, true);
-      } else {
-        this.options.onCommit(lateTranscript, true);
-      }
-      this.dispatchEvent(new Event("change"));
-      return true;
-    });
+    const review = this.capturedReviews.get(session);
+    const committed = this.commits!.add(
+      session,
+      (lateTranscript, final) => {
+        this.releasePlayback();
+        this.pendingCommitsChanged();
+        if (
+          !lateTranscript ||
+          !wasActive ||
+          this.disposed ||
+          !this.options.enabled ||
+          this.options.realtimeTalkActive
+        ) {
+          return false;
+        }
+        const receipt = this.active
+          ? this.options.onCommit(lateTranscript, true, true)
+          : this.options.onCommit(lateTranscript, true);
+        review?.(receipt ?? undefined, final);
+        this.dispatchEvent(new Event("change"));
+        return true;
+      },
+      Boolean(review),
+    );
     this.pendingCommitsChanged();
     return committed;
   }

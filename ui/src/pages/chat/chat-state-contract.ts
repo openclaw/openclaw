@@ -11,6 +11,7 @@ import type {
   ChatReplyTarget,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
+import type { ComposerFileReference } from "../../lib/chat/file-references.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatPendingInputView } from "./chat-pending-inputs.types.ts";
@@ -77,6 +78,7 @@ export type ChatState = StreamCausalBoundaryState & {
   chatSending: boolean;
   chatMessage: string;
   chatMentions?: readonly HumanMention[];
+  chatFileReferences?: readonly ComposerFileReference[];
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;

@@ -1,12 +1,29 @@
+import { t } from "../../i18n/index.ts";
+import { registerChatFileReferencesEnglish } from "../../i18n/locales/en-chat-file-references.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   isExpiredIncognitoSession,
   isInitialChatHistoryUnavailable,
+  setChatError,
 } from "./chat-history-state.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { isChatBusy } from "./run-lifecycle.ts";
+
+registerChatFileReferencesEnglish();
+
+/** The chat transport has no object-identity namespace. Conversion is an explicit composer action. */
+export function refuseUnsupportedFileReferenceSend(
+  host: ChatHost,
+  messageOverride?: string,
+): boolean {
+  if (messageOverride != null || !host.chatFileReferences?.length) {
+    return false;
+  }
+  setChatError(host, t("chat.fileReferences.sendUnsupported"));
+  return true;
+}
 
 export function reconnectSafeQueuedSendState(
   host: Pick<ChatHost, "client" | "connected" | "gatewayWorkPaused">,
@@ -22,6 +39,7 @@ export function canSendVolatileQueueItem(
   routingSessionKey = item.sessionKey ?? host.sessionKey,
 ): boolean {
   return (
+    !item.fileReferences?.length &&
     host.connected &&
     !host.gatewayWorkPaused &&
     Boolean(host.client) &&

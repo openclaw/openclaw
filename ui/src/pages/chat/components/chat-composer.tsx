@@ -14,9 +14,11 @@ import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { navigateToModelProvider } from "../../model-providers/navigation.ts";
 import { isChatRunWorking } from "../chat-run-working.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
+import { ComposerFileReferenceOwner } from "../composer-file-references.ts";
 import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import { navigateToSpeechSettings } from "../voice-api-key-navigation.ts";
 import { createComposerDictationOptions } from "./chat-composer-dictation-options.ts";
+import { readComposerFileReferenceSource } from "./chat-composer-file-reference-options.ts";
 import { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
@@ -68,6 +70,12 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
     props,
     createProjection(() => draftState() ?? {}, {}, { shallow: true }),
   );
+  const readFileReferenceSource = () => readComposerFileReferenceSource(currentProps, state);
+  if (state.fileReferences) {
+    state.fileReferences.rebind(readFileReferenceSource);
+  } else {
+    state.fileReferences = new ComposerFileReferenceOwner(readFileReferenceSource);
+  }
   const goalComposer = createGoalComposer(() => currentProps, state);
   const microphonePicker = (state.microphonePicker ??= new ComposerMicrophoneOwner());
   if (!state.dictation) {
@@ -158,8 +166,12 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
     );
   });
   createEffect(
-    () => ({ context: context(), predictions: readPredictionSource() }),
-    ({ context: current, predictions }, previous) => {
+    () => ({
+      context: context(),
+      predictions: readPredictionSource(),
+      references: readFileReferenceSource(),
+    }),
+    ({ context: current, predictions, references }, previous) => {
       state.mentionMenu.syncDirectory(current.mentionDirectory);
       if (current.clearSlashMenu) {
         state.slashMenu.reset();
@@ -178,6 +190,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
       const options = current.dictationOptions;
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
       voice.dictation.update(options);
+      state.fileReferences?.sync(references);
       prediction.sync(predictions);
       if (current.queuedSubmitDue) {
         // Submission reads live composer state; run it after this commit.

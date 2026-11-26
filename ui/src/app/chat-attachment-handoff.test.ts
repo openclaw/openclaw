@@ -1,9 +1,9 @@
-/* @vitest-environment jsdom */
-
 import { afterEach, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ChatAttachment } from "../lib/chat/chat-types.ts";
+import { composerFileReferenceFixture } from "../lib/chat/file-references.test-support.ts";
 import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store.ts";
 import {
   getChatAttachmentDataUrl,
@@ -342,4 +342,30 @@ it("releases a late prepare after application disposal instead of restaging it",
 
   expect(getChatAttachmentDataUrl(annotation)).toBeNull();
   expect(consume(handoff, {} as GatewayBrowserClient, "p1", "agent:main:one")).toBeNull();
+});
+
+it("carries opaque file identity with staged drafts and memory fallbacks", () => {
+  const handoff = handoffFor();
+  const owner = {} as GatewayBrowserClient;
+  const fileReferences = [composerFileReferenceFixture];
+  prepare(handoff, owner, "pane", "reference-scope", [], {
+    message: "@src/example.ts",
+    fileReferences,
+    fallbacks: {
+      reference: {
+        message: "@src/example.ts",
+        fileReferences,
+        attachments: [],
+        sequence: 1,
+        storageFailed: true,
+      },
+    },
+  });
+  const restored = consume(handoff, owner, "pane", "reference-scope");
+  expect(restored).toMatchObject({
+    message: "@src/example.ts",
+    fileReferences,
+    fallbacks: { reference: { fileReferences } },
+  });
+  expect(consume(handoff, owner, "pane", "reference-scope")).toBeNull();
 });

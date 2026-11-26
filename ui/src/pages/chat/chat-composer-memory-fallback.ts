@@ -25,7 +25,7 @@ export type ChatComposerMemoryFallbackOwnership = {
 
 type ComposerFallbackInput = Pick<
   ChatComposerMemoryFallback,
-  "message" | "mentions" | "attachments"
+  "message" | "mentions" | "fileReferences" | "attachments"
 > & {
   replyTarget?: ChatReplyTarget | null;
 };
@@ -120,6 +120,7 @@ export function storeChatComposerMemoryFallback(
       ...(composer.mentions?.length
         ? { mentions: composer.mentions.map((mention) => ({ ...mention })) }
         : {}),
+      ...(composer.fileReferences?.length ? { fileReferences: composer.fileReferences } : {}),
       ...(composer.goalMode ? { goalMode: composer.goalMode } : {}),
       ...(composer.replyTarget ? { replyTarget: { ...composer.replyTarget } } : {}),
       attachments: [...composer.attachments],
@@ -138,6 +139,8 @@ function fallbackMatches(
   return (
     existing.message === composer.message &&
     JSON.stringify(existing.mentions ?? []) === JSON.stringify(composer.mentions ?? []) &&
+    JSON.stringify(existing.fileReferences ?? []) ===
+      JSON.stringify(composer.fileReferences ?? []) &&
     JSON.stringify(existing.replyTarget ?? null) === JSON.stringify(composer.replyTarget ?? null) &&
     existing.attachments.length === composer.attachments.length &&
     existing.attachments.every(
@@ -165,6 +168,7 @@ export function retainChatComposerMemoryFallback(
         ...existing,
         message: composer.message,
         mentions: composer.mentions,
+        fileReferences: composer.fileReferences,
         replyTarget: composer.replyTarget ? { ...composer.replyTarget } : undefined,
         attachments: [...composer.attachments],
       },

@@ -6,6 +6,7 @@ import type {
   DurableComposerDraftScope,
   DurableQuestionDraft,
 } from "./chat-types.ts";
+import { hasUnreadableFileReferences, readComposerFileReferences } from "./file-references.ts";
 import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { readHumanMentions } from "./human-mentions.ts";
 import { isChatReplyTarget } from "./reply-target.ts";
@@ -80,6 +81,7 @@ export function parseStoredDraft(value: unknown): StoredDurableComposerDraft | n
     record.revision <= 0 ||
     !Array.isArray(record.attachments) ||
     !record.attachments.every(isStoredAttachment) ||
+    hasUnreadableFileReferences(record) ||
     (record.questionDrafts !== undefined &&
       (!Array.isArray(record.questionDrafts) || !record.questionDrafts.every(isQuestionDraft))) ||
     (record.selectionAnnotations !== undefined &&
@@ -124,6 +126,7 @@ export function parseStoredDraft(value: unknown): StoredDurableComposerDraft | n
     };
   }
   record.mentions = readHumanMentions(record.text, record.mentions);
+  record.fileReferences = readComposerFileReferences(record.text, record.fileReferences);
   // SAFETY: the complete stored shape and every attachment payload were validated above.
   return record as StoredDurableComposerDraft;
 }

@@ -8,6 +8,7 @@ import type {
   ChatQueueItem,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
+import type { ComposerFileReference } from "../../lib/chat/file-references.ts";
 import type { readDraftRevisionState } from "../../lib/chat/outbox-store-draft-state.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
@@ -32,6 +33,7 @@ export type StoredChatComposerSnapshot = {
   draft: string;
   attachmentVersion?: string;
   mentions?: readonly HumanMention[];
+  fileReferences?: readonly ComposerFileReference[];
   goalMode?: ChatGoalDraftMode;
   replyTarget?: ChatReplyTarget;
   queue: ChatQueueItem[];
@@ -46,6 +48,7 @@ export type ChatComposerPersistOptions = {
   agentId?: string;
   draft?: string;
   mentions?: readonly HumanMention[];
+  fileReferences?: readonly ComposerFileReference[];
   goalMode?: ChatGoalDraftMode | null;
   replyTarget?: ChatReplyTarget | null;
   draftRevision?: number;
@@ -57,6 +60,7 @@ export type ChatComposerPersistenceState = ChatComposerScope & {
   sessionKey: string;
   chatMessage: string;
   chatMentions?: readonly HumanMention[];
+  chatFileReferences?: readonly ComposerFileReference[];
   chatGoalDraftMode?: ChatGoalDraftMode | null;
   chatReplyTarget?: ChatReplyTarget | null;
   chatAttachments?: ChatAttachment[];
@@ -77,6 +81,7 @@ export type ChatComposerDraftSnapshot = {
   sessionKey: string;
   chatMessage: string;
   mentions?: readonly HumanMention[];
+  fileReferences?: readonly ComposerFileReference[];
   goalMode?: ChatGoalDraftMode;
   replyTarget?: ChatReplyTarget;
   expectedDraftRevision: number;

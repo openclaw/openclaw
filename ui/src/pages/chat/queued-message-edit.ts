@@ -137,6 +137,7 @@ export function beginQueuedMessageEdit(
     !item ||
     !isMovableChatQueueItem(item) ||
     Boolean(item.attachmentStorageError) ||
+    Boolean(item.fileReferences?.length) ||
     Boolean(item.attachments?.some((attachment) => !getChatAttachmentDataUrl(attachment))) ||
     item.localCommandName ||
     activeQueuedMessageEdit(host) ||

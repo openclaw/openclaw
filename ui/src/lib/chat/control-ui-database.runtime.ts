@@ -1,7 +1,9 @@
 import { listen } from "../reactive/listener.ts";
 
 const DATABASE_NAME = "openclaw-control-ui";
-const DATABASE_VERSION = 2;
+// Older binaries silently drop reference identities. Their explicit v2 open must fail
+// after this upgrade; no record guessing or destructive migration is safe.
+const DATABASE_VERSION = 3;
 const STORE_NAME = "composerDrafts";
 const OWNER_INDEX = "ownerKey";
 let databasePromise: Promise<IDBDatabase> | null = null;

@@ -19,6 +19,7 @@ import type { LogsTailParams } from "./schema/logs-chat.js";
 import type * as PortalSchema from "./schema/portals.js";
 import type { PresenceActivityParams, PresenceQueryParams } from "./schema/presence.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
+import type { SessionsFilesReferencesParams } from "./schema/sessions-file-references.js";
 import type { SessionMemberSetAccessParams } from "./schema/sessions-sharing.js";
 import type { StorageLocationsListParams, StorageLocationsProbeParams } from "./schema/storage.js";
 import type * as TemplateDraftSchema from "./schema/template-drafts.js";
@@ -35,6 +36,7 @@ import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "sessions.files.references": SessionsFilesReferencesParams;
   "toolUsage.status": ToolUsageSchema.ToolUsageStatusParams;
   "toolUsage.import": ToolUsageSchema.ToolUsageImportParams;
   "toolUsage.reset": ToolUsageSchema.ToolUsageResetParams;

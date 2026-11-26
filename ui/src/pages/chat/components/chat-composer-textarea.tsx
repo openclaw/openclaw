@@ -51,6 +51,7 @@ export function renderComposerTextarea(
   const editorRef = createMentionComposerBinding(
     () => composer.getMentions?.() ?? composer.mentions ?? [],
     ownerState.mentionMenu.selectedAvatarUrls,
+    () => composer.getFileReferences?.() ?? composer.fileReferences ?? [],
   );
   const textareaRef = elementRef<HTMLTextAreaElement>((node) => {
     element = node;
@@ -77,6 +78,7 @@ export function renderComposerTextarea(
       <textarea
         id={inputId}
         data-composer-mentions={JSON.stringify(composer.mentions)}
+        data-composer-file-references={JSON.stringify(composer.fileReferences)}
         ref={[textareaRef, editorRef]}
 
         dir={detectTextDirection(value())}
@@ -163,6 +165,7 @@ export function renderComposerTextarea(
       <ComposerPluginPromptSlot
         text={context().visibleDraft}
         mentions={composer.mentions}
+        fileReferences={composer.fileReferences}
         disabled={Boolean(context().dictation?.active || context().predictionText)}
       />
     </>

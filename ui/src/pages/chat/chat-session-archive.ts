@@ -8,6 +8,7 @@ export function setSelectedChatSessionArchived(state: ChatPageHost, archived: bo
     releaseChatAttachmentPayloads(state.chatAttachments);
     state.chatMessage = "";
     state.chatMentions = [];
+    state.chatFileReferences = [];
     state.chatGoalDraftMode = null;
     state.chatReplyTarget = null;
     state.chatAttachments = [];

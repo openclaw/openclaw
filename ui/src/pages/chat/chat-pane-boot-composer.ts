@@ -26,7 +26,11 @@ export function adoptBootComposer(
   const saved = state.chatMessage.trim() ? state.chatMessage : "";
   const draft = saved ? `${saved}\n${boot.text}` : boot.text;
   if (boot.text) {
-    state.handleChatDraftChange(draft, saved ? (state.chatMentions ?? []) : []);
+    state.handleChatDraftChange(
+      draft,
+      saved ? (state.chatMentions ?? []) : [],
+      saved ? (state.chatFileReferences ?? []) : [],
+    );
     if (boot.submit && !saved) {
       queueComposerSubmit(composer, draft);
     }

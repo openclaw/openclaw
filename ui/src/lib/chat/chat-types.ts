@@ -16,6 +16,7 @@ import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-wor
 import type { CyberAccessProgram } from "../../api/types.ts";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { IconName } from "../../components/icon-data.ts";
+import type { ComposerFileReference } from "./file-references.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
 export type { HumanMention };
@@ -94,6 +95,7 @@ export type DurableComposerDraft = {
   attachmentVersion?: string;
   text: string;
   mentions?: readonly HumanMention[];
+  fileReferences?: readonly ComposerFileReference[];
   goalMode?: ChatGoalDraftMode;
   replyTarget?: ChatReplyTarget;
   modelSelection?: DurableDraftModelSelection;
@@ -143,6 +145,7 @@ export type ChatComposerMemoryFallback = {
   replyTarget?: ChatReplyTarget;
   message: string;
   mentions?: readonly HumanMention[];
+  fileReferences?: readonly ComposerFileReference[];
   attachments: ChatAttachment[];
   storageFailed: boolean;
   draftRetry?: ChatComposerDraftRetry;
@@ -181,6 +184,7 @@ export type ChatQueueItem = {
   workContextUnavailable?: true;
   text: string;
   mentions?: readonly HumanMention[];
+  fileReferences?: readonly ComposerFileReference[];
   createdAt: number;
   /** Stable arrival position; only an explicit reorder moves an existing input. */
   orderKey?: number;

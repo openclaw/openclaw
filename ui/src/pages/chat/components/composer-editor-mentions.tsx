@@ -17,6 +17,7 @@ import type { ApplicationContext } from "../../../app/context-types.ts";
 import { PersonReferenceLabel } from "../../../components/solid/person-reference-label.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
+import type { ComposerFileReference } from "../../../lib/chat/file-references.ts";
 import {
   MENTION_AFTER,
   MENTION_BEFORE,
@@ -33,11 +34,8 @@ import {
 } from "../../../lib/chat/human-mentions.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import {
-  mountComposerEditor,
-  type ComposerEditorOptions,
-  type ComposerEditorSnapshot,
-} from "./composer-editor-view.tsx";
+import { mountFileReferenceComposerEditor } from "./composer-editor-file-references.ts";
+import type { ComposerEditorOptions, ComposerEditorSnapshot } from "./composer-editor-view.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
@@ -397,6 +395,7 @@ export function mountMentionComposerEditor(
   application?: ApplicationContext,
   nativeHistory?: ComposerMentionSnapshot,
   avatarUrls?: ReadonlyMap<string, string>,
+  fileReferences: () => readonly ComposerFileReference[] = () => [],
 ) {
   const initialHistory =
     nativeHistory && precedesSelection(nativeHistory.value, input.value)
@@ -667,7 +666,7 @@ export function mountMentionComposerEditor(
       }
     },
   };
-  const editor = mountComposerEditor(input, options, initialHistory);
+  const editor = mountFileReferenceComposerEditor(input, fileReferences, options, initialHistory);
   return {
     sync: editor.sync,
     destroy: editor.destroy,

@@ -7,6 +7,10 @@ import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
+import {
+  updateComposerFileReferences,
+  type ComposerFileReference,
+} from "../../lib/chat/file-references.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
@@ -48,6 +52,7 @@ export function renderComposerInto(container: HTMLElement, props: ComposerProps)
     const draftSource = createComposerDraftSource(() => ({
       draft: owner.getDraft?.() ?? owner.draft,
       mentions: owner.getMentions?.() ?? owner.mentions ?? [],
+      fileReferences: owner.getFileReferences?.() ?? owner.fileReferences ?? [],
       attachments: owner.getAttachments?.() ?? owner.attachments ?? [],
       pendingAttachmentReads:
         owner.getPendingAttachmentReads?.() ?? owner.pendingAttachmentReads ?? 0,
@@ -63,14 +68,22 @@ export function renderComposerInto(container: HTMLElement, props: ComposerProps)
           draftSource.publish();
         }
       },
-      onDraftChange: (value: string, mentions?: readonly HumanMention[]) => {
+      onDraftChange: (
+        value: string,
+        mentions?: readonly HumanMention[],
+        fileReferences?: readonly ComposerFileReference[],
+      ) => {
         const previous = owner.getDraft?.() ?? owner.draft;
-        owner.onDraftChange(value, mentions);
+        owner.onDraftChange(value, mentions, fileReferences);
         if (!owner.draftSource) {
           owner.mentions =
             owner.getMentions?.() ??
             mentions ??
             updateHumanMentions(previous, value, owner.mentions);
+          owner.fileReferences =
+            owner.getFileReferences?.() ??
+            fileReferences ??
+            updateComposerFileReferences(previous, value, owner.fileReferences);
           owner.draft = owner.getDraft?.() ?? value;
           draftSource.publish();
         }

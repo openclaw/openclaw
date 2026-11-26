@@ -4,6 +4,7 @@ import type {
   ChatReplyTarget,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
+import type { ComposerFileReference } from "../../lib/chat/file-references.ts";
 
 /** Preserve meaningful spacing while treating an all-whitespace draft as empty. */
 export function normalizeChatComposerDraft(value: string): string {
@@ -16,6 +17,7 @@ export function chatAttachmentDraftSignature(
   goalMode?: ChatGoalDraftMode | null,
   mentions?: readonly HumanMention[],
   replyTarget?: ChatReplyTarget | null,
+  fileReferences?: readonly ComposerFileReference[],
 ): string {
   // Admission and recovery mint a new ID for each payload. Preview URLs and
   // moving the same bytes between Blob/data-URL storage do not change that owner.
@@ -23,6 +25,7 @@ export function chatAttachmentDraftSignature(
     text,
     goalMode ?? null,
     mentions ?? [],
+    fileReferences ?? [],
     replyTarget
       ? [
           replyTarget.messageId,

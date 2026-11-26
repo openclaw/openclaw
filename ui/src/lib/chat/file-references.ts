@@ -1,0 +1,120 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isFileReference, type FileReference } from "../../../../src/shared/file-references.js";
+
+export type ComposerFileReference = {
+  start: number;
+  end: number;
+  reference: FileReference;
+};
+
+/** Display-only escaping; the canonical path remains byte-for-byte provider data. */
+export function fileReferenceText(reference: FileReference): string {
+  return `@${reference.relativePath.replace(
+    // oxlint-disable-next-line eslint/no-control-regex -- Inert labels must expose control and bidi characters.
+    /[\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/gu,
+    (character) => `\\u{${character.codePointAt(0)!.toString(16)}}`,
+  )}`;
+}
+
+/** Storage and editor import boundary: visible text cannot retarget an object. */
+export function readComposerFileReferences(
+  text: string,
+  value: unknown,
+): readonly ComposerFileReference[] | undefined {
+  if (!Array.isArray(value) || value.length > 64) {
+    return undefined;
+  }
+  const references: ComposerFileReference[] = [];
+  let end = 0;
+  for (const entry of value) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.start !== "number" ||
+      !Number.isSafeInteger(entry.start) ||
+      typeof entry.end !== "number" ||
+      !Number.isSafeInteger(entry.end) ||
+      entry.start < end ||
+      entry.end <= entry.start ||
+      entry.end > text.length ||
+      !isFileReference(entry.reference) ||
+      text.slice(entry.start, entry.end) !== fileReferenceText(entry.reference)
+    ) {
+      return undefined;
+    }
+    references.push({ start: entry.start, end: entry.end, reference: entry.reference });
+    end = entry.end;
+  }
+  return references;
+}
+
+let editorEdit: { text: string; references: readonly ComposerFileReference[] } | undefined;
+
+/** Metadata accompanies the existing synchronous input event, never a later patch. */
+export function withComposerFileReferenceEdit<T>(
+  text: string,
+  references: readonly ComposerFileReference[],
+  run: () => T,
+): T {
+  const previous = editorEdit;
+  editorEdit = { text, references };
+  try {
+    return run();
+  } finally {
+    editorEdit = previous;
+  }
+}
+
+export function readComposerFileReferenceEdit(text: string) {
+  return editorEdit?.text === text ? editorEdit.references : undefined;
+}
+
+export function updateComposerFileReferences(
+  previous: string,
+  next: string,
+  references: readonly ComposerFileReference[] = [],
+): readonly ComposerFileReference[] {
+  const selected = readComposerFileReferenceEdit(next);
+  if (selected) {
+    return selected;
+  }
+  if (previous === next) {
+    return references;
+  }
+  let start = 0;
+  while (start < previous.length && start < next.length && previous[start] === next[start]) {
+    start += 1;
+  }
+  let suffix = 0;
+  const shared = Math.min(previous.length, next.length);
+  while (
+    suffix < shared &&
+    previous[previous.length - suffix - 1] === next[next.length - suffix - 1]
+  ) {
+    suffix += 1;
+  }
+  let previousEnd = previous.length - suffix;
+  if (start + suffix > shared) {
+    previousEnd = start + Math.max(0, previous.length - next.length);
+    start = shared - suffix;
+  }
+  const delta = next.length - previous.length;
+  return references.flatMap((reference) => {
+    if (reference.end <= start) {
+      return [reference];
+    }
+    if (reference.start >= previousEnd) {
+      return [{ ...reference, start: reference.start + delta, end: reference.end + delta }];
+    }
+    return [];
+  });
+}
+
+/** A future identity schema must not be erased by a reader that cannot decode it. */
+export function hasUnreadableFileReferences(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.fileReferences !== undefined &&
+    (typeof value.text !== "string" ||
+      readComposerFileReferences(value.text, value.fileReferences) === undefined)
+  );
+}

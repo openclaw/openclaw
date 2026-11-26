@@ -20,6 +20,8 @@ export function createComposerDictationOptions(
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
+    onCapture: () => state.fileReferences?.capture(),
+    onCancelCapture: () => state.fileReferences?.cancel(),
     onCommit: (transcript: string, late?: true, preservePreview?: true) => {
       const target = state.composerTextarea;
       const captured = state.dictationSelection;
@@ -34,12 +36,13 @@ export function createComposerDictationOptions(
           start: target?.selectionStart ?? liveValue.length,
           end: target?.selectionEnd ?? liveValue.length,
           value: liveValue,
+          maxLength: target?.maxLength,
         },
         late,
         preservePreview,
       );
       if (!insertion) {
-        return;
+        return undefined;
       }
       if (target) {
         target.value = insertion.value;
@@ -49,12 +52,23 @@ export function createComposerDictationOptions(
       state.dictationSelection = insertion.captured;
       queueMicrotask(() => {
         const textarea = state.composerTextarea;
-        if (!textarea) {
+        if (!textarea || textarea !== target) {
           return;
         }
         focusComposerInput(textarea, { preventScroll: true });
         selectComposerInput(textarea, insertion.caret, insertion.caret);
       });
+      return target
+        ? {
+            target,
+            text: insertion.value.slice(insertion.from, insertion.to),
+            complete: insertion.value.slice(insertion.from, insertion.to) === transcript.trim(),
+            from: insertion.from,
+            to: insertion.to,
+            previousValue: insertion.previousValue,
+            value: insertion.value,
+          }
+        : undefined;
     },
     onError: (
       message: string,

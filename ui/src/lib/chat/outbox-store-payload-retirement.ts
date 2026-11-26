@@ -29,7 +29,7 @@ export function retireRemovedOutboxPayloads(
       }
       if (
         !isRecord(value) ||
-        value.version !== 4 ||
+        (value.version !== 4 && value.version !== 5) ||
         value.gatewayOwner !== target.gatewayOwner ||
         !isRecord(value.sessions) ||
         !isRecord(value.recovery)

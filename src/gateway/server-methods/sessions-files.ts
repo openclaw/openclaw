@@ -18,6 +18,7 @@ import {
   validateSessionsFilesListParams,
   validateSessionsFilesSetParams,
   validateSessionsFilesStatParams,
+  validateSessionsFilesReferencesParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { loadAgentIdentityFromWorkspaceAsync } from "../../agents/identity-file.js";
@@ -63,6 +64,7 @@ import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import { getSessionWorkspaceAssets } from "./sessions-file-assets.js";
 import { respondSessionFileDownload } from "./sessions-file-download.js";
+import { handleSessionFilesReferences } from "./sessions-files-references.js";
 import { handleSessionFilesStat } from "./sessions-files-stat.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
@@ -373,6 +375,11 @@ async function handleSessionFilesRead(
 }
 
 export const sessionsFilesHandlers: GatewayRequestHandlers = {
+  "sessions.files.references": defineValidatedGatewayHandler(
+    "sessions.files.references",
+    validateSessionsFilesReferencesParams,
+    handleSessionFilesReferences,
+  ),
   "sessions.files.download": defineValidatedGatewayHandler(
     "sessions.files.download",
     validateSessionsFilesDownloadParams,

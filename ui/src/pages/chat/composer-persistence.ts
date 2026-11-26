@@ -50,6 +50,7 @@ function restoreChatComposerState(
   ) {
     state.chatMessage = snapshot.draft;
     state.chatMentions = snapshot.mentions;
+    state.chatFileReferences = snapshot.fileReferences;
     state.chatGoalDraftMode = snapshot.goalMode ?? null;
     state.chatReplyTarget = snapshot.replyTarget ?? null;
   }
@@ -126,6 +127,8 @@ export class ChatComposerPersistence {
       (state.chatAttachments?.length ?? 0) > 0 ||
       (stored?.draft ?? "") !== state.chatMessage ||
       JSON.stringify(stored?.mentions ?? []) !== JSON.stringify(state.chatMentions ?? []) ||
+      JSON.stringify(stored?.fileReferences ?? []) !==
+        JSON.stringify(state.chatFileReferences ?? []) ||
       JSON.stringify(stored?.goalMode ?? null) !==
         JSON.stringify(state.chatGoalDraftMode ?? null) ||
       JSON.stringify(stored?.replyTarget ?? null) !== JSON.stringify(state.chatReplyTarget ?? null);
@@ -260,6 +263,8 @@ export class ChatComposerPersistence {
         storedRevision === baseline.draftRevision &&
         stored?.draft === baseline.chatMessage &&
         JSON.stringify(stored?.mentions ?? []) === JSON.stringify(baseline.mentions ?? []) &&
+        JSON.stringify(stored?.fileReferences ?? []) ===
+          JSON.stringify(baseline.fileReferences ?? []) &&
         JSON.stringify(stored?.goalMode ?? null) === JSON.stringify(baseline.goalMode ?? null) &&
         JSON.stringify(stored?.replyTarget ?? null) === JSON.stringify(baseline.replyTarget ?? null)
       ) {
@@ -322,6 +327,7 @@ export class ChatComposerPersistence {
         ? persistCapturedChatComposerStateResult(state, snapshot, {
             draft: snapshot.chatMessage,
             mentions: snapshot.mentions,
+            fileReferences: snapshot.fileReferences,
             goalMode: snapshot.goalMode ?? null,
             replyTarget: snapshot.replyTarget ?? null,
             draftRevision: snapshot.draftRevision,
@@ -392,6 +398,7 @@ export class ChatComposerPersistence {
         snapshot.goalMode,
         snapshot.mentions,
         snapshot.replyTarget,
+        snapshot.fileReferences,
       ) === this.#currentContentSignature(state, normalizeChatComposerDraft(state.chatMessage))
     );
   }
@@ -403,6 +410,7 @@ export class ChatComposerPersistence {
       state.chatGoalDraftMode,
       state.chatMentions,
       state.chatReplyTarget,
+      state.chatFileReferences,
     );
   }
 
@@ -480,6 +488,7 @@ export class ChatComposerPersistence {
       releaseChatAttachmentPayloads(state.chatAttachments);
       state.chatMessage = "";
       state.chatMentions = [];
+      state.chatFileReferences = [];
       state.chatGoalDraftMode = null;
       state.chatReplyTarget = null;
       state.chatAttachments = [];
@@ -556,6 +565,7 @@ export class ChatComposerPersistence {
         if (!newerCaption) {
           state.chatMessage = normalizeChatComposerDraft(draft.text);
           state.chatMentions = draft.mentions;
+          state.chatFileReferences = draft.fileReferences;
           state.chatGoalDraftMode = draft.goalMode ?? null;
           state.chatReplyTarget = draft.replyTarget ?? null;
         }
@@ -578,6 +588,7 @@ export class ChatComposerPersistence {
           agentId: resolveUiConversationIdentity(state, state.sessionKey).agentId,
           draft: state.chatMessage,
           mentions: state.chatMentions,
+          fileReferences: state.chatFileReferences,
           goalMode: state.chatGoalDraftMode,
           replyTarget: state.chatReplyTarget,
           draftRevision: adoptedRevision,
