@@ -86,7 +86,8 @@ export class PreparedCatalogContexts<T extends Generation> {
     const next = {
       ...admission.identity,
       prepared,
-      owners: previous?.owners ?? new Set(admission.owner === undefined ? [] : [admission.owner]),
+      // The detached predecessor keeps its own ownership until physical cleanup settles.
+      owners: new Set(previous?.owners ?? (admission.owner === undefined ? [] : [admission.owner])),
       unknownOwner: previous?.unknownOwner ?? admission.owner === undefined,
     };
     this.contexts.set(admission.identity.workspaceDir, next);
@@ -97,6 +98,10 @@ export class PreparedCatalogContexts<T extends Generation> {
     if (this.get(admission.identity.workspaceDir) === admission.previous) {
       this.contexts.delete(admission.identity.workspaceDir);
     }
+  }
+
+  private detached(admission: Admission<T>) {
+    return [...admission.touched].filter((context) => this.get(context.workspaceDir) !== context);
   }
 
   recordCleanupFailure(owner: string | undefined, error: unknown): void {
@@ -177,7 +182,10 @@ export class PreparedCatalogContexts<T extends Generation> {
       active.retired = true;
     }
     const releases: Promise<void>[] = [];
-    let joinsActive = active?.owner === owner;
+    let joinsActive =
+      active !== undefined &&
+      (active.owner === owner ||
+        this.detached(active).some((context) => context.owners.has(owner)));
     for (const [workspace, context] of this.contexts) {
       context.owners.delete(owner);
       if (context.owners.size || context.unknownOwner) {
@@ -210,17 +218,12 @@ export class PreparedCatalogContexts<T extends Generation> {
   async finish(admission: Admission<T>): Promise<void> {
     try {
       const results: PromiseSettledResult<void>[] = [];
-      // A retirement can detach the successor while its predecessor releases.
-      // Claim each detached generation once, then drain again before settling.
+      // Detachment makes cleanup joinable even before release can start. Keep that claim
+      // visible until disposal settles, then drain any successor detached in the meantime.
       for (;;) {
-        const detached = [...admission.touched].filter(
-          (context) => this.get(context.workspaceDir) !== context,
-        );
+        const detached = this.detached(admission);
         if (!detached.length) {
           break;
-        }
-        for (const context of detached) {
-          admission.touched.delete(context);
         }
         results.push(
           ...(await Promise.allSettled(
@@ -232,6 +235,9 @@ export class PreparedCatalogContexts<T extends Generation> {
             ),
           )),
         );
+        for (const context of detached) {
+          admission.touched.delete(context);
+        }
       }
       throwIfSettledRejected(results, "Catalog cleanup failed");
       admission.settled?.resolve();

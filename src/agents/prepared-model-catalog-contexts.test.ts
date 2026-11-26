@@ -196,7 +196,7 @@ it("observes completed disposal faults without fencing a subsequent deletion", a
   expect(prepared.release).toHaveBeenCalledOnce();
 });
 
-it.each(["replacement", "scope growth"])(
+it.each(["replacement", "scope growth", "failed replacement"])(
   "keeps shared predecessor cleanup with both owners during %s",
   async (mode) => {
     const contexts = new PreparedCatalogContexts<TestGeneration>();
@@ -204,22 +204,39 @@ it.each(["replacement", "scope growth"])(
     const neighbor = await seed(contexts, elsewhere, "neighbor");
     const admitted = contexts.begin(identity("workspace", "next"), second);
     const cleanup = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const candidateReleased = Promise.withResolvers<void>();
     const retained = new PluginRuntimeCloseRetainedError(new Error("predecessor retained"));
-    predecessor.release.mockImplementation(() => cleanup.promise);
+    predecessor.release.mockImplementation(() => {
+      started.resolve();
+      return cleanup.promise;
+    });
     const releasePredecessor = predecessor.release;
     let finishing: Promise<void>;
     if (mode === "replacement") {
       contexts.publish(admitted, generation());
       finishing = contexts.finish(admitted);
-    } else {
+    } else if (mode === "scope growth") {
       predecessor.release = generation().release;
       finishing = contexts
         .releaseGeneration(second, predecessor, releasePredecessor)
+        .finally(() => contexts.finish(admitted));
+    } else {
+      const attempted = generation();
+      attempted.release.mockImplementation(() => candidateReleased.promise);
+      contexts.invalidate(admitted);
+      finishing = contexts
+        .releaseGeneration(second, attempted)
         .finally(() => contexts.finish(admitted));
     }
     const closed = expect(finishing).rejects.toBe(retained);
     const deletion = expect(contexts.retire([first])).rejects.toBe(retained);
     await contexts.retire(["unrelated"]);
+    if (mode === "failed replacement") {
+      expect(releasePredecessor).not.toHaveBeenCalled();
+      candidateReleased.resolve();
+    }
+    await started.promise;
     cleanup.reject(retained);
     await Promise.all([closed, deletion]);
     await expect(contexts.retire([first])).rejects.toBe(retained);
