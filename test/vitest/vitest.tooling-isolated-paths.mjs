@@ -2,6 +2,8 @@
 export const toolingIsolatedTestFiles = [
   // Personal account authority uses the host-owned shared-state broker.
   "test/codex-account-usage.integration.test.ts",
+  // CLI steering records and reconciles submitted inputs through the host database broker.
+  "test/sessions-send-cli-steering.integration.test.ts",
   // The real migration owner acquires maintenance authority through the main-thread broker.
   "test/scripts/upgrade-survivor-migration-chain.test.ts",
   // The admitted Browser fixture mutates the global runtime config snapshot.

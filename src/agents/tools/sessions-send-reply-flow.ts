@@ -372,7 +372,9 @@ export async function finishSessionsSendReply(params: {
   const accepted = () =>
     jsonResult({
       runId,
-      status: "accepted",
+      ...(start.submittedMessageId
+        ? { status: "submitted", consumption: "unconfirmed", messageId: start.submittedMessageId }
+        : { status: "accepted" }),
       sessionKey: replyContext.displayKey,
       targetDisposition: start.targetDisposition,
       delivery: delayedDelivery,

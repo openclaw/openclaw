@@ -486,6 +486,8 @@ not authentication or isolation from other processes running as the same OS user
 
 Peers and Control UI requesters receive the settled reply once. The requester response is not fed back into the target, and no target announcement turn is generated. Delivery to the target's own channel does not suppress a distinct requester's reply.
 
+When `sessions_send` steers a busy CLI turn with `timeoutSeconds: 0`, it can return `status: "submitted"` and `consumption: "unconfirmed"`. The transport wrote the input, but that does not confirm the runtime consumed it. Do not resend it while consumption is unconfirmed. Pass the returned `sessionKey` and `messageId` to `sessions_history` to find the input once the runtime starts it. To inspect a pending receipt, query the Gateway's `chat.history` with `inputRunIds: [runId]`. A receipt with `cancelled: true` means the Gateway stopped waiting for that input. After a restart, neither cancellation nor a missing history entry proves the runtime never consumed it.
+
 Nonblocking sends retain the requester's reply authority before returning. Finishing
 the requester turn does not cancel the accepted reply; access revocation or Gateway
 replacement still stops it.

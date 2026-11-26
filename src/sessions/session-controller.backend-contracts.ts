@@ -62,6 +62,8 @@ export type ReplyBackendQueueMessageOptions = {
   /** Stable source identity for exact queued-message commit/cancellation matching. */
   queueIdentity?: string;
   abortSignal?: AbortSignal;
+  /** A zero-wait sender can take a provisional receipt when the CLI submits a staged input. */
+  submissionReceipt?: { runId: string; onSubmitted: (messageId: string) => void };
   /** Releases arrival ordering once the runtime has actually accepted this queue item. */
   onQueueAccepted?: (accepted: boolean) => void;
   /** Releases per-input custody after commit, cancellation, or terminal rejection. */

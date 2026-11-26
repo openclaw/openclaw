@@ -1,5 +1,6 @@
 import {
   MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionAuthorityError,
   withMessageInjectionAdmission,
 } from "../../auto-reply/reply/message-injection-authority.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
@@ -17,6 +18,7 @@ import type {
   ReplyBackendQueueMessageOptions,
   ReplyBackendQueueMessageResult,
 } from "../../sessions/session-controller.contracts.js";
+import { getUserTurnTranscriptAdmissionOwner } from "../../sessions/user-turn-transcript-admission.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { loadCliPromptImages } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
@@ -52,6 +54,11 @@ export function createSteeredCliMessageInjection(params: {
     let failure: Error | undefined;
     let result: ReplyBackendQueueMessageResult | undefined;
     const recorder = options?.userTurnTranscriptRecorder;
+    const receipt = options?.submissionReceipt;
+    let messageId: string | undefined;
+    let staged = false;
+    let submitted = false;
+    let withdrawn = false;
     try {
       const message = await recorder?.resolveMessage();
       // Same hydration as the turn's first prompt; admission already required acceptsImages.
@@ -93,7 +100,27 @@ export function createSteeredCliMessageInjection(params: {
       const nativeInput = await injection.queueMessage(
         steeredText,
         async (submit) => {
-          let submitted = false;
+          if (receipt) {
+            try {
+              staged =
+                (await recorder?.stageApproved?.({
+                  runId: receipt.runId,
+                  assertCurrent: assertInjectionCurrent,
+                  // Once submitted, only the receiving run and store own this input.
+                  assertAdmittedCurrent: () => params.signal.throwIfAborted(),
+                })) === true;
+              messageId =
+                recorder && getUserTurnTranscriptAdmissionOwner(recorder)?.pendingInput()?.inputId;
+              if (!staged || !messageId || recorder?.validateCommittedReplay) {
+                throw new Error(
+                  "Couldn't record a receipt for this steering message. Check the target session before retrying.",
+                );
+              }
+            } catch (cause) {
+              // Unavailable or previously consumed custody never authorizes a new turn.
+              throw new MessageInjectionAuthorityError({ cause });
+            }
+          }
           try {
             await withMessageInjectionAdmission(prepareCurrent, () => {
               // The same worker-backed admission owns source checks and native stdin.
@@ -113,6 +140,19 @@ export function createSteeredCliMessageInjection(params: {
         {
           ...(isHostGeneratedInputProvenance(message?.provenance)
             ? { promptOrigin: "host" as const }
+            : {}),
+          ...(receipt
+            ? {
+                onInputDisposition: (disposition) => {
+                  if (disposition === "withdrawn") {
+                    withdrawn = true;
+                  } else if (messageId && !withdrawn) {
+                    // Release sender ordering after the transport write, not after consumption.
+                    options?.onQueueAccepted?.(true);
+                    receipt.onSubmitted(messageId);
+                  }
+                },
+              }
             : {}),
           ...(promptContext ? { promptContext } : {}),
           ...(images.length > 0 ? { images } : {}),
@@ -148,6 +188,21 @@ export function createSteeredCliMessageInjection(params: {
       failure = toErrorObject(error, "CLI steering failed.");
     }
     try {
+      if (staged) {
+        if (recorder?.isPendingInputConsumed?.()) {
+          recorder.releasePendingInput?.();
+        } else {
+          recorder?.finishPendingInput?.(
+            !submitted || withdrawn ? "cancelled" : "interrupted",
+            "failed",
+          );
+        }
+        await recorder?.waitForPendingInputSettlement?.();
+      }
+    } catch (error) {
+      failure ??= toErrorObject(error, "CLI steering receipt settlement failed.");
+    }
+    try {
       // This receipt is terminal even when persistence failed; the registry retains
       // accepted-input disposition without replaying or canceling an unconfirmed turn.
       options?.onQueueSettled?.();
@@ -156,6 +211,12 @@ export function createSteeredCliMessageInjection(params: {
     }
     if (failure) {
       if (!accepted) {
+        // A failed write callback cannot prove that no bytes reached the runtime.
+        if (receipt && submitted) {
+          throw withdrawn
+            ? new MessageInjectionAuthorityError({ cause: failure })
+            : new MessageInjectionAcceptedUnconfirmedError({ cause: failure });
+        }
         throw failure;
       }
       // Completion observers can throw too. Never downgrade native acceptance to rejection.

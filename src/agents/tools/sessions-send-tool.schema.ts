@@ -95,6 +95,19 @@ export const SessionsSendOutputSchema = Type.Union([
   Type.Object(
     {
       runId: Type.String(),
+      status: Type.Literal("submitted"),
+      consumption: Type.Literal("unconfirmed"),
+      messageId: Type.String(),
+      sessionKey: Type.String(),
+      targetDisposition: Type.Literal("steered"),
+      delivery: SessionsSendDeliverySchema,
+      watched: Type.Optional(Type.Boolean()),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      runId: Type.String(),
       status: Type.Literal("accepted"),
       sessionKey: Type.String(),
       targetDisposition: Type.Union([Type.Literal("queued"), Type.Literal("steered")]),

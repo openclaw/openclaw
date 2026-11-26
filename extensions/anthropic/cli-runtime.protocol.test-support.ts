@@ -216,6 +216,17 @@ for await (const line of createInterface({ input: process.stdin })) {
         lifecycle("completed", firstInputUuid);
       }
       if (scenario !== "steer-refused") lifecycle("queued", message.uuid);
+      if (scenario === "steer-delayed") {
+        ready("input.queued");
+        while (!existsSync("input.release")) await delay(5);
+        if (process.env.CLAUDE_FIXTURE_STEER_OUTCOME === "disconnected") process.exit(1);
+        if (process.env.CLAUDE_FIXTURE_STEER_OUTCOME === "withdrawn") {
+          result();
+          lifecycle("completed", firstInputUuid);
+          lifecycle("refused", message.uuid);
+          continue;
+        }
+      }
       if (scenario === "steer-exit") {
         process.exit(1);
       }

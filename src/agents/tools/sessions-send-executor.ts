@@ -625,6 +625,7 @@ export async function executeSessionsSend(
           // A parent's guidance belongs in its busy child's current run; a queued turn would
           // start after that run finished and redo its work. Other targets steer only zero-wait.
           allowActiveRunQueueDelivery: !sameSession && (timeoutSeconds === 0 || ownChild),
+          reportSubmission: timeoutSeconds === 0,
           expectedSessionId,
           preparedTargetSessionId: targetSessionEntry?.sessionId,
           assertSendCurrent: communication.assertCurrent,

@@ -3,9 +3,9 @@ import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import type {
   CliBackendExecuteContext,
-  CliBackendInputImage,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
+  CliBackendMessageInjection,
   CliBackendToolPermissionResult,
 } from "openclaw/plugin-sdk/cli-backend";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
@@ -18,7 +18,7 @@ import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
 import * as promptHooks from "./cli-runtime-prompt-context.js";
 import { createClaudeTurnStatus } from "./cli-runtime-status.js";
 import * as tasks from "./cli-runtime-tasks.js";
-import { createClaudeCliTransport } from "./cli-transport.js";
+import { createClaudeCliTransport, createUserInput } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -52,6 +52,7 @@ type ClaudeCliTurn = {
       text: string;
       promptContext?: CliBackendExecuteContext["promptContext"];
       started: ReturnType<typeof createDeferred<void>>;
+      onWithdrawn?: () => void;
     }
   >;
   /**
@@ -222,37 +223,6 @@ async function handleRequest(
   throw new Error("Unknown Claude CLI hook callback.");
 }
 
-function createUserInput(
-  context: CliBackendExecuteContext,
-  text: string,
-  uuid: string,
-  hostGenerated = false,
-  images: readonly CliBackendInputImage[] = [],
-) {
-  return {
-    type: "user",
-    // Same-turn images go to the model as native content blocks; the first prompt uses @paths.
-    message: {
-      role: "user",
-      content: images.length
-        ? [
-            // Anthropic rejects empty text blocks; an image-only input sends just the images.
-            ...(text ? [{ type: "text", text }] : []),
-            ...images.map(({ data, mimeType }) => ({
-              type: "image",
-              source: { type: "base64", media_type: mimeType, data },
-            })),
-          ]
-        : text,
-    },
-    parent_tool_use_id: null,
-    uuid,
-    // Claude saves synthetic input as a meta row: the model reads it, history never shows it.
-    ...(hostGenerated ? { isSynthetic: true } : {}),
-    ...(context.sessionId ? { session_id: context.sessionId } : {}),
-  };
-}
-
 function rejectInjectedInputs(turn: ClaudeCliTurn, error: Error) {
   for (const input of turn.injectedInputs.values()) {
     input.started.reject(error);
@@ -268,9 +238,7 @@ async function injectInput(
   turn: ClaudeCliTurn,
   text: string,
   withCurrent: (submit: () => void) => Promise<void>,
-  options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext"> & {
-    images?: readonly CliBackendInputImage[];
-  },
+  options?: Parameters<CliBackendMessageInjection["queueMessage"]>[2],
 ) {
   const uuid = randomUUID();
   const started = createDeferred<void>();
@@ -282,7 +250,12 @@ async function injectInput(
     if (!session.transport || !canInjectInput(session, turn)) {
       throw new Error("The Claude CLI turn cannot accept more input.");
     }
-    turn.injectedInputs.set(uuid, { text, started, promptContext: options?.promptContext });
+    turn.injectedInputs.set(uuid, {
+      text,
+      started,
+      promptContext: options?.promptContext,
+      onWithdrawn: () => options?.onInputDisposition?.("withdrawn"),
+    });
     turn.submittedInputUuids.add(uuid);
     written = session.transport.send(
       createUserInput(turn.context, text, uuid, options?.promptOrigin === "host", options?.images),
@@ -299,6 +272,7 @@ async function injectInput(
     turn.injectedInputs.delete(uuid);
     throw error;
   }
+  options?.onInputDisposition?.("written");
   await started.promise;
   const { nativeSessionId: cliSessionId } = session;
   return cliSessionId ? { cliSessionId, externalId: uuid } : undefined;
@@ -414,6 +388,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     const injected = injectedUuid ? turn.injectedInputs.get(injectedUuid) : undefined;
     if (injected && injectedUuid && message.state === "started") {
       turn.promptInputUuid = injectedUuid;
+      injected.onWithdrawn = undefined;
       injected.started.resolve();
       await emitHeldInterimResult(turn);
     } else if (
@@ -430,6 +405,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
         // Native may omit started on a terminal receipt; completion still proves consumption.
         injected.started.resolve();
       } else {
+        injected.onWithdrawn?.();
         injected.started.reject(new Error(`Claude CLI ${message.state} the injected input.`));
       }
       turn.injectedInputs.delete(injectedUuid);

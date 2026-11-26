@@ -20,7 +20,10 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import type { ReplyMessageInjectionOptions } from "../../sessions/session-controller.contracts.js";
-import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import {
+  captureReplyMessageInjectionTarget,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
 import {
   steerSessionControllerOperation,
   type SessionControllerSteerResult,
@@ -160,6 +163,7 @@ type SessionsSendDeliveryParams = {
   sessionKey: string;
   sessionStoreTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
   allowActiveRunQueueDelivery?: boolean;
+  reportSubmission?: boolean;
   expectedSessionId?: string;
   /** Communication binds an incarnation without claiming result ownership or forbidding Cron fallback. */
   preparedTargetSessionId?: string;
@@ -185,6 +189,7 @@ export type SessionsSendStart =
       ok: true;
       runId: string;
       targetDisposition: "queued" | "steered";
+      submittedMessageId?: string;
       steeredRunId?: string;
       a2aSessionKey?: string;
       a2aSession?: AgentStepSession;
@@ -248,6 +253,8 @@ export async function trySessionsSendActiveRunDelivery(
         }
         return {};
       }
+      const submitted = params.reportSubmission ? createDeferredCore<string>() : undefined;
+      let targetRunId: string | undefined;
       const queue = async (
         assertCurrent: () => void,
         lifecycle: Pick<ReplyMessageInjectionOptions, "onQueueAccepted" | "onQueueSettled"> = {},
@@ -268,6 +275,9 @@ export async function trySessionsSendActiveRunDelivery(
             requesterOrigin,
             config: params.admissionConfig,
           },
+          ...(submitted
+            ? { submissionReceipt: { runId: params.runId, onSubmitted: submitted.resolve } }
+            : {}),
           steeringMode: "all",
           debounceMs: 0,
           ...lifecycle,
@@ -301,6 +311,9 @@ export async function trySessionsSendActiveRunDelivery(
             },
           }),
         };
+        if (submitted) {
+          targetRunId = captureReplyMessageInjectionTarget(activeOperation)?.runId;
+        }
         return await steerSessionControllerOperation({
           operation: activeOperation,
           text: messageText,
@@ -309,8 +322,8 @@ export async function trySessionsSendActiveRunDelivery(
           options: queueOptions,
         });
       };
-      const steer = selection.operatorAuthority
-        ? await queueSessionsSendSteeringWithCustody(
+      const steering = selection.operatorAuthority
+        ? queueSessionsSendSteeringWithCustody(
             {
               sessionKey: params.sessionKey,
               sessionId: activeRunSessionId,
@@ -320,13 +333,24 @@ export async function trySessionsSendActiveRunDelivery(
             selection.assertCurrent,
             queue,
           )
-        : await queue(selection.assertCurrent);
-      if (steer.status === "accepted") {
+        : queue(selection.assertCurrent);
+      const steer = await (submitted
+        ? Promise.race([
+            steering,
+            submitted.promise.then((messageId) => ({
+              status: "submitted" as const,
+              targetRunId,
+              messageId,
+            })),
+          ])
+        : steering);
+      if (steer.status === "submitted" || steer.status === "accepted") {
         return {
           ok: true,
           runId: params.runId,
           targetDisposition: "steered",
           steeredRunId: steer.targetRunId,
+          ...(steer.status === "submitted" ? { submittedMessageId: steer.messageId } : {}),
         };
       }
       if (steer.status === "indeterminate") {
