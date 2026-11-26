@@ -174,6 +174,21 @@ CDP URL shapes and picks the right connection strategy automatically:
 logic as runtime attach, so a bare-root URL that connects successfully is not
 reported as unreachable by diagnostics.
 
+Chromium profiles on a loopback address, such as `127.0.0.1` or `localhost`,
+list tabs over HTTP even when `cdpUrl` is a WebSocket URL. This includes
+`attachOnly` profiles. `openclaw browser tabs` reads `/json/list` from the
+endpoint, while startup checks can fall back to the WebSocket. If a proxy in
+front of the browser answers HTTP requests with 404, `openclaw browser start`
+can succeed and `openclaw browser tabs` still fails. Forward `/json/list`
+through the proxy to fix this.
+
+OpenClaw builds the `/json/list` URL from `cdpUrl`. It switches `ws` to `http`
+and `wss` to `https`, removes a `/devtools/browser/<id>` or trailing `/cdp`
+path, and keeps the rest of the path and the query string. For example,
+`wss://127.0.0.1:8443/connect/<session>?token=<token>` becomes
+`https://127.0.0.1:8443/connect/<session>/json/list?token=<token>`. Profiles on
+a non-loopback address list tabs over the CDP WebSocket instead.
+
 ### Browserbase
 
 [Browserbase](https://www.browserbase.com) is a cloud platform for running
