@@ -127,6 +127,49 @@ it("gives a restored update one next step without claiming an unknown cause", ()
 });
 
 it.each([
+  ["new build refused the configuration (exit 78)", true],
+  ["new build failed to start", false],
+] as const)(
+  "projects startup cause detail only for configuration refusal (%s)",
+  (reason, visible) => {
+    const remedy =
+      "53100: The PostgreSQL server has insufficient disk space for the protected database copy. The original PostgreSQL data was not migrated. Free space on the PostgreSQL server, then run openclaw update.";
+    const diagnostic = `${"debug: Gateway startup phase\n".repeat(40)}${remedy}`;
+    const report = render({
+      status: "failed",
+      reason: `${reason}; v2026.9.1 is still running`,
+      steps: [
+        {
+          step: "diagnostic:startup",
+          status: "completed",
+          detail: diagnostic.slice(0, 1024),
+          stderrTail: diagnostic,
+        },
+      ],
+      verification: {
+        runningVersion: "2026.9.1",
+        serviceRunning: true,
+        coreReady: true,
+        rollbackOutcome: { status: "succeeded", reason },
+      },
+    });
+    expect(report.lines[0]).toBe(
+      "Retry the update. If it fails again, choose Report update failure in Settings → Updates.",
+    );
+    if (visible) {
+      const cause = report.lines.find((line) => line.startsWith("Cause detail:"));
+      expect(cause).toContain(remedy);
+      expect(cause!.length).toBeLessThanOrEqual(500);
+      expect(report.markdown).toContain(remedy);
+    } else {
+      expect(report.lines.join("\n")).not.toContain(remedy);
+      expect(report.markdown).not.toContain(remedy);
+    }
+    expectChatBudget(report.markdown);
+  },
+);
+
+it.each([
   "Failed: restarting",
   "Failing check update (update-failed)",
   "Current health unavailable; saved verification describes the update attempt only.",

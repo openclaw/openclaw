@@ -99,6 +99,7 @@ export type SessionCapability = Pick<
     | "subscribeList"
     | "observeList"
     | "refreshList"
+    | "wakeList"
     | "refresh"
     | "refreshReplacement"
   > &

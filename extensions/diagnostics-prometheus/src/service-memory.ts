@@ -79,6 +79,14 @@ export function recordMemorySample(
   memory: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>["memory"],
   byteBuckets: number[],
 ): void {
+  store.replaceGaugeSnapshot(() => recordMemoryMetrics(store, memory, byteBuckets));
+}
+
+function recordMemoryMetrics(
+  store: PrometheusMetricStore,
+  memory: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>["memory"],
+  byteBuckets: number[],
+): void {
   for (const [, name] of HEAP_HEADROOM_METRICS) {
     store.clearGauges(name);
   }

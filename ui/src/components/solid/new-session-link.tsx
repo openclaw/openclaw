@@ -96,6 +96,7 @@ export function ContextNewSessionAction(props: {
       method: "sessions.create",
       params: {},
       sessionScope: true,
+      missingScopeReasonKey: "sessionsView.createPermissionDenied",
     });
   const access = createMemo(readAccess);
   const disabledReason = () => {

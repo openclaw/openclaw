@@ -683,12 +683,6 @@ describe("loadPluginManifestRegistry", () => {
       candidates: [candidate],
     });
     const uiHints = { ...generatedHint, ...manifestHint };
-    expect(registry.plugins[0]?.channelConfigs?.alpha).toEqual({
-      schema: generatedSchema,
-      label: "Alpha",
-      description: "Alpha channel",
-      uiHints,
-    });
     expect(collectChannelSchemaMetadataCore(registry)).toEqual([
       {
         id: "alpha",

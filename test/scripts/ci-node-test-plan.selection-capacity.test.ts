@@ -1,18 +1,22 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { routeBoatNodeTestJobs } from "../../scripts/lib/ci-node-test-capacity.mts";
 import { nodeTestVolumeEnvironment } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import * as inventoryOwner from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   createNodeTestShardBundles,
+  hasCompleteStartupCorpusCoverage,
+  resolveStartupCorpusTestFiles,
   createSelectedNodeTestShardBundles,
-  isRuntimeTestFileIncluded,
   type NodeTestVolumeContext,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { isRuntimeTestFileIncluded } from "../../scripts/lib/ci-runtime-test-eligibility.mts";
 import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
+import { startupCorpusTestFiles } from "../vitest/vitest.startup-corpus-paths.mjs";
+import { createChangedNodeTestShards as changedOwnerTests } from "./ci-changed-node-test-plan.test-support.js";
 
 it("retains the original eligible denominator across selected subsets and runtime copies", () => {
   const config = "test/vitest/vitest.gateway-database-workers.config.ts";
@@ -442,4 +446,58 @@ it("shares selected serial setup within the shortest contributing timeout", () =
       .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))
       .toSorted(),
   ).toEqual(targets.toSorted());
+});
+
+describe("startup corpus coverage", () => {
+  const files = startupCorpusTestFiles;
+  const group = {
+    shard_name: "core-runtime-config",
+    configs: ["test/vitest/vitest.runtime-config.config.ts"],
+    requiresDist: false,
+    runner: "ubuntu-24.04",
+    includePatterns: files,
+    env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+  };
+  it("certifies only the selected tier and directly edited startup cells", () => {
+    const regular = "src/config/config-startup-corpus.test.ts";
+    const changed = "src/config/state-startup-corpus.part-2.test.ts";
+    const options = { includeReleaseOnlyRuntimeTests: false };
+    expect(resolveStartupCorpusTestFiles()).toEqual(files);
+    expect(resolveStartupCorpusTestFiles(options)).toEqual([regular]);
+    const selected = resolveStartupCorpusTestFiles({
+      ...options,
+      changedPaths: [changed, "src/config/state-startup-corpus.test-support.ts"],
+    });
+    expect(selected).toEqual([regular, changed]);
+    const shards = [{ requiresDist: false, groups: [{ ...group, includePatterns: selected }] }];
+    expect(hasCompleteStartupCorpusCoverage(shards, selected)).toBe(true);
+    expect(hasCompleteStartupCorpusCoverage(shards)).toBe(false);
+    expect(hasCompleteStartupCorpusCoverage(shards, [])).toBe(false);
+    expect(
+      hasCompleteStartupCorpusCoverage(
+        [{ requiresDist: false, groups: [{ ...group, includePatterns: [regular] }] }],
+        selected,
+      ),
+    ).toBe(false);
+  });
+  it.each<
+    { label: string } & Partial<Parameters<typeof hasCompleteStartupCorpusCoverage>[0][number]>
+  >([
+    { label: "unknown full config", groups: [{ ...group, includePatterns: undefined }] },
+    { label: "different config", groups: [{ ...group, configs: ["vitest.config.ts"] }] },
+    {
+      label: "native shard",
+      groups: [{ ...group, env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--shard=1/2"]' } }],
+    },
+    { label: "target precedence", groups: [group], targets: files.slice(0, 1) },
+    { label: "non-admitted dist row", groups: [group], requiresDist: true },
+  ])("does not certify $label", ({ label: _label, ...shard }) => {
+    expect(hasCompleteStartupCorpusCoverage([{ requiresDist: false, ...shard }])).toBe(false);
+  });
+});
+
+it("fails safe for raw Git paths that resemble normalized script paths", () => {
+  for (const changedPath of [" scripts/changed-lanes.mts", String.raw`scripts\changed-lanes.mts`]) {
+    expect(changedOwnerTests([changedPath]), changedPath).toBeNull();
+  }
 });

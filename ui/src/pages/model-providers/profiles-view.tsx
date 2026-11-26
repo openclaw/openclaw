@@ -530,13 +530,33 @@ function ProviderProfileRow(
   const firstApiKey = () =>
     profile().type === "api_key" &&
     props.card.profiles.find((candidate) => candidate.type === "api_key") === profile();
-  const logoutProvider = () =>
-    props.card.logoutTargets.find((target) => target.profileIds.includes(profile().profileId))
-      ?.provider;
+  const logoutTarget = () =>
+    props.card.logoutTargets.find((target) => target.profileIds.includes(profile().profileId));
+  const logoutProvider = () => logoutTarget()?.provider;
+  // Providers that declare account actions get the device/provider split as text actions.
+  const accountActions = () =>
+    profile().type === "oauth" && profile().logoutSupported === true
+      ? logoutTarget()?.oauthAccountActions
+      : undefined;
   const logoutLabel = () => t("modelProviders.logout.actionFor", { account: props.identity });
   const canSignInAgain = () => needsOAuthSignIn(profile()) && props.canSignInAgain?.() === true;
   const logoutBlocked = () =>
     !props.canMutate ? (props.mutationBlockedReason ?? "") : logoutLabel();
+  const logoutDisabled = () =>
+    props.logoutSaving?.[props.card.id] ||
+    !props.canMutate ||
+    props.busy[`logout:${props.card.id}`];
+  const requestLogout = (disconnect?: { label: string }) => {
+    const targetProvider = logoutProvider();
+    if (targetProvider) {
+      props.onRequestLogout({
+        cardId: props.card.id,
+        label: props.identity,
+        target: { provider: targetProvider, profileIds: [profile().profileId] },
+        ...(disconnect ? { disconnect } : {}),
+      });
+    }
+  };
   const reorderBlocked = () =>
     !props.canMutate ? (props.mutationBlockedReason ?? "") : (group().explanation ?? "");
   const reorder = (targetId: string) => {
@@ -640,27 +660,14 @@ function ProviderProfileRow(
             {t("modelProviders.profiles.signInAgain")}
           </button>
         ) : undefined}
-        {profile().logoutSupported === true && logoutProvider() ? (
+        {profile().logoutSupported === true && logoutProvider() && !accountActions() ? (
           <button
             type="button"
             class="model-providers__profile-logout"
             aria-label={logoutLabel()}
             title={logoutBlocked()}
-            disabled={
-              props.logoutSaving?.[props.card.id] ||
-              !props.canMutate ||
-              props.busy[`logout:${props.card.id}`]
-            }
-            onClick={() => {
-              const targetProvider = logoutProvider();
-              if (targetProvider) {
-                props.onRequestLogout({
-                  cardId: props.card.id,
-                  label: props.identity,
-                  target: { provider: targetProvider, profileIds: [profile().profileId] },
-                });
-              }
-            }}
+            disabled={logoutDisabled()}
+            onClick={() => requestLogout()}
           >
             <StrokeIcon>
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -670,6 +677,53 @@ function ProviderProfileRow(
           </button>
         ) : undefined}
       </span>
+      <Show when={logoutProvider() ? accountActions() : undefined}>
+        {(actions) => {
+          const disconnectLabel = () =>
+            actions().disconnect?.label || t("modelProviders.disconnect.action");
+          return (
+            <div class="model-providers__profile-account-actions">
+              <button
+                type="button"
+                class="btn btn--sm"
+                aria-label={t("modelProviders.logout.deviceActionFor", { account: props.identity })}
+                title={!props.canMutate ? (props.mutationBlockedReason ?? "") : ""}
+                disabled={logoutDisabled()}
+                onClick={() => requestLogout()}
+              >
+                {t("modelProviders.logout.deviceAction")}
+              </button>
+              <Show when={actions().disconnect}>
+                <button
+                  type="button"
+                  class="btn btn--sm danger"
+                  aria-label={t("modelProviders.disconnect.actionFor", {
+                    action: disconnectLabel(),
+                    account: props.identity,
+                  })}
+                  title={!props.canMutate ? (props.mutationBlockedReason ?? "") : ""}
+                  disabled={logoutDisabled()}
+                  onClick={() => requestLogout({ label: disconnectLabel() })}
+                >
+                  {disconnectLabel()}
+                </button>
+              </Show>
+              <Show when={actions().manage}>
+                {(manage) => (
+                  <a
+                    class="model-providers__profile-manage"
+                    href={manage().url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {manage().label || t("modelProviders.disconnect.manage")}
+                  </a>
+                )}
+              </Show>
+            </div>
+          );
+        }}
+      </Show>
       <Show when={props.usageRead}>
         {(read) => <AccountLimits read={read()} grouped={props.grouped} />}
       </Show>

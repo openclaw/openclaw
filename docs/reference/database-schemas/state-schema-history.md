@@ -63,10 +63,25 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 39      | Immutable retained-worker acquisition policy, pending pause/resume operations, and provider observations                                                                                                                                                                                                                                       | Unreleased          |
 | 40      | Original requesting authority retained with pending worker provisioning                                                                                                                                                                                                                                                                        | Unreleased          |
 | 41      | Trusted approval requester profile retained without inferring historical identities                                                                                                                                                                                                                                                            | Unreleased          |
+| 42      | Reserved confirmed worker-loss predecessor metadata on session placements                                                                                                                                                                                                                                                                      | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 42
+
+Schema 42 adds nullable `worker_session_placements.confirmed_loss_recovery_json`
+on SQLite and PostgreSQL. It does not backfill rows, infer worker loss, or change
+placement, approval, or repository behavior. The column is reserved for a later
+recovery writer.
+
+The SQLite startup migration retains the whole-database quick check and checks
+`worker_session_placements` specifically. Its scoped backup copies the placement
+table and publication metadata. Backup and integrity cost scale with placement
+history; the column addition does not rewrite existing rows. Package updates
+retain their existing full rollback capture. Restore the verified pre-upgrade
+backup with its matching build before downgrading. The agent schema is unchanged.
 
 ### State schema 41
 

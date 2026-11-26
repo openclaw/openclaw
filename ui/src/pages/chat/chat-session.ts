@@ -304,6 +304,37 @@ export function switchChatSetting(
   );
 }
 
+export function reconcileChatAccessProgram(
+  host: ChatModelSettingsHost,
+  row: GatewaySessionRow,
+  sessionKey: string,
+): Promise<boolean> | undefined {
+  if (!row.model) {
+    return undefined;
+  }
+  const entry = resolveModelRuntimeEntry(
+    host.chatModelCatalog.find(
+      (candidate) =>
+        candidate.provider === row.modelProvider &&
+        (candidate.id === row.model ||
+          buildQualifiedChatModelValue(candidate.id, candidate.provider) === row.model),
+    ),
+    row.agentRuntime?.id,
+  );
+  // A discovery failure also omits the list. Keep saved intent until discovery confirms it is stale.
+  if (!entry?.availableAccessPrograms || entry.available === false) {
+    return undefined;
+  }
+  const program = resolveDaybreakModelSwitch(
+    entry.availableAccessPrograms.cyber,
+    row.cyberAccessProgram,
+    row.cyberAccessProgram,
+  );
+  return program === undefined
+    ? undefined
+    : switchChatSetting(host, { kind: "cyberAccessProgram", value: program }, sessionKey);
+}
+
 export type ChatModelSelection = ReturnType<typeof claimChatModelSelection>;
 
 export function claimChatModelSelection(host: ChatModelSettingsHost, targetSessionKey: string) {
@@ -398,20 +429,21 @@ export async function switchChatModel(
       ? activeRow?.agentRuntime?.id
       : runtimeSelection,
   );
-  const nextPrograms = nextRuntime?.availableAccessPrograms?.cyber;
-  let remap: CyberAccessProgram | undefined;
-  if (nextPrograms !== undefined && (nextValue !== currentValue || !runtimeUnchanged)) {
+  let remap: CyberAccessProgram | null | undefined;
+  if (nextRuntime && (nextValue !== currentValue || !runtimeUnchanged)) {
     const currentEntry = resolveModelRuntimeEntry(
       host.chatModelCatalog.find(
         (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === currentValue,
       ),
       activeRow?.agentRuntime?.id,
     );
+    const preview = host.sessions.settingsPreview(targetSessionKey, agentScope.agentId);
     const storedProgram =
-      host.sessions.settingsPreview(targetSessionKey, agentScope.agentId)?.cyberAccessProgram ??
-      activeRow?.cyberAccessProgram;
+      preview && "cyberAccessProgram" in preview
+        ? preview.cyberAccessProgram
+        : activeRow?.cyberAccessProgram;
     remap = resolveDaybreakModelSwitch(
-      nextPrograms,
+      nextRuntime.availableAccessPrograms?.cyber,
       storedProgram ?? currentEntry?.cyberAccessProgramDefault,
       storedProgram,
     );

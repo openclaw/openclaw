@@ -553,8 +553,10 @@ The "Memory file watching is tracking ..." warning reports an advisory count of
 watched paths or directories, not a measured host limit or confirmed exhaustion.
 Remove unnecessary `memory.search.extraPaths` entries or narrow their directory
 roots. Global entries and `agents.entries.<id>.memory.search.extraPaths` entries
-are combined: an empty per-agent list does not remove global roots. Changing only
-an entry's `pattern` filters indexed files, not the directory tree being watched.
+are combined: an empty per-agent list does not remove global roots. A `pattern`
+without `**`, braces, brackets, parentheses, or `.`/`..` segments also stops the
+watcher at the depth the pattern can match (`*/README.md` watches two levels);
+other patterns filter indexed files, not the directory tree being watched.
 Events outside every applicable pattern are ignored when they cannot affect an
 indexed file or directory. Events with no path or an unknown entry type remain
 conservative when indexed content could have changed.

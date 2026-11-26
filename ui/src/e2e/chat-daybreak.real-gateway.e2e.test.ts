@@ -863,33 +863,29 @@ suite.define(() => {
         await open();
         await menu.getByText("Blue", { exact: true }).waitFor();
         await snapshot("blue-only");
-        programs = [];
-        await call("models.list", { agentId: "main", refresh: true });
-        await page.reload();
-        await waitForControlUiGatewayReady(page);
-        await open();
-        expect(await menu.locator(".chat-controls__access-caption").count()).toBe(0);
-        await expect.poll(() => toggle.isChecked()).toBe(true);
-        expect((await row()).cyberAccessProgram).toBe("daybreak_blue");
-        await snapshot("no-access");
-        programs = undefined;
-        await call("models.list", { agentId: "main", refresh: true });
-        await page.reload();
-        await waitForControlUiGatewayReady(page);
-        await open();
-        expect(await menu.locator(".chat-controls__access-caption").count()).toBe(0);
-        await expect.poll(() => toggle.isChecked()).toBe(true);
-        expect((await row()).cyberAccessProgram).toBe("daybreak_blue");
-        await snapshot("unknown");
-        // Turning off the last stale selection removes this switch.
-        await toggle.press("Space");
-        await expect.poll(async () => (await row()).cyberAccessProgram).toBe("standard");
-        await expect.poll(() => toggle.count()).toBe(0);
-        await snapshot("stale-selection");
+        for (const advertised of [undefined, []]) {
+          programs = advertised;
+          const catalog = await call<ModelCatalogResult>("models.list", {
+            agentId: "main",
+            sessionKey: key,
+            refresh: true,
+          });
+          const model = catalog.models.find((entry) => entry.id === "gpt-6.1-sol");
+          expect(model?.availableAccessPrograms?.cyber).toEqual(advertised);
+          await page.reload();
+          await waitForControlUiGatewayReady(page);
+          await open();
+          expect(await toggle.count()).toBe(0);
+          expect((await row()).cyberAccessProgram).toBe("daybreak_blue");
+          await snapshot(advertised ? "no-access" : "unknown");
+        }
+        await picker.locator("summary").click();
         const before = receipts.length;
-        await send("Continue after disabling stale Access.");
+        await page.locator(".agent-chat__composer-combobox textarea").fill("Continue on Standard.");
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
         await expect.poll(() => receipts.length).toBe(before + 1);
         expect(receipts[before]?.access).toEqual({ cyber: "standard" });
+        expect((await row()).cyberAccessProgram).toBeUndefined();
         await expect.poll(async () => Boolean((await row()).hasActiveRun)).toBe(false);
       },
     );

@@ -2,6 +2,12 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import * as config from "../../../config/config.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { createAgentTurnTestContext } from "../../../gateway/agent-turn/agent-run-dispatch.test-support.js";
+import {
+  prepareAgentRunUserTurn,
+  releasePreparedAgentRunUserTurn,
+} from "../../../gateway/agent-turn/agent-run-user-turn.js";
+import { decideTurnGrant } from "../../../gateway/operator-admission.js";
 import * as operatorCapture from "../../../gateway/operator-run-authority.js";
 import {
   resolveGatewayChatCronCreatorAuthorityAdmission,
@@ -29,7 +35,10 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../cron-creator-authority-context.js";
-import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import {
+  readRetainedRequesterToolCaller,
+  withGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import * as delivery from "../announce/subagent-announce-delivery.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { revokeRequesterCronAuthority } from "../requester-cron-authority.js";
@@ -39,6 +48,7 @@ import {
   createRequesterInitialTransferFixture,
   markRequesterTurnYieldedWithAuthority,
 } from "./subagent-registry-requester-yield.test-support.js";
+import { retainedOperatorFixture } from "./subagent-registry.completed-followup-authority.test-support.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import type { RegistryRegistrationFixture } from "./subagent-registry.requester-completion.fixture.test-support.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
@@ -89,7 +99,7 @@ export function registerRequesterAutomationCustodyTests({
         createCronCreatorAuthorityCapability(
           requesterTurnRunId,
           { kind: "unknown" },
-          { source: "control-ui-admin" },
+          { source: "operator" },
         ),
         "original automation management capability",
       );
@@ -155,15 +165,15 @@ export function registerRequesterAutomationCustodyTests({
             runId: "same-human-next-message",
             resolvedSessionKey: requesterSessionKey,
             client: freshClient,
+            grant: decideTurnGrant(freshClient.connect.scopes ?? []),
             hasExplicitOrigin: false,
             hasRestoredCronContinuation: false,
             isIncognito: false,
-            isReconnectResume: false,
             isSystemGenerated: false,
             turnKind: "main",
             isDirectExternalUser: true,
           }),
-        ).toMatchObject({ managementEntitlement: { source: "control-ui-admin" } });
+        ).toMatchObject({ managementEntitlement: { source: "operator" } });
         const resultText = "Original child result";
         await updateRun(runId, (draft) => {
           draft.execution = {
@@ -237,6 +247,159 @@ export function registerRequesterAutomationCustodyTests({
       } finally {
         deliver.mockRestore();
         releaseAgentRunDelegatedAuthority(delegated);
+        clearAgentRunContext(requesterTurnRunId);
+        revokeRequesterCronAuthority(requesterSessionKey);
+        source.release();
+        await resetSubagentRegistryForTests({ persist: false });
+      }
+    });
+  });
+
+  // OA2 matrix cell: asserted-identity channel owner x sessions_yield resume (E12).
+  it("resumes an asserted channel owner's yielded turn as owner with its channel identity", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = {
+        session: { store: state.path("sessions.json") },
+        commands: { ownerAllowFrom: ["imessage:+15550001111"] },
+      };
+      config.setRuntimeConfigSnapshot(cfg);
+      vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
+      const requesterSessionKey = "agent:main:main";
+      const sessionId = "yielded-channel-requester";
+      const requesterTurnRunId = "channel-requester";
+      const runId = "yielded-channel-child";
+      await upsertSessionEntryCore(
+        { storePath: cfg.session.store, sessionKey: requesterSessionKey, agentId: "main" },
+        { sessionId, updatedAt: 1 },
+      );
+      const context = createContext([], () => cfg);
+      const { client, source } = await retainedOperatorFixture("channel-source", context);
+      const origin = {
+        sessionKey: requesterSessionKey,
+        messageProvider: "imessage",
+        accountId: "default",
+        senderId: "+15550001111",
+        senderE164: "+15550001111",
+      };
+      const { operationalRunInstance } = createTestAdmittedRunContext(requesterTurnRunId);
+      registerAgentRunContext(requesterTurnRunId, {
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        sessionId,
+      });
+      const capability = expectDefined(
+        createCronCreatorAuthorityCapability(
+          requesterTurnRunId,
+          { kind: "unknown" },
+          { source: "channel-owner" },
+        ),
+        "channel owner automation capability",
+      );
+      const transfer = createRequesterInitialTransferFixture(subagentRuns);
+      const requester = { requesterSessionKey, requesterAgentId: "main", requesterTurnRunId };
+      const settlement = { ...requester, runs: subagentRuns, transfer };
+      const scope = { context, isWebchatConnect: () => false };
+      const deliver = vi.spyOn(delivery, "deliverSubagentAnnouncement");
+      try {
+        await withPluginRuntimeGatewayRequestScope(
+          { ...scope, client, resolveGatewayContext: () => context },
+          () =>
+            runWithCronCreatorAuthorityCapability(capability, () =>
+              withGatewayToolCallerIdentity(
+                {
+                  agentId: "main",
+                  sessionKey: requesterSessionKey,
+                  operationalRunInstance,
+                  requesterOrigin: origin,
+                  operatorAuthority: source.authority,
+                  gatewayContextResolver: () => context,
+                },
+                async () => {
+                  await registerSubagentRun(
+                    registration(runId, { ...requester, gatewayContextResolver: () => context }),
+                  );
+                  expect(await markRequesterTurnYieldedWithAuthority(settlement)).toBe(1);
+                  expect(
+                    await settleRequesterTurnAfterSessionSpawns({
+                      ...settlement,
+                      requesterYielded: true,
+                      acceptedSessionSpawns: [
+                        {
+                          runId,
+                          childSessionKey: subagentRuns.get(runId)!.childSessionKey,
+                          expectsCompletionMessage: true,
+                        },
+                      ],
+                      schedule: () => {},
+                    }),
+                  ).toBe(true);
+                },
+              ),
+            ),
+        );
+        clearAgentRunContext(requesterTurnRunId);
+        await updateRun(runId, (draft) => {
+          draft.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
+          draft.completion = {
+            required: true,
+            resultText: "child result",
+            terminalReply: { disposition: "visible", text: "child result" },
+          };
+          draft.delivery = { status: "pending" };
+        });
+        let resumed: { senderIsOwner: boolean; senderId?: string | null } | undefined;
+        deliver.mockImplementation(async (params) => {
+          // Direct delivery passes this retained requester as the resume's `agentToolCaller`.
+          const turn = await prepareAgentRunUserTurn({
+            cfg,
+            context: { ...createAgentTurnTestContext(), getRuntimeConfig: () => cfg },
+            client: createSyntheticPluginRuntimeClient({
+              agentToolCaller: readRetainedRequesterToolCaller(),
+            }),
+            // An asserted channel identity carries no operator grant.
+            senderIsOwner: false,
+            request: { message: params.triggerMessage, idempotencyKey: "yield-resume" },
+            runId: "yield-resume",
+            admittedSessionId: sessionId,
+            resolvedSessionKey: requesterSessionKey,
+            activeSessionAgentId: "main",
+            suppressVisibleSessionEffects: true,
+            requestedPromptPersistenceSuppression: true,
+            canUseInternalRuntimeHandoff: false,
+            message: params.triggerMessage,
+            effectiveTranscriptInputText: params.triggerMessage,
+            images: [],
+            offloadedRefs: [],
+            assertCurrent: () => {},
+            onUserTurnMediaPersisted: () => {},
+          });
+          try {
+            resumed = {
+              senderIsOwner: turn.senderIsOwner,
+              senderId: turn.requesterOrigin?.senderId,
+            };
+          } finally {
+            await releasePreparedAgentRunUserTurn(turn);
+          }
+          return { delivered: true, path: "direct" };
+        });
+        await expect(
+          maybeWakeRequesterAfterAllChildrenSettled({
+            requesterSessionKey,
+            settledEntry: subagentRuns.get(runId)!,
+            isSourceCurrent: () => true,
+            transitionBatch: async (_batch, wake, onPublished) => {
+              await updateRun(runId, (draft) => {
+                draft.requesterSettleWake = wake;
+              });
+              onPublished?.([subagentRuns.get(runId)!]);
+            },
+            completeBatch: vi.fn(),
+          }),
+        ).resolves.toBe(true);
+        expect(resumed).toEqual({ senderIsOwner: true, senderId: origin.senderId });
+      } finally {
+        deliver.mockRestore();
         clearAgentRunContext(requesterTurnRunId);
         revokeRequesterCronAuthority(requesterSessionKey);
         source.release();

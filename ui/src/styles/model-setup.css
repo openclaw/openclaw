@@ -451,6 +451,8 @@ openclaw-model-setup-page > .content-header {
   color: var(--muted);
   font-size: 14px;
   line-height: 1.5;
+  /* The signed-in account and the model ready line stay on separate lines. */
+  white-space: pre-line;
 }
 
 .model-setup-wizard__error {

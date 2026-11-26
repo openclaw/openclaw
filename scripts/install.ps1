@@ -2141,6 +2141,7 @@ function Install-OpenClawFromGit {
     $RepoDir = Resolve-GitCheckoutPath -RepoDir $RepoDir
     $repoUrl = "https://github.com/openclaw/openclaw.git"
     Write-Host "[*] Installing OpenClaw from GitHub ($repoUrl)..." -ForegroundColor Yellow
+    Write-Host "[i] Git installs compile OpenClaw locally. For a prebuilt installation on a small host, use -InstallMethod npm."
 
     Assert-GitCheckoutHasCommit -RepoDir $RepoDir
     if (-not (Test-Path -LiteralPath (Join-Path $RepoDir ".git"))) {
@@ -2167,6 +2168,11 @@ function Install-OpenClawFromGit {
 
     Resolve-NodePackageEngine -RepoDir $RepoDir
     if (-not (Ensure-Node)) { return $false }
+    $memoryCheck = Join-Path $RepoDir "scripts/lib/tsdown-memory-admission.mts"
+    if (Test-Path -LiteralPath $memoryCheck -PathType Leaf) {
+        & node $memoryCheck
+        if ($LASTEXITCODE -ne 0) { return $false }
+    }
 
     $prevPnpmChildConcurrency = $env:PNPM_CONFIG_CHILD_CONCURRENCY
     $prevPnpmNetworkConcurrency = $env:PNPM_CONFIG_NETWORK_CONCURRENCY

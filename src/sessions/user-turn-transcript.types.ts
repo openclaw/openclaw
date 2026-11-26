@@ -21,6 +21,13 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PersistedUserTurnMessage, UserTurnInput } from "./user-turn-input.types.js";
 
+/** Native transcript identity of one accepted input, not an authority or replacement message. */
+export type NativeSteerInputIdentity = Readonly<{
+  importedFrom: string;
+  externalId: string;
+  cliSessionId: string;
+}>;
+
 export type UserTurnTranscriptUpdateMode = "inline" | "none";
 
 export type UserTurnMessagePersistenceParams = {
@@ -199,7 +206,10 @@ export type UserTurnTranscriptRecorder = {
   /** Replaces generated current-turn text before runtime persistence/provider submission. */
   replaceTextBeforePersistence?: (text: string) => void;
   /** Confirms exact-run steering provenance after transcript commitment is proven. */
-  confirmSteerTargetRunIdForPersistence?: (targetRunId: string) => Promise<void>;
+  confirmSteerTargetRunIdForPersistence?: (
+    targetRunId: string,
+    nativeInputIdentity?: NativeSteerInputIdentity,
+  ) => Promise<void>;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   /** Freeze model-facing text on the canonical user record before its first provider dispatch. */
   captureModelPromptProjection?: (

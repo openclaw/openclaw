@@ -373,6 +373,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       this.headerPeople.read({
         host: this.state,
         session: row,
+        sharing: row
+          ? this.collaboration.sharingStates.get(this.sessionSharingCacheKey(row.key))?.result
+          : undefined,
         ownerCount: this.state?.sessionsResult?.owners?.length ?? 0,
         presence: this.presence.snapshot,
         selfUser: sharingSnapshot.selfUser,
@@ -405,7 +408,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         Boolean(this.state?.chatRunId),
       ).branchSwitch;
       if (!access.allowed) {
-        this.publishHeaderError(access.reason);
+        this.publishHeaderError(access.reason, undefined, true);
         return;
       }
       void this.switchToBranch(leafEntryId);

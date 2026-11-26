@@ -14,6 +14,10 @@ import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-
 import type { acquireFileLockSync } from "./file-lock-manager.js";
 import { describeGatewayLockHolder, type LockPayload } from "./gateway-lock-payload.js";
 import {
+  createColdAdmissionBudget,
+  type ColdAdmissionOptions,
+} from "./gateway-state-owner-cold-admission.js";
+import {
   resolveStateOwnerIdentity,
   resolveStateOwnerIdentityAsync,
   removeCreatedProjectionDirectories,
@@ -44,7 +48,6 @@ import {
   resolveIdentityPathViaExistingAncestorSync,
 } from "./path-existence.js";
 import { normalizeWindowsPathForComparison } from "./path-guards.js";
-import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 
 export type { GatewayStateProjection } from "./gateway-state-owner-lifecycle.js";
@@ -82,31 +85,17 @@ export function getStateDatabaseSchemaLease(
 
 /** Retry cold admission only; the same budget covers opening and its first unentered write. */
 export function withStateDatabaseColdAdmission<T>(
-  params: { databasePath: string; busyTimeoutMs: number; canRetry?: () => boolean },
+  params: ColdAdmissionOptions,
   open: (remainingBusyTimeoutMs: () => number) => T,
 ): T {
-  const budget = normalizeSqliteNonNegativeInteger(params.busyTimeoutMs, "busyTimeoutMs");
-  const deadline = performance.now() + budget;
-  const canonical = resolveIdentityPathViaExistingAncestorSync(params.databasePath);
-  const remainingBusyTimeoutMs = () => Math.max(0, Math.ceil(deadline - performance.now()));
+  const { remainingBusyTimeoutMs, retryDelay } = createColdAdmissionBudget(params);
   const waiting = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   for (;;) {
     try {
       assertStateDatabaseAccessAllowed(params.databasePath);
       return open(remainingBusyTimeoutMs);
     } catch (error) {
-      if (
-        !(error instanceof StateDatabaseAdmissionPendingError) ||
-        resolveIdentityPathViaExistingAncestorSync(error.databasePath) !== canonical ||
-        params.canRetry?.() === false
-      ) {
-        throw error;
-      }
-      const remaining = deadline - performance.now();
-      if (remaining <= 0) {
-        throw error;
-      }
-      Atomics.wait(waiting, 0, 0, Math.min(10, remaining));
+      Atomics.wait(waiting, 0, 0, retryDelay(error));
     }
   }
 }

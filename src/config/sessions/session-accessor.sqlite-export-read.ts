@@ -1,5 +1,4 @@
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
@@ -124,10 +123,10 @@ export function openTranscriptExportReadOnly(
 
 /**
  * Export metadata and only requested deltas within the caller's read transaction. With
- * `deferAboveBytes` on SQLite, a transcript whose recorded size exceeds it keeps its rows unread
- * and returns `deferred` for `readTranscriptExportSnapshotReadOnlySync` after that transaction.
- * PostgreSQL ignores it: the stalled checkpoint is a SQLite WAL problem, and PostgreSQL buffers
- * every query result, so unbounded slice queries would refetch the remaining rows.
+ * `deferAboveBytes`, a transcript whose recorded size exceeds it keeps its rows unread and
+ * returns `deferred` for `readTranscriptExportSnapshotReadOnlySync` after that transaction, which
+ * reads them in row-bounded slices. That also keeps PostgreSQL, which buffers every query result,
+ * from loading a whole large transcript into one worker heap.
  */
 export function readTranscriptExportSnapshotsFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
@@ -170,7 +169,7 @@ export function readTranscriptExportSnapshotsFromDatabase(
           beforeEventSeq: fence?.beforeRawSeq,
           maxEventBytes: scope.maxEventBytes,
         });
-        if (stats.sizeBytes > deferAboveBytes && !isPostgresSqlConnection(database.db)) {
+        if (stats.sizeBytes > deferAboveBytes) {
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           snapshot.deferred = { afterSeq: previous?.throughSeq, throughSeq, version };
         } else {

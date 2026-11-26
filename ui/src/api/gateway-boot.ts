@@ -2,7 +2,7 @@ import type {
   GatewaySessionMessageSubscription,
   GatewaySessionMessageSubscriptionOptions,
 } from "@openclaw/gateway-client/browser";
-import { hasOperatorApprovalsAccess } from "../app/operator-access.ts";
+import { canSubscribeSessionApprovals } from "../app/session-approval-access.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import {
   GatewayBrowserClient,
@@ -142,7 +142,7 @@ export class EarlyGateway {
           })
           .acquire(this.sessionKey, {
             initialHistory: history,
-            includeApprovals: hasOperatorApprovalsAccess(hello.auth ?? null),
+            includeApprovals: canSubscribeSessionApprovals(hello, this.client.instanceId),
             // The startup FIFO retains output until the prepared pane takes this
             // lease. Admit it before the snapshot so quiet commands have no gap.
             includeLiveToolOutput: this.includeLiveToolOutput,

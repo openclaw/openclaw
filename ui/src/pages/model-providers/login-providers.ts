@@ -124,6 +124,62 @@ export function buildLoginProviders({
   );
 }
 
+type ModelConnectionIntent = Pick<
+  import("./route.ts").ModelProvidersRouteData,
+  "connect" | "pluginId" | "provider"
+>;
+
+export function pendingModelConnection<T extends ModelConnectionIntent>(
+  next: T,
+  previous: T | undefined,
+  pending: T | null,
+): T | null {
+  return next.connect !== previous?.connect ||
+    next.pluginId !== previous?.pluginId ||
+    next.provider !== previous?.provider
+    ? next.connect
+      ? next
+      : null
+    : pending;
+}
+
+export function connectAction(
+  intent: ModelConnectionIntent | null,
+  login: Pick<import("./login-controller.ts").ModelProviderLogin, "busy" | "open">,
+  search: HTMLInputElement | undefined,
+  authStatus: ModelAuthStatusResult | null | undefined,
+): (() => void) | undefined {
+  if (!intent) {
+    return undefined;
+  }
+  const { pluginId, provider: providerId } = intent;
+  if (pluginId) {
+    return login.busy ? undefined : () => void login.open(undefined, { pluginId });
+  }
+  if (providerId) {
+    const provider = canonicalModelAuthProviderId(providerId);
+    const groups = buildLoginProviders({ authStatus, allowQuickApiKey: true });
+    const group =
+      groups.find((entry) => entry.id === providerId) ??
+      groups.find((entry) => canonicalModelAuthProviderId(entry.id) === provider) ??
+      groups.find((entry) =>
+        entry.authProviders.some((id) => canonicalModelAuthProviderId(id) === provider),
+      );
+    if (group) {
+      return login.busy
+        ? undefined
+        : () => void login.open(group.authProviders, { select: group.id });
+    }
+  }
+  if (search) {
+    return () => {
+      search.scrollIntoView({ block: "center" });
+      search.focus({ preventScroll: true });
+    };
+  }
+  return undefined;
+}
+
 /** Saved accounts this agent can already use with one login provider. */
 export function providerAccounts(group: LoginProvider, authStatus?: ModelAuthStatusResult | null) {
   return authStatus

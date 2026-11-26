@@ -212,6 +212,28 @@ describe("worker turn execution", () => {
   afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
   afterEach(resetGlobalHookRunner);
 
+  it("offers neither the sessions_yield tool nor yield guidance to a worker turn", async () => {
+    await seedActivePlacement();
+    const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
+    const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
+      throw new WorkerRunnerCapacityError();
+    });
+    const provider = credentialedProvider(unusedTunnel({ launchTurn }));
+    const input = turn("worker-yield-withheld");
+    try {
+      await expect(execute(provider, input)).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+      const authorized = authorize.mock.calls[0]?.[1];
+      expect(authorized).toContain("sessions_spawn");
+      expect(authorized).not.toContain("sessions_yield");
+      const launch = launchTurn.mock.calls[0]?.[0];
+      assert(launch);
+      expect(launch.plan.assignment.systemPrompt).not.toContain("sessions_yield");
+    } finally {
+      authorize.mockRestore();
+      input.preparedRunAdmission.close();
+    }
+  });
+
   it.each([
     { throws: false, revokeAtCommit: false },
     { throws: true, revokeAtCommit: false },

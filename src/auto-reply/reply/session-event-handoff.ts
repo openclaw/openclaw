@@ -49,7 +49,7 @@ import type {
   SessionEventReceipt,
 } from "./session-event-contract.js";
 import { createSessionEventReplyDelivery } from "./session-event-delivery.js";
-import { narrowSessionEventSettings } from "./session-event-policy.js";
+import { narrowSessionEventSettings } from "./session-event-policy-inheritance.js";
 import {
   assertSessionEventTargetCurrent,
   assertSessionEventSettingsCurrent,

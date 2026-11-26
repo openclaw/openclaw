@@ -66,6 +66,10 @@ import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 const WATCHDOG_TICK_MS = 1_000;
+const EMPTY_CATALOG_FACTS = {
+  configuredModelRefs: [],
+  configuredRuntimeModels: [],
+} as const satisfies PreparedModelCatalogWorkerInput["catalogFacts"];
 
 /**
  * Calls `expire` once the catalog budget of running time passes without `refresh`. A tick that
@@ -541,7 +545,17 @@ export function createPreparedModelCatalogWorker(
           if (shared) {
             shared.validate = receiveResult;
           }
-          return { context, value: reuse ? requestInput : workerInput, request: workerRequest };
+          const taskInput = reuse ? requestInput : workerInput;
+          // Auth refresh returns before catalog discovery. Keep configured rows in the parent
+          // for the next catalog task, including when both commands reuse one worker.
+          return {
+            context,
+            value:
+              command.kind === "auth-refresh"
+                ? { ...taskInput, catalogFacts: EMPTY_CATALOG_FACTS }
+                : taskInput,
+            request: workerRequest,
+          };
         },
         {
           signal: controller.signal,

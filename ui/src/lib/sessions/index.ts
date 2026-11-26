@@ -1,5 +1,4 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
-import { isConversationConfigChange } from "../../../../src/config/read-dependencies.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
@@ -23,7 +22,7 @@ import { createSessionEventSubscriptionOwner } from "./session-event-subscriptio
 import { createSessionGitHubPublication } from "./session-github-publication.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
-import { isPrimarySessionListQuery } from "./session-list-query.ts";
+import { isPrimarySessionListQuery, isSessionListInvalidation } from "./session-list-query.ts";
 import { createSessionMutations } from "./session-mutations.ts";
 import { optimisticSessionRowFields } from "./session-pending-rows.ts";
 import { createSessionPermissionProjection } from "./session-permission-projection.ts";
@@ -34,7 +33,6 @@ import { sanitizeSessionRow } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { createSessionThinkingClaims } from "./session-thinking-claims.ts";
-import { SwarmActivityTracker } from "./swarm-activity.ts";
 
 export type { SessionArchivedFilter } from "./navigation.ts";
 export type {
@@ -120,7 +118,6 @@ export function createSessionCapability(
     snapshot: () => gateway.snapshot,
     deletionState: (row) => deletions.deletionState(row.key, row.agentId, row.sessionId),
   });
-  const swarmActivity = new SwarmActivityTracker();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const pullRequestEpochs = new Map<string, object>();
   const publication = createSessionPublication(() => state);
@@ -165,7 +162,7 @@ export function createSessionCapability(
 
   // Canonical Gateway rows are the source of truth for everything except the
   // UI-owned facts the capability keeps beside them, so every published result
-  // passes through the same overlay: swarm notes, then in-flight row intents.
+  // passes through the same permission and in-flight row-intent overlays.
   const decorateRows = (
     result: SessionsListResult | null,
     owner = roster.primaryList(),
@@ -176,10 +173,7 @@ export function createSessionCapability(
       roster.observations.rowRevision,
       owner.scope.agentId,
     );
-    const annotated = swarmActivity.decorate(projected);
-    // Preserve receipts before a pending intent makes another tracked copy.
-    roster.observations.inherit(annotated, projected);
-    const decorated = deletions.apply(mutations.applyRows(annotated, owner.scope.agentId), owner);
+    const decorated = deletions.apply(mutations.applyRows(projected, owner.scope.agentId), owner);
     roster.observations.inherit(decorated, result);
     return decorated;
   };
@@ -456,7 +450,6 @@ export function createSessionCapability(
         retireConnection(previousClient);
       }
       groups.invalidate();
-      swarmActivity.clear();
       mutations.retireConnection(retainDeferredIntents);
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
@@ -537,10 +530,10 @@ export function createSessionCapability(
       githubPublication.observePullRequests(event.payload);
       return;
     }
-    if (event.event === "chat.metadata.changed" || isConversationConfigChange(event)) {
+    const listInvalidated = isSessionListInvalidation(event);
+    if (event.event === "chat.metadata.changed" || listInvalidated) {
       roster.observations.descriptions.clear();
-      if (event.event === "config.changed") {
-        // Config can change configured-agent membership even with no chat pane mounted.
+      if (listInvalidated) {
         roster.scheduleEvent();
       }
       return;
@@ -561,7 +554,6 @@ export function createSessionCapability(
     }
     const canApplySnapshot = roster.canApplyPrimarySnapshot(event.payload);
     const eventObservation = roster.captureEvent(event.payload);
-    const swarmChanged = swarmActivity.observe(event.payload);
     const { eventInfo, reconciled, claimChanged, notifyManaged, notifyEvent } =
       reconcileChangedEvent(event.payload, eventObservation, {
         resultAgentId: state.agentId,
@@ -576,7 +568,6 @@ export function createSessionCapability(
     const primarySnapshotApplied = reconciled.applied && canApplySnapshot;
     if (
       claimChanged ||
-      swarmChanged ||
       (eventInfo?.archived !== null && !isTerminalMessage) ||
       (!isTerminalMessage &&
         reconciled.applied &&
@@ -661,6 +652,7 @@ export function createSessionCapability(
         ? publication.subscribe(() => listener(roster.listSnapshot(scope)))
         : roster.subscribeList(scope, listener),
     refreshList: roster.refreshList,
+    wakeList: roster.wakeList,
     reconcile,
     captureReconcile,
     observeRow,
@@ -732,7 +724,6 @@ export function createSessionCapability(
       mutations.dispose();
       permissions.clear();
       deletions.clear();
-      swarmActivity.clear();
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
       sessionEventSubscription.dispose();
