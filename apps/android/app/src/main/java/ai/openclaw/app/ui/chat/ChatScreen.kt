@@ -1812,13 +1812,7 @@ private fun ChatMessageList(
       sessionKey = sessionKey,
       indicatorVisible = indicatorVisible,
       row = session,
-      transcript =
-        TurnRecapTranscriptState(
-          sessionKey = transcriptAnchor?.sessionKey,
-          newestItemId = transcriptAnchor?.newestItemId,
-          completedEndedAt = transcriptAnchor?.completedEndedAt,
-          completedNewestItemId = transcriptAnchor?.completedNewestItemId,
-        ),
+      transcript = transcriptAnchor,
     )
   val toolBridge = remember(sessionKey) { LiveToolActivityBridge() }
   val presentedTools = remember(toolBridge, history.toolScope, pendingToolCalls) { toolBridge.update(history.toolScope, pendingToolCalls) }
@@ -3996,6 +3990,7 @@ private fun BranchSwitcherSheet(
         Surface(
           onClick = { if (!branch.active) onSelect(branch.leafEntryId) },
           enabled = selectionEnabled && !branch.active,
+          modifier = Modifier.semantics { selected = branch.active },
           color = if (branch.active) ClawTheme.colors.surfacePressed else Color.Transparent,
           contentColor = ClawTheme.colors.text,
         ) {
