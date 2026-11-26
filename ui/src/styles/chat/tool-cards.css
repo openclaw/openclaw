@@ -1058,17 +1058,15 @@
 .chat-tool-msg-collapse--lifecycle {
   gap: 4px;
 
-  /* Keep each linked name together when it fits, without clipping the next
-     agent or the remaining count when the conversation narrows. */
-  > .chat-tool-row .chat-tool-row__title {
-    overflow-wrap: anywhere;
-    text-wrap: pretty;
+  /* Only names yield space; keep the localized separators and remaining count intact. */
+  > .chat-tool-row .chat-tool-row__subagent-name {
+    display: flex;
+    align-items: baseline;
+    white-space: pre;
 
-    .chat-tool-row__subagent-link {
-      /* Leave room for the list separator after an unusually long name. */
-      max-width: calc(100% - 1ch);
-      vertical-align: bottom;
-      white-space: normal;
+    > :is(button, span) {
+      flex: 1 1 0;
+      max-width: max-content;
       text-align: start;
       outline-offset: -2px;
     }
