@@ -33,7 +33,7 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
 import { applyDevUpdateTargetEnv } from "./update-dev-target.js";
-import { verifyPackageUpdateRecovery } from "./update-global.js";
+import { resolvePnpmGlobalInstallOwner, verifyPackageUpdateRecovery } from "./update-global.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
 import { MANAGED_HANDOFF_COMMAND_SOURCE } from "./update-managed-service-handoff-command-source.js";
@@ -1082,6 +1082,12 @@ async function spawnManagedServiceUpdateHandoff(
       ? readCurrentGitUpdateRecovery(rootIdentity, owner.recoveryTimeoutMs)
       : verifyPackageUpdateRecovery(rootIdentity)),
     recoveryModulePath: path.join(rootIdentity, "dist", "cli", "daemon-cli.js"),
+    // pnpm replaces this versioned root on install; interrupted recovery follows the
+    // stable package link to the generation the service runs.
+    installLink: await resolvePnpmGlobalInstallOwner(rootIdentity).then(
+      (installation) => (installation?.packageRoot === rootIdentity ? undefined : installation?.packageRoot),
+      () => undefined,
+    ),
   };
 
   let child!: HandoffChild;

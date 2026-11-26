@@ -19,12 +19,12 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
   let serviceRunning;
   let servicePid;
   const ownsRecovery = () => {
-    try { return ownsManagedUpdateLease() && fs.realpathSync(params.updateLeaseKey) === params.updateLeaseKey; }
+    try { return ownsManagedUpdateLease() && fs.realpathSync(installedRoot) === installedRoot; }
     catch { return false; }
   };
   const runOwned = (...args) => ownsRecovery()
     ? runServiceCommand(...args) : Promise.resolve({ code: 1, stdout: "", stderr: "recovery ownership lost" });
-  const restart = () => runOwnedUpdateCommand("recovery", params.recoveryCommandArgv,
+  const restart = () => runOwnedUpdateCommand("recovery", params.recoveryCommandArgv.map(installedPath),
     params.recoveryTimeoutMs, params.cwd, previousGeneration
       ? { ...process.env, OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1" } : process.env);
   if (!ownsRecovery()) return false;
@@ -147,7 +147,7 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
   });
   if (restored) {
     try {
-      const { waitForGatewayUpdateRecovery } = await import(pathToFileURL(params.recoveryModulePath).href);
+      const { waitForGatewayUpdateRecovery } = await import(pathToFileURL(installedPath(params.recoveryModulePath)).href);
       if (!ownsRecovery()) throw new Error("managed update recovery ownership was lost");
       const health = await waitForGatewayUpdateRecovery(expectedVersion, expectedBuildId, params.recoveryTimeoutMs, requireHealthRpc);
       restored = ownsRecovery() && health.healthy === true &&
