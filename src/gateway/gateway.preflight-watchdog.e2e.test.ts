@@ -212,7 +212,7 @@ it.each([
     });
     try {
       await fixture.start();
-      const scope = await seedLongSession(140_000);
+      await seedLongSession(140_000);
       const { runId } = await fixture.client.request<{ runId: string }>("chat.send", {
         sessionKey,
         message: "Answer after maintenance.",
