@@ -123,6 +123,20 @@ export async function ensureCaptureBinary(): Promise<string> {
   return (await resolveNativeInstall()).capture;
 }
 
+/**
+ * The FaceTime window capture helper ships in the same native package as the audio helper.
+ * Native packages released before it exist, so its absence only turns vision off.
+ */
+export async function resolveVideoCaptureBinary(): Promise<string | undefined> {
+  const video = resolve((await resolveNativeInstall()).capture, "..", "facetime-video-capture");
+  try {
+    await access(video, constants.X_OK);
+    return video;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function ensureHelperArtifacts(params: {
   pluginRoot: string;
   runCommandWithTimeout: PluginRuntime["system"]["runCommandWithTimeout"];

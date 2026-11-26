@@ -5,6 +5,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { FACETIME_FEED_DEVICE_NAME, FACETIME_MIC_DEVICE_NAME } from "./audio-pump.js";
+import type { FaceTimeAvatarSink } from "./avatar-feed.js";
 import type { FaceTimeConfig } from "./config.js";
 import {
   FaceTimeHelperAmbiguousError,
@@ -26,6 +27,8 @@ export function createFaceTimeCallControl(params: {
   runtime: PluginRuntime;
   logger: RuntimeLogger;
   captureBinary: string;
+  videoCaptureBinary?: string;
+  avatar?: FaceTimeAvatarSink;
   isStopping: () => boolean;
   getHelperTopologyVersion: () => number;
 }) {
@@ -316,6 +319,8 @@ export function createFaceTimeCallControl(params: {
           callUUID,
           senderId: call.senderId,
           captureBinary: params.captureBinary,
+          videoCaptureBinary: params.videoCaptureBinary,
+          avatar: params.avatar,
           signal: call.lifecycleAbort.signal,
           async onHangupRequested() {
             if (!(await attemptCarrierHangup(call, "caller-requested-hangup"))) {

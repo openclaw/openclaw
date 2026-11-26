@@ -67,6 +67,9 @@ export function resolveFaceTimeConfig(input: unknown) {
       instructions: normalizeOptionalString(realtime.instructions) ?? DEFAULT_INSTRUCTIONS,
       providers: resolveProviders(realtime.providers),
     },
+    // Both features change what leaves and enters the call, so they stay opt-in.
+    vision: { enabled: asBoolean(asRecord(raw.vision).enabled) ?? false },
+    avatar: { enabled: asBoolean(asRecord(raw.avatar).enabled) ?? false },
   };
 }
 

@@ -115,6 +115,7 @@ export async function runFaceTimePreflight(params: {
   runtime: PluginRuntime;
   helperConnected: boolean;
   captureBinary: string;
+  videoCaptureBinary?: string;
 }): Promise<FaceTimePreflightResult> {
   const runCommandWithTimeout = params.runtime.system.runCommandWithTimeout;
   const checks: FaceTimePreflightCheck[] = [];
@@ -226,6 +227,24 @@ export async function runFaceTimePreflight(params: {
       label: "FaceTime app-audio process tap",
       ok: false,
       message: "capture helper unavailable",
+    });
+  }
+
+  if (params.config.vision.enabled) {
+    // Sight is optional: a call without it is still a working call, so this never fails preflight.
+    const check = params.videoCaptureBinary
+      ? await runCommandWithTimeout([params.videoCaptureBinary, "--check"], { timeoutMs: 8_000 })
+      : undefined;
+    pushCheck(checks, {
+      id: "video-capture",
+      label: "FaceTime window capture for vision",
+      ok: check?.code === 0,
+      required: false,
+      message: check
+        ? (firstLine(check.stderr) ??
+          firstLine(check.stdout) ??
+          "grant Screen & System Audio Recording permission")
+        : "the installed native package has no facetime-video-capture helper; calls continue without vision",
     });
   }
 

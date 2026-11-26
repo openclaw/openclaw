@@ -166,6 +166,46 @@ want to follow changes to the provider's default voice.
 If `realtime.provider` is omitted, the registered realtime providers select the
 provider automatically. OpenAI is an example here, not the plugin's default.
 
+### See the caller and show an avatar
+
+Two optional features extend a video call. Both are off by default and neither can
+fail or end a call: if one stops working, the call continues as a voice call.
+
+```json5
+{
+  plugins: {
+    entries: {
+      facetime: {
+        config: {
+          vision: { enabled: true },
+          avatar: { enabled: true },
+        },
+      },
+    },
+  },
+}
+```
+
+**Vision** lets the agent look at the caller's FaceTime video: their camera, or
+their screen while they share it. The agent looks when you show it something or ask
+what it sees; each look sends one frame of the call window to the realtime voice
+provider. Frames are kept in memory only, replaced every two seconds, and dropped
+when the call ends. Vision needs:
+
+- a native companion that includes the `facetime-video-capture` helper,
+- a realtime model that accepts images, such as `gpt-realtime-2.1` or
+  `gpt-realtime-2.1-mini` (GPT-Live models are audio-only), and
+- the FaceTime call window visible on the Mac's screen.
+
+`facetime.preflight` reports a `video-capture` check when vision is enabled. It does
+not fail preflight.
+
+**Avatar** serves a lip-synced animated character at
+`http://127.0.0.1:<gateway port>/facetime/avatar`. Add that URL to OBS as a browser
+source (1280x720, 30 FPS) and select OBS Virtual Camera as FaceTime's video input.
+The page is reachable only from the Mac itself. Add `?demo=1` to preview it without
+a call, and `?offsetMs=<n>` to shift lip sync if the mouth leads or trails the voice.
+
 ## Prepare the Mac
 
 After saving your configuration, restart the Gateway and run setup:

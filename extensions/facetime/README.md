@@ -38,6 +38,10 @@ openclaw gateway restart
   Foundation Developer ID identity, and Apple notarization before activation.
 - `src/talk-driver.ts` owns provider response/tool generations and exact agent
   consult cancellation.
+- `src/video-capture.ts` owns the optional call-window capture child and its single
+  in-memory frame; `src/talk-vision.ts` owns the model's `facetime_look` tool.
+- `src/avatar-feed.ts` owns the optional `/facetime/avatar` page and its view-only
+  loopback feed; `src/avatar-lipsync.ts` turns model speech into mouth shapes.
 
 Carrier hangup is terminal only after a native ended event or stable complete
 topology absence. A helper reply only acknowledges the request. Capture death,
@@ -52,6 +56,13 @@ invalid explicit values fail validation.
 `realtime.provider`, `realtime.model`, and `realtime.voice` are optional
 session overrides. Registered realtime providers own auto-selection,
 authentication, and their model and voice defaults.
+
+`vision.enabled` and `avatar.enabled` default to `false`. Vision lets the agent look
+at the caller's FaceTime video on demand; it needs the `facetime-video-capture`
+native helper and a realtime model that accepts images. The avatar serves a
+lip-synced character for a local OBS browser source. Neither can fail a call. See
+[the design](docs/vision-and-avatar.md) and
+[test plan](docs/vision-and-avatar-test-plan.md).
 
 The helper endpoint is not configurable. Node and the native helper consume
 `helper-endpoint.json`, bind loopback only, and derive the port from the user ID.

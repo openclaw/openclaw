@@ -26,7 +26,15 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
     const validation = validateFaceTimeConfig(config);
     const pluginRoot = api.rootDir ?? api.resolvePath(".");
     let runtimePromise: Promise<import("./runtime-api.js").FaceTimeRuntime> | undefined;
+    let avatarFeedPromise: Promise<import("./runtime-api.js").FaceTimeAvatarFeed> | undefined;
     let uninstalling = false;
+
+    // One feed serves the avatar page and every call's mouth shapes. It loads with the first
+    // viewer or the runtime, whichever comes first.
+    const ensureAvatarFeed = () =>
+      (avatarFeedPromise ??= import("./runtime-api.js").then(({ createFaceTimeAvatarFeed }) =>
+        createFaceTimeAvatarFeed({ pluginRoot }),
+      ));
 
     const ensureRuntime = async () => {
       if (uninstalling) {
@@ -39,13 +47,14 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
         throw new Error(validation.errors.join("; "));
       }
       runtimePromise ??= import("./runtime-api.js")
-        .then(({ createFaceTimeRuntime }) =>
+        .then(async ({ createFaceTimeRuntime }) =>
           createFaceTimeRuntime({
             config,
             fullConfig: api.config,
             runtime: api.runtime,
             logger: api.logger,
             pluginRoot,
+            avatar: config.avatar.enabled ? (await ensureAvatarFeed()).sink : undefined,
           }),
         )
         .catch((error: unknown) => {
@@ -72,6 +81,9 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
       });
     };
     const stopRuntime = async () => {
+      const feed = avatarFeedPromise;
+      avatarFeedPromise = undefined;
+      (await feed)?.close();
       const current = runtimePromise;
       if (!current) {
         return;
@@ -91,6 +103,20 @@ const faceTimePlugin: OpenClawPluginDefinition = definePluginEntry({
       }
       return resolveFaceTimeToolApproval(event.params);
     });
+
+    if (config.enabled && config.avatar.enabled) {
+      // OBS on this Mac loads the page as a browser source; OBS Virtual Camera carries it into
+      // the call. The feed admits only direct loopback viewers, so it needs no Gateway token
+      // in an OBS scene file.
+      api.registerHttpRoute({
+        path: "/facetime/avatar",
+        auth: "plugin",
+        match: "exact",
+        handler: async (req, res) => await (await ensureAvatarFeed()).handleRequest(req, res),
+        handleUpgrade: async (req, socket, head) =>
+          (await ensureAvatarFeed()).handleUpgrade(req, socket, head),
+      });
+    }
 
     api.registerService({
       id: "facetime-runtime",

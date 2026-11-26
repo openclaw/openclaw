@@ -125,3 +125,32 @@ it.each([
   expect(result.ok).toBe(false);
   expect(result.checks.filter((check) => !check.ok).map((check) => check.id)).toEqual(failedChecks);
 });
+
+it("reports vision readiness without letting it fail an otherwise ready call path", async () => {
+  const withoutHelper = await preflight({
+    config: config({
+      vision: { enabled: true },
+      realtime: { providers: { openai: { apiKey: "k" } } },
+    }),
+  });
+  expect(withoutHelper.checks.at(-2)).toEqual({
+    id: "video-capture",
+    label: "FaceTime window capture for vision",
+    ok: false,
+    required: false,
+    message: expect.stringContaining("no facetime-video-capture helper"),
+  });
+  expect(withoutHelper.ok).toBe(true);
+
+  const withHelper = await preflight({
+    config: config({
+      vision: { enabled: true },
+      realtime: { providers: { openai: { apiKey: "k" } } },
+    }),
+    videoCaptureBinary: "/libexec/facetime-video-capture",
+  });
+  expect(withHelper.checks.find((check) => check.id === "video-capture")).toMatchObject({
+    ok: true,
+    message: "capture ready",
+  });
+});
