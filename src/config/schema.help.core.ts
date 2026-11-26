@@ -406,6 +406,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Per-agent override for max characters of each workspace bootstrap file injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapMaxChars.",
   "agents.entries.*.bootstrapTotalMaxChars":
     "Per-agent override for max total characters across all workspace bootstrap files injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapTotalMaxChars.",
+  "agents.entries.*.sharedUserDir":
+    "Directory holding a USER.md that several agents share. When set, this agent loads that USER.md in place of its workspace's own; personal USER.md overlays still apply. The directory stays outside the workspace path guard, so workspace file tools neither read nor edit it. Omit to keep the workspace USER.md.",
   "agents.entries.*.experimental":
     "Per-agent experimental flags. Omitted fields inherit agents.defaults.experimental.",
   "agents.entries.*.experimental.localModelLean":
