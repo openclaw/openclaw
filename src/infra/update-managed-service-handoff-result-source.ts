@@ -233,6 +233,8 @@ async function recoverInterruptedUpdater() {
   try {
     const assertCurrent = () => {
       if (!ownsManagedUpdateLease()) throw new Error("managed update recovery ownership was lost");
+      if (params.installLink && fs.realpathSync(params.installLink) !== installedRoot)
+        throw new Error("Active pnpm generation changed during interrupted recovery");
     };
     const updaterStopped = !restorationArmed;
     const assertPendingStop = () => {
@@ -268,9 +270,7 @@ async function recoverInterruptedUpdater() {
     const restored = await restoreGatewayService(
       recovered.status === "rolled-back" ? "managed-service-handoff-cancelled" : reason,
       recovered.recovery, updaterStopped || recovered.status === "succeeded" ? "error" : undefined,
-      // The candidate's own readiness verdict judges a forward recovery: a candidate
-      // built without the health-RPC marker still verifies an authenticated hello.
-      false, updaterStopped, assertPendingStop, recovered.status !== "succeeded",
+      false, updaterStopped, assertPendingStop, true,
     );
     if (!restored) throw new Error("Recovered runtime could not restore Gateway readiness and identity");
     runOutcome = { status: recovered.status, reason: recovered.status === "succeeded"

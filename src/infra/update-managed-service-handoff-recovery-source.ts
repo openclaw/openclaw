@@ -19,7 +19,9 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
   let serviceRunning;
   let servicePid;
   const ownsRecovery = () => {
-    try { return ownsManagedUpdateLease() && fs.realpathSync(installedRoot) === installedRoot; }
+    try {
+      return ownsManagedUpdateLease() && fs.realpathSync(params.installLink ?? installedRoot) === installedRoot;
+    }
     catch { return false; }
   };
   const runOwned = (...args) => ownsRecovery()
@@ -150,8 +152,13 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
       const { waitForGatewayUpdateRecovery } = await import(pathToFileURL(installedPath(params.recoveryModulePath)).href);
       if (!ownsRecovery()) throw new Error("managed update recovery ownership was lost");
       const health = await waitForGatewayUpdateRecovery(expectedVersion, expectedBuildId, params.recoveryTimeoutMs, requireHealthRpc);
+      // Main-based candidates predating the marker report the authenticated hello's boot ID.
+      // HTTP identity alone has no boot ID; an RPC refused after hello reports why.
+      const legacyAuthenticatedHealth = installedRoot !== params.updateLeaseKey &&
+        health.healthRpcVerified === undefined && Boolean(health.gatewayBootId) &&
+        !health.probeError && !health.authenticationError && !health.protocolMismatch && !health.operatorScopeWarning;
       restored = ownsRecovery() && health.healthy === true &&
-        (!requireHealthRpc || health.healthRpcVerified === true) &&
+        (!requireHealthRpc || health.healthRpcVerified === true || legacyAuthenticatedHealth) &&
         health.runtime?.status === "running" && health.gatewayVersion === expectedVersion &&
         (!expectedBuildId || health.gatewayBuildId === expectedBuildId);
       if (restored && serviceStoppedAtMs !== undefined) serviceDowntimeMs = Math.max(0, Date.now() - serviceStoppedAtMs);

@@ -1085,7 +1085,8 @@ async function spawnManagedServiceUpdateHandoff(
     // pnpm replaces this versioned root on install; interrupted recovery follows the
     // stable package link to the generation the service runs.
     installLink: await resolvePnpmGlobalInstallOwner(rootIdentity).then(
-      (installation) => (installation?.packageRoot === rootIdentity ? undefined : installation?.packageRoot),
+      (installation) =>
+        installation?.packageRoot === rootIdentity ? undefined : installation?.packageRoot,
       () => undefined,
     ),
   };

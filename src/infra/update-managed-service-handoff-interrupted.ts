@@ -142,7 +142,7 @@ export async function recoverInterruptedManagedUpdate(params: {
         ? run.after
         : // A package manager that replaced the root has no journal; the run names its target.
           installedRoot !== root && run.target.kind === "package" && run.target.version
-          ? { version: run.target.version }
+          ? { version: run.target.version, buildId: run.after.buildId }
           : undefined;
   if (
     !expected?.version ||
