@@ -483,6 +483,8 @@ Reply-level token maintenance and the optional mid-turn precheck defer local rec
 
 When the warm request cannot produce a summary, the client compactor runs. The public OpenAI Responses API and native xAI use their compact endpoint by default for that fallback and for `/compact` without focus instructions. `params.responsesCompactEndpoint: false` disables that endpoint for a model. `/compact <focus>` keeps client-side summarization so the instructions apply. A provider-confirmed overflow keeps the client recovery path because compact endpoints also require their input to fit. Endpoint failures fall back to client-side summarization.
 
+If history ends with a user message or tool result, OpenClaw sends only the completed history before the unfinished exchange to the compact endpoint. The pending user message, tool calls, and their results stay in order after the checkpoint and still count toward the next request. If there is no completed assistant message to own the checkpoint, OpenClaw uses client compaction.
+
 Once the foreground request budget is prepared, a returned endpoint window must
 also fit beside its fixed instructions, tools, pending input, and reserve before
 OpenClaw saves it. If retained user messages still exceed that budget,

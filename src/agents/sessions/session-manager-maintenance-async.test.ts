@@ -92,65 +92,82 @@ function afterWorkerCommand(type: string, after: () => void | Promise<void>) {
   return vi.spyOn(metadataRuntime, "withSessionMetadataWorker").mockImplementation(intercept);
 }
 
-it("keeps hydrated endpoint history shared and publishes the same durable checkpoint", async () => {
-  const { scope, manager: seed } = await openSession();
-  await appendUser(seed, "remember this");
-  await seed.appendMessageAsync(
-    makeAgentAssistantMessage({
-      model: "synthetic",
-      content: [{ type: "text", text: "remembered" }],
-    }),
-  );
-  const manager = await SessionManager.openAsync(scope);
-  const original = manager[sessionManagerReadTranscriptBranch]();
-  const payloads = original.map((entry) => entry.type === "message" && entry.message);
-  const bytes = JSON.stringify(original);
-  const model = makeProviderModelFixture({
-    id: "synthetic",
-    api: "openai-responses",
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-  });
-  const item = { type: "compaction" as const, id: "cmp_test", encrypted_content: "synthetic" };
-  const result = await attemptServerEndpointCompaction({
-    trigger: "manual",
-    model,
-    sessionManager: manager,
-    extraParams: {},
-    requestOptions: {},
-    context: {
-      systemPrompt: "",
-      messages: (await manager[sessionManagerReadInitialContext]()).messages,
-    },
-    streamFn: (_model, _context, options) => {
-      const request = claimResponsesCompactRequest(options);
-      assert(request);
-      request.resolve({
-        item,
-        output: [item],
-        historyMode: "compacted-prefix",
-        model,
-        usage: { input_tokens: 100, output_tokens: 10 },
-        replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model),
+it.each([false, true])(
+  "keeps hydrated endpoint history shared and publishes a durable checkpoint (pending tail: %s)",
+  async (withTail) => {
+    const { scope, manager: seed } = await openSession();
+    await appendUser(seed, "remember this");
+    await seed.appendMessageAsync(
+      makeAgentAssistantMessage({
+        model: "synthetic",
+        content: [{ type: "text", text: "remembered" }],
+      }),
+    );
+    const manager = await SessionManager.openAsync(scope);
+    const tailId = withTail ? await appendUser(manager, "still pending") : undefined;
+    const original = manager[sessionManagerReadTranscriptBranch]();
+    const payloads = original.map((entry) => entry.type === "message" && entry.message);
+    const bytes = JSON.stringify(original);
+    const model = makeProviderModelFixture({
+      id: "synthetic",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    const item = { type: "compaction" as const, id: "cmp_test", encrypted_content: "synthetic" };
+    const result = await attemptServerEndpointCompaction({
+      trigger: "manual",
+      model,
+      sessionManager: manager,
+      extraParams: {},
+      requestOptions: {},
+      context: {
+        systemPrompt: "",
+        messages: (await manager[sessionManagerReadInitialContext]()).messages,
+      },
+      streamFn: (_model, _context, options) => {
+        const request = claimResponsesCompactRequest(options);
+        assert(request);
+        request.resolve({
+          item,
+          output: [item],
+          historyMode: "compacted-prefix",
+          model,
+          usage: { input_tokens: 100, output_tokens: 10 },
+          replayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model),
+        });
+        const stream = createAssistantMessageEventStream();
+        void nextTurn().then(() =>
+          stream.end(
+            makeAgentAssistantMessage({ content: [{ type: "text", text: "remembered" }] }),
+          ),
+        );
+        return stream;
+      },
+    });
+    expect(result).toMatchObject({ item });
+    expect(JSON.stringify(original)).toBe(bytes);
+    for (const [index, entry] of original.entries()) {
+      expect(entry.type === "message" && entry.message).toBe(payloads[index]);
+    }
+    const reopened = await SessionManager.openAsync(scope);
+    expect(manager.getPersistedEntries()).toEqual(reopened.getPersistedEntries());
+    if (withTail) {
+      expect(reopened.getLeafEntry()).toMatchObject({
+        id: tailId,
+        message: { role: "user", content: "still pending" },
       });
-      const stream = createAssistantMessageEventStream();
-      void nextTurn().then(() =>
-        stream.end(makeAgentAssistantMessage({ content: [{ type: "text", text: "remembered" }] })),
+      expect(reopened.getBranch().map((entry) => entry.id)).toEqual(
+        original.map((entry) => entry.id),
       );
-      return stream;
-    },
-  });
-  expect(result).toMatchObject({ item });
-  expect(JSON.stringify(original)).toBe(bytes);
-  for (const [index, entry] of original.entries()) {
-    expect(entry.type === "message" && entry.message).toBe(payloads[index]);
-  }
-  const reopened = await SessionManager.openAsync(scope);
-  expect(manager.getPersistedEntries()).toEqual(reopened.getPersistedEntries());
-  expect(reopened.getLeafEntry()).toMatchObject({
-    message: { providerReplay: { data: "synthetic" } },
-  });
-});
+    }
+    expect(
+      reopened
+        .getBranch()
+        .findLast((entry) => entry.type === "message" && entry.message.role === "assistant"),
+    ).toMatchObject({ message: { providerReplay: { data: "synthetic" } } });
+  },
+);
 
 it("shares admitted immutable payloads and opaque aliases when preparing and publishing a rewrite", async () => {
   const manager = SessionManager.fromEntries([
