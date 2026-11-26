@@ -304,6 +304,7 @@ export function createChannelActionContext(params: {
       params.ctx.input.conversationReadOrigin,
     ),
     sessionKey: params.ctx.input.sessionKey,
+    transcriptProducerSessionKey: params.ctx.input.sourceReplySessionKey,
     sessionId: params.ctx.input.sessionId,
     inboundEventKind: params.ctx.input.inboundEventKind,
     agentId: params.ctx.agentId,

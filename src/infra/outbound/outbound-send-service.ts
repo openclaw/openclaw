@@ -222,7 +222,11 @@ export async function executeSendAction(params: SendActionParams): Promise<{
         onHandled: async (deliveryFact) => {
           try {
             await params.ctx.onSendAccepted?.();
-            if (!deliveryFact || deliveryFact.partialDelivery) {
+            if (
+              !deliveryFact ||
+              deliveryFact.partialDelivery ||
+              channelPlugin.actions?.nativeSendUsesDurableHistory
+            ) {
               return;
             }
             if (deliveryFact.createdThreadIds.length > 1) {
@@ -243,6 +247,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
               producer: buildOutboundSessionContext({
                 cfg: params.ctx.cfg,
                 sessionKey: params.ctx.input.sessionKey,
+                transcriptProducerSessionKey: params.ctx.input.sourceReplySessionKey,
                 agentId: params.ctx.agentId,
               }),
               payload: { ...defaultPayload, text: pluginMessage },
@@ -296,6 +301,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     ...(corePayload ? { payloads: [corePayload] } : {}),
     agentId: params.ctx.agentId,
     requesterSessionKey: params.ctx.input.sessionKey,
+    transcriptProducerSessionKey: params.ctx.input.sourceReplySessionKey,
     requesterAccountId: params.ctx.input.requesterAccountId ?? params.ctx.accountId ?? undefined,
     requesterSenderId: params.ctx.input.requesterSenderId ?? undefined,
     requesterSenderName: params.ctx.input.requesterSenderName ?? undefined,

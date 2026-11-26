@@ -328,6 +328,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   await import("../../infra/outbound/message-action-runner.js");
                 const result = await runMessageAction({
                   ...actionContext,
+                  sourceReplySessionKey,
                   gatewayOwnedDelivery: true,
                   actionOrigin:
                     request.action === "send" && trustedContext.runtimeAgentId

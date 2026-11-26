@@ -95,9 +95,6 @@ const TELEGRAM_ACTION_ALIASES = {
 } as const;
 
 type TelegramActionName = (typeof TELEGRAM_ACTION_ALIASES)[keyof typeof TELEGRAM_ACTION_ALIASES];
-type ConversationReadInvocationOrigin = NonNullable<
-  ChannelMessageActionContext["conversationReadOrigin"]
->;
 function normalizeTelegramActionName(action: string): TelegramActionName {
   const normalized = TELEGRAM_ACTION_ALIASES[action as keyof typeof TELEGRAM_ACTION_ALIASES];
   if (!normalized) {
@@ -125,13 +122,14 @@ export async function handleTelegramAction(
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
     sessionKey?: string | null;
+    transcriptProducerSessionKey?: string;
     inboundEventKind?: string;
     gatewayClientScopes?: readonly string[];
     deliveryRetryOwner?: ChannelMessageActionContext["deliveryRetryOwner"];
     onPlatformSendDispatch?: ChannelMessageActionContext["onPlatformSendDispatch"];
     assertDirectAdapterHandoff?: ChannelMessageActionContext["assertDirectAdapterHandoff"];
     skipQueue?: boolean;
-    conversationReadOrigin?: ConversationReadInvocationOrigin;
+    conversationReadOrigin?: ChannelMessageActionContext["conversationReadOrigin"];
     requesterAccountId?: string | null;
     requesterSenderId?: string | null;
     reply?: ChannelMessageActionContext["reply"];
@@ -450,6 +448,7 @@ export async function handleTelegramAction(
     const outboundSession = buildOutboundSessionContext({
       cfg,
       sessionKey: options?.sessionKey,
+      transcriptProducerSessionKey: options?.transcriptProducerSessionKey,
       requesterAccountId: accountId,
     });
     const durableResult = await sendDurableMessageBatch({

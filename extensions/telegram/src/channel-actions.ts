@@ -203,6 +203,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       schema,
     };
   },
+  nativeSendUsesDurableHistory: true,
   providerOwnedReadGates: ["react", "edit", "delete", "emoji-list", "read"],
   readAuthorityActions: ["read"],
   writeAuthorityActions: ["delete", "edit"],
@@ -292,6 +293,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         mediaLocalRoots: ctx.mediaLocalRoots,
         mediaReadFile: ctx.mediaReadFile,
         sessionKey: ctx.sessionKey,
+        transcriptProducerSessionKey: ctx.transcriptProducerSessionKey,
         inboundEventKind: ctx.inboundEventKind,
         gatewayClientScopes: ctx.gatewayClientScopes,
         deliveryRetryOwner: ctx.deliveryRetryOwner,

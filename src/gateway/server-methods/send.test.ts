@@ -1014,18 +1014,18 @@ describe("gateway send conversation ownership", () => {
     mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
       jsonResult({ ok: true, messageId: "tg-split-session" }),
     );
-    const policySessionKey = "agent:main:telegram:default:direct:chat-123";
-    const runSessionKey = "agent:main:main";
+    const sessionKey = "agent:main:telegram:default:direct:chat-123";
+    const sourceReplySessionKey = "agent:main:main";
 
-    const { respond } = await runTelegramTerminalAction({
-      sessionKey: policySessionKey,
-      sourceReplySessionKey: runSessionKey,
-    });
+    const { respond } = await runTelegramTerminalAction({ sessionKey, sourceReplySessionKey });
 
     expect(firstRespondCall(respond)[0]).toBe(true);
-    expectCall(mocks.appendAssistantMessageToSessionTranscript, { sessionKey: runSessionKey });
+    expectCall(mocks.appendAssistantMessageToSessionTranscript, {
+      sessionKey: sourceReplySessionKey,
+    });
     expectCall(mocks.dispatchChannelMessageAction, {
-      sessionKey: policySessionKey,
+      sessionKey,
+      transcriptProducerSessionKey: sourceReplySessionKey,
       deliveryRetryOwner: "caller",
       skipQueue: true,
     });

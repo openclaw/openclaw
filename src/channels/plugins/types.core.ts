@@ -699,6 +699,8 @@ export type ChannelMessageActionContext = {
    * Plugins must use it only for conversation-read visibility policy.
    */
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  /** Host-owned source conversation for delivery history, never a policy key. */
+  transcriptProducerSessionKey?: string;
   sessionKey?: string | null;
   sessionId?: string | null;
   inboundEventKind?: InboundEventKind;
@@ -772,6 +774,8 @@ export type ChannelMessageActionAdapter = {
    * Does not grant authority or bypass current requester/provider permissions.
    */
   writeAuthorityActions?: readonly ChannelMessageActionName[];
+  /** Native sends use durable delivery, which already records confirmed destination history. */
+  nativeSendUsesDurableHistory?: true;
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   resolveExecutionMode?: (params: { action: ChannelMessageActionName }) => "local" | "gateway";
   resolveCliActionRequest?: (params: {
