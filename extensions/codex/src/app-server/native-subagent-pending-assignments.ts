@@ -62,6 +62,12 @@ export type CodexNativeSubagentAssignmentStore = {
   /** In-process binding ownership; use the async check before recovered work escapes. */
   assertCurrent(): void;
   assertCurrentAsync(): Promise<void>;
+  /**
+   * Delivery-only ownership: accepts native parent rotation within the same
+   * session and connection. Throws CodexNativeCompletionOwnerError.
+   * Submission receipts and assignment writes keep the strict assertCurrent().
+   */
+  assertDeliveryOwner?(): void;
   read(): Promise<readonly CodexNativeSubagentPendingAssignment[]>;
   record(
     assignment: CodexNativeSubagentPendingAssignment,
@@ -73,6 +79,25 @@ export type CodexNativeSubagentAssignmentStore = {
     undelivered?: { status: "succeeded" | "failed" | "cancelled" },
   ): Promise<boolean>;
 };
+
+export type CodexNativeCompletionOwnerReason =
+  | "binding-unavailable"
+  | "pending-supervision-branch"
+  | "connection-changed"
+  | "session-changed"
+  | "lifecycle-changed"
+  | "rotation-unverifiable";
+
+/** Retryable reasons may resolve later; the rest can never deliver to this owner. */
+export class CodexNativeCompletionOwnerError extends Error {
+  constructor(
+    readonly reason: CodexNativeCompletionOwnerReason,
+    readonly retryable: boolean,
+  ) {
+    super(`Native completion owner is not current: ${reason}`);
+    this.name = "CodexNativeCompletionOwnerError";
+  }
+}
 
 /** Native parent rotation is not physical requester or connection adoption. */
 export function matchesNativeAssignmentLifecycle(
