@@ -3,7 +3,7 @@ import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalizatio
 import { Errored, For, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
 import {
   formatPromptCacheHitRate,
-  promptCacheHitRate,
+  latestRunCacheHitRate,
 } from "../../../../../src/shared/prompt-cache-hit-rate.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
@@ -87,32 +87,6 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
     }
   }
   return null;
-}
-
-/** Prompt cache share across the model calls since the latest user message that reported
- *  a cache split; a call with unknown usage or cache use is left out, never counted as a miss. */
-function latestRunCacheHitRate(messages: unknown[] | undefined): number | null {
-  const totals = { input: 0, cacheRead: 0, cacheWrite: 0 };
-  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
-    const message = readCostRecord(messages?.[index]);
-    if (message?.role === "user") {
-      break;
-    }
-    if (message?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(message)) {
-      continue;
-    }
-    const usage = readCostRecord(message.usage);
-    if (
-      readCostRecord(usage?.usageReport)?.state === "unavailable" ||
-      readCostRecord(usage?.cacheTelemetry)?.state === "unavailable"
-    ) {
-      continue;
-    }
-    for (const key of ["input", "cacheRead", "cacheWrite"] as const) {
-      totals[key] += asNonNegativeFiniteNumber(usage?.[key]) ?? 0;
-    }
-  }
-  return promptCacheHitRate(totals);
 }
 
 function formatContextCost(value: number) {

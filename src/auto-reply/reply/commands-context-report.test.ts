@@ -309,12 +309,28 @@ describe("buildContextReply", () => {
       cacheUnmeasuredInput: 0,
       ...overrides,
     });
+    // The latest run made two measured calls and one without cache telemetry: the rate
+    // sums the measured calls (90%) instead of aggregate input over the last call's reads.
+    const call = (callUsage: Record<string, unknown>) => ({
+      role: "assistant",
+      content: [],
+      usage: callUsage,
+    });
+    const recentMessages = [
+      { role: "user", content: "older" },
+      call({ input: 1_000, cacheRead: 0, cacheWrite: 0 }),
+      { role: "user", content: "latest" },
+      call({ input: 100, cacheRead: 900, cacheWrite: 0 }),
+      call({ input: 500, cacheRead: 0, cacheTelemetry: { state: "unavailable" } }),
+      call({ input: 100, cacheRead: 900, cacheWrite: 0 }),
+    ];
     const lines = (sessionUsage: SessionCostSummary | null) =>
       formatContextBudget({
         report: expectDefined(sessionEntry.systemPromptReport, "system prompt report"),
         used: 4_000,
         limit: 8_192,
-        entry: { ...sessionEntry, cacheRead: 900, cacheWrite: 0, estimatedCostUsd: 0.306 },
+        entry: { ...sessionEntry, estimatedCostUsd: 0.306 },
+        recentMessages,
         sessionUsage,
       })
         .split("\n")
@@ -336,6 +352,16 @@ describe("buildContextReply", () => {
       "Session total: 90.00% cache · $154.52",
     );
     expect(lines(null)).toEqual(["Latest run: 90.00% cache · $0.31"]);
+  });
+
+  it("keeps the budget bar at 20 cells when small categories take their minimum cell", () => {
+    const sessionEntry = expectDefined(makeParams("/context", false).sessionEntry, "session entry");
+    const bar = formatContextBudget({
+      report: expectDefined(sessionEntry.systemPromptReport, "system prompt report"),
+      used: 99_000,
+      limit: 100_000,
+    }).split("\n")[1];
+    expect([...expectDefined(bar, "budget bar")]).toHaveLength(20);
   });
 
   it("does not invent a message share when cached usage is stale", async () => {

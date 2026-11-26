@@ -29,7 +29,11 @@ import {
   type SessionEntry,
   type SessionSystemPromptReport,
 } from "../../config/sessions/types.js";
-import { readSessionMessagesWithSourceAsync } from "../../gateway/session-transcript-readers.js";
+import type { SessionTranscriptReadScope } from "../../gateway/session-transcript-read.types.js";
+import {
+  readSessionMessagesAsync,
+  readSessionMessagesWithSourceAsync,
+} from "../../gateway/session-transcript-readers.js";
 import { iterateSessionTranscriptSourcePages } from "../../gateway/session-transcript-source-pages.js";
 import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
 import {
@@ -38,6 +42,7 @@ import {
 } from "../../shared/context-budget-categories.js";
 import {
   formatPromptCacheHitRate,
+  latestRunCacheHitRate,
   promptCacheHitRate,
 } from "../../shared/prompt-cache-hit-rate.js";
 import { formatUsd } from "../../utils/usage-format.js";
@@ -69,6 +74,9 @@ const CONTEXT_BUDGET_LABELS: Record<ContextCategory["id"], { swatch: string; lab
   system: { swatch: "🟪", label: "System instructions" },
 };
 const CONTEXT_BUDGET_BAR_CELLS = 20;
+// Bounds the tail read; a run longer than this reports the rate of its latest calls.
+const LATEST_RUN_MAX_MESSAGES = 200;
+const LATEST_RUN_MAX_BYTES = 1024 * 1024;
 const formatBudgetTokens = (tokens: number) =>
   formatCompactTokenCount(tokens, { trimTrailingZero: true });
 
@@ -78,6 +86,8 @@ export function formatContextBudget(params: {
   used: number | null;
   limit: number | null;
   entry?: SessionEntry;
+  /** Recent transcript messages; the latest run's cache rate comes from its model calls. */
+  recentMessages?: readonly unknown[];
   /** Lifetime usage of this session instance; null when it has no recorded usage. */
   sessionUsage?: SessionCostSummary | null;
 }): string {
@@ -96,18 +106,21 @@ export function formatContextBudget(params: {
   const lines = [header];
   if (limit && known > 0) {
     // Each visible category keeps at least one cell, like the UI's sliver, so a small
-    // share stays legible; the header and legend carry the exact numbers.
+    // share stays legible; the header and legend carry the exact numbers. The cells left
+    // after that minimum go by largest remainder, so the bar never overflows.
     const shown = categories.filter((category) => (category.tokens ?? 0) > 0);
     const filled = Math.min(
       CONTEXT_BUDGET_BAR_CELLS,
       Math.max(shown.length, Math.round((known / limit) * CONTEXT_BUDGET_BAR_CELLS)),
     );
-    const exact = shown.map((category) => ((category.tokens ?? 0) / known) * filled);
-    const cells = exact.map((value) => Math.max(1, Math.floor(value)));
+    const exact = shown.map(
+      (category) => ((category.tokens ?? 0) / known) * (filled - shown.length),
+    );
+    const cells = exact.map((value) => 1 + Math.floor(value));
     for (let spare = filled - cells.reduce((sum, value) => sum + value, 0); spare > 0; spare -= 1) {
       const next = exact.reduce(
         (best, value, index) =>
-          value - cells[index]! > exact[best]! - cells[best]! ? index : best,
+          value + 1 - cells[index]! > exact[best]! + 1 - cells[best]! ? index : best,
         0,
       );
       cells[next]! += 1;
@@ -115,10 +128,7 @@ export function formatContextBudget(params: {
     lines.push(
       shown
         .map((category, index) => CONTEXT_BUDGET_LABELS[category.id].swatch.repeat(cells[index]!))
-        .join("") +
-        "⬜".repeat(
-          Math.max(0, CONTEXT_BUDGET_BAR_CELLS - cells.reduce((sum, value) => sum + value, 0)),
-        ),
+        .join("") + "⬜".repeat(CONTEXT_BUDGET_BAR_CELLS - filled),
     );
   }
   lines.push("");
@@ -134,14 +144,7 @@ export function formatContextBudget(params: {
   }
 
   const entry = params.entry;
-  const latestRate =
-    entry?.cacheRead == null
-      ? null
-      : promptCacheHitRate({
-          input: entry.inputTokens ?? 0,
-          cacheRead: entry.cacheRead,
-          cacheWrite: entry.cacheWrite ?? 0,
-        });
+  const latestRate = latestRunCacheHitRate(params.recentMessages);
   const latestRun = [
     latestRate === null ? null : `${formatPromptCacheHitRate(latestRate)} cache`,
     formatUsd(entry?.estimatedCostUsd),
@@ -189,16 +192,16 @@ function resolveContextReportAgentId(params: HandleCommandsParams): string {
   }).sessionAgentId;
 }
 
-async function* readContextTranscriptPages(
+function resolveContextTranscriptScope(
   params: HandleCommandsParams,
   targetSessionEntry: SessionEntry | undefined,
-): AsyncGenerator<AgentMessage[]> {
+): SessionTranscriptReadScope | null {
   const sessionId = targetSessionEntry?.sessionId?.trim();
   if (!sessionId) {
-    return;
+    return null;
   }
   const agentId = resolveContextReportAgentId(params);
-  for await (const page of iterateSessionTranscriptSourcePages(readSessionMessagesWithSourceAsync, {
+  return {
     agentId,
     sessionId,
     sessionKey: params.sessionKey,
@@ -207,9 +210,38 @@ async function* readContextTranscriptPages(
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     }),
-  })) {
+  };
+}
+
+async function* readContextTranscriptPages(
+  params: HandleCommandsParams,
+  targetSessionEntry: SessionEntry | undefined,
+): AsyncGenerator<AgentMessage[]> {
+  const scope = resolveContextTranscriptScope(params, targetSessionEntry);
+  if (!scope) {
+    return;
+  }
+  for await (const page of iterateSessionTranscriptSourcePages(
+    readSessionMessagesWithSourceAsync,
+    scope,
+  )) {
     yield page.messages as AgentMessage[];
   }
+}
+
+/** Bounded tail read: the latest run's model calls sit after the last user message. */
+async function readLatestRunMessages(
+  params: HandleCommandsParams,
+  targetSessionEntry: SessionEntry | undefined,
+): Promise<unknown[]> {
+  const scope = resolveContextTranscriptScope(params, targetSessionEntry);
+  return scope
+    ? await readSessionMessagesAsync(scope, {
+        mode: "recent",
+        maxMessages: LATEST_RUN_MAX_MESSAGES,
+        maxBytes: LATEST_RUN_MAX_BYTES,
+      })
+    : [];
 }
 
 async function buildTranscriptCompactabilityLines(
@@ -440,6 +472,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         used: cachedContextUsageTokens ?? null,
         limit: session.contextTokens,
         entry: targetSessionEntry,
+        recentMessages: await readLatestRunMessages(params, targetSessionEntry),
         sessionUsage: await loadCurrentSessionCostSummary({
           cfg: params.cfg,
           sessionKey: params.sessionKey,

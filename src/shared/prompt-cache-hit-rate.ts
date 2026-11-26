@@ -1,3 +1,7 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "./transcript-only-openclaw-assistant.js";
+
 /** Prompt-cache hit rate shared by the Control UI and chat `/context` reports. */
 export type PromptCacheUsage = {
   input: number;
@@ -15,6 +19,32 @@ export const measuredPromptTokens = (usage: PromptCacheUsage) =>
 export function promptCacheHitRate(usage: PromptCacheUsage): number | null {
   const prompt = measuredPromptTokens(usage);
   return prompt > 0 ? usage.cacheRead / prompt : null;
+}
+
+/** Prompt cache share across the model calls since the latest user message that reported
+ *  a cache split; a call with unknown usage or cache use is left out, never counted as a miss. */
+export function latestRunCacheHitRate(messages: readonly unknown[] | undefined): number | null {
+  const totals = { input: 0, cacheRead: 0, cacheWrite: 0 };
+  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = asNullableObjectRecord(messages?.[index]);
+    if (message?.role === "user") {
+      break;
+    }
+    if (message?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(message)) {
+      continue;
+    }
+    const usage = asNullableObjectRecord(message.usage);
+    if (
+      asNullableObjectRecord(usage?.usageReport)?.state === "unavailable" ||
+      asNullableObjectRecord(usage?.cacheTelemetry)?.state === "unavailable"
+    ) {
+      continue;
+    }
+    for (const key of ["input", "cacheRead", "cacheWrite"] as const) {
+      totals[key] += asNonNegativeFiniteNumber(usage?.[key]) ?? 0;
+    }
+  }
+  return promptCacheHitRate(totals);
 }
 
 /** Floors, so 100.00% only appears when every prompt token was a cache read. */
