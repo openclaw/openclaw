@@ -52,8 +52,8 @@ import {
 import { buildFeishuMessageToolHints } from "./agent-prompt.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
-import { FeishuChannelConfigSchema } from "./channel-config-schema.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
+import { FeishuChannelConfigSchema } from "./config-schema.js";
 import {
   buildFeishuConversationId,
   buildFeishuModelOverrideParentCandidates,

@@ -2,7 +2,7 @@
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { describe, expect, it, vi } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract-api.js";
-import { FeishuConfigSchema } from "./src/config-schema.js";
+import { FeishuConfigSchema } from "./src/config-validator.js";
 
 vi.mock(import("openclaw/plugin-sdk/channel-config-schema"), async (importOriginal) => {
   const actual = await importOriginal();
