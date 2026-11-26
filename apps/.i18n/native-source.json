@@ -4866,6 +4866,8 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/node/DebugHandler.kt","kind":"ui-call","surface":"android","id":"native.android.cde7800d239f6622","source":"${signature.take(20)}... (OK)"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/node/DebugHandler.kt","kind":"ui-call","surface":"android","id":"native.android.4c3f0ff77123a235","source":"NULL (FAILED)"},
     {"path":"apps/macos/Sources/OpenClaw/DashboardManager+Construction.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.b8fd3263920a001e","source":"OpenClaw"},
+    {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.490b8f515f128aaa","source":"OpenClaw app update required"},
+    {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.5214eb9ddbe24f87","source":"OpenClaw client credentials need recovery"},
     {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"ui-call","surface":"apple","id":"native.apple.cf5cdb8c89e57ea2","source":"About OpenClaw"},
     {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"ui-call","surface":"apple","id":"native.apple.9c60d46ba33836b2","source":"Back"},
     {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"ui-call","surface":"apple","id":"native.apple.91ed29ffffd541e0","source":"Command Palette…"},
