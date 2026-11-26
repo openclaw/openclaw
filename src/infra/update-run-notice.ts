@@ -87,6 +87,11 @@ export function renderUpdateRunSummary(
           ),
       )?.step ?? "unknown";
     const reason = run.reason ?? "update-failed";
+    const detail = (
+      run.steps.findLast((step) => step.step === "outcome")?.detail ?? failedStep?.detail
+    )
+      ?.replace(/\s+/gu, " ")
+      .trim();
     const observation = run.steps.findLast((step) => step.step === "gateway recovery verification");
     const recovery = run.verification?.recovery;
     // The request receipt proves continued service only before activation can stop it.
@@ -111,7 +116,7 @@ export function renderUpdateRunSummary(
               : `The previous version (${serving}) is still serving.`,
           ]
         : []),
-      `Update failed ${FAILED_PHASE_DESCRIPTIONS.get(phase) ?? UNKNOWN_FAILED_PHASE} (${reason}).`,
+      `Update failed ${FAILED_PHASE_DESCRIPTIONS.get(phase) ?? UNKNOWN_FAILED_PHASE} (${reason}).${detail ? ` ${detail}` : ""}`,
       run.origin?.nextAction && !options.manualCommand
         ? `Next: ${run.origin.nextAction.replace(/\s+/gu, " ")}`
         : nextStep,
@@ -150,7 +155,7 @@ export function isUpdateRunTerminalNoticeText(text: string): boolean {
       [...FAILED_PHASE_DESCRIPTIONS.values(), UNKNOWN_FAILED_PHASE].some(
         (description) =>
           failure.startsWith(`Update failed ${description} (`) &&
-          /\([a-z0-9-]+\)\.$/u.test(failure),
+          /\([a-z0-9-]+\)\.(?: .+)?$/u.test(failure),
       )
     ) {
       return true;

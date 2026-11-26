@@ -84,4 +84,17 @@ describe("update conversation notices", () => {
       renderUpdateRunNotice({ status: "succeeded", phase: "finished", reason: null }, "parking"),
     ).toBeNull();
   });
+
+  it("keeps the recorded failure cause in the shared terminal summary", () => {
+    const run = {
+      status: "failed" as const,
+      phase: "finished" as const,
+      reason: "build-failed",
+      steps: [{ step: "build", status: "failed" as const, detail: "Disk is full\nFree space" }],
+    };
+    const text = renderUpdateRunSummary(run);
+    expect(text).toContain("(build-failed). Disk is full Free space");
+    expect(renderUpdateRunNotice(run, "finished")).toBe(text);
+    expect(isUpdateRunTerminalNoticeText(text)).toBe(true);
+  });
 });
