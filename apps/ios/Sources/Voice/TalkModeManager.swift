@@ -883,7 +883,8 @@ final class TalkModeManager {
                   self.recognitionTask?.state == .running && appendedInput.withLock { $0 })
         else {
             throw NSError(domain: "TalkMode", code: 4, userInfo: [
-                NSLocalizedDescriptionKey: "Speech recognition did not receive microphone input",
+                NSLocalizedDescriptionKey: String(
+                    localized: "No microphone audio. Check that no other app is using the microphone, then tap Talk to try again."),
             ])
         }
 
