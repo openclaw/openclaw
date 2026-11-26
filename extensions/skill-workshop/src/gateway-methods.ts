@@ -196,6 +196,7 @@ export function registerSkillWorkshopGatewayMethods(api: OpenClawPluginApi): voi
         change: await archiveWorkshopSkill(writeContext(resolved, invocation), {
           name: params.name,
           reason: params.reason,
+          undoRestoreChangeId: params.undoRestoreChangeId,
         }),
       }),
     ),

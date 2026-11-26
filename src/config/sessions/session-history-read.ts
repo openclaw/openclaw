@@ -3,7 +3,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
-import { listTranscriptArchivesFromDatabase } from "./session-accessor.sqlite-archive-read.js";
+import { listTranscriptArchivesFromDatabase } from "./session-accessor.sqlite-archive-metadata.js";
 import type {
   SessionTranscriptInstance,
   SessionTranscriptInstanceListOptions,
