@@ -1,19 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { adoptBootComposer, retireBootComposer } from "../../app/boot-composer.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { completeInitialSessionTurn } from "../new-session/initial-session-turn-handoff.ts";
-import { StartedSessionNavigation } from "../new-session/started-session-navigation.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import type { ChatPaneProps } from "./chat-pane.tsx";
 import "./chat-pane.tsx";
@@ -47,298 +43,96 @@ function mountedFixture(
 
 function mountPane(context: ApplicationContext, props: Partial<ChatPaneProps>) {
   const container = document.body.appendChild(createApplicationContextProvider(context));
-  const pane = Object.assign(document.createElement("openclaw-chat-pane"), {
-    presentationId: crypto.randomUUID(),
-    ...props,
-  });
+  const pane = Object.assign(document.createElement("openclaw-chat-pane"), props);
   container.append(pane);
   onTestFinished(() => container.remove());
   return { container, pane };
 }
 
 const composerSelector = ".agent-chat__composer-combobox textarea";
-async function coldPane(
-  outcome:
-    | "archived"
-    | "cached"
-    | "active"
-    | "absent"
-    | "failed"
-    | "creating"
-    | "accepted"
-    | "incognito",
-) {
-  installTranscriptDomMocks();
-  onTestFinished(resetTranscriptTestDom);
-  const sessionKey =
-    outcome === "incognito"
-      ? "agent:main:dashboard:incognito-expired"
-      : "agent:main:chat:11111111-1111-4111-8111-111111111111";
-  const absent = outcome === "absent" || outcome === "incognito";
-  const row = {
-    key: sessionKey,
-    kind: "direct" as const,
-    sessionId: "cold-target",
-    updatedAt: 1,
-    archived: outcome === "archived" || outcome === "cached",
-    label: "Cold conversation",
-  };
-  const descriptor = createDeferred();
-  const history = createDeferred();
-  const roster = createDeferred();
-  const successor = createDeferred();
-  onTestFinished(() => {
-    descriptor.resolve();
-    history.resolve();
-    roster.resolve();
-    successor.resolve();
-  });
-  const readHistory = async (_method: string, raw: unknown) => {
-    if (asOptionalRecord(raw)?.sessionKey !== sessionKey) {
-      await successor.promise;
-      return { messages: [], sessionId: null };
-    }
-    await history.promise;
-    if (outcome === "failed") throw new Error("Synthetic history unavailable");
-    if (outcome === "incognito") return { sessionKey, messages: [] };
-    return {
-      messages: [],
-      sessionInfo: outcome === "absent" ? undefined : row,
-      sessionId: outcome === "absent" ? null : row.sessionId,
-    };
-  };
-  const fixture = createMountedPanes(absent ? [] : [row], "main", roster.promise, {
-    "sessions.describe": async (_method, raw) => {
-      if (asOptionalRecord(raw)?.key !== sessionKey) {
-        await successor.promise;
-        return { session: null };
-      }
-      await descriptor.promise;
-      return { session: absent ? null : row };
-    },
-    "chat.startup": readHistory,
-    "chat.history": readHistory,
-  });
-  if (outcome === "cached") {
-    await fixture.context.sessions.whenCachedRosterSettled();
-    Object.assign(fixture.context.sessions.state, {
-      result: sessionsResult([{ ...row, archived: false, label: "Stale active title" }]),
-      resultCached: true,
-      agentId: "main",
-    });
-    Object.assign(fixture.context.sessions.presentation, fixture.context.sessions.state);
-  }
-  if (outcome === "creating") {
-    onTestFinished(
-      fixture.context.chatSubmissions.beginCreate({
-        creation: { sessionKey, admitted: true },
-        message: null,
-        canDisplay: () => true,
-      }),
+it.each([false, true])(
+  "adopts the boot editor before session facts settle (archived: %s)",
+  async (archived) => {
+    installTranscriptDomMocks();
+    onTestFinished(resetTranscriptTestDom);
+    const metadata = createDeferred();
+    onTestFinished(() => metadata.resolve());
+    const sessionKey = "agent:main:chat:11111111-1111-4111-8111-111111111111";
+    const fixture = createMountedPanes(
+      [{ key: sessionKey, kind: "direct", sessionId: "boot-target", updatedAt: 1, archived }],
+      "main",
+      metadata.promise,
     );
-  }
-  const gateway = fixture.context.gateway;
-  const request = vi.spyOn(expectDefined(gateway.snapshot.client, "client"), "request");
-  if (outcome === "accepted") {
-    vi.spyOn(gateway, "setSessionKey").mockImplementation((sessionKey) =>
-      fixture.pane.applyGatewaySnapshot({ ...gateway.snapshot, sessionKey }),
+    const gateway = fixture.context.gateway;
+    const disk = vi
+      .spyOn(snapshotDatabase, "readStoredChatSnapshotRecord")
+      .mockResolvedValue(undefined);
+    onTestFinished(() => {
+      discardPrewarmedChatSnapshot();
+      disk.mockRestore();
+      retireBootComposer();
+      document.documentElement.removeAttribute("data-openclaw-boot-chat");
+      document.documentElement.removeAttribute("data-openclaw-warm-frame");
+    });
+    await prewarmChatSnapshot(
+      resolveChatSnapshotKey(
+        {
+          settings: gateway.connection,
+          client: gateway.snapshot.client,
+          hello: gateway.snapshot.hello,
+          agentsList: fixture.context.agents.state.agentsList,
+        },
+        { sessionKey },
+      ),
     );
-    const clearCreate = fixture.context.chatSubmissions.beginCreate({
-      creation: { sessionKey, admitted: true },
-      message: null,
-      canDisplay: () => true,
-    });
-    Object.assign(fixture.context, {
-      router: { getState: () => ({ matches: [] }) },
-      navigateAndWait: async () => {},
-    });
-    await completeInitialSessionTurn({
-      context: fixture.context,
-      client: expectDefined(gateway.snapshot.client, "client"),
-      agentId: "main",
-      result: {
-        key: sessionKey,
-        entry: row,
-        initialRun: { status: "started", runId: "first-turn" },
-      },
-      turn: { text: "Accepted initial question", attachments: [], createdAt: 1 },
-      instant: undefined,
-      navigation: new StartedSessionNavigation(),
-      isCurrent: () => true,
-      clearDraft: async () => clearCreate(),
-      completeInBackground: () => false,
-      finishNavigation: () => {},
-    });
-    expect(fixture.context.chatSubmissions.creation).toBeUndefined();
-    expect(fixture.context.chatSubmissions.readAcceptedCreate()?.creation.sessionKey).toBe(
+    const boot = document.createElement("textarea");
+    boot.id = "openclaw-boot-composer";
+    boot.value = "Keep the pending draft";
+    boot.setAttribute("data-focused", "");
+    document.documentElement.setAttribute("data-openclaw-boot-chat", "");
+    document.body.append(boot);
+    boot.focus();
+    boot.setSelectionRange(5, 8, "backward");
+    boot.scrollTop = 43;
+    adoptBootComposer(true);
+    const request = vi.spyOn(expectDefined(gateway.snapshot.client, "client"), "request");
+    const { pane } = mountPane(fixture.context, {
+      paneId: "boot-target",
+      ownsRouteComposer: true,
+      presentationId: crypto.randomUUID(),
       sessionKey,
-    );
-  }
-  const disk = vi
-    .spyOn(snapshotDatabase, "readStoredChatSnapshotRecord")
-    .mockResolvedValue(undefined);
-  onTestFinished(() => {
-    discardPrewarmedChatSnapshot();
-    disk.mockRestore();
-  });
-  await prewarmChatSnapshot(
-    resolveChatSnapshotKey(
-      {
-        settings: gateway.connection,
-        client: gateway.snapshot.client,
-        hello: gateway.snapshot.hello,
-        agentsList: fixture.context.agents.state.agentsList,
-      },
-      { sessionKey },
-    ),
-  );
-  const { pane } = mountPane(fixture.context, {
-    paneId: "cold-target",
-    sessionKey,
-    active: true,
-    presented: true,
-    sessionSnapshotStore: new SessionSnapshotStore(),
-  });
-  await waitForSolid(() =>
-    expect(request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(true),
-  );
-  await vi.dynamicImportSettled();
-  flush();
-  return {
-    ...fixture,
-    pane,
-    row,
-    descriptor,
-    history,
-    roster,
-    successor,
-    request,
-    disconnect: () =>
-      fixture.pane.applyGatewaySnapshot({ ...gateway.snapshot, phase: "reconnecting" }),
-  };
-}
-
-it.each([
-  { outcome: "archived", first: "descriptor" },
-  { outcome: "archived", first: "history" },
-  { outcome: "active", first: "descriptor" },
-  { outcome: "cached", first: "descriptor" },
-  { outcome: "absent", first: "history" },
-  { outcome: "failed", first: "history" },
-] as const)(
-  "admits cold $outcome presentation from $first without an editable flash",
-  async ({ outcome, first }) => {
-    const { pane, row, descriptor, history } = await coldPane(outcome);
-    expect(Boolean(pane.querySelector(".agent-chat__input"))).toBe(false);
-    if (outcome === "absent") {
-      descriptor.resolve();
-      await vi.dynamicImportSettled();
-      flush();
-      // An optional describe miss is not the successful history owner's absence proof.
-      expect(Boolean(pane.querySelector(".agent-chat__input"))).toBe(false);
-    }
-    (first === "descriptor" ? descriptor : history).resolve();
-    if (outcome === "failed") {
-      await waitForSolid(() => expect(pane.textContent).toContain("Synthetic history unavailable"));
-    } else {
-      await waitForSolid(() =>
-        expect(
-          Boolean(
-            pane.querySelector(
-              outcome === "archived" || outcome === "cached"
-                ? ".agent-chat__disabled-banner--replacement"
-                : ".agent-chat__input",
-            ),
-          ),
-        ).toBe(true),
-      );
-      if (outcome !== "absent")
-        expect(pane.querySelector(".chat-pane__header")?.textContent).toContain(row.label);
-    }
-  },
-);
-
-it("keeps an admitted creation responsive while its first reads are pending", async () => {
-  const { pane } = await coldPane("creating");
-  expect(Boolean(pane.querySelector(".agent-chat__input"))).toBe(true);
-});
-
-it("keeps an accepted first turn visible after the provisional create retires", async () => {
-  const { pane, descriptor, history } = await coldPane("accepted");
-  await waitForSolid(() =>
-    expect(pane.querySelector(".chat-group.user")?.textContent ?? "").toContain(
-      "Accepted initial question",
-    ),
-  );
-  expect(pane.querySelector(".agent-chat__input")).not.toBeNull();
-  descriptor.resolve();
-  history.resolve();
-});
-
-it("mounts the empty Incognito transcript before its deferred startup settles", async () => {
-  const { pane, history } = await coldPane("incognito");
-  await waitForSolid(() => expect(pane.querySelector(".chat-thread-inner")).not.toBeNull());
-  expect(pane.querySelector(".chat-thread openclaw-panel-loading-skeleton")).toBeNull();
-  expect(pane.querySelector(".agent-chat__input")).toBeNull();
-  history.resolve();
-  await waitForSolid(() => expect(pane.textContent).toContain("Incognito session expired"));
-});
-
-it("reveals disconnection instead of holding a cold descriptor forever", async () => {
-  const { pane, disconnect, descriptor, history } = await coldPane("archived");
-  disconnect();
-  await waitForSolid(() => expect(Boolean(pane.querySelector(".chat-pane__header"))).toBe(true));
-  expect(pane.querySelector(".lazy-view-state--route")).toBeNull();
-  descriptor.resolve();
-  history.resolve();
-  await vi.dynamicImportSettled();
-  flush();
-  expect(pane.querySelector(".agent-chat__disabled-banner--replacement")).toBeNull();
-});
-
-it.each(["retired", "parked"] as const)(
-  "does not let a %s target's late descriptor admit its replacement",
-  async (mode) => {
-    const { pane, context, descriptor, history, request, row, successor } =
-      await coldPane("archived");
-    if (mode === "retired") pane.remove();
-    else Object.assign(pane, { active: false, presented: false });
-    // The route retains one owner per conversation; a different key gets its own pane.
-    const nextKey = "agent:main:chat:22222222-2222-4222-8222-222222222222";
-    const next = mountPane(context, {
-      paneId: "successor",
-      sessionKey: nextKey,
       active: true,
       presented: true,
       sessionSnapshotStore: new SessionSnapshotStore(),
-    }).pane;
+    });
     await waitForSolid(() =>
-      expect(
-        request.mock.calls.some(([, params]) => asOptionalRecord(params)?.key === nextKey),
-      ).toBe(true),
+      expect(request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(true),
     );
-    descriptor.resolve();
-    history.resolve();
-    await vi.dynamicImportSettled();
-    flush();
-    expect(next.textContent).not.toContain(row.label);
-    expect(Boolean(next.querySelector(".agent-chat__input"))).toBe(false);
-    if (mode === "retired") expect(pane.children).toHaveLength(0);
-    else {
-      // Parked layout and admission facts stay frozen together until reveal.
-      expect(pane.querySelector(".chat-footer")?.getAttribute("aria-busy")).toBe("true");
-      expect(pane.querySelector(".agent-chat__disabled-banner--replacement")).toBeNull();
-      Object.assign(next, { active: false, presented: false });
-      Object.assign(pane, { active: true, presented: true });
-      await waitForSolid(() =>
-        expect(pane.querySelector(".agent-chat__disabled-banner--replacement")).not.toBeNull(),
-      );
-      expect(next.querySelector(".agent-chat__input")).toBeNull();
-      Object.assign(pane, { active: false, presented: false });
-      Object.assign(next, { active: true, presented: true });
-    }
-    successor.resolve();
-    await waitForSolid(() => expect(Boolean(next.querySelector(".agent-chat__input"))).toBe(true));
+    await pane.updateComplete;
+    const editor = expectDefined(
+      pane.querySelector<HTMLTextAreaElement>(composerSelector),
+      "adopted composer before metadata",
+    );
+    const footer = pane.querySelector(".chat-footer");
+    expect(pane.querySelectorAll("textarea")).toHaveLength(1);
+    expect(editor.value).toBe(boot.value);
+    expect(document.activeElement).toBe(editor);
+    expect([editor.selectionStart, editor.selectionEnd, editor.selectionDirection]).toEqual([
+      5,
+      8,
+      "backward",
+    ]);
+    expect(editor.scrollTop).toBe(43);
+    metadata.resolve();
+    await waitForSolid(() => {
+      if (archived) {
+        expect(pane.querySelector(".agent-chat__disabled-banner--replacement")).not.toBeNull();
+        expect(pane.querySelector(composerSelector)).toBeNull();
+      } else {
+        expect(pane.querySelector(composerSelector)).toBe(editor);
+      }
+    });
+    expect(pane.querySelector(".chat-footer")).toBe(footer);
   },
 );
 

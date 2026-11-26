@@ -32,8 +32,6 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   title: string;
   agent?: AgentIdentity & { name: string };
   titlePending?: boolean;
-  /** First descriptor admission; does not suspend the header's Details owner. */
-  pending?: boolean;
   session: GatewaySessionRow | undefined;
   incognito?: boolean;
   showOwnerChip?: boolean;

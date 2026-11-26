@@ -385,10 +385,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
           sources.forEach((source) => source?.read());
           composerCapabilities()?.read();
           prepareRender();
-          return {
-            ...runtime.render(providerReview, readRealtimeTalkConversation),
-            sessionPresentationPending: runtime.initialSessionPresentationPending(),
-          };
+          return runtime.render(providerReview, readRealtimeTalkConversation);
         },
         () => runtime.presented && runtime.presentation.documentVisible,
       );
@@ -401,24 +398,24 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         runtime.presentationId,
         () => frame().layout?.primary.chat ?? null,
       );
-      const [layoutReady, setLayoutReady] = createSignal(!splitColdBoot);
-      if (splitColdBoot) {
-        onSettled(() => {
-          frame();
-          pendingLayout = yieldChatTask().then(() => {
-            pendingLayout = undefined;
-            if (!disposed) setLayoutReady(true);
-          });
-        });
+      // Only cold boot already exposes a loading frame. Restored panes keep their
+      // synchronous construction even after the warm-frame deadline expires.
+      if (!splitColdBoot) {
+        return <MountedPane />;
       }
-      // Only session chrome waits for its first facts. Transcript and accepted local
-      // turns must mount while startup is pending; later refreshes cannot re-hide chrome.
-      const sessionReady = createMemo<boolean>((previous) => {
-        return previous || !frame().sessionPresentationPending;
+      const [constructed, setConstructed] = createSignal(false);
+      onSettled(() => {
+        frame();
+        pendingLayout = yieldChatTask().then(() => {
+          pendingLayout = undefined;
+          if (!disposed) {
+            setConstructed(true);
+          }
+        });
       });
       return (
         <Show
-          when={layoutReady()}
+          when={constructed()}
           fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}
         >
           <MountedPane />
@@ -455,11 +452,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
             prop:agentId={runtime.agentId ?? parseAgentSessionKey(runtime.sessionKey)?.agentId}
             prop:sessionKey={runtime.sessionKey}
           >
-            <PaneLayout
-              layout={frame().layout}
-              questions={questions}
-              chromePending={!sessionReady()}
-            />
+            <PaneLayout layout={frame().layout} questions={questions} />
             <Show when={reviewVisited()}>
               <Errored
                 fallback={(error, reset) => (

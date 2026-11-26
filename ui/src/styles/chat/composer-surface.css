@@ -149,6 +149,14 @@
   corner-shape: var(--chat-composer-corner-shape);
 }
 
+.agent-chat__input,
+.agent-chat__disabled-banner--replacement:not(.agent-chat__disabled-banner--compact) {
+  /* Terminal notices replace the writing surface after session facts arrive.
+     Share its responsive floor so an empty composer does not collapse then;
+     expanded drafts and longer notices still grow with their own content. */
+  min-height: var(--chat-composer-min-height, 112px);
+}
+
 .agent-chat__input {
   --chat-box-inset: 8px;
   /* Rest, glyph and disabled ink are steps of this surface (see base.css), so
@@ -246,15 +254,6 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  /* The resting shape is two regions, not one line that may grow into two: the
-     editor sits at the top and the action row is docked at the bottom from the
-     first frame. This floor is what keeps that reading — an empty draft plus a
-     row of 28px controls would otherwise settle into a bar too shallow to look
-     like a writing surface, and the composer would appear to change kind the
-     moment the first line wrapped. A surface may lower the floor without leaving
-     the two-region shape — the session companion does, because it is a narrow
-     side panel rather than the page's main writing area. */
-  min-height: var(--chat-composer-min-height, 112px);
   margin: 0;
   padding: 0;
   /* The app owns the artwork; the writing surface stays opaque above it. */
@@ -1412,8 +1411,12 @@
     min-width: 0;
     overflow: visible;
   }
-  .agent-chat__input--mobile-toolbar {
+  .agent-chat__input--mobile-toolbar,
+  .agent-chat__disabled-banner--replacement:not(.agent-chat__disabled-banner--compact) {
     --chat-composer-min-height: 92px;
+  }
+
+  .agent-chat__input--mobile-toolbar {
     --chat-composer-context-offset: 0px;
     --chat-composer-editor-inset-inline: 14px;
     --chat-composer-icon-size: 18px;
@@ -1552,8 +1555,12 @@
     --chat-footer-max-height: 100cqh;
   }
 
-  .agent-chat__input {
+  .agent-chat__input,
+  .agent-chat__disabled-banner--replacement:not(.agent-chat__disabled-banner--compact) {
     --chat-composer-min-height: 0px;
+  }
+
+  .agent-chat__input {
     --chat-composer-editor-max-lines: 1;
   }
 

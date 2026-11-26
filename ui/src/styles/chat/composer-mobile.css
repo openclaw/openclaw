@@ -90,9 +90,13 @@
 /* Only the resting one-line presentation (unfocused, no draft) overrides the native surface.
    Editing inherits composer-surface.css, including its textarea autogrow. */
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"] {
+  .agent-chat__input,
+  .agent-chat__disabled-banner--replacement:not(.agent-chat__disabled-banner--compact) {
+    --chat-composer-min-height: 52px;
+  }
+
   .agent-chat__input {
     --chat-composer-radius: calc(22px * var(--openclaw-corner-radius-scale));
-    --chat-composer-min-height: 52px;
     --chat-composer-editor-line: 24px;
     --chat-composer-editor-inset-block: 0px;
     --chat-composer-control-size: 32px;

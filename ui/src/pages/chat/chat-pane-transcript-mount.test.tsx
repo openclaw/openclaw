@@ -67,7 +67,6 @@ it.each([false, true])("owns transcript mounts (restoring=%s)", async (isRestori
         return (
           <PaneLayout
             questions={questions}
-            chromePending={false}
             layout={{
               region: {
                 panelIdPrefix: paneId,
