@@ -94,7 +94,9 @@ vi.mock("./run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./run.js")>()),
   prepareUpdate: async (params: unknown) => {
     prepared.push(params);
-    return { status: "current", version: "2026.11.6", pluginsChanged: false };
+    return localRun.phase === "activating"
+      ? { status: "pending", target: { version: "2026.11.6" }, releaseRoot: root }
+      : { status: "current", version: "2026.11.6", pluginsChanged: false };
   },
 }));
 vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
@@ -216,6 +218,19 @@ it("does not dispatch an update if shared-state custody cannot be released", asy
     runReleaseUpdateCli({ json: true, restart: true, runningRoot: root }),
   ).rejects.toThrow("State custody could not be released");
   expect(sent).toEqual([]);
+});
+
+it("does not present a node restart as activation for a prepared Gateway trial", async () => {
+  localRun.status = "running";
+  localRun.phase = "activating";
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  await runReleaseUpdateCli({ json: false, restart: false, runningRoot: root });
+
+  expect(sent).toEqual([]);
+  expect(log).toHaveBeenCalledWith(expect.stringContaining("Gateway release trial is pending"));
+  expect(log).toHaveBeenCalledWith(expect.stringContaining("restarting a node alone does not"));
+  expect(log.mock.calls.flat().join(" ")).not.toContain("Updated to");
+  expect(process.exitCode).toBe(0);
 });
 
 it("keeps a stable-tag checkout on stable when it updates without the Gateway", async () => {

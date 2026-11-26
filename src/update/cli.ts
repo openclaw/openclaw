@@ -553,7 +553,7 @@ async function updateWithoutGateway(
   }
   if (outcome.status === "pending" && !opts.json) {
     defaultRuntime.log(
-      `OpenClaw ${outcome.target.version} is ready and starts the next time the Gateway starts.`,
+      `OpenClaw ${outcome.target.version} is staged; the Gateway release trial is pending. Only a local Gateway start can activate it; restarting a node alone does not.`,
     );
   }
   return await getUpdateRunAsync(run.runId);

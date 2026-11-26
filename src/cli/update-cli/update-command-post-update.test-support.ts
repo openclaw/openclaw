@@ -578,13 +578,9 @@ export function registerServiceInstallationConvergenceTests(
           );
         }
         if (absent) {
-          expect(mocks.printResult.mock.lastCall?.[0].steps).toEqual([
-            expect.objectContaining({
-              name: "advisory:node-restart",
-              cwd: packageRoot,
-              stdoutTail: expect.stringMatching(/node install --force.*node restart/u),
-            }),
-          ]);
+          expect(mocks.printResult.mock.lastCall?.[0].steps).not.toContainEqual(
+            expect.objectContaining({ name: "advisory:node-restart" }),
+          );
           expect(defaultRuntime.error).toHaveBeenCalledWith(absentMessage);
         }
       } finally {

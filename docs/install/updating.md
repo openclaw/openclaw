@@ -187,13 +187,16 @@ Before conversion, a node-only package installation with an installed node servi
 Gateway service definition, and no live local Gateway stays with its package installer.
 `openclaw update` uses the existing package update flow for that installation;
 it does not create a Gateway launcher, forwarding entry, or pending Gateway trial.
-Its package result names the updated installation's `node install --force` and
-`node restart` commands. Wait for node work to become idle before using them;
-the package update does not claim to have replaced or restarted a retained node
-runtime.
+If the running node service uses the package just replaced, the update reports
+that the node is still running and prints the updated installation's
+`node restart` command. Wait for node work to become idle before running it.
+The update does not restart the node. A node using another installation or a
+separately retained runtime does not receive this restart advice.
 
 A previously converted installation keeps its resident release owner even if its
 Gateway service was removed; `--no-restart` can still prepare its next release.
+Only a local Gateway start can activate that pending trial. Restarting the node
+alone does not activate it.
 
 Before first conversion, a live foreground Gateway can lose its installation
 path from OS process inspection. With operator access, let that Gateway handle
