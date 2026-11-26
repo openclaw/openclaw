@@ -1,5 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { Value } from "typebox/value";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import {
+  WorkerAdmissionResponseFrameSchema,
+  type WorkerAdmissionResponseFrame,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { AgentToolSurfacePresentationSchema } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { validateWorkerAdmissionResponseFrame } from "../../../packages/gateway-protocol/src/worker-response-validators.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -271,6 +278,87 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       }
     },
   );
+
+  it("preserves the per-agent Code Mode index budget across a worker presentation", () => {
+    const config: OpenClawConfig = {
+      tools: { codeMode: { enabled: true, catalogIndexMaxChars: 8_000 } },
+      agents: {
+        entries: { scoped: { tools: { codeMode: { catalogIndexMaxChars: 32_000 } } } },
+      },
+    };
+    const agentId = "scoped";
+    const targets = tools(Array.from({ length: 100 }, (_, i) => `fixture_${i}_${"x".repeat(100)}`));
+    const serialized = JSON.stringify(preparePresentation({ config, agentId }));
+    const wire: unknown = JSON.parse(serialized);
+    assert(Value.Check(AgentToolSurfacePresentationSchema, wire));
+    expect(wire.codeMode.catalogIndexMaxChars).toBe(32_000);
+    const local = rawRuntime({ config, agentId }).compactTools(targets);
+    const worker = rawRuntime({ presentation: wire }).compactTools(targets, {
+      prepared: { preserveToolNames: [] },
+    });
+    const workerWithAgent = rawRuntime({ presentation: wire, agentId }).compactTools(targets, {
+      prepared: { preserveToolNames: [] },
+    });
+    const localPrompt = expectDefined(
+      local.promptToolPolicy.apply().toolSchemaDirectoryPrompt,
+      "Code Mode catalog prompt",
+    );
+    expect(localPrompt).toContain("Enabled async tool globals");
+    expect(localPrompt.length).toBeGreaterThan(8_000);
+    expect(localPrompt).not.toContain("additional tools omitted");
+    expect(worker.promptToolPolicy.apply().toolSchemaDirectoryPrompt).toBe(localPrompt);
+    expect(workerWithAgent.promptToolPolicy.apply().toolSchemaDirectoryPrompt).toBe(localPrompt);
+    // Unconfigured deployments retain the existing presentation payload.
+    expect(
+      preparePresentation({ config: { tools: { codeMode: true } } }).codeMode,
+    ).not.toHaveProperty("catalogIndexMaxChars");
+  });
+
+  it.each([
+    [undefined, true],
+    [999, false],
+    [1_000, true],
+    [32_000, true],
+    [128_000, true],
+    [128_001, false],
+  ])("validates worker admission catalog budget %s as %s", (catalogIndexMaxChars, accepted) => {
+    const presentation = preparePresentation({ config: { tools: { codeMode: true } } });
+    if (catalogIndexMaxChars !== undefined) {
+      presentation.codeMode.catalogIndexMaxChars = catalogIndexMaxChars;
+    }
+    const frame: WorkerAdmissionResponseFrame = {
+      type: "res",
+      id: "catalog-budget",
+      ok: true,
+      payload: {
+        type: "worker-hello-ok",
+        environmentId: "worker-1",
+        sessionId: null,
+        ownerEpoch: 1,
+        rpcSetVersion: 1,
+        protocolFeatures: [],
+        credentialExpiresAtMs: 10_000,
+        policy: { heartbeatIntervalMs: 15_000, maxPayload: 1_024 },
+        toolSurface: {
+          generation: "surface-1",
+          presentation,
+          tools: [],
+          policy: {
+            workspaceOnly: true,
+            readOnly: false,
+            applyPatchEnabled: false,
+            applyPatchWorkspaceOnly: true,
+            imageSanitization: {},
+          },
+        },
+      },
+    };
+    // Exercise JSON transport, not an in-process deep clone.
+    const serialized = JSON.stringify(frame);
+    const wire: unknown = JSON.parse(serialized);
+    expect(validateWorkerAdmissionResponseFrame(wire)).toBe(accepted);
+    expect(Value.Check(WorkerAdmissionResponseFrameSchema, wire)).toBe(accepted);
+  });
 
   it("returns the canonical directory only after applying prompt policy", () => {
     const runtime = configuredRuntime({

@@ -166,6 +166,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     'JavaScript executor: "node" (default) uses Node vm for trusted code and is not a security sandbox; "quickjs" uses the bundled QuickJS WASM plugin for hardened guest execution. Tool permissions apply to both. Code Mode cannot run if the selected executor is unavailable.',
   "tools.codeMode.mode":
     'Model-facing surface. Only "only" is supported: expose code-mode `exec` and `wait` and hide normal tools.',
+  "tools.codeMode.catalogIndexMaxChars":
+    "Maximum characters in the compact tool-signature prompt index, including its heading and footer (default: 8000; runtime clamps to 1000..128000). Larger values expose more signatures but consume more prompt context. Omitted tools remain callable through catalog.search; this does not change tool permissions or the MCP namespace index.",
   "tools.codeMode.timeoutMs": "Maximum milliseconds for one code-mode `exec` or `wait` call.",
   "tools.codeMode.memoryLimitBytes":
     "QuickJS guest heap limit or best-effort Node worker V8 heap budget in bytes. Node runtime overhead and minimum engine allocations affect the effective budget; external buffers and process RSS are excluded. This is not a security guarantee.",

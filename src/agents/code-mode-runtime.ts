@@ -15,6 +15,7 @@ import type { ToolSearchConfig } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
 export { CODE_MODE_WORKER_WATCHDOG_GRACE_MS } from "./code-mode-worker-types.js";
+export const DEFAULT_CODE_MODE_CATALOG_INDEX_MAX_CHARS = 8_000;
 export const CODE_MODE_RESUME_MARGIN_MS = 250;
 // Reserve the resume floor plus dispatch/settlement slack so a call that runs
 // to its yield still leaves enough budget to resume the guest inline.
@@ -107,6 +108,18 @@ export function resolveCodeModeConfig(
     enabled: raw.enabled ?? false,
     executor: raw.executor ?? "node",
     mode: "only",
+    // Omission preserves unconfigured presentation bytes; worker admission still
+    // requires the matching build and version.
+    ...(raw.catalogIndexMaxChars === undefined
+      ? {}
+      : {
+          catalogIndexMaxChars: limit(
+            "catalogIndexMaxChars",
+            DEFAULT_CODE_MODE_CATALOG_INDEX_MAX_CHARS,
+            1_000,
+            128_000,
+          ),
+        }),
     timeoutMs: limit("timeoutMs", 10_000, 100, 60_000),
     memoryLimitBytes: limit("memoryLimitBytes", 64 * 1024 * 1024, 1024 * 1024, 1024 * 1024 * 1024),
     maxOutputBytes: limit("maxOutputBytes", 64 * 1024, 1024, 10 * 1024 * 1024),
