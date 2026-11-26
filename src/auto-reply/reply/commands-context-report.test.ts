@@ -361,7 +361,7 @@ describe("buildContextReply", () => {
       used: 99_000,
       limit: 100_000,
     }).split("\n")[1];
-    expect([...expectDefined(bar, "budget bar")]).toHaveLength(20);
+    expect(bar).toMatch(/^(?:🟦|🟧|🟩|🟨|🟪|⬜){20}$/u);
   });
 
   it("does not invent a message share when cached usage is stale", async () => {
