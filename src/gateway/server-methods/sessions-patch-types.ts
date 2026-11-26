@@ -19,6 +19,14 @@ import type {
   SessionMutationAuthorization,
 } from "./types.js";
 
+/** Admitted Archive Undo issuer; checked again before each Archive drain and response. */
+export type ArchiveUndoCaller = {
+  profileId: string;
+  connId: string;
+  token?: string;
+  assertCurrent: () => void;
+};
+
 export type MutationTarget = SessionPatchTargetIdentity & {
   commitGuard: () => ErrorShape | undefined;
 };
@@ -36,11 +44,13 @@ export type MutationOutcome =
       applied: boolean;
       accessChanged: boolean;
       entry: SessionEntry;
+      archiveUndoToken?: string;
     }
   | { ok: false; error: ErrorShape };
 
 export type GroupMutationOperation = {
   replacements?: SessionEntryCanonicalReplacement[];
+  archiveReceipts?: Map<string, { token: string; outcome: Extract<MutationOutcome, { ok: true }> }>;
   result: GroupMutationResult;
 };
 
@@ -57,6 +67,7 @@ export type ExecuteSessionPatchMutationsParams = {
   participationOnly?: boolean;
   context: GatewayRequestContext;
   signal?: AbortSignal;
+  archiveUndo?: ArchiveUndoCaller;
   diagnostics?: SessionPatchDiagnostics;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
   followSharingRegistration?: SessionMutationAuthorization["followRegistration"];

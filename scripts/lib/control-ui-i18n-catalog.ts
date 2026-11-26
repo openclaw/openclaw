@@ -83,6 +83,7 @@ import { registerPreferencesEnglish } from "../../ui/src/i18n/locales/en-prefere
 import { registerProcessesEnglish } from "../../ui/src/i18n/locales/en-processes.ts";
 import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts";
 import { registerProviderUsageEnglish } from "../../ui/src/i18n/locales/en-provider-usage.ts";
+import { registerRolesEnglish } from "../../ui/src/i18n/locales/en-roles.ts";
 import { registerRouteSubtitlesEnglish } from "../../ui/src/i18n/locales/en-route-subtitles.ts";
 import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secrets-store.ts";
 import { registerSessionDeletionEnglish } from "../../ui/src/i18n/locales/en-session-deletion.ts";
@@ -225,6 +226,7 @@ const sourceFiles = [
   "en-plugin-management.ts",
   "en-portals.ts",
   "en-profile.ts",
+  "en-roles.ts",
   "en-settings.ts",
   "en-settings-sidebar.ts",
   "en-sidebar-attention.ts",
@@ -782,6 +784,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerPluginManagementEnglish.catalog,
     registerPortalsEnglish.catalog,
     registerProfileEnglish.catalog,
+    registerRolesEnglish.catalog,
     registerSettingsEnglish.catalog,
     registerSidebarAttentionEnglish.catalog,
     registerSkillWorkshopEnglish.catalog,

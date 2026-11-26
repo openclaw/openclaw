@@ -3450,7 +3450,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/ci-node-pretest-admission.test.ts",
   "test/scripts/ci-node-test-plan-hosted-tail.test.ts",
   "test/scripts/ci-node-test-plan.commands.test.ts",
-  "test/scripts/ci-node-test-plan.test.ts",
   "test/scripts/ci-node-worker-owner-boundary.test.ts",
   "test/scripts/ci-platform-checkout.test.ts",
   "test/scripts/ci-run-node-test-shard.test.ts",

@@ -655,6 +655,7 @@ export function createSessionCapability(
         ? registerListener(listeners, () => listener(roster.listSnapshot(scope)))
         : roster.subscribeList(scope, listener),
     refreshList: roster.refreshList,
+    wakeList: roster.wakeList,
     reconcile,
     captureReconcile,
     observeRow,

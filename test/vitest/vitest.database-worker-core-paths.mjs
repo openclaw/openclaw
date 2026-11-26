@@ -22,6 +22,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/approval-session-audience.sqlite.test.ts",
   "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
   "src/secrets/runtime-web-provider.postgres.test.ts",
+  "src/agents/agent-bundle-mcp-webchat-requester.test.ts",
   "src/gateway/server-methods.workshop-contract.test.ts",
   // A real channel plugin install acquires the host-owned lifecycle lease.
   "src/cli/channels-add-install.test.ts",
@@ -1430,6 +1431,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/process/supervisor/service-child-relay-host.owned-worker.test.ts",
   "src/worker/worker.runtime.test.ts",
   "src/node-host/node-worker-supervisor.startup.test.ts",
+  "src/node-host/node-worker-supervisor.filesystem.test.ts",
   "src/node-host/runtime.worker-supervisor.test.ts",
   "src/node-host/runner.inventory.test.ts",
   "src/node-host/node-worker-workspace-retention.test.ts",

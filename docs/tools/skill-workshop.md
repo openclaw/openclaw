@@ -182,8 +182,9 @@ cleanup also diets one oversized learned skill per agent:
 To undo a diet, restore the previous version from the skill's history in the
 Control UI or with `openclaw skills workshop restore <name>`. Restoring also
 removes the reference files the diet added. A skill that cannot be dieted, for
-example one long procedure section, is left unchanged and tried again when its
-turn comes around. A diet makes two to four tool-free model calls on the
+example one long procedure section or a Markdown file outside `assets/`,
+`examples/`, `references/`, `scripts/`, and `templates/`, is left unchanged and
+tried again when its turn comes around. A diet makes two to four tool-free model calls on the
 agent's primary model and sends the skill's text to that provider.
 
 <a id="learn" />

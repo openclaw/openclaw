@@ -88,6 +88,27 @@ it("falls back to the offset when Gateway ICU does not recognize the browser tim
   );
 });
 
+it("shares the UTC report for a named UTC zone even with a conflicting offset", async () => {
+  const config = {};
+  const startMs = Date.UTC(2026, 1, 1);
+  const endMs = Date.UTC(2026, 1, 3) - 1;
+  const summary = costSummary(7, 0.25);
+  loadCost.mockResolvedValueOnce(summary);
+
+  expectUsage(await request(dates, config), summary);
+  expectUsage(
+    await request({ ...dates, mode: "specific", timeZone: "UTC", utcOffset: "UTC+5:30" }, config),
+    summary,
+  );
+  expect(loadCost).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      startMs,
+      endMs,
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    }),
+  );
+});
+
 it("includes later years when a split-day report starts before year 1000", () => {
   const range = resolveDateRange({
     startDate: "0999-01-01",

@@ -26,7 +26,7 @@ it("repairs an included legacy config without flattening and restores both autho
       import { acquireGatewayLock } from ${moduleUrl("../../infra/gateway-lock.js")};
       import { checkRelease } from ${moduleUrl("../../update/check-release.js")};
       import { createTrialPending, resolvePrefix, writeTrial } from ${moduleUrl("../../update/store.js")};
-      import { ROLLBACK_SOURCE } from ${moduleUrl("../../update/rollback-source.js")};
+      import { LEGACY_ROLLBACK_SOURCE } from ${moduleUrl("../../update/legacy-rollback-source.js")};
       import { resolveRuntimeServiceBuildId, VERSION } from ${moduleUrl("../../version.js")};
       import { withCliCommandCleanup, withCliProcessScope } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliCleanupRetirementEntrypoints.scope).href)};
       import { closeCliResources } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliCleanupRetirementEntrypoints.cleanup).href)};
@@ -67,7 +67,7 @@ it("repairs an included legacy config without flattening and restores both autho
       const suffix = ".pre-" + (resolveRuntimeServiceBuildId() ?? VERSION);
       assert.equal(fs.readFileSync(configPath + suffix, "utf8"), rootBytes);
       assert.equal(fs.readFileSync(includePath + suffix, "utf8"), includeBytes);
-      runInNewContext(ROLLBACK_SOURCE + "\nrestoreState(collectPreserved(stateDir,suffix,0,4,[]),suffix);", {
+      runInNewContext(LEGACY_ROLLBACK_SOURCE + "\nrestoreState(collectPreserved(stateDir,suffix,0,4,[]),suffix);", {
         fs, path, stateDir, suffix,
       });
       assert.equal(fs.readFileSync(configPath, "utf8"), rootBytes);

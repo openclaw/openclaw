@@ -11,7 +11,7 @@ import {
   parseEverySchedule,
   durationMsToSecondsString,
   parseStaggerSchedule,
-  parseCronScheduleAt,
+  resolveCronScheduleAt,
 } from "./form-schedule.ts";
 import type { CronFieldErrors, CronFormState } from "./types.ts";
 import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
@@ -77,7 +77,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.eventArguments = "cron.events.eventArgumentsInvalid";
     }
   } else if (form.scheduleKind === "at") {
-    if (!parseCronScheduleAt(form.scheduleAt)) {
+    if (!resolveCronScheduleAt(form)) {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
@@ -190,6 +190,10 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   if (!isCronFormSessionTarget(job.sessionTarget)) {
     throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
   }
+  const originalScheduleAt =
+    job.schedule.kind === "at"
+      ? { at: job.schedule.at, local: formatDateTimeLocal(job.schedule.at) }
+      : undefined;
   const next: CronFormState = {
     ...prev,
     name: job.name,
@@ -205,7 +209,8 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     eventServer: "",
     eventName: "",
     eventArguments: "{}",
-    scheduleAt: "",
+    originalScheduleAt,
+    scheduleAt: originalScheduleAt?.local ?? "",
     cronTz: "",
     scheduleExact: false,
     staggerAmount: "",
@@ -271,8 +276,6 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
       typeof job.schedule.options.server === "string" ? job.schedule.options.server : "";
     next.eventName = typeof job.schedule.options.name === "string" ? job.schedule.options.name : "";
     next.eventArguments = JSON.stringify(job.schedule.options.arguments ?? {}, null, 2);
-  } else if (job.schedule.kind === "at") {
-    next.scheduleAt = formatDateTimeLocal(job.schedule.at);
   } else if (job.schedule.kind === "every") {
     Object.assign(next, parseEverySchedule(job.schedule.everyMs));
   } else if (job.schedule.kind === "cron") {

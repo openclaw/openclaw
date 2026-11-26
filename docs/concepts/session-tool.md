@@ -189,7 +189,7 @@ The returned view is intentionally bounded:
 
 - text, including tool results and credentials, is returned without secret masking
 - thinking signatures, reasoning replay payloads, and inline image data are omitted
-- long text blocks are truncated to 4000 characters, with a truncation marker appended
+- long text blocks are truncated to 4000 characters, with a truncation marker appended; stripped `usage`, `cost`, and `details` metadata does not set `truncated` or `contentTruncated`
 - returned messages are capped at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`
 - the tool reports summary flags such as `truncated`, `droppedMessages`, `contentTruncated`, `contentRedacted`, `bytes`, and pagination metadata
 
