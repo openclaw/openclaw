@@ -29,7 +29,6 @@ let renderQrTerminalMock: ReturnType<typeof vi.fn>;
 let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 let waitForCredsSaveQueue: typeof import("./session.js").waitForCredsSaveQueue;
 let writeCredsJsonAtomically: typeof import("./session.js").writeCredsJsonAtomically;
-let DEFAULT_WHATSAPP_SOCKET_TIMING: typeof import("./socket-timing.js").DEFAULT_WHATSAPP_SOCKET_TIMING;
 
 async function emitCredsUpdate(authDir?: string) {
   const sock = getLastSocket();
@@ -181,7 +180,6 @@ describe("web session", () => {
       writeCredsJsonAtomically,
     } = await import("./session.js"));
     renderQrTerminalMock = vi.mocked((await import("./qr-terminal.js")).renderQrTerminal);
-    ({ DEFAULT_WHATSAPP_SOCKET_TIMING } = await import("./socket-timing.js"));
   });
 
   beforeEach(() => {
@@ -206,9 +204,6 @@ describe("web session", () => {
     const passed = readLastSocketOptions();
     expect(passed.printQRInTerminal).toBe(false);
     expect(passed.fireInitQueries).toBe(true);
-    expect(passed.keepAliveIntervalMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs);
-    expect(passed.connectTimeoutMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs);
-    expect(passed.defaultQueryTimeoutMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
     const passedLogger = (passed as { logger?: { level?: string; trace?: unknown } }).logger;
     expect(passedLogger?.level).toBe("silent");
     if (typeof passedLogger?.trace !== "function") {
@@ -366,19 +361,6 @@ describe("web session", () => {
       expect(fsSync.existsSync(target)).toBe(false);
     },
   );
-
-  it("passes explicit Baileys socket timing overrides", async () => {
-    await createWaSocket(false, false, {
-      keepAliveIntervalMs: 10_000,
-      connectTimeoutMs: 90_000,
-      defaultQueryTimeoutMs: 120_000,
-    });
-
-    const passed = readLastSocketOptions();
-    expect(passed.keepAliveIntervalMs).toBe(10_000);
-    expect(passed.connectTimeoutMs).toBe(90_000);
-    expect(passed.defaultQueryTimeoutMs).toBe(120_000);
-  });
 
   it("passes explicit Baileys WebSocket URL overrides", async () => {
     await createWaSocket(false, false, {

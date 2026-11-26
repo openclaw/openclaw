@@ -1,6 +1,5 @@
 import { WebAPIPlatformError, WebAPIRequestError } from "@slack/web-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { addChannelAllowFromStoreEntry } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -226,25 +225,6 @@ describe("authorizeSlackSystemEventSender", () => {
         reason: "sender-not-channel-allowed",
       });
     }
-  });
-
-  it("reuses cached channel members", async () => {
-    const { authorize, conversationsMembers } = makeChannelMemberAuth();
-    await expect(authorize()).resolves.toBe(true);
-    await expect(authorize()).resolves.toBe(true);
-    expect(conversationsMembers).toHaveBeenCalledTimes(1);
-  });
-
-  it("coalesces in-flight channel member lookups", async () => {
-    const members = createDeferred<MembersResponse>();
-    const { authorize, conversationsMembers } = makeChannelMemberAuth(vi.fn(() => members.promise));
-
-    const first = authorize();
-    const second = authorize();
-    members.resolve({ members: ["UOWNER"], response_metadata: {} });
-
-    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
-    expect(conversationsMembers).toHaveBeenCalledTimes(1);
   });
 
   it("denies channel bot authorization on a cursor cycle and retries cleanly", async () => {

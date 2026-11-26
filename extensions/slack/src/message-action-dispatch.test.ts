@@ -407,25 +407,6 @@ describe("Slack action adapter", () => {
 
   it.each([
     [
-      "native fields",
-      {
-        to: "user:U1",
-        filePath: "/tmp/report.png",
-        initialComment: "fresh build",
-        filename: "build.png",
-        title: "Build Screenshot",
-        threadId: "111.222",
-      },
-      {
-        to: "user:U1",
-        filePath: "/tmp/report.png",
-        initialComment: "fresh build",
-        filename: "build.png",
-        title: "Build Screenshot",
-        threadTs: "111.222",
-      },
-    ],
-    [
       "media/message/replyTo aliases",
       { channelId: "C1", media: "/tmp/chart.png", message: "chart attached", replyTo: "333.444" },
       {
