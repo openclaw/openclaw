@@ -36,7 +36,7 @@ function registerNativeChildToolHost(params: {
   parent: AgentHarnessHostCapabilities;
   attempt: AgentHarnessHostAttempt;
   source: NativeChildToolSource;
-  readConfig?: () => NonNullable<AgentHarnessHostAttempt["config"]>;
+  isPolicyCurrent: () => boolean;
   scope?: "turn" | "conversation";
 }) {
   const { attempt, source, parent } = params;
@@ -76,8 +76,6 @@ function registerNativeChildToolHost(params: {
   const resolveGatewayContext = captureGatewayContextResolver(
     getGatewayContextResolver(attempt.admittedRunContext),
   );
-  const configAtAdmission = params.readConfig?.();
-  const registryAtAdmission = getPluginRegistryState()?.activeVersion;
   // Preserve the store witness for this requester's MCP connections only.
   const storeOwner = {};
   inheritSessionMcpStoreOwner(parent, storeOwner);
@@ -92,11 +90,7 @@ function registerNativeChildToolHost(params: {
       request.assertCurrent();
       assertToolAllowed?.(request.toolName);
       issuer.assertCurrent?.();
-      if (
-        (resolveGatewayContext && !resolveGatewayContext()) ||
-        params.readConfig?.() !== configAtAdmission ||
-        getPluginRegistryState()?.activeVersion !== registryAtAdmission
-      ) {
+      if ((resolveGatewayContext && !resolveGatewayContext()) || !params.isPolicyCurrent()) {
         throw new Error("Native child tool source changed. Start a new parent turn.");
       }
     };
@@ -208,12 +202,18 @@ export function registerNativeChildToolHostIssuer(
   const readConfig = captureHostToolPolicyConfigReader(params.attempt)({
     config: params.attempt.config,
   });
+  // The ceiling must predate the foreground tool listing, not just the later child call.
+  const configAtAdmission = readConfig?.();
+  const registryAtAdmission = getPluginRegistryState()?.activeVersion;
+  const isPolicyCurrent = () =>
+    readConfig?.() === configAtAdmission &&
+    getPluginRegistryState()?.activeVersion === registryAtAdmission;
   registerNativeChildToolIssuer(parent, (source) =>
     registerNativeChildToolHost({
       parent,
       source,
       attempt: params.attempt,
-      readConfig,
+      isPolicyCurrent,
       scope: readScope(),
     }),
   );
