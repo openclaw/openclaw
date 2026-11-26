@@ -86,22 +86,37 @@ function runRecovery(
   receipt: "none" | "valid" | "wrong-run" | "missing-history" = "none",
   failAt = "",
   resident = false,
+  plugins: "completed" | "late" | "failed" | "absent" | "wrong-run" = "completed",
 ) {
   writeJson(join(root, "package.json"), { version: resident ? "2100.0.0" : "2100.1.0" });
+  const pluginStep = {
+    step: "plugins",
+    status: plugins === "failed" ? "failed" : "completed",
+    detail: plugins === "failed" ? "whatsapp: registry unavailable" : undefined,
+  };
   writeJson(join(root, "recovery-update.json"), {
     status: "ok",
     runId: "fixture-run",
     steps: receipt === "none" ? [] : [warning],
   });
-  writeJson(join(root, "status.json"), {
+  const status = (withPlugins: boolean) => ({
     lastRun: {
-      runId: receipt === "wrong-run" ? "other-run" : "fixture-run",
-      steps:
-        receipt === "none" || receipt === "missing-history"
+      runId: receipt === "wrong-run" || plugins === "wrong-run" ? "other-run" : "fixture-run",
+      steps: [
+        ...(receipt === "none" || receipt === "missing-history"
           ? []
-          : [{ step: "warning:managed-service-membership", status: "completed", detail: message }],
+          : [{ step: "warning:managed-service-membership", status: "completed", detail: message }]),
+        ...(withPlugins ? [pluginStep] : []),
+      ],
     },
   });
+  writeJson(
+    join(root, "status.json"),
+    status(resident && plugins !== "late" && plugins !== "absent"),
+  );
+  if (resident && plugins === "late") {
+    writeJson(join(root, "status.next.json"), status(true));
+  }
   const events = join(root, "events");
   writeFileSync(events, "");
   const observed = runProcess(
@@ -131,7 +146,8 @@ function runRecovery(
         'check_gateway_status() { [ "$FAIL_AT" != auth ]; }',
         'update_candidate() { [ "$#" -eq 3 ] && [ "$1" = 1 ] && [ "$FAIL_AT" != update ] || return 1; if [ "$RESIDENT" = 1 ]; then last_update_restart_route=resident; fi; }',
         'openclaw_e2e_maybe_timeout() { shift; "$@"; }',
-        'openclaw() { if [ "$*" = --version ] && [ "$RESIDENT" = 1 ]; then printf "OpenClaw 2100.1.0 (fixture)\\n"; else [ "$*" = "update status --json" ] && cat "$ARTIFACT_ROOT/status.json"; fi; }',
+        'openclaw() { if [ "$*" = --version ] && [ "$RESIDENT" = 1 ]; then printf "OpenClaw 2100.1.0 (fixture)\\n"; elif [ "$*" = "update status --json" ]; then cat "$ARTIFACT_ROOT/status.json"; if [ -f "$ARTIFACT_ROOT/status.next.json" ]; then mv "$ARTIFACT_ROOT/status.next.json" "$ARTIFACT_ROOT/status.json"; fi; else return 1; fi; }',
+        'openclaw_e2e_print_log() { cat "$1"; }',
         'node() { case "$1" in --input-type=module|-p) command node "$@" ;; *) case "$2" in assert-restart-serving-turn) [ "$FAIL_AT" != serving ] ;; assert-exec-approvals|assert-config) : ;; assert-state) [ "$OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE" = post-inference ] && printf "survival\\n" >> "$EVENTS" ;; *) return 1 ;; esac ;; esac; }',
         "repair_update_restart_auth",
         'if [ "$RESIDENT" = 1 ]; then assert_survival; fi',
@@ -144,6 +160,7 @@ function runRecovery(
       EVENTS: events,
       FAIL_AT: failAt,
       RESIDENT: resident ? "1" : "0",
+      RECOVERY_PLUGIN_MAINTENANCE_TIMEOUT_SECONDS: "2",
       [flag]: mode,
     },
   );
@@ -171,6 +188,28 @@ describe.skipIf(process.platform === "win32")("frozen managed membership contrac
     expect(JSON.parse(readFileSync(join(f.root, "package.json"), "utf8"))).toEqual({
       version: "2100.0.0",
     });
+  });
+
+  it("waits for the resident recovery run's plugin maintenance before plugin checks", () => {
+    const f = target(true);
+    const late = runRecovery(f.root, "absent", "none", "", true, "late");
+    expect(late.status, late.stderr).toBe(0);
+    expect(late.events.slice(-4)).toEqual([
+      "await-recovery-plugin-maintenance",
+      "assert-restart-serving-turn",
+      "survival",
+      "survival",
+    ]);
+    const failed = runRecovery(f.root, "absent", "none", "", true, "failed");
+    expect(failed.status).not.toBe(0);
+    expect(failed.stderr).toContain("whatsapp: registry unavailable");
+    expect(failed.events).not.toContain("assert-restart-serving-turn");
+    for (const plugins of ["absent", "wrong-run"] as const) {
+      const unfinished = runRecovery(f.root, "absent", "none", "", true, plugins);
+      expect(unfinished.status).not.toBe(0);
+      expect(unfinished.stderr).toContain("did not finish for the recovery update");
+      expect(unfinished.events).not.toContain("assert-restart-serving-turn");
+    }
   });
 
   it("uses the committed pre-warning containment contract", () => {
