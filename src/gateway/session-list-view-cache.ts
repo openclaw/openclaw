@@ -466,7 +466,7 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     }
     type SharedFact = { fact: Partial<T>; rows: number | number[] };
     const candidates = new Map<string, Fact>();
-    const rows: GatewaySessionRow[] = [];
+    const rows = new Array<GatewaySessionRow>(sessions.length);
     const fieldCounts = new Uint32Array(sessions.length);
     const fields: Fact[][] = [];
     const referenceCounts = new Uint32Array(sessions.length);
@@ -477,7 +477,7 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     // Capture aliases before any occurrence publishes a new packing layout.
     const previousRows = sessions.map((row, index) => {
       let retained = prepared.get(row);
-      rows.push(retained?.packed?.row ?? required(row));
+      rows[index] = retained?.packed?.row ?? required(row);
       let facts = retained?.facts;
       if (!facts) {
         facts = [];
@@ -503,7 +503,8 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         retained = { facts, bytes, rawBytes };
         prepared.set(row, retained);
       }
-      for (const fact of facts) {
+      for (let factIndex = 0; factIndex < facts.length; factIndex++) {
+        const fact = facts[factIndex]!;
         const candidate = candidates.get(fact.encoded);
         if (candidate) {
           if (typeof candidate.rows === "number") {
@@ -546,7 +547,7 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       return row;
     };
     // Facts with the same recipients share one reference, including common scalar defaults.
-    const groups = new Map<string, SharedFact>();
+    const groups = new Map<number | string, SharedFact>();
     for (const candidate of candidates.values()) {
       let recipients = candidate.rows;
       // Recipient scratch belongs to this response, never to the retained row facts.
@@ -565,11 +566,8 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         fieldCounts[recipients]!++;
         continue;
       }
-      // Common defaults need no per-field copies of the same all-row index vector.
-      if (typeof recipients === "number" && recipients !== -sessions.length) {
-        recipients = Array.from({ length: -recipients }, (_, i) => i);
-      }
-      const key = typeof recipients === "number" ? "" : recipients.join(",");
+      // Sparse recipients cannot cover a leading run without a gap.
+      const key = typeof recipients === "number" ? recipients : recipients.join(",");
       const group = groups.get(key);
       if (group) {
         Object.assign(group.fact, candidate.fact);
