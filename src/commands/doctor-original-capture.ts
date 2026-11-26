@@ -108,12 +108,12 @@ export async function preserveDoctorOriginalState(params: {
     }
     const { captureUpdateRecoveryBaseline } =
       await import("../infra/update-recovery-baseline-capture.js");
-    const { retireExpiredStandaloneDoctorCaptures } =
+    const { retireSupersededStandaloneDoctorCaptures } =
       await import("../infra/doctor-capture-retention.js");
     const stateDir = resolvePathViaExistingAncestorSync(resolveStateDir(params.env));
-    const retireExpiredCaptures = async (keepRunId: string) => {
+    const retireSupersededCaptures = async (keepRunId: string) => {
       try {
-        const retirement = await retireExpiredStandaloneDoctorCaptures({
+        const retirement = await retireSupersededStandaloneDoctorCaptures({
           stateDir,
           env: params.env,
           keepRunId,
@@ -121,7 +121,7 @@ export async function preserveDoctorOriginalState(params: {
         });
         for (const directory of retirement.retired) {
           log.debug(
-            `Retired superseded or expired standalone Doctor capture: ${directory}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
+            `Retired superseded standalone Doctor capture: ${directory}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
           );
         }
         for (const warning of retirement.warnings) {
@@ -149,7 +149,7 @@ export async function preserveDoctorOriginalState(params: {
       log.debug(
         `This container already retained a pre-repair capture (${activationCapture}); Doctor skipped a repeated full capture. Repair-specific backups still apply.`,
       );
-      await retireExpiredCaptures(activationCapture);
+      await retireSupersededCaptures(activationCapture);
       return { findings, warnings };
     }
     const installRoot = params.root;
@@ -243,7 +243,7 @@ export async function preserveDoctorOriginalState(params: {
         );
       }
     }
-    await retireExpiredCaptures(standaloneRunId);
+    await retireSupersededCaptures(standaloneRunId);
     warnings.push(...captured.diagnostics.databaseWarnings);
     findings.push(
       ...captured.diagnostics.databaseWarnings.map((message): HealthFinding => ({

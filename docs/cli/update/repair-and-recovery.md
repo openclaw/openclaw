@@ -216,14 +216,17 @@ Shared database families larger than 64 MiB keep discovery copies in an isolated
 so a slow copy does not block Doctor's main thread from processing cancellation.
 Official image activation keeps one such copy per container: after a capture
 succeeds, later starts of the same container skip the repeated full copy, keep
-that copy, and still retire other expired Doctor captures.
-Standalone Doctor keeps the newest three sealed captures and expires captures older
-than 30 days, always preserving the newest sealed capture. Each successful standalone
-`doctor --fix` capture retires older eligible copies and reports each removal.
+that copy, and still retire other superseded Doctor captures.
+Each standalone capture is a full copy of state, so standalone Doctor keeps the
+newest two sealed captures, however old they are. Some repairs change database rows
+without a backup of their own, so after a second repair the older copy is the only
+one from before the first. Each successful standalone `doctor --fix` capture
+retires older sealed copies and reports each removal; a finished update's
+automatic cleanup retires them too.
 Incomplete captures, active recovery references, and real update captures stay protected;
 unreadable role or recovery records also prevent retirement. Take a verified backup
-when you need a long-term copy. Review and retire superseded captures with
-[`openclaw update cleanup`](#update-cleanup).
+when you need a long-term copy or more than two generations. Review and retire
+superseded captures with [`openclaw update cleanup`](#update-cleanup).
 
 If a fresh standalone capture fails before publishing its final manifest, Doctor
 removes that attempt's incomplete copy after owned work settles, while it retains
@@ -1258,8 +1261,8 @@ before repair or activation. To keep a downgrade path, create a
 [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup) before
 updating. Identity checks are unchanged. Unfinished runs, pending
 recovery, unresolved failed or rolled-back captures, orphaned/unmanifested copies,
-and blocked artifacts remain. Standalone Doctor captures keep their existing
-newest-three/30-day policy, always retaining the newest sealed capture. Historical
+and blocked artifacts remain. Standalone Doctor captures keep their own
+policy: the newest two sealed captures are retained. Historical
 originals requiring additional import verification are left for manual cleanup.
 When that verification is deferred, migration originals are retained together:
 a historical index may reference an original in another manifest. Independently
@@ -1539,10 +1542,10 @@ captures through their sealed manifests; it never reads the captured payload:
   that reached repair or activation and is neither restored nor repaired forward.
   It remains that update's manual recovery source.
 - `candidate` / `superseded-doctor-capture`: a sealed standalone `doctor-<id>`
-  capture outside the newest three or older than 30 days. The newest sealed copy
-  is always retained.
-- `protected` / `retained-doctor-capture`: a standalone Doctor copy kept by that
-  retention rule. Active recovery references remain `pending-update-recovery`.
+  capture older than the newest two sealed ones. Those two are always retained,
+  however old they are.
+- `protected` / `retained-doctor-capture`: one of the newest two sealed standalone
+  Doctor copies, kept by that retention rule. Active recovery references remain `pending-update-recovery`.
 - `protected` / `superseded-unsealed-capture`: a marked historical incomplete
   capture with no matching update run, including an unsealed standalone Doctor
   attempt, superseded by a later successful update with recorded Gateway readiness

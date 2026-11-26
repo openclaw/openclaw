@@ -16,7 +16,6 @@ type RetentionOptions = {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   keepRunId?: string;
-  now?: number;
 };
 
 /** Shared policy for automatic Doctor retention and explicit update cleanup. */
@@ -113,21 +112,20 @@ export function collectStandaloneDoctorCaptures(params: RetentionOptions) {
       );
     }
   }
-  const newest = [...captures.values()].toSorted((a, b) => b.createdAt - a.createdAt);
-  for (const [index, capture] of newest.entries()) {
-    const expired = (params.now ?? Date.now()) - capture.createdAt > 30 * 24 * 60 * 60_000;
-    // Always preserve the newest sealed original, including after a long idle period.
-    if (index === 0 || (index < 3 && !expired)) {
-      capture.eligible = false;
-      if (capture.reason !== "pending-update-recovery") {
-        capture.reason = "retained-doctor-capture";
-      }
+  // Each capture is a full copy of state. Keep the newest two sealed originals,
+  // however old: some repairs write rows without their own backup, so after a
+  // second Doctor run the older copy is the only one from before the first.
+  const retained = [...captures.values()].toSorted((a, b) => b.createdAt - a.createdAt).slice(0, 2);
+  for (const capture of retained) {
+    capture.eligible = false;
+    if (capture.reason !== "pending-update-recovery") {
+      capture.reason = "retained-doctor-capture";
     }
   }
   return { captures, warnings };
 }
 
-export async function retireExpiredStandaloneDoctorCaptures(
+export async function retireSupersededStandaloneDoctorCaptures(
   params: RetentionOptions & { keepRunId: string; assertCurrent: () => void },
 ): Promise<{ retired: string[]; warnings: string[] }> {
   const { captures, warnings } = collectStandaloneDoctorCaptures(params);

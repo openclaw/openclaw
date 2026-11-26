@@ -154,10 +154,12 @@ it("reuses a sealed standalone baseline only while the complete source is unchan
   const stat = await fs.stat(f.file);
   await fs.writeFile(f.file, "after!");
   await fs.utimes(f.file, stat.atime, stat.mtime);
-  expect(await f.capture()).toHaveLength(2);
-  expect(await f.capture(true), "explicit full integrity verification does not reuse").toHaveLength(
-    3,
-  );
+  const second = await f.capture();
+  expect(second).toHaveLength(2);
+  // A fresh capture is not a reuse, and it supersedes the oldest of the two kept.
+  const third = await f.capture(true);
+  expect(third, "explicit full integrity verification does not reuse").toHaveLength(2);
+  expect(third).not.toContain(first[0]);
 });
 
 it("captures declared SQLite sidecar roots through their database image and reuses it", async () => {
