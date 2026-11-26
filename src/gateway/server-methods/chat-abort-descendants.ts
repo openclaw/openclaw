@@ -9,9 +9,11 @@ import {
 import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/subagent-control.js";
 import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
 import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
+import { enqueueStoppedSubagentsNotice } from "../../agents/subagents/registry/subagent-stop-notice.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureExecRequestCustodySelection } from "../../infra/exec-request-context.js";
+import type { ExplicitRunStopSource } from "../../sessions/session-run-stopped.js";
 
 export async function abortControlledSubagents(params: {
   cfg: OpenClawConfig;
@@ -27,6 +29,8 @@ export async function abortControlledSubagents(params: {
   beforeKill?: Parameters<typeof killAllControlledSubagentRuns>[0]["beforeKill"];
   /** Accepted parent effects retain cleanup reporting after a later guard rejects. */
   parentStopAccepted?: () => boolean;
+  /** An explicit Stop tells the requester's next turn which children it cancelled. */
+  stopSource?: ExplicitRunStopSource;
   prepareSelection?: {
     acceptsRequest: SubagentRequestSessionOrigin["acceptsRequest"];
     prepare: () => Promise<{
@@ -253,6 +257,15 @@ export async function abortControlledSubagents(params: {
     ...registryCancelledRequesters,
     ...(settledNative?.status === "fulfilled" ? settledNative.value.cancelledRequesters : []),
   ];
+  if (params.stopSource) {
+    enqueueStoppedSubagentsNotice({
+      source: params.stopSource,
+      requesterSessionKey: controller.controllerSessionKey,
+      requesterAgentId: controller.controllerAgentId,
+      killed,
+      labels: descendants?.labels ?? [],
+    });
+  }
   if (failure && !settledNative && !descendants && !execAborted && !params.parentStopAccepted?.()) {
     throw commandErrors.length > 0
       ? new AggregateError([failure.error, ...commandErrors], "Request cancellation was incomplete")

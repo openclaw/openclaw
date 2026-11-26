@@ -13,7 +13,7 @@ const EXPLICIT_RUN_STOP_SOURCES = new Set<SessionStopSource>([
 ]);
 
 /** Stop sources that mean a user or operator stopped the run on purpose. */
-type ExplicitRunStopSource = Extract<
+export type ExplicitRunStopSource = Extract<
   SessionStopSource,
   "channel-user" | "client-session" | "client-run"
 >;

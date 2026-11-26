@@ -27,6 +27,8 @@ import {
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
+  peekSystemEventEntries,
+  peekSystemEvents,
 } from "../../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -120,6 +122,47 @@ function installNativeCancellation(
 }
 
 describe("descendant cascade ownership", () => {
+  it.for(["session", "exact run"] as const)(
+    "tells the requester's next turn which children a %s Stop canceled",
+    async (scope) => {
+      const childKey = "agent:main:subagent:stopped-research";
+      await writeSession(mainIdentity.sessionKey, mainIdentity.sessionId);
+      await writeSession(childKey, "stopped-research");
+      await registerDescendant("stopped-research", childKey, {
+        label: "Layout research",
+        // A session Stop also reaches children that an earlier, finished turn started.
+        requesterTurnRunId: scope === "session" ? "earlier-turn" : "parent-turn",
+      });
+      const parent = mainRun({ connId: "request-owner" });
+      const respond = await stop({
+        // The session Stop arrives while the parent itself is idle.
+        handler: scope === "session" ? cascade : handleChatAbortRequestWithLifecycle,
+        context: createChatAbortContext({
+          sources: scope === "session" ? [] : [["parent-turn", parent]],
+        }),
+        request:
+          scope === "session"
+            ? { sessionKey: mainIdentity.sessionKey }
+            : { sessionKey: mainIdentity.sessionKey, runId: "parent-turn" },
+        client: requestOwner,
+      });
+
+      expect(requireLastRespondCall(respond)[0]).toBe(true);
+      expect(await getSubagentRunByChildSessionKey(childKey)).toMatchObject({
+        endedReason: "subagent-killed",
+      });
+      expect(peekSystemEvents(mainIdentity.sessionKey)).toEqual([
+        `${scope === "session" ? "An explicit session Stop from a connected app" : "An explicit Stop of your turn"} ` +
+          "canceled 1 running sub-agent: Layout research. It won't report back. Check its session " +
+          "before relying on any partial work, and don't restart it unless the user asks.",
+      ]);
+      consumeSelectedSystemEventEntries(
+        mainIdentity.sessionKey,
+        peekSystemEventEntries(mainIdentity.sessionKey),
+      );
+    },
+  );
+
   it.for(["session", "exact run"])(
     "keeps text produced during %s Stop preparation",
     async (scope, { signal }) => {

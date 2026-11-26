@@ -8,6 +8,7 @@ import { captureExecRequestCancellation } from "../../agents/bash-process-contro
 import { captureExecRequestSubagentSelection } from "../../agents/subagents/registry/subagent-control-scope.js";
 import { killAllControlledSubagentRuns } from "../../agents/subagents/registry/subagent-control.js";
 import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
+import { enqueueStoppedSubagentsNotice } from "../../agents/subagents/registry/subagent-stop-notice.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -409,6 +410,13 @@ export async function stopSubagentsForRequester(params: {
   if (result.status === "error") {
     logVerbose(`abort: failed to stop subagents for ${requesterKey}: ${result.error}`);
   }
+  enqueueStoppedSubagentsNotice({
+    source: "channel-user",
+    requesterSessionKey: requesterKey,
+    requesterAgentId: controllerAgentId,
+    killed: result.killed,
+    labels: result.labels,
+  });
   return {
     stopped: result.killed,
     failed: result.status === "error" ? result.failed : 0,

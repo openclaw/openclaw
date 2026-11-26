@@ -143,6 +143,7 @@ export async function stopExactClientRun(params: {
           assertCurrent,
           beforeKill: applyParentStop,
           parentStopAccepted: () => result.aborted,
+          stopSource: params.stoppedSession ? "client-run" : undefined,
         });
         return {
           stopped: result.descendants?.killed ?? 0,
