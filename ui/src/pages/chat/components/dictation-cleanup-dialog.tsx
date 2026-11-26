@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createUniqueId, Show } from "solid-js";
 import { ModalDialog } from "../../../components/modal-dialog.tsx";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { DialogHeader } from "../../../components/solid/dialog-header.tsx";
@@ -6,7 +6,6 @@ import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-compo
 import { registerChatDictationEnglish } from "../../../i18n/locales/en-chat-dictation.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
-import "./dictation-cleanup-dialog.css";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 registerEnglishCatalog(registerChatDictationEnglish);
@@ -15,6 +14,7 @@ export function DictationCleanupDialog(props: {
   readDictation: () => ComposerDictationOwner | undefined;
   onClose: () => void;
 }) {
+  const modeId = createUniqueId();
   const review = () => props.readDictation()?.cleanupReview;
   const reviewMessage = () => {
     const current = review();
@@ -43,15 +43,16 @@ export function DictationCleanupDialog(props: {
       description={t("chat.dictation.cleanupDescription")}
       onModal-cancel={() => props.onClose()}
     >
-      <section class="oc-dialog dictation-cleanup">
+      <section class="oc-dialog">
         <DialogHeader
           title={t("chat.composer.dictationCleanup")}
           description={t("chat.dictation.cleanupDescription")}
         />
         <div class="oc-dialog__body">
-          <label class="field">
-            <span>{t("chat.dictation.cleanupMode")}</span>
+          <div class="field">
+            <label for={modeId}>{t("chat.dictation.cleanupMode")}</label>
             <select
+              id={modeId}
               value={props.readDictation()?.cleanupPolicy.mode ?? "off"}
               onChange={(event) =>
                 props
@@ -66,7 +67,7 @@ export function DictationCleanupDialog(props: {
               <option value="off">{t("chat.dictation.cleanupOff")}</option>
               <option value="conservative">{t("chat.dictation.cleanupConservative")}</option>
             </select>
-          </label>
+          </div>
           <p class="muted">{t("chat.dictation.cleanupPolicyHelp")}</p>
           <p class="muted">{t("chat.dictation.cleanupOffHelp")}</p>
           <Show when={review()}>

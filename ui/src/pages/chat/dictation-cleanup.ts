@@ -194,11 +194,14 @@ export function validateCleanupPlan(
   let previousEnd = 0;
   let removedLength = 0;
   for (const value of proposedRemovals) {
+    if (!isRecord(value)) {
+      return retained(source, "rejected", "invalid-plan");
+    }
+    const { category, evidence } = value;
     if (
       !isRange(value, source.text.length) ||
-      !isRecord(value) ||
-      (value.category !== "hesitation" && value.category !== "exact_restart") ||
-      (value.evidence !== "text" && value.evidence !== "text-and-provider-metadata") ||
+      (category !== "hesitation" && category !== "exact_restart") ||
+      (evidence !== "text" && evidence !== "text-and-provider-metadata") ||
       !boundaries.has(value.start) ||
       !boundaries.has(value.end) ||
       value.start < previousEnd
@@ -209,7 +212,7 @@ export function validateCleanupPlan(
       return retained(source, "rejected", "protected-text");
     }
     if (
-      value.evidence === "text-and-provider-metadata" &&
+      evidence === "text-and-provider-metadata" &&
       !source.tokens?.some(
         (token) =>
           overlaps(token, value) &&

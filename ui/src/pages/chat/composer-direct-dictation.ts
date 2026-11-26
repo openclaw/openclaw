@@ -2,7 +2,6 @@ import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { focusComposerInput, selectComposerInput } from "../../lib/composer-input.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
@@ -18,27 +17,14 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
   let observed: HTMLTextAreaElement | null = null;
   // A comparison for programmatic changes; the textarea remains the draft authority.
   let observedValue: string | undefined;
-  let stopInput: (() => void) | undefined;
   const subscribers = new Set<() => void>();
   const current = () => {
     const target = read();
     if (target !== observed) {
-      stopInput?.();
-      stopInput = undefined;
       observed = target;
       observedValue = target?.value;
       capturedSelection = null;
       revision += 1;
-      if (target) {
-        stopInput = listen(target, "input", () => {
-          // Each edit retires the review’s draft snapshot even when native Undo returns to the same value.
-          revision += 1;
-          observedValue = target.value;
-          for (const subscriber of subscribers) {
-            subscriber();
-          }
-        });
-      }
     } else if (target && target.value !== observedValue) {
       observedValue = target.value;
       revision += 1;
@@ -52,8 +38,6 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
   const invalidateDraft = () => {
     revision += 1;
     capturedSelection = null;
-    stopInput?.();
-    stopInput = undefined;
     observed = null;
     observedValue = undefined;
   };
@@ -78,6 +62,14 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
   return {
     readDraft,
     invalidateDraft,
+    // The composer calls this after accepting the input, not from a competing DOM listener.
+    recordInput() {
+      observedValue = read()?.value;
+      revision += 1;
+      for (const subscriber of subscribers) {
+        subscriber();
+      }
+    },
     subscribeDraft(listener: () => void) {
       subscribers.add(listener);
       return () => subscribers.delete(listener);
@@ -176,7 +168,11 @@ export class DirectDictationControl extends EventTarget {
     super();
     // Forward the owned device picker's receipts through the dictation owner's projection.
     this.devicePicker.subscribe(this.changed);
-    this.stopDraft = this.options.textarea.subscribeDraft?.(this.changed);
+    this.stopDraft = this.options.textarea.subscribeDraft?.(() => {
+      if (this.session?.cleanupReview) {
+        this.changed();
+      }
+    });
   }
 
   private readonly changed = () => this.dispatchEvent(new Event("change"));
@@ -211,7 +207,6 @@ export class DirectDictationControl extends EventTarget {
 
   /** Sending retires the review before any async submission can reuse this draft. */
   dismissCleanup(): void {
-    this.options.textarea.invalidateDraft?.();
     this.session?.dismissCleanup();
   }
 

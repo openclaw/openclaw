@@ -447,6 +447,7 @@ suite.define(() => {
         await gateway.waitForRequest("talk.session.close");
         if (editedDraft) {
           await textarea.fill(editedDraft);
+          await expectDraft(textarea, editedDraft);
         }
 
         if (!isNew) {

@@ -84,8 +84,9 @@ export function SessionRailComposer(props: {
   const inputHandle = createChatAttachmentInputHandle();
   const [plusMenuOpen, setPlusMenuOpen] = createSignal(false);
   const [settled, setSettled] = createSignal(false);
+  const draft = createDirectDictationTextarea(() => textarea ?? null);
   const dictationControl = new DirectDictationControl({
-    textarea: createDirectDictationTextarea(() => textarea ?? null),
+    textarea: draft,
     getClient: () => props.client,
     isConnected: () => props.connected,
     // Follow-ups stay editable while an answer is pending; submit owns that gate.
@@ -278,6 +279,7 @@ export function SessionRailComposer(props: {
               }
               adjustTextareaHeight(event.currentTarget);
               props.onDraftChange?.(event.currentTarget.value);
+              draft.recordInput();
               emojiMenu.update(event.currentTarget, !composing);
             }}
             ref={[
