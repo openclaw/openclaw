@@ -97,8 +97,13 @@ it("retains missed shutdown markers in terminal writes without marking resets or
       entry?: Partial<SessionEntry>;
       marker?: SessionEntry["resumeAfterRestart"];
     }> = [
-      { name: "missing", shutdown: true, marker: {} },
-      { name: "queued", shutdown: true, entry: { resumeAfterRestart: retained }, marker: retained },
+      { name: "missing", shutdown: true, marker: { sourceRunId: "running" } },
+      {
+        name: "queued",
+        shutdown: true,
+        entry: { resumeAfterRestart: retained },
+        marker: { sourceRunId: "running" },
+      },
       { name: "reset" },
       { name: "stop", shutdown: true, stopReason: "aborted" },
       { name: "stale", shutdown: true, stale: true },
