@@ -417,6 +417,32 @@ module.exports = {
     }
     const first = await start("Remember HISTORY_ALPHA.", "first");
     const settled = await wait(first.runId);
+    if (healthy && settled.status !== "ok") {
+      try {
+        const { redactSupportDiagnosticLine } = requireHost(
+          "../logging/diagnostic-support-redaction.ts",
+        ) as typeof import("../logging/diagnostic-support-redaction.js");
+        const redaction = { env: {}, stateDir: "", redactRelativePaths: true };
+        console.error(
+          "[codex-recovery:first-settlement]",
+          JSON.stringify({
+            status: settled.status === "error" ? "error" : "unexpected",
+            error: redactSupportDiagnosticLine(settled.error ?? "<none>", redaction, 256),
+            lifecycleError: redactSupportDiagnosticLine(
+              lifecycleErrors.get(first.runId)?.[0] ?? "<none>",
+              redaction,
+              256,
+            ),
+            ready: readyThreads.has(first.runId),
+            requests: requests.length,
+            primaryRequests: primaryRequests.length,
+            idleSiblingRequests: idleSiblingRequests.length,
+          }),
+        );
+      } catch {
+        // Diagnostics must never replace the settlement assertion below.
+      }
+    }
     expect(settled).toMatchObject({ status: failFirst ? "error" : "ok" });
     if (failFirst) {
       expect(settled.error).toBe("LLM request rejected: controlled settled failure");
