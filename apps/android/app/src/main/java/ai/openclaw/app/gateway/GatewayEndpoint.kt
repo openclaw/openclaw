@@ -35,6 +35,8 @@ data class GatewayEndpoint(
   val tlsEnabled: Boolean = false,
   val tlsFingerprintSha256: String? = null,
   val contextPath: String = "",
+  /** Explicit node-only relay target; never resolved through ordinary HTTP/WebSocket routing. */
+  val openClawIdNode: Boolean = false,
 ) {
   companion object {
     /** Builds a stable manual endpoint key that survives display-name changes. */

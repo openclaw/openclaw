@@ -356,6 +356,7 @@ class GatewaySession(
   private val webSocketFactory: ((OkHttpClient, Request, WebSocketListener) -> WebSocket)? = null,
   private val lifecycleDispatcher: CoroutineDispatcher = Dispatchers.IO,
   private val ingressAuthorizationProvider: ((GatewayEndpoint) -> GatewayIngressAuthorization?)? = null,
+  private val nodeTunnelWebSocketFactory: ((GatewayEndpoint, Request, WebSocketListener) -> WebSocket)? = null,
 ) {
   private companion object {
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
@@ -562,6 +563,9 @@ class GatewaySession(
     bootstrapHandoff: GatewayBootstrapHandoff? = null,
     onReady: (() -> Unit)? = null,
   ) {
+    require(!endpoint.openClawIdNode || (options.role == "node" && token == null && bootstrapToken == null && password == null && bootstrapHandoff == null)) {
+      "OpenClaw ID targets allow only the node role without shared credentials"
+    }
     val connectionToClose: Connection?
     synchronized(notificationLock) {
       val target = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls, bootstrapHandoff, onReady)
@@ -682,6 +686,7 @@ class GatewaySession(
   internal fun currentCanvasHostRoute(): GatewayCanvasHostRoute? =
     synchronized(lifecycleLock) {
       val connection = readyConnection() ?: return@synchronized null
+      if (connection.target.endpoint.openClawIdNode) return@synchronized null
       val url = pluginSurfaceUrls["canvas"] ?: return@synchronized null
       // TLS validation can learn the certificate during the WebSocket handshake. Read
       // the live TLS config so the widget document inherits that exact trust.
@@ -1124,7 +1129,7 @@ class GatewaySession(
     private val ingressRetirementStarted = AtomicBoolean(false)
     private val ingressCalls = ConcurrentHashMap.newKeySet<Call>()
     private val ingressAuthorization =
-      if (target.tls == null) null else ingressAuthorizationProvider?.invoke(target.endpoint)
+      if (target.tls == null || target.endpoint.openClawIdNode) null else ingressAuthorizationProvider?.invoke(target.endpoint)
     private var ingressHeaders: Map<String, String> = emptyMap()
 
     @Volatile
@@ -1212,7 +1217,11 @@ class GatewaySession(
               }
               val createdSocket =
                 try {
-                  webSocketFactory?.invoke(client, request, listener) ?: client.newWebSocket(request, listener)
+                  if (target.endpoint.openClawIdNode) {
+                    checkNotNull(nodeTunnelWebSocketFactory) { "OpenClaw ID native transport unavailable" }.invoke(target.endpoint, request, listener)
+                  } else {
+                    webSocketFactory?.invoke(client, request, listener) ?: client.newWebSocket(request, listener)
+                  }
                 } catch (error: Throwable) {
                   synchronized(lifecycleLock) {
                     socketCreationPending = false
@@ -1617,6 +1626,10 @@ class GatewaySession(
           .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
           .readTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
           .pingInterval(30, java.util.concurrent.TimeUnit.SECONDS)
+      if (target.endpoint.openClawIdNode) {
+        // No HTTP media or WebView fallback may turn this logical target into a direct connection.
+        builder.addInterceptor { throw IOException("HTTP resources are unavailable on this node-only connection") }
+      }
       if (tlsConfig != null) {
         builder.sslSocketFactory(tlsConfig.sslSocketFactory, tlsConfig.trustManager)
         builder.hostnameVerifier(tlsConfig.hostnameVerifier)
@@ -1753,7 +1766,7 @@ class GatewaySession(
 
     private suspend fun sendConnect(connectChallenge: ConnectChallenge) {
       val identity = identityStore.loadOrCreate()
-      val storedEntry = deviceAuthStore.loadEntry(target.endpoint.stableId, identity.deviceId, target.options.role)
+      val storedEntry = if (target.endpoint.openClawIdNode) null else deviceAuthStore.loadEntry(target.endpoint.stableId, identity.deviceId, target.options.role)
       val storedToken = storedEntry?.token?.trim()
       val selectedAuth =
         selectConnectAuth(
@@ -2385,6 +2398,8 @@ class GatewaySession(
 
             is GatewayExternalAuthorizationException -> ErrorShape("EXTERNAL_AUTH_REQUIRED", err.message.orEmpty())
 
+            is OpenClawIdRemovedException -> ErrorShape("OPENCLAW_ID_REJOIN_REQUIRED", err.message.orEmpty())
+
             is ConnectException,
             is NoRouteToHostException,
             is UnknownHostException,
@@ -2400,7 +2415,7 @@ class GatewaySession(
               false
             } else {
               // Commit before callbacks so a reentrant connect/reconnect owns the next state.
-              target.reconnectPausedForAuthFailure = error?.let { shouldPauseReconnectAfterAuthFailure(target, it) } == true
+              target.reconnectPausedForAuthFailure = err is OpenClawIdRemovedException || error?.let { shouldPauseReconnectAfterAuthFailure(target, it) } == true
               true
             }
           }
@@ -2437,6 +2452,7 @@ class GatewaySession(
     endpoint: GatewayEndpoint,
     isTlsConnection: Boolean,
   ): String? {
+    if (endpoint.openClawIdNode) return null
     val trimmed = raw?.trim().orEmpty()
     val parsed = trimmed.takeIf { it.isNotBlank() }?.let { runCatching { java.net.URI(it) }.getOrNull() }
     val host = parsed?.host?.trim().orEmpty()
@@ -2681,7 +2697,7 @@ internal fun buildGatewayWebSocketUpgradeRequest(
         endpoint.contextPath,
       ),
     )
-  if (tls == null) return request.build()
+  if (tls == null || endpoint.openClawIdNode) return request.build()
 
   // Read at connect time so edits apply on the next reconnect. Headers may contain service tokens
   // or Authorization values, so the cleartext branch above must never invoke the provider.
