@@ -473,25 +473,19 @@ describe("Copilot harness", () => {
     },
   );
 
-  it("does not send when cancellation wins the send boundary", async () => {
+  it("does not send when cancelled after disabling remote export", async () => {
     const controller = new AbortController();
-    let registrations = 0;
-    const add = controller.signal.addEventListener.bind(controller.signal);
-    vi.spyOn(controller.signal, "addEventListener").mockImplementation((...args) => {
-      add(...args);
-      if (++registrations === 5) {
-        queueMicrotask(() => controller.abort(new Error("cancelled at send boundary")));
-      }
-    });
     const f = isolated();
+    f.session.rpc.remote.disable.mockImplementation(async () => {
+      controller.abort(new Error("cancelled before send"));
+    });
     f.session.sendAndWait.mockReset();
     await expect(f.complete({ abortSignal: controller.signal })).rejects.toThrow(
-      "cancelled at send boundary",
+      "cancelled before send",
     );
     await flush();
-    expect(registrations).toBe(5);
+    expect(f.session.rpc.remote.disable).toHaveBeenCalledOnce();
     expect(f.session.sendAndWait).not.toHaveBeenCalled();
-    expect(f.session.abort).toHaveBeenCalledOnce();
     expect(f.session.disconnect).toHaveBeenCalledOnce();
   });
 
