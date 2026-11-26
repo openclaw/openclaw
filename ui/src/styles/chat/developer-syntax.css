@@ -1,16 +1,3 @@
-.developer-syntax {
-  min-width: 0;
-  padding: 8px 12px;
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.developer-syntax summary {
-  color: var(--muted);
-  cursor: pointer;
-}
-
 .developer-syntax fieldset {
   display: flex;
   flex-wrap: wrap;

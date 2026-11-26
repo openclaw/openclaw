@@ -82,9 +82,105 @@ function SyntaxPreview(props: {
   );
 }
 
-export function DeveloperSyntaxPanel(props: { readOwner: () => ComposerDeveloperSyntax | null }) {
+type DeveloperSyntaxPanelProps = { readOwner: () => ComposerDeveloperSyntax | null };
+
+export function DeveloperSyntaxSettings(props: DeveloperSyntaxPanelProps) {
   const [importText, setImportText] = createSignal("");
   const [exportText, setExportText] = createSignal("");
+  const owner = () => props.readOwner();
+  return (
+    <>
+      <fieldset disabled={owner()?.invalidSettings}>
+        <label>
+          <input
+            type="checkbox"
+            checked={owner()?.settings.enabled ?? false}
+            onChange={(event) => owner()?.configure({ enabled: event.currentTarget.checked })}
+          />
+          {t("chat.dictation.developer.enable")}
+        </label>
+        <label>
+          {t("chat.dictation.developer.mode")}
+          <select
+            value={owner()?.settings.mode ?? "prose"}
+            onChange={(event) => {
+              const mode = event.currentTarget.value;
+              if (mode === "prose" || mode === "literal" || mode === "developer") {
+                owner()?.configure({ mode });
+              }
+            }}
+          >
+            <option value="prose">{t("chat.dictation.developer.prose")}</option>
+            <option value="literal">{t("chat.dictation.developer.literal")}</option>
+            <option value="developer">{t("chat.dictation.developer.developer")}</option>
+          </select>
+        </label>
+        <label>
+          {t("chat.dictation.developer.locale")}
+          <select
+            value={owner()?.settings.locale ?? ""}
+            onChange={(event) => owner()?.configure({ locale: event.currentTarget.value })}
+          >
+            <option value="">{t("chat.dictation.developer.chooseLocale")}</option>
+            <Show when={owner()?.settings.locale && owner()?.settings.locale !== "en-US"}>
+              <option value={owner()?.settings.locale}>{owner()?.settings.locale}</option>
+            </Show>
+            <option value="en-US">{t("chat.dictation.developer.english")}</option>
+          </select>
+        </label>
+        <label>
+          {t("chat.dictation.developer.profile")}
+          <select
+            value={owner()?.settings.profileId ?? "en-us-plain-code"}
+            onChange={(event) => owner()?.configure({ profileId: event.currentTarget.value })}
+          >
+            <For each={owner()?.profiles ?? []}>
+              {(profile) => <option value={profile.id}>{profileLabel(profile)}</option>}
+            </For>
+          </select>
+        </label>
+        <p>{t("chat.dictation.developer.grammar")}</p>
+        <label>
+          {t("chat.dictation.developer.importLabel")}
+          <textarea
+            rows="3"
+            value={importText()}
+            maxlength="65536"
+            dir="ltr"
+            onInput={(event) => setImportText(event.currentTarget.value)}
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => {
+            if (owner()?.importProfile(importText())) {
+              setImportText("");
+            }
+          }}
+        >
+          {t("chat.dictation.developer.import")}
+        </button>
+      </fieldset>
+      <button type="button" onClick={() => setExportText(owner()?.exportProfile() ?? "")}>
+        {t("chat.dictation.developer.export")}
+      </button>
+      <Show when={exportText()}>
+        <label>
+          {t("chat.dictation.developer.exportLabel")}
+          <textarea readonly rows="5" dir="ltr" value={exportText()} />
+        </label>
+      </Show>
+      <Show when={owner()?.invalidSettings}>
+        <p role="status">{t("chat.dictation.developer.invalidSettings")}</p>
+        <button type="button" onClick={() => owner()?.useProseFallback()}>
+          {t("chat.dictation.developer.useProseFallback")}
+        </button>
+      </Show>
+    </>
+  );
+}
+
+export function DeveloperSyntaxReview(props: DeveloperSyntaxPanelProps) {
   const [inspect, setInspect] = createSignal(false);
   const owner = () => props.readOwner();
   const review = () => owner()?.review;
@@ -111,100 +207,7 @@ export function DeveloperSyntaxPanel(props: { readOwner: () => ComposerDeveloper
       .join(" · ");
   });
   return (
-    <section
-      class="developer-syntax"
-      dir="auto"
-      aria-label={t("chat.dictation.developer.settings")}
-    >
-      <details>
-        <summary>{t("chat.dictation.developer.settings")}</summary>
-        <fieldset disabled={owner()?.invalidSettings}>
-          <label>
-            <input
-              type="checkbox"
-              checked={owner()?.settings.enabled ?? false}
-              onChange={(event) => owner()?.configure({ enabled: event.currentTarget.checked })}
-            />
-            {t("chat.dictation.developer.enable")}
-          </label>
-          <label>
-            {t("chat.dictation.developer.mode")}
-            <select
-              value={owner()?.settings.mode ?? "prose"}
-              onChange={(event) => {
-                const mode = event.currentTarget.value;
-                if (mode === "prose" || mode === "literal" || mode === "developer") {
-                  owner()?.configure({ mode });
-                }
-              }}
-            >
-              <option value="prose">{t("chat.dictation.developer.prose")}</option>
-              <option value="literal">{t("chat.dictation.developer.literal")}</option>
-              <option value="developer">{t("chat.dictation.developer.developer")}</option>
-            </select>
-          </label>
-          <label>
-            {t("chat.dictation.developer.locale")}
-            <select
-              value={owner()?.settings.locale ?? ""}
-              onChange={(event) => owner()?.configure({ locale: event.currentTarget.value })}
-            >
-              <option value="">{t("chat.dictation.developer.chooseLocale")}</option>
-              <Show when={owner()?.settings.locale && owner()?.settings.locale !== "en-US"}>
-                <option value={owner()?.settings.locale}>{owner()?.settings.locale}</option>
-              </Show>
-              <option value="en-US">{t("chat.dictation.developer.english")}</option>
-            </select>
-          </label>
-          <label>
-            {t("chat.dictation.developer.profile")}
-            <select
-              value={owner()?.settings.profileId ?? "en-us-plain-code"}
-              onChange={(event) => owner()?.configure({ profileId: event.currentTarget.value })}
-            >
-              <For each={owner()?.profiles ?? []}>
-                {(profile) => <option value={profile.id}>{profileLabel(profile)}</option>}
-              </For>
-            </select>
-          </label>
-          <p>{t("chat.dictation.developer.grammar")}</p>
-          <label>
-            {t("chat.dictation.developer.importLabel")}
-            <textarea
-              rows="3"
-              value={importText()}
-              maxlength="65536"
-              dir="ltr"
-              onInput={(event) => setImportText(event.currentTarget.value)}
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => {
-              if (owner()?.importProfile(importText())) {
-                setImportText("");
-              }
-            }}
-          >
-            {t("chat.dictation.developer.import")}
-          </button>
-        </fieldset>
-        <button type="button" onClick={() => setExportText(owner()?.exportProfile() ?? "")}>
-          {t("chat.dictation.developer.export")}
-        </button>
-        <Show when={exportText()}>
-          <label>
-            {t("chat.dictation.developer.exportLabel")}
-            <textarea readonly rows="5" dir="ltr" value={exportText()} />
-          </label>
-        </Show>
-        <Show when={owner()?.invalidSettings}>
-          <p role="status">{t("chat.dictation.developer.invalidSettings")}</p>
-          <button type="button" onClick={() => owner()?.useProseFallback()}>
-            {t("chat.dictation.developer.useProseFallback")}
-          </button>
-        </Show>
-      </details>
+    <>
       <Show when={review()}>
         <section
           aria-label={t("chat.dictation.developer.review")}
@@ -307,6 +310,6 @@ export function DeveloperSyntaxPanel(props: { readOwner: () => ComposerDeveloper
       <Show when={owner()?.notice}>
         <p role="status">{owner()?.notice}</p>
       </Show>
-    </section>
+    </>
   );
 }

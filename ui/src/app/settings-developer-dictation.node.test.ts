@@ -62,9 +62,9 @@ describe("developer dictation settings", () => {
     expect(loaded.developerDictation).toEqual(stored);
     patchSettings({ gatewayUrl, navWidth: 330 });
     expect(loadSettings(gatewayUrl).developerDictation).toEqual(stored);
-    // An older consumer omitting this new field must not erase it on save.
-    const { developerDictation: _retained, ...olderConsumer } = loadSettings(gatewayUrl);
-    saveSettings(olderConsumer);
+    // The current writer retains this field when a caller omits it; this is not a binary downgrade.
+    const { developerDictation: _retained, ...callerWithoutField } = loadSettings(gatewayUrl);
+    saveSettings(callerWithoutField);
     expect(
       JSON.parse(localStorage.getItem(settingsKeyForGateway(gatewayUrl))!).developerDictation,
     ).toEqual(stored);

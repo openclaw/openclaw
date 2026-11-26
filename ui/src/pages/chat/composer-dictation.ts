@@ -39,7 +39,7 @@ type ComposerDictationOwnerOptions = {
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onTap?: () => void;
   onDictationUnavailable?: () => void;
-  captureReview?: () => ComposerDictationReviewCapture | undefined;
+  captureReview?: () => ComposerDictationReviewCapture | false | undefined;
   reviewPending?: () => boolean;
 };
 
@@ -343,7 +343,13 @@ export class ComposerDictationOwner extends EventTarget {
     this.clearPointerGesture();
     const captureStart = {};
     this.captureStart = captureStart;
-    this.reviewCapture = this.options.captureReview?.();
+    const review = this.options.captureReview?.();
+    if (review === false) {
+      // Required optional code is not ready. Never downgrade this capture to raw insertion.
+      await this.stop({ commit: false });
+      return;
+    }
+    this.reviewCapture = review;
     this.setPhase("connecting");
     if (this.captureStart !== captureStart) {
       return;

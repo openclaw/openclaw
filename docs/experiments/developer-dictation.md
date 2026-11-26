@@ -39,6 +39,14 @@ The feature starts disabled. Focusing an editor or terminal never changes the
 mode. Unsupported locale/profile settings do not select English automatically;
 choose a supported profile or Prose explicitly.
 
+The closed disclosure does not load the optional syntax engine, profile registry,
+review panel, or review stylesheet while review is disabled. Opening it, or
+restoring saved settings that require review, loads those parts through the
+existing chat loading boundary. A capture attempt while the required runtime is
+still loading is declined before microphone access. Retry after loading; a failed
+load never falls through to raw insertion. The selected profile and destination
+are still captured synchronously before asynchronous microphone work.
+
 Literal and Developer captures stop at review. The review shows **Recognized
 original**, **Exact preview**, diagnostics, and explicit alternatives. It offers
 **Keep recognized original**, **Undo last transformation**, optional character inspection,
@@ -58,6 +66,9 @@ submission, and draft-history promotion remain separate from this review action.
 The accepted insertion does not reinterpret slash commands such as `/goal`,
 activate completion menus, or replace emoji shortcodes. Normal manual typing
 afterward retains the composer's existing behavior.
+The native textarea uses the browser's existing editing command so a single undo
+restores the prior draft. The rich editor retains its own history transaction.
+If the native editing API is unavailable, the candidate remains copy-only.
 The only implemented insertion adapter is the mounted unsent composer. For
 terminals and other external destinations, use the copy action; no paste or
 submit-key route is provided. Pasted newlines may execute in a terminal, which
@@ -187,6 +198,20 @@ Invalid/future settings remain exportable. Disabling the feature preserves
 authored mappings and existing draft text; it does not undo earlier document
 edits or change a destination application's undo history.
 
+The browser upgrade check used the actual published `v2026.11.10` UI to write
+existing preferences and an exact Unicode/tab/whitespace draft, then loaded this
+candidate at the same origin in the same browser context. Preferences, saved
+navigation choices, and the draft survived. An imported profile's stored source
+string and mappings survived disable, reload, and re-enable. The browser and
+published UI were real; the Gateway responses were synthetic, so this is not a
+live Gateway or speech-provider qualification.
+
+Disabling the feature is the supported rollback. Launching the older
+`v2026.11.10` UI again preserves existing preferences and the draft but removes
+the new `developerDictation` field during its startup settings write, before any
+manual preference change. Export authored profiles before a binary downgrade;
+this proposal does not add a second store or an older-writer compatibility shim.
+
 ## Shared composition and lifecycle
 
 `src/shared/dictation-refinement.ts` supplies the proposed neutral composition
@@ -198,10 +223,16 @@ It is not an accepted public SDK or a completed M11 feature.
 The actual shared-owner proposal is
 [M11 issue #205845](https://github.com/openclaw/openclaw/issues/205845). Its
 finality, target/context policy, result-state, and 32 KiB transcript proposal
-have not been accepted or implemented on a verified M11 branch. This minimal
-foundation currently uses the M07-shaped boundary and a 128 KiB transcript
-limit. Those contracts and the same-path additions in sibling drafts must
-converge before landing; this PR does not claim that agreement already exists.
+now have a concrete implementation draft in
+[M11 PR #205973](https://github.com/openclaw/openclaw/pull/205973), observed at
+`7dab77ee268617d70ab5f035bb7864cc278aa327`. It remains open, draft, unmerged,
+and unaccepted as the shared contract. Its review path also has an unresolved
+realtime final-drain finding. This minimal foundation currently uses the
+M07-shaped boundary and a 128 KiB transcript limit. M11's authorized-edit lane
+is a possible future adapter for the explicit grammar edits, but combined
+execution has not been implemented or qualified. Those contracts and the
+same-path additions in sibling drafts must converge before landing; this PR
+does not claim that agreement already exists.
 
 Source and result offsets are half-open **UTF-16** ranges. Source slices must
 match exactly; ranges must be bounded, ordered, nonoverlapping, and aligned to

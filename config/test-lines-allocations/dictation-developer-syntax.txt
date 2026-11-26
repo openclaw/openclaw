@@ -1,2 +1,2 @@
-# M08 AC01-AC11: exact-byte language corpus, atomic profiles, Unicode/protected composition, and mounted capture/review/write lifecycle regressions including disabled baselines.
-1297
+# M08 AC01-AC11: exact-byte corpus, profiles, protected composition, mounted capture/review lifecycle, real-browser lazy loading/native undo, and stable-data retention. Follow-up keeps all assertions while splitting the mounted boundary and proving held loading, remount visibility, and disclosure retention.
+1829

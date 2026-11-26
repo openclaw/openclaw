@@ -4,15 +4,7 @@ import { assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import {
-  createComposerContainer,
-  createComposerProps,
-  renderComposerInto,
-  resetComposerFixture,
-} from "./chat-composer.test-support.ts";
-import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { ComposerDictationSession, placeComposerDictation } from "./composer-dictation-session.ts";
 import { setupComposerDictationTestHarness } from "./composer-dictation.test-support.ts";
 
@@ -35,7 +27,6 @@ const {
   listeners,
   microphone,
   pointer,
-  pointerTarget,
   processors,
   recordRequests,
   releaseLatched,
@@ -47,161 +38,6 @@ const {
 } = dictationTest;
 
 describe("ComposerDictationOwner", () => {
-  it.each([
-    {
-      name: "syntax with boundary whitespace",
-      early: [" \tsnake case customer ID end identifier\n "],
-      late: [],
-      raw: " \tsnake case customer ID end identifier\n ",
-      expected: " \tcustomer_id\n ",
-    },
-    {
-      name: "supplied chunk boundaries",
-      early: [" \tfirst\n"],
-      late: ["\tsecond \n"],
-      raw: " \tfirst\n\tsecond \n",
-      expected: " \tfirst\n\tsecond \n",
-    },
-    {
-      name: "whitespace-only live final",
-      early: [" \t\n "],
-      late: [],
-      raw: " \t\n ",
-      expected: " \t\n ",
-    },
-    {
-      name: "whitespace-only late final",
-      early: [],
-      late: [" \t\n "],
-      raw: " \t\n ",
-      expected: " \t\n ",
-    },
-    {
-      name: "CR and CRLF copy-only output",
-      early: ["\tA\r\n"],
-      late: ["B\rC "],
-      raw: "\tA\r\nB\rC ",
-      expected: "\tA\r\nB\rC ",
-    },
-    {
-      name: "explicit separator between non-whitespace boundaries",
-      early: ["first"],
-      late: ["second"],
-      raw: "first second",
-      expected: "first second",
-    },
-    {
-      name: "disabled baseline revision notifications",
-      early: ["first"],
-      late: [],
-      raw: "first",
-      expected: "first",
-      review: false,
-    },
-  ])("delivers mounted microphone capture through Stop and review: $name", async (scenario) => {
-    const { early, late, raw, expected } = scenario;
-    const reviewing = !("review" in scenario && scenario.review === false);
-    request.mockImplementation(async (method) => {
-      if (method === "talk.catalog") {
-        return {
-          transcription: { ready: true, providers: [] },
-          realtime: { ready: false, providers: [] },
-        };
-      }
-      if (method === "talk.config") {
-        return { config: {} };
-      }
-      return method === "talk.session.create" ? sessionResult() : { ok: true };
-    });
-    patchSettings({
-      developerDictation: {
-        schemaVersion: 1,
-        enabled: reviewing,
-        mode: "developer",
-        locale: "en-US",
-        profileId: "en-us-plain-code",
-        profiles: [],
-      },
-    });
-    let draft = "Existing ";
-    const props = createComposerProps({
-      draft,
-      getDraft: () => draft,
-      gatewayClient: createClient(),
-      onToggleRealtimeTalk: vi.fn(),
-      onDraftChange: vi.fn((next) => {
-        draft = next;
-      }),
-    });
-    const container = document.body.appendChild(createComposerContainer());
-    renderComposerInto(container, props);
-    const state = getChatComposerState(props.paneId);
-    const input = state.composerTextarea!;
-    input.setSelectionRange(draft.length, draft.length);
-    const controller = state.dictation!;
-    try {
-      await waitForFast(() => expect(state.microphonePicker?.dictationStatus).toBe("ready"));
-      flush();
-      const microphoneButton = pointerTarget(
-        container.querySelector<HTMLButtonElement>(".chat-talk-control button")!,
-      );
-      await startHold(microphoneButton);
-      await waitForFast(() => expect(controller.connecting).toBe(false));
-      await releaseLatched(microphoneButton);
-      const revisionBeforePartial = state.editRevision;
-      emit({ type: "partial", text: "snake case customer ID end identifier" });
-      flush();
-      if (reviewing) {
-        expect(input.value).toBe("Existing ");
-        expect(state.editRevision).toBe(revisionBeforePartial);
-      } else {
-        expect(state.editRevision).toBeGreaterThan(revisionBeforePartial);
-      }
-      expect(state.developerSyntax?.blocksSend).toBe(reviewing);
-      for (const chunk of early) {
-        transcript(chunk);
-      }
-      const finish = vi.spyOn(controller, "finishActive");
-      microphoneButton.click();
-      const finished = finish.mock.results[0]?.value;
-      expect(finished).toBeDefined();
-      for (const chunk of late) {
-        transcript(chunk);
-      }
-      emit({ type: "close", reason: "completed" });
-      expect(await finished).toBe(!reviewing);
-      flush();
-      if (!reviewing) {
-        expect(state.developerSyntax?.review).toBeNull();
-        expect(draft).toBe(`Existing ${expected}`);
-        expect(props.onDraftChange).toHaveBeenCalledOnce();
-        expect(props.onSend).not.toHaveBeenCalled();
-        return;
-      }
-      expect(state.developerSyntax?.review?.raw).toBe(raw);
-      expect(state.developerSyntax?.review?.text).toBe(expected);
-      expect(draft).toBe("Existing ");
-      const insert = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Insert into draft",
-      )!;
-      expect(insert).toBeDefined();
-      if (expected.includes("\r")) {
-        expect(insert.disabled).toBe(true);
-        expect(state.developerSyntax?.accept()).toBe(false);
-        expect(state.developerSyntax?.review?.text).toBe(expected);
-        expect(props.onDraftChange).not.toHaveBeenCalled();
-      } else {
-        insert.click();
-        flush();
-        expect(draft).toBe(`Existing ${expected}`);
-        expect(props.onDraftChange).toHaveBeenCalledOnce();
-      }
-      expect(props.onSend).not.toHaveBeenCalled();
-    } finally {
-      await resetComposerFixture();
-    }
-  });
-
   it("keeps established whitespace and replay behavior when syntax review is off", async () => {
     const { controller, onCommit } = controllerFixture();
     await startDirect(controller);
@@ -266,6 +102,27 @@ describe("ComposerDictationOwner", () => {
     expect(controller.startDirect()).toBe(false);
     expect(controller.active).toBe(false);
     expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it("declines newly required syntax at the hold threshold before any media work", async () => {
+    let required = false;
+    const { controller, target, onCommit } = createHarness({
+      captureReview: () => (required ? false : undefined),
+      reviewPending: () => required,
+    });
+    target.dispatchEvent(pointer("pointerdown"));
+    await vi.advanceTimersByTimeAsync(150);
+    required = true;
+    await vi.advanceTimersByTimeAsync(350);
+    expect(controller.active).toBe(false);
+    expect(controller.locksComposer).toBe(false);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expect(audios).toHaveLength(0);
+    expect(onCommit).not.toHaveBeenCalled();
+    required = false;
+    await startDirect(controller);
+    expect(getUserMedia).toHaveBeenCalledOnce();
   });
 
   it("rejects canonical replayed finals across Stop while retaining deliberate repeated text", async () => {

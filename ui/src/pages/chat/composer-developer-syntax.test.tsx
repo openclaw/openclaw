@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { builtinDeveloperProfiles } from "../../../../src/shared/dictation-developer.ts";
 import type { DeveloperDictationSettings } from "../../app/settings-developer-dictation.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
@@ -6,7 +6,8 @@ import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { readComposerEditor, selectComposerInput } from "../../lib/composer-input.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { installNativeTextEditing } from "../../test-helpers/native-text-editing.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   createComposerContainer,
@@ -32,13 +33,14 @@ const exact = "start code space tab new line space end code";
 const original = "snake case customer account ID end identifier";
 
 beforeEach(() => {
+  onTestFinished(installNativeTextEditing(document));
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
   patchSettings({ developerDictation: enabled });
 });
 afterEach(() => resetComposerFixture());
 
-function fixture(
+async function fixture(
   initial = "",
   initialMentions: readonly HumanMention[] = [],
   overrides: Partial<ChatComposerProps> = {},
@@ -72,6 +74,11 @@ function fixture(
   renderComposerInto(container, props);
   const state = getChatComposerState(props.paneId);
   const input = state.composerTextarea!;
+  container.querySelector<HTMLElement>(".developer-syntax summary")!.click();
+  await waitForSolid(() => {
+    expect(state.developerSyntax).not.toBeNull();
+    expect(container.querySelector(".developer-syntax fieldset")).not.toBeNull();
+  });
   const owner = state.developerSyntax!;
   const button = (name: string) => {
     const match = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -101,37 +108,47 @@ function fixture(
   };
 }
 
-it("reviews exact bytes in the main composer and preserves an unchanged native recipient", () => {
-  const mention = { profileId: "alex", start: 0, end: 5 };
-  const view = fixture("@Alex hello", [mention]);
-  expect(readComposerEditor(view.input)).toBeUndefined();
-  selectComposerInput(view.input, 11, 11);
-  const captured = view.capture(exact);
-  expect(view.draft()).toBe("@Alex hello");
-  expect(view.props.onSend).not.toHaveBeenCalled();
-  const previews = [
-    ...view.container.querySelectorAll<HTMLTextAreaElement>(".developer-syntax__review textarea"),
-  ];
-  expect(previews.map((field) => [field.value, field.dir])).toEqual([
-    [exact, "auto"],
-    [" \t\n ", "ltr"],
-  ]);
-  view.button("Insert into draft").click();
-  flush();
-  view.input.dispatchEvent(new FocusEvent("blur"));
-  flush();
-  expect(view.draft()).toBe("@Alex hello \t\n ");
-  expect(view.mentions()).toEqual([mention]);
-  expect(view.props.onDraftChange).toHaveBeenCalledOnce();
-  captured.finish(exact);
-  expect(view.owner.accept()).toBe(false);
-  expect(view.props.onDraftChange).toHaveBeenCalledOnce();
-  expect(view.props.onSend).not.toHaveBeenCalled();
-});
+it.each([
+  { kind: "native", initial: "hello", mentions: [] },
+  {
+    kind: "recipient",
+    initial: "@Alex hello",
+    mentions: [{ profileId: "alex", start: 0, end: 5 }],
+  },
+])(
+  "reviews exact bytes and preserves recipients in the $kind composer",
+  async ({ kind, initial, mentions }) => {
+    const view = await fixture(initial, mentions);
+    // A selected recipient activates the rich editor while optional syntax loads.
+    expect(Boolean(readComposerEditor(view.input))).toBe(kind === "recipient");
+    selectComposerInput(view.input, initial.length, initial.length);
+    const captured = view.capture(exact);
+    expect(view.draft()).toBe(initial);
+    expect(view.props.onSend).not.toHaveBeenCalled();
+    const previews = [
+      ...view.container.querySelectorAll<HTMLTextAreaElement>(".developer-syntax__review textarea"),
+    ];
+    expect(previews.map((field) => [field.value, field.dir])).toEqual([
+      [exact, "auto"],
+      [" \t\n ", "ltr"],
+    ]);
+    view.button("Insert into draft").click();
+    flush();
+    view.input.dispatchEvent(new FocusEvent("blur"));
+    flush();
+    expect(view.draft()).toBe(`${initial} \t\n `);
+    expect(view.mentions()).toEqual(mentions);
+    expect(view.props.onDraftChange).toHaveBeenCalledOnce();
+    captured.finish(exact);
+    expect(view.owner.accept()).toBe(false);
+    expect(view.props.onDraftChange).toHaveBeenCalledOnce();
+    expect(view.props.onSend).not.toHaveBeenCalled();
+  },
+);
 
-it("uses the real rich editor transaction and keeps recipient identities through undo", () => {
+it("uses the real rich editor transaction and keeps recipient identities through undo", async () => {
   const mention = { profileId: "alex", start: 0, end: 5 };
-  const view = fixture("@Alex hello", [mention]);
+  const view = await fixture("@Alex hello", [mention]);
   const editor = mountMentionComposerEditor(view.input, view.mentions);
   try {
     const bridge = readComposerEditor(view.input)!;
@@ -174,7 +191,7 @@ it.each([
 ])(
   "keeps $content copy-only for the $kind editor without losing the preview",
   async ({ kind, initial, raw, expected }) => {
-    const view = fixture(initial);
+    const view = await fixture(initial);
     const editor =
       kind === "rich" ? mountMentionComposerEditor(view.input, view.mentions) : undefined;
     const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
@@ -229,8 +246,8 @@ it.each([
 
 it.each(["equal draft", "profile"])(
   "revalidates the native target after a reentrant beforeinput callback changes %s",
-  (change) => {
-    const view = fixture("before");
+  async (change) => {
+    const view = await fixture("before");
     selectComposerInput(view.input, 6, 6);
     view.capture();
     view.input.addEventListener(
@@ -253,10 +270,10 @@ it.each(["equal draft", "profile"])(
 
 it.each(["native", "rich"])(
   "keeps command-looking accepted bytes inert in the %s goal-capable composer",
-  (kind) => {
+  async (kind) => {
     const onGoalDraftModeChange = vi.fn();
     const onGoalSubmit = vi.fn(async () => false);
-    const view = fixture("/go", [], { onGoalDraftModeChange, onGoalSubmit });
+    const view = await fixture("/go", [], { onGoalDraftModeChange, onGoalSubmit });
     const editor =
       kind === "rich" ? mountMentionComposerEditor(view.input, view.mentions) : undefined;
     try {
@@ -285,9 +302,9 @@ it.each(["native", "rich"])(
 
 it.each(["native", "rich"])(
   "keeps an exact empty replacement empty in an active %s goal draft",
-  (kind) => {
+  async (kind) => {
     const onGoalDraftModeChange = vi.fn();
-    const view = fixture("objective", [], {
+    const view = await fixture("objective", [], {
       onGoalDraftModeChange,
       onGoalSubmit: vi.fn(async () => false),
       goalDraftMode: { action: "start", fromCommand: true },
@@ -303,14 +320,23 @@ it.each(["native", "rich"])(
       expect(view.draft()).toBe("");
       expect(onGoalDraftModeChange).not.toHaveBeenCalled();
       expect(view.props.onSend).not.toHaveBeenCalled();
+      if (kind === "native") {
+        // Chromium emits no input for an empty collapsed insertion: leave no intent behind.
+        view.capture("start code end code");
+        view.button("Insert into draft").click();
+        flush();
+        expect(view.props.onDraftChange).toHaveBeenCalledOnce();
+        expect(view.state.composerInputIntentKey).toBeNull();
+        expect(view.state.mentionInput).toBeUndefined();
+      }
     } finally {
       editor?.destroy();
     }
   },
 );
 
-it("requires a literal choice and blocks Enter, history, and imperative send while reviewing", () => {
-  const view = fixture("draft");
+it("requires a literal choice and blocks Enter, history, and imperative send while reviewing", async () => {
+  const view = await fixture("draft");
   selectComposerInput(view.input, 5, 5);
   view.capture("start code x minus y end code");
   expect(view.button("Insert into draft").disabled).toBe(true);
@@ -333,9 +359,9 @@ it("requires a literal choice and blocks Enter, history, and imperative send whi
   expect(view.props.onSend).not.toHaveBeenCalled();
 });
 
-it("keeps unsupported locales unresolved until the user explicitly retains the original", () => {
+it("keeps unsupported locales unresolved until the user explicitly retains the original", async () => {
   patchSettings({ developerDictation: { ...enabled, locale: "fr-FR" } });
-  const view = fixture();
+  const view = await fixture();
   view.capture();
   expect(view.owner.review?.text).toBeNull();
   expect(view.button("Insert into draft").disabled).toBe(true);
@@ -349,7 +375,7 @@ it.each(["oversize", "invalid Unicode"])(
   "keeps recognized-original recovery blocked for %s source",
   async (kind) => {
     const raw = kind === "oversize" ? "x".repeat(131_073) : "broken\ud800";
-    const view = fixture("kept");
+    const view = await fixture("kept");
     view.capture(raw);
     view.button("Keep recognized original").click();
     flush();
@@ -370,8 +396,8 @@ it.each(["oversize", "invalid Unicode"])(
 
 it.each(["selection", "equal draft publication", "client", "permission", "profile", "disable"])(
   "rejects a final and later insertion after %s changes during provider wait",
-  (change) => {
-    const view = fixture("kept");
+  async (change) => {
+    const view = await fixture("kept");
     selectComposerInput(view.input, 4, 4);
     const captured = view.owner.capture()!;
     if (change === "selection") {
@@ -404,8 +430,8 @@ it.each(["selection", "equal draft publication", "client", "permission", "profil
   },
 );
 
-it("undoes the last preview edit locally and exposes literal character names without speech", () => {
-  const view = fixture();
+it("undoes the last preview edit locally and exposes literal character names without speech", async () => {
+  const view = await fixture();
   view.capture("snake case first name end identifier and camel case last name end identifier");
   expect(view.owner.review?.text).toBe("first_name and lastName");
   view.button("Undo last preview transformation").click();
@@ -430,8 +456,39 @@ it("undoes the last preview edit locally and exposes literal character names wit
   expect(view.container.textContent).toContain("newline (U+000A)");
 });
 
-it("retains authored bytes on disable or failed import and checks a newer persisted revision", () => {
-  const view = fixture();
+it("retains pending profile input and an export when syntax settings are collapsed", async () => {
+  const view = await fixture();
+  const pending = '{"name": "profile in progress';
+  const input = view.container.querySelector<HTMLTextAreaElement>(
+    ".developer-syntax fieldset textarea",
+  )!;
+  input.value = pending;
+  input.dispatchEvent(new InputEvent("input", { bubbles: true, data: pending }));
+  view.button("Show profile export").click();
+  flush();
+  const exported = () =>
+    view.container.querySelector<HTMLTextAreaElement>(
+      ".developer-syntax details textarea[readonly]",
+    );
+  expect(JSON.parse(exported()!.value).id).toBe("en-us-plain-code");
+  const details = view.container.querySelector<HTMLDetailsElement>(".developer-syntax details")!;
+  for (const open of [false, true]) {
+    const toggled = new Promise<void>((resolve) => {
+      details.addEventListener("toggle", () => resolve(), { once: true });
+    });
+    details.querySelector<HTMLElement>("summary")!.click();
+    await toggled;
+    flush();
+    expect(details.open).toBe(open);
+  }
+  expect(
+    view.container.querySelector<HTMLTextAreaElement>(".developer-syntax fieldset textarea")!.value,
+  ).toBe(pending);
+  expect(JSON.parse(exported()!.value).id).toBe("en-us-plain-code");
+});
+
+it("retains authored bytes on disable or failed import and checks a newer persisted revision", async () => {
+  const view = await fixture();
   const profile = { ...builtinDeveloperProfiles[0]!, id: "my-code", name: "My code", revision: 1 };
   const authored = JSON.stringify(profile, null, 2);
   expect(view.owner.importProfile(authored)).toBe(true);
@@ -454,10 +511,10 @@ it("retains authored bytes on disable or failed import and checks a newer persis
   expect(JSON.parse(view.owner.exportProfile()).revision).toBe(3);
 });
 
-it("preserves unknown saved records and requires an explicit Prose fallback", () => {
+it("preserves unknown saved records and requires an explicit Prose fallback", async () => {
   const future = { schemaVersion: 99, authored: "Keep me" };
   patchSettings({ developerDictation: future });
-  const view = fixture();
+  const view = await fixture();
   view.capture();
   expect(view.owner.review?.text).toBeNull();
   expect(JSON.parse(view.owner.exportProfile())).toEqual(future);
@@ -465,6 +522,19 @@ it("preserves unknown saved records and requires an explicit Prose fallback", ()
   expect(view.owner.capture()).toBeUndefined();
   expect(loadSettings().developerDictation).toEqual(future);
 });
+
+it.each([{ enabled: false }, { mode: "prose" as const }])(
+  "keeps explicit baseline dictation available with unused invalid profile data: %j",
+  async (baseline) => {
+    const saved = { ...enabled, ...baseline, profiles: ["not a profile"] };
+    patchSettings({ developerDictation: saved });
+    const view = await fixture();
+    expect(view.owner.invalidSettings).toBe(true);
+    expect(view.owner.capture()).toBeUndefined();
+    expect(view.owner.blocksSend).toBe(false);
+    expect(loadSettings().developerDictation).toEqual(saved);
+  },
+);
 
 it("retires an uncertain editor write and never retries or restores its captured baseline", () => {
   let draft = "before";

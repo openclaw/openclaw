@@ -7,7 +7,6 @@ const enChatDictation = {
     dictation: {
       busy: "Dictation is busy finishing earlier recordings. Try again in a moment.",
       developer: {
-        settings: "Dictation syntax",
         enable: "Enable exact syntax review",
         mode: "Dictation mode",
         prose: "Prose",

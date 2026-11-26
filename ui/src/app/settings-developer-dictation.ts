@@ -80,3 +80,12 @@ export function normalizeDeveloperDictationSettings(
     profiles,
   };
 }
+
+/** Unknown envelopes require an explicit fallback; unused profiles need no runtime. */
+export function requiresDeveloperDictationReview(value: unknown): boolean {
+  if (value === undefined) {
+    return false;
+  }
+  const settings = normalizeDeveloperDictationSettings(value);
+  return !settings || (settings.enabled && settings.mode !== "prose");
+}

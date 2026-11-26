@@ -13,12 +13,18 @@ import {
   DEFAULT_DEVELOPER_DICTATION_SETTINGS,
   DEVELOPER_DICTATION_MAX_PROFILES,
   normalizeDeveloperDictationSettings,
+  requiresDeveloperDictationReview,
   type DeveloperDictationSettings,
 } from "../../app/settings-developer-dictation.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictation.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import type { DeveloperDictationTarget } from "./composer-developer-target.ts";
+import type { ChatComposerState } from "./components/chat-composer-types.ts";
+import {
+  captureDeveloperDictationTarget,
+  type DeveloperDictationTarget,
+} from "./composer-developer-target.ts";
 import type { ComposerDictationReviewCapture } from "./composer-dictation.ts";
 
 registerChatDictationEnglish();
@@ -50,7 +56,7 @@ export class ComposerDeveloperSyntax extends EventTarget {
   notice = "";
 
   constructor(
-    private options: {
+    private readonly options: {
       readSettings(): unknown;
       saveSettings(value: DeveloperDictationSettings): void;
       captureTarget(): DeveloperDictationTarget | undefined;
@@ -64,10 +70,6 @@ export class ComposerDeveloperSyntax extends EventTarget {
 
   subscribe(listener: () => void) {
     return listen(this, "change", listener);
-  }
-
-  update(options: typeof this.options) {
-    this.options = options;
   }
 
   get profiles() {
@@ -192,9 +194,8 @@ export class ComposerDeveloperSyntax extends EventTarget {
   capture(): ComposerDictationReviewCapture | undefined {
     this.refreshSettings();
     if (
-      this.configError
-        ? this.explicitProseFallback
-        : !this.settings.enabled || this.settings.mode === "prose"
+      !requiresDeveloperDictationReview(this.rawSettings) ||
+      (this.configError && this.explicitProseFallback)
     ) {
       return undefined;
     }
@@ -398,4 +399,18 @@ export class ComposerDeveloperSyntax extends EventTarget {
   dispose() {
     this.retire();
   }
+}
+
+/** The existing pane owns this instance; its editor adapter loads with syntax use. */
+export function createComposerDeveloperSyntax(state: ChatComposerState) {
+  return new ComposerDeveloperSyntax({
+    readSettings: () => loadSettings().developerDictation,
+    saveSettings: (value) => patchSettings({ developerDictation: value }),
+    captureTarget: () => {
+      const props = state.developerSyntaxHost?.readProps();
+      return props ? captureDeveloperDictationTarget(props, state) : undefined;
+    },
+    cancelCapture: () => state.dictation?.cancel(),
+    copy: (text) => navigator.clipboard.writeText(text),
+  });
 }

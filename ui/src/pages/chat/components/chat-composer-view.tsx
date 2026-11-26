@@ -45,9 +45,11 @@ import { ComposerWidthEdge, prepareComposerWidthEdge } from "./chat-composer-wid
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
 import { ChatVoiceStatus, ComposerDictationStatus } from "./chat-voice-activity.tsx";
-import { DeveloperSyntaxPanel } from "./developer-syntax-panel.tsx";
+import { DeveloperSyntaxSlot } from "./developer-syntax-slot.tsx";
 
-type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
+type ChatComposerViewContext = ReturnType<typeof createChatComposerContext> & {
+  developerSyntaxRequested: boolean;
+};
 
 const WorktreeRestoreNotice = lazy(() => import("./chat-worktree-restore-notice.tsx"), {
   export: "ChatWorktreeRestoreNotice",
@@ -598,7 +600,11 @@ export function renderChatComposerView(
             </div>
 
             <Show when={context().dictation}>
-              <DeveloperSyntaxPanel readOwner={() => context().developerSyntax} />
+              <DeveloperSyntaxSlot
+                state={state}
+                requested={context().developerSyntaxRequested}
+                readOwner={() => context().developerSyntax}
+              />
             </Show>
             <div class="agent-chat__composer-footer">
               <div class="agent-chat__composer-lead agent-chat__composer-meta">

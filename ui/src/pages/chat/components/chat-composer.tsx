@@ -8,15 +8,13 @@ import {
   Show,
   untrack,
 } from "solid-js";
-import type { DeveloperDictationSettings } from "../../../app/settings-developer-dictation.ts";
-import { loadSettings, patchSettings } from "../../../app/settings.ts";
+import { requiresDeveloperDictationReview } from "../../../app/settings-developer-dictation.ts";
+import { loadSettings } from "../../../app/settings.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { navigateToModelProvider } from "../../model-providers/navigation.ts";
 import { isChatRunWorking } from "../chat-run-working.ts";
-import { ComposerDeveloperSyntax } from "../composer-developer-syntax.ts";
-import { captureDeveloperDictationTarget } from "../composer-developer-target.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import { navigateToSpeechSettings } from "../voice-api-key-navigation.ts";
@@ -73,15 +71,14 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
     createProjection(() => draftState() ?? {}, {}, { shallow: true }),
   );
   const goalComposer = createGoalComposer(() => currentProps, state);
-  const developerOptions = {
-    readSettings: () => loadSettings().developerDictation,
-    saveSettings: (value: DeveloperDictationSettings) =>
-      patchSettings({ developerDictation: value }),
-    captureTarget: () => captureDeveloperDictationTarget(currentProps, state),
-    cancelCapture: () => state.dictation?.cancel(),
-    copy: (text: string) => navigator.clipboard.writeText(text),
+  const [developerRequested, setDeveloperRequested] = createSignal(
+    requiresDeveloperDictationReview(loadSettings().developerDictation),
+  );
+  const developerHost = {
+    readProps: () => currentProps,
+    request: () => setDeveloperRequested(true),
   };
-  const developerSyntax = (state.developerSyntax ??= new ComposerDeveloperSyntax(developerOptions));
+  state.developerSyntaxHost = developerHost;
   const microphonePicker = (state.microphonePicker ??= new ComposerMicrophoneOwner());
   if (!state.dictation) {
     // Seed this retained owner once; later configuration is admitted by update(), not recreation.
@@ -113,7 +110,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
     let locked = false;
     const release = voice.dictation.subscribe(() => {
       const nextLocked = voice.dictation.locksComposer;
-      if (nextLocked && (!locked || !developerSyntax.blocksSend)) {
+      if (nextLocked && (!locked || !state.developerSyntax?.blocksSend)) {
         state.editRevision += 1;
         currentProps.onDismissRealtimeTalkError?.();
       }
@@ -121,11 +118,17 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
     });
     return () => {
       release();
-      developerSyntax.cancel();
+      state.developerSyntax?.cancel();
+      if (state.developerSyntaxHost === developerHost) {
+        state.developerSyntaxHost = null;
+      }
     };
   });
   const dictation = projectOwner(voice.dictation, (owner) => owner);
-  const developer = projectOwner(developerSyntax, (owner) => owner);
+  const developer = createMemo(() => {
+    const owner = state.developerSyntaxReady();
+    return owner ? projectOwner(owner, (value) => value) : undefined;
+  });
   const microphone = projectOwner(voice.picker, (owner) => owner);
   const readPredictionSource = () => {
     const options = currentProps.composerPredictions;
@@ -148,7 +151,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
         !currentProps.realtimeTalkActive &&
         !state.composerComposing &&
         !state.dictation?.active &&
-        !developerSyntax.blocksSend &&
+        !state.developerSyntax?.blocksSend &&
         !currentProps.goalDraftMode &&
         !currentProps.replyTarget &&
         !(currentProps.getDraft?.() ?? currentProps.draft) &&
@@ -168,7 +171,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
   const context = createMemo(() => {
     draftState();
     dictation.read();
-    developer.read();
+    developer()?.read();
     microphone.read();
     return createChatComposerContext(
       currentProps,
@@ -184,7 +187,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
     () => ({
       context: context(),
       predictions: readPredictionSource(),
-      developerCurrent: developerSyntax.targetCurrent,
+      developerCurrent: state.developerSyntax?.targetCurrent,
     }),
     ({ context: current, predictions, developerCurrent }, previous) => {
       state.mentionMenu.syncDirectory(current.mentionDirectory);
@@ -205,8 +208,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
       const options = current.dictationOptions;
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
       voice.dictation.update(options);
-      developerSyntax.update(developerOptions);
-      developerSyntax.sync(developerCurrent);
+      state.developerSyntax?.sync(developerCurrent);
       prediction.sync(predictions);
       if (current.queuedSubmitDue) {
         // Submission reads live composer state; run it after this commit.
@@ -266,6 +268,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
     return {
       attachmentReadRevision: current.attachmentReadRevision,
       canCompose: current.canCompose,
+      developerSyntaxRequested: developerRequested(),
       showAbortableUi: current.showAbortableUi,
       visibleDraft: current.visibleDraft,
       submitQueued: current.submitQueued,

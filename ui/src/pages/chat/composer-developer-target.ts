@@ -55,7 +55,11 @@ export function captureDeveloperDictationTarget(
   // retains CR/CRLF and whitespace-only results those owners cannot retain.
   const canInsertExact = (text: string) => {
     const next = draft.slice(0, start) + text + draft.slice(end);
-    return !text.includes("\r") && normalizeChatComposerDraft(next) === next;
+    return (
+      (editor !== undefined || typeof input.ownerDocument.execCommand === "function") &&
+      !text.includes("\r") &&
+      normalizeChatComposerDraft(next) === next
+    );
   };
   return {
     isCurrent: () => isCurrent(),
@@ -67,36 +71,39 @@ export function captureDeveloperDictationTarget(
       if (editor) {
         // The editor owns mention range mapping and its native history transaction.
         withExactComposerInsertion(input, () => editor.replace(text, start, end));
-      } else {
-        const before = new InputEvent("beforeinput", {
-          bubbles: true,
-          cancelable: true,
-          inputType: "insertReplacementText",
-          data: text,
-        });
-        // The mounted input owner records this one beforeinput intent. A callback
-        // may also replace the draft, selection, or authority: check after dispatch.
-        if (
-          !input.dispatchEvent(before) ||
-          !isCurrent(revision + 1) ||
-          input.readOnly ||
-          !isAuthorized()
-        ) {
-          return false;
-        }
-        withExactComposerInsertion(input, () => {
-          input.setRangeText(text, start, end, "end");
-          input.dispatchEvent(
-            new InputEvent("input", {
-              bubbles: true,
-              inputType: "insertReplacementText",
-              data: text,
-            }),
-          );
-        });
+        focusComposerInput(input, { preventScroll: true });
+        return true;
       }
+      // Like emoji insertion, the browser editing command owns native undo and
+      // publishes input through the existing draft owner. Direct value writes do not.
       focusComposerInput(input, { preventScroll: true });
-      return true;
+      if (!isCurrent() || input.readOnly || !isAuthorized()) {
+        return false;
+      }
+      // Native no-op insertion emits no input to consume a beforeinput intent.
+      if (!text && start === end) {
+        return true;
+      }
+      const before = new InputEvent("beforeinput", {
+        bubbles: true,
+        cancelable: true,
+        inputType: "insertReplacementText",
+        data: text,
+      });
+      // The mounted input owner records this one beforeinput intent. A callback
+      // may also replace the draft, selection, or authority: check after dispatch.
+      if (
+        !input.dispatchEvent(before) ||
+        !isCurrent(revision + 1) ||
+        input.readOnly ||
+        !isAuthorized()
+      ) {
+        return false;
+      }
+      return withExactComposerInsertion(
+        input,
+        () => input.ownerDocument.execCommand?.("insertText", false, text) ?? false,
+      );
     },
   };
 }
