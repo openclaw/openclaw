@@ -2,6 +2,7 @@
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
+import { LOCAL_HOST } from "../gateway/operator-admission.js";
 import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -66,7 +67,7 @@ export async function runLocalAgentCommand<TResult>(params: {
           const opts = {
             ...params.opts,
             lifecycleGeneration,
-            senderIsOwner: params.opts.senderIsOwner ?? true,
+            senderIsOwner: LOCAL_HOST.grant.owner,
             allowModelOverride: params.opts.allowModelOverride ?? true,
             // Standalone commands cannot retain transports after their idle scheduler closes.
             cleanupBundleMcpOnRunEnd: existingHost ? params.opts.cleanupBundleMcpOnRunEnd : true,
@@ -75,10 +76,9 @@ export async function runLocalAgentCommand<TResult>(params: {
             prepareAgentCommandExecution(opts, params.runtime),
           );
           try {
-            const capability =
-              params.operatorAuthority && prepared.opts.senderIsOwner === true
-                ? createCronCreatorAuthorityCapability(prepared.runId, { kind: "local" })
-                : undefined;
+            const capability = params.operatorAuthority
+              ? createCronCreatorAuthorityCapability(prepared.runId, { kind: "local" })
+              : undefined;
             const admittedPrepared = capability
               ? {
                   ...prepared,

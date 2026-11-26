@@ -353,7 +353,8 @@
           "cyan": "青色"
         },
         "partial": "已加载 {count} 个会话，共 {total} 个。智能体筛选仅适用于已加载的会话。",
-        "loadMore": "加载更多会话"
+        "loadMore": "加载更多会话",
+        "loadedCount": "显示 {count} 个会话，共 {total} 个"
       },
       "boardName": "名称",
       "boardAppearance": "看板外观",
@@ -832,7 +833,8 @@
           "cyan": "青色"
         },
         "partial": "已載入 {count} 個工作階段，共 {total} 個。代理程式篩選僅適用於已載入的工作階段。",
-        "loadMore": "載入更多工作階段"
+        "loadMore": "載入更多工作階段",
+        "loadedCount": "顯示 {count} 個工作階段，共 {total} 個"
       },
       "boardName": "名稱",
       "boardAppearance": "看板外觀",
@@ -1311,7 +1313,8 @@
           "cyan": "Ciano"
         },
         "partial": "{count} de {total} sessões carregadas. O filtro de agente se aplica às sessões carregadas.",
-        "loadMore": "Carregar mais sessões"
+        "loadMore": "Carregar mais sessões",
+        "loadedCount": "Exibindo {count} de {total} sessões"
       },
       "boardName": "Nome",
       "boardAppearance": "Aparência do quadro",
@@ -1790,7 +1793,8 @@
           "cyan": "Cyan"
         },
         "partial": "{count} von {total} Sitzungen geladen. Der Agentenfilter gilt für geladene Sitzungen.",
-        "loadMore": "Weitere Sitzungen laden"
+        "loadMore": "Weitere Sitzungen laden",
+        "loadedCount": "{count} von {total} Sitzungen werden angezeigt"
       },
       "boardName": "Name",
       "boardAppearance": "Board-Darstellung",
@@ -2269,7 +2273,8 @@
           "cyan": "Cian"
         },
         "partial": "{count} de {total} sesiones cargadas. El filtro de agentes se aplica a las sesiones cargadas.",
-        "loadMore": "Cargar más sesiones"
+        "loadMore": "Cargar más sesiones",
+        "loadedCount": "Mostrando {count} de {total} sesiones"
       },
       "boardName": "Nombre",
       "boardAppearance": "Apariencia del tablero",
@@ -2748,7 +2753,8 @@
           "cyan": "シアン"
         },
         "partial": "{total}件中{count}件のセッションを読み込み済みです。エージェントフィルターは読み込み済みのセッションに適用されます。",
-        "loadMore": "セッションをさらに読み込む"
+        "loadMore": "セッションをさらに読み込む",
+        "loadedCount": "{total}件中{count}件のセッションを表示中"
       },
       "boardName": "名前",
       "boardAppearance": "ボードの外観",
@@ -3227,7 +3233,8 @@
           "cyan": "청록색"
         },
         "partial": "세션 {total}개 중 {count}개를 불러왔습니다. 에이전트 필터는 불러온 세션에 적용됩니다.",
-        "loadMore": "세션 더 불러오기"
+        "loadMore": "세션 더 불러오기",
+        "loadedCount": "전체 세션 {total}개 중 {count}개 표시 중"
       },
       "boardName": "이름",
       "boardAppearance": "보드 모양",
@@ -3706,7 +3713,8 @@
           "cyan": "Cyan"
         },
         "partial": "{count} sessions chargées sur {total}. Le filtre par agent s’applique aux sessions chargées.",
-        "loadMore": "Charger plus de sessions"
+        "loadMore": "Charger plus de sessions",
+        "loadedCount": "Affichage de {count} sessions sur {total}"
       },
       "boardName": "Nom",
       "boardAppearance": "Apparence du tableau",
@@ -4185,7 +4193,8 @@
           "cyan": "सियान"
         },
         "partial": "{total} में से {count} सत्र लोड हो गए हैं। एजेंट फ़िल्टर लोड किए गए सत्रों पर लागू होता है।",
-        "loadMore": "और सत्र लोड करें"
+        "loadMore": "और सत्र लोड करें",
+        "loadedCount": "{total} में से {count} सत्र दिखाए जा रहे हैं"
       },
       "boardName": "नाम",
       "boardAppearance": "बोर्ड का स्वरूप",
@@ -4664,7 +4673,8 @@
           "cyan": "سماوي"
         },
         "partial": "تم تحميل {count} من أصل {total} جلسة. ينطبق عامل تصفية الوكيل على الجلسات المحمّلة.",
-        "loadMore": "تحميل المزيد من الجلسات"
+        "loadMore": "تحميل المزيد من الجلسات",
+        "loadedCount": "عرض {count} من أصل {total} جلسة"
       },
       "boardName": "الاسم",
       "boardAppearance": "مظهر اللوحة",
@@ -5143,7 +5153,8 @@
           "cyan": "Ciano"
         },
         "partial": "{count} sessioni caricate su {total}. Il filtro per agente si applica alle sessioni caricate.",
-        "loadMore": "Carica altre sessioni"
+        "loadMore": "Carica altre sessioni",
+        "loadedCount": "Visualizzazione di {count} sessioni su {total}"
       },
       "boardName": "Nome",
       "boardAppearance": "Aspetto della bacheca",
@@ -5622,7 +5633,8 @@
           "cyan": "Camgöbeği"
         },
         "partial": "{total} oturumdan {count} tanesi yüklendi. Aracı filtresi, yüklenen oturumlara uygulanır.",
-        "loadMore": "Daha fazla oturum yükle"
+        "loadMore": "Daha fazla oturum yükle",
+        "loadedCount": "{total} oturumdan {count} tanesi gösteriliyor"
       },
       "boardName": "Ad",
       "boardAppearance": "Pano görünümü",
@@ -6101,7 +6113,8 @@
           "cyan": "Блакитний"
         },
         "partial": "Завантажено сеансів: {count} із {total}. Фільтр за агентом застосовується до завантажених сеансів.",
-        "loadMore": "Завантажити більше сеансів"
+        "loadMore": "Завантажити більше сеансів",
+        "loadedCount": "Показано {count} із {total} сеансів"
       },
       "boardName": "Назва",
       "boardAppearance": "Вигляд дошки",
@@ -6580,7 +6593,8 @@
           "cyan": "Sian"
         },
         "partial": "{count} dari {total} sesi dimuat. Filter agen berlaku untuk sesi yang dimuat.",
-        "loadMore": "Muat lebih banyak sesi"
+        "loadMore": "Muat lebih banyak sesi",
+        "loadedCount": "Menampilkan {count} dari {total} sesi"
       },
       "boardName": "Nama",
       "boardAppearance": "Tampilan papan",
@@ -7059,7 +7073,8 @@
           "cyan": "Cyjan"
         },
         "partial": "Liczba wczytanych sesji: {count} z {total}. Filtr agentów dotyczy wczytanych sesji.",
-        "loadMore": "Wczytaj więcej sesji"
+        "loadMore": "Wczytaj więcej sesji",
+        "loadedCount": "Wyświetlono {count} z {total} sesji"
       },
       "boardName": "Nazwa",
       "boardAppearance": "Wygląd tablicy",
@@ -7538,7 +7553,8 @@
           "cyan": "สีฟ้าอมเขียว"
         },
         "partial": "โหลดเซสชันแล้ว {count} จาก {total} เซสชัน ตัวกรองเอเจนต์จะใช้กับเซสชันที่โหลดแล้วเท่านั้น",
-        "loadMore": "โหลดเซสชันเพิ่มเติม"
+        "loadMore": "โหลดเซสชันเพิ่มเติม",
+        "loadedCount": "แสดง {count} จากทั้งหมด {total} เซสชัน"
       },
       "boardName": "ชื่อ",
       "boardAppearance": "รูปลักษณ์ของบอร์ด",
@@ -8017,7 +8033,8 @@
           "cyan": "Xanh lơ"
         },
         "partial": "Đã tải {count} trên tổng số {total} phiên. Bộ lọc tác nhân áp dụng cho các phiên đã tải.",
-        "loadMore": "Tải thêm phiên"
+        "loadMore": "Tải thêm phiên",
+        "loadedCount": "Đang hiển thị {count} trên tổng số {total} phiên"
       },
       "boardName": "Tên",
       "boardAppearance": "Giao diện bảng",
@@ -8496,7 +8513,8 @@
           "cyan": "Cyaan"
         },
         "partial": "{count} van {total} sessies geladen. Het agentfilter is van toepassing op geladen sessies.",
-        "loadMore": "Meer sessies laden"
+        "loadMore": "Meer sessies laden",
+        "loadedCount": "{count} van {total} sessies worden weergegeven"
       },
       "boardName": "Naam",
       "boardAppearance": "Bordweergave",
@@ -8975,7 +8993,8 @@
           "cyan": "فیروزه‌ای"
         },
         "partial": "{count} جلسه از {total} جلسه بارگذاری شده است. فیلتر عامل روی جلسه‌های بارگذاری‌شده اعمال می‌شود.",
-        "loadMore": "بارگذاری جلسه‌های بیشتر"
+        "loadMore": "بارگذاری جلسه‌های بیشتر",
+        "loadedCount": "نمایش {count} جلسه از {total} جلسه"
       },
       "boardName": "نام",
       "boardAppearance": "ظاهر تابلو",
@@ -9454,7 +9473,8 @@
           "cyan": "Голубой"
         },
         "partial": "Загружено сеансов: {count} из {total}. Фильтр по агенту применяется к загруженным сеансам.",
-        "loadMore": "Загрузить ещё сеансы"
+        "loadMore": "Загрузить ещё сеансы",
+        "loadedCount": "Показано сеансов: {count} из {total}"
       },
       "boardName": "Название",
       "boardAppearance": "Оформление доски",
@@ -9739,7 +9759,8 @@
           "orange": "Orange",
           "pink": "Rosa",
           "cyan": "Cyan"
-        }
+        },
+        "loadedCount": "Visar {count} av {total} sessioner"
       },
       "boardName": "Namn",
       "boardAppearance": "Tavlans utseende",
@@ -10157,7 +10178,8 @@
           "orange": "Taronja",
           "pink": "Rosa",
           "cyan": "Cian"
-        }
+        },
+        "loadedCount": "Es mostren {count} de {total} sessions"
       },
       "boardName": "Nom",
       "boardAppearance": "Aparença del tauler",

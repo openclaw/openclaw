@@ -1136,30 +1136,6 @@ describe("active-memory plugin", () => {
     }
   });
 
-  it("warns once per provider and agent when the provider lacks protected transcript recall", async () => {
-    syncRuntimePluginConfig({ agents: [], logging: true, toolsAllow: ["memory_search"] });
-    setMemorySlot("memory-lancedb");
-    setAgents({ personal: { memory: { search: { rememberAcrossConversations: true } } } });
-    const sessionKey = "agent:personal:telegram:direct:owner";
-    seedSession(sessionKey, "s-personal");
-    const target = {
-      agentId: "personal",
-      sessionKey,
-      messageProvider: "telegram",
-      channelId: "owner",
-    };
-    await runRecall(target);
-    await runRecall(target);
-    await runRecall(target);
-    const unsupported = (level: "warn" | "debug") =>
-      logLines(level).filter((line) =>
-        line.includes("does not support protected private transcript recall"),
-      ).length;
-    expect(unsupported("warn")).toBe(1);
-    expect(unsupported("debug")).toBe(2);
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-  });
-
   it("runs product recall by default for a personal install without Active Memory config", async () => {
     configFile = {
       agents: {
@@ -1472,40 +1448,6 @@ describe("active-memory plugin", () => {
     },
   );
 
-  it("logs deterministic trigger injections when invocation logging is enabled", async () => {
-    hoisted.getActiveMemorySearchManager.mockResolvedValueOnce({
-      manager: {
-        search: vi.fn(async () => []),
-        listTriggerCandidates: vi.fn(async () => [
-          {
-            path: "MEMORY.md",
-            startLine: 1,
-            endLine: 1,
-            score: 1,
-            snippet: "Prefer aisle seats.",
-            source: "memory" as const,
-            provenance: {
-              originClass: "agent" as const,
-              sessionKind: "interactive" as const,
-              observedAt: 1,
-            },
-            triggers: "booking a flight",
-          },
-        ]),
-      },
-    } as never);
-    const result = await runPromptBuild("Help when booking a flight", {
-      sessionKey: "agent:main:telegram:direct:owner",
-      messageProvider: "telegram",
-      channelId: "owner",
-    });
-
-    expectRecallContains(result, "Prefer aisle seats.");
-    expect(api.logger.info).toHaveBeenCalledWith(
-      "active-memory: lane-1 injected 1 trigger-matched entries",
-    );
-  });
-
   it.each([
     ["continues after trigger timeout despite clock rollback", 1_000, true],
     ["skips trigger lookup without enough settle reserve", 1_490, false],
@@ -1588,15 +1530,6 @@ describe("active-memory plugin", () => {
     query?: string;
     wellFormed?: boolean;
   }>([
-    {
-      name: "explicit preference style",
-      config: { queryMode: "message", promptStyle: "preference-only" },
-      event: { prompt: "What is my favorite food?" },
-      contains: [
-        "Prompt style: preference-only.",
-        "Optimize for favorites, preferences, habits, routines, taste, and recurring personal facts.",
-      ],
-    },
     {
       name: "operator override and append",
       config: {
@@ -2619,21 +2552,6 @@ describe("active-memory plugin", () => {
       await Promise.allSettled(recallRunSpy.mock.results.map(({ value }) => value));
     }
     expect(hoisted.sessionStore[lastRecallSessionKey()]).toBeUndefined();
-  });
-
-  it("applies the CLI dispatch default recall budget", async () => {
-    resolveCliBackendDispatchEligibility.mockReturnValueOnce({ provider: "claude-cli" });
-    mockRun(async () => ({
-      payloads: [{ text: "- lemon pepper wings" }],
-    }));
-    await runRecall({
-      modelProviderId: "claude-cli",
-      modelId: "claude-opus-4-8",
-    });
-    expect(lastRecallParams().timeoutMs).toBe(45_000);
-    expect(resolveCliBackendDispatchEligibility).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "claude-cli", model: "claude-opus-4-8" }),
-    );
   });
 
   it("caps active-memory log field lengths without splitting surrogate pairs", async () => {

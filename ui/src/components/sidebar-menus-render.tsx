@@ -463,6 +463,7 @@ function renderSidebarMenus(
               effectiveCommunication: session().effectiveCommunication,
               archived: allArchived(),
               snoozedUntil: session().snoozedUntil ?? null,
+              snoozeTime: view.gatewayTimeForSavedPin(session()),
               archiving: rows().some(
                 (row) => context()?.sessions.archiveVisibility(row.key) === "pending",
               ),

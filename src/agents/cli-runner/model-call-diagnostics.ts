@@ -75,11 +75,12 @@ function truncateSerializedStringSafe(value: string, maxBytes: number): string {
   if (maxBytes <= 0) {
     return "";
   }
-  if (serializedStringContentBytes(value) <= maxBytes) {
-    return value;
+  const prefix = truncateUtf16Safe(value, maxBytes);
+  if (serializedStringContentBytes(prefix) <= maxBytes) {
+    return prefix;
   }
   let low = 0;
-  let high = Math.min(value.length, maxBytes);
+  let high = prefix.length - 1;
   let captured = "";
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
@@ -109,10 +110,14 @@ function captureTextWithinBudget(
     budget.truncated = true;
     return undefined;
   }
-  const valueBytes = serializedStringContentBytes(value);
-  if (valueBytes <= budget.remainingBytes) {
-    budget.remainingBytes -= valueBytes;
-    return value;
+  // Escaped UTF-8 needs at least one byte per UTF-16 code unit. A value
+  // longer than the budget cannot fit, so only serialize its bounded prefix.
+  if (value.length <= budget.remainingBytes) {
+    const valueBytes = serializedStringContentBytes(value);
+    if (valueBytes <= budget.remainingBytes) {
+      budget.remainingBytes -= valueBytes;
+      return value;
+    }
   }
   const suffix = truncateSerializedStringSafe(TRUNCATED_CONTENT_SUFFIX, budget.remainingBytes);
   const prefixBudget = Math.max(0, budget.remainingBytes - serializedStringContentBytes(suffix));

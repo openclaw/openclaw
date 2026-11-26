@@ -131,7 +131,7 @@ export default {
       writeUnavailable:
         "Board appearance was saved. Reconnect with write access to save the session columns.",
       loading: "Loading sessions…",
-      partial: "{count} of {total} sessions loaded. The agent filter applies to loaded sessions.",
+      loadedCount: "Showing {count} of {total} sessions",
       loadMore: "Load more sessions",
       empty: "No sessions in this column",
       columns: "Columns",

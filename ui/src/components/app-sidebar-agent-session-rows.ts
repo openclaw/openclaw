@@ -27,6 +27,7 @@ import {
 } from "./app-sidebar-session-parent.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
+  type SidebarSavedPinTime,
   SIDEBAR_SESSION_NO_ATTENTION,
   summarizeSidebarSessionAttention,
   type SidebarRecentSession,
@@ -42,6 +43,7 @@ type AgentSessionRowsHost = {
   selectedAgentMainSessionKey(agentId: string): string;
   readonly sessionsShowCron: boolean;
   readonly sessionsShowSystem: boolean;
+  readonly gatewayTimeForSavedPin: SidebarSavedPinTime;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
   readonly sessionInvolvingMeFilterActive: boolean;
 };
@@ -96,6 +98,7 @@ export function projectSidebarAgentSessionRows({
     statusFilter: host.sessionsStatusFilter,
     showSystem: host.sessionsShowSystem,
     now: Date.now(),
+    gatewayTimeForSavedPin: host.gatewayTimeForSavedPin,
     deletionState: (key, agentId) =>
       host.sessionDataContext?.sessions.deletionState(
         key,
@@ -288,6 +291,7 @@ export function projectSidebarSessionReference({
     AgentSessionRowsHost,
     | "sessionDataContext"
     | "sessionData"
+    | "gatewayTimeForSavedPin"
     | "sessionsStatusFilter"
     | "sessionsShowSystem"
     | "selectedAgentMainSessionKey"
@@ -309,6 +313,7 @@ export function projectSidebarSessionReference({
     statusFilter: host.sessionsStatusFilter,
     showSystem: host.sessionsShowSystem,
     now: Date.now(),
+    gatewayTimeForSavedPin: host.gatewayTimeForSavedPin,
     deletionState: (key, owner) => host.sessionDataContext?.sessions.deletionState(key, owner),
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
   });

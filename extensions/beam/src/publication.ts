@@ -1,7 +1,7 @@
 import { posix } from "node:path";
 import { buildControlUiCatalogSharePath } from "openclaw/plugin-sdk/session-catalog-runtime";
 import { snapshotRevision } from "./packet-state.js";
-import { BEAM_SESSION_SHARE_ROUTE, type BeamHandoff } from "./types.js";
+import { BEAM_SESSION_SHARE_ROUTE, type BeamStoredSession } from "./types.js";
 
 export const BEAM_V2_API = "/api/v2/beam";
 
@@ -15,8 +15,14 @@ export function parsePublicationId(
 
 export function publicationHead(
   row: Pick<
-    BeamHandoff,
-    "beamId" | "title" | "revision" | "publicationId" | "handoffId" | "publisherProfileId"
+    BeamStoredSession,
+    | "presentationDigest"
+    | "beamId"
+    | "title"
+    | "revision"
+    | "publicationId"
+    | "handoffId"
+    | "publisherProfileId"
   >,
   digest: string,
   basePath: string | undefined,
@@ -38,6 +44,7 @@ export function publicationHead(
     beamId: row.beamId,
     revision,
     digest,
+    ...(row.presentationDigest ? { presentationDigest: row.presentationDigest } : {}),
     ...(view ? { url: reference(view) } : {}),
     canRelease: Boolean(
       publicationId &&

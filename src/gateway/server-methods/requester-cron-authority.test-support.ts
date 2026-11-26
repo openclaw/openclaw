@@ -34,6 +34,7 @@ import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-g
 import * as mcpGrants from "../mcp-grant-store.js";
 import { json, prepareAdmission, request } from "../mcp-http-request.test-support.js";
 import { getActiveMcpLoopbackRuntime } from "../mcp-http.loopback-runtime.js";
+import { decideTurnGrant } from "../operator-admission.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "../server-methods.js";
 import type { GatewayUiCommandTarget } from "../ui-command-target.types.js";
@@ -86,6 +87,8 @@ export function admission(runId: string, client: GatewayClient, childSessionKey?
     resolvedSessionKey: SESSION,
     sessionId: SESSION_ID,
     client,
+    // The grant admission gives this client's connect scopes.
+    grant: decideTurnGrant(client.connect.scopes ?? []),
     request: { message: "Update the maintenance automation", idempotencyKey: runId },
     inputProvenance: childSessionKey
       ? {
@@ -148,7 +151,6 @@ export async function inRun<T>(
         admitted.managementEntitlement,
         admitted.isCurrent,
         undefined,
-        admitted.requesterOwner,
         admitted.callerScopedCreation,
       ),
       "admitted cron capability",

@@ -77,6 +77,8 @@ export type ToolSearchCatalogEntry = {
   directVisible?: boolean;
   /** Its bare name also belongs to an eligible tool kept direct outside the catalog. */
   requiresExactId?: boolean;
+  /** Runs only as a direct call by name; catalog bridges refuse it. */
+  onDemand?: true;
   parameters?: unknown;
   outputSchema?: TSchema;
   tool: CatalogTool;
@@ -97,6 +99,15 @@ export type ToolSearchCatalogTelemetry = Omit<ToolSearchCatalogSession, "entries
 
 export type ToolSearchCatalogRef = {
   current?: ToolSearchCatalogSession;
+  /**
+   * Set by a runner that loads an on-demand tool on its first direct call by name. Without it,
+   * compaction keeps on-demand tools direct, like direct-only ones.
+   */
+  loadsOnDemandTools?: true;
+  /** On-demand tools this session already loaded; compaction keeps them direct. */
+  promotedToolNames?: ReadonlySet<string>;
+  /** Set by a runner that loads an on-demand tool as soon as the model looks it up. */
+  loadOnDemandTool?: (name: string) => void;
   directOnlyToolNames?: ReadonlySet<string>;
   baselineDirectOnlyToolNames?: ReadonlySet<string>;
   closedTelemetry?: ToolSearchCatalogTelemetry;

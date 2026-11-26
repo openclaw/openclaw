@@ -280,7 +280,7 @@ it("keeps the draft's frozen revision when exact conflict recovery fails", async
     cronForm: { name: "Unsaved" },
     cronEditingJob: { configRevision: "stale" },
   });
-  expect(state.cronError).toContain("could not be loaded");
+  expect(state.cronError).toContain("Copy your edits before reloading the page");
   firstList.resolve(jobsPage([current]));
   await pending;
   expect(state).toMatchObject({

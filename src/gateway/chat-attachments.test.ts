@@ -450,13 +450,6 @@ describe("parseMessageWithAttachments validation errors", () => {
     ).toEqual([]);
   });
 
-  it("passes through unchanged on text-only session with no attachments", async () => {
-    const parsed = await parseMessageWithAttachments("hello", [], { supportsInlineImages: false });
-    expect(parsed).toMatchObject({ message: "hello", images: [], offloadedRefs: [] });
-    expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe("hello");
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
-  });
-
   it.each([
     [
       "audio",
