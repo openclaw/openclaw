@@ -9,6 +9,13 @@ import {
   type FileMutationFingerprint,
 } from "./file-descriptor.js";
 
+// SQLite stores no content in the 512 lock bytes at 1 GiB, and Windows enforces the byte-range
+// locks it takes there: while any connection holds EXCLUSIVE (the update migration owner, or a
+// last-close checkpoint), reading them fails with EBUSY. Main-database reads treat them as the
+// zeros SQLite leaves, so digests match a full read. Never apply this to a WAL or journal, which
+// can hold frames at that offset. Nonzero bytes a foreign tool wrote there read as zeros.
+export const SQLITE_LOCK_BYTE_RANGES = [{ offset: 0x4000_0000, length: 512 }] as const;
+
 export type SqliteFileContent = {
   sha256: string;
   sizeBytes: number;

@@ -1,7 +1,7 @@
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import { openRootFileSync } from "@openclaw/fs-safe/advanced";
-import { sha256FileSync } from "@openclaw/fs-safe/durability";
+import { sha256FileSync, type ZeroRange } from "@openclaw/fs-safe/durability";
 
 export { copyFileHandle, writeFileWindowFully } from "@openclaw/fs-safe/advanced";
 
@@ -79,7 +79,7 @@ export function hashFileMutationSnapshotSync(
     // observe identical bytes and a stable descriptor/path through the final stat.
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const before = assertStat(fs.fstatSync(opened.fd, { bigint: true }));
-      const content = hashFileDescriptorSync(opened.fd, Number(expected.size));
+      const content = hashFileDescriptorSync(opened.fd, { maxBytes: Number(expected.size) });
       const after = assertStat(fs.fstatSync(opened.fd, { bigint: true }));
       const current = assertStat(fs.lstatSync(filePath, { bigint: true }));
       if (
@@ -105,9 +105,9 @@ export function hashFileMutationSnapshotSync(
 /** Maps the borrowed-descriptor digest to OpenClaw's persisted artifact fields. */
 export function hashFileDescriptorSync(
   fd: number,
-  maxBytes?: number,
+  options?: { maxBytes?: number; zeroRanges?: readonly ZeroRange[] },
 ): { sha256: string; sizeBytes: number } {
-  const { digest, bytes } = sha256FileSync(fd, { maxBytes });
+  const { digest, bytes } = sha256FileSync(fd, options);
   return { sha256: digest, sizeBytes: bytes };
 }
 

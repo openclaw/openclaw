@@ -467,7 +467,7 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
     } else {
       // Transcript-like archives can be arbitrarily large. Hash them incrementally so duplicate
       // planning cannot turn a Doctor restore into a synchronous whole-file allocation.
-      const hashed = hashFileDescriptorSync(fd, descriptorStat.size);
+      const hashed = hashFileDescriptorSync(fd, { maxBytes: descriptorStat.size });
       if (hashed.sizeBytes !== descriptorStat.size) {
         throw new Error("archive changed while it was inspected");
       }

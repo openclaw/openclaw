@@ -6,6 +6,7 @@ import {
   copyRootFileSync,
   sameFileContentsSync,
   sameFileIdentity,
+  type ZeroRange,
 } from "@openclaw/fs-safe/advanced";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -28,7 +29,7 @@ import type {
   SqliteSnapshotDestination,
 } from "./sqlite-readonly-location.types.js";
 import type { SqliteSnapshotChangeReason } from "./sqlite-snapshot-diagnostics.js";
-import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
+import { SQLITE_LOCK_BYTE_RANGES, type SqliteFileContent } from "./sqlite-snapshot-file.js";
 import {
   MAX_SNAPSHOT_ATTEMPTS,
   SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS,
@@ -164,6 +165,7 @@ export function copySourceFile(
   sourcePath: string,
   targetPath: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
+  zeroRanges: readonly ZeroRange[] = [],
 ): void {
   const source = openPinnedFile(sourcePath, expectedSourceIdentity);
   try {
@@ -189,6 +191,7 @@ export function copySourceFile(
       // Inspection preserves source artifacts, not physical extent sharing.
       clone: "never",
       mode: 0o600,
+      zeroRanges,
     });
     try {
       fs.fsyncSync(target.fd);
@@ -205,6 +208,7 @@ function sourceMatchesCopy(
   sourcePath: string,
   copyPath: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
+  zeroRanges: readonly ZeroRange[] = [],
 ): boolean {
   const source = openPinnedFile(sourcePath, expectedSourceIdentity);
   try {
@@ -213,7 +217,7 @@ function sourceMatchesCopy(
       if (!fs.fstatSync(copy).isFile()) {
         return false;
       }
-      const equal = sameFileContentsSync(source.descriptor, copy);
+      const equal = sameFileContentsSync(source.descriptor, copy, { zeroRanges });
       assertPinnedIdentityUnchanged(source);
       return equal;
     } finally {
@@ -309,6 +313,7 @@ type CopyRequest = {
   sourcePath: string;
   targetPath: string;
   expectedSourceIdentity?: DatabaseFileIdentity;
+  zeroRanges?: readonly ZeroRange[];
 };
 
 function* createStableReadOnlyCopyInTempDirectory(
@@ -326,6 +331,8 @@ function* createStableReadOnlyCopyInTempDirectory(
     tempDir ??= createSqliteSnapshotStagingDirectorySync(stagingRoot);
     assertSqliteSnapshotSpace(pathname, tempDir);
     const snapshotPath = path.join(tempDir, "database.sqlite.partial");
+    // Only the main database has lock bytes; WAL and journal copies keep every byte.
+    const zeroRanges = SQLITE_LOCK_BYTE_RANGES;
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
@@ -339,10 +346,15 @@ function* createStableReadOnlyCopyInTempDirectory(
       const wal = openPinnedFile(walPath);
       try {
         const copyPrefix = prepareSqliteWalPrefixCopy(wal.descriptor, `${snapshotPath}-wal`, () =>
-          sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity),
+          sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity, zeroRanges),
         );
         if (copyPrefix) {
-          yield { sourcePath: pathname, targetPath: snapshotPath, expectedSourceIdentity };
+          yield {
+            sourcePath: pathname,
+            targetPath: snapshotPath,
+            expectedSourceIdentity,
+            zeroRanges,
+          };
         }
         const copied = copyPrefix?.();
         assertPinnedIdentityUnchanged(wal);
@@ -364,8 +376,8 @@ function* createStableReadOnlyCopyInTempDirectory(
       for (const suffix of sidecarSuffixes) {
         yield { sourcePath: `${pathname}${suffix}`, targetPath: `${snapshotPath}${suffix}` };
       }
-      yield { sourcePath: pathname, targetPath: snapshotPath, expectedSourceIdentity };
-      if (!sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity)) {
+      yield { sourcePath: pathname, targetPath: snapshotPath, expectedSourceIdentity, zeroRanges };
+      if (!sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity, zeroRanges)) {
         throw new SqliteSourceChangedError("main-changed-during-copy");
       }
       for (const suffix of sidecarSuffixes) {
@@ -377,13 +389,13 @@ function* createStableReadOnlyCopyInTempDirectory(
       }
       assertExpectedSidecars(pathname, sidecars);
     } else {
-      yield { sourcePath: pathname, targetPath: snapshotPath, expectedSourceIdentity };
+      yield { sourcePath: pathname, targetPath: snapshotPath, expectedSourceIdentity, zeroRanges };
       assertExpectedSidecars(pathname, sidecars);
       // A generation owner can bind the private bytes to its earlier source digest
       // instead. Publication must verify that digest before any native open.
       const mainUnchanged =
         expectedSourceContent !== undefined ||
-        sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity);
+        sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity, zeroRanges);
       assertExpectedSidecars(pathname, sidecars);
       if (!mainUnchanged) {
         throw new SqliteSourceChangedError("main-changed-during-copy");
@@ -429,8 +441,8 @@ function copyPreparedLocationSync(
   let step = steps.next();
   while (!step.done) {
     try {
-      const { sourcePath, targetPath, expectedSourceIdentity } = step.value;
-      copySourceFile(sourcePath, targetPath, expectedSourceIdentity);
+      const { sourcePath, targetPath, expectedSourceIdentity, zeroRanges } = step.value;
+      copySourceFile(sourcePath, targetPath, expectedSourceIdentity, zeroRanges);
     } catch (error) {
       step = steps.throw(error);
       continue;
