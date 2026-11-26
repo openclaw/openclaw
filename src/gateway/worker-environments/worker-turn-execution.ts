@@ -94,12 +94,12 @@ export async function executeWorkerTurn(
     params.assertRunCurrent();
     input.abortSignal?.throwIfAborted();
     const turn = { ...input, config: preparedRuntime.snapshot.config };
+    const modelRef = assertSupportedTurn(turn);
     const { environment, bootstrapReceipt } = requireCurrentWorkerTurnEnvironment({
       environments: params.environments,
       placement,
     });
-    const inferencePlacement = workerInferencePlacement(environment);
-    const modelRef = assertSupportedTurn(turn, inferencePlacement);
+    const inferencePlacement = workerInferencePlacement(environment, turn.requiredAuthProfileId);
     if (inferencePlacement === "worker") {
       const policy = createModelVisibilityPolicy({
         cfg: turn.config ?? {},

@@ -600,15 +600,7 @@ export async function finalizeWorkerTurnResult(
   return result;
 }
 
-export function assertSupportedTurn(
-  params: SessionPlacementTurnParams,
-  inferencePlacement?: "gateway" | "worker",
-) {
-  if (inferencePlacement === "worker" && params.requiredAuthProfileId) {
-    throw new Error(
-      "Worker-local inference cannot honor a required Gateway auth profile. Use Gateway-owned inference for this session.",
-    );
-  }
+export function assertSupportedTurn(params: SessionPlacementTurnParams) {
   assertParticipationWorkerExecution(readRunOperatorAuthority(params)?.participationCeiling);
   if (params.clientTools?.length) {
     throw new Error("Cloud worker turns do not support client-provided tools");

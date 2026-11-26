@@ -237,10 +237,14 @@ describe("plugin forked turns through the real Gateway", () => {
     },
   );
 
-  it.each([false, true])(
-    "runs the fork on the session account (required=%s)",
+  it.each([
+    { required: false, override: "none" },
+    { required: true, override: "same-profile" },
+    { required: true, override: "same-model" },
+  ])(
+    "runs the fork on the session account ($required, $override)",
     { timeout: 150_000 },
-    async (required) => {
+    async ({ required, override }) => {
       const first = "mock-openai:first";
       const rotated = "mock-openai:rotated";
       await withForkGateway(
@@ -294,7 +298,12 @@ describe("plugin forked turns through the real Gateway", () => {
           await expect(
             fixture.fork(
               turn,
-              required ? { provider: "mock-openai", model: `fork-proof@${rotated}` } : {},
+              override === "none"
+                ? {}
+                : {
+                    provider: "mock-openai",
+                    model: override === "same-profile" ? `fork-proof@${rotated}` : "fork-proof",
+                  },
             ),
           ).resolves.toMatchObject({
             ok: true,

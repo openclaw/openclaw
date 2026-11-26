@@ -290,6 +290,7 @@ export function createRuntimeLlm(
             requestedModelProfile ??
             preferredProfile ??
             modelProfile,
+          requiredAuthProfileId: requiredAuthProfileId ?? executionProfile ?? requestedModelProfile,
           operatorAuthority,
           assertCurrent,
         });

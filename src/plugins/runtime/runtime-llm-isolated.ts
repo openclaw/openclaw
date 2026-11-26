@@ -104,6 +104,7 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
   provider: string;
   model: string;
   authProfileId?: string;
+  requiredAuthProfileId?: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   assertCurrent?: () => void;
 }): Promise<IsolatedCompletionResult> {
@@ -158,6 +159,7 @@ export async function runIsolatedAgentRuntimeCompletion(params: {
       provider: params.provider,
       model: params.model,
       authProfileId: params.authProfileId,
+      requiredAuthProfileId: params.requiredAuthProfileId,
       operatorAuthority: params.operatorAuthority,
       mapOperatorAuthorizationError: createLlmOperatorAuthorizationError,
       assertCurrent: params.assertCurrent,

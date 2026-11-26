@@ -10,6 +10,7 @@ type WorkerInferenceProfile = {
 /** Inference placement is a recorded provider-profile choice, not a worker fallback. */
 export function workerInferencePlacement(
   environment: WorkerInferenceProfile,
+  requiredAuthProfileId?: string,
 ): "gateway" | "worker" {
   // Other providers own their settings grammar, including an inference key.
   if (environment.providerId !== DEVICE_WORKER_PROVIDER_ID) {
@@ -23,6 +24,11 @@ export function workerInferencePlacement(
   if (placement !== "worker") {
     throw new WorkerProviderError(
       'Invalid device worker profile: cloudWorkers.profiles.<id>.settings.inference must be "gateway" or "worker".',
+    );
+  }
+  if (requiredAuthProfileId) {
+    throw new Error(
+      "Worker-local inference cannot honor a required Gateway auth profile. Use Gateway-owned inference for this session.",
     );
   }
   return "worker";

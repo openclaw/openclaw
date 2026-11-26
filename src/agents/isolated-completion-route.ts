@@ -152,6 +152,7 @@ export async function resolveIsolatedCompletionRuntime(params: {
   provider: string;
   model: string;
   authProfileId?: string;
+  requiredAuthProfileId?: string;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
@@ -162,6 +163,7 @@ export async function resolveIsolatedCompletionRuntime(params: {
   >;
 }): Promise<IsolatedCompletionRuntime | undefined> {
   const config = params.config ?? {};
+  const authProfileId = params.requiredAuthProfileId ?? params.authProfileId;
   try {
     const agentId = params.agentId ?? resolveDefaultAgentId(config);
     const { provider, runtimeOverride } = resolveIsolatedCompletionProvider({
@@ -173,7 +175,7 @@ export async function resolveIsolatedCompletionRuntime(params: {
       config,
       provider,
       model: params.model,
-      authProfileId: params.authProfileId,
+      authProfileId,
       agentId,
       agentDir: params.agentDir ?? resolveAgentDir(config, agentId),
       workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId),
@@ -212,9 +214,10 @@ export async function resolveIsolatedCompletionRuntime(params: {
           workspaceDir: params.workspaceDir,
           metadataSnapshot: prepared.metadataSnapshot,
           authProfileStore: prepared.preparedAuthStore,
-          sessionAuthProfileId: params.authProfileId,
-          sessionAuthProfileSource: params.authProfileId ? "user" : undefined,
-          requiredAuthProfileId: params.authProfileId,
+          sessionAuthProfileId: authProfileId,
+          sessionAuthProfileSource: authProfileId ? "user" : undefined,
+          requiredAuthProfileId: params.requiredAuthProfileId,
+          ...(authProfileId ? { allowAuthProfileFallback: false } : {}),
           harnessId: harness.id,
           harnessRuntime: harness.id,
           harnessAuthBootstrap: harness.authBootstrap,

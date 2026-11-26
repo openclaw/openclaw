@@ -155,6 +155,7 @@ async function runIsolatedCompletionOwned(
   // Snapshot caller choices and validators before admission yields; callbacks expire on close.
   const input = {
     ...params,
+    authProfileId: params.requiredAuthProfileId ?? params.authProfileId,
     streamParams: params.streamParams && { ...params.streamParams },
   };
   const completionId = randomUUID();
@@ -529,11 +530,11 @@ async function runIsolatedCompletionOwned(
               ? { observedRoutes: listModelCatalogObservedRoutes(variants) }
               : { modelApi: runtimeModel.api, modelBaseUrl: runtimeModel.baseUrl }),
             ...context,
-            env: process.env,
             authProfileStore,
             sessionAuthProfileId: request.authProfileId,
             sessionAuthProfileSource: request.authProfileId ? "user" : undefined,
-            requiredAuthProfileId: request.authProfileId,
+            requiredAuthProfileId: request.requiredAuthProfileId,
+            ...(request.authProfileId ? { allowAuthProfileFallback: false } : {}),
             harnessId: harness.id,
             harnessRuntime: harness.id,
             harnessAuthBootstrap: harness.authBootstrap,
