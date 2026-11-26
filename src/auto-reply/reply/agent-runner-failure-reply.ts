@@ -38,6 +38,7 @@ import {
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
   renderCodexAppServerFailureCopy,
+  renderControlUiAgentFailureCopy,
   renderFailoverCodeUserCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
@@ -237,6 +238,8 @@ export function buildExternalRunFailureReply(
     includeDetails?: boolean;
     replayPrevented?: boolean;
     failoverFacts?: ReplyFailoverFacts;
+    failureSummary?: ReturnType<typeof resolveReplyFailureSummary>;
+    shouldSurfaceToControlUi?: boolean;
   },
 ): ExternalRunFailureReply {
   const message = typeof input === "string" ? input : input.message;
@@ -280,9 +283,11 @@ export function buildExternalRunFailureReply(
   const buildUnclassifiedReply = (): ExternalRunFailureReply => {
     const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
-      text: options?.includeDetails
-        ? formatForwardedExternalRunFailureText(sanitizedMessage)
-        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      text: options?.shouldSurfaceToControlUi
+        ? renderControlUiAgentFailureCopy()
+        : options?.includeDetails
+          ? formatForwardedExternalRunFailureText(sanitizedMessage)
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
       isGenericRunnerFailure: true,
     };
   };
@@ -400,12 +405,14 @@ export function buildExternalRunFailureReply(
     (isFailoverError(error) && error.rateLimitRetriesExhausted !== undefined) ||
     failoverFacts.rateLimitResetAt !== undefined
   ) {
-    const summary = resolveReplyFailureSummary({
-      error,
-      message,
-      facts: failoverFacts,
-      attempts: isFailoverError(error) ? error.attempts : undefined,
-    });
+    const summary =
+      options?.failureSummary ??
+      resolveReplyFailureSummary({
+        error,
+        message,
+        facts: failoverFacts,
+        attempts: readFallbackAttempts(error),
+      });
     if (summary) {
       return { text: summary.text, isGenericRunnerFailure: false };
     }
@@ -414,6 +421,14 @@ export function buildExternalRunFailureReply(
     return { text: error.userMessage, isGenericRunnerFailure: false, summaryAsTitle: true };
   }
   const providerRequestError = failoverFacts.providerRequestError;
+  if (
+    options?.failureSummary &&
+    (options.shouldSurfaceToControlUi ||
+      options.failureSummary.kind === "billing" ||
+      !providerRequestError)
+  ) {
+    return { text: options.failureSummary.text, isGenericRunnerFailure: false };
+  }
   if (providerRequestError) {
     // Curated facet copy carries recovery guidance (quota/billing ambiguity,
     // /new for conversation-state, config fix for model_not_found); the
@@ -441,11 +456,13 @@ export function buildExternalRunFailureReply(
   // Only unclassified thrown text reaches this branch. Verbose mode is the
   // explicit opt-in because sanitization does not make raw provider bodies safe.
   return {
-    text: options?.includeDetails
-      ? formatForwardedExternalRunFailureText(
-          renderUserFacingText(normalizedMessage, { errorContext: true }),
-        )
-      : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    text: options?.shouldSurfaceToControlUi
+      ? renderControlUiAgentFailureCopy()
+      : options?.includeDetails
+        ? formatForwardedExternalRunFailureText(
+            renderUserFacingText(normalizedMessage, { errorContext: true }),
+          )
+        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
     isGenericRunnerFailure: true,
   };
 }
