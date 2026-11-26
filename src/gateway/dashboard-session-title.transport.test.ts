@@ -525,6 +525,23 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
     ],
   ] as const;
 
+  it("keeps a saved fallback for native chat clients that do not display derived titles", async () => {
+    await withTitleProvider("", async ({ cfg, storePath }) => {
+      for (const suffix of ["ios-topic", "node-device"]) {
+        const scope = { agentId: "main", sessionKey: `agent:main:${suffix}`, storePath };
+        const sessionId = suffix;
+        await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+        await maybeGenerateDashboardSessionTitle({
+          ...scope,
+          cfg,
+          sessionId,
+          userMessage: "Plan the release",
+        });
+        expect(loadSessionEntry(scope)?.displayName).toMatch(/^[a-z]+-[a-z]+$/);
+      }
+    });
+  });
+
   it("persists usable titles through the dashboard owner", async () => {
     let raw = "";
     await withTitleProvider(

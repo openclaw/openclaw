@@ -6,6 +6,7 @@ import { resolveAgentWorkspaceDir, resolveNativeModelPrimary } from "../agents/a
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
+import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
 import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
@@ -124,9 +125,12 @@ type SessionTitleParams = {
   onTitleStateChanged?: () => void;
 };
 
-function isAutoTitleSessionKey(sessionKey: string): boolean {
+function autoTitleSessionKind(sessionKey: string): "dashboard" | "native" | undefined {
   const rest = parseAgentSessionKey(sessionKey)?.rest ?? "";
-  return rest.startsWith("dashboard:") || rest.startsWith("ios-") || rest.startsWith("node-");
+  if (rest.startsWith("dashboard:")) {
+    return "dashboard";
+  }
+  return rest.startsWith("ios-") || rest.startsWith("node-") ? "native" : undefined;
 }
 
 /** True when this interactive chat key should receive an automatic topic title. */
@@ -135,7 +139,7 @@ export function isDashboardSessionTitleCandidate(params: {
   userMessage: string;
 }): boolean {
   const sourceText = params.userMessage.trim();
-  return Boolean(sourceText && isAutoTitleSessionKey(params.sessionKey));
+  return Boolean(sourceText && autoTitleSessionKind(params.sessionKey));
 }
 
 function resolveDashboardTitleAuthProfile(params: {
@@ -359,8 +363,7 @@ async function generateDashboardSessionTitle(params: {
   if (title) {
     return title;
   }
-  // No generated name: clients show the first message, and the next message retries.
-  // Saved titles also name worktree branches, so a raw prompt never becomes one.
+  // The caller decides how to present an exhausted attempt. Never turn a raw prompt into a branch name.
   params.onFallback?.();
   return null;
 }
@@ -492,7 +495,10 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
   }
 
   const finish = async (generation: Promise<string | null>, fallbackReady: boolean) => {
-    const displayName = await generation;
+    // Shipped native clients read saved names, not the dashboard's derived title.
+    const displayName =
+      (await generation) ??
+      (autoTitleSessionKind(sessionKey) === "native" ? createCrustaceanSlug() : null);
     if (!displayName && fallbackReady) {
       return false;
     }
