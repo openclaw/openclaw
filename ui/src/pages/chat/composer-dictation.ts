@@ -132,9 +132,6 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   setFormattingMode(mode: formatting.DictationFormattingMode): void {
-    if (mode !== "preserve" && mode !== "explicit") {
-      return;
-    }
     patchSettings({ dictationFormatting: { version: 1, mode } });
     if (this.mode !== mode) {
       this.policyRevision++;
@@ -424,11 +421,9 @@ export class ComposerDictationOwner extends EventTarget {
     const generation = ++this.preparationGeneration;
     this.clearClickSuppression();
     this.playback.stop();
-    if (this.commits?.size) {
-      this.commits.retire();
-      this.pendingCommitsChanged();
-    } else if (hadReview) {
-      // Capture phases report their own changes; an idle scope change has nothing to publish.
+    // Capture phases report their own changes; an idle scope change has nothing to publish.
+    if (this.transcribing || hadReview) {
+      this.commits?.retire();
       this.pendingCommitsChanged();
     }
     void this.stop({ commit: false });

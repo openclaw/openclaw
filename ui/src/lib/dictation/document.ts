@@ -319,7 +319,11 @@ export function validateDictationDocument(value: unknown): DictationValidationRe
         for (const boundary of dictationParagraphBreaks(text.slice(start, end))) {
           const first = start + boundary.index;
           const last = first + boundary[0].length;
-          if (!protectedRanges.some((range) => range.start < last && range.end > first)) {
+          if (
+            !protectedRanges.some(
+              (protectedRange) => protectedRange.start < last && protectedRange.end > first,
+            )
+          ) {
             failure = "merged-source-paragraphs";
             return undefined;
           }

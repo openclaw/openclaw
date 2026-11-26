@@ -8,7 +8,6 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
-  startControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 import { installTalkBrowserFixtures } from "./browser-talk-start-stop.fixtures.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -18,14 +17,9 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const microphoneWav = process.env.OPENCLAW_DICTATION_FORMATTING_MICROPHONE_WAV;
 // Set this flag when exercising the same capture against the unmodified base build.
 const baselineOnly = process.env.OPENCLAW_DICTATION_FORMATTING_BASELINE === "1";
-// Diagnostic source proof preserves the ordinary bundled CI lane as the default.
-const sourceProof = process.env.OPENCLAW_DICTATION_FORMATTING_SOURCE_PROOF === "1";
 const speech = "Shopping list bullet milk next item eggs next item rice";
 const suite = createControlUiE2eSuite({
   name: "Dictation formatting synthetic STT product proof",
-  ...(sourceProof
-    ? { startServer: () => startControlUiE2eServer(undefined, { source: true }) }
-    : {}),
   browserLaunchOptions: {
     args: [
       "--use-fake-device-for-media-stream",
@@ -58,7 +52,7 @@ async function capture(page: Page, stage: string, surface: Locator, content: Loc
         fixture: microphoneWav
           ? "Chromium fake media capture from WAV, synthetic STT and mocked Gateway; actual product UI and native editor"
           : "Synthetic STT, synthetic microphone and mocked Gateway; actual product UI and native editor",
-        lane: sourceProof ? "source-server (production build not verified)" : "production bundle",
+        lane: "production bundle",
         baselineOnly,
         viewport: page.viewportSize(),
         bounds: crop.bounds,

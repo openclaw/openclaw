@@ -72,7 +72,7 @@ export class NewSessionPageOwner {
 
   submit(background = false) {
     if (this.dictationBlocksSubmit) {
-      return;
+      return undefined;
     }
     const lifetime = this.submissionLifetime;
     const textarea = this.submission.composerTextarea.getTextarea();

@@ -12,26 +12,36 @@ and [draft PR #205791](https://github.com/openclaw/openclaw/pull/205791).
 The [user guide](/web/control-ui-dictation-formatting) describes the proposed
 grammar and delivery boundaries. M04 and M11 are planning identifiers.
 
-**Current repair qualification: source inspection only; product checks NOT RUN.**
-The follow-up repairs captured-range replacement, the built-in direct composers'
-Markdown contract, and explicit command confirmation. Authored regressions are
-test source, not passing results. Earlier test, build-attempt, and benchmark
-records belong to earlier source revisions and do not qualify this repair.
-No current browser, microphone, provider, native editor, screen-reader, upgrade,
-or performance result is asserted here.
+The [PR Evidence](https://github.com/openclaw/openclaw/pull/205791#evidence)
+records results by tested revision, including hosted jobs and their links.
+This ledger describes what those checks cover and what is still unqualified.
+
+## Captured New Session journey
+
+The real Gateway and local Vosk journey passed on published head
+`6241a650991542e61549668334ed99e149f261c6`. It also passed on prepared tree
+`227ff6f5f87541c40df696224a5610366d07eb54`, after integrating upstream
+`b7b81558906bd47c7c774d1d082169fced9c3922` and repairing render-time storage access
+and idle cancellation. The production UI ran in Chromium with a prerecorded
+synthesized WAV as its fake microphone. Local Vosk transcribed the audio;
+these were not canned transcript events from a mock Gateway.
+
+The captured output records Stop, blocked Enter and disabled Start while the
+final transcript was held, command confirmation and semantic review, Markdown
+Apply, native Undo, and zero sends. This does not qualify a physical microphone,
+a cloud speech provider, or an external rich editor.
 
 ## Revision and environment record
 
-| Field                                         | Recorded value                                                                                                                                             |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Contribution                                  | `CompleteDotTech/openclaw:feat/dictation-semantic-formatting`; existing draft PR #205791                                                                   |
-| Reviewed parent                               | `75070f7628a8651907294c60ce33037e08be1c85`                                                                                                                 |
-| Historical feature merge base                 | `04b854b239cd8ab8a14beae4914ed9c54d791e62`                                                                                                                 |
-| Source revision for this ledger               | The commit containing this repair; future execution must record its actual head and tree                                                                   |
-| ClawSweeper feedback                          | [Durable PR review](https://github.com/openclaw/openclaw/pull/205791#issuecomment-7184857255), reviewed parent above, completed `2026-11-26T06:50:17.055Z` |
-| Current execution environment                 | No policy-approved secretless execution environment established; repository code was not run                                                               |
-| Build, CI, browser, hardware, provider and AT | NOT RUN on the repair revision; no artifact URLs or named device results are supplied                                                                      |
-| Maintainer decisions                          | Private shared owner, preferences, grammar, formats, limits and required fork workflow approval remain open                                                |
+| Field                         | Recorded value                                                                                                        |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Contribution                  | `CompleteDotTech/openclaw:feat/dictation-semantic-formatting`; existing draft PR #205791                              |
+| Reviewed parent               | `75070f7628a8651907294c60ce33037e08be1c85`                                                                            |
+| Historical feature merge base | `04b854b239cd8ab8a14beae4914ed9c54d791e62`                                                                            |
+| Published evidence            | [PR Evidence](https://github.com/openclaw/openclaw/pull/205791#evidence), with results scoped to each tested revision |
+| ClawSweeper feedback          | [Durable PR review](https://github.com/openclaw/openclaw/pull/205791#issuecomment-7184857255)                         |
+| Execution environment         | Isolated Linux workspace, Chromium, and a local Vosk model; public hosted CI is CompleteDotTech's fork CI             |
+| Maintainer decisions          | Private shared owner, preferences, grammar, formats, limits and required fork workflow approval remain open           |
 
 Bind each later result to the actual tested head, base, tree, dependency versions,
 command and exit status. A source commit does not approve a fork workflow, make a
@@ -40,9 +50,10 @@ of the affected boundaries.
 
 ## Acceptance ledger
 
-All execution outcomes in this table are **NOT RUN on this repair revision**.
-The original issue remains open, including native/rich delivery and accessibility
-requirements that the bounded Control UI implementation cannot yet qualify.
+The table describes the scope of qualification. See the PR for observed
+outcomes. The original issue remains open, including native/rich delivery and
+accessibility requirements that the bounded Control UI implementation does not
+yet qualify.
 
 | Criterion                                     | Source boundary and authored coverage                                                                                         | Remaining proof or decision                                                                                        |
 | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -81,12 +92,10 @@ authorize an automatic retry.
 
 ## Focused automated procedures
 
-These are procedures for an approved isolated execution checkout. No installer,
-repository script, test, typechecker, formatter, generator, build, server or
-benchmark was executed for this repair. First inspect that checkout's actual
-scripts and run `pnpm changed:lanes --json`; then select the owning test paths
-through the supported runner. Serialize checks or use the documented separate
-module-cache ownership.
+These are procedures for an approved isolated execution checkout. First inspect
+that checkout's scripts and run `pnpm changed:lanes --json`; then select the owning
+test paths through the supported runner. Serialize checks or use the documented
+separate module-cache ownership.
 
 ```bash
 pnpm test ui/src/lib/dictation/formatting.node.test.ts --maxWorkers=1
@@ -111,22 +120,19 @@ pnpm format:docs:check
 
 The English confirmation/overflow copy changed. Run the canonical keyless i18n
 baseline generator in that allowed environment and commit any generated raw-copy
-baseline delta before considering the check complete; no generated baseline was
-hand-edited here. Types, lint, formatting, test-line/max-line ratchets, docs checks
-and the exact installed Solid contract also remain unverified. The restored
-source did not contain the installed Solid rc.18 `CHEATSHEET.md`.
+baseline delta before considering that check complete; do not hand-edit
+generated baselines. See the PR for the exact checks that ran.
 
 The semantic tests author expected source ranges independently of the formatter,
 parse Markdown with an independent parser, and inspect an allowlisted HTML tree.
-The editor regressions instantiate the real editor path in their test harness;
-that source still needs execution. A fake history bridge or a passing DOM test
-would not by itself qualify native browser Undo or assistive technology.
+The editor regressions instantiate the real editor path in their test harness.
+A fake history bridge or a passing DOM test would not by itself qualify native
+browser Undo or assistive technology.
 
 Use the checkout's documented browser route for
-`ui/src/e2e/dictation-formatting.e2e.test.ts`. Its default lane requires the
-production bundle. Its optional source-server route remains diagnostic. Both
-use synthetic media, STT and Gateway fixtures and cannot replace the real journey
-below. The fixture's main and New Session flows now emit text before a single
+`ui/src/e2e/dictation-formatting.e2e.test.ts`. It uses the shared production bundle
+with synthetic media, STT, and Gateway fixtures and cannot replace the real
+journey above. The fixture's main and New Session flows emit text before a single
 keyboard Finish; list commands are explicitly checked before formatted Apply.
 
 ## Live target and microphone procedures
@@ -159,10 +165,9 @@ keyboard Finish; list commands are explicitly checked before formatted Apply.
    focus refusal, one Undo and unknown-effect recovery. The semantic preview
    does not establish external insertion support.
 
-**Observed outcome: NOT COLLECTED.** A safe real Gateway/provider, physical
-microphone, required native adapter and assistive-technology session were not
-available for this continuation. No screenshots or recordings are supplied as
-formatting proof. Keep the draft and the broader issue open.
+The captured real Gateway/local Vosk journey above covers New Session with a
+prerecorded WAV. A physical microphone, cloud-provider behavior, and external
+native/rich insertion remain unqualified.
 
 ## Accessibility and visual procedures
 
@@ -178,11 +183,9 @@ Review and recovery controls must stay reachable. Redact sensitive content befor
 saving any capture. No adjacent capture/recovery screenshot is evidence of this
 formatting behavior.
 
-**Observed outcome: NOT COLLECTED.** The authored synthetic browser fixture
-includes narrow, RTL, high-contrast, enlarged-text and 200%-equivalent geometry;
-none was run on this repair, and those scenarios do not establish 400% browser
-zoom or screen-reader behavior. The earlier browser attempt failed in setup
-before product assertions or screenshots.
+The bundled synthetic browser fixture covers narrow, RTL, high-contrast,
+enlarged-text and 200%-equivalent geometry. The PR links captured visuals. These
+do not establish 400% browser-chrome zoom or screen-reader behavior.
 
 ## Performance, privacy, and rollback procedures
 
