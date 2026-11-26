@@ -39,6 +39,7 @@ import {
   normalizeDashboardsDisplay,
   normalizeSessionFilesDisplay,
   normalizeTextScale,
+  parseDictationRefinementPreference,
   UI_APPEARANCE_DEFAULTS,
   type UiPreferences,
   type UiSettings,
@@ -84,6 +85,7 @@ type PersistedUiSettings = Omit<
   | "navCollapsed"
   | "sidebarEntries"
   | "background"
+  | "dictationRefinementIssue"
 > &
   Partial<ProfileNavigation> & {
     token?: never;
@@ -420,6 +422,7 @@ export function loadUiPreferences(
       const value = parsed[key];
       return typeof value === "boolean" ? value : defaults[key];
     };
+    const dictation = parseDictationRefinementPreference(parsed.dictationRefinement);
     const settings: UiPreferences = {
       gatewayUrl,
       sessionKey: scopedSessionSelection.sessionKey,
@@ -449,6 +452,8 @@ export function loadUiPreferences(
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
       composerHoldToRecord: booleanSetting("composerHoldToRecord"),
+      dictationRefinement: dictation.preference,
+      dictationRefinementIssue: dictation.issue,
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
@@ -610,6 +615,7 @@ export function saveSettings(
     realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
     realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),
     composerHoldToRecord: next.composerHoldToRecord === false ? false : undefined,
+    dictationRefinement: parseDictationRefinementPreference(next.dictationRefinement).preference,
     talkCameraAutoEnable: next.talkCameraAutoEnable,
     chatSplitLayout: next.chatSplitLayout || undefined,
     // Right dock is the default; only the opt-in bottom dock persists.

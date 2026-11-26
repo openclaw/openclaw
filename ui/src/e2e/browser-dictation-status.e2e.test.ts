@@ -108,6 +108,128 @@ const expectDraft = async (textarea: Locator, value: string) => {
 };
 
 suite.define(() => {
+  it.each([400, 820, 1280])(
+    "reviews punctuation with keyboard controls before one insertion at %s px",
+    (width) =>
+      suite.withPage(
+        { permissions: ["microphone"], viewport: { width, height: 960 }, reducedMotion: "reduce" },
+        async ({ page }) => {
+          const { gateway, textarea, admit, emit, close } = await openDictation(page, {
+            route: "new",
+          });
+          await page.goto(`${suite.server.baseUrl}settings/talk`);
+          const policy = page.getByRole("group", { name: "Punctuation policy" });
+          const mode = policy.getByLabel("Mode", { exact: true });
+          await mode.focus();
+          await page.keyboard.press("Home");
+          await page.keyboard.press("ArrowDown");
+          await page.keyboard.press("ArrowDown");
+          await expect.poll(() => mode.inputValue()).toBe("automatic");
+          await policy.getByLabel("Punctuation language", { exact: true }).selectOption("en-US");
+          await page.goto(`${suite.server.baseUrl}new`);
+          await button(page, "Dictate", true).click();
+          await admit();
+          const raw = "i do not authorize the transfer";
+          await emit(raw);
+          // Send stops this recording; an opted-in result still requires review.
+          await button(page, "Send", true).click();
+          await gateway.waitForRequest("talk.session.close");
+          await emit(raw, true);
+          await close();
+          const review = page.getByRole("region", { name: "Review dictation" });
+          await review.waitFor();
+          await expectDraft(textarea, "");
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          expect(await review.getByLabel("Original recognizer text").inputValue()).toBe(raw);
+          expect(await review.getByLabel("Proposed text").inputValue()).toBe(
+            "I do not authorize the transfer.",
+          );
+          await review.getByRole("button", { name: "Use original", exact: true }).focus();
+          await page.keyboard.press("Enter");
+          await expect
+            .poll(() => review.getByLabel("Selected original text").inputValue())
+            .toBe(raw);
+          await review.getByText("Change policy for this result", { exact: true }).click();
+          await review.getByLabel("Mode", { exact: true }).selectOption("automatic");
+          await review.getByRole("button", { name: "Reprocess original", exact: true }).click();
+          await expect
+            .poll(() => review.getByLabel("Proposed text").inputValue())
+            .toBe("I do not authorize the transfer.");
+          await review.getByText("Change policy for this result", { exact: true }).click();
+          expect(await gateway.getRequests("talk.session.create")).toHaveLength(1);
+          await review.scrollIntoViewIfNeeded();
+          const frame = await takeControlUiScreenshotFrame(page, review, [review], {
+            animations: "disabled",
+          });
+          await writeFile(
+            path.join(suite.artifactDir, `punctuation-review-${width}.png`),
+            frame.png,
+          );
+          await writeFile(
+            path.join(suite.artifactDir, `punctuation-review-${width}-accessibility.txt`),
+            await review.ariaSnapshot(),
+          );
+          expect(
+            await review.evaluate((element) => element.scrollWidth <= element.clientWidth),
+          ).toBe(true);
+          const insert = review.getByRole("button", { name: "Insert into draft", exact: true });
+          await insert.focus();
+          await page.keyboard.press("Enter");
+          await expectDraft(textarea, "I do not authorize the transfer.");
+          await expect.poll(() => isFocused(textarea)).toBe(true);
+          expect(await insert.isDisabled()).toBe(true);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          await review
+            .getByRole("button", { name: "Undo dictation insertion", exact: true })
+            .focus();
+          await page.keyboard.press("Enter");
+          await expectDraft(textarea, "");
+          await expect.poll(() => isFocused(textarea)).toBe(true);
+          expect(await insert.isDisabled()).toBe(true);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        },
+      ),
+  );
+
+  it("keeps an edited draft and recoverable punctuation review when a provider final arrives late", () =>
+    suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+      await page.addInitScript(() => {
+        const gatewayUrl = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
+        localStorage.setItem(
+          `openclaw.control.settings.v1:${gatewayUrl}`,
+          JSON.stringify({
+            gatewayUrl,
+            dictationRefinement: {
+              version: 1,
+              mode: "automatic",
+              locale: "en-US",
+              explicitEnabled: false,
+            },
+          }),
+        );
+      });
+      const { gateway, textarea, admit, emit, close } = await openDictation(page, { route: "new" });
+      await textarea.fill("keep this draft");
+      await button(page, "Dictate", true).click();
+      await admit();
+      await emit("version 1.2.3 costs 3.50 iPhone API OpenClaw");
+      await button(page, "Stop and keep text", true).click();
+      await gateway.waitForRequest("talk.session.close");
+      await textarea.fill("my newer draft");
+      await emit("late text must not replace the recovery snapshot", true);
+      await close();
+      const review = page.getByRole("region", { name: "Review dictation" });
+      await review.waitFor();
+      await expectDraft(textarea, "my newer draft");
+      expect(await review.getByLabel("Original recognizer text").inputValue()).toBe(
+        "version 1.2.3 costs 3.50 iPhone API OpenClaw",
+      );
+      expect(await review.getByRole("button", { name: "Insert into draft" }).isDisabled()).toBe(
+        true,
+      );
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    }));
+
   it("dictates for a session-only guest without reading operator configuration", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const { gateway, textarea, admit, emit, close } = await openDictation(page, {

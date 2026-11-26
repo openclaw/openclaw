@@ -68,3 +68,88 @@ export function selectComposerInput(
     editor.select(start, end, direction);
   }
 }
+
+export type ComposerDraftTransaction = {
+  value: string;
+  committed: boolean | undefined;
+  canUndo: () => boolean;
+  undo: (isCurrent?: () => boolean) => boolean | undefined;
+};
+
+/** A known composer's isolated history step, with a target-scoped undo receipt. */
+export function replaceComposerDraft(
+  target: HTMLTextAreaElement,
+  text: string,
+  isCurrent?: () => boolean,
+): ComposerDraftTransaction {
+  const before = {
+    value: target.value,
+    start: target.selectionStart,
+    end: target.selectionEnd,
+    direction: target.selectionDirection,
+  };
+  const editor = readComposerEditor(target);
+  focusComposerInput(target, { preventScroll: true });
+  if (
+    isCurrent &&
+    (!isCurrent() ||
+      target.value !== before.value ||
+      readComposerEditor(target) !== editor ||
+      target.disabled ||
+      target.readOnly)
+  ) {
+    return { value: text, committed: false, canUndo: () => false, undo: () => false };
+  }
+  if (editor) {
+    editor.replaceAll(text);
+  } else {
+    target.setSelectionRange(0, target.value.length);
+    if (!target.ownerDocument.execCommand?.("insertText", false, text)) {
+      target.setRangeText(text, 0, target.value.length, "end");
+      target.dispatchEvent(
+        new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }),
+      );
+    }
+  }
+  // Input handlers run inside the write. A changed value after dispatch cannot
+  // prove that no write happened; preserve an unknown receipt instead of retrying.
+  const committed = target.value === text ? before.value !== text : undefined;
+  let used = false;
+  const targetMatches = () =>
+    target.isConnected &&
+    !target.disabled &&
+    !target.readOnly &&
+    target.value === text &&
+    readComposerEditor(target) === editor;
+  const canUndo = () => committed === true && !used && targetMatches();
+  return {
+    value: text,
+    committed,
+    canUndo,
+    undo(isCurrent = () => true) {
+      if (!canUndo() || !isCurrent()) {
+        return false;
+      }
+      used = true;
+      focusComposerInput(target, { preventScroll: true });
+      if (!targetMatches() || !isCurrent()) {
+        return false;
+      }
+      if (editor) {
+        editor.undo();
+      } else {
+        // Native history may be unavailable (the insertText fallback). Restore
+        // only this verified field, never issue application-wide undo commands.
+        target.setRangeText(before.value, 0, target.value.length, "end");
+        target.dispatchEvent(
+          new InputEvent("input", { bubbles: true, inputType: "historyUndo", data: null }),
+        );
+      }
+      if (target.value !== before.value) {
+        return undefined;
+      }
+      selectComposerInput(target, before.start, before.end, before.direction);
+      return true;
+    },
+  };
+}

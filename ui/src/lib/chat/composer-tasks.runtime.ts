@@ -1,5 +1,5 @@
 import { createStore } from "solid-js";
-import { focusComposerInput, readComposerEditor } from "../composer-input.ts";
+import { focusComposerInput, readComposerEditor, replaceComposerDraft } from "../composer-input.ts";
 import { t } from "../reactive/i18n.ts";
 import { listen } from "../reactive/listener.ts";
 
@@ -169,7 +169,7 @@ export function createComposerTasks(pane: {
 
   function apply(target: HTMLTextAreaElement, text: string, title: string) {
     settle("accepted");
-    replaceDraft(target, text);
+    replaceComposerDraft(target, text);
     written = text;
     // After the replacement's own input event, which retires an older receipt.
     setState((draft) => {
@@ -275,23 +275,6 @@ export function createComposerTasks(pane: {
       }
     },
   };
-}
-
-/** One isolated edit over the whole draft, so a single undo step reverts it. */
-function replaceDraft(target: HTMLTextAreaElement, text: string) {
-  focusComposerInput(target, { preventScroll: true });
-  const editor = readComposerEditor(target);
-  if (editor) {
-    editor.replaceAll(text);
-    return;
-  }
-  target.setSelectionRange(0, target.value.length);
-  if (!target.ownerDocument.execCommand?.("insertText", false, text)) {
-    target.setRangeText(text, 0, target.value.length, "end");
-    target.dispatchEvent(
-      new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }),
-    );
-  }
 }
 
 export type ComposerTasks = ReturnType<typeof createComposerTasks>;

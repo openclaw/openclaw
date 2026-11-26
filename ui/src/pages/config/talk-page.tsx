@@ -16,6 +16,7 @@ import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts"
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectMutableSource, projectOwner } from "../../lib/reactive/projection.ts";
+import { DictationRefinementSettings } from "./dictation-refinement-settings.tsx";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
   resolveTalkModelFamilySettings,
@@ -767,6 +768,7 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
         )}
         editor={props.buildEditor?.()}
       />
+      <DictationRefinementSettings />
     </openclaw-talk-settings>
   );
 }

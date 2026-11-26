@@ -268,7 +268,13 @@ export function ComposerDictationSendAction(props: {
     if (dictation.finalizing) {
       return;
     }
+    // Finishing may retire the capture, so keep its review decision with the
+    // initiating Send action. Disabled dictation preserves its existing Send path.
+    const requiresReview = dictation.requiresReview;
     await dictation.finishActive();
+    if (requiresReview) {
+      return;
+    }
     // Keep the initiating input action when asynchronous dictation finishes.
     send(event);
   };

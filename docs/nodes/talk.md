@@ -21,6 +21,86 @@ final transcript before inserting text. If finalization times out, disconnects,
 or fails, it preserves the text already received. Canceling, switching drafts,
 or starting another voice action discards the pending insertion.
 
+## Optional Control UI dictation punctuation
+
+In **Settings → Talk → Dictation punctuation**, opt in to reviewing dictated text
+before it enters the draft. **Off** keeps the existing dictation behavior. This
+preference belongs to the current browser and Gateway; it does not change the
+transcription provider, ordinary Talk, assistant replies, or native-app dictation.
+
+| Policy    | Behavior                                                                                                                                                                                                                                               |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Verbatim  | Review the recognizer's output without punctuation or casing changes. It cannot recover acoustic words or punctuation that the recognizer already changed.                                                                                             |
+| Automatic | For explicitly selected English (United States), capitalize an unprotected opening at the beginning of a field and add a missing final period when the authorized right context is empty. It does not infer internal sentence boundaries or questions. |
+| Explicit  | Interpret the documented spoken mark grammar only when **Allow spoken punctuation commands in Explicit mode** is also enabled.                                                                                                                         |
+
+Select **Punctuation language** explicitly. An unset or unsupported locale preserves
+the original text. The current rule set supports `en-US`; it does not establish
+support for other languages or Latin-script code switching. Non-Latin text and
+explicitly marked mixed-language requests preserve the original. If surrounding
+text is unavailable or unauthorized, the original is retained. **Keep as a
+fragment** suppresses automatic sentence casing and a sentence ending.
+
+Explicit mode recognizes `insert comma`, `insert colon`, and `insert semicolon`
+within a phrase, followed by a final `insert period`, `insert full stop`,
+`insert question mark`, or `insert exclamation mark`. A final introduced command
+can also stand alone after the dictated words. The bare greeting shorthand is
+limited to `hello comma <one plain word> period`: for example,
+`hello comma world period` becomes `Hello, world.`. Other bare punctuation words,
+mixed command styles, and ambiguous sequences remain literal. Commands inside
+quoted text or code are protected.
+
+### Review and recovery
+
+Stop ends microphone capture and waits for the existing provider finalization
+barrier. **Review dictation** displays the original, the validated candidate, and
+a text explanation of any fallback. **Use original** retires the prior candidate.
+**Change policy for this result → Reprocess original** prepares a new revision
+from the same raw transcript without another provider request or a saved-setting
+change. **Insert into draft** performs one local edit. Sending during capture
+stops for this review; it does not send a message automatically.
+
+Editing the draft, replacing its destination, starting another capture, or
+canceling revokes the old result's insertion authority. Text recognized before a
+draft change remains available for review; later provider events cannot overwrite
+that recovery snapshot. An incomplete transcript is labeled and cannot be inserted
+as a final result. Revoking a source also revokes its original-text fallback;
+the preview is redacted instead of offering an unauthorized copy.
+
+**Undo dictation insertion** is tied to the known local insertion transaction.
+It is available only while that target and its post-insertion revision remain
+unchanged. An unknown write outcome is shown explicitly and is never retried.
+External application insertion and system-wide undo are not supplied by this
+Control UI feature.
+
+### Data, limits, and rollback
+
+Punctuation runs locally after recognition. It makes no additional provider
+requests, has no cloud fallback, and adds no transcript, audio, context, or
+protected-term storage or telemetry. Review text remains in the existing capture
+owner's memory until it is dismissed or retired. Inserted text follows the
+existing draft and message storage behavior.
+
+The private request uses a capture ID, generation and raw transcript revision.
+Source ranges are half-open UTF-16 offsets; edits must land on ICU grapheme
+boundaries. Protected ranges, Unicode casing, versions, decimals, URLs, email,
+paths, identifiers, and quoted/code literals constrain the allowed edits.
+The validator replays the bounded source map and checks lexical coverage;
+unsupported or malformed changes retain the eligible original.
+
+Processing is bounded to 32 KiB of UTF-8 transcript, 8 KiB of authorized context,
+256 supplied protected spans, and 128 edits. Inputs over these limits keep the
+original with a limitation. Recognition still requires its configured provider;
+local punctuation does not imply offline speech recognition.
+
+Only the versioned punctuation preference is saved through the existing browser
+settings owner. Invalid values and unknown versions disable refinement and show
+a warning. Unvalidated fields are not copied back on settings writes. Existing
+installations have no setting and remain off. Selecting **Off** removes the
+preference without deleting unrelated microphone or voice settings. A policy or
+locale change during recording applies to the next capture; explicitly
+reprocessing an unsent review is the only way to change that result.
+
 Native Talk is a continuous loop. It listens for speech. It sends the transcript to the model through the active session. It waits for the response. It then speaks the response through the configured Talk provider (`talk.speak`).
 
 While the Gateway is preparing an agent after startup, native Talk keeps the spoken

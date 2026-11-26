@@ -39,6 +39,65 @@ export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
 
 export const normalizeChatFollowUpMode = normalizeChoice(CHAT_FOLLOW_UP_MODES, "steer");
 
+/** Device-local opt-in. Absence preserves the existing dictation path. */
+export type DictationRefinementPreference = {
+  version: 1;
+  mode: "verbatim" | "automatic" | "explicit";
+  locale?: string;
+  explicitEnabled: boolean;
+  fragment?: boolean;
+};
+
+export type DictationRefinementPreferenceIssue = "invalid" | "unsupported-version";
+
+/** Fail closed without guessing a locale or migrating an unknown policy version. */
+export function parseDictationRefinementPreference(value: unknown): {
+  preference?: DictationRefinementPreference;
+  issue?: DictationRefinementPreferenceIssue;
+} {
+  if (value === undefined) {
+    return {};
+  }
+  if (!isRecord(value)) {
+    return { issue: "invalid" };
+  }
+  if (value.version !== 1) {
+    return { issue: "unsupported-version" };
+  }
+  const { mode, locale, explicitEnabled, fragment } = value;
+  if (
+    Object.keys(value).some(
+      (key) => !["version", "mode", "locale", "explicitEnabled", "fragment"].includes(key),
+    ) ||
+    (mode !== "verbatim" && mode !== "automatic" && mode !== "explicit") ||
+    typeof explicitEnabled !== "boolean" ||
+    (fragment !== undefined && typeof fragment !== "boolean") ||
+    (locale !== undefined &&
+      (typeof locale !== "string" ||
+        locale.length > 64 ||
+        !/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/u.test(locale)))
+  ) {
+    return { issue: "invalid" };
+  }
+  return { preference: { version: 1, mode, locale, explicitEnabled, fragment } };
+}
+
+/** Snapshot the local policy once; optional producers cannot turn an absent locale into English. */
+export function resolveDictationRefinementPreference(input: {
+  saved?: DictationRefinementPreference;
+  session?: DictationRefinementPreference;
+  profile?: { enabled: boolean; preference: DictationRefinementPreference };
+}): Readonly<DictationRefinementPreference> | undefined {
+  const profile = input.profile?.enabled ? input.profile.preference : undefined;
+  const policy = input.session ?? profile ?? input.saved;
+  return policy
+    ? Object.freeze({
+        ...policy,
+        locale: input.session?.locale ?? profile?.locale ?? input.saved?.locale,
+      })
+    : undefined;
+}
+
 export function normalizeChatFollowUpModeOverride(value: unknown): ChatFollowUpMode | undefined {
   return CHAT_FOLLOW_UP_MODES.find((mode) => mode === value);
 }
@@ -213,6 +272,9 @@ export type UiSettings = {
   realtimeTalkInputDeviceId?: string;
   realtimeTalkVideoDeviceId?: string;
   composerHoldToRecord?: boolean;
+  dictationRefinement?: DictationRefinementPreference;
+  // Read-only validation feedback. Never persisted or sent to the Gateway.
+  dictationRefinementIssue?: DictationRefinementPreferenceIssue;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
   chatSplitLayout?: ChatSplitLayout;

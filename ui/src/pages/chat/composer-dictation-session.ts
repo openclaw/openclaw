@@ -186,6 +186,8 @@ export class ComposerDictationSession {
   private transcriptionSessionId: string | null = null;
   private readonly finalTranscripts: string[] = [];
   private currentPartial = "";
+  private transcriptRevision = 0;
+  private settledTranscript: { isFinal: boolean; transcriptRevision: number } | null = null;
   private startPromise: Promise<void> | null = null;
   private appendChain: Promise<void> = Promise.resolve();
   private closeRequest: { discard: boolean; promise: Promise<void> } | null = null;
@@ -263,6 +265,7 @@ export class ComposerDictationSession {
         typeof payload.text === "string"
       ) {
         const text = payload.text.trim();
+        this.transcriptRevision += 1;
         if (payload.type === "partial" || payload.final !== true) {
           this.currentPartial = text;
         } else if (text) {
@@ -312,7 +315,21 @@ export class ComposerDictationSession {
     return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }
 
+  /** A partial retained by the existing drain is recoverable text, not a final candidate. */
+  finalTranscriptState(): Readonly<{ isFinal: boolean; transcriptRevision: number }> {
+    return (
+      this.settledTranscript ?? {
+        isFinal: this.finalTranscripts.length > 0 && !this.currentPartial,
+        transcriptRevision: this.transcriptRevision,
+      }
+    );
+  }
+
   async finish(requireTranscript?: true): Promise<string> {
+    this.settledTranscript = {
+      isFinal: this.finalTranscripts.length > 0 && !this.currentPartial,
+      transcriptRevision: this.transcriptRevision,
+    };
     const transcript =
       this.gatewayDisconnected || this.failed ? this.transcriptSnapshot() : this.waitForLateFinal();
     // Bound admission separately; a started close uses the media provider timeout.
@@ -448,16 +465,26 @@ export class ComposerDictationSession {
   private waitForLateFinal(): Promise<string> {
     return new Promise((resolve) => {
       const initialTranscript = this.transcriptSnapshot();
+      const initialState = this.finalTranscriptState();
       const transcripts: string[] = [...this.finalTranscripts];
       let partial = this.currentPartial;
+      let hasLatePartial = false;
+      let revision = this.transcriptRevision;
       let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
       let unsubscribe = () => {};
-      const finish = (text: string) => {
+      const finish = (
+        text: string,
+        state = {
+          isFinal: transcripts.length > 0 && !partial && !hasLatePartial,
+          transcriptRevision: revision,
+        },
+      ) => {
         globalThis.clearTimeout(timer);
         unsubscribe();
         this.settleLateFinalDrain = null;
         this.pauseFinalDrain = null;
         this.resumeFinalDrain = null;
+        this.settledTranscript = state;
         resolve(text);
       };
       const transcript = () => [...transcripts, partial].filter(Boolean).join(" ").trim();
@@ -479,6 +506,17 @@ export class ComposerDictationSession {
         ) {
           transcripts.push(payload.text.trim());
           partial = "";
+          hasLatePartial = false;
+          revision += 1;
+        } else if (
+          (payload.type === "partial" ||
+            (payload.type === "transcript" && payload.final !== true)) &&
+          typeof payload.text === "string"
+        ) {
+          // The legacy drain ignores late captions. Preserve its returned bytes,
+          // but never describe an earlier final as complete after a newer partial.
+          hasLatePartial = Boolean(payload.text.trim());
+          revision += 1;
         } else if (payload.type === "error" || payload.type === "close") {
           if (payload.type === "error" || payload.reason === "error") {
             this.reportFailure(
@@ -493,8 +531,18 @@ export class ComposerDictationSession {
         }
       });
       // Failed finalization retains the preview, not its provisional result.
-      this.settleLateFinalDrain = (discard) =>
-        finish(discard ? "" : this.failed ? initialTranscript : transcript());
+      this.settleLateFinalDrain = (discard) => {
+        if (discard) {
+          finish("", { isFinal: false, transcriptRevision: revision });
+        } else if (this.failed) {
+          finish(initialTranscript, {
+            isFinal: initialState.isFinal && revision === initialState.transcriptRevision,
+            transcriptRevision: revision,
+          });
+        } else {
+          finish(transcript());
+        }
+      };
     });
   }
 }

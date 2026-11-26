@@ -1,8 +1,13 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import type { DictationPunctuationPolicy } from "../../lib/dictation-refinement.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import {
+  ComposerDictationRefinement,
+  type ComposerDictationRefinementOptions,
+} from "./composer-dictation-refinement.ts";
 import type {
   ComposerDictationCommits,
   ComposerDictationSession,
@@ -20,7 +25,7 @@ type ComposerDictationFailure = {
   preservesText: boolean;
 };
 
-type ComposerDictationOwnerOptions = {
+type ComposerDictationOwnerOptions = ComposerDictationRefinementOptions & {
   client: GatewayBrowserClient | null;
   sessionKey?: string;
   prepareSession?: () => Promise<string | undefined>;
@@ -29,7 +34,6 @@ type ComposerDictationOwnerOptions = {
   enabled: boolean;
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
-  onCommit: (text: string, late?: true, preservePreview?: true) => void;
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onTap?: () => void;
   onDictationUnavailable?: () => void;
@@ -52,6 +56,12 @@ export class ComposerDictationOwner extends EventTarget {
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   // Created with the lazy capture module, before the first transcript exists.
   private commits: ComposerDictationCommits | undefined;
+  private readonly refinement = new ComposerDictationRefinement({
+    options: () => this.options,
+    idle: () => this.phase === "idle" && !this.transcribing,
+    disposed: () => this.disposed,
+    changed: () => this.pendingCommitsChanged(),
+  });
   private disposed = false;
 
   constructor(private options: ComposerDictationOwnerOptions) {
@@ -102,6 +112,28 @@ export class ComposerDictationOwner extends EventTarget {
     return this.session?.transcriptSnapshot() ?? "";
   }
 
+  get review() {
+    return this.refinement.review;
+  }
+  get requiresReview(): boolean {
+    return Boolean(this.refinement.currentPlan);
+  }
+  reprocess(policy: DictationPunctuationPolicy): boolean {
+    return this.refinement.reprocess(policy);
+  }
+  chooseOriginal(): boolean {
+    return this.refinement.chooseOriginal();
+  }
+  insertReviewed(): boolean {
+    return this.refinement.insertReviewed();
+  }
+  undoReviewed(): boolean {
+    return this.refinement.undoReviewed();
+  }
+  dismissReview(): void {
+    this.refinement.dismissReview();
+  }
+
   // Returns the stop promise so the confirming control can remain tied to the
   // session that actually inserted text into the draft.
   finishActive(): Promise<boolean> {
@@ -128,6 +160,23 @@ export class ComposerDictationOwner extends EventTarget {
       this.cancel();
     }
     this.options = options;
+    const retired = this.refinement.update(
+      this.session
+        ? {
+            text: this.session.transcriptSnapshot(),
+            ...this.session.finalTranscriptState(),
+          }
+        : undefined,
+    );
+    if (retired && this.refinement.currentPlan === retired) {
+      if (this.commits?.size) {
+        this.commits.retire();
+        this.pendingCommitsChanged();
+      }
+      if (this.active) {
+        void this.stop({ commit: false });
+      }
+    }
     if (!options.connected) {
       this.commits?.markGatewayDisconnected();
     }
@@ -213,6 +262,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   cancel(): void {
+    const hadRefinement = this.refinement.cancel();
     this.clearClickSuppression();
     this.playback.stop();
     if (this.commits?.size) {
@@ -220,6 +270,9 @@ export class ComposerDictationOwner extends EventTarget {
       this.pendingCommitsChanged();
     }
     void this.stop({ commit: false });
+    if (hadRefinement) {
+      this.pendingCommitsChanged();
+    }
   }
 
   private readonly handleDocumentPointerMove = (event: PointerEvent): void => {
@@ -267,11 +320,18 @@ export class ComposerDictationOwner extends EventTarget {
   };
 
   private readonly handleDocumentKeyDown = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape" || (this.phase === "idle" && !this.transcribing)) {
+    if (
+      event.key !== "Escape" ||
+      (this.phase === "idle" && !this.transcribing && !this.refinement.hasReview)
+    ) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
+    if (this.phase === "idle" && !this.transcribing && this.refinement.hasReview) {
+      this.dismissReview();
+      return;
+    }
     this.cancel();
   };
 
@@ -316,6 +376,13 @@ export class ComposerDictationOwner extends EventTarget {
     // Crossing the threshold latches dictation. Pointer ownership ends here,
     // while Escape/visibility/blur keep guarding the live capture lifecycle.
     this.clearPointerGesture();
+    if (this.options.refinement || this.refinement.hasState) {
+      this.commits?.retire();
+      if (!this.refinement.beginCapture()) {
+        await this.stop({ commit: false });
+        return;
+      }
+    }
     const captureStart = {};
     this.captureStart = captureStart;
     this.setPhase("connecting");
@@ -332,8 +399,10 @@ export class ComposerDictationOwner extends EventTarget {
       const sessionKey = this.options.prepareSession
         ? await this.options.prepareSession()
         : this.options.sessionKey;
-      const { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError } =
-        await import("./composer-dictation-session.ts");
+      const [capture, refinement] = await Promise.all([
+        import("./composer-dictation-session.ts"),
+        this.refinement.currentPlan ? import("../../lib/dictation-refinement.ts") : undefined,
+      ]);
       if (
         this.captureStart !== captureStart ||
         this.disposed ||
@@ -341,6 +410,11 @@ export class ComposerDictationOwner extends EventTarget {
         !this.canHold()
       ) {
         return;
+      }
+      const { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError } =
+        capture;
+      if (refinement) {
+        this.refinement.load(refinement.refineDictation);
       }
       describeStartError = describeDictationStartError;
       const commits = (this.commits ??= new ComposerDictationCommits());
@@ -390,6 +464,16 @@ export class ComposerDictationOwner extends EventTarget {
     const wasActive = this.active;
     this.clearPointerGesture();
     const session = this.session;
+    const refinement = this.refinement.currentPlan;
+    if (refinement && session) {
+      this.refinement.remember(refinement, {
+        text: session.transcriptSnapshot(),
+        ...session.finalTranscriptState(),
+      });
+    }
+    if (refinement && !options.commit) {
+      this.refinement.retireCapture(refinement);
+    }
     if (!session) {
       this.setPhase("idle");
       this.releasePlayback();
@@ -415,6 +499,12 @@ export class ComposerDictationOwner extends EventTarget {
         !this.options.enabled ||
         this.options.realtimeTalkActive
       ) {
+        return false;
+      }
+      if (refinement) {
+        this.refinement.finalize(refinement, lateTranscript, session.finalTranscriptState());
+        // Review is deliberately unsent. The existing Send affordance must not
+        // continue with an empty draft when capture only prepared a candidate.
         return false;
       }
       if (this.active) {
@@ -482,7 +572,10 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private syncCancellationListeners(): void {
-    if (this.phase !== "idle" || this.transcribing) {
+    if (
+      !this.disposed &&
+      (this.phase !== "idle" || this.transcribing || this.refinement.hasReview)
+    ) {
       if (this.cancellationListeners) {
         return;
       }

@@ -634,6 +634,38 @@ it("keeps a pending dictation send bound to the action that started it", async (
   expect(laterSend).not.toHaveBeenCalled();
 });
 
+it.each([
+  { requiresReview: false, finished: false, sends: 1 },
+  { requiresReview: true, finished: false, sends: 0 },
+  { requiresReview: true, finished: true, sends: 0 },
+])("preserves the capture's review decision after finish: %j", async (scenario) => {
+  const controller = new ComposerDictationOwner({
+    client: null,
+    connected: false,
+    enabled: false,
+    realtimeTalkActive: false,
+    onCommit: () => {},
+    onError: () => {},
+  });
+  vi.spyOn(controller, "active", "get").mockReturnValue(true);
+  const review = vi.spyOn(controller, "requiresReview", "get");
+  review.mockReturnValue(scenario.requiresReview);
+  const finish = createDeferred<boolean>();
+  vi.spyOn(controller, "finishActive").mockReturnValue(finish.promise);
+  const onSend = vi.fn();
+  const view = mountComponent(ComposerDictationSendAction, {
+    readDictation: () => controller,
+    onSend,
+  });
+  onTestFinished(() => controller.dispose());
+  view.container.querySelector<HTMLButtonElement>("button")!.click();
+  // The completed capture can disappear before its asynchronous finish resolves.
+  review.mockReturnValue(false);
+  finish.resolve(scenario.finished);
+  await Promise.resolve();
+  expect(onSend).toHaveBeenCalledTimes(scenario.sends);
+});
+
 it("preserves keyboard input-history traversal with hydrated member evidence", () => {
   const { state, view } = mountOwnedComposer({ draft: "Unsent draft" });
   state.chatLocalInputHistoryBySession[state.sessionKey] = [

@@ -171,15 +171,25 @@ export function ChatVoiceStatus(props: {
 const ActiveDictationStatus = lazy(() => import("./composer-dictation-status.tsx"), {
   export: "ActiveDictationStatus",
 });
+const DictationReview = lazy(() => import("./composer-dictation-review.tsx"), {
+  export: "ComposerDictationReview",
+});
 
 export function ComposerDictationStatus(props: {
   readDictation: () => ComposerDictationOwner | undefined;
 }) {
   return (
-    <Show when={props.readDictation()?.active || props.readDictation()?.transcribing}>
-      <ChatLazyBoundary>
-        <ActiveDictationStatus readDictation={props.readDictation} />
-      </ChatLazyBoundary>
-    </Show>
+    <>
+      <Show when={props.readDictation()?.active || props.readDictation()?.transcribing}>
+        <ChatLazyBoundary>
+          <ActiveDictationStatus readDictation={props.readDictation} />
+        </ChatLazyBoundary>
+      </Show>
+      <Show when={props.readDictation()?.review}>
+        <ChatLazyBoundary>
+          <DictationReview readDictation={props.readDictation} />
+        </ChatLazyBoundary>
+      </Show>
+    </>
   );
 }
