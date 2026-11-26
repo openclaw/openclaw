@@ -389,9 +389,9 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
               { canRead: canRefreshCron },
             ).catch(() => null);
             if (current()) {
-              this.#cronRefreshNeeded ||= !inventory || !canRefreshCron();
+              this.#cronRefreshNeeded = !inventory || !canRefreshCron();
               this.#cronRetryAt = inventory ? undefined : Date.now() + 60_000;
-              if (inventory && canRefreshCron()) {
+              if (inventory && !this.#cronRefreshNeeded) {
                 // Publish membership only after the shared inventory has validated every wire page.
                 // Runtime events need job IDs and failure state, never the table's sorted rows.
                 this.#clearCronJobs();

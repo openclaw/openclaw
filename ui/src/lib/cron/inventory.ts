@@ -212,6 +212,10 @@ function readRows<Row>(
           const response = await client.request<CronJobsListResult<Row>>("cron.list", params, {
             signal: pending.controller.signal,
           });
+          // An invalidated response cannot establish current membership, even when malformed.
+          if (version !== owner.version) {
+            continue;
+          }
           const first = readCanonicalCronListPage<Row>(response, params.limit ?? 50);
           const jobs: Row[] = [];
           let page = first;
@@ -220,7 +224,12 @@ function readRows<Row>(
             const nextOffset = resolveCronListPageNextOffset(page, offset);
             for (const job of page.jobs) {
               // A partial or malformed response must not replace the last valid scoped inventory.
-              if (!isRecord(job)) {
+              if (
+                !isRecord(job) ||
+                typeof job.id !== "string" ||
+                !job.id ||
+                typeof job.enabled !== "boolean"
+              ) {
                 throw new Error("cron.list returned an invalid inventory job");
               }
               jobs.push(job);
