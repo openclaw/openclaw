@@ -198,6 +198,7 @@ final class TalkModeManager {
 
     private let allowSimulatorCapture: Bool
     private let gatewaySpeechSynthesizerOverride: (any TalkGatewaySpeechSynthesizing)?
+    private let audioSessionActivationAction: (@MainActor () throws -> Void)?
     private let audioSessionDeactivationAction: (@MainActor () throws -> Void)?
     private var audioSessionIsActive = false
 
@@ -296,7 +297,6 @@ final class TalkModeManager {
     @ObservationIgnored private var testPTTFinalizerHandler: (@MainActor () async -> Void)?
     @ObservationIgnored private var testPTTOnceStartedHandler: (@MainActor () async -> Void)?
     @ObservationIgnored private var testPTTReservedHandler: (@MainActor () async -> Void)?
-    @ObservationIgnored private var testRecognitionStartError: Error?
     @ObservationIgnored private var testRealtimeVoiceSessionCloseRequest:
         (@MainActor (_ method: String, _ paramsJSON: String?) async throws -> Void)?
     #endif
@@ -419,6 +419,7 @@ final class TalkModeManager {
     init(
         allowSimulatorCapture: Bool = false,
         gatewaySpeechSynthesizer: (any TalkGatewaySpeechSynthesizing)? = nil,
+        audioSessionActivationAction: (@MainActor () throws -> Void)? = nil,
         audioSessionDeactivationAction: (@MainActor () throws -> Void)? = nil,
         recognitionFinalizationSleep: @escaping @Sendable () async throws -> Void = {
             try await Task.sleep(for: .seconds(2))
@@ -428,6 +429,7 @@ final class TalkModeManager {
         UserDefaults.standard.removeObject(forKey: "talk.speechLocale")
         self.allowSimulatorCapture = allowSimulatorCapture
         self.gatewaySpeechSynthesizerOverride = gatewaySpeechSynthesizer
+        self.audioSessionActivationAction = audioSessionActivationAction
         self.audioSessionDeactivationAction = audioSessionDeactivationAction
         self.recognitionFinalizationSleep = recognitionFinalizationSleep
         self.preferredInputDeviceID = UserDefaults.standard.string(
@@ -1392,11 +1394,6 @@ final class TalkModeManager {
         self.stopRecognition()
         let recognitionGeneration = self.recognitionGeneration
         if Self.isSimulator {
-            #if DEBUG
-            if let testRecognitionStartError {
-                throw testRecognitionStartError
-            }
-            #endif
             if self.allowSimulatorCapture {
                 self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
                 self.recognitionRequest?.shouldReportPartialResults = true
@@ -1584,8 +1581,10 @@ final class TalkModeManager {
             deactivateAudioSession()
             let msg = error.localizedDescription
             GatewayDiagnostics.log("talk speech: restart failed error=\(msg)")
-            let status = String(format: String(localized: "Start failed: %@"), msg)
-            self.setStatus(status, phase: .idle, watchPresentation: .verbatim(status))
+            self.setStatus(
+                String(localized: "Talk stopped listening. Turn Talk off and on to try again."),
+                phase: .idle,
+                watchPresentation: .localized("Talk stopped listening. Turn Talk off and on to try again."))
         }
     }
 
@@ -4014,7 +4013,11 @@ extension TalkModeManager {
         {
             return
         }
-        try Self.configureAudioSession(preferredInputDeviceID: self.preferredInputDeviceID)
+        if let audioSessionActivationAction {
+            try audioSessionActivationAction()
+        } else {
+            try Self.configureAudioSession(preferredInputDeviceID: self.preferredInputDeviceID)
+        }
         self.audioSessionIsActive = true
     }
 
@@ -4405,10 +4408,6 @@ extension TalkModeManager {
             isFinal: isFinal,
             pttCaptureId: captureId,
             recognitionGeneration: self.recognitionGeneration)
-    }
-
-    func _test_setRecognitionStartError(_ error: Error?) {
-        self.testRecognitionStartError = error
     }
 
     func _test_recognitionGeneration() -> UInt64 {

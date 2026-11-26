@@ -2715,6 +2715,7 @@
     {"path":"apps/ios/Sources/Voice/TalkModeManager.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.5ae3dff71774954a","source":"Start failed: %@"},
     {"path":"apps/ios/Sources/Voice/TalkModeManager.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f93f27da45d472cf","source":"Still asking OpenClaw"},
     {"path":"apps/ios/Sources/Voice/TalkModeManager.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.1da1f8b0f2cf232d","source":"Talk failed: %@"},
+    {"path":"apps/ios/Sources/Voice/TalkModeManager.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.9d73e7d9c9877f7b","source":"Talk stopped listening. Turn Talk off and on to try again."},
     {"path":"apps/ios/Sources/Voice/TalkModeManager.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.ea5944dac09f07af","source":"Thinking"},
     {"path":"apps/ios/Sources/Voice/TalkModeManager.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.c738a88c74985999","source":"Thinking…"},
     {"path":"apps/ios/Sources/Voice/TalkModeManager.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f0895df33a948ce9","source":"Updating OpenClaw"},

@@ -3922,7 +3922,16 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `failed recognition restart stops showing Listening`() async {
-        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        var activations = 0
+        let talkMode = TalkModeManager(
+            allowSimulatorCapture: true,
+            audioSessionActivationAction: {
+                activations += 1
+                // AVAudioSession refuses activation while a call holds audio ('!int').
+                if activations > 1 {
+                    throw NSError(domain: NSOSStatusErrorDomain, code: 560_557_684)
+                }
+            })
         talkMode.updateGatewayConnected(true)
         talkMode.gatewayTalkConfigLoaded = true
         talkMode.isEnabled = true
@@ -3930,9 +3939,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await talkMode.start()
         #expect(talkMode.isListening)
 
-        talkMode._test_setRecognitionStartError(NSError(domain: "TalkMode", code: 3, userInfo: [
-            NSLocalizedDescriptionKey: "Invalid audio input format",
-        ]))
         let noSpeech = NSError(domain: "kAFAssistantErrorDomain", code: 1110, userInfo: [
             NSLocalizedDescriptionKey: "No speech detected",
         ])
@@ -3945,7 +3951,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(talkMode.statusText == "Listening")
 
         await waitForTalkCondition { talkMode.phase == .idle }
-        #expect(talkMode.statusText == "Start failed: Invalid audio input format")
+        #expect(talkMode.statusText == "Talk stopped listening. Turn Talk off and on to try again.")
+        #expect(activations == 2)
         #expect(!talkMode.isListening)
     }
 
