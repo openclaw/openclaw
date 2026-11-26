@@ -79,10 +79,11 @@ try {
       // Keep stack inspection out of the timing sample. Positive concat lengths
       // count bytes copied into the new contiguous Buffer, excluding pipe reads.
       const capture = { calls: 0, bytes: 0, chunks: 0, clippedBytes: 0, concatNs: 0 };
-      // oxlint-disable-next-line typescript/unbound-method -- Static factories ignore this; preserve their identity for restoration.
-      const concat = Buffer.concat;
-      // oxlint-disable-next-line typescript/unbound-method -- Static factories ignore this; preserve their identity for restoration.
-      const allocate = Buffer.allocUnsafeSlow;
+      const { concat: concatDescriptor, allocUnsafeSlow: allocateDescriptor } =
+        Object.getOwnPropertyDescriptors(Buffer);
+      const concat = concatDescriptor.value;
+      const allocate = allocateDescriptor.value;
+      assert(concat && allocate);
       const countRuns = 5;
       Buffer.concat = (chunks, length) => {
         const owned = new Error().stack?.includes("at capturedOutput ");
