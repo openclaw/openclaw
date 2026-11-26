@@ -1,14 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
-import { sleep } from "../utils.js";
-import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "./program-args.js";
+import { runScheduledTaskOrThrow, type ScheduledTaskActivation } from "./schtasks-activation.js";
 import { execScheduledTaskEnabledChange, execSchtasks } from "./schtasks-exec.js";
 import {
   readScheduledTaskCommand,
@@ -20,14 +18,7 @@ import {
   waitForGatewayPortRelease,
 } from "./schtasks-port-diagnostics.js";
 import {
-  findInstalledProcessPid,
-  isNodeHostArgv,
-  readWindowsProcessSnapshot,
-} from "./schtasks-process-snapshot.js";
-import {
-  resolveScheduledTaskCommandPort,
   resolveScheduledTaskGatewayContext,
-  resolveScheduledTaskOwnedGatewayPids,
   shouldManageGatewayListenerPort,
   terminateGatewayProcessTree,
   terminateScheduledTaskGatewayListeners,
@@ -38,15 +29,11 @@ import {
   isRegisteredScheduledTask,
   isScheduledTaskDefinitelyNotRunning,
   isStartupEntryInstalled,
-  launchFallbackTaskScript,
-  readScheduledTaskRuntime,
   removeStartupEntries,
   resolveFallbackRuntime,
   restartStartupEntry,
   startStartupEntry,
   stopStartupEntry,
-  SCHEDULED_TASK_FALLBACK_POLL_MS,
-  SCHEDULED_TASK_FALLBACK_TIMEOUT_MS,
   terminateInstalledStartupRuntime,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
@@ -70,151 +57,13 @@ import type {
   GatewayServiceEnv,
   GatewayServiceRestartResult,
 } from "./service-types.js";
+import { isUpdateOwnedGatewayServiceCommand } from "./service-update-authority.js";
 
+export { runScheduledTaskOrThrow, type ScheduledTaskActivation };
 type ScheduledTaskRestartResult = GatewayServiceRestartResult & {
   taskSettlement?: ScheduledTaskSettlement;
   restartRecovery?: "sqlite-owner-read";
 };
-export type ScheduledTaskActivation = "scheduled-task" | "direct-fallback";
-
-async function shouldFallbackScheduledTaskLaunch(params: {
-  env: GatewayServiceEnv;
-  scriptPath: string;
-}): Promise<boolean> {
-  const readLaunchObservation = async (timeoutMs?: number) => {
-    const runtime = await readScheduledTaskRuntime(params.env, { timeoutMs }).catch(() => null);
-    let state: "running" | "not-yet-run" | "stopped-success" | "other" = "other";
-    if (runtime?.status === "running") {
-      state = "running";
-    } else if (runtime?.status === "stopped") {
-      // SCHED_S_TASK_HAS_NOT_RUN is history, and only a stopped task is a fallback candidate.
-      if (runtime.lastRunResult === "267011") {
-        state = "not-yet-run";
-      } else if (runtime.lastRunResult === "0") {
-        state = "stopped-success";
-      }
-    }
-    return {
-      state,
-      signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
-        .filter(Boolean)
-        .join("|"),
-    };
-  };
-
-  const hasLaunchEvidence = async (): Promise<boolean> => {
-    const command = await readScheduledTaskCommand(params.env).catch(() => null);
-    const installedArguments = command?.programArguments;
-    const taskPort = resolveScheduledTaskCommandPort(params.env, command);
-    const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
-    if (manageGatewayPort && taskPort) {
-      const probeHosts = await resolveGatewayServiceProbeHosts({ env: params.env, command });
-      const ownedPids = await resolveScheduledTaskOwnedGatewayPids(
-        params.env,
-        { port: taskPort, probeHosts },
-        command,
-      );
-      if (ownedPids.length > 0) {
-        return true;
-      }
-    }
-
-    const scriptPathNeedle = normalizeLowercaseStringOrEmpty(
-      params.scriptPath.replaceAll("/", "\\"),
-    );
-    if (!scriptPathNeedle) {
-      return false;
-    }
-    const entries = readWindowsProcessSnapshot();
-    if (!entries) {
-      return false;
-    }
-    if (
-      entries.some((entry) =>
-        normalizeLowercaseStringOrEmpty(entry.CommandLine ?? "")
-          .replaceAll("/", "\\")
-          .includes(scriptPathNeedle),
-      )
-    ) {
-      return true;
-    }
-    if (!taskPort) {
-      return false;
-    }
-    if (!installedArguments?.length) {
-      return false;
-    }
-    return (
-      findInstalledProcessPid(
-        entries,
-        taskPort,
-        installedArguments,
-        manageGatewayPort
-          ? (argv) => classifyOpenClawArgv(argv, { command: "gateway" }).kind === "openclaw"
-          : isNodeHostArgv,
-      ) != null
-    );
-  };
-
-  let previous = await readLaunchObservation();
-  if (previous.state !== "not-yet-run" && previous.state !== "stopped-success") {
-    return false;
-  }
-  const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
-    // Periodic observations keep their existing short budget after the initial cold read.
-    const current = await readLaunchObservation(5_000);
-    if (current.state !== "not-yet-run" && current.state !== "stopped-success") {
-      return false;
-    }
-    if (
-      current.state === "not-yet-run" &&
-      previous.state === "not-yet-run" &&
-      current.signature !== previous.signature
-    ) {
-      return false;
-    }
-    // A queued task may finish before its process is observable; the reverse transition means a new run is starting.
-    if (previous.state === "stopped-success" && current.state === "not-yet-run") {
-      return false;
-    }
-    previous = current;
-    if (await hasLaunchEvidence()) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export async function runScheduledTaskOrThrow(params: {
-  taskName: string;
-  env: GatewayServiceEnv;
-  scriptPath: string;
-  onMutation?: () => void;
-  assertCurrent?: () => void;
-  allowFallback?: boolean;
-}): Promise<ScheduledTaskActivation> {
-  params.assertCurrent?.();
-  const run = await execSchtasks(["/Run", "/TN", params.taskName]);
-  if (run.code !== 0) {
-    throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
-  }
-  params.onMutation?.();
-  if (
-    !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
-  ) {
-    return "scheduled-task";
-  }
-  if (params.allowFallback !== false && !shouldManageGatewayListenerPort(params.env)) {
-    await launchFallbackTaskScript(params.env, undefined, params.assertCurrent);
-    return "direct-fallback";
-  }
-  throw new Error(
-    `Scheduled Task ${params.taskName} did not start within ${SCHEDULED_TASK_FALLBACK_TIMEOUT_MS / 1000}s after schtasks /Run; refusing a direct fallback because the queued task could still start.`,
-  );
-}
-
 export async function readScheduledTaskDefinition(env: GatewayServiceEnv): Promise<string> {
   const result = await execSchtasks(["/Query", "/TN", resolveTaskName(env), "/XML"]);
   const xml = result.stdout.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "");
@@ -581,6 +430,7 @@ export async function restartRegisteredScheduledTask(params: {
   onEndMutation?: () => void;
   onRunMutation?: () => void;
   assertCurrent?: () => void;
+  prepareEffect?: GatewayServiceControlArgs["prepareEffect"];
   warn?: (message: string) => void;
 }): Promise<ScheduledTaskRestartResult> {
   const facts: Pick<ScheduledTaskRestartResult, "taskSettlement" | "restartRecovery"> = {};
@@ -622,6 +472,7 @@ export async function restartRegisteredScheduledTask(params: {
   const activation = await runScheduledTaskOrThrow({
     taskName,
     assertCurrent: params.assertCurrent,
+    prepareEffect: params.prepareEffect,
     env: params.env,
     scriptPath: resolveTaskScriptPath(params.env),
     ...(params.onRunMutation ? { onMutation: params.onRunMutation } : {}),
@@ -638,6 +489,7 @@ export async function restartRegisteredScheduledTask(params: {
   const shouldRemoveStartup =
     activation === "scheduled-task" &&
     !params.preserveDefinition &&
+    !params.prepareEffect &&
     (await isStartupEntryInstalled(params.env));
   if (
     activation === "scheduled-task" &&
@@ -670,11 +522,26 @@ export async function restartScheduledTask({
   env,
   onMutation,
   assertCurrent,
+  prepareEffect,
+  updateHandoff,
   warn,
 }: GatewayServiceControlArgs): Promise<ScheduledTaskRestartResult> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
+  const updateOwnsGateway =
+    isUpdateOwnedGatewayServiceCommand() && shouldManageGatewayListenerPort(effectiveEnv);
+  const prepareActivation = updateOwnsGateway
+    ? async () => {
+        const state = await import("../state/openclaw-state-db-cache.js");
+        await state.joinOpenClawStateDatabaseBorrowers();
+        await state.releaseOpenClawStateDatabaseCustody();
+        await prepareEffect?.();
+      }
+    : prepareEffect;
   if (await shouldControlStartupEntry(effectiveEnv)) {
+    if (prepareActivation || updateHandoff) {
+      throw new Error("Update-owned Scheduled Task restart cannot use the Startup fallback.");
+    }
     return restartStartupEntry(
       effectiveEnv,
       stdout,
@@ -686,6 +553,7 @@ export async function restartScheduledTask({
     warn,
     preserveDefinition,
     assertCurrent,
+    prepareEffect: prepareActivation,
     env: effectiveEnv,
     stdout,
     mode: { kind: "standard" },

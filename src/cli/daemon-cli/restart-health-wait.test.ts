@@ -12,6 +12,7 @@ import {
   makeGatewayService,
   monotonicClock,
   callGateway,
+  readActiveGatewayLockIdentity,
   readGatewayOwnerLease,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
@@ -69,6 +70,30 @@ describe("restart health", () => {
       outcome: "ready",
       elapsedMs: 90_000,
     });
+  });
+
+  it("waits for a transferred state owner without opening its SQLite store", async () => {
+    const service = makeGatewayService({ status: "stopped" });
+    const readMigrationLease = vi.fn(() => false);
+    readActiveGatewayLockIdentity.mockResolvedValue({
+      pid: 8000,
+      port: 18789,
+      createdAt: "2026-11-25T00:00:00.000Z",
+    });
+    listenAfter(1000);
+    serveHealth();
+    const result = await waitForRunningGateway({
+      service,
+      config: {},
+      attempts: 10,
+      delayMs: 500,
+      stateCustodyTransferred: true,
+      isStartupMigrationActive: readMigrationLease,
+    });
+    expectWait(result, "healthy", 1000);
+    expect(readActiveGatewayLockIdentity).toHaveBeenCalled();
+    expect(readGatewayOwnerLease).not.toHaveBeenCalled();
+    expect(readMigrationLease).not.toHaveBeenCalled();
   });
 
   it("ends readiness polling immediately for a verified service hold", async () => {

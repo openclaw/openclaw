@@ -7,13 +7,9 @@ import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import {
   assertGatewayServiceUpdateCurrent,
   assertGatewayServiceFallbackAllowed,
+  isUpdateOwnedGatewayServiceCommand,
 } from "../../daemon/service-update-authority.js";
 import { resolveGatewayService } from "../../daemon/service.js";
-import {
-  findInstalledSystemdGatewayScope,
-  restartSystemdService,
-  stopSystemdService,
-} from "../../daemon/systemd.js";
 import {
   type GatewayLockIdentity,
   readActiveGatewayLockIdentity,
@@ -41,7 +37,6 @@ import {
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
-import { createNullWriter } from "../../shared/null-writer.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   isTerminalInteractive,
@@ -65,6 +60,7 @@ import {
   runSafeGatewayRestart,
   resolveGatewayRestartIntentOptions,
 } from "./lifecycle-safe-restart.js";
+import { handleSystemScopeSystemdGateway } from "./lifecycle-systemd-scope.js";
 import { signalGatewayRestart } from "./lifecycle-unmanaged.js";
 import { createDaemonActionContext } from "./response.js";
 import { createGatewayRestartDeadline } from "./restart-health-deadline.js";
@@ -87,36 +83,6 @@ function postRestartHealthAttempts(): number {
   return process.platform === "win32"
     ? Math.ceil(resolveGatewayStartupTiming().deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS)
     : DEFAULT_RESTART_HEALTH_ATTEMPTS;
-}
-
-async function handleSystemScopeSystemdGateway(
-  action: "stop",
-): Promise<{ result: "stopped"; message: string } | null>;
-async function handleSystemScopeSystemdGateway(
-  action: "restart",
-): Promise<{ result: "restarted"; message: string } | null>;
-async function handleSystemScopeSystemdGateway(
-  action: "stop" | "restart",
-): Promise<{ result: "stopped" | "restarted"; message: string } | null> {
-  if (process.platform !== "linux") {
-    return null;
-  }
-  const installed = await findInstalledSystemdGatewayScope(process.env).catch(() => null);
-  if (installed?.scope !== "system") {
-    return null;
-  }
-  const stdout = createNullWriter();
-  const runAction = action === "stop" ? stopSystemdService : restartSystemdService;
-  await runAction({
-    stdout,
-    env: process.env,
-    onMutation: createGatewayLifecycleMutationAudit({ action }),
-  });
-  const result = action === "stop" ? "stopped" : "restarted";
-  return {
-    result,
-    message: `Gateway ${result} via system-scope systemd unit ${installed.unitName}.`,
-  };
 }
 
 async function stopGatewayWithoutServiceManager(
@@ -497,6 +463,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     (await readActiveGatewayLockPort().catch(() => undefined)) ?? managedRestartPort;
   const restartHealthAttempts = postRestartHealthAttempts();
   const restartWaitMs = restartHealthAttempts * DEFAULT_RESTART_HEALTH_DELAY_MS;
+  const updateOwnedTask = process.platform === "win32" && isUpdateOwnedGatewayServiceCommand();
+  let stateCustodyTransferred = false;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
   let unmanagedRestartWait: ReturnType<typeof resolveRestartListenerHealthWait> | undefined;
 
@@ -512,6 +480,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     expectedPort: configuredPort,
     beforeServiceMutation: () =>
       assertGatewayServiceActionAllowed("restart", "restart the gateway"),
+    prepareServiceEffect: updateOwnedTask
+      ? async () => {
+          stateCustodyTransferred = true;
+        }
+      : undefined,
     restartOwnedProcess: preserveDefinition
       ? undefined
       : async () => {
@@ -668,13 +641,25 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
 
       const waitForHealthy = async () =>
         await waitForGatewayHealthyRestart({
-          service,
+          service: stateCustodyTransferred
+            ? {
+                readCommand: async () => restartContext.command ?? null,
+                readRuntime: (env, options) =>
+                  service.readRuntime(env, {
+                    ...options,
+                    commandInspection: restartContext.command
+                      ? { kind: "present", command: restartContext.command }
+                      : { kind: "absent" },
+                  }),
+              }
+            : service,
           port: managedRestartPort,
           attempts: restartHealthAttempts,
           delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
           ...(process.platform === "win32" ? { timeoutMs: restartWaitMs } : {}),
           env: restartContext.env,
-          config: restartContext.config,
+          config: stateCustodyTransferred ? (restartContext.config ?? {}) : restartContext.config,
+          stateCustodyTransferred,
           probeHosts: await resolveGatewayServiceProbeHosts(restartContext),
           requireOwnedListener: restartContext.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1",
           supervisorKeepsAlive: process.platform === "darwin",
@@ -682,7 +667,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         });
       let health = await waitForHealthy();
 
-      if (!health.healthy && health.staleGatewayPids.length > 0) {
+      if (!stateCustodyTransferred && !health.healthy && health.staleGatewayPids.length > 0) {
         // On Windows service restarts can leave stale listeners behind; kill verified stale
         // Gateway pids once, restart again, then re-run the same health proof.
         const staleMsg = `Found stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;

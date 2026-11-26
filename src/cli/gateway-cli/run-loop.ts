@@ -175,8 +175,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     gatewayLog,
   );
   const releaseLockIfHeld = async (): Promise<void> => {
-    await cleanup.waitForPersistence(bootCompletion);
-    await cleanup.waitForPersistence(lock?.release());
+    await loopExit.releaseRetiringGatewayCustody(cleanup, bootCompletion, lock, supervisorMode);
     lock = null;
   };
   const exitReplacedInstallation = async (replacement: GatewayInstallationReplacement) => {
@@ -186,57 +185,24 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     await releaseLockIfHeld();
     await finishLoopAfterCleanup(1);
   };
-  const forceExitAfterStabilityBundle = async (
-    reason: string,
-    exitCode = 1,
-    failure?: ShutdownFailure,
-  ) => {
-    if (
-      foregroundUpdateClosed ||
-      (updateSuccessor.waitingForStop && !getManagedUpdateOwner()) ||
-      forcedExitStarted
-    ) {
-      return;
-    }
-    forcedExitStarted = true;
-    const retirement = hostLifecycle?.retire();
-    if (retirement) {
-      cleanup.retain(retirement);
-    }
-    let stabilityFailure: { error: unknown } | undefined;
-    try {
-      writeStabilityBundle(reason, failure?.error, failure?.step);
-    } catch (error) {
-      stabilityFailure = { error };
-    }
-    // Exit rescue cannot replay an issued file append; join it before final authority checks.
-    // Reserve half the hard-exit grace for final shutdown bookkeeping.
-    await cleanup.flushLogs(HARD_EXIT_WATCHDOG_GRACE_MS / 2);
-    if (foregroundUpdateClosed) {
-      return;
-    }
-    const owner = getManagedUpdateOwner();
-    if (owner) {
-      forceActiveRestartExit?.();
-    }
-    const restoration = await updateSuccessor.cancelHandoff(getManagedUpdateOwner, owner);
-    if (restoration) {
-      completeBoot({ outcome: "forced_stop", reason });
-      if (restoration === "restart-after-exit") {
-        await finishLoopAfterCleanup(exitCode, owner, "restore");
-      } else {
-        finishLoop(exitCode);
-      }
-    } else if (updateSuccessor.capturedStop) {
-      await updateSuccessor.exit(exitCode, (code) => {
-        completeBoot({ outcome: "forced_stop", reason });
-        finishLoop(code);
-      });
-    }
-    if (stabilityFailure) {
-      throw stabilityFailure.error;
-    }
-  };
+  const forceExitAfterStabilityBundle = loopExit.createForcedExitAfterStabilityBundle({
+    isClosed: () => foregroundUpdateClosed,
+    isForced: () => forcedExitStarted,
+    markForced: () => {
+      forcedExitStarted = true;
+    },
+    getOwner: getManagedUpdateOwner,
+    successor: updateSuccessor,
+    retireHost: () => hostLifecycle?.retire(),
+    cleanup,
+    writeStabilityBundle,
+    forceRestartExit: () => forceActiveRestartExit?.(),
+    completeBoot,
+    finishLoop,
+    finishRestoring: (code, owner) => finishLoopAfterCleanup(code, owner, "restore"),
+    graceMs: HARD_EXIT_WATCHDOG_GRACE_MS,
+  });
+
   const reacquireAndResumeInProcessRestart = async (
     alreadyCancelledOwner?: GatewayRestartIntent["successorOwner"],
   ): Promise<void> => {
@@ -346,6 +312,13 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
   };
   const markRestartHandoffUnavailable = (reason?: string) =>
     updateSuccessor.markHandoffUnavailable(foregroundUpdateClosed, reason);
+  const persistSupervisorHandoff = loopExit.createSupervisorHandoffWriter({
+    runtime: eagerLifecycleRuntime,
+    processInstanceId,
+    supervisorMode,
+    isCurrent: (request) =>
+      signals.active && !forcedExitStarted && activeRestartRequest === request,
+  });
   const handleRestartAfterServerClose = async (
     expectedOwner?: GatewayRestartIntent["successorOwner"],
     initiallyCancelled = false,
@@ -379,20 +352,54 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
         cancelled = true;
       }
     }
-    await releaseLockIfHeld();
+    const updateTransfersCustody =
+      supervisorMode === "schtasks" &&
+      !cancelled &&
+      !hostExitRequested &&
+      (Boolean(expectedOwner) || isUpdateProcessRestartReason(activeRestartRequest?.restartReason));
+    if (updateTransfersCustody) {
+      // The retiring process must record its outcome while it still owns the database.
+      completeBoot(loopCompletion.formatRestartCompletion(activeRestartRequest, Boolean(failure)));
+    }
+    const writesHandoffBeforeRelease =
+      updateTransfersCustody && !expectedOwner && restartDecision.mode === "supervised";
+    const handoffBeforeRelease = writesHandoffBeforeRelease
+      ? await persistSupervisorHandoff(activeRestartRequest, "update-process")
+      : null;
+    if (writesHandoffBeforeRelease && !handoffBeforeRelease) {
+      throw new Error(
+        "Scheduled Task update handoff could not be persisted before custody release",
+      );
+    }
+    try {
+      await releaseLockIfHeld();
+    } catch (error) {
+      if (!updateTransfersCustody || !expectedOwner) {
+        throw error;
+      }
+      gatewayLog.error("managed update custody release failed: " + formatErrorMessage(error));
+      await markRestartHandoffUnavailable("restart-state-custody-release-failed");
+      await updateSuccessor.cancelHandoff(getManagedUpdateOwner, expectedOwner);
+      // Do not hand off or resume while the predecessor's persistence is unresolved.
+      throw error;
+    }
     if (forcedExitStarted) {
       return;
     }
     if (hostExitRequested) {
-      completeBoot(loopCompletion.formatHostExitCompletion(Boolean(failure), hostExitReason));
+      if (!updateTransfersCustody) {
+        completeBoot(loopCompletion.formatHostExitCompletion(Boolean(failure), hostExitReason));
+      }
       return finishLoopAfterCleanup(failure ? 1 : 0);
     }
     // Lock release may yield while a managed update upgrades this restart.
     const restartReason = activeRestartRequest?.restartReason;
-    pendingRestartCompletion = loopCompletion.formatRestartCompletion(
-      activeRestartRequest,
-      Boolean(failure),
-    );
+    if (!updateTransfersCustody) {
+      pendingRestartCompletion = loopCompletion.formatRestartCompletion(
+        activeRestartRequest,
+        Boolean(failure),
+      );
+    }
     const isUpdateRestart = isUpdateProcessRestartReason(restartReason);
 
     if (cancelled) {
@@ -455,6 +462,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
       const accepted = await updateSuccessor.observeReadiness(child, {
         port: params.lockPort,
         host: params.healthHost,
+        config: params.healthConfig,
         foreground: foregroundUpdateClosed,
         // Old-server cleanup must not consume the replacement's readiness window.
         beforeWait: () => forceActiveRestartExit?.(),
@@ -494,20 +502,9 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
       let handoff: Awaited<ReturnType<typeof eagerLifecycleRuntime.writeGatewayRestartHandoff>> =
         null;
       try {
-        handoff = await eagerLifecycleRuntime.writeGatewayRestartHandoff(
-          {
-            restartKind,
-            reason: restartReason,
-            processInstanceId,
-            supervisorMode: supervisorMode ?? "external",
-            restartTrace: restartTrace.captureGatewayRestartTraceHandoff(),
-          },
-          () => {
-            if (!handoffIsCurrent()) {
-              throw new Error("Gateway restart handoff no longer owns the shutdown request");
-            }
-          },
-        );
+        handoff = writesHandoffBeforeRelease
+          ? handoffBeforeRelease
+          : await persistSupervisorHandoff(handoffRequest, restartKind);
       } catch (error) {
         if (handoffIsCurrent()) {
           throw error;

@@ -317,6 +317,7 @@ export async function readBoundedScheduledTaskProcess(
   env: GatewayServiceEnv,
   deadlineMs: number,
   installedCommand?: GatewayServiceCommandConfig | null,
+  stateCustodyTransferred?: boolean,
 ): Promise<{ port: number; pid: number | null; command: GatewayServiceCommandConfig } | null> {
   const remaining = () => {
     const value = deadlineMs - performance.now();
@@ -370,6 +371,18 @@ export async function readBoundedScheduledTaskProcess(
       );
     });
     if (candidates.length > 0) {
+      if (stateCustodyTransferred) {
+        const identity = await readActiveGatewayLockIdentity({
+          env: mergeGatewayServiceEnv(env, command),
+          requireInspection: true,
+          timeoutMs: remaining(),
+        });
+        remaining();
+        return identity?.port === port &&
+          candidates.some((entry) => getSnapshotProcessId(entry) === identity.pid)
+          ? { port, pid: identity.pid, command }
+          : null;
+      }
       const owner = await readGatewayOwnerLeaseAsync({
         env: mergeGatewayServiceEnv(env, command),
         signal: AbortSignal.timeout(Math.ceil(remaining())),

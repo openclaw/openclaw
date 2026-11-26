@@ -4,6 +4,7 @@ import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-pr
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { ConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
+import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { classifyPortListener } from "../../infra/ports-format.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
@@ -30,6 +31,8 @@ export async function inspectGatewayRestart(params: {
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
+  /** The update released its SQLite custody; observe the successor without reopening the store. */
+  stateCustodyTransferred?: boolean;
   requireChannelHealth?: boolean;
   /** Probe only a listener the service runtime owns, even without an expected version. */
   requireOwnedListener?: boolean;
@@ -100,9 +103,12 @@ export async function inspectGatewayRestart(params: {
   let runtime: GatewayServiceRuntime;
   try {
     runtime = await read("service-runtime", () =>
-      params.timeoutMs === undefined && !params.deadline
+      params.timeoutMs === undefined && !params.deadline && !params.stateCustodyTransferred
         ? params.service.readRuntime(env)
-        : params.service.readRuntime(env, { timeoutMs: remainingTimeoutMs() }),
+        : params.service.readRuntime(env, {
+            timeoutMs: remainingTimeoutMs(),
+            ...(params.stateCustodyTransferred ? { stateCustodyTransferred: true } : {}),
+          }),
     );
   } catch (err) {
     if (hasCommandProcessCleanupError(err)) {
@@ -138,7 +144,7 @@ export async function inspectGatewayRestart(params: {
 
   signal?.throwIfAborted();
   const configuredProbe = params.configuredProbe;
-  const startupPhase =
+  let startupPhase =
     portUsage.status === "busy" && configuredProbe
       ? await read("startup-health", () =>
           readGatewayStartupPhase({
@@ -190,8 +196,36 @@ export async function inspectGatewayRestart(params: {
   }
   // Read after probes: an owner can acquire the coordinator while health is unavailable.
   const unmanagedHealthy = healthy && !running;
+  let stateOwner = false;
+  if (params.stateCustodyTransferred && (!healthy || portUsage.status === "free")) {
+    try {
+      const identity = await read("state-owner", () =>
+        readActiveGatewayLockIdentity({
+          env,
+          includeEmbedded: true,
+          requireInspection: true,
+          timeoutMs: remainingTimeoutMs(),
+          signal,
+        }),
+      );
+      stateOwner = Boolean(
+        identity && (identity.port === undefined || identity.port === params.port),
+      );
+      if (stateOwner && portUsage.status !== "busy") {
+        startupPhase ??= "startup migration";
+      }
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
+      signal?.throwIfAborted();
+      // Inconclusive ownership is not permission to terminate a listener.
+      stateOwner = true;
+      startupPhase ??= "waiting for Gateway state ownership";
+    }
+  }
   const owner =
-    !unmanagedHealthy && portUsage.status === "busy"
+    !params.stateCustodyTransferred && !unmanagedHealthy && portUsage.status === "busy"
       ? readGatewayOwnerLease({
           env,
           port: params.port,
@@ -203,7 +237,7 @@ export async function inspectGatewayRestart(params: {
   // A recorded owner is never stale by PID inference; other listeners are foreign.
   // 2026.9.3 Gateways have no row and retain the installed-runtime ownership path.
   const staleGatewayPids =
-    unmanagedHealthy || owner
+    unmanagedHealthy || owner || stateOwner
       ? []
       : Array.from(
           new Set(

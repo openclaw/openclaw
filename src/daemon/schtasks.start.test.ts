@@ -14,8 +14,9 @@ import * as ports from "../infra/ports-inspect.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import * as utils from "../utils.js";
-import { startScheduledTask } from "./schtasks-control.js";
+import { runScheduledTaskOrThrow, startScheduledTask } from "./schtasks-control.js";
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
+import { readScheduledTaskRuntime } from "./schtasks-runtime.js";
 import * as gatewayService from "./service.js";
 import { createMockGatewayService } from "./service.test-helpers.js";
 
@@ -145,6 +146,43 @@ async function fixture(
   };
   return { env, file, root, entry };
 }
+
+it("prepares custody before /Run and does not reopen the runtime during observation", async () => {
+  const { env } = await fixture();
+  native.enabled = true;
+  vi.mocked(readScheduledTaskRuntime).mockClear();
+  const prepareEffect = vi.fn(async () => {
+    expect(native.calls).toEqual([]);
+    expect(native.running).toBe(false);
+  });
+  await expect(
+    runScheduledTaskOrThrow({
+      taskName: native.taskName,
+      scriptPath: native.scriptPath,
+      env,
+      prepareEffect,
+    }),
+  ).resolves.toBe("scheduled-task");
+  expect(prepareEffect).toHaveBeenCalledOnce();
+  expect(native.calls).toEqual([["/Run", "/TN", native.taskName]]);
+  expect(readScheduledTaskRuntime).not.toHaveBeenCalled();
+});
+
+it("keeps /Run undispatched if custody preparation fails", async () => {
+  const { env } = await fixture();
+  native.enabled = true;
+  await expect(
+    runScheduledTaskOrThrow({
+      taskName: native.taskName,
+      scriptPath: native.scriptPath,
+      env,
+      prepareEffect: async () => {
+        throw new Error("custody did not settle");
+      },
+    }),
+  ).rejects.toThrow("custody did not settle");
+  expect(native.calls).toEqual([]);
+});
 
 it.each(["owned", "foreign", "missing launcher"] as const)(
   "recovers a disabled Scheduled Task through Doctor only with a verified launcher (%s)",

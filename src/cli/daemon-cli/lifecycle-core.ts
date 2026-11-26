@@ -1,12 +1,14 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkManagedServiceEnvDrift, checkTokenDrift } from "../../daemon/service-audit.js";
-import { readGatewayServiceLoadState } from "../../daemon/service-load-state.js";
 import {
   collectGatewayServiceStartRepairIssues,
   formatGatewayServiceStartRepairIssues,
 } from "../../daemon/service-start-repair.js";
-import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
+import type {
+  GatewayServiceControlArgs,
+  GatewayServiceRestartResult,
+} from "../../daemon/service-types.js";
 import type {
   GatewayServiceStartRepairIssue,
   GatewayServiceState,
@@ -17,12 +19,9 @@ import {
   readGatewayServiceState,
   startGatewayService,
 } from "../../daemon/service.js";
-import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
-import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
-import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { formatCliCommand } from "../command-format.js";
@@ -33,19 +32,15 @@ import {
   appendServiceLifecycleRepairAudit,
   createServiceLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
+import { failServiceNotLoaded, resolveServiceLoadedOrFail } from "./lifecycle-load-state.js";
 import { createServiceRestartIntent } from "./lifecycle-restart-intent.js";
 import { buildDaemonServiceSnapshot, createDaemonActionContext } from "./response.js";
 import type { GatewayRestartSnapshot } from "./restart-health.types.js";
-import { filterContainerGenericHints, resolveDaemonInstallBlockMessage } from "./shared.js";
+import { resolveDaemonInstallBlockMessage } from "./shared.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
 type ServiceLifecycleOptions = DaemonLifecycleOptions & {
   restartIntent?: GatewayRestartIntent;
-};
-
-type ServiceTarget = {
-  serviceNoun: string;
-  service: GatewayService;
 };
 
 type StartPostCheckContext = Pick<
@@ -81,46 +76,6 @@ function mergeWarnings(
 ): string[] | undefined {
   const combined = [...captured, ...(reported ?? [])];
   return combined.length > 0 ? combined : undefined;
-}
-
-async function failServiceNotLoaded(
-  params: ServiceTarget & { renderStartHints: () => string[] },
-  fail: ReturnType<typeof createDaemonActionContext>["fail"],
-) {
-  let hints = params.renderStartHints();
-  if (process.platform === "linux" && !(await isSystemdUserServiceAvailable().catch(() => false))) {
-    hints = [
-      ...hints,
-      ...renderSystemdUnavailableHints({ wsl: await isWSL(), kind: "generic_unavailable" }),
-    ];
-  }
-  fail(
-    `${params.serviceNoun} service ${params.service.notLoadedText}.`,
-    filterContainerGenericHints(hints),
-  );
-}
-
-async function resolveServiceLoadedOrFail(
-  params: ServiceTarget,
-  fail: ReturnType<typeof createDaemonActionContext>["fail"],
-  opts: { acceptInstalledDefinition?: boolean; inspectionFailureMessage?: string } = {},
-): Promise<boolean | null> {
-  // Keep native scope discovery in the adapter and failure emission in the action context.
-  const hasInstalledDefinition = async () =>
-    params.service.hasInstalledDefinition
-      ? await params.service.hasInstalledDefinition({ env: process.env }).catch(() => false)
-      : Boolean(await params.service.readCommand(process.env).catch(() => null));
-  const loadState = await readGatewayServiceLoadState(params.service, { env: process.env });
-  if (loadState.status === "unknown") {
-    fail(
-      `${opts.inspectionFailureMessage ?? `${params.serviceNoun} service check failed`}: ${loadState.detail}`,
-    );
-    return null;
-  }
-  return (
-    loadState.status === "loaded" ||
-    (Boolean(opts.acceptInstalledDefinition) && (await hasInstalledDefinition()))
-  );
 }
 
 /** Only observer cancellation belongs to the root; concurrent service failures still report. */
@@ -477,6 +432,7 @@ export async function runServiceRestart(params: {
   };
   expectedPort?: number;
   beforeServiceMutation?: () => void;
+  prepareServiceEffect?: GatewayServiceControlArgs["prepareEffect"];
   repairLoadedService?: (
     ctx: ServiceStartRepairContext,
   ) => Promise<ServiceRecoveryResult<"restarted"> | null>;
@@ -680,6 +636,7 @@ export async function runServiceRestart(params: {
       try {
         restartResult = await params.service.restart({
           prepareRestart: params.opts?.preserveDefinition ? prepareGatewayRestartIntent : undefined,
+          prepareEffect: params.prepareServiceEffect,
           preserveDefinition: configIssue ? true : params.opts?.preserveDefinition,
           env: process.env,
           stdout,
