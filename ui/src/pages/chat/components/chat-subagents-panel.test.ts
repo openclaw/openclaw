@@ -225,7 +225,13 @@ it.each([false, true])(
         hasActiveRun: false,
         activeRunIds: [],
       },
-      { ...child("unknown"), activeModel: " ", modelDisplayName: " ", model: " " },
+      {
+        ...child("unknown"),
+        activeModel: " ",
+        modelDisplayName: " ",
+        model: " ",
+        runtimeMs: 12_000,
+      },
       {
         ...child("rerouted"),
         model: "shared-id",
@@ -240,7 +246,9 @@ it.each([false, true])(
     const text = (row: GatewaySessionRow) =>
       f.panel.querySelector('[data-session-key="' + row.key + '"] ' + openSelector(mobile))
         ?.textContent;
-    expect(text(rows[0])).toMatch(/Working for.*18s.*·.*Model A/);
+    expect(text(rows[0])).toMatch(/18s.*·.*Model A/);
+    expect(text(rows[0])?.includes("Working for")).toBe(!mobile);
+    expect(text(rows[3])).toMatch(/Working for.*12s/);
     expect(text(rows[1])).toContain("model-c");
     expect(text(rows[1])).not.toContain("Model B");
     expect(text(rows[2])).toContain("model-d");

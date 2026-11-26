@@ -95,7 +95,9 @@ function MobileRow(props: {
             <span class="chat-subagents-mobile__stats">
               {!finished() && props.item.elapsed && (
                 <span>
-                  {props.item.status === "running" && `${t("chat.subagentsPanel.workingFor")} `}
+                  {props.item.status === "running" &&
+                    !props.item.modelLabel &&
+                    `${t("chat.subagentsPanel.workingFor")} `}
                   {props.item.elapsed}
                 </span>
               )}
