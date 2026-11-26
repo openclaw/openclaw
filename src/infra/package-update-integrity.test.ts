@@ -12,6 +12,10 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 const SETTLED_TIME = new Date(1_700_000_000_000);
+// A substitution also changes its parent directory. Sweep reads run in
+// batches, so either may be observed first; both are strict stat refusals.
+const SUBSTITUTION_REFUSAL =
+  /entry="dist(?:\/entry\.js)?"; changes=\{"(?:ino|mtimeNs)"[^;]*\}(?!; \w+ changed)/u;
 
 async function writeDriftPackage(root: string) {
   await fs.writeFile(path.join(root, "package.json"), '{"version":"1.0.0"}');
@@ -121,7 +125,7 @@ describe.runIf(process.platform !== "win32")("metadata-only drift during a packa
         await fs.rename(file, `${file}.moved`);
         await fs.symlink("other.js", file);
       },
-      refusal: /entry="dist\/entry\.js"; changes=\{"ino"/u,
+      refusal: SUBSTITUTION_REFUSAL,
     },
     {
       shape: "directory substitution",
@@ -129,7 +133,7 @@ describe.runIf(process.platform !== "win32")("metadata-only drift during a packa
         await fs.rm(file);
         await fs.mkdir(file);
       },
-      refusal: /entry="dist\/entry\.js"; changes=\{"ino"/u,
+      refusal: SUBSTITUTION_REFUSAL,
     },
     {
       shape: "removed entry",
