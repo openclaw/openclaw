@@ -1,8 +1,6 @@
 import type { SQLInputValue, SQLOutputValue } from "node:sqlite";
 import type { MessagePort } from "node:worker_threads";
 
-export const POSTGRES_REQUEST_TIMEOUT_MS = 120_000;
-
 export type PostgresBridge = {
   port: MessagePort;
   control: Int32Array;

@@ -114,7 +114,7 @@ it("rejects async commit hooks without forbidding async preparation or unrelated
         import { runSqliteImmediateTransactionSync as transact } from "./sqlite-transaction.js";
         async function commitLater() {}
         transact(db, () => 42, { ...options, async withCommit(commit) { commit(); } });
-        runPostgresTransactionSync(db, () => 42, { withCommit: commitLater });
+        runPostgresTransactionSync(db, () => 42, 120_000, { withCommit: commitLater });
         runSqliteImmediateTransaction(db, async () => () => 42, { withCommit: async (commit) => commit() });
         const withCommit: () => void = async () => undefined;
         transact(db, () => 42, { withCommit });

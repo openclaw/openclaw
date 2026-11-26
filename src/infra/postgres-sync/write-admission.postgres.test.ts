@@ -28,10 +28,41 @@ async function bounded<T>(value: Promise<T>): Promise<T> {
   }
 }
 
-it.skipIf(!connection).for([false, true])(
-  "services a worker commit with an idle contender (transaction timeout: %s)",
+it.skipIf(!connection).for([
+  {
+    name: "configured",
+    statementTimeoutMs: 2000,
+    statement: "2s",
+    maintenance: false,
+    expireBody: false,
+  },
+  {
+    name: "default",
+    statementTimeoutMs: undefined,
+    statement: "90s",
+    maintenance: false,
+    expireBody: false,
+  },
+  { name: "zero", statementTimeoutMs: 0, statement: "0", maintenance: false, expireBody: false },
+  {
+    name: "maintenance",
+    statementTimeoutMs: 0,
+    statement: "0",
+    maintenance: true,
+    expireBody: false,
+  },
+  {
+    name: "transaction_timeout",
+    statementTimeoutMs: 2000,
+    statement: "2s",
+    maintenance: false,
+    expireBody: true,
+  },
+])(
+  "services a worker commit with an idle $name contender",
   { timeout: 15_000 },
-  async (expireBody, { skip }) => {
+  async (mode, { skip }) => {
+    const { expireBody } = mode;
     const hasTransactionTimeout =
       (await client.query("SELECT 1 FROM pg_settings WHERE name = 'transaction_timeout'"))
         .rowCount === 1;
@@ -57,8 +88,8 @@ it.skipIf(!connection).for([false, true])(
     harness.onClose(cleanup);
     try {
       const filename = path.join(directories.make("write-admission-"), "anchor.sqlite");
-      const schema = `${prefix}_${expireBody ? "timeout" : "commit"}`;
-      const storeId = `${prefix}-${expireBody}`;
+      const schema = `${prefix}_${mode.name}`;
+      const storeId = `${prefix}-${mode.name}`;
       const anchor = openNodeSqliteDatabase(filename);
       cleanups.push(() => anchor.close());
       anchor.exec("CREATE TABLE anchor (id TEXT)");
@@ -67,7 +98,7 @@ it.skipIf(!connection).for([false, true])(
         () =>
           new PostgresSyncConnection(connection!, schema, anchor, storeId, {
             lockTimeoutMs: 1000,
-            statementTimeoutMs: 2000,
+            statementTimeoutMs: mode.statementTimeoutMs,
           }),
       );
       cleanups.push(() => withEngineStoreAdmission(() => contender.close()));
@@ -130,20 +161,26 @@ it.skipIf(!connection).for([false, true])(
       let bodyCalls = 0;
       const write = () =>
         withEngineStoreAdmission(() =>
-          contender.runTransaction(() => {
-            bodyCalls++;
-            expect(serviceCalls).toBeGreaterThan(0);
-            expect(contender.prepare("SHOW lock_timeout").get()).toEqual({ lock_timeout: "1s" });
-            if (hasTransactionTimeout) {
-              expect(contender.prepare("SHOW transaction_timeout").get()).toEqual({
-                transaction_timeout: expireBody ? "400ms" : "10s",
+          contender.runTransaction(
+            () => {
+              bodyCalls++;
+              expect(serviceCalls).toBeGreaterThan(0);
+              expect(contender.prepare("SHOW lock_timeout").get()).toEqual({ lock_timeout: "1s" });
+              expect(contender.prepare("SHOW statement_timeout").get()).toEqual({
+                statement_timeout: mode.maintenance ? "1h" : mode.statement,
               });
-            }
-            contender.prepare("INSERT INTO events VALUES (?)").run("host");
-            if (expireBody) {
-              contender.exec("SELECT pg_sleep(0.3)");
-            }
-          }),
+              if (hasTransactionTimeout) {
+                expect(contender.prepare("SHOW transaction_timeout").get()).toEqual({
+                  transaction_timeout: expireBody ? "400ms" : "10s",
+                });
+              }
+              contender.prepare("INSERT INTO events VALUES (?)").run("host");
+              if (expireBody) {
+                contender.exec("SELECT pg_sleep(0.3)");
+              }
+            },
+            { maintenance: mode.maintenance },
+          ),
         );
       if (expireBody) {
         expect(write).toThrow("transaction rolled back");
@@ -151,6 +188,9 @@ it.skipIf(!connection).for([false, true])(
       } else {
         write();
         expect(contender.isOpen).toBe(true);
+        expect(
+          withEngineStoreAdmission(() => contender.prepare("SHOW statement_timeout").get()),
+        ).toEqual({ statement_timeout: mode.statement });
         if (hasTransactionTimeout) {
           expect(
             withEngineStoreAdmission(() => contender.prepare("SHOW transaction_timeout").get()),
@@ -167,6 +207,169 @@ it.skipIf(!connection).for([false, true])(
       );
     } finally {
       await cleanup();
+    }
+  },
+);
+
+it.skipIf(!connection).for([false, true])(
+  "restores the outer statement timeout after nested maintenance (refused: %s)",
+  async (refused) => {
+    const schema = `${prefix}_nested_${refused}`;
+    await client.query(`CREATE SCHEMA "${schema}"`);
+    const anchor = openNodeSqliteDatabase(":memory:");
+    const run = withEngineStoreAdmission;
+    try {
+      const db = run(
+        () =>
+          new PostgresSyncConnection(connection!, schema, anchor, schema, {
+            statementTimeoutMs: 1234,
+          }),
+      );
+      try {
+        const failure = new Error("nested maintenance refusal");
+        const statementTimeout = () => db.prepare("SHOW statement_timeout").get();
+        run(() =>
+          db.runTransaction(() => {
+            expect(statementTimeout()).toEqual({ statement_timeout: "1234ms" });
+            const nested = () =>
+              db.runTransaction(
+                () => {
+                  expect(statementTimeout()).toEqual({ statement_timeout: "1h" });
+                  if (refused) {
+                    throw failure;
+                  }
+                },
+                { maintenance: true },
+              );
+            if (refused) {
+              let nestedFailure: unknown;
+              try {
+                nested();
+              } catch (error) {
+                nestedFailure = error;
+              }
+              expect(nestedFailure).toBe(failure);
+            } else {
+              nested();
+            }
+            expect(db.isTransaction).toBe(true);
+            expect(statementTimeout()).toEqual({ statement_timeout: "1234ms" });
+          }),
+        );
+        expect(db.isTransaction).toBe(false);
+        expect(run(statementTimeout)).toEqual({ statement_timeout: "1234ms" });
+      } finally {
+        run(() => db.close());
+      }
+    } finally {
+      anchor.close();
+    }
+  },
+);
+
+it.skipIf(!connection).for([
+  { name: "lock", lockTimeoutMs: 100, statementTimeoutMs: 0, code: "55P03" },
+  { name: "statement", lockTimeoutMs: 0, statementTimeoutMs: 100, code: "57014" },
+])("bounds repeated lock slices by the real $name GUC", async (mode) => {
+  const schema = `${prefix}_budget_${mode.name}`;
+  await client.query(`CREATE SCHEMA "${schema}"`);
+  const filename = path.join(directories.make("admission-budget-"), "anchor.sqlite");
+  const anchor = openNodeSqliteDatabase(filename);
+  const run = withEngineStoreAdmission;
+  try {
+    const db = run(
+      () =>
+        new PostgresSyncConnection(connection!, schema, anchor, schema, {
+          lockTimeoutMs: mode.lockTimeoutMs,
+          statementTimeoutMs: mode.statementTimeoutMs,
+        }),
+    );
+    try {
+      let serviceCalls = 0;
+      let bodyCalls = 0;
+      const releaseService = retainSqliteWriteAdmissionService([filename], () => {
+        expect(db.isTransaction).toBe(false);
+        serviceCalls++;
+      });
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [
+          db.advisoryLockKey.toString(),
+        ]);
+        let failure: unknown;
+        try {
+          run(() =>
+            db.runTransaction(() => {
+              bodyCalls++;
+            }),
+          );
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toMatchObject(
+          mode.code === "55P03"
+            ? { code: "ERR_SQLITE_ERROR", errcode: 5, cause: { code: "55P03" } }
+            : { code: "57014", name: "PostgresQueryCanceledError" },
+        );
+        expect(serviceCalls).toBeGreaterThan(0);
+        expect(bodyCalls).toBe(0);
+        expect(db.isOpen).toBe(true);
+        expect(db.isTransaction).toBe(false);
+        await client.query("ROLLBACK");
+        expect(run(() => db.prepare("SHOW lock_timeout").get())).toEqual({
+          lock_timeout: mode.lockTimeoutMs === 0 ? "0" : "100ms",
+        });
+        expect(run(() => db.prepare("SHOW statement_timeout").get())).toEqual({
+          statement_timeout: mode.statementTimeoutMs === 0 ? "0" : "100ms",
+        });
+      } finally {
+        try {
+          await client.query("ROLLBACK");
+        } finally {
+          releaseService();
+        }
+      }
+    } finally {
+      run(() => db.close());
+    }
+  } finally {
+    anchor.close();
+  }
+});
+
+it.skipIf(!connection)(
+  "retires a server-terminated idle transaction without publishing its write",
+  async () => {
+    const schema = `${prefix}_idle_timeout`;
+    await client.query(`CREATE SCHEMA "${schema}"; CREATE TABLE "${schema}".events (id TEXT)`);
+    const anchor = openNodeSqliteDatabase(":memory:");
+    const run = withEngineStoreAdmission;
+    try {
+      const db = run(() => new PostgresSyncConnection(connection!, schema, anchor, schema));
+      let bodyCalls = 0;
+      try {
+        expect(() =>
+          run(() =>
+            db.runTransaction(() => {
+              bodyCalls++;
+              db.exec("SET LOCAL idle_in_transaction_session_timeout = '50ms'");
+              db.prepare("INSERT INTO events VALUES (?)").run("rolled-back");
+              // Let the server's real idle timer terminate the transaction while this host is idle.
+              Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+              db.exec("SELECT 1");
+            }),
+          ),
+        ).toThrow("transaction rolled back");
+        expect(bodyCalls).toBe(1);
+        expect(db.isOpen).toBe(false);
+        expect(db.isTransaction).toBe(false);
+        expect(() => run(() => db.exec("SELECT 1"))).toThrow("transaction rolled back");
+        expect((await client.query(`SELECT id FROM "${schema}".events`)).rows).toEqual([]);
+      } finally {
+        run(() => db.close());
+      }
+    } finally {
+      anchor.close();
     }
   },
 );

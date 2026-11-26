@@ -10,11 +10,7 @@ import { beginPostgresReadSnapshotScope } from "../sqlite-schema-facts.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
 import { readSqliteWriteAdmissionServices } from "../sqlite-write-admission.js";
-import {
-  decodePostgresError,
-  POSTGRES_REQUEST_TIMEOUT_MS,
-  readPostgresSqlState,
-} from "./protocol.js";
+import { decodePostgresError, readPostgresSqlState } from "./protocol.js";
 
 function assertPostgresOperationCurrent(): void {
   const scope = currentSqliteWorkerOperationAdmission.getStore();
@@ -25,7 +21,7 @@ function assertPostgresOperationCurrent(): void {
 
 type AdmissionTimeout = "lock_timeout" | "statement_timeout" | "transaction_timeout";
 
-function beginPostgresWrite(db: PostgresSqlConnection): void {
+function beginPostgresWrite(db: PostgresSqlConnection, requestTimeoutMs: number): void {
   const services = readSqliteWriteAdmissionServices(db.anchor);
   const begin = "BEGIN ISOLATION LEVEL READ COMMITTED";
   const lock = `SELECT pg_advisory_xact_lock(${db.advisoryLockKey})`;
@@ -48,7 +44,7 @@ function beginPostgresWrite(db: PostgresSqlConnection): void {
     { name: "transaction_timeout", ms: transactionTimeout || Infinity },
     { name: "statement_timeout", ms: statementTimeout || Infinity },
     { name: "lock_timeout", ms: lockTimeout || Infinity },
-    { name: "bridge request deadline", ms: POSTGRES_REQUEST_TIMEOUT_MS },
+    { name: "bridge request deadline", ms: requestTimeoutMs },
   ].reduce((first, next) => (first.ms <= next.ms ? first : next));
   const deadline = started + budget.ms;
   let lastLockError: Error | undefined;
@@ -140,6 +136,7 @@ export function tryReservePostgresTransactionSync(db: PostgresSqlConnection): bo
 export function runPostgresTransactionSync<T>(
   db: PostgresSqlConnection,
   operation: () => T,
+  requestTimeoutMs: number,
   options?: PostgresTransactionOptions,
   readOnly = false,
   reserved = false,
@@ -160,7 +157,7 @@ export function runPostgresTransactionSync<T>(
         if (readOnly) {
           db.exec("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
         } else {
-          beginPostgresWrite(db);
+          beginPostgresWrite(db, requestTimeoutMs);
         }
       }
       const previousTimeout =

@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { retainSqliteWriteAdmissionService } from "../sqlite-write-admission.js";
 import { usePostgresFixture } from "./fixture.test-support.js";
-import { decodePostgresError, POSTGRES_REQUEST_TIMEOUT_MS } from "./protocol.js";
+import { decodePostgresError } from "./protocol.js";
 
 const harness = usePostgresFixture();
 
@@ -147,7 +147,7 @@ it.each([
   { lock: 10, statement: 0, transaction: 0, elapsed: 10, code: "55P03" },
   { lock: 0, statement: 10, transaction: 0, elapsed: 10, code: "57014" },
   { lock: 0, statement: 0, transaction: 10, elapsed: 10, code: "25P04" },
-  { lock: 0, statement: 0, transaction: 0, elapsed: POSTGRES_REQUEST_TIMEOUT_MS, code: undefined },
+  { lock: 0, statement: 0, transaction: 0, elapsed: 120_000, code: undefined },
 ])("keeps the whole acquisition budget $code with zero timeout semantics", (options) => {
   const f = fixture(options);
   f.service.mockImplementation(() => f.elapse(options.elapsed));

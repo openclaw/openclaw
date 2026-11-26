@@ -18,14 +18,18 @@ import {
   withSqliteWorkerOperationAdmission as withAdmission,
 } from "../sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationContext } from "../sqlite-worker-operation-settlement.js";
+import { retainSqliteWriteAdmissionService } from "../sqlite-write-admission.js";
 import * as bridgePrestart from "./bridge-prestart.js";
 import { PostgresSyncConnection } from "./connection.js";
 import { usePostgresFixture } from "./fixture.test-support.js";
-import type { BridgeReply, BridgeRequest, PostgresErrorData } from "./protocol.js";
+import type { BridgeReply, BridgeRequest, PostgresErrorData, PostgresResult } from "./protocol.js";
 import { observeStatementEvents } from "./sql.test-support.js";
 
 const harness = usePostgresFixture();
 const writeBegin = "BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(-42)";
+type QueryResponse = Partial<Pick<PostgresResult, "rows" | "fields">> & {
+  error?: PostgresErrorData;
+};
 
 function transactionFixture() {
   const db = harness.connection();
@@ -50,16 +54,18 @@ function transportFixture(
     | "timeout"
     | "service-death"
     | "delayed",
+  options?: Parameters<typeof harness.connection>[0],
 ) {
   let mode = initialMode;
   let command: string | undefined;
   let queryError: PostgresErrorData | undefined;
+  let queryResponse: ((sql: string) => QueryResponse | undefined) | undefined;
   const { port1, port2 } = new MessageChannel();
   const control = new Int32Array(new SharedArrayBuffer(8));
   control.set([1, 1]);
   const service = new Int32Array(new SharedArrayBuffer(8));
   // Exercise the connection over real ports; live tests cover worker startup and admission.
-  const db = harness.connection();
+  const db = harness.connection(options);
   Object.assign(db, {
     bridge: { port: port1, control, service, requestId: 1 },
   });
@@ -107,11 +113,13 @@ function transportFixture(
     const id = pending.id ?? 1;
     if (mode !== "missing" || !query) {
       const sql = query?.sql ?? "";
+      const response = query ? queryResponse?.(sql) : undefined;
+      const error = query ? (queryError ?? response?.error) : undefined;
       const reply: BridgeReply =
         pending.operation === "release"
           ? { id, reusable: !db.isTransaction }
-          : queryError && query
-            ? { id, error: queryError }
+          : error
+            ? { id, error }
             : {
                 id: mode === "mismatched" && query ? id + 1 : id,
                 result: {
@@ -124,9 +132,9 @@ function transportFixture(
                   mutation: /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command ?? "")
                     ? "scoped"
                     : undefined,
-                  rows: [{ value: 7 }],
+                  rows: response?.rows ?? [{ value: 7 }],
                   rowCount: 1,
-                  fields: [{ name: "value", dataTypeID: 23 }],
+                  fields: response?.fields ?? [{ name: "value", dataTypeID: 23 }],
                 },
               };
       port2.postMessage(reply);
@@ -158,7 +166,43 @@ function transportFixture(
     delayNextReply: () => (mode = "delayed"),
     command: (value: string) => (command = value),
     rejectQuery: (error: PostgresErrorData) => (queryError = error),
+    onQuery: (respond: (sql: string) => QueryResponse | undefined) => (queryResponse = respond),
   };
+}
+
+function admissionBudgetFixture(options: {
+  statementTimeoutMs?: number;
+  elapsed: number;
+  settingsElapsed?: number;
+}) {
+  const fixture = transportFixture("normal", { statementTimeoutMs: options.statementTimeoutMs });
+  fixture.command("COMMIT");
+  const path = "/synthetic/postgres-request-budget.sqlite";
+  vi.spyOn(fixture.db.anchor, "location").mockReturnValue(path);
+  let busy = true;
+  fixture.onQuery((sql) => {
+    if (sql.startsWith("SELECT name, setting FROM pg_settings")) {
+      fixture.elapse(options.settingsElapsed ?? 0);
+      return {
+        rows: ["lock_timeout", "statement_timeout", "transaction_timeout"].map((name) => ({
+          name,
+          setting: "0",
+        })),
+        fields: ["name", "setting"].map((name) => ({ name, dataTypeID: 25 })),
+      };
+    }
+    if (busy && sql.includes("pg_advisory_xact_lock")) {
+      return { error: { name: "error", message: "lock timeout", code: "55P03" } };
+    }
+    return undefined;
+  });
+  const service = vi.fn(() => {
+    expect(fixture.db.isTransaction).toBe(false);
+    busy = false;
+    fixture.elapse(options.elapsed);
+  });
+  harness.cleanups.push(retainSqliteWriteAdmissionService([path], service));
+  return { fixture, service };
 }
 
 it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
@@ -237,6 +281,112 @@ it("lets maintenance finish beyond the runtime deadline, then restores runtime l
   expect(() => fixture.db.exec("SELECT 7")).toThrow("PostgreSQL connection lost");
   expect(fixture.db.isOpen).toBe(false);
 });
+
+it.each([
+  {
+    name: "default",
+    statementTimeoutMs: undefined,
+    maintenance: false,
+    deadline: 120_000,
+    elapsed: 120_000,
+    expires: true,
+  },
+  {
+    name: "zero",
+    statementTimeoutMs: 0,
+    maintenance: false,
+    deadline: 30_000,
+    elapsed: 30_000,
+    expires: true,
+  },
+  {
+    name: "configured",
+    statementTimeoutMs: 1000,
+    maintenance: false,
+    deadline: 31_000,
+    elapsed: 31_000,
+    expires: true,
+  },
+  {
+    name: "maintenance",
+    statementTimeoutMs: 0,
+    maintenance: true,
+    deadline: 3_630_000,
+    elapsed: 120_001,
+    expires: false,
+  },
+])("shares the $name bridge budget with writer admission", (options) => {
+  const { fixture, service } = admissionBudgetFixture(options);
+  const body = vi.fn();
+  let failure: unknown;
+  try {
+    fixture.db.runTransaction(body, { maintenance: options.maintenance });
+  } catch (error) {
+    failure = error;
+  }
+  expect(fixture.sent.mock.calls.map(([request]) => request.deadlineMs)).toEqual(
+    fixture.sent.mock.calls.map(() => options.deadline),
+  );
+  expect(service).toHaveBeenCalledOnce();
+  if (options.expires) {
+    expect(failure).toMatchObject({ message: expect.stringContaining("bridge request deadline") });
+    expect(body).not.toHaveBeenCalled();
+  } else {
+    expect(failure).toBeUndefined();
+    expect(body).toHaveBeenCalledOnce();
+  }
+  expect(fixture.db.isTransaction).toBe(false);
+});
+
+it("charges the timeout-settings read to the connection budget before BEGIN", () => {
+  const { fixture, service } = admissionBudgetFixture({
+    statementTimeoutMs: 0,
+    elapsed: 0,
+    settingsElapsed: 30_000,
+  });
+  const body = vi.fn();
+  expect(() => fixture.db.runTransaction(body)).toThrow("bridge request deadline");
+  expect(body).not.toHaveBeenCalled();
+  expect(service).not.toHaveBeenCalled();
+  expect(
+    fixture.sent.mock.calls.some(
+      ([request]) => request.operation === "query" && request.sql.startsWith("BEGIN"),
+    ),
+  ).toBe(false);
+});
+
+it.each([false, true])(
+  "restores the configured budget after nested maintenance (refused=%s)",
+  (refused) => {
+    const fixture = transportFixture("normal", { statementTimeoutMs: 0 });
+    fixture.command("COMMIT");
+    const failure = new Error("nested maintenance refused");
+    const run = () =>
+      fixture.db.runTransaction(
+        () => {
+          fixture.db.runTransaction(() => {
+            fixture.db.exec("SELECT 7");
+            if (refused) {
+              throw failure;
+            }
+          });
+        },
+        { maintenance: true },
+      );
+    let caught: unknown;
+    try {
+      run();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(refused ? failure : undefined);
+    expect(fixture.sent.mock.calls.every(([request]) => request.deadlineMs === 3_630_000)).toBe(
+      true,
+    );
+    fixture.db.exec("SELECT 8");
+    expect(fixture.sent.mock.calls.at(-1)?.[0].deadlineMs).toBe(30_000);
+  },
+);
 
 it("validates retained idle connections after suspended wall time, never inside a transaction", () => {
   const fixture = transportFixture("normal");
