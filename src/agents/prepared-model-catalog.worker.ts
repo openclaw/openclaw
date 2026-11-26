@@ -191,6 +191,7 @@ async function runCatalogRequest(
   work: AsyncWorkScope,
   prepareGeneration: () => Promise<WorkerGeneration>,
   beginDiscovery: () => Promise<void>,
+  recordCleanupFailure: (error: unknown) => void,
 ): Promise<PreparedModelWorkerOutcome> {
   const directoryOwner = value.input.agentId
     ? { agentId: value.input.agentId, agentDir: value.input.agentDir, env: value.input.env }
@@ -523,6 +524,8 @@ async function runCatalogRequest(
     }
     return result;
   } catch (error) {
+    // Preserve a retained native close before projecting the task error to wire text.
+    recordCleanupFailure(error);
     return {
       status: "failed",
       error: error instanceof Error ? error.message : String(error),
@@ -666,6 +669,7 @@ if (parentPort) {
                                   );
                                 }
                               },
+                              (error) => contexts.recordCleanupFailure(admission.owner, error),
                             ),
                           ),
                       ),
@@ -699,6 +703,10 @@ if (parentPort) {
                       }
                     }
                   }
+                } catch (error) {
+                  // Failed disposal of an unpublished or unadopted generation escapes the task.
+                  contexts.recordCleanupFailure(admission.owner, error);
+                  throw error;
                 } finally {
                   // Disposal retains the request's source and credential scopes;
                   // successful cleanup can publish credential commits of its own.

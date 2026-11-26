@@ -61,6 +61,7 @@ describe("Gateway catalog worker agent database readers", () => {
         retirePreparedModelRuntimeAgent({
           agentId: fixture.agentIds[0]!,
           agentDirs: [path.dirname(deleted!)],
+          deleted: true,
         });
       if (workspaces === "shared") {
         const retirement = createDeferredCore();

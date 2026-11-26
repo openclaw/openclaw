@@ -45,7 +45,27 @@ it("notifies catalog retirement even when no parent owner remains", async () => 
   const retire = vi.spyOn(catalogWorker, "retirePreparedModelCatalogAgent").mockResolvedValue();
   try {
     expect(mocks.createPreparedModelCatalogWorker).not.toHaveBeenCalled();
-    await retirePreparedModelRuntimeAgent({ agentId: "DELETED", agentDirs: [agentDir] });
+    const target = { agentId: "DELETED", agentDirs: [agentDir] };
+    await retirePreparedModelRuntimeAgent(target);
+    expect(retire).not.toHaveBeenCalled();
+    await withAgentDeletion(
+      "deleted",
+      async (begin) => {
+        const deletion = await begin({
+          agentId: "deleted",
+          agentDir,
+          workspaceDir: fixture.state.workspaceDir,
+          sessionsDir: fixture.state.sessionsDir("deleted"),
+          deleteFiles: false,
+        });
+        try {
+          await retireAgentDeleteRuntime(deletion, [agentDir]);
+        } finally {
+          await deletion.rollback();
+        }
+      },
+      { env: fixture.state.env },
+    );
     expect(retire).toHaveBeenCalledExactlyOnceWith(
       "deleted",
       new Set([normalizeAgentDirRegistryPath(agentDir)]),

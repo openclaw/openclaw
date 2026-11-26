@@ -134,7 +134,10 @@ export async function retirePreparedModelCatalogAgent(
   agentDirs: ReadonlySet<string>,
 ): Promise<void> {
   const pool = gatewayCatalog.current?.pool;
-  if (!pool || pool.isClosed) {
+  if (!pool) return;
+  if (pool.isClosed) {
+    // Closing fences admission before the worker and its native resources have exited.
+    await pool.close();
     return;
   }
   // Queued tasks reread this map at dispatch; old replies cannot acknowledge an evicted context.

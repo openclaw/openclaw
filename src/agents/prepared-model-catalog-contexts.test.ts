@@ -1,5 +1,9 @@
 import { expect, it, vi } from "vitest";
 import {
+  PluginRuntimeCloseCompletedError,
+  PluginRuntimeCloseRetainedError,
+} from "../plugins/runtime-close-error.js";
+import {
   decodePreparedCatalogRetirement,
   encodePreparedCatalogRetirement,
   preparedCatalogOwnerKey,
@@ -112,7 +116,7 @@ it("joins every detached replacement and exposes cleanup failure to the retireme
   const admitted = contexts.begin(identity("workspace", "replacement"), first);
   const next = generation();
   contexts.publish(admitted, next);
-  const failure = new Error("release failed");
+  const failure = new PluginRuntimeCloseRetainedError(new Error("release failed"));
   previous.release.mockRejectedValue(failure);
   const releaseNext = Promise.withResolvers<void>();
   next.release.mockImplementation(() => releaseNext.promise);
@@ -123,8 +127,45 @@ it("joins every detached replacement and exposes cleanup failure to the retireme
   expect(finished).not.toHaveBeenCalled();
   releaseNext.resolve();
   await Promise.all([finishing, retirement]);
+  await expect(contexts.retire([first])).rejects.toBe(failure);
   expect(previous.release).toHaveBeenCalledOnce();
   expect(next.release).toHaveBeenCalledOnce();
+});
+
+it.each(["idle", "unpublished"] as const)(
+  "preserves %s cleanup failures on a deletion retry",
+  async (mode) => {
+    const contexts = new PreparedCatalogContexts<TestGeneration>();
+    const prepared = mode === "idle" ? await seed(contexts, first) : generation();
+    const active = mode === "unpublished" ? contexts.begin(identity(), first) : undefined;
+    const cleanup = Promise.withResolvers<void>();
+    const failure = new PluginRuntimeCloseRetainedError(new Error("native cleanup retained"));
+    prepared.release.mockImplementation(() => cleanup.promise);
+    const retirement = expect(contexts.retire([first])).rejects.toBe(failure);
+    const duplicate = expect(contexts.retire([first])).rejects.toBe(failure);
+    const release =
+      active &&
+      prepared
+        .release()
+        .catch((error: unknown) => contexts.recordCleanupFailure(active.owner, error));
+    cleanup.reject(failure);
+    await release;
+    if (active) await contexts.finish(active);
+    await Promise.all([retirement, duplicate]);
+    await expect(contexts.retire([first])).rejects.toBe(failure);
+    await contexts.retire([elsewhere]);
+    expect(prepared.release).toHaveBeenCalledOnce();
+  },
+);
+
+it("observes completed disposal faults without fencing a subsequent deletion", async () => {
+  const contexts = new PreparedCatalogContexts<TestGeneration>();
+  const prepared = await seed(contexts, first);
+  const failure = new PluginRuntimeCloseCompletedError([], "callback failed after cleanup");
+  prepared.release.mockRejectedValue(failure);
+  await expect(contexts.retire([first])).rejects.toBe(failure);
+  await contexts.retire([first]);
+  expect(prepared.release).toHaveBeenCalledOnce();
 });
 
 it("releases failed replacements once and permits the same identity to be recreated", async () => {

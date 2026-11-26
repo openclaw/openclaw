@@ -90,7 +90,7 @@ vi.mock("./prepared-model-catalog-worker.pool.js", () => ({
     }
     async close() {
       this.isClosed = true;
-      transport.close();
+      await transport.close();
     }
     startCloseResources(key: string) {
       return { result: transport.closeResources(key) };
@@ -111,20 +111,21 @@ afterEach(async () => {
   transport.enqueued.mockReset();
 });
 
+const success: PreparedModelWorkerResult = {
+  status: "ok",
+  kind: "auth-refresh",
+  authStore: { version: 1, profiles: {} },
+  authModes: {},
+  credentials: {},
+  authCredentials: [],
+};
+
 it("re-reads acknowledgements at dispatch and rejects a pre-retirement reply's acknowledgement", async () => {
   const { worker, createWorker } = fixture({ gatewayOwned: true });
   const survivor = createWorker();
   const firstEntered = createDeferredCore();
   const nextQueued = createDeferredCore();
   const first = createDeferredCore<PreparedModelWorkerResult>();
-  const success: PreparedModelWorkerResult = {
-    status: "ok",
-    kind: "auth-refresh",
-    authStore: { version: 1, profiles: {} },
-    authModes: {},
-    credentials: {},
-    authCredentials: [],
-  };
   transport.enqueued.mockImplementationOnce(() => {}).mockImplementationOnce(nextQueued.resolve);
   transport.run
     .mockImplementationOnce(() => {
@@ -150,6 +151,33 @@ it("re-reads acknowledgements at dispatch and rejects a pre-retirement reply's a
     first.resolve(success);
     await Promise.allSettled([initial, ...(queued ? [queued] : [])]);
   }
+});
+
+it("waits for physical worker shutdown before acknowledging agent deletion", async () => {
+  const { worker } = fixture({ gatewayOwned: true });
+  transport.run.mockResolvedValue(success);
+  await worker.loadAuth({ providerIds: [] });
+  const closing = createDeferredCore();
+  const released = createDeferredCore();
+  transport.close.mockImplementation(() => {
+    closing.resolve();
+    return released.promise;
+  });
+  const shutdown = closePreparedModelRuntimeSnapshots();
+  await closing.promise;
+  const completed = vi.fn();
+  const retirement = retirePreparedModelCatalogAgent(
+    "deleted",
+    new Set(["/synthetic/deleted"]),
+  ).then(completed);
+  try {
+    await Promise.resolve();
+    expect(completed).not.toHaveBeenCalled();
+  } finally {
+    released.resolve();
+    await Promise.all([shutdown, retirement]);
+  }
+  expect(completed).toHaveBeenCalledOnce();
 });
 
 function fixture(options: { gatewayOwned?: true; isCurrent?: () => boolean } = {}) {

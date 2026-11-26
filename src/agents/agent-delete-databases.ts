@@ -95,7 +95,7 @@ export async function retireAgentDeleteRuntime(
   const agentId = deletion.entry.agentId;
   const { retirePreparedModelRuntimeAgent } = await import("./prepared-model-runtime.js");
   await deletion.assertCurrentAsync();
-  await retirePreparedModelRuntimeAgent({ agentId, agentDirs });
+  await retirePreparedModelRuntimeAgent({ agentId, agentDirs, deleted: true });
   await deletion.assertCurrentAsync();
 }
 

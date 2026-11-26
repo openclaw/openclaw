@@ -1,4 +1,5 @@
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
+import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import type { PreparedModelCatalogWorkerTask } from "./prepared-model-catalog-worker.types.js";
 
 const RETIREMENT_PREFIX = "openclaw:catalog-agent-retirement:";
@@ -43,6 +44,8 @@ type Admission<T> = {
 export class PreparedCatalogContexts<T extends Generation> {
   private readonly contexts = new Map<string | undefined, CatalogContext<T>>();
   private active?: Admission<T>;
+  private readonly retiring = new Map<string, Promise<void>>();
+  private readonly cleanupFailures = new Map<string, unknown>();
 
   get(workspaceDir: string | undefined) {
     return this.contexts.get(workspaceDir);
@@ -95,18 +98,45 @@ export class PreparedCatalogContexts<T extends Generation> {
     }
   }
 
+  recordCleanupFailure(owner: string | undefined, error: unknown): void {
+    // Plugin lifetimes keep native prerequisites after a retained close failure.
+    // Keep the first failure visible to deletion until this physical worker exits.
+    if (
+      owner !== undefined &&
+      !this.cleanupFailures.has(owner) &&
+      hasRetainedPluginRuntimeCloseError(error)
+    ) {
+      this.cleanupFailures.set(owner, error);
+    }
+  }
+
   async retire(owners: readonly string[]): Promise<void> {
-    const retiring = new Set(owners);
+    const results = await Promise.allSettled(
+      owners.map((owner) => {
+        const pending = this.retiring.get(owner);
+        if (pending) return pending;
+        const retirement = this.retireOwner(owner)
+          .catch((error: unknown) => {
+            this.recordCleanupFailure(owner, error);
+            throw error;
+          })
+          .finally(() => this.retiring.delete(owner));
+        this.retiring.set(owner, retirement);
+        return retirement;
+      }),
+    );
+    throwIfSettledRejected(results, "Catalog retirement failed");
+  }
+
+  private async retireOwner(owner: string): Promise<void> {
     const active = this.active;
-    if (active?.owner !== undefined && retiring.has(active.owner)) {
+    if (active?.owner === owner) {
       active.retired = true;
     }
     const releases: Promise<void>[] = [];
-    let joinsActive = active?.retired === true;
+    let joinsActive = active?.owner === owner;
     for (const [workspace, context] of this.contexts) {
-      for (const owner of retiring) {
-        context.owners.delete(owner);
-      }
+      context.owners.delete(owner);
       if (context.owners.size || context.unknownOwner) {
         continue;
       }
@@ -123,6 +153,7 @@ export class PreparedCatalogContexts<T extends Generation> {
       releases.push((active.settled ??= Promise.withResolvers<void>()).promise);
     }
     throwIfSettledRejected(await Promise.allSettled(releases), "Catalog retirement failed");
+    if (this.cleanupFailures.has(owner)) throw this.cleanupFailures.get(owner);
   }
 
   async finish(admission: Admission<T>): Promise<void> {
@@ -150,6 +181,7 @@ export class PreparedCatalogContexts<T extends Generation> {
       throwIfSettledRejected(results, "Catalog cleanup failed");
       admission.settled?.resolve();
     } catch (error) {
+      this.recordCleanupFailure(admission.owner, error);
       admission.settled?.reject(error);
       throw error;
     } finally {
