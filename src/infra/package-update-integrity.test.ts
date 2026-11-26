@@ -12,10 +12,10 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 const SETTLED_TIME = new Date(1_700_000_000_000);
-// A substitution also changes its parent directory. Sweep reads run in
-// batches, so either may be observed first; both are strict stat refusals.
-const SUBSTITUTION_REFUSAL =
-  /entry="dist(?:\/entry\.js)?"; changes=\{"(?:ino|mtimeNs)"[^;]*\}(?!; \w+ changed)/u;
+// A substitution also changes its parent directory, and a new directory can
+// reuse the inode. Sweep reads run in batches, so either entry may refuse
+// first; both are strict stat refusals, not a re-read of contents.
+const SUBSTITUTION_REFUSAL = /entry="dist(?:\/entry\.js)?"; changes=\{[^;]*\} Drift:/u;
 
 async function writeDriftPackage(root: string) {
   await fs.writeFile(path.join(root, "package.json"), '{"version":"1.0.0"}');
