@@ -288,7 +288,9 @@ name. Explicit worktree names are preserved, and typing never creates a worktree
 or runs setup.
 
 If automatic naming fails after submission, no name is saved. The sidebar shows a
-shortened version of the first message, and the next message tries naming again.
+shortened version of the first message and keeps it visible during the next naming
+attempt. Sending a message affects the **Last updated** order; changing the title
+does not.
 If the first message has no text, such as an image alone, the sidebar shows the
 session's worktree checkout or "New session". New worktree branches use the saved
 session title when available, or a two-word crustacean-themed name if naming fails

@@ -561,9 +561,11 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
           expect(JSON.parse(sourceMessage!.content), name).toEqual({
             conversationLabelSource: source,
           });
-          // Unusable output saves nothing; clients keep showing the first message.
+          // Neither a generated title nor a failed attempt moves the session in recents.
+          expect(persisted?.updatedAt, name).toBe(entry.updatedAt);
           expect(persisted?.displayName, name).toBe(title ?? undefined);
           if (title === null) {
+            expect(persisted?.titleFallbackReady, name).toBe(true);
             continue;
           }
           expect(deriveSessionTitle(persisted), name).toBe(title);

@@ -487,11 +487,13 @@ export function present(
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;
   // Naming belongs to the in-flight owner, not persisted or materialized row state.
-  row.titlePending = sessionTitleRequests.isPending({
-    storePath: record.storeTarget.storePath,
-    sessionKey: record.key,
-    sessionId: record.entry.sessionId,
-  });
+  row.titlePending =
+    !record.entry.titleFallbackReady &&
+    sessionTitleRequests.isPending({
+      storePath: record.storeTarget.storePath,
+      sessionKey: record.key,
+      sessionId: record.entry.sessionId,
+    });
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;

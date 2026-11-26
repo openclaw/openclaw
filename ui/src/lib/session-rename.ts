@@ -1,16 +1,20 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { isSessionTitlePending } from "./session-display.ts";
 import { parseAgentSessionKey } from "./sessions/session-key.ts";
 
 export function resolveSessionRenameValue(
-  row: Pick<GatewaySessionRow, "key" | "label" | "displayName" | "derivedTitle">,
+  row: Pick<GatewaySessionRow, "key" | "label" | "displayName" | "derivedTitle" | "titlePending">,
 ): string {
   const label = normalizeOptionalString(row.label);
+  if (label || isSessionTitlePending(row.key, row)) {
+    return label ?? "";
+  }
   // Dashboard titles are editable session text; channel/account decoration is not.
   const generatedTitle = parseAgentSessionKey(row.key)?.rest.startsWith("dashboard:")
     ? (normalizeOptionalString(row.displayName) ?? normalizeOptionalString(row.derivedTitle))
     : undefined;
-  return label ?? generatedTitle ?? "";
+  return generatedTitle ?? "";
 }
 
 export function resolveSessionRenamePatch(

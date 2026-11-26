@@ -359,7 +359,7 @@ async function generateDashboardSessionTitle(params: {
   if (title) {
     return title;
   }
-  // Save nothing: clients show the first message, and the next message retries.
+  // No generated name: clients show the first message, and the next message retries.
   // Saved titles also name worktree branches, so a raw prompt never becomes one.
   params.onFallback?.();
   return null;
@@ -491,9 +491,9 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       : false;
   }
 
-  const finish = async (generation: Promise<string | null>) => {
+  const finish = async (generation: Promise<string | null>, fallbackReady: boolean) => {
     const displayName = await generation;
-    if (!displayName) {
+    if (!displayName && fallbackReady) {
       return false;
     }
     const persist = async (assertSourceCurrent?: SessionSourceAssertion) => {
@@ -512,10 +512,16 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
           if (current.sessionId !== params.sessionId || hasExplicitSessionName(current)) {
             return null;
           }
+          if (!displayName) {
+            // Record the outcome, never the prompt or a synthetic branch name.
+            return current.titleFallbackReady ? null : { titleFallbackReady: true };
+          }
           persisted = true;
           return { displayName };
         },
         {
+          // Naming is metadata, not activity that should reorder the sidebar.
+          preserveActivity: true,
           requireWriteSuccess: true,
           ...sessionEntryCommitGuardOptions(assertCommitAllowed),
         },
@@ -583,7 +589,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     const withSource = params.withSource;
     if (!withSource) {
       params.commitGuard?.();
-      return await finish(generate());
+      return await finish(generate(), entry.titleFallbackReady === true);
     }
     return await runWithAsyncWorkResources(
       async () => {
@@ -598,7 +604,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
           void completion.catch(() => undefined);
           return { completion };
         });
-        return await finish(pending.completion);
+        return await finish(pending.completion, entry.titleFallbackReady === true);
       },
       { cancelOnError: true },
     );

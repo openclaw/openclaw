@@ -158,21 +158,17 @@ type SessionDisplayRow = {
   label?: string;
   displayName?: string;
   derivedTitle?: string;
+  titlePending?: boolean;
   /** Canonical account projected from the delivery route by the Gateway. */
   accountId?: string;
 } & SessionWorktreeDisplayRow;
 
 /** Naming has a separate lifetime from the first reply; a usable name always wins. */
-export function isSessionTitlePending(
-  key: string,
-  row?: SessionDisplayRow & { titlePending?: boolean },
-): boolean {
+export function isSessionTitlePending(key: string, row?: SessionDisplayRow): boolean {
   return (
     /^agent:[^:]+:dashboard:/.test(key) &&
     row?.titlePending === true &&
-    ![row.label, row.displayName, row.derivedTitle].some(
-      (name) => name?.trim() && name.trim() !== key,
-    )
+    ![row.label, row.displayName].some((name) => name?.trim() && name.trim() !== key)
   );
 }
 
@@ -300,7 +296,7 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
     name = applyTypedPrefix(label);
   } else if (displayName && displayName !== key) {
     name = applyTypedPrefix(displayName);
-  } else if (derivedTitle && derivedTitle !== key) {
+  } else if (derivedTitle && derivedTitle !== key && !isSessionTitlePending(key, row)) {
     // The first message names the conversation better than its checkout.
     name = applyTypedPrefix(derivedTitle);
   } else {

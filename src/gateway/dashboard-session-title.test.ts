@@ -303,8 +303,8 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       }
       await expect(pending).resolves.toBe(false);
       if (outcome === "unavailable") {
-        // Nothing is saved, so clients keep showing the first message and a later send retries.
-        expect(mocks.patch).not.toHaveBeenCalled();
+        // A later send can retry without hiding the already released fallback.
+        expect(mocks.load().titleFallbackReady).toBe(true);
         expect(mocks.load().displayName).toBeUndefined();
         expect(onFallback).toHaveBeenCalledOnce();
       } else {
@@ -357,7 +357,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
         outcome !== "fallback" ? "Release Planning" : undefined,
       );
       expect(onTitleStateChanged).toHaveBeenCalledTimes(backgroundFirst ? 0 : 2);
-      expectCalls(outcome !== "fallback" ? 1 : 0, mocks.patch);
+      expectCalls(1, mocks.patch);
       // A dashboard request that joined a failed title retries it once.
       expectCalls(outcome !== "fallback" ? 1 : 2, mocks.generate);
     },

@@ -491,6 +491,12 @@ div.chat-thread:where(.chat-thread--annotations) {
     justify-self: stretch;
   }
 
+  /* The adjacent menu appears at the settled title, never beside its temporary bar. */
+  &:has(.chat-pane__session-title-text > .session-title-placeholder)
+    .chat-header-session-menu__trigger {
+    visibility: hidden;
+  }
+
   & .chat-pane__identity-actions {
     display: flex;
     flex: 0 0 auto;
