@@ -32,7 +32,10 @@ import {
   getGatewayRestartDrainSignal,
   runWithGatewayDetachedWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { SESSION_FORK_SOURCE_TOOL } from "../sessions/input-provenance.js";
+import {
+  isCompletionReportInputProvenance,
+  SESSION_FORK_SOURCE_TOOL,
+} from "../sessions/input-provenance.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import {
   createOperationalRunInstanceRef,
@@ -122,6 +125,8 @@ export async function readSessionForkTurn(
   signal?: AbortSignal,
 ): Promise<SessionForkTurn | undefined> {
   let model: SessionForkTurn["model"];
+  let report: Pick<SessionForkTurn, "requester"> | undefined;
+  const reportSenders: string[] = [];
   const sessionManager = await SessionManager.openModelContextAsync(source, {
     through: source,
     limits: FORK_TURN_SEARCH_LIMITS,
@@ -154,9 +159,26 @@ export async function readSessionForkTurn(
       continue;
     }
     const requester = readSessionForkRequesterFromTurn(meta);
+    // A completion report delivers work an earlier turn started; that turn's requester asked.
+    // Only reports the host's delivery wrote qualify: callers may send the same provenance.
+    if (
+      meta?.hostCompletion === true &&
+      isCompletionReportInputProvenance(Reflect.get(message, "provenance"))
+    ) {
+      report ??= requester ? { requester } : {};
+      if (requester?.senderId) {
+        reportSenders.push(requester.senderId);
+      }
+      continue;
+    }
+    // A report that names another sender stays that sender's input.
+    if (report && reportSenders.some((sender) => sender !== requester?.senderId)) {
+      return { ...report, ...(model ? { model } : {}) };
+    }
     return { ...(requester ? { requester } : {}), ...(model ? { model } : {}) };
   }
-  return undefined;
+  // No earlier input in the window: the report's own facts.
+  return report && { ...report, ...(model ? { model } : {}) };
 }
 
 /**

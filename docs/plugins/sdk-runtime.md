@@ -218,7 +218,11 @@ bundled plugins). The caller must also have the target session's `sessions.get`
 read access. That authority, the Gateway binding and conversation access remain
 live through the run and its settlement. Tool policy is checked as the anchored
 turn's requester: the sender, owner flag, group and channel that the turn's
-stored user message recorded. Plugins cannot supply requester facts.
+stored user message recorded. Plugins cannot supply requester facts. A completion
+report that OpenClaw delivered from a subagent, an agent harness task or a media
+generation task is not a new request: the fork uses the requester of the turn
+before it. A report sent through the `agent` method by a client is that client's
+own input.
 
 A session whose model runs on a subscription login that a CLI backend owns (for
 example `claude-cli` with a Claude login or Claude subscription token) forks

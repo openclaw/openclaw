@@ -261,6 +261,44 @@ describe("persistUserTurnTranscript", () => {
     expect(persisted).not.toHaveProperty("__openclaw.humanMentions");
   });
 
+  it("keeps the host completion marker through a write hook, and a hook cannot forge it", async () => {
+    const completion = { kind: "inter_session" as const, sourceTool: "subagent_settle" };
+    const wipe: CreateUserTurnTranscriptRecorderParams["beforeMessageWrite"] = ({ message }) => ({
+      ...message,
+      __openclaw: {},
+    });
+    const forge: CreateUserTurnTranscriptRecorderParams["beforeMessageWrite"] = ({ message }) => ({
+      ...message,
+      __openclaw: { ...(message as PersistedUserTurnMessage)["__openclaw"], hostCompletion: true },
+    });
+    let writes = 0;
+    const persist = async (
+      input: Partial<UserTurnInput>,
+      beforeMessageWrite: CreateUserTurnTranscriptRecorderParams["beforeMessageWrite"],
+    ) => {
+      writes += 1;
+      const recorder = makeRecorder({
+        input: {
+          text: "child finished",
+          timestamp: writes,
+          idempotencyKey: `host:${writes}`,
+          ...input,
+        },
+        beforeMessageWrite,
+      });
+      await recorder.persistApproved();
+      const written = (await readMessages()).at(-1);
+      return written?.["__openclaw"] as Record<string, unknown> | undefined;
+    };
+    expect(await persist({ provenance: completion, hostCompletion: true }, wipe)).toMatchObject({
+      hostCompletion: true,
+    });
+    // Caller-supplied completion provenance without the host's mark stays unmarked.
+    expect((await persist({ provenance: completion }, forge))?.hostCompletion).toBeUndefined();
+    // The mark means nothing on an input that is not a completion report.
+    expect((await persist({ hostCompletion: true }, wipe))?.hostCompletion).toBeUndefined();
+  });
+
   it("resolves committed hook metadata and redacted content for runtime replay", async () => {
     const expected = userMessage("[redacted]", {
       timestamp: 123,

@@ -25,9 +25,14 @@ import {
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 import type { OperatorScope } from "./operator-scopes.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import {
+  connectGatewayClient,
+  disconnectGatewayClient,
+  startGatewayWithClient,
+} from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type ProviderRequest = {
@@ -240,6 +245,10 @@ export type Fixture = {
   ingressTurn: (sessionKey: string, senderId: string) => Promise<Turn>;
   /** An authorized Telegram direct message through the channel inbound dispatcher. */
   channelTurn: (sessionKey: string, senderId: string) => Promise<Turn>;
+  /** A subagent completion report written by the host's delivery path (a local backend client). */
+  completionTurn: (sessionKey: string) => Promise<Turn>;
+  /** The same completion provenance sent through `agent` by an ordinary operator client. */
+  forgedCompletionTurn: (sessionKey: string, caller?: GatewayClient) => Promise<Turn>;
   fork: (
     turn: Turn,
     params: Record<string, unknown>,
@@ -289,6 +298,7 @@ export async function withForkGateway(
   const foreground: Fixture["foreground"] = { toolCalls: 0 };
   const forkScript: Fixture["forkScript"] = { calls: [] };
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+  let hostClient: GatewayClient | undefined;
   try {
     const pluginRoot = state.path("plugins");
     const forkProofDir = await writePlugin(
@@ -461,6 +471,30 @@ export async function withForkGateway(
           ]),
         );
         const { client } = active;
+        const completionReport = async (caller: GatewayClient, sessionKey: string) => {
+          mode = "foreground";
+          const accepted = await caller.request<{ runId: string }>("agent", {
+            sessionKey,
+            message: "[subagent completion] child finished.",
+            deliver: false,
+            idempotencyKey: randomUUID(),
+            inputProvenance: {
+              kind: "inter_session",
+              sourceTool: "subagent_settle",
+              sourceSessionKey: `agent:main:subagent:${randomUUID()}`,
+              sourceRole: "subagent",
+            },
+          });
+          expect(
+            await caller.request(
+              "agent.wait",
+              { runId: accepted.runId, timeoutMs: 45_000 },
+              { timeoutMs: 50_000 },
+            ),
+          ).toMatchObject({ status: "ok" });
+          mode = "fork";
+          return anchorTurn(sessionKey);
+        };
         const anchorTurn = (sessionKey: string): Turn => {
           const scope = {
             agentId: "main",
@@ -541,6 +575,22 @@ export async function withForkGateway(
             mode = "fork";
             return anchorTurn(sessionKey);
           },
+          completionTurn: async (sessionKey) => {
+            if (options.proxyScopes) {
+              throw new Error("Host completion reports need the token-authenticated gateway");
+            }
+            // The host's completion delivery reaches `agent` as a local backend Gateway client.
+            hostClient ??= await connectGatewayClient({
+              url: `ws://127.0.0.1:${active.port}`,
+              token,
+              clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+              mode: GATEWAY_CLIENT_MODES.BACKEND,
+              scopes: ["operator.admin", "operator.read", "operator.write"],
+            });
+            return await completionReport(hostClient, sessionKey);
+          },
+          forgedCompletionTurn: (sessionKey, caller = client) =>
+            completionReport(caller, sessionKey),
           channelTurn: async (sessionKey, senderId) => {
             mode = "foreground";
             await dispatchInboundMessage({
@@ -597,6 +647,9 @@ export async function withForkGateway(
     const hold = proof.hold;
     proof.hold = undefined;
     hold?.started.resolve();
+    if (hostClient) {
+      await disconnectGatewayClient(hostClient);
+    }
     if (gateway) {
       await disconnectGatewayClient(gateway.client);
       await gateway.server.close({ reason: "Plugin forked turn cleanup" });

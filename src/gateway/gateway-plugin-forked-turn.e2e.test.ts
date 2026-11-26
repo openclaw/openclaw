@@ -596,6 +596,19 @@ describe("plugin forked turns through the real Gateway", () => {
             result: { status: "refused", reason: "tool_policy" },
           });
 
+          // A completion report with no earlier input keeps its own facts; the fork still runs.
+          const reportOnly = await storedTurn([
+            {
+              role: "user",
+              content: "[subagent completion] child finished.",
+              timestamp: 1,
+              provenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+              __openclaw: { senderIsOwner: false },
+            },
+            assistant("Noted"),
+          ]);
+          await expect(fixture.fork(reportOnly, {})).resolves.toMatchObject({ ok: true });
+
           // No input for the turn: refuse rather than guess the requester.
           const orphan = await storedTurn([assistant("Orphan reply")]);
           await expect(fixture.fork(orphan, {})).resolves.toMatchObject({

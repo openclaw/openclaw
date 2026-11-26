@@ -835,3 +835,65 @@ it("shows a fork a still-running tool call as pending without writing the source
     });
   });
 });
+
+it("reads past only host-marked completion reports to the turn that started the work", async () => {
+  const report = (meta: Record<string, unknown>, sourceTool = "subagent_settle") => ({
+    role: "user",
+    content: "[subagent completion] child finished.",
+    timestamp: 2,
+    provenance: { kind: "inter_session", sourceTool },
+    __openclaw: { senderIsOwner: false, ...meta },
+  });
+  const cases: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+    // The host's own delivery: the fork runs as the owner whose turn started the child.
+    ["host-report", report({ hostCompletion: true }), { senderIsOwner: true, senderId: "owner-1" }],
+    // A caller can send completion provenance, but never the host marker.
+    ["unmarked-report", report({}), { senderIsOwner: false }],
+    ["unmarked-media-report", report({}, "image_generate"), { senderIsOwner: false }],
+    // A marked report that names another sender stays that sender's input.
+    [
+      "host-report-other-sender",
+      report({ hostCompletion: true, senderId: "other-9" }),
+      { senderIsOwner: false, senderId: "other-9" },
+    ],
+  ];
+  for (const [label, row, requester] of cases) {
+    await withSessionState(`fork-turn-${label}`, async ({ scope }) => {
+      const source = SessionManager.open(scope);
+      // SAFETY: fixtures follow the stored user-turn shape the transcript owner accepts.
+      source.appendMessage({
+        role: "user",
+        content: "Owner message",
+        timestamp: 1,
+        __openclaw: { senderIsOwner: true, senderId: "owner-1" },
+      } as never);
+      source.appendMessage(makeAgentAssistantMessage({ content: [{ type: "text", text: "ok" }] }));
+      source.appendMessage(row as never);
+      const { anchor } = await source.appendMessageWithTranscriptAnchorAsync(
+        makeAgentAssistantMessage({ content: [{ type: "text", text: "noted" }], timestamp: 3 }),
+      );
+      expect((await readSessionForkTurn(anchor!))?.requester, label).toEqual(requester);
+    });
+  }
+});
+
+it("keeps a lone host completion report's own facts when no earlier input is in the window", async () => {
+  await withSessionState("fork-turn-report-only", async ({ scope }) => {
+    const source = SessionManager.open(scope);
+    // SAFETY: fixtures follow the stored user-turn shape the transcript owner accepts.
+    source.appendMessage({
+      role: "user",
+      content: "[subagent completion] child finished.",
+      timestamp: 1,
+      provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      __openclaw: { senderIsOwner: false, hostCompletion: true },
+    } as never);
+    const { anchor } = await source.appendMessageWithTranscriptAnchorAsync(
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "noted" }], timestamp: 2 }),
+    );
+    expect(await readSessionForkTurn(anchor!)).toEqual({
+      requester: { senderIsOwner: false },
+      model: { provider: "openai", model: "test-model" },
+    });
+  });
+});

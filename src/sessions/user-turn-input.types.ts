@@ -86,6 +86,11 @@ export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeF
   /** Bounded display fallback for replies whose target is outside loaded history. */
   replyToPreview?: { text: string; senderLabel?: string | null } | null;
   senderIsOwner?: boolean;
+  /**
+   * The host's own completion delivery wrote this completion report; caller-supplied
+   * provenance never sets it. Session forks read past only these reports.
+   */
+  hostCompletion?: true;
   /** Host-captured requester facts; recovery still requires exact accepted-input custody. */
   requesterOrigin?: RequesterOrigin;
   provenance?: InputProvenance;

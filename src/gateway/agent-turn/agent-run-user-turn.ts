@@ -364,6 +364,11 @@ export async function prepareAgentRunUserTurn(params: {
         idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
         ...senderFields,
         senderIsOwner: params.senderIsOwner,
+        // Public callers may still send completion provenance; only the host's delivery marks it.
+        ...(params.canUseInternalRuntimeHandoff &&
+        isCompletionReportInputProvenance(params.inputProvenance)
+          ? { hostCompletion: true as const }
+          : {}),
         requesterOrigin,
         ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
         ...(media.length > 0 ? { media } : {}),
