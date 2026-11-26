@@ -16,10 +16,11 @@ import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { buildContextReply, formatContextBudget } from "./commands-context-report.js";
+import { buildContextReply } from "./commands-context-report.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { commandFixture } from "./commands-handler-fixture.test-support.js";
 import type * as CostRuntime from "./commands-session-cost.runtime.js";
+import { loadCurrentSessionCostSummary } from "./commands-session-cost.runtime.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -27,7 +28,9 @@ import { buildTestCtx } from "./test-ctx.js";
 // The `/usage cost` reader has its own suite; here the card only formats what it returns.
 vi.mock("./commands-session-cost.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof CostRuntime>()),
-  loadCurrentSessionCostSummary: async () => null,
+  loadCurrentSessionCostSummary: vi.fn<typeof CostRuntime.loadCurrentSessionCostSummary>(
+    async () => null,
+  ),
 }));
 
 function makeParams(
@@ -348,8 +351,7 @@ describe("buildContextReply", () => {
     );
   });
 
-  it("shows latest-run and whole-session cache and cost like the Control UI", () => {
-    const sessionEntry = expectDefined(makeParams("/context", false).sessionEntry, "session entry");
+  it("shows latest-run and whole-session cache and cost like the Control UI", async () => {
     const usage = (overrides: Partial<SessionCostSummary>): SessionCostSummary => ({
       input: 500,
       output: 0,
@@ -380,43 +382,45 @@ describe("buildContextReply", () => {
       call({ input: 500, cacheRead: 0, cacheTelemetry: { state: "unavailable" } }),
       call({ input: 100, cacheRead: 900, cacheWrite: 0 }),
     ];
-    const lines = (sessionUsage: SessionCostSummary | null) =>
-      formatContextBudget({
-        report: expectDefined(sessionEntry.systemPromptReport, "system prompt report"),
-        used: 4_000,
-        limit: 8_192,
-        entry: { ...sessionEntry, estimatedCostUsd: 0.306 },
-        recentMessages,
-        sessionUsage,
-      })
-        .split("\n")
-        .filter((line) => /^(Latest run|Session total):/.test(line));
+    await withTranscript(recentMessages, async (target) => {
+      const params = makeParams("/context", false, {
+        contextTokens: 8_192,
+        totalTokens: 4_000,
+        ...target,
+      });
+      expectDefined(params.sessionEntry, "session entry").estimatedCostUsd = 0.306;
+      const lines = async (sessionUsage: SessionCostSummary | null) => {
+        vi.mocked(loadCurrentSessionCostSummary).mockResolvedValueOnce(sessionUsage);
+        const result = await buildContextReply(params);
+        return (result.text ?? "")
+          .split("\n")
+          .filter((line) => /^(Latest run|Session total):/.test(line));
+      };
 
-    expect(lines(usage({}))).toEqual([
-      "Latest run: 90.00% cache · $0.31",
-      "Session total: 90.00% cache · $154.52",
-    ]);
-    // A partly priced total is a lower bound; usage without any price is never $0.
-    expect(lines(usage({ missingCostEntries: 2 }))[1]).toBe(
-      "Session total: 90.00% cache · ≥ $154.52",
-    );
-    expect(lines(usage({ totalCost: 0, missingCostEntries: 3 }))[1]).toBe(
-      "Session total: 90.00% cache · unpriced",
-    );
-    // Calls without a cache split are left out of the rate, not counted as misses.
-    expect(lines(usage({ input: 10_500, cacheUnmeasuredInput: 10_000 }))[1]).toBe(
-      "Session total: 90.00% cache · $154.52",
-    );
-    expect(lines(null)).toEqual(["Latest run: 90.00% cache · $0.31"]);
+      expect(await lines(usage({}))).toEqual([
+        "Latest run: 90.00% cache · $0.31",
+        "Session total: 90.00% cache · $154.52",
+      ]);
+      // A partly priced total is a lower bound; usage without any price is never $0.
+      expect((await lines(usage({ missingCostEntries: 2 })))[1]).toBe(
+        "Session total: 90.00% cache · ≥ $154.52",
+      );
+      expect((await lines(usage({ totalCost: 0, missingCostEntries: 3 })))[1]).toBe(
+        "Session total: 90.00% cache · unpriced",
+      );
+      // Calls without a cache split are left out of the rate, not counted as misses.
+      expect((await lines(usage({ input: 10_500, cacheUnmeasuredInput: 10_000 })))[1]).toBe(
+        "Session total: 90.00% cache · $154.52",
+      );
+      expect(await lines(null)).toEqual(["Latest run: 90.00% cache · $0.31"]);
+    });
   });
 
-  it("keeps the budget bar at 20 cells when small categories take their minimum cell", () => {
-    const sessionEntry = expectDefined(makeParams("/context", false).sessionEntry, "session entry");
-    const bar = formatContextBudget({
-      report: expectDefined(sessionEntry.systemPromptReport, "system prompt report"),
-      used: 99_000,
-      limit: 100_000,
-    }).split("\n")[1];
+  it("keeps the budget bar at 20 cells when small categories take their minimum cell", async () => {
+    const result = await buildContextReply(
+      makeParams("/context", false, { contextTokens: 100_000, totalTokens: 99_000 }),
+    );
+    const bar = result.text?.split("\n")[1];
     expect(bar).toMatch(/^(?:🟦|🟧|🟩|🟨|🟪|⬜){20}$/u);
   });
 

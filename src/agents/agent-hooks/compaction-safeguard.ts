@@ -463,6 +463,12 @@ export async function executeCompactionSafeguard(
       streamFn,
       usageSink,
     };
+    const historySummaryParams = {
+      ...llmSummaryParams,
+      summaryPrompt: { kind: "custom", instructions: structuredInstructions } as const,
+      // The structured prompt already carries the configured identifier policy.
+      summarizationInstructions: { identifierPolicy: "off" } as const,
+    };
     const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
 
     const summaryFacts = prepared
@@ -510,10 +516,7 @@ export async function executeCompactionSafeguard(
         if (warmSummary) {
           try {
             historySummary = await warmSummary(
-              formatWarmCompactionSummaryInstructions({
-                ...llmSummaryParams,
-                summaryPrompt: { kind: "custom", instructions: structuredInstructions },
-              }),
+              formatWarmCompactionSummaryInstructions(historySummaryParams),
               signal,
             );
           } catch (error) {
@@ -527,15 +530,13 @@ export async function executeCompactionSafeguard(
             reconciliationCount > 0
               ? await (prepared
                   ? prepared.summarize("history", {
-                      ...llmSummaryParams,
-                      summaryPrompt: { kind: "custom", instructions: structuredInstructions },
+                      ...historySummaryParams,
                       customInstructions: correctiveInstructions,
                       previousSummary,
                     })
                   : compactionSafeguardDeps.summarizeCompactionHistory({
-                      ...llmSummaryParams,
+                      ...historySummaryParams,
                       messages: summaryFacts.reconciliationMessages,
-                      summaryPrompt: { kind: "custom", instructions: structuredInstructions },
                       customInstructions: correctiveInstructions,
                       previousSummary,
                     }))

@@ -293,7 +293,7 @@ Activation retains a full pre-repair copy of local state under
 `<state-dir>.update-captures/` the first time Doctor captures in a container.
 Later starts of the same container (`docker stop`/`docker start`, restart
 policies, host reboots) still run the Doctor repair pass but skip that repeated
-full copy, keep it, and still retire other Doctor copies older than 30 days;
+full copy, keep it, and still retire other superseded Doctor copies;
 repair-specific backups still apply. If a capture fails, the next
 start tries again. A new image, a recreated container, or a container whose
 `/tmp` does not persist across restarts captures again.

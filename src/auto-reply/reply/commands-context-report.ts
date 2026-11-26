@@ -84,7 +84,7 @@ const formatBudgetTokens = (tokens: number) =>
   formatCompactTokenCount(tokens, { trimTrailingZero: true });
 
 /** Text form of the Control UI prompt-budget popover, shared by every chat channel. */
-export function formatContextBudget(params: {
+function formatContextBudget(params: {
   report: SessionSystemPromptReport;
   used: number | null;
   limit: number | null;
