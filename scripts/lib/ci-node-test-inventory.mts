@@ -223,7 +223,7 @@ export function listNodeTestConfigFiles(config: string): string[] | undefined {
   return files;
 }
 
-/** Measurement-only ownership; adding it must not change runtime partitioning. */
+/** Effective measurement ownership; timer/isolated runtime exception checks also use it. */
 export function listNodeTestVolumeConfigFiles(config: string): string[] | undefined {
   if (config === "test/vitest/vitest.unit-fast.config.ts") {
     const excluded = new Set([...getUnitFastTimerTestFiles(), ...getUnitFastIsolatedTestFiles()]);
@@ -498,6 +498,12 @@ export const SCHEDULED_COVERAGE_EXCEPTIONS: Array<{
   {
     pattern: ".agents/skills/plugin-sdk-impact/scripts/*.test.mjs",
     owner: "Plugin SDK impact tooling",
+    reason:
+      "Standalone node:test skill self-tests have no scheduled runner and are not Vitest suites.",
+  },
+  {
+    pattern: ".agents/skills/openclaw-writing/scripts/*.test.mjs",
+    owner: "OpenClaw writing skill tooling",
     reason:
       "Standalone node:test skill self-tests have no scheduled runner and are not Vitest suites.",
   },

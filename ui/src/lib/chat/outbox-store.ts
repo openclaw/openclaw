@@ -71,14 +71,22 @@ export function notifyDraftPresence(
 export function clearStoredComposerDraftInput(session: {
   draft?: unknown;
   draftMentions?: unknown;
+  draftAttachmentVersion?: unknown;
   goalMode?: unknown;
   replyTarget?: unknown;
 }): boolean {
-  if (!session.draft && !session.draftMentions && !session.goalMode && !session.replyTarget) {
+  if (
+    !session.draft &&
+    !session.draftMentions &&
+    session.draftAttachmentVersion === undefined &&
+    !session.goalMode &&
+    !session.replyTarget
+  ) {
     return false;
   }
   delete session.draft;
   delete session.draftMentions;
+  delete session.draftAttachmentVersion;
   delete session.goalMode;
   delete session.replyTarget;
   return true;

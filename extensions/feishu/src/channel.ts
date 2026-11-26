@@ -42,7 +42,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { textResult } from "openclaw/plugin-sdk/tool-results";
+import { jsonResult as jsonActionResult } from "openclaw/plugin-sdk/tool-results";
 import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "../runtime-api.js";
 import {
   listFeishuAccountIds,
@@ -74,10 +74,10 @@ import { chunkFeishuMarkdown } from "./markdown.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
 import { describeFeishuMessageTool, isFeishuActionEnabled } from "./message-tool-discovery.js";
 import { readNativeFeishuCardJson } from "./native-card.js";
+import type { FeishuOutboundSendMedia } from "./outbound-types.js";
 import {
   FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER,
   resolveFeishuReplyMode,
-  type FeishuOutboundSendMedia,
 } from "./outbound.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import {
@@ -431,10 +431,6 @@ function normalizeFeishuAcpConversationId(conversationId: string) {
         ? parsed.chatId
         : undefined,
   };
-}
-
-function jsonActionResult(details: Record<string, unknown>) {
-  return textResult(JSON.stringify(details), details);
 }
 
 function readFirstString(
@@ -948,6 +944,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
               mediaLocalRoots: ctx.mediaLocalRoots,
               ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
+              filename: normalizeOptionalString(ctx.params.filename),
               ...(replyInThread ? { threadId: replyToMessageId } : { replyToId: replyToMessageId }),
             };
             let result;

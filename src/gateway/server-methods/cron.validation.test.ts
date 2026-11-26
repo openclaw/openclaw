@@ -325,7 +325,7 @@ describe("cron method validation", () => {
     ["cron.get", false, "channel-owner", true],
     ["cron.update", false, "channel-owner", false],
     ["cron.run", false, "channel-owner", true],
-    ["cron.remove", true, "control-ui-admin", true],
+    ["cron.remove", true, "operator", true],
   ] as const)(
     "%s manages a foreign automation (close after commit: %s, source: %s, trusted: %s)",
     async (method, closeAfterCommit, source, trusted) => {

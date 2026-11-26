@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { listNodeTestConfigFiles } from "../../scripts/lib/ci-node-test-inventory.mts";
+import * as inventories from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   ciTestShardRuntimes,
   filterCiTestRuntimeSelections,
@@ -11,6 +12,7 @@ import {
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "../vitest/vitest.unit-fast-fake-timers.config.ts";
+import { createUnitFastIsolatedVitestConfig } from "../vitest/vitest.unit-fast-isolated.config.ts";
 import { listMatchedTestFiles } from "./ci-node-test-plan.test-support.js";
 
 const nodeOnly = "src/cli/cli-process-diagnostics.test.ts";
@@ -19,16 +21,19 @@ const bothHosts = "src/infra/sqlite-schema-facts.physical-cache.test.ts";
 const bunEligible = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
 const config = "test/vitest/vitest.unit-fast.config.ts";
 const timerConfig = "test/vitest/vitest.unit-fast-fake-timers.config.ts";
+const isolatedConfig = "test/vitest/vitest.unit-fast-isolated.config.ts";
 const supportConfig = "test/vitest/vitest.agents-support.config.ts";
 
 describe("CI runtime job inventory", () => {
-  it.each([timerConfig, supportConfig])(
+  it.each([timerConfig, isolatedConfig, supportConfig])(
     "reuses complete %s ownership for accounting without per-exception planning",
     (ownerConfig) => {
       const inventory =
         ownerConfig === timerConfig
           ? listMatchedTestFiles(createUnitFastFakeTimersVitestConfig({}, { argv: [] }))
-          : listMatchedTestFiles(createAgentsSupportVitestConfig({}));
+          : ownerConfig === isolatedConfig
+            ? listMatchedTestFiles(createUnitFastIsolatedVitestConfig({}, { argv: [] }))
+            : listMatchedTestFiles(createAgentsSupportVitestConfig({}));
       expect(inventory.length).toBeGreaterThan(0);
       const planner = vi.spyOn(testProjects, "buildVitestRunPlans");
       onTestFinished(() => planner.mockRestore());
@@ -37,7 +42,11 @@ describe("CI runtime job inventory", () => {
         resolveCiTestRuntimeInventory(ownerConfig, inventory, {}, "bun-all", execution),
         "whole-config accounting",
       ).map((row) => expectDefined(row, "whole-config runtime row"));
-      expect(planner.mock.calls.length).toBeGreaterThan(0);
+      if (ownerConfig === supportConfig) {
+        expect(planner.mock.calls.length).toBeGreaterThan(0);
+      } else {
+        expect(planner.mock.calls.length).toBe(0);
+      }
       planner.mockClear();
       expect(
         resolveCiTestRuntimeInventory(ownerConfig, inventory, {}, "bun-all", execution, inventory),
@@ -66,6 +75,38 @@ describe("CI runtime job inventory", () => {
       expect(planner).not.toHaveBeenCalled();
     },
   );
+
+  it("preserves whole unit-fast runtime envelopes without per-exception planning", () => {
+    const planner = vi.spyOn(testProjects, "buildVitestRunPlans");
+    const volume = vi.spyOn(inventories, "listNodeTestVolumeConfigFiles");
+    onTestFinished(() => {
+      planner.mockRestore();
+      volume.mockRestore();
+    });
+    const selections = [
+      { configs: [timerConfig] },
+      { configs: [isolatedConfig] },
+      { configs: [timerConfig, isolatedConfig] },
+      { configs: [timerConfig, isolatedConfig], includePatterns: [nodeOnly, bothHosts] },
+      { configs: [isolatedConfig], targets: [nodeOnly] },
+      { configs: [timerConfig], vitestArgs: ["--maxWorkers=1"] },
+    ];
+    const cases = (["bun-all", "dual-all"] as const).flatMap((policy) =>
+      selections.map((selection) => ({ selection, policy })),
+    );
+    // With no effective inventory, the real general planner supplies the baseline.
+    volume.mockReturnValue(undefined);
+    const baseline = cases.map(({ selection, policy }) =>
+      resolveCiTestRuntimeSelections(selection, policy),
+    );
+    expect(planner.mock.calls.length).toBeGreaterThan(0);
+    volume.mockRestore();
+    planner.mockClear();
+    expect(
+      cases.map(({ selection, policy }) => resolveCiTestRuntimeSelections(selection, policy)),
+    ).toEqual(baseline);
+    expect(planner.mock.calls.length).toBe(0);
+  });
 
   it("retains fallback for an unresolved sibling of a qualified accounting owner", () => {
     const inventory = listMatchedTestFiles(createUnitFastFakeTimersVitestConfig({}, { argv: [] }));
@@ -134,7 +175,13 @@ describe("CI runtime job inventory", () => {
   it.each([
     [nodeOnly, bothHosts],
     [nodeOnly, "test/scripts/vitest-pair-benchmark.test.ts"],
+    [nodeOnly, "test/scripts/node-cache-disabled-control.test.ts"],
+    [nodeOnly, "test/scripts/node-cache-qualification.test.ts"],
+    [nodeOnly, "test/vitest-performance-config.test.ts"],
     [gitRelease, bothHosts],
+    ["test/scripts/upgrade-survivor-sqlite-observer.test.ts", bothHosts],
+    ["test/scripts/upgrade-survivor-bulk-access.test.ts", bothHosts],
+    ["test/scripts/upgrade-survivor-migration-chain.test.ts", bothHosts],
   ])(
     "keeps Node-only %s and both-host %s coverage in a mixed bun-all group",
     (nodeContract, bothHost) => {

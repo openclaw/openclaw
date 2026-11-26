@@ -38,6 +38,9 @@ minimumReleaseAgeExclude:
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
+# The build requires dependencies physically inside the checkout, and updates build
+# the target tree under the host's user pnpm config, which may set a global store.
+virtualStoreType: project
 # Private inodes keep sibling installs from changing compiler input ctimes.
 packageImportMethod: clone-or-copy
 # GWTs share node_modules; script commands must not reconcile that shared install.
@@ -52,7 +55,7 @@ overrides:
   "chevrotain>lodash-es": 4.18.1
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
-  "@agentclientprotocol/codex-acp@2.3.0>@openai/codex": 0.169.0
+  "@agentclientprotocol/codex-acp@2.3.0>@openai/codex": 0.172.0
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.15
   "@codemirror/view@6.43.15>@codemirror/state": 6.7.6
   "@anthropic-ai/sdk": 0.137.0

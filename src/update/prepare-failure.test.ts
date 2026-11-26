@@ -62,6 +62,13 @@ it("does not publish a trial when preparation outcome bookkeeping throws", async
     expect(await getUpdateRunAsync(run.runId)).toMatchObject({
       status: "failed",
       phase: "finished",
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "outcome",
+          status: "failed",
+          detail: expect.stringContaining("preparation outcome bookkeeping failed"),
+        }),
+      ]),
     });
     expect(await readTrial()).toBeNull();
   } finally {

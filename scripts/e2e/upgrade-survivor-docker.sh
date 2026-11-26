@@ -586,7 +586,8 @@ if [ "$SCENARIO" = "release-update" ]; then
     node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/release-fixture.mjs" \
       "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE"
   fi
-  node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/schema-downgrade-source.mjs" \
+  OPENCLAW_UPGRADE_SURVIVOR_BULK_RECEIPT="$ARTIFACT_DIR/migration-bulk-access.json" \
+    node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/schema-downgrade-source.mjs" \
     "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE" "${OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA:-}"
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
   case "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" in

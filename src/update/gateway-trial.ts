@@ -288,7 +288,8 @@ export async function announceReady(buildId: string | null): Promise<void> {
         reject(error);
       }
     });
-    await settleRunFromTrial((await promise) ?? (await readTrial()));
+    const confirmed = await promise;
+    await settleRunFromTrial(confirmed ?? (await readTrial()));
   } finally {
     clearTimeout(timer);
     process.off("message", onMessage);

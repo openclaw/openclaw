@@ -68,11 +68,14 @@ const loadToolAvailabilityRuntime = createLazyRuntimeModule(
   () => import("../../agents/tool-availability-explanation.js"),
 );
 const loadAgentCommandRuntime = createLazyRuntimeModule(async () => {
-  const [command, identity] = await Promise.all([
+  const [command, identity, readIngressSenderAdmission] = await Promise.all([
     import("../../agents/agent-command.js"),
     import("../../agents/agent-command-execution-identity.js"),
+    import("../../gateway/operator-admission.js").then(
+      (admission) => admission.readIngressSenderAdmission,
+    ),
   ]);
-  return { command, identity };
+  return { command, identity, readIngressSenderAdmission };
 });
 
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
@@ -290,19 +293,33 @@ export function createRuntimeAgent(
   defineCachedValue(agentRuntime, "runCommandFromIngress", () =>
     createLazyRuntimeMethod(
       loadAgentCommandRuntime,
-      ({ command, identity }) =>
+      ({ command, identity, readIngressSenderAdmission }) =>
         async (
           opts: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[0],
           runtime: Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[1],
-        ) =>
-          // Like runEmbeddedAgent: a bridge consult can arrive after the request that opened
-          // the bridge (googlemeet.join) has ended, so the turn owns its own admission.
-          await runWithGatewayDetachedWorkContinuation(
+        ) => {
+          const channelTurn = opts.messageChannel !== undefined;
+          if (channelTurn && opts.senderIsOwner === true) {
+            warnPluginSdkDeprecation({
+              family: "ingress-owner-claim",
+              method: "runCommandFromIngress({ senderIsOwner })",
+              replacement: "runContext.senderId",
+              pluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
+              compatibility: "The host ignores the claim and decides owner from the sender.",
+            });
+          }
+          // Like runEmbeddedAgent, a bridge consult may outlive the request that opened it.
+          return await runWithGatewayDetachedWorkContinuation(
             () =>
               command.agentCommandFromGatewayIngress(
                 {
                   ...identity.sanitizePublicAgentCommandIngressOpts(opts),
-                  senderIsOwner: opts.senderIsOwner === true,
+                  senderIsOwner: channelTurn
+                    ? readIngressSenderAdmission(config.current({ clone: true }), {
+                        ...opts,
+                        senderId: opts.runContext?.senderId,
+                      }).grant.owner
+                    : opts.senderIsOwner === true,
                   // The plugin-scoped wrapper admitted these bindings for the caller's own tools.
                   toolBindings: opts.toolBindings,
                 },
@@ -311,7 +328,8 @@ export function createRuntimeAgent(
               ),
             `plugin:${getPluginRuntimeGatewayRequestScope()?.pluginId ?? "unknown"}:run-command-from-ingress`,
             opts.abortSignal,
-          ),
+          );
+        },
     ),
   );
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>

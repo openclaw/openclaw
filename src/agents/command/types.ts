@@ -47,6 +47,8 @@ export type AgentRunContext = {
   currentThreadTs?: string;
   currentInboundAudio?: boolean;
   senderId?: string | null;
+  /** Server-verified identity used only by personal MCP. */
+  mcpRequesterProfileId?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
 };
@@ -76,6 +78,8 @@ export type AgentCommandOpts = {
   sessionKey?: string;
   thinking?: string;
   thinkingOnce?: string;
+  /** Host-owned: treat the thinking request as a machine preference resolved per model, not a command. */
+  normalizeThinkingLevelOverride?: boolean;
   /** With `thinkingOnce`: run an unsupported level at the closest supported one instead of failing. */
   thinkingOnceClosest?: boolean;
   verbose?: string;
@@ -289,6 +293,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   internalDeliverySuppressErrors: undefined,
   operatorDirectRoot: undefined,
   cleanupMemoryOnRunEnd: undefined,
+  normalizeThinkingLevelOverride: undefined,
 } as const satisfies Partial<AgentCommandOpts>;
 
 type AgentCommandGatewayOnlyKey = Exclude<
@@ -301,7 +306,7 @@ export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
   AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride"
 > & {
-  /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
+  /** @deprecated Public and named-channel ingress ignore this claim; trusted channel-less plugins may use it. */
   senderIsOwner?: boolean;
   /** Ingress callsites must always pass explicit model-override authorization state. */
   allowModelOverride: boolean;

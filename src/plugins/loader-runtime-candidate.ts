@@ -145,8 +145,7 @@ export function* loadRuntimePluginCandidate(params: {
   const clearMismatchedQuarantineAfterLoad =
     enableState.enabled && Boolean(degradedPluginForId) && !degradedPlugin;
   if (enableState.enabled && degradedPlugin) {
-    // Startup verification owns this boot-stable quarantine. Return before
-    // artifact resolution so no top-level plugin code can execute this boot.
+    // Return before artifact resolution: only explicit reload re-verifies an in-place repair.
     yield;
     recordPluginConfiguredUnavailable({
       registry,

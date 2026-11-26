@@ -439,6 +439,7 @@ export function createSessionRowProjectionFixture(params: {
       const target = projection.sharingTarget(query);
       return target ? { status: "ready", target } : { status: "missing" };
     },
+    memberAccess: () => undefined,
     hasMembership: (path, key, identity) =>
       [...rows.values()].some(
         (row) =>

@@ -2,6 +2,7 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   loginHarness,
@@ -78,7 +79,7 @@ it.each([
         );
       } else {
         await waitForSolid(() =>
-          expect(text(".model-setup-wizard")).toContain("Example browser sign-in is ready"),
+          expect(text(".model-setup-wizard")).toContain("Example browser sign-in connected"),
         );
         expect(page.querySelector("[data-login-start-chat]")).toBeNull();
       }
@@ -88,3 +89,35 @@ it.each([
     }
   },
 );
+
+it("names the account a sign-in connected under its heading", async () => {
+  vi.spyOn(window, "open").mockReturnValue(null);
+  const { context, request, answer } = loginHarness();
+  const originalRequest = request.getMockImplementation()!;
+  request.mockImplementation(async (method, ...args) => {
+    const response = await originalRequest(method, ...args);
+    if (method === "models.authStatus") {
+      for (const provider of (response as ModelAuthStatusResult).providers) {
+        for (const profile of provider.profiles) {
+          profile.email = "user@example.com";
+        }
+      }
+    }
+    return response;
+  });
+  const page = appendPage(context);
+  const text = (selector: string) => page.querySelector(selector)?.textContent?.trim();
+  try {
+    await openPicker(page);
+    await selectProvider(page, "example");
+    await startSelectedLogin(page, "Example browser sign-in");
+    await submitCredential(page);
+    answer.resolve({ done: true, status: "done" });
+    await waitForSolid(() =>
+      expect(text(".model-setup-wizard__success-description")).toBe("user@example.com"),
+    );
+    expect(text(".model-setup-wizard__success-title")).toBe("Example browser sign-in connected");
+  } finally {
+    unmountPage(page);
+  }
+});

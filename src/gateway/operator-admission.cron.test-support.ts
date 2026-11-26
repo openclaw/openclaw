@@ -79,7 +79,9 @@ export async function runCronAdmissionCase(
         expect([...authority.scopes].toSorted()).toEqual([...WRITER].toSorted());
         if (isOccurrence) {
           expect(params.attempt.runId).not.toBe(creatorRunId);
-          expect(authority.requesterOwner).toBe(true);
+          // The same writer's fresh turn is not the owner; a parent-bound replay matches it.
+          expect(authority.grant.owner).toBe(false);
+          expect(params.attempt.senderIsOwner).toBe(false);
         } else {
           const tool = tools.toolsRaw.find((candidate) => candidate.name === AUTOMATIONS_TOOL_NAME);
           assert(params.attempt.admittedRunContext);

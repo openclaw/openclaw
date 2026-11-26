@@ -1119,7 +1119,7 @@ class Monitor {
     if (parent && canNativeParentConsumeCompletion(parent, readString(params, "turnId"))) {
       observeCodexNativeSubagentDeliveryReceipts({
         state: parent,
-        receipts: nativeNotification.receipts,
+        notification: nativeNotification,
         knownChildren: this.knownChildren.values(),
         applyReceipts: (runIds) => this.completionDelivery.applyReceipts(parent, runIds),
       });
@@ -1319,29 +1319,28 @@ class Monitor {
         buildParentAgentPathKey(state.parentThreadId, nativeCompletion.agentPath),
       );
       const childState = childThreadId ? this.currentChild(childThreadId) : undefined;
-      if (
-        !childState ||
-        childState.parentThreadId !== state.parentThreadId ||
-        childState.terminal ||
-        this.knownChildren.get(childState.childThreadId)?.pendingTurns.length ||
-        readCodexNativeSubagentRunId(childState.runId)?.turnId
-      ) {
-        embeddedAgentLog.warn(
-          "Ignoring Codex native subagent completion for unknown child thread",
-          {
-            parentThreadId: state.parentThreadId,
-            agentPath: nativeCompletion.agentPath,
-          },
-        );
+      if (!childState || childState.parentThreadId !== state.parentThreadId) {
+        embeddedAgentLog.warn("Ignoring completion for unknown Codex child", {
+          parentThreadId: state.parentThreadId,
+          agentPath: nativeCompletion.agentPath,
+        });
         continue;
       }
-      const completion: CodexNativeSubagentCompletion = {
+      // A parent notification can describe an earlier task. Use the child's own turn evidence.
+      if (
+        childState.terminal ||
+        childState.nativeTurnId ||
+        readCodexNativeSubagentRunId(childState.runId)?.turnId ||
+        this.knownChildren.get(childState.childThreadId)?.pendingTurns.length
+      ) {
+        continue;
+      }
+      await this.processObservedCompletion(state, childState, {
         childThreadId: childState.childThreadId,
         status: nativeCompletion.status,
         statusLabel: nativeCompletion.statusLabel,
         result: nativeCompletion.result,
-      };
-      await this.processObservedCompletion(state, childState, completion);
+      });
     }
   }
 
@@ -1374,7 +1373,8 @@ class Monitor {
     });
     // History is a best-effort snapshot; subsequent notifications and polls
     // reconcile a status change that overlaps this read.
-    if (this.childStates.get(childState.runId) !== childState || !this.isCurrentParent(state)) {
+    const live = !childState.terminal && this.childStates.get(childState.runId) === childState;
+    if (!live || !this.isCurrentParent(state)) {
       return false;
     }
     if (childState.completionCustody && !childState.completionCustody.isCurrent()) {
@@ -1406,11 +1406,10 @@ class Monitor {
       return false;
     }
     const completion = this.processRecoveredCompletion(state, childState, recovery);
-    if (!completion) {
-      return false;
+    if (completion) {
+      await completion;
     }
-    await completion;
-    return true;
+    return completion !== undefined;
   }
 
   private processRecoveredCompletion(

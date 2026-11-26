@@ -65,6 +65,7 @@ import {
 import {
   AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
   AGENT_MEMBER_ACCESS_POSTGRES_MIGRATION_SQL,
+  getAgentMemberAccessMinReader,
   withoutAgentPostgresMemberAccess,
 } from "./openclaw-agent-member-access-schema.js";
 import { withLegacyAgentPostgresMemoryPaths } from "./openclaw-agent-memory-path-migration.js";
@@ -94,6 +95,7 @@ import {
   AGENT_WRITE_LAYOUT_POSTGRES_MIGRATION_SQL,
   withLegacyAgentPostgresWriteLayout,
 } from "./openclaw-agent-write-layout-migration.js";
+import { AGENT_ARCHIVE_UNDO_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { agentPostgresRuntime } from "./postgres-schema.generated/agent-runtime.js";
 import { agentSearchPostgresRuntime } from "./postgres-schema.generated/agent-search-runtime.js";
 
@@ -133,9 +135,14 @@ export function admitAgentEngineSearchExtensions(
   );
 }
 
+export function withoutAgentPostgresArchiveUndo(schema: string): string {
+  return schema.replace('  "archive_undo_marker" text COLLATE "C",\n', "");
+}
+
 function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
   const agentPostgresSql = agentEngineSchema.postgres;
-  const agentPostgresV43Sql = withoutAgentPostgresMemberAccess(agentPostgresSql);
+  const agentPostgresV44Sql = withoutAgentPostgresArchiveUndo(agentPostgresSql);
+  const agentPostgresV43Sql = withoutAgentPostgresMemberAccess(agentPostgresV44Sql);
   const agentPostgresV42Sql = withoutAgentPostgresPendingInputEndings(agentPostgresV43Sql);
   const agentPostgresV41Sql = withoutAgentPostgresToolUsage(agentPostgresV42Sql);
   const agentPostgresV40Sql = withoutAgentPostgresActiveEventFacts(agentPostgresV41Sql);
@@ -427,8 +434,35 @@ function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
     },
     {
       version: AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+      get minReader() {
+        return getAgentMemberAccessMinReader();
+      },
       fromSchema: {
         postgres: agentPostgresV43Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      schema: {
+        postgres: agentPostgresV44Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      sql: `${AGENT_MEMBER_ACCESS_POSTGRES_MIGRATION_SQL}
+        UPDATE schema_meta SET schema_version = ${AGENT_MEMBER_ACCESS_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: AGENT_ARCHIVE_UNDO_SCHEMA_VERSION,
+      // PostgreSQL never issues the marker; the nullable column keeps the v44 reader floor.
+      get minReader() {
+        return getAgentMemberAccessMinReader();
+      },
+      fromSchema: {
+        postgres: agentPostgresV44Sql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
         postgresTextSearchVersion: 2,
@@ -439,8 +473,8 @@ function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
         postgresVectorSearchVersion: 2,
         postgresTextSearchVersion: 2,
       },
-      sql: `${AGENT_MEMBER_ACCESS_POSTGRES_MIGRATION_SQL}
-        UPDATE schema_meta SET schema_version = ${AGENT_MEMBER_ACCESS_SCHEMA_VERSION},
+      sql: `ALTER TABLE session_nodes ADD COLUMN archive_undo_marker TEXT COLLATE "C";
+        UPDATE schema_meta SET schema_version = ${AGENT_ARCHIVE_UNDO_SCHEMA_VERSION},
           app_version = '${VERSION.replaceAll("'", "''")}',
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,
@@ -509,6 +543,7 @@ function admitAgentPostgres(
       agentId,
       role: "agent",
       schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      minReader: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
   }
   const metadata = readExistingAgentSchemaMeta(db);
@@ -518,7 +553,13 @@ function admitAgentPostgres(
     pathname,
     agentEngineSchema.version,
   );
-  if (getPostgresPhysicalFacts(db)?.version !== agentEngineSchema.version) {
+  const facts = getPostgresPhysicalFacts(db);
+  if (
+    !facts ||
+    facts.version < agentEngineSchema.version ||
+    facts.minReader > agentEngineSchema.version ||
+    metadata?.schemaVersion !== facts.version
+  ) {
     throw new Error("Agent database has no current PostgreSQL schema admission");
   }
   // Nested worker writes must see the identity anchor's completed native admission.

@@ -33,7 +33,7 @@ async function invoke(
   params: unknown,
   companion: Partial<Record<"ask" | "state" | "reset", ReturnType<typeof vi.fn>>>,
   {
-    client = { connId: "conn-1" },
+    client = { ...sharingPolicyClient({ scopes: [] }), connId: "conn-1" },
     signal,
     config = { agents: { entries: { main: {} } } },
   }: { client?: { connId?: string }; signal?: AbortSignal; config?: Record<string, unknown> } = {},

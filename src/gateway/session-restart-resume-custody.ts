@@ -29,7 +29,6 @@ import {
 } from "../config/sessions/transcript-lease.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
@@ -42,6 +41,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { chatRef } from "../sessions/chat-ref.js";
 import { UserProfileNotFoundError } from "../state/user-profiles-schema.js";
 import { GatewayOperatorAccessDeniedError } from "./operator-access-policy.js";
+import { OperatorRefusalError, operatorRefusalText } from "./operator-refusal.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import { WRITE_SCOPE } from "./operator-scopes.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -56,8 +56,10 @@ import type {
 import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 
 /** Fixed wording: no requester, grant, or result content reaches the chat. */
-const RESTART_COMPLETION_REFUSED_NOTICE =
-  "A background task's result couldn't be delivered because the access it ran under has ended.";
+const RESTART_COMPLETION_REFUSED_NOTICE = operatorRefusalText(
+  "requester-access-ended",
+  "deliver a background task's result",
+);
 const REFUSED_NOTICE_SOURCE = "restart-completion-refused";
 /** Results older than this settle without a chat notice. */
 const REFUSED_NOTICE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
@@ -69,7 +71,7 @@ const REFUSED_NOTICE_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
  * facts, such as the shared session generation, that the new process may rebuild).
  */
 function isDefiniteRecoveryRefusal(error: unknown): boolean {
-  if (!(error instanceof GatewayOperatorRecoveryAuthorizationError)) {
+  if (!(error instanceof OperatorRefusalError)) {
     return false;
   }
   const cause = error.cause;
@@ -234,6 +236,9 @@ async function recoverRequesterCompletionCustody(params: {
         // Re-admit the spawning requester's saved source; the woken turn checks session access
         // when it starts. Older rows use the session principal, else the System write baseline.
         const source = child.requesterOperatorSource;
+        if (child.requiresCompletionAuthority && !source) {
+          throw new Error("Participant completion requires its original requester source.");
+        }
         authority = source
           ? await restoreGatewayQueuedOperatorRecovery({ agentId, source, context, assertCurrent })
           : await prepareSessionSystemTurnAuthority({

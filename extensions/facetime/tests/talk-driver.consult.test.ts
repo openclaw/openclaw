@@ -268,5 +268,7 @@ describe("FaceTime talk driver consult delivery", () => {
       ),
     );
     expect(mocks.consult.mock.calls[0]?.[0].extraSystemPrompt).toContain("answer immediately");
+    // Owner status comes from commands.ownerAllowFrom in the host, never from this plugin.
+    expect(mocks.consult.mock.calls[0]?.[0]).not.toHaveProperty("senderIsOwner");
   });
 });

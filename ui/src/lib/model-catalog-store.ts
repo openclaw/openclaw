@@ -182,30 +182,35 @@ export async function loadModelCatalog(
   }
   const cache = getModelCatalogCache(client);
   const key = modelCatalogKey(params);
-  const requestKey = JSON.stringify([
-    timeoutMs === undefined ? "default" : timeoutMs,
-    params.refresh === true,
-  ]);
-  const existing = cache.requests.get(key)?.get(requestKey);
-  if (existing && !existing.controller.signal.aborted) {
-    return await subscribeToSharedRequest(existing, {}, signal);
+  for (const existing of cache.requests.get(key) ?? []) {
+    if (
+      !existing.retired &&
+      !existing.controller.signal.aborted &&
+      existing.timeoutMs === timeoutMs &&
+      (existing.scope.refresh === true) === (params.refresh === true)
+    ) {
+      return await subscribeToSharedRequest(existing, {}, signal);
+    }
   }
   if (params.refresh) {
     invalidateModelCatalogCache(client);
   }
-  const budgets = cache.requests.get(key) ?? new Map<string, ModelCatalogRequest>();
-  cache.requests.set(key, budgets);
+  const requests = cache.requests.get(key) ?? new Set<ModelCatalogRequest>();
+  cache.requests.set(key, requests);
   const controller = new AbortController();
   const completion = createDeferredCore<ModelCatalogResult>();
   const pending: ModelCatalogRequest = {
-    refresh: params.refresh === true,
+    scope: params,
+    timeoutMs,
+    retired: false,
+    statusChanged: false,
     controller,
     promise: completion.promise,
     resolve: completion.resolve,
     reject: completion.reject,
     subscribers: new Set(),
   };
-  budgets.set(requestKey, pending);
+  requests.add(pending);
   const subscription = subscribeToSharedRequest(pending, {}, signal);
   const read = beginModelCatalogRead(client, params, controller.signal);
   const request = async () => {
@@ -226,19 +231,45 @@ export async function loadModelCatalog(
       }
     }
   };
+  const followCurrentDisplay = () => {
+    if (
+      !pending.retired ||
+      params.refresh ||
+      !pending.subscribers.size ||
+      controller.signal.aborted
+    ) {
+      return false;
+    }
+    // Direct readers can outlive their catalog generation. Explicit discovery returns its
+    // own attempt's outcome, and a retired subscriber never starts another read.
+    void loadModelCatalog(client, { ...params, timeoutMs, signal: controller.signal }).then(
+      pending.resolve,
+      pending.reject,
+    );
+    return true;
+  };
   void request()
-    .then((result) => {
-      // Catalog changes during a read are best effort until the next refresh.
-      publishModelCatalogResult(read, params, result);
-      pending.resolve(result);
-    }, pending.reject)
+    .then(
+      (result) => {
+        if (followCurrentDisplay()) {
+          return;
+        }
+        if (!pending.retired) {
+          publishModelCatalogResult(read, params, result, !params.refresh && pending.statusChanged);
+        }
+        pending.resolve(result);
+      },
+      (error: unknown) => {
+        if (!followCurrentDisplay()) {
+          pending.reject(error);
+        }
+      },
+    )
     .catch(pending.reject)
     .finally(() => {
-      if (budgets.get(requestKey) === pending) {
-        budgets.delete(requestKey);
-        if (budgets.size === 0 && cache.requests.get(key) === budgets) {
-          cache.requests.delete(key);
-        }
+      requests.delete(pending);
+      if (requests.size === 0 && cache.requests.get(key) === requests) {
+        cache.requests.delete(key);
       }
     });
   return await subscription;

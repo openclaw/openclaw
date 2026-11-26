@@ -1,8 +1,10 @@
 import { t } from "../../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { extractThinkingCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
@@ -31,6 +33,8 @@ import {
 } from "./chat-message-sender.ts";
 import { extractGroupMeta } from "./chat-message-timestamp-view.tsx";
 import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.ts";
+
+registerChatMessageMetadataEnglish();
 
 export type GroupMessage = MessageGroupData["messages"][number];
 
@@ -107,10 +111,15 @@ export function prepareMessageGroupFrame(
     !isForwarded &&
     !sourceOnly &&
     (normalizedRole !== "user" || !isOwnGroup || opts.showOwnSenderName !== false);
-  const visibleSources = group.sourceClients?.filter(
-    (source) => gatewayClientKind(source) !== "web",
-  );
+  const visibleSources = group.sourceClients?.filter((source) => {
+    const kind = gatewayClientKind(source);
+    return kind !== "web" && kind !== "app";
+  });
   const who = resolveMessageGroupSenderLabel(group, opts);
+  const suggestedByName = formatSenderLabel(group.suggestedBy);
+  const suggestedByLabel = suggestedByName
+    ? t("chat.messages.suggestedBy", { name: suggestedByName })
+    : null;
   const roleClass =
     normalizedRole === "user" || normalizedRole === "assistant" || normalizedRole === "tool"
       ? normalizedRole
@@ -200,6 +209,7 @@ export function prepareMessageGroupFrame(
     showSenderName,
     visibleSources,
     who,
+    suggestedByLabel,
     avatarPlacement,
     meta,
     turnDurationMs,

@@ -425,8 +425,10 @@ type SessionEntryCore = SessionEntryProvenance &
     blindPrompt?: true;
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
-    /** Sender/channel restriction provenance retained with the inherited tool snapshot. */
+    /** Restriction provenance for ordinary sender-delegated tool policy. */
     inheritedToolPolicySource?: "sender";
+    /** Immutable original execution source required by a constrained delegated session. */
+    delegatedOperatorSource?: QueuedOperatorRecoverySource;
     /** Session-scoped tool deny entries inherited from the caller that created this session. */
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */
@@ -732,6 +734,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
+  /** Admitted native shell calls whose terminal transcript write has not been acknowledged. */
+  pendingShellCalls?: import("./session-restart-resume-scope.js").PendingSessionShellCalls;
   /** Canonical remote repository awaiting preparation by this exact session generation. */
   pendingProjectGitUrl?: string;
   /** Authorized worktree intent awaiting preparation by an admitted turn. */
@@ -746,6 +750,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Running root-session resume only; accepted queued input owns its own durable row. */
   resumeAfterRestart?: {
+    /** Backend execution whose tool results belong to the interrupted turn. */
+    sourceRunId?: string;
     /** A direct chat turn in a visible spawned session, not its original delegated run. */
     directChat?: true;
     /** Interrupted turn requester; revalidated before the replacement turn is admitted. */

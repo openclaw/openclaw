@@ -35,7 +35,7 @@ manual qualification can run all three majors. See the
 | CLI and interactive setup/onboard                 | Supported                               | Includes one-shot commands and Doctor; PostgreSQL `onboard --reset` deliberately refuses.                                                                                                                                      |
 | Gateway turns and CLI parity                      | Supported                               | Real agent turns, tools, compaction, restart, child sessions and plugin operations.                                                                                                                                            |
 | Doctor                                            | Supported                               | Per-store configured/observed engines, schema, extensions, reachability and custody; unknown evidence stays unknown.                                                                                                           |
-| Update admission, forward migrations and recovery | Supported                               | Release trials use protected server-side copies, with no size refusal or in-place trial fallback. Legacy capture/restore has separate generation checks.                                                                       |
+| Update admission, forward migrations and recovery | In-place qualification pending          | Gateway startup migrates in place through existing store owners. Only migrations that raise the derived minimum reader version require a preimage. Earlier copy-based proof does not qualify this path.                        |
 | Published stable 2026.10.5 → current upgrade      | Supported, qualified scope              | Published 2026.10.5 SQLite → current → PG17 port, foreground Gateway and matched-backup rollback verified. See [evidence and service/turn limits](#published-stable-upgrade-qualification).                                    |
 | Published stable 2026.11.5 PostgreSQL upgrade     | Linux CI coverage                       | Linux CI upgrades both PostgreSQL 17 stores then checks that the candidate foreground Gateway can read the original session and transcript. See [the qualification scope and limits](#published-stable-upgrade-qualification). |
 | Port, backup, restore and disaster recovery       | Supported                               | All five families, retained roots and mixed engines; memory indexes require the documented rebuild step. No cluster/PITR orchestration.                                                                                        |
@@ -65,9 +65,10 @@ package-activation journals remain **local by design**, not missing PostgreSQL
 families. There are no other configurable families. Device caches, external
 read-only sources and file artifacts also remain outside engine selection.
 
-Protected-copy prerequisites, including database `CREATE`, apply to release trials.
-An ordinary start after a manual package upgrade keeps the existing in-place
-migration-on-open path and does not acquire copy-only privilege requirements.
+Gateway startup uses the existing in-place migration owners. It does not stage a
+Doctor run on a shadow copy or publish replacement anchors as an upgrade step.
+A preimage is required only when a migration raises the derived minimum reader
+version; a schema-version change alone does not require one.
 
 ## Server-major qualification
 
@@ -1050,63 +1051,24 @@ matching server store's version without migrating it. An older server schema can
 therefore reach the stopped-writer migration phase; a newer schema or mismatched
 anchor identity still refuses the update.
 
-Preparation checks the PostgreSQL copy prerequisites while the previous Gateway
-serves. A schema-changing update uses a **private server-side copy**, without a
-size-based admission rule:
+Gateway startup applies forward migrations **in place**, through the existing
+store owners, with exclusive writer ownership. The configured PostgreSQL
+namespaces and matching anchors remain the live stores; startup does not run
+Doctor on a private copy or swap in replacement stores.
 
-1. After the previous Gateway and other writers stop, the candidate copies each
-   affected PostgreSQL store into a fresh private namespace. Required SQLite
-   migration inputs stay in the same private upgrade tree, including mixed-engine
-   state/agent pairs.
-2. It runs and validates the forward migrations against private inputs only.
-   The original PostgreSQL application schema and rows remain unchanged.
-3. Only after all private migrations pass does it write the durable swap plan
-   and publish the new anchors. Original anchors stay with their recovery generation.
-4. If the trial fails, the resident launcher restores the previous release,
-   anchors, and local migration originals. The old anchors select the original
-   namespaces. Rollback needs no PostgreSQL restore or launcher SQL.
+Before a migration that raises the store's derived minimum reader version
+(`min_reader`), startup retains a preimage using the existing restore-manifest
+format. A schema-version change that does not raise that floor does not require
+a preimage. This protection is not a trial namespace, an anchor-only rollback,
+or a substitute for a verified off-server backup.
 
-Writes made only during the failed trial are discarded, as with SQLite trials.
-Restoring anchors does not repair an unavailable PostgreSQL server. Recovery is
-confirmed only when the previous Gateway reports ready.
+If preimage preparation fails, the floor-raising migration must not proceed.
+Keep the recovery manifest and its matching artifacts together. Recovery after
+a floor-raising migration requires the preimage and a compatible binary;
+reinstalling an older package does not undo an in-place migration.
 
-For stores selected for protection, the release path uses the server-side carrier,
-regardless of `database.postgres.recoveryCaptures`, with **no portable-export
-fallback**. If the copy or migration cannot be prepared, the candidate refuses
-through the existing configuration-refusal exit (78) and names the obstruction.
-Restore missing copy privileges or namespace ownership before retrying; see
-[runtime role requirements](#provision-a-database-and-runtime-role).
-
-Store size does not refuse the release update and never selects an in-place
-trial path. An ordinary non-trial Gateway start still uses its normal migration
-owner.
-
-The copy preserves and verifies schema, table, column, and sequence grants,
-including grant options and schema-specific default privileges. Existing reader,
-backup, and reporting roles keep their access. If the configured login cannot
-assume a source owner or grantor role, preparation refuses and names the required
-administrator action.
-
-Expect a longer restart for protected copies: copying runs after the old Gateway
-stops. Each protected schema-changing update changes the affected store's namespace
-name. Update operator tooling tied to a namespace, including dump scripts,
-grant-management scripts, and monitoring, to use the namespace selected by the current anchor.
-Allow space for at least the original and private server copies, plus indexes,
-WAL, temporary work, and any retained generations. There is no portable local
-row export on this release path. The existing release-trial deadline still
-bounds copy, migration, and startup together; the maintenance statement limits
-below do not extend it. The estimate is an admission bound, not a completion
-guarantee.
-
-Namespace retention follows the paired anchor generations. Keep the active,
-immediate-prior, and pinned or recovery generations. Pruning drops only
-update-created namespaces or namespaces with verified ownership, never a foreign
-or uncertain namespace. A failed drop retains the pair and reports a warning;
-it does not fail or undo a serving release. These same-server copies do not
-replace a verified off-server backup.
-
-`--no-restart` does not copy or migrate PostgreSQL until the next actual Gateway
-start. A release that needs no schema change does not make this protected copy.
+`--no-restart` defers Gateway-start migrations until the next actual Gateway
+start.
 
 **In-place updates and standalone Doctor keep their existing migration owner.** Update Doctor
 and `openclaw update repair` select the configured engines before reading
@@ -1127,8 +1089,8 @@ retain captures. Those captures are portable SQLite images by default;
 `database.postgres.recoveryCaptures: "server"` selects the
 [server recovery carrier](/reference/database-engines#server-recovery-captures)
 where supported. [Original state captures](/cli/update/repair-and-recovery#original-state-captures)
-stay portable either way. This legacy restore is not the release trial's
-anchor-only rollback. See [update compatibility and recovery](/reference/database-engines#updates-and-target-compatibility).
+stay portable either way. Legacy updater captures are separate from startup's
+floor-raising migration preimages. See [update compatibility and recovery](/reference/database-engines#updates-and-target-compatibility).
 
 Store owners run consecutive forward schema migrations under a writer transaction.
 Admission verifies the generated destination schema before publication. Missing
@@ -1136,12 +1098,10 @@ migrations, newer schemas, and drift refuse admission; use a compatible binary
 or restore a matched backup. Never edit version/fingerprint metadata. Doctor's
 state migrations take their own exact backup before mutation.
 
-Outside protected release-managed startup, PostgreSQL schema upgrades run through
-`openclaw doctor --fix` or the legacy update flow with writers stopped. A direct
-Gateway start that cannot prepare a protected upgrade refuses and directs you to
-Doctor. Stop the Gateway and embedded writers, then run the target release's
-`openclaw doctor --fix` before restarting. Doctor takes a backup and applies the
-consecutive migrations needed by each store:
+Gateway startup and offline `openclaw doctor --fix` use the existing PostgreSQL
+migration owners. For offline repair, stop the Gateway and embedded writers,
+then run the target release's `openclaw doctor --fix` before restarting.
+Historical migrations include:
 
 - State 32 and agent 34 add nullability-aware PostgreSQL index ordering.
 - State 33 and agent 35 extend that ordering to partial indexes whose predicates
@@ -1156,9 +1116,9 @@ and [agent schema 36](/reference/database-schemas/agent-schema-history#agent-sch
 Older binaries require the verified pre-upgrade backup and matching build;
 reinstalling an older package does not reverse these migrations.
 
-An installation already stranded by an earlier unprotected migration has no
-original namespace for anchor rollback. Use a known-good build compatible with
-the current schema, or restore a verified matched pre-migration backup with its
+An installation already stranded by an earlier unprotected migration needs a
+known-good build compatible with the current schema, or a verified matched
+pre-migration backup restored with its
 matching release while writers are stopped. Verify which installation the
 managed service selects; replacing a global package alone does not prove that
 selection changed. Do not lower version markers or drop namespaces to force an

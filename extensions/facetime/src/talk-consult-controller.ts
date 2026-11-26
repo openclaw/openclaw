@@ -315,7 +315,6 @@ export function createFaceTimeConsultController(params: {
       sessionKey: params.consultSessionKey,
       spawnedBy: params.requesterSessionKey,
       senderId: params.senderId,
-      senderIsOwner: true,
       contextMode: "fork",
       runner: "agent-turn",
       messageProvider: AGENT_CONSULT_MESSAGE_PROVIDER,

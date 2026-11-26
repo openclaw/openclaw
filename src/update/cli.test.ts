@@ -1,17 +1,29 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import { validateUpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import type * as UpdateCliShared from "../cli/update-cli/shared.js";
 import type * as ConfigMutate from "../config/mutate.js";
 import { GatewayCredentialsRequiredError } from "../gateway/call-device-auth.js";
 import type { CallGatewayOptions } from "../gateway/call-options.js";
+import {
+  buildMinimalGatewayHelloOkPayload,
+  closeMinimalGatewayServer,
+  parseMinimalGatewayRequestFrame,
+  sendMinimalGatewayConnectChallenge,
+  sendMinimalGatewayResponse,
+} from "../gateway/minimal-gateway.test-helpers.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import * as updateRunReader from "../infra/update-run-reader.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import * as resolveStore from "../secrets/resolve-store.js";
 import * as stateDatabaseCache from "../state/openclaw-state-db-cache.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
 import {
@@ -19,6 +31,7 @@ import {
   tryAdoptInstalledPackageForGateway,
   waitForReleaseUpdateFailure,
 } from "./cli.js";
+import * as installationIdentity from "./installation-identity.js";
 import { TRIAL_BUDGET_MS } from "./launcher.js";
 import { createTrialPending, resolvePrefix, switchLink, writeTrial } from "./store.js";
 import * as releaseStore from "./store.js";
@@ -39,7 +52,11 @@ beforeEach(async () => {
 const sent = vi.hoisted(() => [] as unknown[]);
 const missingCredentials = vi.hoisted(() => ({ enabled: false }));
 const install = vi.hoisted(() => ({ kind: "git" }));
-const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
+const localRun = vi.hoisted((): Pick<UpdateRunRecord, "status" | "phase" | "origin"> => ({
+  status: "skipped",
+  phase: "finished",
+  origin: {},
+}));
 const packageTarget = vi.hoisted(() => ({ version: "" }));
 const confirmDowngrade = vi.hoisted(() =>
   vi.fn<() => Promise<"confirmed" | "cancelled" | "confirmation-required">>(),
@@ -104,13 +121,17 @@ vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
     reason: "already-current",
     steps: [],
     after: {},
-    origin: {},
   }),
 }));
 const runsGet = vi.hoisted(() => [] as Array<() => unknown>);
+const useWireGateway = vi.hoisted(() => ({ enabled: false }));
 vi.mock("../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: async (request: CallGatewayOptions) => {
+    if (useWireGateway.enabled) {
+      const actual = await importOriginal<typeof import("../gateway/call.js")>();
+      return actual.callGateway(request);
+    }
     if (request.method === "gateway.restart.request") {
       await request.prepareDispatchCurrent?.();
       sent.push(request);
@@ -152,6 +173,7 @@ afterEach(async () => {
   missingCredentials.enabled = false;
   localRun.status = "skipped";
   localRun.phase = "finished";
+  localRun.origin = {};
   maintainRuntimes.mockReset();
   maintainRuntimes.mockResolvedValue([]);
   confirmDowngrade.mockReset();
@@ -160,6 +182,7 @@ afterEach(async () => {
   sent.length = 0;
   prepared.length = 0;
   runsGet.length = 0;
+  useWireGateway.enabled = false;
   process.exitCode = undefined;
 });
 
@@ -252,6 +275,94 @@ it("keeps following the run while the restarting Gateway refuses connections", a
   await runReleaseUpdateCli({ json: true, restart: true, runningRoot: root });
   expect(process.exitCode).toBe(0);
 });
+
+it.each(["update.run", "gateway.restart.request"] as const)(
+  "follows %s without reading the Gateway token store after restart dispatch",
+  async (restartMethod) => {
+    useWireGateway.enabled = true;
+    vi.spyOn(installationIdentity, "checkUpdateInstallationSlot").mockResolvedValue();
+    const tag = restartMethod === "gateway.restart.request" ? VERSION : undefined;
+    if (tag) {
+      localRun.status = "running";
+      localRun.phase = "activating";
+    }
+    const { claim, listener, releaseListener } = await reserveTestPortListener({
+      offsets: [0],
+      createListener: createServer,
+    });
+    const wss = new WebSocketServer({ server: listener });
+    try {
+      const configPath = path.join(home.home, "openclaw.json");
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      vi.stubEnv("OPENCLAW_GATEWAY_PORT", undefined);
+      const refId = "GATEWAY_TEST_TOKEN";
+      const token = "wire-test-token";
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          gateway: {
+            port: claim.port,
+            auth: { mode: "token", token: { source: "store", provider: "default", id: refId } },
+          },
+        }),
+      );
+      const runId = tag ? "run-cli" : "run-wire";
+      const output = {
+        runId,
+        status: "succeeded",
+        phase: "finished",
+        steps: [],
+        after: {},
+        origin: {},
+      };
+      const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const requests: string[] = [];
+      const tokens: Array<string | undefined> = [];
+      let restartDispatched = false;
+      const readTokenStore = vi
+        .spyOn(resolveStore, "resolveStoreRefs")
+        .mockImplementation(async () => {
+          if (restartDispatched) {
+            throw new Error("Restart has exclusive state custody");
+          }
+          return new Map([[refId, token]]);
+        });
+      wss.on("connection", (ws) => {
+        ws.on("message", (data) => {
+          const { id, method, params } = parseMinimalGatewayRequestFrame(data);
+          if (!id || !method) {
+            return;
+          }
+          if (method === "connect") {
+            tokens.push(params?.auth?.token);
+            sendMinimalGatewayResponse(ws, id, buildMinimalGatewayHelloOkPayload());
+          } else {
+            requests.push(method);
+            if (method === restartMethod) {
+              restartDispatched = true;
+              sendMinimalGatewayResponse(ws, id, { ok: true, runId });
+            } else if (method === "update.runs.get") {
+              sendMinimalGatewayResponse(ws, id, { run: params?.runId === runId ? output : null });
+            }
+          }
+        });
+        sendMinimalGatewayConnectChallenge(ws);
+      });
+
+      await runReleaseUpdateCli({ json: true, restart: true, runningRoot: root, tag, yes: true });
+      expect(requests).toEqual([restartMethod, "update.runs.get"]);
+      expect(tokens).toEqual([token, token]);
+      expect(readTokenStore).toHaveBeenCalledOnce();
+      expect(json).toHaveBeenCalledWith(output);
+      expect(process.exitCode).toBe(0);
+    } finally {
+      vi.unstubAllEnvs();
+      await closeMinimalGatewayServer(wss);
+      await releaseListener();
+      await claim.release();
+    }
+  },
+);
 
 it.each([false, true])(
   "reclaims earlier updaters' runtimes itself before the Gateway updates (json=%s)",
@@ -442,12 +553,55 @@ it("refuses --no-restart from another checkout before preparation or creating a 
   expect(maintainRuntimes).not.toHaveBeenCalled();
 });
 
+it("lets an accessible Gateway take over an opaque first-conversion owner", async () => {
+  vi.spyOn(installationIdentity, "checkUpdateInstallationSlot").mockRejectedValueOnce(
+    new installationIdentity.UnverifiedForegroundUpdateOwnerError(123),
+  );
+  runsGet.push(() => ({
+    run: { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} },
+  }));
+  await runReleaseUpdateCli({ json: true, restart: true, runningRoot: root });
+  expect(sent).toEqual([{}]);
+  expect(prepared).toEqual([]);
+});
+
+it.each([{ restart: false }, { restart: true, tag: "beta" }])(
+  "refuses opaque foreground ownership when RPC cannot carry the update: %j",
+  async (opts) => {
+    vi.spyOn(installationIdentity, "checkUpdateInstallationSlot").mockRejectedValueOnce(
+      new installationIdentity.UnverifiedForegroundUpdateOwnerError(123),
+    );
+    await expect(runReleaseUpdateCli({ json: true, runningRoot: root, ...opts })).rejects.toThrow(
+      "operator access",
+    );
+    expect(sent).toEqual([]);
+    expect(prepared).toEqual([]);
+    expect(createRun).not.toHaveBeenCalled();
+    expect(maintainRuntimes).not.toHaveBeenCalled();
+  },
+);
+
 it("restarts the local Gateway after preparing an explicit package tag and follows its outcome", async () => {
   install.kind = "package";
   localRun.status = "running";
   localRun.phase = "activating";
+  const releaseAdmission = {
+    owner: "candidate",
+    candidateVersion: "2026.11.6",
+    verdict: "admit",
+    warnings: [{ code: "configured-plugin-path-unavailable", message: "Plugin path is absent" }],
+  } satisfies NonNullable<UpdateRunRecord["origin"]["releaseAdmission"]>;
+  localRun.origin.releaseAdmission = releaseAdmission;
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   runsGet.push(() => ({
-    run: { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} },
+    run: {
+      runId: "run-cli",
+      status: "succeeded",
+      phase: "finished",
+      steps: [],
+      after: { version: "2026.11.6" },
+      origin: {},
+    },
   }));
   await runReleaseUpdateCli({
     json: true,
@@ -462,6 +616,13 @@ it("restarts the local Gateway after preparing an explicit package tag and follo
     }),
   ]);
   expect(process.exitCode).toBe(0);
+  expect(json).toHaveBeenCalledWith(
+    expect.objectContaining({
+      status: "succeeded",
+      after: { version: "2026.11.6" },
+      origin: { releaseAdmission },
+    }),
+  );
 });
 
 it.each([

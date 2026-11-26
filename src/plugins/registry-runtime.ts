@@ -594,11 +594,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               toolBindings,
               ...remainingParams
             } = params;
-            const senderIsOwner = claimedOwner === true;
-            // Validate and dispatch the same host-owned values; never re-read plugin-owned authority.
+            // The host resolves named-channel owner identity from its sender. A channel-less
+            // bridge may claim owner only when the plugin has trusted official provenance.
+            const claimsBridgeOwner = messageChannel === undefined && claimedOwner === true;
+            // Validate and dispatch the same plugin-owned values; never re-read them later.
             const ingressParams = {
               ...remainingParams,
-              senderIsOwner,
+              senderIsOwner: claimedOwner === true,
               messageChannel,
               toolBindings,
             };
@@ -612,10 +614,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               );
             }
             if (
-              // Community channels may admit guests; trusted provenance is required only for owner elevation.
-              (senderIsOwner &&
-                record.origin !== "bundled" &&
-                record.trustedOfficialInstall !== true) ||
+              claimsBridgeOwner &&
+              record.origin !== "bundled" &&
+              record.trustedOfficialInstall !== true
+            ) {
+              throw new Error(`Plugin "${pluginId}" cannot admit authenticated owner authority.`);
+            }
+            if (
               currentRegistry().plugins.find((entry) => entry.id === pluginId) !== record ||
               !isPluginRecordActive(registry, record) ||
               // Without a channel the turn runs on the plugin's own surface (a phone or meeting bridge).
@@ -626,7 +631,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 ))
             ) {
               throw new Error(
-                `Plugin "${pluginId}" cannot admit authenticated owner authority for channel "${messageChannel ?? "unknown"}".`,
+                `Plugin "${pluginId}" cannot run turns for channel "${messageChannel ?? "unknown"}": it is not the active plugin registered for that channel.`,
               );
             }
             return await runWithPluginScope(() =>

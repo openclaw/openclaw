@@ -85,6 +85,8 @@ It does not move the source checkout's `HEAD` or replace its built runtime.
 The running Gateway keeps its release; the next start loads the selected one.
 Candidate installs and nested build commands use a private pnpm virtual store,
 so preparing an update cannot prune dependencies used by the serving Gateway.
+The target's `pnpm-workspace.yaml` pins pnpm's project virtual store, so a
+user-level `virtualStoreType: global` setting does not stop the candidate build.
 The candidate's temporary workspace settings are restored before checking for
 source changes; the source checkout's workspace settings are preserved.
 Candidate commands keep the qualified Node first among Node providers on `PATH`,

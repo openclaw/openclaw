@@ -1951,6 +1951,7 @@ describe("publication status real CLI", () => {
       expect(result.stdout).toContain("qualification: blocked; evidence: pending");
       expect(result.stdout).toContain("drain: in_progress");
       expect(result.stdout).toContain("actual test blocker");
+      expect(result.stdout).toContain("Release Decision snapshot: blocked_diagnostics_running");
       expect(result.stdout).toContain("Diagnostic Drain is still collecting");
       expect(result.stdout).toContain(
         'blocker: parent job "Prepare release npm artifacts" failure (attempt 2)',
@@ -1958,6 +1959,30 @@ describe("publication status real CLI", () => {
       expect(result.stdout).toContain("next: pnpm frv watch --run 77");
     },
   );
+
+  it("keeps an early Decision snapshot separate from a terminal Drain", async () => {
+    const fixture = publicationFixture();
+    fixture.root.conclusion = "failure";
+    const result = await runPublicationCli(
+      fixture,
+      ["status", "--run", "77"],
+      (responses) => {
+        responses[`repos/${REPOSITORY}/actions/runs/77/jobs?filter=all&per_page=100`] = {
+          jobs: [{ ...job("Diagnostic Drain"), run_attempt: 2 }],
+        };
+      },
+      false,
+      0,
+      "accepted",
+      "blocked_diagnostics_running",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("qualification: blocked; evidence: not-accepted");
+    expect(result.stdout).toContain("drain: completed success; active children: none");
+    expect(result.stdout).toContain("Release Decision snapshot: blocked_diagnostics_running");
+    expect(result.stdout).toContain("actual test blocker");
+    expect(result.stdout).not.toContain("still collecting");
+  });
 
   it("stops the shipped watcher on a current artifact blocker without mutating GitHub", async () => {
     const fixture = publicationFixture();

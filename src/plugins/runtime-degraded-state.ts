@@ -1,6 +1,6 @@
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 
-/** Boot-stable quarantine state for configured plugins whose payload failed verification. */
+/** Process-local quarantine state for configured plugins whose payload failed verification. */
 
 export const PLUGIN_AVAILABILITY_POLICY = {
   state: "configured-unavailable",

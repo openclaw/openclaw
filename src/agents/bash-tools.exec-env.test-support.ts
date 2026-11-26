@@ -31,7 +31,7 @@ const copyEnvironment = ({ env, requestedEnv }: CapturedEnvironment) => ({
 });
 
 export const shellEnvironmentMock = () => ({
-  getShellEnvAppliedKeys: vi.fn(() => []),
+  isShellEnvAppliedKey: vi.fn(() => false),
   getShellPathFromLoginShell: vi.fn(() => null),
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
   shouldDeferShellEnvFallback: vi.fn(() => false),

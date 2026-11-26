@@ -43,6 +43,7 @@ actor GatewayConnection: Observable {
     nonisolated static let operatorClientCaps = [
         OpenClawGatewayClientCapability.agentKind,
         OpenClawGatewayClientCapability.inlineWidgets,
+        OpenClawGatewayClientCapability.personalSessionPins,
         OpenClawGatewayClientCapability.modelSelectionPolicy,
         OpenClawGatewayClientCapability.ultrafast,
         OpenClawGatewayClientCapability.usageRefreshing,

@@ -102,7 +102,7 @@ function createBatch(requesterTurnRunId: string, count = 1): Batch {
   });
 }
 
-type RunOptions = Pick<Scope, "isCurrent" | "requesterOwner" | "managementEntitlement"> & {
+type RunOptions = Pick<Scope, "isCurrent" | "managementEntitlement"> & {
   bindRunScope?: (scope: Scope) => void;
 };
 
@@ -117,10 +117,9 @@ async function inAdminRun<T>(
   const capability = cronContext.createCronCreatorAuthorityCapability(
     runId,
     { kind: "unknown" },
-    options.managementEntitlement ?? { source: "control-ui-admin" },
+    options.managementEntitlement ?? { source: "operator" },
     options.isCurrent,
     undefined,
-    options.requesterOwner,
   )!;
   try {
     options.bindRunScope?.(capability);
@@ -309,7 +308,7 @@ it.each(["completion", "scope ended"] as const)(
       paused!.requesterSettleWake!.pauseNotice = { acknowledgment: "Need a continuation." };
     });
     await inAdmittedScope([batch[0]!], async (admission) => {
-      expect(admission.managementEntitlement.source).toBe("control-ui-admin");
+      expect(admission.managementEntitlement.source).toBe("operator");
       if (outcome === "completion") {
         await finishPause(batch);
       }
@@ -323,7 +322,7 @@ it.each(["completion", "scope ended"] as const)(
     await dispatch(nextBatch, async () => {
       const completionAdmission = consume(nextBatch)!;
       expect(completionAdmission.isCurrent()).toBe(true);
-      expect(completionAdmission.managementEntitlement.source).toBe("control-ui-admin");
+      expect(completionAdmission.managementEntitlement.source).toBe("operator");
       await updateBatch(nextBatch, (drafts) => {
         for (const entry of drafts) {
           entry.requesterSettleWake = undefined;
@@ -335,60 +334,29 @@ it.each(["completion", "scope ended"] as const)(
   },
 );
 
-it.each([
-  ["channel-owner", true],
-  ["channel-owner", false],
-  ["control-ui-admin", false],
-] as const)("retains %s across yields with plugin owner=%s", async (source, hasOwner) => {
-  const owner = {
-    senderId: "original-owner",
-    channel: "discord",
-    accountId: "original-account",
-  };
-  const batch = await capture("owner-source", 1, {
-    managementEntitlement: { source },
-    requesterOwner: hasOwner ? owner : undefined,
-  });
-  let retained: ReturnType<typeof cronContext.bindRequesterOwnerIdentity>;
-  let next: Batch = [];
-  await inAdmittedScope(batch, async (admission, scope) => {
-    expect(() => admission.bindRunScope(scope)).toThrow("no longer owns");
-    expect(admission.requesterOwner).toBe(hasOwner ? owner : undefined);
-    const target = { ...identity, runId: "continuation" };
-    expect(
-      cronContext.bindRequesterOwnerIdentity({ ...target, sessionKey: "agent:main:unrelated" }),
-    ).toBeUndefined();
-    retained = cronContext.bindRequesterOwnerIdentity(target);
-    if (hasOwner) {
-      expect(retained).toMatchObject({
-        senderId: "original-owner",
-        channel: "discord",
-        accountId: "original-account",
+it.each(["channel-owner", "operator"] as const)(
+  "retains %s management across yields",
+  async (source) => {
+    const batch = await capture("owner-source", 1, { managementEntitlement: { source } });
+    let next: Batch = [];
+    await inAdmittedScope(batch, async (admission, scope) => {
+      expect(() => admission.bindRunScope(scope)).toThrow("no longer owns");
+      expect(admission).toMatchObject({
+        managementEntitlement: { source },
+        callerOrigin: { kind: "unknown" },
       });
-      expect(retained?.isCurrent()).toBe(true);
-    } else {
-      expect(retained).toBeUndefined();
-    }
-    expect(admission).toMatchObject({
-      managementEntitlement: { source },
-      callerOrigin: { kind: "unknown" },
+      next = await capture("second-yield", 1, {
+        isCurrent: admission.isCurrent,
+        managementEntitlement: admission.managementEntitlement,
+      });
     });
-    next = await capture("second-yield", 1, {
-      isCurrent: admission.isCurrent,
-      managementEntitlement: admission.managementEntitlement,
-      requesterOwner: admission.requesterOwner,
+    await dispatch(next, async () => {
+      const second = consume(next)!;
+      expect(second.callerOrigin).toEqual({ kind: "unknown" });
+      expect(second.isCurrent()).toBe(true);
     });
-  });
-  if (hasOwner) {
-    expect(retained?.isCurrent()).toBe(false);
-    expect(() => retained?.assertCurrent()).toThrow("owner identity");
-  }
-  await dispatch(next, async () => {
-    const second = consume(next)!;
-    expect(second.callerOrigin).toEqual({ kind: "unknown" });
-    expect(second.isCurrent()).toBe(true);
-  });
-});
+  },
+);
 
 it.each([false, true])(
   "binds yield across contexts, rejecting replaced runs: %s",

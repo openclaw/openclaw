@@ -155,9 +155,9 @@ export type PluginRuntimeCore = {
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
     /**
-     * Admit a turn for this plugin's own channel and its authenticated sender. Without
-     * `messageChannel` the turn runs on the plugin's own surface (a phone or meeting bridge).
-     * Owner authority needs a bundled or trusted official plugin; `toolBindings` may scope only
+     * Admit a turn for this plugin's own channel and authenticated sender. Named channels derive
+     * owner from `runContext.senderId`. Without `messageChannel`, a bundled or trusted official
+     * plugin may claim owner for its authenticated bridge sender. `toolBindings` may scope only
      * tools the calling plugin declares.
      */
     runCommandFromIngress: (

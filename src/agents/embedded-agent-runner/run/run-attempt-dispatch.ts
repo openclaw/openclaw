@@ -3,7 +3,7 @@ import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
-import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import * as runAdmission from "../../admitted-run-context.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import { resizeExecApprovalContinuationPrompt } from "../../bash-tools.exec-approval-output.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
@@ -12,6 +12,7 @@ import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import { resolveTurnCyberAccessProgram } from "../../model-catalog-access-programs.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
+import { assertParticipationRuntime } from "../../participation-ceiling.js";
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
@@ -77,12 +78,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     notifyRunProgress,
     resolveAttemptFastModeParam,
   } = runInput.progressController;
-  const { createAttemptControls } = runInput.laneController;
   const {
     provider,
     modelId,
     requestedModelId,
-    expectedHarnessArtifact,
+    expectedHarnessArtifact: expectedArtifact,
     nativeModelOwned,
     authStorage,
     modelRegistry,
@@ -91,6 +91,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     resolveRunAttemptAuthProfileStore,
   } = preparedRuntime;
   const runtime = preparedRuntime.snapshot();
+  const ceiling = runAdmission.readRunOperatorAuthority(params)?.participationCeiling;
+  assertParticipationRuntime(ceiling, runtime.agentHarness.id);
   const effectiveModel = attachModelProviderRuntimePluginHandle(
     runtime.effectiveModel,
     runtime.providerRuntimeHandle,
@@ -156,7 +158,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   }
   const admittedRunContext = params.admittedRunContext;
   const requireActiveAssertion = (signal?: AbortSignal) => {
-    const assertion = resolveAdmittedRunActiveAssertion(admittedRunContext, signal);
+    const assertion = runAdmission.resolveAdmittedRunActiveAssertion(admittedRunContext, signal);
     if (!assertion) {
       throw new Error("embedded attempt reached dispatch without an active admitted run");
     }
@@ -209,7 +211,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const toolAuthProfileStore = agentHarnessBuildsOpenClawTools(runtime.agentHarness.id)
     ? attemptAuthProfileStore
     : undefined;
-  const captureRuntimeArtifact = Boolean(params.onSuccessfulAuthBinding || expectedHarnessArtifact);
+  const captureRuntimeArtifact = Boolean(params.onSuccessfulAuthBinding || expectedArtifact);
   const beforeAgentFinalizeRevisionAttempts = terminalRetryState.beforeFinalizeRevisionAttempts;
   const fallbackActive =
     modelId !== requestedModelId ||
@@ -346,35 +348,40 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       admission: runInput.sessionAdmission,
       assertCallerCurrent: assertActiveRun,
     });
-  const attemptControls = createAttemptControls({
+  const attemptControls = runInput.laneController.createAttemptControls({
     admittedRunContext,
-    onAbort: () => {
-      params.replyOperation?.abortByUser();
-    },
+    onAbort: () => params.replyOperation?.abortByUser(),
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
-  const preparedSessionTarget =
+  const preparedSessionTargetBinding =
     (!sessionManager || params.sessionPersistence === "detached") &&
     resolvedSessionTarget?.agentId &&
     resolvedSessionTarget.sessionId &&
     resolvedSessionTarget.sessionKey &&
     resolvedSessionTarget.storePath
+      ? captureSessionTranscriptTargetBinding({
+          ...resolvedSessionTarget,
+          agentId: resolvedSessionTarget.agentId,
+          sessionId: resolvedSessionTarget.sessionId,
+          sessionKey: resolvedSessionTarget.sessionKey,
+          storePath: resolvedSessionTarget.storePath,
+        })
+      : undefined;
+  using preparedSessionTargetScope = preparedSessionTargetBinding
+    ? createPreparedSessionTargetAssertion({
+        runId: params.runId,
+        sessionId,
+        sessionPromptState,
+        selectedPromptTarget,
+        isAttemptCurrent: attemptControls.isAttemptCurrent,
+        assertActiveRun,
+      })
+    : undefined;
+  const preparedSessionTarget =
+    preparedSessionTargetBinding && preparedSessionTargetScope
       ? {
-          target: captureSessionTranscriptTargetBinding({
-            ...resolvedSessionTarget,
-            agentId: resolvedSessionTarget.agentId,
-            sessionId: resolvedSessionTarget.sessionId,
-            sessionKey: resolvedSessionTarget.sessionKey,
-            storePath: resolvedSessionTarget.storePath,
-          }),
-          assertCurrent: createPreparedSessionTargetAssertion({
-            runId: params.runId,
-            sessionId,
-            sessionPromptState,
-            selectedPromptTarget,
-            isAttemptCurrent: () => attemptControls.isAttemptCurrent(),
-            assertActiveRun,
-          }),
+          target: preparedSessionTargetBinding,
+          assertCurrent: preparedSessionTargetScope.assertCurrent,
         }
       : undefined;
   const attemptParams: EmbeddedRunAttemptInternalParams & {
@@ -397,6 +404,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     continuation: sessionPromptState.continuation,
     runCleanupSettlement: params.runCleanupSettlement,
     joinObservation: params.joinObservation,
+    onMemoryFlushModelProgress: params.onMemoryFlushModelProgress,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,
@@ -423,6 +431,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     bootstrapUserProfileId: params.bootstrapUserProfileId,
     sessionUserProfileId: params.sessionUserProfileId,
     gatewayUiCommandTarget: params.gatewayUiCommandTarget,
+    mcpRequesterProfileId: params.mcpRequesterProfileId,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
     chatType: params.chatType,
@@ -521,9 +530,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
         }
       : {}),
     ...(captureRuntimeArtifact ? { captureRuntimeArtifact: true } : {}),
-    ...(expectedHarnessArtifact?.artifact
-      ? { expectedRuntimeArtifact: expectedHarnessArtifact?.artifact }
-      : {}),
+    ...(expectedArtifact?.artifact && { expectedRuntimeArtifact: expectedArtifact.artifact }),
     ...(params.sessionKey
       ? {
           agentHarnessCompletionScope: createAgentHarnessCompletionScope({

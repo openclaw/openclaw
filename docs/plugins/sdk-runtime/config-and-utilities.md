@@ -356,11 +356,15 @@ supplemental diagnostic at its terminal result boundary.
 Channel plugins must admit authenticated agent turns through their injected
 `api.runtime.agent.runCommandFromIngress(options, runtime)` capability. A named
 `options.messageChannel` must be a channel the calling plugin registers. Owner
-authority needs a bundled or trusted official plugin; guest turns retain their
-non-owner identity. Plugins without a channel, such as phone, meeting, and FaceTime
-bridges, omit `messageChannel`. `options.toolBindings` may scope only tools the
-calling plugin declares in `contracts.tools`. The public `agentCommandFromIngress`
-SDK helper never accepts a caller-supplied owner claim.
+authority for a named channel comes from its authenticated `runContext.senderId`
+when `commands.ownerAllowFrom` lists that sender. A plugin-supplied
+`senderIsOwner` claim is ignored for named channels and logs a deprecation
+warning. Plugins without a channel, such as phone, meeting, and FaceTime
+bridges, omit `messageChannel`; bundled or trusted official plugins may mark
+their authenticated sender as owner. Other turns remain guests.
+`options.toolBindings` may scope only tools the calling plugin declares in
+`contracts.tools`. The public `agentCommandFromIngress` SDK helper never accepts
+a caller-supplied owner claim.
 
 `consultRealtimeVoiceAgent` from `openclaw/plugin-sdk/realtime-voice` accepts
 `runner: "agent-turn"` to run the consult as a turn of the consult session through
