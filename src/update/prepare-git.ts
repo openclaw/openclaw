@@ -1,8 +1,14 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { formatErrorMessage } from "../infra/errors.js";
-import { gitCommandArgv } from "../infra/git-exec.js";
-import { readPackageVersion } from "../infra/package-json.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { gitCommandArgv, gitReadOnlyEnvironment } from "../infra/git-exec.js";
+import {
+  irohNativeBinaryName,
+  irohNativeBuildInputs,
+  isIrohBuildCurrent,
+} from "../infra/iroh-native-build.js";
+import { hasPackageScript, readPackageVersion } from "../infra/package-json.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { resolveUpdateBuildManager } from "../infra/update-package-manager.js";
 import { shouldInstallWithoutScriptsOnWindows } from "../infra/update-runner-git-commands.js";
@@ -15,9 +21,64 @@ export type PrepareResult =
   | { ok: true; releaseRoot: string; buildId?: string; version: string }
   | { ok: false; reason: string; stderrTail: string };
 
-/** One deadline includes fetch, dependencies and the full build, including Control UI. */
+const IROH_CRATE = "crates/openclaw-iroh-node";
+const IROH_BUILD_STEP = "build:iroh";
+
+async function hasNativeArtifact(file: string): Promise<boolean> {
+  const stat = await fs.lstat(file).catch((error: unknown) => {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+    return undefined;
+  });
+  return stat?.isFile() === true && stat.size > 0;
+}
+
+async function selectIrohArtifact(
+  roots: string[],
+  releaseRoot: string,
+  binary: string,
+  gitRead: (cwd: string, args: string[]) => Promise<string | undefined>,
+): Promise<{ reuse?: string } | undefined> {
+  const candidates: string[] = [];
+  for (const root of new Set(roots)) {
+    if (await hasNativeArtifact(path.join(root, IROH_CRATE, binary))) {
+      candidates.push(root);
+    }
+  }
+  if (candidates.length === 0) {
+    return undefined; // Native builds are opt-in.
+  }
+
+  const crateTree = ["rev-parse", "--verify", "--quiet", "HEAD:" + IROH_CRATE];
+  const targetTree = await gitRead(releaseRoot, crateTree);
+  if (targetTree) {
+    for (const root of candidates) {
+      const crate = path.join(root, IROH_CRATE);
+      // A pulled checkout may have a matching HEAD but a binary from before the pull.
+      if ((await gitRead(root, crateTree)) !== targetTree || !isIrohBuildCurrent(crate, binary)) {
+        continue;
+      }
+      // The napi build can rewrite its generated JS loader; only inspect native inputs here.
+      const dirty = await gitRead(root, [
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--",
+        ...irohNativeBuildInputs.map((file) => IROH_CRATE + "/" + file),
+      ]);
+      if (dirty === "") {
+        return { reuse: path.join(crate, binary) };
+      }
+    }
+  }
+  return {};
+}
+
+/** One deadline includes fetch, dependencies and the full build, including opt-in iroh. */
 export async function prepareGit(params: {
   checkout: string;
+  runningRoot: string;
   sha: string;
   staging: string;
   node: string;
@@ -126,6 +187,47 @@ export async function prepareGit(params: {
       pnpmEnv,
     );
     await run("build", ["pnpm", "build"], releaseRoot, pnpmEnv);
+    reason = IROH_BUILD_STEP + "-failed";
+    const binary = irohNativeBinaryName();
+    const iroh = await selectIrohArtifact(
+      [params.runningRoot, params.checkout],
+      releaseRoot,
+      binary,
+      async (cwd, args) => {
+        const result = await runCommand(gitCommandArgv(cwd, args), {
+          cwd,
+          env: gitReadOnlyEnvironment(args, { ...env, GIT_OPTIONAL_LOCKS: "0" }),
+          timeoutMs: remaining(),
+        });
+        return result.code === 0 && !result.killed && !result.signal
+          ? result.stdout.trim()
+          : undefined;
+      },
+    );
+    if (iroh) {
+      const destination = path.join(releaseRoot, IROH_CRATE, binary);
+      if (iroh.reuse) {
+        remaining();
+        await fs.copyFile(iroh.reuse, destination, fsConstants.COPYFILE_EXCL);
+        remaining();
+      } else {
+        if (!(await hasPackageScript(releaseRoot, IROH_BUILD_STEP))) {
+          throw new Error(
+            "The target Git revision does not define pnpm build:iroh. Select a revision that can build the OpenClaw ID transport.",
+          );
+        }
+        // The service can inherit an override that would otherwise win over the crate pin.
+        await run(IROH_BUILD_STEP, ["pnpm", IROH_BUILD_STEP], releaseRoot, {
+          ...pnpmEnv,
+          RUSTUP_TOOLCHAIN: undefined,
+        });
+        if (!(await hasNativeArtifact(destination))) {
+          throw new Error(
+            "pnpm build:iroh did not produce the expected OpenClaw ID binding: " + binary,
+          );
+        }
+      }
+    }
     reason = "metadata-failed";
     const version = await readPackageVersion(releaseRoot);
     if (!version) {
