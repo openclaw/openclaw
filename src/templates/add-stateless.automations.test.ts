@@ -614,7 +614,6 @@ it.each(["retained", "rollback", "native conflict"])(
               enabled: false,
               declarationKey: `template:${plan.agent.finalId}:existing`,
               sessionTarget: "main",
-              wakeMode: "next-heartbeat",
               schedule: { kind: "every", everyMs: 60000 },
               payload: { kind: "systemEvent", text: "Fixture" },
             })
