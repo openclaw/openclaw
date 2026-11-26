@@ -1,4 +1,4 @@
-import type { CopilotClient, SessionConfig, SessionEvent } from "@github/copilot-sdk";
+import type { CopilotClient, SessionConfig } from "@github/copilot-sdk";
 import {
   attachModelProviderRequestTransport,
   type AgentHarness,
@@ -22,7 +22,10 @@ import {
 import { resolvePoolAcquire } from "./src/attempt-config.js";
 import type { CopilotAttemptDeps } from "./src/attempt-types.js";
 import { tokenFingerprint } from "./src/auth-bridge.js";
-import { createCopilotIsolatedCompletionParams } from "./src/isolated-completion.test-support.js";
+import {
+  createCopilotIsolatedHarnessFixture,
+  createCopilotIsolatedCompletionParams,
+} from "./src/isolated-completion.test-support.js";
 import type { CopilotClientPool, PoolKey } from "./src/runtime.js";
 
 type IsolatedParams = Parameters<NonNullable<AgentHarness["runIsolatedCompletionV2"]>>[0];
@@ -144,35 +147,8 @@ async function flush() {
     setTimeout(resolve, 0);
   });
 }
-function isolated(
-  data: Extract<SessionEvent, { type: "assistant.message" }>["data"] = {
-    content: "",
-    messageId: "message-1",
-  },
-) {
-  const session = {
-    abort: vi.fn().mockResolvedValue(undefined),
-    disconnect: vi.fn().mockResolvedValue(undefined),
-    rpc: { remote: { disable: vi.fn<() => Promise<void>>().mockResolvedValue(undefined) } },
-    sendAndWait: vi.fn().mockResolvedValue({ type: "assistant.message", data }),
-  };
-  const createSession = vi.fn().mockResolvedValue(session);
-  const resumeSession = vi.fn();
-  const handle = { key: KEY, client: client({ createSession, resumeSession }) };
-  const pool = poolMock();
-  pool.acquire.mockResolvedValue(handle);
-  const harness = createCopilotAgentHarness({ pool });
-  return {
-    session,
-    pool,
-    handle,
-    harness,
-    createSession,
-    resumeSession,
-    complete: (extra: Partial<IsolatedParams> = {}) =>
-      harness.runIsolatedCompletionV2?.({ ...ISOLATED, ...extra }),
-  };
-}
+const isolated = createCopilotIsolatedHarnessFixture;
+
 function compaction(
   result = { success: true, tokensRemoved: 45, messagesRemoved: 2 },
   store?: Store,
