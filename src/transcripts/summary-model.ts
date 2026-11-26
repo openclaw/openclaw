@@ -53,7 +53,7 @@ function readSourceNotes(value: unknown, readTurn: (turn: number) => string | un
   const refs = sourceNotesSchema.parse(value);
   const excerpts = (turns: number[], limit = 25) =>
     [...new Set(turns)]
-      .sort((a, b) => a - b)
+      .toSorted((a, b) => a - b)
       .flatMap((turn) => {
         const line = readTurn(turn);
         return line
