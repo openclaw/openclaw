@@ -1,0 +1,61 @@
+# M07 ClawSweeper requirement dispositions
+
+**Design documentation: DONE. Acceptance: NEEDS MAINTAINER. Implementation: PLAN ONLY. Product proof: NOT COLLECTED. Runtime targets: UNMEASURED.**
+
+This iteration implements the user's instruction to commit ClawSweeper-requested revisions without commenting. The observed feedback still requests design acceptance before implementation. The authorized change is therefore a committed design revision on the existing fork branch, with no product source change or additional PR.
+
+## Historical attachment Table 1 — preserved
+
+| ID | Capability | Issue · PR | ClawSweeper verdict | Decision → recommended scope | Changes requested | Flags |
+| --- | --- | --- | --- | --- | --- | --- |
+| M07 | Voice snippets | Issue [#205639](https://github.com/openclaw/openclaw/issues/205639)<br>**No PR** (the plan calls for an issue + PR pair) | **Issue:** needs work. Keep open for product review. | A generic dictation extension contract, or a manually invoked draft plugin first? → A narrow dictation contract. Browser dictation is the first consumer, draft proposals are reused, and bounded plugin storage is settled before implementation. | • Redesign the snippet catalog to fit the existing preference storage limits. A single catalog exceeds them.<br>• Drop or justify immediate in-flight revocation. It conflicts with request-start admission.<br>• Get the extension contract and initial client scope accepted before implementing. | No PR yet. |
+
+The historical row remains unchanged in meaning. The later [fork PR #2](https://github.com/CompleteDotTech/openclaw/pull/2) is an open draft at observed head `7d8c99e9683ab86d65452d3de71ed3aa8463e6cc`, base `b7bd237d00508e0999c7a3fc6e36bc32bf421098`, both in CompleteDotTech/openclaw. It is not an upstream PR or accepted parent. This iteration adds design documents on that existing branch.
+
+**Attachment Table 2:** no M07 PR-blocker/E2E row was assigned. **Attachment Table 3:** no direct M07 parent/dependency row was assigned. Do not invent either or borrow sibling proof.
+
+## Exact feedback and current identities
+
+The [sole durable issue comment](https://github.com/openclaw/openclaw/issues/205639#issuecomment-7178316740) carries marker `clawsweeper-review item=205639`, reviewed at `2026-11-26T00:15:21.209Z`, source commit `26898ee0732b9ef426d175503a07ea6c76be3324`, and implementation `sha=na`. Its 64-character source digest is content identity, not a Git commit. The issue is still open, with P3, needs-product-decision and no-new-fix-pr; there is no observed human acceptance.
+
+Current upstream main is once-refreshed **`aa8288706247f3445242abf74395b9419100e665`**. Fork formal reviews, inline threads and discussion comments were separately fetched and returned zero; REST inventories corroborate the connector, whose pagination metadata is not exposed. No reviewed fork PR SHA or durable PR verdict is established. [Safe complete receipt](checks/source-refresh.json)
+
+The current placement source now has a `maxLength`/`truncateUtf16Safe` path, in addition to trim/spacing. This source change is incorporated into the literal fidelity decision and Q04 proof plan. Existing source behavior is not a live M07 result.
+
+## All thirteen named requirements
+
+Each row's local status covers the documentation response, not acceptance or runtime qualification. Original acceptance IDs M07-AC01–M07-AC11 are individually mapped in the revised issue.
+
+| ID | Source / requirement | Chosen response at this revision | Local status | Remaining decision/work | Product proof | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| A1 | Attachment Table 1 and durable comment: extension versus manual milestone, browser first | Exact question, two options and conditional small generic seam recommendation; current draft APIs lack finality/source metadata | DONE | NEEDS MAINTAINER: option, API, grammar, client | NOT COLLECTED | [Decision](decision-brief.md); [issue](issue-body.revised.md) |
+| A2 | Same feedback: fit existing preference limits | 8 total records, ID16 ASCII, trigger64 UTF-8, body256 UTF-8, full compact value4096; measured escaping/Unicode and optional disable reserve; no cap expansion | DONE | NEEDS MAINTAINER: key/content/write/retention policy | NOT COLLECTED; arithmetic separate | [Calculation](checks/catalogue-size-calculation.md); [result](checks/catalogue-size-calculation.json) |
+| A3 | Same feedback plus root request-start policy: reconcile immediate revocation | One admitted snapshot; later catalogue changes affect new requests; keep actual authority, input/target checks and explicit cancellation | DONE | NEEDS MAINTAINER: precise lifecycle contract | NOT COLLECTED | [Decision](decision-brief.md) |
+| L1 | Live fork discovery: exact head/base/reviews and no invented approval | Record fork-local draft, empty fresh inventories, no durable PR review or reviewed PR SHA; preserve historical No PR | DONE | PLAN ONLY: later accepted reassessment | NOT COLLECTED | [Source receipt](checks/source-refresh.json) |
+| L2 | Actual fork reserved key/9-MiB/500-record proposal versus generic caps | Treat as unaccepted expansion; tiny design uses no exception/sharding; actual user-data migration separate | DONE | NEEDS MAINTAINER: storage/access/retention; later actual data access may NEED USER | NOT COLLECTED | [Owner facts](checks/current-owner-facts.md); [readiness](pr-readiness.md) |
+| L3 | Capture order, literal output, review, Undo, no execution/Send | Existing capture/session/commits/task/editor owners; identify one-card replacement and current trim/spacing/truncation gaps; whole-body preserve-or-refuse proposal | DONE | NEEDS MAINTAINER: exact host integration | NOT COLLECTED | [Issue](issue-body.revised.md); [runbook](checks/qualification-runbook.md) |
+| L4 | Browser/microphone/provider/keyboard/AT/M11/sibling/upgrade gaps | Q01–Q16 precise future flow and evidence names; historical fork counts not credited | DONE | NEEDS USER: actual hardware/access; NEEDS MAINTAINER: scope/execution | NOT COLLECTED | [Runbook](checks/qualification-runbook.md) |
+| L5 | Design gate: issue revision/readiness before implementation | Full revised issue and implementation handoff; no second implementation/patch/branch/PR | DONE | PLAN ONLY: accepted later task | NOT COLLECTED | [Readiness](pr-readiness.md) |
+| G1 | Refresh source/guidance/reviews/limits | Current main aa828870; issue/fork refreshed; source digest separate; no newer review/approval found | DONE | PLAN ONLY: refresh at later implementation | NOT COLLECTED | [Receipt](checks/source-refresh.json) |
+| G2 | Exact local packet, preserved prior work and ZIPs | Recreate a fresh source-backed iteration in the required directory; add only that path to existing remote tree; prior scratch/ZIPs unavailable here, so no new hash claim | DONE | PLAN ONLY: inspect committed tree/result | NOT COLLECTED | [Notes](issue-revision-notes.md); [status](status.md) |
+| G3 | Current root/scoped owners; shared summary; transport/input guards | Current SDK/storage/settings verified; retain guards; proposed 1-KiB policy separate from content and excluded from all sync descriptors | DONE | NEEDS MAINTAINER: shared policy and content owner | NOT COLLECTED | [Owner facts](checks/current-owner-facts.md); [decision](decision-brief.md) |
+| G4 | Precise real-product and compatibility runbook; honest proof labels | Verified existing commands/path, actual future selection pending, all scenarios NOT COLLECTED and targets UNMEASURED | DONE | NEEDS USER / NEEDS MAINTAINER for listed prerequisites | NOT COLLECTED | [Runbook](checks/qualification-runbook.md); [checks](checks/checks-run.md) |
+| G5 | Original no-code/no-execution/no-mutation/no-fabricated-proof instruction | Latest user explicitly supersedes the no-commit restriction for requested revisions. Commit docs only, no comments, product execution, source repair, workflow request or fabricated proof | DONE | PLAN ONLY: no further action implied | NOT COLLECTED | [Notes](issue-revision-notes.md); [checks](checks/checks-run.md) |
+
+## Superseded assertions retained
+
+| Earlier assertion | Current disposition |
+| --- | --- |
+| No PR | Historical attachment statement retained; later same-fork draft separately recorded. |
+| Formal review/thread inventory unavailable | Fresh returned inventories are zero, with no-cursor limit stated; no review pass inferred. |
+| Reserved 9 MiB / 500-record catalogue is established storage | Unaccepted fork proposal; unchanged generic limits govern the proposed alternative. |
+| Field caps alone guarantee storage fit | False by exact quote/backslash and control escaping arithmetic; measure the entire serialized value. |
+| Catalogue edit/delete automatically retires admitted candidate | Superseded by request-start snapshot semantics; actual authority and explicit cancellation remain. |
+| Admission once removes transport checks | Rejected; preserve existing credential/frame/publication guards and authorized final drain. |
+| Default-off transforms establish literal placement | Not established; current prose path trims, spaces and can truncate for maxLength. |
+| Import/export belongs in first slice | Deferred with large bodies/catalogues, sharing, cloud sync and new storage. |
+| configSync:false establishes browser-only policy | Not sufficient; it can still use profile sync. Keep proposed policy outside the descriptor map and server schema. |
+| Earlier packet's product/count assertions are new proof | No; fresh arithmetic is design evidence only, source checks are source evidence, all runtime remains uncollected. |
+| No commits authorized | Latest explicit user instruction authorizes committing requested revisions; no-comment restriction remains. |
+
+This document does not resolve the same-author companion or any M11/M08/P02 decision, release a review hold or close an issue. [Full revised issue](issue-body.revised.md)

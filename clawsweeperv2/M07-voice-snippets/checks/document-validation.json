@@ -1,0 +1,217 @@
+{
+  "schemaVersion": 1,
+  "completedAtUtc": "2026-11-26T16:23:39.362954+00:00",
+  "result": "PASS",
+  "scope": "Bounded documentation validation and review; not product/runtime qualification",
+  "requiredDocumentCount": 9,
+  "validatedInputCount": 12,
+  "plannedCommitFiles": [
+    "checks/catalogue-size-calculation.json",
+    "checks/catalogue-size-calculation.md",
+    "checks/checks-run.md",
+    "checks/current-owner-facts.md",
+    "checks/document-validation.json",
+    "checks/qualification-runbook.md",
+    "checks/source-refresh.json",
+    "clawsweeper-requirements.md",
+    "decision-brief.md",
+    "issue-body.revised.md",
+    "issue-revision-notes.md",
+    "pr-readiness.md",
+    "status.md"
+  ],
+  "checks": [
+    {
+      "check": "required-deliverables",
+      "result": "PASS",
+      "detail": "All nine required documents exist and are nonempty."
+    },
+    {
+      "check": "intended-types",
+      "result": "PASS",
+      "detail": "Only Markdown and JSON are selected; the temporary calculation script and validation helper are excluded."
+    },
+    {
+      "check": "markdown-and-whitespace",
+      "result": "PASS",
+      "detail": {
+        "markdownFiles": 10,
+        "tablesChecked": 22,
+        "errors": []
+      }
+    },
+    {
+      "check": "relative-links",
+      "result": "PASS",
+      "detail": {
+        "linkCount": 67,
+        "receiptLink": "Receipt is generated before staging; other relative targets exist."
+      }
+    },
+    {
+      "check": "finding-ids:clawsweeper-requirements.md",
+      "result": "PASS",
+      "detail": {
+        "expected": [
+          "A1",
+          "A2",
+          "A3",
+          "L1",
+          "L2",
+          "L3",
+          "L4",
+          "L5",
+          "G1",
+          "G2",
+          "G3",
+          "G4",
+          "G5"
+        ],
+        "actual": [
+          "A1",
+          "A2",
+          "A3",
+          "L1",
+          "L2",
+          "L3",
+          "L4",
+          "L5",
+          "G1",
+          "G2",
+          "G3",
+          "G4",
+          "G5"
+        ]
+      }
+    },
+    {
+      "check": "finding-ids:status.md",
+      "result": "PASS",
+      "detail": {
+        "expected": [
+          "A1",
+          "A2",
+          "A3",
+          "L1",
+          "L2",
+          "L3",
+          "L4",
+          "L5",
+          "G1",
+          "G2",
+          "G3",
+          "G4",
+          "G5"
+        ],
+        "actual": [
+          "A1",
+          "A2",
+          "A3",
+          "L1",
+          "L2",
+          "L3",
+          "L4",
+          "L5",
+          "G1",
+          "G2",
+          "G3",
+          "G4",
+          "G5"
+        ]
+      }
+    },
+    {
+      "check": "acceptance-ids",
+      "result": "PASS",
+      "detail": [
+        "M07-AC01",
+        "M07-AC02",
+        "M07-AC03",
+        "M07-AC04",
+        "M07-AC05",
+        "M07-AC06",
+        "M07-AC07",
+        "M07-AC08",
+        "M07-AC09",
+        "M07-AC10",
+        "M07-AC11"
+      ]
+    },
+    {
+      "check": "exact-leading-question",
+      "result": "PASS",
+      "detail": "# Should automatic snippet expansion gain a generic dictation extension contract, or should initial work remain a manually invoked draft plugin?"
+    },
+    {
+      "check": "qualification-scenarios",
+      "result": "PASS",
+      "detail": {
+        "scenarios": [
+          "Q01",
+          "Q02",
+          "Q03",
+          "Q04",
+          "Q05",
+          "Q06",
+          "Q07",
+          "Q08",
+          "Q09",
+          "Q10",
+          "Q11",
+          "Q12",
+          "Q13",
+          "Q14",
+          "Q15",
+          "Q16"
+        ],
+        "productProof": "NOT COLLECTED"
+      }
+    },
+    {
+      "check": "json-parsing",
+      "result": "PASS",
+      "detail": [
+        "checks/catalogue-size-calculation.json",
+        "checks/source-refresh.json"
+      ]
+    },
+    {
+      "check": "source-identities",
+      "result": "PASS",
+      "detail": "Current source, pre-commit fork head and absent reviewed SHAs remain distinct."
+    },
+    {
+      "check": "stored-numeric-totals",
+      "result": "PASS",
+      "detail": {
+        "fixtureCount": 15,
+        "scope": "Validation of the saved report; the calculation was not rerun."
+      }
+    },
+    {
+      "check": "complete-calculation-source",
+      "result": "PASS",
+      "detail": "The Markdown source exactly matches the standalone script that was executed."
+    },
+    {
+      "check": "independent-bounded-review",
+      "result": "PASS",
+      "detail": "Six design documents reviewed by a second agent with no material issue; parent-supplied pinned excerpt confirmed source-only truncation. No independent re-fetch/runtime execution was claimed. Root corrected the literal-capacity cross-reference to Q04."
+    },
+    {
+      "check": "git-diff-cached-check",
+      "result": "PASS",
+      "detail": {
+        "exitCode": 0,
+        "output": "",
+        "scope": "Native Git in a fresh documentation-only repository; no OpenClaw hook, planner, test or build executed."
+      }
+    }
+  ],
+  "limitations": [
+    "The report does not certify owner acceptance, product behavior, performance, or remote publication.",
+    "No project code, build, installation, test, secret scanner, provider or microphone was executed.",
+    "Remote tree preservation and branch/PR outcome are verified separately after the authorized commit.",
+    "The receipt cannot include its own content hash; it is parsed and included in the final staged whitespace check after writing."
+  ]
+}
