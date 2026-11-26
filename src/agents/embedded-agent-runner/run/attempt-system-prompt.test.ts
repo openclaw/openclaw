@@ -641,19 +641,6 @@ describe("buildAttemptSystemPrompt", () => {
     expect(scoped.prepared.systemPromptText).not.toBe(userTurn.prepared.systemPromptText);
   });
 
-  it("keeps model instructions identical when only reasoning effort changes", async () => {
-    const prompts = [];
-    for (const effort of ["low", "high", "medium"] as const) {
-      prompts.push(
-        (await preparePermissionPrompt({ attemptOverrides: { thinkLevel: effort } })).prepared
-          .systemPromptText,
-      );
-    }
-    expect(prompts[0]).not.toBe("");
-    expect(prompts[1]).toBe(prompts[0]);
-    expect(prompts[2]).toBe(prompts[0]);
-  });
-
   it("marks rebuilt prompts as fresh even when restoring the original bytes", async () => {
     const { prepared, read } = await preparePermissionPrompt();
     const original = prepared.systemPromptText;

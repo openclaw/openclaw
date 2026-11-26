@@ -54,7 +54,6 @@
   the feature's E2E scenarios.
 - `scripts/control-ui-parity/`: visual scenario recipes, with the measurement
   environment caveat in step 2.
-- `ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts`: stream and idle budgets.
 - `ui/src/e2e/cron-search.e2e.test.ts`: interaction-scoped tracing.
 - `scripts/bench-control-ui-interactions.ts`: large-catalog input and sidebar measurements; `ui/src/e2e/chat-model-controls.e2e.test.ts` retains the behavior assertions.
 - Use `--trace` for per-task source-mapped attribution (`longTaskDetails`), and
