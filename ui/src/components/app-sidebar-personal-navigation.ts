@@ -1,16 +1,9 @@
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { parseSidebarEntry, type NavigationRouteId } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
-import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
+import { parseSidebarEntry } from "../app-navigation.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
-import { t } from "../i18n/index.ts";
-import { handleNavigationClick } from "../lib/navigation-click.ts";
-import { listen } from "../lib/reactive/listener.ts";
 import type { SessionConnectionScope } from "../lib/sessions/session-capability.ts";
 import { readSessionChangedEvent } from "../lib/sessions/session-row-reconcile.ts";
-import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
-import { showToast } from "../lib/toast.ts";
-import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import {
   buildReconciledSidebarZone,
   findSidebarSessionRow,
@@ -18,7 +11,7 @@ import {
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
 import {
-  setStoredSessionCatalogHidden,
+  sidebarPinnedSessionRows,
   type SidebarRecentSession,
   type SidebarPinZone,
 } from "./app-sidebar-session-types.ts";
@@ -47,52 +40,6 @@ type PersonalNavigationHost = {
   ): SidebarRecentSession | undefined;
   pluginNavigation(): Parameters<typeof buildReconciledSidebarZone>[0]["pluginNavigation"];
 };
-
-export function hidePersonalSidebarCatalog(
-  host: {
-    readonly sessionData: {
-      readonly sessionCatalogs: ReadonlyArray<{ id: string; label?: string | null }>;
-    };
-    readonly basePath: string;
-    readonly ownerDocument: Document;
-    readonly onNavigate:
-      | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
-      | undefined;
-  },
-  catalogId: string,
-): void {
-  const label =
-    host.sessionData.sessionCatalogs.find((catalog) => catalog.id === catalogId)?.label ??
-    catalogId;
-  setStoredSessionCatalogHidden(catalogId, true);
-  // Reuse the settings-search destination for the Sidebar preferences block so the
-  // toast opens the same place the rest of the app calls "Appearance > Sidebar".
-  const recovery = SETTINGS_ROUTE_TARGETS.appearanceSidebar;
-  const recoveryHref =
-    pathForRoute(recovery.routeId, host.basePath) + recovery.search + recovery.hash;
-  // The section disappears instantly and its only standing recovery lives on another
-  // page, so the outcome is announced where the action happened: undo here, plus a
-  // link that opens the re-enable block for after the toast is gone. Longer than the
-  // 6s default because that text is a recovery instruction, not an acknowledgement.
-  const message = host.ownerDocument.createDocumentFragment();
-  const recoveryLink = host.ownerDocument.createElement("a");
-  recoveryLink.className = "session-link";
-  recoveryLink.href = recoveryHref;
-  recoveryLink.textContent = t("chat.sidebar.sectionHiddenRecovery");
-  listen(recoveryLink, "click", (event) =>
-    handleNavigationClick(event, () =>
-      host.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash }),
-    ),
-  );
-  message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
-  showToast({
-    severity: "success",
-    message,
-    actionLabel: t("common.undo"),
-    onAction: () => setStoredSessionCatalogHidden(catalogId, false),
-    durationMs: 12_000,
-  });
-}
 
 /** Personal references observe the session owner; seeds only bridge presentation. */
 export function createSidebarPinnedSessions(
@@ -402,29 +349,12 @@ export function personalSidebarOwnerProjection(
   });
 }
 
-/** Rendering and selection share visibility for saved personal references. */
-export function sidebarPinnedSessionRows(
-  zone: SidebarPinZone,
-  archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],
-  now = Date.now(),
-): SidebarRecentSession[] {
-  return zone.entries.flatMap((entry) => {
-    const row =
-      entry.type === "session" && !entry.rail ? zone.sessionRows.get(entry.key) : undefined;
-    return row &&
-      row.archived !== true &&
-      !archiveVisibility?.(row.key) &&
-      !isSessionSnoozed(row, now)
-      ? [row]
-      : [];
-  });
-}
-
 export function sidebarVisibleRowsInOrder(
   zone: SidebarPinZone,
   visibleRows: SidebarRecentSession[],
   host: {
     readonly collapsedSessionSections: ReadonlySet<string>;
+    readonly gatewayPinTime?: number;
     readonly sessionDataContext?: {
       sessions: Pick<ApplicationContext["sessions"], "archiveVisibility">;
     };
@@ -432,8 +362,10 @@ export function sidebarVisibleRowsInOrder(
 ): SidebarRecentSession[] {
   const pins = host.collapsedSessionSections.has("pinned")
     ? []
-    : sidebarPinnedSessionRows(zone, (key) =>
-        host.sessionDataContext?.sessions.archiveVisibility(key),
+    : sidebarPinnedSessionRows(
+        zone,
+        (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
+        host.gatewayPinTime,
       );
   return [...pins, ...visibleRows];
 }

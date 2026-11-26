@@ -43,6 +43,7 @@ import {
   readGatewayLockProcessCmdline,
   readGatewayLockProcessStartTime,
 } from "./gateway-lock-process.js";
+import { drainGatewayLockResources } from "./gateway-lock-release.js";
 import {
   acquireGatewayOwnerLease,
   assertGatewayOwnerLeaseStopped,
@@ -743,8 +744,7 @@ export async function acquireGatewayLock(
     },
     release: () =>
       (released ??= (async () => {
-        await ownerLease?.release();
-        await resources?.close();
+        await drainGatewayLockResources(ownerLease, resources, role);
         projection?.release();
         projection = undefined;
         stateOwner.release();

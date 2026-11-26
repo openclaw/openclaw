@@ -148,7 +148,7 @@ export const WorkerInferenceUsageSchema = closedObject({
 });
 
 // Saved transcript usage may predate pricing; fresh inference keeps required cost.
-export const WorkerTranscriptUsageSchema = closedObject({
+const WorkerTranscriptUsageSchema = closedObject({
   ...WorkerInferenceUsageSchema.properties,
   cost: Type.Optional(WorkerInferenceUsageSchema.properties.cost),
 });

@@ -730,7 +730,7 @@ export function createHookRunner(
     const token = { active: true };
     const assertActive = () => {
       if (!token.active) {
-        throw new Error("prompt tool authority is no longer active");
+        throw new Error("Prompt build ended. Start a new turn to retry.");
       }
       params.assertHostActive();
     };

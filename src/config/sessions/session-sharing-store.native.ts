@@ -19,9 +19,14 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
+import { revokeSessionParticipationQueueInTransaction } from "./session-participation-queue.kernel.js";
 import type { SessionSharingExpectedEntry } from "./session-sharing-authority.types.js";
 import { getSessionMemberKysely } from "./session-sharing-store.kernel.js";
-import type { SessionMemberAdd } from "./session-sharing-store.types.js";
+import type {
+  SessionMemberAdd,
+  SessionMemberSetAccess,
+  SessionMemberAccessChange,
+} from "./session-sharing-store.types.js";
 export type { SessionSharingExpectedEntry } from "./session-sharing-authority.types.js";
 
 // Membership is bound to a live session entry, never a transcript placeholder.
@@ -72,11 +77,18 @@ function publishCommittedSessionMembership(
   sessionId: string,
   identityId: string,
   present: boolean,
+  access?: SessionMember["access"],
 ): void {
   publishSessionSharingMemberChange(
     database,
     sessionKey,
-    { kind: "member", sessionId, identityId: toUSVString(identityId), present },
+    {
+      kind: "member",
+      sessionId,
+      identityId: toUSVString(identityId),
+      present,
+      ...(access !== undefined ? { access } : {}),
+    },
     agentId,
   );
 }
@@ -123,6 +135,7 @@ export function addSessionMemberInTransaction(
           identity_id: identityId,
           added_by: addedBy,
           added_at: addedAt,
+          access: params.access ?? null,
         })
         .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
     ),
@@ -133,12 +146,110 @@ export function addSessionMemberInTransaction(
     if (actor) {
       actor.hot.members = [
         ...actor.hot.members,
-        { identityId: toUSVString(identityId), addedBy: toUSVString(addedBy), addedAt },
+        {
+          identityId: toUSVString(identityId),
+          addedBy: toUSVString(addedBy),
+          addedAt,
+          ...(params.access !== undefined ? { access: params.access } : {}),
+        },
       ];
     }
-    publishCommittedSessionMembership(database, agentId, sessionKey, sessionId, identityId, true);
+    publishCommittedSessionMembership(
+      database,
+      agentId,
+      sessionKey,
+      sessionId,
+      identityId,
+      true,
+      params.access,
+    );
   }
-  return { member: { identityId, addedBy, addedAt }, inserted: changed };
+  return {
+    member: {
+      identityId,
+      addedBy,
+      addedAt,
+      ...(params.access !== undefined ? { access: params.access } : {}),
+    },
+    inserted: changed,
+  };
+}
+
+export function setSessionMemberAccess(
+  scope: SessionAccessScope,
+  params: SessionMemberSetAccess,
+): SessionMemberAccessChange | undefined {
+  const identityId = params.identityId.trim();
+  if (!identityId) {
+    return undefined;
+  }
+  const resolved = resolveSqliteScope(scope);
+  const { agentId, sessionKey } = resolved;
+  return runOpenClawAgentWriteTransaction(
+    (database) => {
+      const sessionId = assertAuthorizedSessionInstance(
+        database,
+        sessionKey,
+        params.expectedSessionId,
+        params.expectedEntry,
+      );
+      const db = getSessionMemberKysely(database);
+      const previous = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_members")
+          .select("access")
+          .where("session_key", "=", sessionKey)
+          .where("identity_id", "=", identityId),
+      );
+      if (!previous) {
+        return undefined;
+      }
+      const result = {
+        changed: previous.access !== params.access,
+        ...(previous.access != null ? { previousAccess: previous.access } : {}),
+      };
+      if (!result.changed) {
+        return result;
+      }
+      withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .updateTable("session_members")
+            .set({ access: params.access })
+            .where("session_key", "=", sessionKey)
+            .where("identity_id", "=", identityId),
+        ),
+      );
+      if (params.access !== "send") {
+        revokeSessionParticipationQueueInTransaction(database, {
+          sessionKey,
+          sessionId,
+          profileId: identityId,
+        });
+      }
+      const actor = readSessionActorTransactionState(database, { sessionKey, sessionId });
+      if (actor) {
+        const member = actor.hot.members.find((row) => row.identityId === toUSVString(identityId));
+        if (member) {
+          member.access = params.access;
+        }
+      }
+      publishCommittedSessionMembership(
+        database,
+        agentId,
+        sessionKey,
+        sessionId,
+        identityId,
+        true,
+        params.access,
+      );
+      return result;
+    },
+    toDatabaseOptions(resolved),
+    { operationLabel: "session.sharing.set-member-access" },
+  );
 }
 
 export function removeSessionMember(
@@ -179,12 +290,17 @@ export function removeSessionMember(
       const row = withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
         executeSqliteQueryTakeFirstSync(
           database.db,
-          removal.returning(["identity_id", "added_by", "added_at"]),
+          removal.returning(["identity_id", "added_by", "added_at", "access"]),
         ),
       );
       if (!row) {
         return null;
       }
+      revokeSessionParticipationQueueInTransaction(database, {
+        sessionKey,
+        sessionId,
+        profileId: normalizedIdentityId,
+      });
       const actor = readSessionActorTransactionState(database, { sessionKey, sessionId });
       if (actor) {
         actor.hot.members = actor.hot.members.filter(
@@ -199,7 +315,12 @@ export function removeSessionMember(
         normalizedIdentityId,
         false,
       );
-      return { identityId: row.identity_id, addedBy: row.added_by, addedAt: row.added_at };
+      return {
+        identityId: row.identity_id,
+        addedBy: row.added_by,
+        addedAt: row.added_at,
+        ...(row.access !== null ? { access: row.access } : {}),
+      };
     },
     toDatabaseOptions(resolved),
     { operationLabel: "session.sharing.remove-member" },

@@ -62,7 +62,7 @@ suite.define(() => {
             return { left: box.left, width: box.width, height: box.height };
           }),
         );
-        expect(boxes).toHaveLength(5);
+        expect(boxes).toHaveLength(6);
         for (const box of boxes) {
           expect(Math.abs(box.left - boxes[0]!.left)).toBeLessThan(1);
           expect(Math.abs(box.width - boxes[0]!.width)).toBeLessThan(1);
@@ -86,18 +86,16 @@ suite.define(() => {
           const detailBox = detail.getBoundingClientRect();
           const menuBox = element.closest(".picker-select__menu")!.getBoundingClientRect();
           return {
-            centerOffset: Math.abs(
-              (labelBox.top + labelBox.bottom - detailBox.top - detailBox.bottom) / 2,
-            ),
-            gap: detailBox.left - labelBox.right,
+            verticalGap: detailBox.top - labelBox.bottom,
+            leftOffset: detailBox.left - labelBox.left,
             rightOffset: copy.getBoundingClientRect().right - detailBox.right,
             detailColor: getComputedStyle(detail).color,
             mutedColor: getComputedStyle(trigger).color,
             menuFits: menuBox.left >= 0 && menuBox.right <= innerWidth,
           };
         });
-        expect(metadata.centerOffset).toBeLessThan(1);
-        expect(metadata.gap).toBeGreaterThan(0);
+        expect(metadata.verticalGap).toBeGreaterThanOrEqual(0);
+        expect(Math.abs(metadata.leftOffset)).toBeLessThan(1);
         expect(Math.abs(metadata.rightOffset)).toBeLessThan(1);
         expect(metadata.detailColor).toBe(metadata.mutedColor);
         expect(metadata.menuFits).toBe(true);

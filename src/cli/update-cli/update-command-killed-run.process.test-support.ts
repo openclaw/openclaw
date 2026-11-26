@@ -7,10 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as gatewayService from "../../daemon/service.js";
-import {
-  createMockGatewayService,
-  mockSystemAccountHome,
-} from "../../daemon/service.test-helpers.js";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as containerEnvironment from "../../infra/container-environment.js";
 import {
   openPackageActivationJournal,
@@ -20,7 +17,6 @@ import { createPackageActivationLifetimeFixture } from "../../infra/package-upda
 import { packageActivationRuntimeEntrypoint } from "../../infra/package-update-activation-runtime-assets.js";
 import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
 import {
-  packageVersion,
   runSwitch,
   type KillSweepChildEnv,
 } from "../../infra/package-update-kill-sweep.test-support.js";
@@ -33,7 +29,6 @@ import * as processOwner from "../../infra/state-lease-process-owner.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
-import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
@@ -50,7 +45,6 @@ import {
 } from "./update-command-executor.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
-import { createUpdateServiceStateReader } from "./update-command-service-state.test-support.js";
 import { updateCommand } from "./update-command.js";
 
 // The next `openclaw update` after a real updater process was killed: each suite
@@ -410,62 +404,11 @@ export function nextUpdate(slot: string, options: { dryRun?: true; restart?: tru
   const { dryRun, restart = false } = options;
   return updateCommand({ json: true, yes: true, restart, ...(dryRun ? { dryRun } : {}) });
 }
-/** The installation's managed Gateway: stopped, owned by `slot`, healthy once started. */
-export function managedGateway(slot: string) {
-  const { service } = ctx;
-  // The fixture home is the account home: the default installation, whose service is managed.
-  mockSystemAccountHome();
-  const entry = path.join(slot, "openclaw.mjs");
-  fs.writeFileSync(entry, "// fixture Gateway entrypoint\n");
-  vi.mocked(service.readCommand).mockResolvedValue({
-    programArguments: [process.execPath, entry, "gateway"],
-    sourcePath: path.join(ctx.root, "gateway.service"),
-  });
-  vi.mocked(service.start).mockImplementation(async (args) => {
-    await args.beforeMutation?.();
-    args.assertCurrent?.();
-  });
-  vi.spyOn(gatewayService, "readGatewayServiceState").mockImplementation(
-    createUpdateServiceStateReader({
-      readCommand: service.readCommand,
-      isLoaded: service.isLoaded,
-      readRuntime: service.readRuntime,
-      readCapability: async () => ({ kind: "writable" }),
-      absentPort: () => 19789,
-    }),
-  );
-  vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockResolvedValue({
-    outcome: "ready",
-    runtime: { status: "running", pid: 4242 },
-    portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
-    healthy: true,
-    staleGatewayPids: [],
-    gatewayVersion: packageVersion(slot),
-  });
-}
-export const recorded = (prepared: Prepared | undefined, name: string) =>
-  prepared?.packageActivationSteps?.find((step) => step.name === name)?.warnings?.[0];
-export const settled = (prepared: Prepared | undefined) =>
-  recorded(prepared, "interrupted-update-recovery");
 /** The repair-shaped runs finalization of a killed run writes, newest first. */
 export const finalizationRuns = () =>
   listUpdateRuns({ limit: 100 }).filter((run) =>
     run.steps.some((step) => step.step === "finalize:repair-continuation"),
   );
-/** A run row without its identities, clocks and process facts. */
-export const shape = (run: UpdateRunRecord | undefined) =>
-  run && {
-    trigger: run.trigger,
-    phase: run.phase,
-    status: run.status,
-    reason: run.reason,
-    target: run.target,
-    after: run.after,
-    origin: Object.keys(run.origin).toSorted(),
-    verification: Object.keys(run.verification).toSorted(),
-    serving: [run.verification.serviceRunning, run.verification.settled],
-    steps: run.steps.map((step) => [step.step, step.status]),
-  };
 /** The update stopped on the stage's failure, named repair, and nothing exited the process. */
 export function expectFinishFailure(refused: unknown, runId: string, detail: string) {
   expect(String(refused)).toContain(

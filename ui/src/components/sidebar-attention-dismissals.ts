@@ -10,8 +10,6 @@ import { getSafeLocalStorage } from "../local-storage.ts";
 
 const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
   "outbox",
-  "cronFailed",
-  "cronOverdue",
   "modelAuthExpired",
   "openClawIdKeys",
   "openClawIdRequest",
@@ -22,13 +20,13 @@ const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
 ] as const;
 
 export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_DISMISSAL_KINDS)[number];
-export type SidebarAttentionDismissal = {
-  kind: SidebarAttentionKind;
-  signature: string;
-  failedAtMs?: number;
-};
+export type SidebarAttentionDismissal = { kind: SidebarAttentionKind; signature: string };
 
-export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string[]>>;
+// Preserve v2 failure IDs until the Gateway confirms their import.
+const STORED_DISMISSAL_KINDS = [...SIDEBAR_ATTENTION_DISMISSAL_KINDS, "cronFailed"] as const;
+export type SidebarAttentionDismissals = Partial<
+  Record<(typeof STORED_DISMISSAL_KINDS)[number], string[]>
+>;
 
 // Origin-only v1 records have no proven account owner. Leave them untouched and unadopted.
 const DISMISSED_STORE_PREFIX = "openclaw.control.sidebarAttention.v2:";
@@ -78,7 +76,7 @@ export function loadDismissals(key: string | null): SidebarAttentionDismissals {
       return {};
     }
     const result: SidebarAttentionDismissals = {};
-    for (const kind of SIDEBAR_ATTENTION_DISMISSAL_KINDS) {
+    for (const kind of STORED_DISMISSAL_KINDS) {
       const value = record[kind];
       const signatures = Array.isArray(value)
         ? value.filter((entry): entry is string => typeof entry === "string")
@@ -93,7 +91,7 @@ export function loadDismissals(key: string | null): SidebarAttentionDismissals {
   }
 }
 
-export function saveDismissals(key: string | null, dismissals: SidebarAttentionDismissals) {
+function saveDismissals(key: string | null, dismissals: SidebarAttentionDismissals) {
   if (!key) {
     return;
   }
@@ -110,6 +108,18 @@ export function saveDismissals(key: string | null, dismissals: SidebarAttentionD
   } catch {
     // Quota/privacy-mode failures just lose the snooze; chips reappear.
   }
+}
+
+export function retireLegacyCronDismissal(key: string, id: string): void {
+  const stored = loadDismissals(key);
+  if (!stored.cronFailed?.includes(id)) {
+    return;
+  }
+  stored.cronFailed = stored.cronFailed.filter((candidate) => candidate !== id);
+  if (!stored.cronFailed.length) {
+    delete stored.cronFailed;
+  }
+  saveDismissals(key, stored);
 }
 
 /**
@@ -185,7 +195,7 @@ export function isSidebarAttentionDismissed(
 export function reconcileSidebarAttentionDismissals(params: {
   active: readonly SidebarAttentionDismissal[];
   key: string | null;
-  scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null };
+  scope?: { modelAuthAgentId: string };
 }): SidebarAttentionDismissals {
   const dismissals = loadDismissals(params.key);
   const active = params.active;
@@ -196,6 +206,9 @@ export function reconcileSidebarAttentionDismissals(params: {
    * stale snooze. Returns the input object when nothing changed.
    */
   const next: SidebarAttentionDismissals = {};
+  if (dismissals.cronFailed) {
+    next.cronFailed = dismissals.cronFailed;
+  }
   let changed = false;
   for (const kind of SIDEBAR_ATTENTION_DISMISSAL_KINDS) {
     const stored = dismissals[kind];
@@ -205,23 +218,15 @@ export function reconcileSidebarAttentionDismissals(params: {
     const current = stored.filter((signature) => {
       // A recovery use is an immutable event, not a nag that can recur. Other inventories
       // and a pending owner history read cannot re-arm an already dismissed event.
-      // A v2 failure ID is pending migration. Only the authenticated gateway can retire it.
-      if (kind === "openClawIdRecoveryUse" || kind === "cronFailed") {
+      if (kind === "openClawIdRecoveryUse") {
         return true;
       }
-      // Selected-agent responses are partial: they may re-arm their own auth
-      // warning, but only an all-agent cron inventory may re-arm cron entries.
+      // A selected-agent response can only re-arm its own auth warnings.
       const authoritative =
         !scope ||
-        (kind === "modelAuthExpired"
-          ? Boolean(
-              scope.modelAuthAgentId &&
-              (!signature.startsWith("agent:") ||
-                signature.startsWith(`agent:${scope.modelAuthAgentId}\n`)),
-            )
-          : kind === "cronOverdue"
-            ? scope.cronInventoryComplete
-            : true);
+        kind !== "modelAuthExpired" ||
+        !signature.startsWith("agent:") ||
+        signature.startsWith(`agent:${scope.modelAuthAgentId}\n`);
       return (
         !authoritative ||
         active.some((dismissal) => dismissal.kind === kind && dismissal.signature === signature)

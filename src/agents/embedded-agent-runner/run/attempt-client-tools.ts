@@ -43,6 +43,8 @@ export function prepareEmbeddedAttemptClientTools(params: {
   effectiveTools: AgentTool[];
   /** Applies the session tool pin each time the surface is built, including permission refreshes. */
   pinTools?: (tools: AgentTool[]) => AgentTool[];
+  /** Records an on-demand catalog tool the model just called by name as a session direct tool. */
+  onPromoteTool?: (tool: AgentTool) => void;
   replaySafetyOptions: Parameters<typeof isAgentToolReplaySafe>[1];
   sandboxSessionKey?: string;
   sessionAgentId: string;

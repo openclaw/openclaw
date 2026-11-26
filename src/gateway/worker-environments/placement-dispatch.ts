@@ -529,12 +529,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     pendingOperations?: WorkerPlacementPendingOperations,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
+    authorize?.();
+    if (request.recoverToGateway && getRuntimeConfig().cloudWorkers?.requiredProfile) {
+      throw new RequiredWorkerProfileError(
+        "Gateway recovery is disabled by the required worker profile policy; Stop retains the workspace for remote recovery.",
+      );
+    }
     const assertGatewayRecoverySource = (captured?: WorkerDispatchPlacement) => {
-      if (request.recoverToGateway && getRuntimeConfig().cloudWorkers?.requiredProfile) {
-        throw new RequiredWorkerProfileError(
-          "Gateway recovery is disabled by the required worker profile policy; Stop retains the workspace for remote recovery.",
-        );
-      }
       if (!request.recoverToGateway) {
         return;
       }
@@ -559,7 +560,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       }
     };
     const initial = await placements.getAsync(request.sessionId);
-    authorize?.();
     beforeDrain?.();
     assertGatewayRecoverySource(initial);
     if (initial) {
@@ -574,7 +574,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     );
     return await options.runReclaimPreparation({
       ...request,
-      authorize,
+      authorize: authorize?.assertWorkerLifetime ?? authorize,
       beforeDrain: checkSource,
       pendingOperations,
       run: (reauthorize) =>
@@ -599,7 +599,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     runMoveBarrier: options.runMoveBarrier,
     dispatch,
     reclaimSource: (request, intent, authorize, onTransition) =>
-      reclaimOnce(request, intent, authorize, undefined, onTransition),
+      reclaimOnce(
+        request,
+        intent,
+        authorize?.assertWorkerLifetime ?? authorize,
+        undefined,
+        onTransition,
+      ),
     validateAbandonSource: abandonment.validateAbandonSource,
     abandonSource: abandonment.abandonSource,
     resolveDestination: options.resolveMoveDestination,

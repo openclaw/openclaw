@@ -8,7 +8,7 @@ export type SqliteLifecycleTargetSnapshot = Array<{
   entry: InternalSessionEntry;
   sessionKey: string;
   window?: SessionEntryWindowFacts;
-  sideTables?: { memberIdsJson: string; hasBoard: boolean };
+  sideTables?: { memberIdsJson: string; memberAccessJson?: string; hasBoard: boolean };
   row?: ResolvedSessionEntryRow["row"];
 }>;
 

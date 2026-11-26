@@ -162,18 +162,24 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
       const unbound = registry.getSubagentRunByRunId("run-unbound");
       if (binding === "restored") {
         expect(unbound).toBeUndefined();
-        const notices = readTranscriptEventRows(
+        const statuses = readTranscriptEventRows(
           openOpenClawAgentDatabase({ agentId: "main" }),
           "sess-main",
         )
           .map((row) => JSON.parse(row.eventJson))
-          .filter((event) => event.customType === "run-failed-before-reply");
-        expect(notices).toEqual([expect.objectContaining({ display: true })]);
+          .filter((event) => event.customType === "subagent-completion");
+        expect(statuses).toEqual([
+          expect.objectContaining({
+            display: false,
+            content: expect.stringContaining("saved result run-unbound"),
+            details: expect.objectContaining({ childRunIds: ["run-unbound"] }),
+          }),
+        ]);
+        expect(statuses[0]).not.toHaveProperty("excludeFromContext");
         return;
       }
       expect(unbound?.requesterSettleWake).toBeUndefined();
-      expect(unbound?.delivery?.status).toMatch(/^(delivered|failed)$/);
-      expect(unbound?.delivery?.disposition).not.toBe("intentional_non_delivery");
+      expect(unbound?.delivery?.status).toBe("delivered");
     },
   );
 

@@ -417,6 +417,32 @@ Code Mode also includes that guidance in the returned value's `message` field.
 This exemption uses private runtime provenance, not tool-authored `gated` or
 `status` fields.
 
+### On-demand tools
+
+Tools marked `catalogMode: "on-demand"` (currently `computer` and, on
+unsandboxed or adopting sessions, `github_publish`) start in the catalog with a
+short entry whose `call` field says they load as top-level tools once looked up.
+The prompt directory marks their rows `[loads on lookup]` and the Code Mode
+index marks them `[top-level call only; not from exec]`.
+
+In the embedded harness, looking one up loads it: `tool_describe` adds its
+definition to the next provider request in the same turn, so the model can call
+it by name right away. A refused `dispatch_action` loads it the same way, and so
+does a direct call by name. In Code Mode, `describe()` or a refused guest call
+loads it for the following turns.
+The tool is recorded in the session's tool pin, so every later turn of the
+prompt series sends it as a normal direct tool, including after a Gateway
+restart. `/new`, `/reset`, compaction and a model change start a new series,
+and the tool is deferred again until it is looked up again. Loading changes the
+provider tool list once, on the request after the lookup.
+
+`dispatch_action` and Code Mode guest calls never run on-demand tools, because
+a catalog bridge cannot carry a screenshot result or a turn handoff; they load
+the tool and say to call it directly. Harnesses that cannot load a tool
+mid-session (Copilot, Codex, cloud workers, headless catalogs) keep on-demand
+tools direct.
+With Tool Search and Code Mode off, every tool is direct as before.
+
 If `dispatch_action` names a direct-only tool declared for the current turn, it returns
 guidance to call that tool directly by its declared name and parameters. It does
 not dispatch direct-only tools through the catalog or suggest searching for them.

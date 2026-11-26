@@ -1,5 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 import { MAX_TEMPLATE_UPLOAD_ARCHIVE_BYTES } from "../../../../packages/gateway-protocol/src/template-source-limits.js";
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import "../../components/modal-dialog.tsx";
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
@@ -12,8 +13,8 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { readTemplatePackagePreview } from "../templates/template-package-preview.ts";
-import { openTemplateAgentChat } from "./template-agent-chat.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import { templateImportFacts } from "./template-import-facts.ts";
 import { TemplateImportReview } from "./template-import-review.tsx";
@@ -25,6 +26,8 @@ import {
   type TemplateUploadSource,
 } from "./templates-catalog-client.ts";
 
+type ImportedChat = { agentId: string; sessionKey: string };
+
 export function TemplateUpload() {
   const context = useApplication();
   let fileInput: HTMLInputElement | undefined;
@@ -32,7 +35,7 @@ export function TemplateUpload() {
   const [review, setReview] = createSignal<TemplateAddReviewPlan | null>(null);
   const [busy, setBusy] = createSignal(false);
   const [message, setMessage] = createSignal("");
-  const [installed, setInstalled] = createSignal<{ agentId: string; name: string } | null>(null);
+  const [failedChat, setFailedChat] = createSignal<ImportedChat | null>(null);
   // Only a failed review may pick again; an uncertain apply must not invite a blind retry.
   const [canChooseAgain, setCanChooseAgain] = createSignal(false);
   const [opening, setOpening] = createSignal(false);
@@ -53,7 +56,7 @@ export function TemplateUpload() {
     setReview(null);
     setBusy(false);
     setMessage("");
-    setInstalled(null);
+    setFailedChat(null);
     setCanChooseAgain(false);
     setOpening(false);
   }
@@ -111,26 +114,42 @@ export function TemplateUpload() {
       }
     }
   }
-  async function openChat() {
-    const done = installed();
+  async function openChat({ agentId, sessionKey }: ImportedChat) {
+    const scope = gateway.capture();
     const current = generation;
-    if (!done || opening()) {
+    if (!scope || opening()) {
       return;
     }
+    const isCurrent = () => gateway.isCurrent(scope) && current === generation;
     setOpening(true);
-    setMessage("");
     try {
       const roster = await context.agents.refreshList();
-      if (current !== generation) {
+      if (!isCurrent()) {
         return;
       }
-      if (!roster?.agents.some((agent) => agent.id === done.agentId)) {
+      if (!roster?.agents.some((agent) => agent.id === agentId)) {
         throw new Error(t("templatesCatalog.openChatFailed"));
       }
+      const target = sessionNavigationTarget({
+        context,
+        face: "chat",
+        sessionKey,
+        agentId,
+        exactKey: true,
+      });
+      selectApplicationSession({
+        selection: context.agentSelection,
+        gateway: context.gateway,
+        sessionKey,
+        agentId,
+      });
+      context.navigate("chat", target.options);
       reset();
-      openTemplateAgentChat(context, done.agentId);
     } catch {
-      if (current === generation) {
+      if (isCurrent()) {
+        // The archive has already been applied. Retry only the chat handoff.
+        setReview(null);
+        setFailedChat({ agentId, sessionKey });
         setMessage(t("templatesCatalog.openChatFailed"));
         setOpening(false);
       }
@@ -204,10 +223,10 @@ export function TemplateUpload() {
       const result = await applyTemplateUpload(scope.client, upload, plan);
       if (gateway.isCurrent(scope) && current === generation) {
         source = undefined;
-        setReview(null);
-        if (result.status === "complete" && result.agentId) {
-          setInstalled({ agentId: result.agentId, name: templateImportFacts(plan).name });
+        if (result.status === "complete" && result.sessionKey) {
+          await openChat({ agentId: result.agentId, sessionKey: result.sessionKey });
         } else {
+          setReview(null);
           setMessage(result.error?.message ?? t("templatesCatalog.incompleteImport"));
         }
       }
@@ -254,15 +273,17 @@ export function TemplateUpload() {
               {t("templatesCatalog.chooseAnotherArchive")}
             </button>
           </Show>
-          <Show when={installed()}>
-            <button
-              type="button"
-              class="btn primary"
-              disabled={opening()}
-              onClick={() => void openChat()}
-            >
-              {t("templatesCatalog.openChat")}
-            </button>
+          <Show when={failedChat()} keyed>
+            {(chat) => (
+              <button
+                type="button"
+                class="btn primary"
+                disabled={opening()}
+                onClick={() => void openChat(chat)}
+              >
+                {t("templatesCatalog.retryOpenChat")}
+              </button>
+            )}
           </Show>
           <Show when={review()}>
             <button
@@ -345,7 +366,7 @@ export function TemplateUpload() {
                     <span class="template-art template-package-art">
                       <TemplateArtwork />
                     </span>
-                    <h2>{installed()?.name ?? t("templatesCatalog.importTitle")}</h2>
+                    <h2>{t("templatesCatalog.importTitle")}</h2>
                   </header>
                   <div class="template-creator__body">
                     <Show when={reviewing()}>
@@ -355,13 +376,6 @@ export function TemplateUpload() {
                       >
                         <For each={[1, 2, 3]}>{() => <span class="skeleton" />}</For>
                       </div>
-                    </Show>
-                    <Show when={installed()}>
-                      {(done) => (
-                        <p role="status">
-                          {t("templatesCatalog.installedAgent", { agentId: done().agentId })}
-                        </p>
-                      )}
                     </Show>
                     <Show when={message()}>
                       <InlineAlert tone="danger" role="alert">

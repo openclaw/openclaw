@@ -54,7 +54,7 @@ async function prepareProjectSkillScope(
       cfg,
       projectId: params.projectId,
       targetAgentId: agentId,
-      requester: projectRequesterForClient(client),
+      requester: projectRequesterForClient(client, cfg),
       resolveSandboxRequired: () =>
         resolveCreatorSandbox(cfg, resolveOperatorSessionCreation(client)) === "required",
       assertCurrent,

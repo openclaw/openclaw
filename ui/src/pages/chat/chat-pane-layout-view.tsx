@@ -5,7 +5,6 @@ import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { useScrollState } from "../../components/solid/scroll-state.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -24,6 +23,7 @@ import type { SidebarRegionViewProps } from "./components/chat-sidebar-region-ty
 import { SubagentDesktopAvatar } from "./components/chat-subagent-avatar.tsx";
 import {
   ChatSubagentMobileHeader,
+  SubagentReaderTitle,
   type ChatSubagentMobileStop,
 } from "./components/chat-subagent-mobile-header.tsx";
 import { isSidebarSlotVisible } from "./sidebar-layout.ts";
@@ -92,7 +92,6 @@ function PaneSubagentHeader(props: {
           }
         >
           {(desktop) => {
-            const nameRef = useScrollState(true, false);
             return (
               <header
                 class="subagents-desktop__child-rail session-panel-rail"
@@ -109,9 +108,7 @@ function PaneSubagentHeader(props: {
                   </button>
                 </span>
                 <SubagentDesktopAvatar sessionKey={desktop().sessionKey} />
-                <strong ref={nameRef} class="subagents-desktop__child-name" title={props.title}>
-                  {props.title}
-                </strong>
+                <SubagentReaderTitle title={props.title} />
                 <Show when={props.stop}>
                   {(stop) => (
                     <span class="session-panel-rail__group">

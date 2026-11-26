@@ -878,10 +878,10 @@ describe("remote Control UI ingress production composition", () => {
             expect(recovered.authority.scopes).not.toContain("operator.admin");
           } else {
             // A read-only requester's saved source starts no new work.
-            await expect(restore()).rejects.toThrow("no longer allows sending messages");
+            await expect(restore()).rejects.toThrow("I did not run your queued request.");
           }
           resumable = false;
-          await expect(restore()).rejects.toThrow("original ingress grant");
+          await expect(restore()).rejects.toThrow("The sign-in it was started with");
           resumable = true;
           await expect(binding.request("config.set", { raw: "{}" })).rejects.toThrow(
             "operator.admin",
@@ -921,7 +921,6 @@ describe("remote Control UI ingress production composition", () => {
             ).toMatchObject({ ok: true });
             setOpenClawIdTunnelPrincipalLookup((key) => claw.authority.currentPeer(key));
             await expect(binding.request("voicewake.get", {})).rejects.toThrow();
-            recovered?.authority.assertCurrent();
             await expect(restore()).rejects.toThrow();
             await expect(readRemote("/claw/control-ui-config.json", ui)).rejects.toThrow();
           });

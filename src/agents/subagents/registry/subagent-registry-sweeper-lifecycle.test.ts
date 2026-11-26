@@ -5,7 +5,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import * as expiredDelivery from "./subagent-registry-suspended-delivery.js";
+import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import {
   createArchivedSubagentSweeperRun,
   createSubagentSweeperHarness,
@@ -21,32 +21,32 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["failed", "suspended", "retryable"] as const)(
-  "applies session-run retention after six minutes (%s)",
-  async (deliveryStatus) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const settledAt = Date.now() - 6 * 60_000;
-      const entry = createArchivedSubagentSweeperRun({
-        spawnMode: "session",
-        cleanup: "keep",
-        archiveAtMs: undefined,
-        cleanupCompletedAt: settledAt,
-        delivery:
-          deliveryStatus === "suspended"
-            ? { status: "suspended", suspendedAt: settledAt, suspendedReason: "permanent_failure" }
-            : {
-                status: "failed",
-                ...(deliveryStatus === "retryable" ? { disposition: "retryable" as const } : {}),
-                lastError: "completion agent did not produce a visible reply",
-              },
-      });
-      const { sweeper, runs, callGateway } = createSubagentSweeperHarness(entry);
-      await sweeper.sweepOnce();
-      expect(runs.has(entry.runId)).toBe(deliveryStatus !== "failed");
-      expect(callGateway).not.toHaveBeenCalled();
+it("settles a legacy failed result into requester history before session-run retention", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const settledAt = Date.now() - 6 * 60_000;
+    const entry = createArchivedSubagentSweeperRun({
+      spawnMode: "session",
+      cleanup: "keep",
+      archiveAtMs: undefined,
+      cleanupCompletedAt: settledAt,
+      expectsCompletionMessage: true,
+      // Older builds left an undelivered result like this after their retry gave up.
+      delivery: { status: "failed", lastError: "completion agent failed" },
     });
-  },
-);
+    const { sweeper, runs, callGateway } = createSubagentSweeperHarness(entry);
+    const settle = vi
+      .spyOn(completionStore, "settleSubagentCompletionInHistory")
+      .mockResolvedValue(false);
+    try {
+      await sweeper.sweepOnce();
+      expect(settle.mock.calls.map(([{ subagent }]) => subagent.runId)).toEqual([entry.runId]);
+      expect(runs.has(entry.runId)).toBe(true);
+      expect(callGateway).not.toHaveBeenCalled();
+    } finally {
+      settle.mockRestore();
+    }
+  });
+});
 
 it("lets I/O run during a retained backlog and skips owners replaced between batches", async () => {
   vi.useRealTimers();
@@ -55,7 +55,7 @@ it("lets I/O run during a retained backlog and skips owners replaced between bat
       cleanup: "keep",
       archiveAtMs: Number.MAX_SAFE_INTEGER,
       cleanupCompletedAt: 1,
-      delivery: { status: "delivered" },
+      delivery: { status: "suspended", suspendedAt: Date.now(), suspendedReason: "expiry" },
       requesterTurnRunId: "retained-requester",
       expectsCompletionMessage: true,
     });
@@ -68,7 +68,9 @@ it("lets I/O run during a retained backlog and skips owners replaced between bat
     // Expire the processing budget independently of host speed; keep real event-loop turns.
     let clockNow = performance.now();
     const clock = vi.spyOn(performance, "now").mockImplementation(() => (clockNow += 5));
-    const settle = vi.spyOn(expiredDelivery, "settleSubagentCompletionReservation");
+    const settle = vi
+      .spyOn(completionStore, "settleSubagentCompletionInHistory")
+      .mockResolvedValue(false);
     const sweep = sweeper.runTick();
     const io = new Promise<void>((resolve) => {
       setImmediate(() => {
@@ -81,7 +83,7 @@ it("lets I/O run during a retained backlog and skips owners replaced between bat
       await Promise.all([sweep, io]);
       expect(visitedBeforeIo).toBeGreaterThan(0);
       expect(visitedBeforeIo).toBeLessThan(1024);
-      expect(settle.mock.calls.map(([run]) => run.runId)).toEqual(
+      expect(settle.mock.calls.map(([{ subagent }]) => subagent.runId)).toEqual(
         Array.from({ length: 1023 }, (_, index) => `run-${index}`),
       );
       expect(warn).not.toHaveBeenCalled();

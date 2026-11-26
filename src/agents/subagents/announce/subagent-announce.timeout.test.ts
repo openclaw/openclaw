@@ -172,14 +172,14 @@ describe("subagent announce timeout config", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("keeps delete-mode timeout retryable while the embedded child request is still active", async () => {
+  it("does not deliver a delete-mode timeout while the embedded child request is still active", async () => {
     sessionStore["agent:main:subagent:worker"] = { sessionId: "child-session" };
     isActive.mockReturnValue(true);
     waitForEnd.mockResolvedValue(false);
 
     const didAnnounce = await timeout("active-delete", { cleanup: "delete" });
 
-    expect(didAnnounce).toBe("retryable");
+    expect(didAnnounce).toBe("undelivered");
     expect(deliver).not.toHaveBeenCalled();
   });
 

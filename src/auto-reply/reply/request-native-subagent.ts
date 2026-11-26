@@ -125,7 +125,6 @@ export async function withRequesterNativeSubagents<T>(
       const assertCurrent = () => {
         guard.assertCurrent();
         signal.throwIfAborted();
-        operatorAuthority.assertCurrent();
         state.assertCurrent();
       };
       const prepare = async (
@@ -220,10 +219,7 @@ export async function withRequesterNativeSubagents<T>(
                   agentId: sessionAgentId,
                   operatorAuthority,
                   // Accepted children retain the operator source, not this invocation.
-                  assertSourceCurrent: () => {
-                    operatorAuthority.assertCurrent();
-                    owner.assertOwnerCurrent?.();
-                  },
+                  assertSourceCurrent: () => owner.assertOwnerCurrent?.(),
                   onAdmitted: (context) =>
                     bindGatewayContextResolver(context, resolveGatewayContext),
                 });

@@ -158,8 +158,13 @@ export const modelAccountProfile: UserProfile = {
 };
 export type ProfilePageElement = HTMLElement & { unmount(): void };
 
-export function mountProfilePage(context: ApplicationContext): ProfilePageElement {
+export function mountProfilePage(
+  context: ApplicationContext,
+  routeData?: string,
+): ProfilePageElement {
   const provider = createSolidApplicationContextProvider(context);
-  const view = mountSolid(() => <ProfilePage />, { wrapper: provider.wrapper });
+  const view = mountSolid(() => <ProfilePage routeData={routeData} />, {
+    wrapper: provider.wrapper,
+  });
   return Object.assign(view.container, { unmount: view.unmount });
 }

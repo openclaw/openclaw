@@ -16,19 +16,15 @@ import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 
 const UPDATE_RUN_POLL_MS = 2_000;
 const TERMINAL_SENTINEL_WAIT_MS = 30 * 60_000;
-let wakeCurrentWatcher:
-  | ((runId?: string, advisoryWork?: () => Promise<void>) => void | Promise<void>)
-  | undefined;
+let wakeCurrentWatcher: ((runId?: string, advisoryWork?: () => Promise<void>) => void) | undefined;
 
-/** The Gateway-lifetime watcher owns advisory jobs and their final invalidation. */
-export async function wakeUpdateRunWatcher(
-  runId?: string,
-  advisoryWork?: () => Promise<void>,
-): Promise<void> {
-  if (advisoryWork && !wakeCurrentWatcher) {
-    throw new Error("Gateway update watcher is unavailable");
-  }
-  await wakeCurrentWatcher?.(runId, advisoryWork);
+/**
+ * Wake the Gateway-lifetime watcher. It also owns advisory jobs: it runs them, logs their
+ * failures, then refreshes the run. Returns false when no watcher can take the work.
+ */
+export function wakeUpdateRunWatcher(runId?: string, advisoryWork?: () => Promise<void>): boolean {
+  wakeCurrentWatcher?.(runId, advisoryWork);
+  return wakeCurrentWatcher !== undefined;
 }
 
 /** The update-check lifecycle joins notices and their transport tails before Gateway teardown. */
@@ -269,9 +265,17 @@ export function startUpdateRunWatcher(params: {
         }
       });
   };
-  const wake = (runId?: string, advisoryWork?: () => Promise<void>): void | Promise<void> => {
+  const wake = (runId?: string, advisoryWork?: () => Promise<void>): void => {
     if (advisoryWork) {
-      return work.track(advisoryWork).finally(() => wake(runId));
+      void work
+        .track(advisoryWork)
+        .catch((error: unknown) =>
+          params.log.warn(
+            `update run ${runId ?? "unknown"} advisory work failed: ${formatErrorMessage(error)}`,
+          ),
+        )
+        .finally(() => wake(runId));
+      return;
     }
     if (runId) {
       void work

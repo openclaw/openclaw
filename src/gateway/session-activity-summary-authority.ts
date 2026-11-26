@@ -33,10 +33,7 @@ export function createActivitySummaryAuthority({
   };
   return {
     operatorOwned: Boolean(profileId),
-    assertCurrent(this: void) {
-      assertOwnerCurrent();
-      authority?.assertCurrent();
-    },
+    assertCurrent: assertOwnerCurrent,
     async prepare(this: void) {
       assertOwnerCurrent();
       if (!profileId) {

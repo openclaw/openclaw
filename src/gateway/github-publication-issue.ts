@@ -20,7 +20,7 @@ import {
   prepareGitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
 import { SESSION_WRITE_SCOPE } from "./operator-scopes.js";
-import { canRequesterUseProject } from "./project-access.js";
+import { canRequesterUseProject, projectRequesterForProfile } from "./project-access.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 /** Issue filing uses the registered project, never a checkout remote or a tool-supplied URL. */
@@ -101,7 +101,14 @@ export async function createSessionGitHubIssue(
         !(await canRequesterUseProject(
           getConfig(),
           project,
-          { kind: "operator", scopes: authority.scopes },
+          projectRequesterForProfile(
+            getConfig(),
+            authority.scopes,
+            admitted.requester.snapshot.actor.kind === "operator"
+              ? admitted.requester.snapshot.actor.profileId
+              : undefined,
+            admitted.requester.snapshot.openclawIdPrincipal,
+          ),
           { fresh: true },
         ))
       ) {

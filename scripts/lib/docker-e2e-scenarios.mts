@@ -422,7 +422,7 @@ export const mainLanes: DockerE2eLane[] = [
   upgradeSurvivorLane(
     "release-update-survivor",
     upgradeSurvivorScriptCommand("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=release-update"),
-    20 * 60 * 1000,
+    55 * 60 * 1000,
     "release-update",
   ),
   upgradeSurvivorLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, 2580 * 1000),

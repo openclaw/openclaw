@@ -12,6 +12,7 @@ import {
 } from "../../config/sessions/session-source-authority.js";
 import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { openCommandStdinFile } from "../../process/command-stdin-file.js";
 import { runCommandWithTimeout, runExec } from "../../process/exec.js";
 import type { WorkerLocalWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -198,7 +199,7 @@ async function stageWorkerWorkspaceResult(
     // Preparation owns only a private input file, never the accepted refs.
     params.assertCurrent?.();
     await prepareWorkspaceStageInput({ ...params, inputPath }, params);
-    await using input = await fs.open(inputPath, "r");
+    await using input = await openCommandStdinFile(inputPath);
     const { stdout } = await withWorkspaceResultRefMutation(
       root,
       async (queuedEnv) => {
@@ -221,7 +222,7 @@ async function stageWorkerWorkspaceResult(
         source.assertCurrent();
         return await runExec("git", gitCommand(root, ["fast-import", "--quiet"]).slice(1), {
           baseEnv: queuedEnv,
-          stdinFileDescriptor: input.fd,
+          stdinFile: input.stdinFile,
           timeoutMs: PATCH_TIMEOUT_MS,
           maxBuffer: 1024 * 1024,
         });

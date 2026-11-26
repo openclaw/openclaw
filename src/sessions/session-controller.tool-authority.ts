@@ -68,12 +68,7 @@ export function createReplyTurnParticipants(
         if (closed) {
           throw new Error("This turn has ended; ask again in a new turn.");
         }
-        try {
-          if (retentionFailed) {
-            throw new Error("Participant authority could not be retained");
-          }
-          authority.assertCurrent();
-        } catch {
+        if (retentionFailed) {
           throw new Error(`${name}'s access changed; ask them again`);
         }
       },

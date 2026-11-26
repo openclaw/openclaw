@@ -58,6 +58,14 @@ it.each([
   );
 });
 
+it("admits resumed schema maintenance without admitting runtime, closed, or config-only custody", async () => {
+  await probeChild(
+    new URL("./admission-role.test-support.ts", import.meta.url),
+    { role: "gateway", maintenance: true },
+    (result) => expect(result).toEqual({ allowed: false, changeRefused: true }),
+  );
+});
+
 it("allows worker execution without a process role", async () => {
   const url = new URL("./admission-role.test-support.ts", import.meta.url);
   const worker = new Worker(url, { execArgv: resolveRuntimeWorkerThreadExecArgv(url) });

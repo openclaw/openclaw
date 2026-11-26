@@ -18,8 +18,12 @@ prepare beside the serving version, check with the new code, maintain plugins,
 then start a trial under a resident launcher. A candidate that cannot start rolls
 back automatically. See [Updating](/install/updating).
 
+PostgreSQL stores whose copy-time estimate exceeds the update window keep
+in-place migration, with a recorded warning and without automatic data rollback.
+See the [database protection policy](/install/updating).
+
 `--no-restart` leaves the Gateway running and activates the trial at its next
-start, with the same rollback protection. The new Gateway performs state
+start, using the same database protection policy. The new Gateway performs state
 migrations at boot; plugin failures are reported without failing the core update.
 
 The older admission, in-place replacement, and recovery details on this page
@@ -825,6 +829,22 @@ follow the recovery guidance for that installed release first.
 
 ## Database capture and recovery
 
+Prepared-release updates protect state and agent schema upgrades at candidate
+startup. PostgreSQL migrations run against a private server-side copy before its
+anchor is published; SQLite inputs stay private in the same upgrade tree, including
+mixed-engine installations. On failure, the launcher restores the previous release
+and anchors, selecting the unchanged original PostgreSQL namespaces without a
+database restore. Trial-only writes are discarded.
+
+The release path has no portable-export or in-place migration fallback, regardless
+of `database.postgres.recoveryCaptures`. A protection failure, including missing
+`CREATE` privileges, uses the existing configuration-refusal exit (78). Each
+schema-changing update changes the affected namespace name and adds copy time
+to the restart. Budget server space for both copies plus indexes, WAL, temporary
+work, and retained generations. See
+[PostgreSQL update recovery](/gateway/postgresql#updates-and-schema-migrations)
+for retention, cleanup warnings, and legacy recovery distinctions.
+
 Candidate SQLite migrations use whole-database `quick_check`, full integrity
 checks of rewritten or re-indexed tables, and foreign-key checks by default.
 Prepared-release updates (Git and npm, pnpm or Bun installs) refuse
@@ -834,9 +854,9 @@ during Doctor migrations, then update without the flag. This does not scan an
 already-current database as a separate verification job. See
 [migration integrity checks](/install/updating#migration-integrity-checks).
 
-Updates preserve each store's physical engine. Before database mutation, the
-installed updater keeps the existing exact SQLite captures and captures each
-PostgreSQL store as an unsanitized SQLite export image plus its matching anchor
+Legacy in-place updates also preserve each store's physical engine. Before
+database mutation, their installed updater keeps exact SQLite captures and
+captures each PostgreSQL store as an unsanitized SQLite export image plus its matching anchor
 and format-2 manifest. With `database.postgres.recoveryCaptures: "server"`,
 non-state PostgreSQL stores keep their rows in a `restore_<uuid>` schema on the
 same server instead; see
@@ -845,7 +865,7 @@ These private recovery captures preserve canonical data,
 transient rows, and allocation facts; ordinary sanitized user backups cannot
 replace them. Recovery receipts record the physical engine and store identity.
 
-PostgreSQL capture runs under the update's exclusive maintenance ownership.
+On that legacy path, PostgreSQL capture runs under exclusive maintenance ownership.
 Rollback verifies the capture, restores a fresh owned PostgreSQL namespace, and
 publishes the matching anchor through the existing recovery owner. It retains the
 migrated namespace until recovery is confirmed. If state has changed since the

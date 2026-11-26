@@ -3,6 +3,7 @@ import path from "node:path";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import JSON5 from "json5";
 import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
+import { resolveFutureConfigActionBlock } from "./future-version-guard.js";
 import {
   enqueueConfigAuditRecord,
   captureConfigAuditAppender,
@@ -200,6 +201,7 @@ export function maybeRecoverSuspiciousConfigReadSync(
 type ConfigRecoveryOperation<T> = Generator<ConfigRecoveryEffect<unknown>, T, unknown>;
 type SuspiciousConfigRecoveryPlan = {
   candidate: ConfigReadRecoveryResult;
+  assertBackupUnchanged: () => void;
   apply: (
     beforeCommit?: () => void,
   ) => ConfigRecoveryOperation<{ restored: boolean; error: unknown }>;
@@ -208,6 +210,7 @@ type SuspiciousConfigRecoveryPlan = {
 /** Prepare the existing recovery without observing or writing the selected config. */
 export async function prepareSuspiciousConfigRead(params: ConfigReadRecoveryParams): Promise<{
   candidate: ConfigReadRecoveryResult;
+  assertBackupUnchanged: () => void;
   apply: (beforeCommit?: () => void) => Promise<void>;
 } | null> {
   const health = captureConfigHealthStateStore(
@@ -224,6 +227,7 @@ export async function prepareSuspiciousConfigRead(params: ConfigReadRecoveryPara
   return (
     plan && {
       candidate: plan.candidate,
+      assertBackupUnchanged: plan.assertBackupUnchanged,
       apply: async (beforeCommit) => {
         const result = await runConfigRecoveryAsync(plan.apply(beforeCommit), health, appendAudit);
         if (!result.restored) {
@@ -367,6 +371,19 @@ function* planSuspiciousConfigRead(
     ) {
       continue;
     }
+    // Preserve a configured rollback's restored config. If its gateway mode was
+    // lost, keep the candidate so startup can refuse an incompatible recovery.
+    if (
+      current.gatewayMode &&
+      prepared.candidate.config &&
+      resolveFutureConfigActionBlock({
+        action: "recover config",
+        config: prepared.candidate.config,
+        env: deps.env,
+      })
+    ) {
+      continue;
+    }
     selected = { path: candidatePath, original, prepared: prepared.candidate };
     break;
   }
@@ -397,8 +414,14 @@ function* planSuspiciousConfigRead(
     ],
     requireIdentity,
   );
+  const assertBackupUnchanged = createConfigRecoverySourceGuard(
+    deps,
+    [[backupPath, backupRaw, backupStat]],
+    requireIdentity,
+  );
   return {
     candidate: preparedCandidate,
+    assertBackupUnchanged,
     *apply(beforeCommit) {
       const snapshotParams = {
         deps,

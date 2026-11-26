@@ -597,7 +597,7 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
     [
       "subagent-lifecycle-registry",
       importsLifecycleRegistry,
-      /\bemitSubagentEndedHookOnce\b|\bresolveDeferredCleanupDecision\b|\bpersistSubagentRunsToDisk\b|\brestoreSubagentRunsFromDisk\b|\bresolveContextEngine\b|\bemitSessionLifecycleEvent\b|\bcaptureSubagentCompletionReply\b/,
+      /\bemitSubagentEndedHookOnce\b|\bpersistSubagentRunsToDisk\b|\brestoreSubagentRunsFromDisk\b|\bresolveContextEngine\b|\bemitSessionLifecycleEvent\b|\bcaptureSubagentCompletionReply\b/,
     ],
     [
       "subagent-announce-delivery",
@@ -607,7 +607,7 @@ function describeSubagentSeamKinds(relativePath: string, source: string) {
     [
       "subagent-session-cleanup",
       importsCleanup,
-      /\bsessions\.delete\b|\bdeleteTranscript\b|\bcleanupFailedAcpSpawn\b|\bcleanupProvisionalSession\b|\bcleanupFailedSpawnBeforeAgentStart\b|\bresolveDeferredCleanupDecision\b/,
+      /\bsessions\.delete\b|\bdeleteTranscript\b|\bcleanupFailedAcpSpawn\b|\bcleanupProvisionalSession\b|\bcleanupFailedSpawnBeforeAgentStart\b/,
     ],
     [
       "subagent-parent-stream",

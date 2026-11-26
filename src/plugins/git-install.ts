@@ -1,13 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
-import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
-import { resolveUserFilesystemPath } from "../infra/home-dir.js";
 import {
   resolveInstallWorkTimeoutMs,
   resolveTimedInstallModeOptions,
@@ -25,6 +22,7 @@ import {
 } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
+import { isImmutableGitCommitRef, parseGitPluginSpec } from "./git-source-spec.js";
 import { resolveDefaultPluginGitDir } from "./install-paths.js";
 import {
   preflightPluginGitInstallPolicy,
@@ -43,9 +41,7 @@ import type { PluginInstallArtifactConsentHandler, PluginInstallLogger } from ".
 import { installPluginFromInstalledPackageDir, type InstallPluginResult } from "./install.js";
 import { emitPluginInstallSecurityEvent } from "./security-events.js";
 
-const GIT_SPEC_PREFIX = "git:";
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
-const FULL_GIT_COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
 
 /** Resolved Git source metadata persisted into plugin install records. */
 type GitPluginResolution = {
@@ -58,177 +54,6 @@ type GitPluginResolution = {
 type GitPluginInstallResult =
   | (Extract<InstallPluginResult, { ok: true }> & { git: GitPluginResolution })
   | Extract<InstallPluginResult, { ok: false }>;
-
-/** Normalized Git plugin install spec accepted by the Git installer. */
-type ParsedGitPluginSpec = {
-  input: string;
-  url: string;
-  ref?: string;
-  label: string;
-  normalizedSpec: string;
-};
-
-/** Returns true for full commit SHAs that do not require branch/tag drift checks. */
-export function isImmutableGitCommitRef(ref: string | undefined): boolean {
-  return FULL_GIT_COMMIT_PATTERN.test(ref ?? "");
-}
-
-function splitGitSpecRef(input: string): { base: string; ref?: string } {
-  const hashIndex = input.lastIndexOf("#");
-  if (hashIndex > 0) {
-    return {
-      base: input.slice(0, hashIndex),
-      ref: normalizeOptionalString(input.slice(hashIndex + 1)),
-    };
-  }
-
-  for (
-    let atIndex = input.lastIndexOf("@");
-    atIndex > 0;
-    atIndex = input.lastIndexOf("@", atIndex - 1)
-  ) {
-    const base = input.slice(0, atIndex);
-    const ref = normalizeOptionalString(input.slice(atIndex + 1));
-    // An @ at the start of a local path component belongs to that ancestor.
-    if (
-      process.platform === "win32" &&
-      (isLocalGitPath(base) || /^file:\/\//i.test(base)) &&
-      /[\\/]$/.test(base)
-    ) {
-      continue;
-    }
-    // Preserve the legacy full-path interpretation of absolute .git repositories.
-    // An explicit ref on a .git repository still splits after that suffix.
-    if (
-      process.platform === "win32" &&
-      path.isAbsolute(input) &&
-      input.endsWith(".git") &&
-      !base.endsWith(".git")
-    ) {
-      continue;
-    }
-    // A native path ancestor is not a ref: Git refs cannot contain backslashes.
-    if (ref && isGitSpecBase(base) && !(process.platform === "win32" && ref.includes("\\"))) {
-      return { base, ref };
-    }
-  }
-
-  return { base: input };
-}
-
-function isLocalGitPath(value: string): boolean {
-  return (
-    value.startsWith("./") ||
-    value.startsWith("../") ||
-    value.startsWith("~/") ||
-    (process.platform === "win32" &&
-      (value.startsWith(".\\") ||
-        value.startsWith("..\\") ||
-        value.startsWith("~\\") ||
-        path.isAbsolute(value)))
-  );
-}
-
-function isGitSpecBase(value: string): boolean {
-  return (
-    looksLikeGitHubRepoShorthand(value) ||
-    looksLikeGitHubHostPath(value) ||
-    looksLikeUrlGitSpecBase(value) ||
-    looksLikeScpGitUrl(value) ||
-    value.endsWith(".git") ||
-    isLocalGitPath(value)
-  );
-}
-
-function looksLikeGitHubRepoShorthand(value: string): boolean {
-  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(value);
-}
-
-function looksLikeGitHubHostPath(value: string): boolean {
-  return /^github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/i.test(value);
-}
-
-function isGitUrl(value: string): boolean {
-  if (value.startsWith("-")) {
-    return false;
-  }
-  return (
-    /^(?:ssh|git|file):\/\//i.test(value) || looksLikeScpGitUrl(value) || value.endsWith(".git")
-  );
-}
-
-function looksLikeScpGitUrl(value: string): boolean {
-  return /^[^@\s]+@[^:\s]+:.+/.test(value);
-}
-
-function looksLikeUrlGitSpecBase(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (!["http:", "https:", "ssh:", "git:", "file:"].includes(url.protocol)) {
-      return false;
-    }
-    if (url.protocol === "file:") {
-      return url.pathname.length > 1;
-    }
-    return Boolean(url.hostname) && url.pathname.length > 1;
-  } catch {
-    return false;
-  }
-}
-
-function stripGitSuffix(value: string): string {
-  return value.replace(/\.git$/i, "");
-}
-
-function normalizeGitLabel(value: string): string {
-  if (hasHttpUrlPrefix(value) || /^(?:ssh|git|file):\/\//i.test(value)) {
-    try {
-      const url = new URL(value);
-      return stripGitSuffix(`${url.hostname}${url.pathname}`).replace(/^\/+/, "");
-    } catch {
-      return stripGitSuffix(value);
-    }
-  }
-  return stripGitSuffix(value);
-}
-
-export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {
-  const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith(GIT_SPEC_PREFIX)) {
-    return null;
-  }
-
-  const body = trimmed.slice(GIT_SPEC_PREFIX.length).trim();
-  if (!body) {
-    return null;
-  }
-
-  const split = splitGitSpecRef(body);
-  const base = split.base.trim();
-  if (!base) {
-    return null;
-  }
-
-  const localPath = isLocalGitPath(base);
-  let normalized: { url: string; label: string };
-  if (looksLikeGitHubRepoShorthand(base) || looksLikeGitHubHostPath(base)) {
-    const repo = stripGitSuffix(base.replace(/^github\.com\//i, ""));
-    normalized = { url: `https://github.com/${repo}.git`, label: repo };
-  } else if (hasHttpUrlPrefix(base) || isGitUrl(base) || localPath) {
-    const url = localPath ? resolveUserFilesystemPath(base) : base;
-    normalized = { url, label: normalizeGitLabel(url) };
-  } else {
-    return null;
-  }
-  // A normalized absolute Windows path can otherwise make a .git-ending ref look like a repository.
-  const refSeparator = localPath && process.platform === "win32" ? "#" : "@";
-  return {
-    input: trimmed,
-    ...normalized,
-    ref: split.ref,
-    normalizedSpec: `${GIT_SPEC_PREFIX}${normalized.url}${split.ref ? `${refSeparator}${split.ref}` : ""}`,
-  };
-}
 
 function createGitCommandEnv(): NodeJS.ProcessEnv {
   return {

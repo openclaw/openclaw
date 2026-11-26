@@ -26,6 +26,7 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
+import { captureRunMcpRequester } from "../agent-bundle-mcp-webchat-requester.js";
 import { getControllerEmbeddedAttachment } from "../embedded-agent-runner/run-state.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { captureRequesterOrigin, hasSameRequesterOrigin } from "../requester-origin.js";
@@ -71,6 +72,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     | "replyOperation"
     | "sessionPersistence"
     | "trigger"
+    | "mcpRequesterProfileId"
     | "bindWatchdogAttempt"
     | "joinObservation"
   > & { queueInputAdapter?: ReplyQueueInputAdapter },
@@ -310,6 +312,17 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
         sessionKey,
         operationalRunInstance: instance,
         personalToolParticipants,
+        webchatMcpRequester: captureRunMcpRequester({
+          ...attempt,
+          operatorAuthority,
+          assertActive: assertReplyActive,
+          participants: operation?.personalToolParticipants,
+          directBrowserTurn:
+            Boolean(operation && !admitted.admissionSource) &&
+            (turnState?.turnKind === "direct" || turnState?.turnKind === "visible"),
+          trigger: internal.trigger,
+          mcpRequesterProfileId: internal.mcpRequesterProfileId,
+        }),
         watchdogAttempt,
         requesterOrigin,
         receiptAuthority: assertReplyActive,
@@ -444,6 +457,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           const binding: ReturnType<EmbeddedRunToolAuthorityBinding> = {
             watchdogAttempt,
             personalToolParticipants,
+            operatorAuthority,
             operation: turn,
             ...(!turn ? { detached: true as const } : {}),
             source: operation ? "reply" : "attempt",
