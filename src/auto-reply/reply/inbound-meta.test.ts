@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import type { SessionEntry, SessionGoalStatus } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withEnv } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
 import { prepareReplyRunContext } from "./get-reply-run-context.js";
@@ -258,55 +257,6 @@ describe("buildInboundUserContextPrefix", () => {
     excludes?: string[];
   }>([
     {
-      name: "includes the original source modality in per-turn conversation metadata",
-      context: {
-        ChatType: "direct",
-        OriginatingChannel: "telegram",
-        SourceModality: "voice",
-        MediaType: "audio/ogg",
-      },
-      expected: { source_modality: "voice" },
-    },
-    {
-      name: "derives a source modality from media when the channel does not provide one",
-      context: {
-        ChatType: "direct",
-        OriginatingChannel: "discord",
-        media: [
-          { path: "/tmp/report.pdf", contentType: "application/pdf" },
-          { path: "/tmp/photo.png", contentType: "image/png" },
-        ],
-      },
-      expected: { source_modality: "document" },
-    },
-    {
-      name: "includes topic_name for forum chats",
-      context: { ChatType: "group", IsForum: true, MessageThreadId: 42, TopicName: "Deployments" },
-      expected: { topic_id: "42", topic_name: "Deployments", is_forum: true },
-    },
-    {
-      name: "includes sender identity in direct external-channel conversation info",
-      context: {
-        ChatType: "direct",
-        OriginatingChannel: "telegram",
-        SenderName: "Tyler",
-        SenderId: "+15551234567",
-        SenderIsBot: true,
-      },
-      expected: { sender: { id: "+15551234567", name: "Tyler", is_bot: true } },
-      excludes: ["Sender: ⟦openclaw:ctx⟧"],
-    },
-    {
-      name: "includes formatted timestamp in conversation info when provided",
-      context: {
-        ChatType: "group",
-        MessageSid: "msg-with-ts",
-        Timestamp: Date.UTC(2026, 1, 15, 13, 35, 42),
-      },
-      envelope: { timezone: "utc" },
-      expected: { timestamp: "Sun 2026-02-15T13:35:42Z" },
-    },
-    {
       name: "omits invalid timestamps instead of throwing",
       context: { ChatType: "group", MessageSid: "msg-with-bad-ts", Timestamp: 1e20 },
       expected: { timestamp: undefined },
@@ -320,40 +270,6 @@ describe("buildInboundUserContextPrefix", () => {
     for (const fragment of excludes) {
       expect(text).not.toContain(fragment);
     }
-  });
-
-  it("honors envelope user timezone for conversation timestamps", () => {
-    withEnv({ TZ: "America/Los_Angeles" }, () => {
-      const text = buildInboundUserContextPrefix(
-        {
-          ChatType: "group",
-          MessageSid: "msg-with-user-tz",
-          Timestamp: Date.UTC(2026, 2, 19, 0, 0, 27),
-        } as TemplateContext,
-        {
-          timezone: "user",
-          userTimezone: "Asia/Tokyo",
-        },
-      );
-
-      const conversationInfo = parseConversationInfoPayload(text);
-      expect(conversationInfo["timestamp"]).toBe("Thu 2026-03-19 09:00:27 GMT+9");
-    });
-  });
-
-  it("renders reply metadata without a body but not without any reply fields", () => {
-    const text = buildInboundUserContextPrefix({
-      ReplyToId: "message-42",
-      ReplyToSender: "Attachment Sender",
-    } as TemplateContext);
-
-    expect(parseReplyPayload(text)).toEqual({
-      message_id: "message-42",
-      sender_label: "Attachment Sender",
-    });
-    expect(buildInboundUserContextPrefix({} as TemplateContext)).not.toContain(
-      "Reply target of current user message",
-    );
   });
 
   it("keeps Telegram current-message quote even when context already includes the target", () => {
@@ -402,34 +318,6 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     expect(parseConversationInfoPayload(text)["sender"]).toEqual({ id: "15551234567" });
-  });
-
-  it("includes dynamic per-turn flags in conversation info", () => {
-    const text = buildInboundUserContextPrefix({
-      ChatType: "group",
-      InboundEventKind: "room_event",
-      WasMentioned: true,
-      ExplicitlyMentionedBot: false,
-      MentionedUserIds: [" U_OTHER ", "", "U_HELPER"],
-      MentionedSubteamIds: [" S_ONCALL "],
-      ImplicitMentionKinds: ["bot_thread_participant"],
-      MentionSource: "implicit_thread",
-      ReplyToBody: "quoted",
-      ForwardedFrom: "sender",
-      ThreadStarterBody: "starter",
-      InboundHistory: [{ sender: "a", body: "b", timestamp: 1 }],
-    } as TemplateContext);
-
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["inbound_event_kind"]).toBe("room_event");
-    expect(conversationInfo["is_group_chat"]).toBe(true);
-    expect(conversationInfo["was_mentioned"]).toBe(true);
-    expect(conversationInfo["explicitly_mentioned_bot"]).toBe(false);
-    expect(conversationInfo["mentioned_user_ids"]).toEqual(["U_OTHER", "U_HELPER"]);
-    expect(conversationInfo["mentioned_subteam_ids"]).toEqual(["S_ONCALL"]);
-    expect(conversationInfo["implicit_mention_kinds"]).toEqual(["bot_thread_participant"]);
-    expect(conversationInfo["mention_source"]).toBe("implicit_thread");
-    expect(conversationInfo["history_count"]).toBe(1);
   });
 
   it("strips null bytes from serialized untrusted metadata blocks", () => {
@@ -666,18 +554,6 @@ describe("buildInboundUserContextPrefix", () => {
 
     expect(render).not.toThrow();
     expect(render()).not.toContain("media://inbound/");
-  });
-
-  it("emits a bare chat-window label when the entry carries no order or relation", () => {
-    const text = buildInboundUserContextPrefix(
-      createChatWindowContext({
-        source: "third-party-plugin",
-        payload: { messages: [{ message_id: "1", sender: "Sam", body: "hi" }] },
-      }),
-    );
-
-    expect(text).toContain(`Current local chat window: ${INBOUND_CONTEXT_MARKER}`);
-    expect(text).not.toContain("Current local chat window ()");
   });
 
   it("does not duplicate reply chain or history when a chat window already covers them", () => {

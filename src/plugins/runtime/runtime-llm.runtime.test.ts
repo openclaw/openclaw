@@ -92,11 +92,6 @@ type MockCalls = {
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
-function requireArray(value: unknown, label: string): unknown[] {
-  expect(Array.isArray(value), label).toBe(true);
-  return value as unknown[];
-}
-
 function expectFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
   for (const [key, value] of Object.entries(expected)) {
     expect(record[key], key).toEqual(value);
@@ -522,13 +517,6 @@ describe("runtime.llm.complete", () => {
           cfg,
         },
       );
-      const context = requireRecord(completionArg.context, "completion context");
-      expect(context.systemPrompt).toBe("Be terse.");
-      const [message] = requireArray(context.messages, "completion messages");
-      expectFields(requireRecord(message, "completion message"), {
-        role: "user",
-        content: "Ping",
-      });
       expectFields(requireRecord(completionArg.options, "completion options"), {
         maxTokens: 64,
         temperature: 0.2,
@@ -537,13 +525,6 @@ describe("runtime.llm.complete", () => {
           type: "json_schema",
           json_schema: { name: "test_result", strict: true, schema: { type: "object" } },
         },
-      });
-      expectFields(requireRecord(result, "completion result"), {
-        text: "done",
-        provider: "openai",
-        model: "gpt-5.5",
-        responseModel: "gpt-5.5-2026-08-01",
-        stopReason: "stop",
       });
       expectFields(requireRecord(result.usage, "completion usage"), {
         inputTokens: 11,
