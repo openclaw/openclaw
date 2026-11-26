@@ -161,9 +161,9 @@ export async function readSessionForkTurn(
 
 /**
  * The model a fork runs on: the anchored turn's (else the session's), on the credential the
- * session's own turns use when the provider matches (a user pin or an automatic rotation). The
- * fork's internal session has no stored selection, so without this it could bill another
- * profile and miss the turn's cache.
+ * session's own turns use when providers match. A required account also survives a mismatched
+ * anchor so final routing refuses instead of substituting an account. The internal fork session
+ * has no stored selection, so it must carry this fact to dispatch.
  */
 export function resolveSessionForkModel(params: {
   cfg: OpenClawConfig;
@@ -174,7 +174,8 @@ export function resolveSessionForkModel(params: {
   const sessionModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   const turnModel = params.turnModel ?? sessionModel;
   const sessionProfile =
-    turnModel && sessionModel && turnModel.provider === sessionModel.provider
+    params.entry.authProfileOverrideRequired ||
+    (turnModel && sessionModel && turnModel.provider === sessionModel.provider)
       ? params.entry.authProfileOverride?.trim()
       : undefined;
   return {

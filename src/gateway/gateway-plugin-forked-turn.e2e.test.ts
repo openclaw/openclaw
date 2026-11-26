@@ -241,6 +241,7 @@ describe("plugin forked turns through the real Gateway", () => {
     { required: false, override: "none" },
     { required: true, override: "same-profile" },
     { required: true, override: "same-model" },
+    { required: true, override: "switched-model" },
   ])(
     "runs the fork on the session account ($required, $override)",
     { timeout: 150_000 },
@@ -256,6 +257,20 @@ describe("plugin forked turns through the real Gateway", () => {
           );
           return {
             ...config,
+            ...(override === "switched-model"
+              ? {
+                  agents: {
+                    ...config.agents,
+                    defaults: {
+                      ...config.agents?.defaults,
+                      models: {
+                        ...config.agents?.defaults?.models,
+                        "mock-other/fork-proof": {},
+                      },
+                    },
+                  },
+                }
+              : {}),
             auth: {
               profiles: {
                 [first]: { provider: "mock-openai", mode: "api_key" },
@@ -263,7 +278,15 @@ describe("plugin forked turns through the real Gateway", () => {
               },
               order: { "mock-openai": [first, rotated] },
             },
-            models: { ...config.models, providers: { "mock-openai": mock } },
+            models: {
+              ...config.models,
+              providers: {
+                "mock-openai": mock,
+                ...(override === "switched-model"
+                  ? { "mock-other": { ...mock, apiKey: "synthetic-other" } }
+                  : {}),
+              },
+            },
           };
         },
         async (fixture) => {
@@ -295,6 +318,28 @@ describe("plugin forked turns through the real Gateway", () => {
           );
           const turn = await fixture.dashboardTurn(sessionKey);
           expect(fixture.authorizations.foreground).toEqual([`Bearer key-${rotated}`]);
+          if (override === "switched-model") {
+            await fixture.client.request("sessions.patch", {
+              key: turn.sessionKey,
+              model: "mock-other/fork-proof",
+            });
+            expect(loadSessionEntry(turn.scope)).toMatchObject({
+              providerOverride: "mock-other",
+              modelOverride: "fork-proof",
+              modelOverrideSource: "user",
+              authProfileOverride: rotated,
+              authProfileOverrideRequired: true,
+            });
+            await expect(
+              fixture.fork(turn, { provider: "mock-other", model: "fork-proof" }),
+            ).resolves.toMatchObject({ ok: true, result: { status: "settled" } });
+            // RPC settlement succeeds even when the owned inference refuses its account.
+            expect(fixture.proof.settled).toEqual([
+              expect.objectContaining({ ok: false, error: expect.stringContaining(rotated) }),
+            ]);
+            expect(fixture.authorizations.fork).toEqual([]);
+            return;
+          }
           await expect(
             fixture.fork(
               turn,

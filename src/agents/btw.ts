@@ -541,6 +541,7 @@ export async function runBtwSideQuestion(
         sessionEntry: params.sessionEntry,
         sessionKey: params.sessionKey,
         sessionAgentId,
+        agentDir: preparedModelRuntime.agentDir,
         workspaceDir,
         cliProvider,
         authProfileId: cliProviderFromSessionAuth ? sessionAuthProfileId : undefined,

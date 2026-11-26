@@ -112,13 +112,20 @@ it.each([false, true])(
       authProfileId: "openai:delegated",
       ...(required ? { requiredAuthProfileId: "openai:delegated" } : {}),
     });
-    expect(
-      resolveSessionForkModel({
-        cfg,
-        agentId: "main",
-        entry,
-        turnModel: { provider: "anthropic", model: "claude-test" },
-      }).model,
-    ).not.toHaveProperty("requiredAuthProfileId");
+    const anchored = resolveSessionForkModel({
+      cfg,
+      agentId: "main",
+      entry,
+      turnModel: { provider: "anthropic", model: "claude-test" },
+    }).model;
+    if (required) {
+      expect(anchored).toMatchObject({
+        authProfileId: "openai:delegated",
+        requiredAuthProfileId: "openai:delegated",
+      });
+    } else {
+      expect(anchored).not.toHaveProperty("authProfileId");
+      expect(anchored).not.toHaveProperty("requiredAuthProfileId");
+    }
   },
 );

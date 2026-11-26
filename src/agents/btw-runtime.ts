@@ -22,6 +22,10 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
 import { buildBtwCliPrompt, buildBtwQuestionPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
 import { normalizeBtwContentBlocks } from "./btw-transcript.js";
+import {
+  cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId,
+} from "./cli-execution-auth.js";
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
 import { createCliModelRequestGate } from "./cli-runner/model-request-hook.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
@@ -516,6 +520,7 @@ export async function runCliBtwSideQuestion(params: {
   sessionEntry: StoredSessionEntry;
   sessionKey?: string;
   sessionAgentId: string;
+  agentDir: string;
   workspaceDir: string;
   cliProvider: string;
   authProfileId?: string;
@@ -541,6 +546,34 @@ export async function runCliBtwSideQuestion(params: {
     params.sessionAgentId,
     "btw.side-question",
   );
+  let authProfileId = params.authProfileId;
+  if (params.sessionEntry.authProfileOverrideRequired) {
+    const requiredProfile = params.sessionEntry.authProfileOverride?.trim();
+    if (
+      !requiredProfile ||
+      !cliBackendAcceptsAuthProfileForwarding({
+        provider: params.cliProvider,
+        config: params.cfg,
+        agentId: params.sessionAgentId,
+      })
+    ) {
+      throw new Error(
+        `CLI backend "${params.cliProvider}" cannot honor the required auth profile.`,
+      );
+    }
+    authProfileId = await resolveCliExecutionAuthProfileId({
+      cliExecutionProvider: params.cliProvider,
+      authProfileProvider: params.cliProvider,
+      config: params.cfg,
+      agentDir: params.agentDir,
+      selected: { authProfileId: requiredProfile },
+    });
+    if (authProfileId !== requiredProfile) {
+      throw new Error(
+        `CLI backend "${params.cliProvider}" cannot honor auth profile "${requiredProfile}".`,
+      );
+    }
+  }
   let prepared: Awaited<ReturnType<typeof prepareCliRunContext>> | undefined;
   try {
     prepared = await prepareCliRunContext({
@@ -563,7 +596,7 @@ export async function runCliBtwSideQuestion(params: {
       timeoutMs,
       runTimeoutOverrideMs: timeoutMs,
       runId,
-      authProfileId: params.authProfileId,
+      authProfileId,
       abortSignal: params.opts?.abortSignal,
       messageChannel: params.messageChannel,
       messageProvider: params.messageProvider,

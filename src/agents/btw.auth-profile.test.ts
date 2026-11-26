@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import * as btw from "./btw.test-support.js";
+
+vi.mock("./auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-profiles/store-runtime.js")>()),
+  loadAuthProfileStoreForRuntimeAsync: (...args: unknown[]) =>
+    btw.ensureAuthProfileStoreMock(...args),
+}));
 
 describe("BTW account policy", () => {
   btw.setupBtwTestHooks();
@@ -131,4 +137,31 @@ describe("BTW account policy", () => {
       baseUrl: "https://backup.example.test",
     });
   });
+  it.each(["anthropic", "openai"])(
+    "validates required BTW account compatibility before CLI preparation (%s)",
+    async (provider) => {
+      const profileId = `${provider}:delegated`;
+      btw.ensureAuthProfileStoreMock.mockReturnValue({
+        version: 1,
+        profiles: { [profileId]: createApiKeyCredential(provider, "synthetic-key") },
+      });
+      btw.mockCliOutput({ text: "CLI answer." });
+      const result = btw.runSideQuestion({
+        cfg: btw.createCliRuntimeConfig(),
+        model: "claude-opus-4-7",
+        sessionEntry: btw.createSessionEntry({
+          authProfileOverride: profileId,
+          authProfileOverrideRequired: true,
+        }),
+      });
+      if (provider === "anthropic") {
+        await expect(result).resolves.toEqual({ text: "CLI answer." });
+        expect(btw.prepareCliRunContextMock).toHaveBeenCalledOnce();
+      } else {
+        await expect(result).rejects.toThrow(/cannot use auth profile/);
+        expect(btw.prepareCliRunContextMock).not.toHaveBeenCalled();
+        expect(btw.executePreparedCliRunMock).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
