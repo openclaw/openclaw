@@ -1153,7 +1153,8 @@ AFTER_CD
     expect(admission.run?.replace(/\\\s*/gu, "").trim().split(/\s+/u)).toEqual([
       "pnpm",
       "test",
-      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/ci-node-test-plan-hosted-tail.test.ts",
+      "test/scripts/ci-node-test-plan.selection-capacity.test.ts",
       "test/scripts/ci-node-test-plan.commands.test.ts",
       "test/scripts/ci-changed-node-test-plan.test.ts",
       "--maxWorkers=1",
