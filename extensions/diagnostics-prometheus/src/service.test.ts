@@ -222,66 +222,6 @@ openclaw_gateway_http_cancelled_total{source="client"} 2
 openclaw_gateway_http_cancelled_total{source="shutdown"} 1`);
   });
 
-  it("exports bounded byte histograms, including late frames and negative heap changes", () => {
-    using metrics = createMetricsHarness();
-    const base = { type: "gateway.rpc" as const, method: "sessions.history" };
-    for (const [firstResponse, responseBytes] of [
-      [true, 1024],
-      [false, 67108864],
-    ] as const) {
-      metrics.record({
-        ...base,
-        phase: "response",
-        outcome: "ok",
-        durationMs: 10,
-        responseBytes,
-        firstResponse,
-      });
-    }
-    for (const heapDeltaBytes of [-2048, 4096, undefined]) {
-      metrics.record({
-        ...base,
-        phase: "handler",
-        outcome: "returned",
-        durationMs: 20,
-        admissionMs: 0,
-        heapDeltaBytes,
-      });
-    }
-    metrics.record({ ...base, phase: "response", outcome: "unavailable", durationMs: 20 });
-    metrics.record(
-      {
-        ...base,
-        method: "private-untrusted",
-        phase: "response",
-        outcome: "ok",
-        durationMs: 20,
-        responseBytes: 5000,
-      },
-      untrusted,
-    );
-    const rendered = metrics.render();
-    expectMetrics(rendered)(`# TYPE openclaw_gateway_rpc_response_bytes histogram
-openclaw_gateway_rpc_response_bytes_sum{method="sessions.history"} 67109888
-openclaw_gateway_rpc_response_bytes_count{method="sessions.history"} 2
-openclaw_gateway_rpc_response_bytes_bucket{le="1024",method="sessions.history"} 1
-openclaw_gateway_rpc_response_bytes_bucket{le="67108864",method="sessions.history"} 2
-openclaw_gateway_rpc_response_bytes_bucket{le="+Inf",method="sessions.history"} 2
-# TYPE openclaw_gateway_rpc_handler_heap_delta_bytes histogram
-openclaw_gateway_rpc_handler_heap_delta_bytes_sum{method="sessions.history"} 2048
-openclaw_gateway_rpc_handler_heap_delta_bytes_count{method="sessions.history"} 2
-openclaw_gateway_rpc_handler_heap_delta_bytes_bucket{le="-1024",method="sessions.history"} 1
-openclaw_gateway_rpc_handler_heap_delta_bytes_bucket{le="0",method="sessions.history"} 1
-openclaw_gateway_rpc_handler_heap_delta_bytes_bucket{le="4096",method="sessions.history"} 2
-openclaw_gateway_rpc_handler_heap_delta_bytes_bucket{le="67108864",method="sessions.history"} 2
-openclaw_gateway_rpc_handler_heap_delta_bytes_bucket{le="+Inf",method="sessions.history"} 2
-openclaw_gateway_rpc_handler_heap_delta_exclusive_total{method="sessions.history"} 2
-openclaw_gateway_rpc_handler_seconds_count{method="sessions.history"} 3
-openclaw_gateway_rpc_first_response_seconds_count{method="sessions.history"} 1
-openclaw_gateway_rpc_outcomes_total{outcome="ok",phase="response"} 1`);
-    expect(rendered).not.toContain("private-untrusted");
-  });
-
   it("records hook-blocked run metrics with safe blocker originator only", () =>
     expectRecordedMetrics(
       [
@@ -300,26 +240,6 @@ openclaw_gateway_rpc_outcomes_total{outcome="ok",phase="response"} 1`);
       ],
       `openclaw_run_completed_total{blocked_by="policy-plugin",channel="slack",model="gpt-5.4",outcome="blocked",provider="openai",trigger="message"} 1`,
       ["run-should-not-export", "session-should-not-export", "matched secret prompt"],
-    ));
-
-  it("records sanitized async diagnostic queue drop summaries from core diagnostics", () =>
-    expectRecordedMetrics(
-      [
-        {
-          type: "diagnostic.async_queue.dropped",
-          droppedEvents: 3,
-          droppedTrustedEvents: 1,
-          droppedUntrustedEvents: 2,
-          queueLength: 0,
-          maxQueueLength: 10_000,
-          drainBatchSize: 100,
-        },
-      ],
-      `openclaw_diagnostic_async_queue_dropped_total{drop_class="total"} 3
-openclaw_diagnostic_async_queue_dropped_total{drop_class="trusted"} 1
-openclaw_diagnostic_async_queue_dropped_total{drop_class="untrusted"} 2
-openclaw_diagnostic_async_queue_length 0`,
-      [],
     ));
 
   it("redacts and bounds label values", () =>

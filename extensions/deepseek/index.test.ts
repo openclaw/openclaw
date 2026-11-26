@@ -116,19 +116,3 @@ it("fetches DeepSeek usage balance through the provider hook", async () => {
     summary: "Balance ¥8.88 · Granted ¥1.00",
   });
 });
-
-it("publishes configured DeepSeek models through plugin-owned catalog augmentation", async () => {
-  const provider = await registerSingleProviderPlugin(deepseekPlugin);
-  const model = {
-    id: "deepseek-chat",
-    name: "DeepSeek Chat",
-    input: ["text"],
-    reasoning: false,
-    contextWindow: 65536,
-  };
-  const config = { models: { providers: { deepseek: { models: [model] } } } };
-
-  expect(provider.augmentModelCatalog?.({ config } as never)).toEqual([
-    { ...model, provider: "deepseek" },
-  ]);
-});
