@@ -13,7 +13,6 @@ import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sq
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readPreparedSessionCompactionInWorker } from "../../config/sessions/session-compaction-prepared.js";
 import { readAgentToolUsageStatus } from "../../config/sessions/tool-usage.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import {
   getOwnedSessionTranscriptActor,
   withSessionTranscriptWriteAssertion,
@@ -24,14 +23,11 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { SessionManager } from "../../plugin-sdk/agent-sessions.js";
 import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { isUserMessage } from "../../sessions/user-turn-transcript.message.js";
-import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createRunToolUsageRecorder } from "../tool-usage-recorder.js";
-import { sessionManagerAppendPromptContext } from "./model-prompt-projection-append.js";
 import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import * as actorAppend from "./session-manager-actor-append.js";
-import { assistantText, sessionScope } from "./session-manager-fixtures.test-support.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import * as persistenceReceipt from "./session-manager-persistence-error.js";
 import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import type { SessionEntry } from "./session-manager-types.js";
@@ -125,91 +121,6 @@ async function withFixture(
     await run({ target, manager, seed, reopen });
   });
 }
-
-it("answers the first user turn when restart writes race its prompt rewrite retry", async () => {
-  await withFixture("restart-prompt-rewrite", async ({ target, reopen }) => {
-    const resume = await reopen();
-    const resumeWrite = (ordinal: number) =>
-      runOutsideStoreWriterContext(() =>
-        runWithoutOwnedSessionTranscriptWrites(() =>
-          resume.appendCustomEntryAsync("restart-resume", { ordinal }),
-        ),
-      );
-    await withSelectedTranscriptReader(
-      target,
-      async (actor) => {
-        const owner = expectDefined(actor, "admitted actor");
-        const manager = await reopen();
-        const user = await manager.appendMessageWithTranscriptAnchorAsync(
-          makeUserMessage("First message after restart", 2),
-        );
-        const anchor = expectDefined(user.anchor, "admitted user");
-        const append = owner.appendTranscriptEvent.bind(owner);
-        vi.spyOn(owner, "appendTranscriptEvent").mockImplementationOnce(async (...args) => {
-          await resumeWrite(1);
-          return append(...args);
-        });
-        let competingWrite: Promise<string> | undefined;
-        const read = owner.read.bind(owner);
-        vi.spyOn(owner, "read").mockImplementationOnce(async (authority) => {
-          const reading = read(authority);
-          competingWrite = resumeWrite(2);
-          return reading;
-        });
-        try {
-          await manager[sessionManagerAppendPromptContext](
-            {
-              role: "custom",
-              customType: "openclaw.runtime-context",
-              content: "Runtime context for the first post-restart message",
-              display: false,
-              timestamp: 3,
-            },
-            async () => ({
-              intent: { anchor, text: "Prepared first message after restart" },
-              async onCommitted(result) {
-                expect(result).toMatchObject({ messageId: user.entryId });
-                if (!result || !isUserMessage(result.message)) {
-                  throw new Error("Prompt rewrite did not return its user message");
-                }
-                return result.message;
-              },
-            }),
-          );
-        } finally {
-          await competingWrite;
-        }
-        expect(competingWrite).toBeDefined();
-        await manager.appendMessageAsync(assistantText("Answer to the first message"));
-        const persisted = (await reopen()).getEntries();
-        expect(persisted).toContainEqual(
-          expect.objectContaining({
-            id: user.entryId,
-            message: expect.objectContaining({
-              content: "First message after restart",
-              __openclaw: expect.objectContaining({
-                modelPromptProjection: { version: 1, text: "Prepared first message after restart" },
-              }),
-            }),
-          }),
-        );
-        expect(
-          persisted.filter(
-            (entry) => entry.type === "custom" && entry.customType === "restart-resume",
-          ),
-        ).toMatchObject([{ data: { ordinal: 1 } }, { data: { ordinal: 2 } }]);
-        expect(persisted.at(-1)).toMatchObject({
-          type: "message",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "Answer to the first message" }],
-          },
-        });
-      },
-      true,
-    );
-  });
-});
 
 const rawEntry = (id: string, parentId: string): Extract<SessionEntry, { type: "custom" }> => ({
   type: "custom",

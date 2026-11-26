@@ -166,12 +166,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
             throw new SessionTranscriptWriterClaimReboundError();
           }
           // A newer committed view owns navigation; this receipt will not replace it.
-          if (
-            !this.hasNewerPublishedTranscriptView(
-              committed.committedVersion,
-              committed.result?.adoptedMessageId,
-            )
-          ) {
+          if (!this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
             assertNavigation();
           }
           const adopted = await this.adoptWorkerCommittedEntry(
@@ -357,12 +352,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     if (committed.viewFailure instanceof SessionManagerActorCommittedError) {
       throw committed.viewFailure;
     }
-    if (
-      this.hasNewerPublishedTranscriptView(
-        committed.committedVersion,
-        committed.result?.adoptedMessageId,
-      )
-    ) {
+    if (this.hasNewerPublishedTranscriptView(committed.committedVersion)) {
       // A native SDK append can publish a later view before the worker receipt arrives.
       return {
         entry: {

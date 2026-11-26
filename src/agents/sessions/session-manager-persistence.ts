@@ -28,7 +28,6 @@ import {
 import { readUserTurnMentionInvitation } from "../../sessions/user-turn-transcript-admission.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import { appendSessionManagerActor } from "./session-manager-actor-append.js";
@@ -214,15 +213,14 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         "effectiveParentId" in receipt && receipt.effectiveParentId !== undefined
           ? receipt.effectiveParentId
           : entry.parentId;
-      const adoptedMessage =
-        "messageId" in receipt && receipt.messageId !== entry.id ? receipt.messageId : undefined;
+      const adoptedMessage = "messageId" in receipt && receipt.messageId !== entry.id;
       const reloadAfterAppend =
         receipt.appended &&
         (transcriptAppendNeedsReload(committed.before, loadedVersion) ||
           (initialModelParentId !== undefined && initialModelParentId !== initialModel?.parentId));
       if (
         requireReload &&
-        !this.hasNewerPublishedTranscriptView(committed.after, adoptedMessage) &&
+        !this.hasNewerPublishedTranscriptView(committed.after) &&
         (adoptedMessage || reloadAfterAppend || effectiveParentId !== entry.parentId) &&
         !reload
       ) {
@@ -244,7 +242,9 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           ...("anchor" in receipt && receipt.anchor ? { anchor: receipt.anchor } : {}),
           lifecycleRevision: committed.lifecycleRevision,
           effectiveParentId,
-          ...(adoptedMessage ? { adoptedMessageId: adoptedMessage } : {}),
+          ...(adoptedMessage && "messageId" in receipt
+            ? { adoptedMessageId: receipt.messageId }
+            : {}),
           ...(reloadAfterAppend ? { reloadAfterAppend: true } : {}),
         },
         reload: reload?.ok ? reload.value : undefined,
@@ -367,20 +367,8 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         ) {
           throw error;
         }
-        // Keep the refreshed watermark and its one retry in the same writer turn.
-        // Otherwise another resume write can invalidate the retry before it enters.
-        outcome = await runOpenClawAgentWriteAdmission(
-          options,
-          async () => {
-            assertCurrent();
-            const current = actor.snapshot(authority) ?? (await actor.read(authority));
-            return append(current.transcript.version.updatedAt);
-          },
-          true,
-          undefined,
-          undefined,
-          "session-manager.write",
-        );
+        const current = actor.snapshot(authority) ?? (await actor.read(authority));
+        outcome = await append(current.transcript.version.updatedAt);
       }
       try {
         if (outcome.committed.kind !== "metadata") {

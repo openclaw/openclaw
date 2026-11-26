@@ -12,7 +12,6 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
-import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { Context, Model } from "../../llm/types.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
 import { beginReplyMessageInjectionTarget } from "../../sessions/session-controller.js";
@@ -42,7 +41,6 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
-import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import { SessionManager } from "./session-manager.js";
 import { getSteeringMessageIdentity } from "./steering-message-identity.js";
 
@@ -99,82 +97,6 @@ it("propagates transcript conflicts without synthesizing an assistant provider e
   ).toBe(false);
   expect(events.some((event) => event.type === "auto_retry_start")).toBe(false);
 });
-
-it.each(["actor", "worker"] as const)(
-  "saves the first follow-up answer after adopting its committed user from a fenced %s view",
-  async (backend) => {
-    await withOpenClawTestState({ label: "restart-followup-" + backend }, async (state) => {
-      const { target } = await createTranscriptTarget(state, "restart-followup-" + backend);
-      const source = await SessionManager.openAsync(target, state.workspaceDir);
-      await source.appendThinkingLevelChange("medium");
-      await source.appendModelChange(testModel.provider, testModel.id);
-      const restart = await source.appendMessageAsync(
-        makeUserMessage("Resume interrupted work", 1),
-      );
-      expect(restart).toBeDefined();
-      await source.appendCompactionAsync("Saved progress", restart!, 40000);
-      await source.appendMessageAsync(call(["resumed-read"]));
-      await source.appendMessageAsync(
-        makeTextToolResult("resumed-read", "read", "Saved result", false, 2),
-      );
-      await source.appendCustomEntryAsync("openclaw.cache-ttl", { timestamp: 2 });
-      const first = {
-        ...makeUserMessage("Reply with EDGE-ALIVE-PINE", 3),
-        idempotencyKey: "first-followup:user",
-      };
-      const committed = await source.appendMessageWithTranscriptAnchorAsync(first);
-      if (!committed.anchor) {
-        throw new Error("Missing committed follow-up anchor");
-      }
-      const admission = { ...committed.anchor, role: "user" as const, logicalTurnId: "follow-up" };
-      const run = async () => {
-        const manager = guardSessionManager(
-          await runWithSessionTranscriptReadFence(admission, () =>
-            SessionManager.openAsync(target, state.workspaceDir, {
-              maxEvents: 256,
-              maxBytes: 1_000_000,
-            }),
-          ),
-          { runId: "restart-recovery", preparedUserTurnMessage: first },
-        );
-        expect(manager.getEntry(committed.entryId)).toBeUndefined();
-        const requests: Context["messages"][] = [];
-        streamMocks.streamSimple.mockImplementation((model, context) => {
-          requests.push(structuredClone(context.messages));
-          return createAssistantResultStream(createAssistant(model, "EDGE-ALIVE-PINE"));
-        });
-        const { session } = await createTestSession({ sessionManager: manager });
-        try {
-          await session.prompt("Reply with EDGE-ALIVE-PINE");
-          expect(session.getLastAssistantText()).toBe("EDGE-ALIVE-PINE");
-          const reopened = await SessionManager.openAsync(target, state.workspaceDir);
-          expect(reopened.getLeafEntry()).toMatchObject({
-            parentId: committed.entryId,
-            message: { role: "assistant", content: [{ type: "text", text: "EDGE-ALIVE-PINE" }] },
-          });
-          expect(
-            reopened.getEntries().filter((entry) => entry.id === committed.entryId),
-          ).toHaveLength(1);
-          await source.appendMessageAsync(makeUserMessage("A later unconsumed message", 4));
-          const before = loadTranscriptEventsSync(target);
-          await expect(manager.appendMessageAsync(assistantText("Stale answer"))).rejects.toThrow(
-            "SQLite transcript changed while preparing rewrite",
-          );
-          expect(loadTranscriptEventsSync(target)).toEqual(before);
-        } finally {
-          session.dispose();
-          expect(requests).toHaveLength(1);
-          expect(JSON.stringify(requests[0])).toContain("Reply with EDGE-ALIVE-PINE");
-        }
-      };
-      if (backend === "actor") {
-        await withSelectedTranscriptReader(target, run, true);
-      } else {
-        await run();
-      }
-    });
-  },
-);
 
 it("commits streamed and custom messages off the host thread and adopts the committed branch", async () => {
   await withOpenClawTestState({ label: "session-stream-worker" }, async (state) => {

@@ -89,19 +89,13 @@ export class SessionManagerNativePersistence extends SessionManagerHydration {
     );
   }
 
-  protected hasNewerPublishedTranscriptView(
-    version: SessionTranscriptContextVersion,
-    replayedMessageId?: string,
-  ): boolean {
+  protected hasNewerPublishedTranscriptView(version: SessionTranscriptContextVersion): boolean {
     this.assertTranscriptViewAvailable();
     // Appends and rewrites strictly advance this owner-held watermark, including maintenance.
     return (
       this.transcriptMutationAt != null &&
       version.updatedAt !== null &&
-      (this.transcriptMutationAt > version.updatedAt ||
-        (this.transcriptMutationAt === version.updatedAt &&
-          // A fenced snapshot can share this watermark while excluding the replayed user.
-          (replayedMessageId === undefined || this.byId.has(replayedMessageId))))
+      this.transcriptMutationAt >= version.updatedAt
     );
   }
 
