@@ -1,4 +1,7 @@
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeNullableString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { createMemo, onSettled, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { createPhoneSheetLayout, PhoneSheet } from "../../components/solid/phone-sheet.tsx";
@@ -108,7 +111,7 @@ export function Filters(props: TranscriptsViewProps & { phone: boolean; queryToo
       onSubmit={(event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
-        const query = String(data.get("query") ?? "");
+        const query = readStringValue(data.get("query")) ?? "";
         if (isTranscriptQueryTooLong(query)) {
           props.onDraft("query", query);
           return;
