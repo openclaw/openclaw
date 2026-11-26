@@ -538,13 +538,12 @@ recovery, or an actionable failure. Lost ownership, named data risk, and
 unverifiable runtime identity still keep the Gateway stopped. The helper that starts the update must contain this
 change; staging a newer candidate cannot repair an older helper.
 
-The in-place updater bounds the migrated finalizer process even without an
-explicit `--timeout`; an explicit `--timeout` takes precedence. The default
-allowance accounts for SQLite state size and installed plugins. The waiting
-updater joins the worker's process tree before returning control to the managed
-helper. A finalizer stopped at its deadline, a killed waiting updater, and a
-killed worker all enter the same interrupted recovery that `openclaw update
-repair` runs: the helper waits for the worker's lease to settle, then either
+Only an explicit `--timeout` bounds the migrated finalizer process; without
+one, finalization keeps running until it finishes. The waiting updater joins the
+worker's process tree before returning control to the managed helper. A
+finalizer stopped at that deadline, a killed waiting updater, and a killed
+worker all enter the same interrupted recovery that `openclaw update repair`
+runs: the helper waits for the worker's lease to settle, then either
 finishes the published candidate or keeps the previous installation, starts the
 Gateway, and verifies it. Recovery requires a successful health RPC and the
 expected version and build from the same authenticated connection; HTTP readiness
