@@ -9,6 +9,10 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
   /** An older run carries a data-at-risk mark that post-core repair finds consistent. */
   olderMark?: true;
   finalizeFailure?: true;
+  /** The updater bound its child lease to a candidate worker; "killed" dies with it. */
+  candidateWorker?: "killed" | "exits";
+  /** The updater stopped its finalizer at the deadline and left recovery pending. */
+  finalizerTimeout?: true;
   trigger?: "cli" | "api" | "campaign";
   origin?: UpdateRunRecord["origin"];
   controlDisconnect?: "transferred" | "unarmed" | "dead-parent";

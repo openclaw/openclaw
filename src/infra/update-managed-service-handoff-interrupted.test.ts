@@ -7,6 +7,26 @@ const { runManagedServiceManagerBoundary: runBoundary } =
   useManagedServiceHandoffLifecycleFixture(true);
 const itUnix = it.runIf(process.platform !== "win32");
 
+itUnix("does not call an interrupted update recovered on HTTP readiness alone", async () => {
+  const result = await runBoundary("systemd", {
+    ledger: true,
+    controlDisconnect: "transferred",
+    interruptedUpdate: "after",
+    gatewayHealth: "http-only",
+    helperExitCode: 1,
+  });
+  expect(result.state, result.log).toMatchObject({
+    postCoreRepaired: true,
+    healthProbed: true,
+    expectedVersion: "2.0.0",
+  });
+  expect(result.run, result.log).toMatchObject({
+    status: "failed",
+    phase: "finished",
+    verification: { settled: false },
+  });
+});
+
 itUnix("uses the verified installed writer when post-core repair migrates then fails", async () => {
   const result = await runBoundary("systemd", {
     ledger: true,
@@ -71,6 +91,7 @@ itUnix.each([
     expect(result.run, result.log).toMatchObject({
       status: forward ? "succeeded" : "rolled-back",
       phase: "finished",
+      verification: { settled: true, runningVersion: forward ? "2.0.0" : "1.0.0" },
     });
     expect(result.publication).toEqual({
       installedVersion: forward ? "2.0.0" : "1.0.0",
@@ -86,6 +107,62 @@ itUnix.each([
         guardedRestart: ["gateway", "restart", "--preserve-definition", "--json"],
       });
     }
+  },
+);
+
+// The updater binds its child lease to the candidate worker; losing both must not
+// strand the helper's own claim and leave the Gateway stopped.
+itUnix.each(["killed", "exits"] as const)(
+  "recovers after SIGKILL when the candidate worker held the child lease (%s)",
+  async (candidateWorker) => {
+    const result = await runBoundary("systemd", {
+      ledger: true,
+      controlDisconnect: "transferred",
+      interruptedUpdate: "after",
+      candidateWorker,
+      helperExitCode: 0,
+    });
+    expect(result.log).not.toContain("lease binding was lost");
+    expect(result.state, result.log).toMatchObject({
+      restored: true,
+      healthProbed: true,
+      expectedVersion: "2.0.0",
+      postCoreRepaired: true,
+    });
+    expect(result.run, result.log).toMatchObject({
+      status: "succeeded",
+      phase: "finished",
+      verification: { settled: true, runningVersion: "2.0.0" },
+    });
+  },
+);
+
+// A finalizer deadline leaves recovery pending for the helper; it must not leave the
+// Gateway stopped for a manual repair.
+itUnix.each([
+  { interruptedUpdate: "after", forward: true },
+  { interruptedUpdate: "prepared", forward: false },
+] as const)(
+  "recovers a finalizer stopped at its deadline at $interruptedUpdate publication",
+  async ({ interruptedUpdate, forward }) => {
+    const result = await runBoundary("systemd", {
+      ledger: true,
+      controlDisconnect: "transferred",
+      interruptedUpdate,
+      finalizerTimeout: true,
+      helperExitCode: forward ? 0 : 1,
+    });
+    expect(result.log).toContain("update command exited code=1 signal=null");
+    expect(result.state, result.log).toMatchObject({
+      restored: true,
+      healthProbed: true,
+      expectedVersion: forward ? "2.0.0" : "1.0.0",
+    });
+    expect(result.run, result.log).toMatchObject({
+      status: forward ? "succeeded" : "rolled-back",
+      phase: "finished",
+      verification: { settled: true, runningVersion: forward ? "2.0.0" : "1.0.0" },
+    });
   },
 );
 

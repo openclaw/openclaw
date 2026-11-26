@@ -11,7 +11,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { UPDATE_ACTIVATION_TIMEOUT_REASON } from "../../shared/update-outcome.js";
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
-import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import type { FinishUpdateOptions, FinishUpdateParams } from "./update-command-finish-types.js";
 import {
   captureMutableUpdateCompensation,
   withMutableUpdateForwardScope,
@@ -31,10 +31,17 @@ import {
   resolveSettledUpdateCommandResult,
 } from "./update-command-terminal.js";
 
-export function captureUpdateFinalization(params: FinishUpdateParams) {
+export function captureUpdateFinalization(
+  params: FinishUpdateParams,
+  { adoptedFinalization }: Pick<FinishUpdateOptions, "adoptedFinalization">,
+) {
   const fence = createUpdateCommandFinalizationFence(params);
   const assertCurrent = params.opts.run?.requesterAuthority
-    ? createUpdateCommandAuthority({ opts: params.opts, assertCurrent: fence }).assertCurrent
+    ? createUpdateCommandAuthority({
+        opts: params.opts,
+        assertCurrent: fence,
+        checkRequesterOnce: adoptedFinalization,
+      }).assertCurrent
     : fence;
   const { recordPhase } = createUpdateCommandExecutionGuards(params.opts, params.root, {
     kind: "current-core-finalization",

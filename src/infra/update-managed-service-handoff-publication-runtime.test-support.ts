@@ -1,5 +1,6 @@
 export { settleManagedHandoffPluginCohort } from "../cli/update-cli/update-plugin-cohort-settlement.js";
 export { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+export { withUpdateCommandExecutorChild } from "../cli/update-cli/update-command-executor-capabilities.js";
 export { preparePackageActivationJournal } from "./package-update-activation-prepare.js";
 export { encodePackageActivationLauncher } from "./package-update-activation-journal.js";
 export { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";

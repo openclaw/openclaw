@@ -46,6 +46,8 @@ export async function prepareManagedServiceRuntimeFixture({
     | "pluginCohort"
     | "olderMark"
     | "finalizeFailure"
+    | "candidateWorker"
+    | "finalizerTimeout"
   >;
 }) {
   const appendRuntime = (source: string) => fs.appendFile(recoveryModulePath, source);
@@ -78,6 +80,8 @@ export async function prepareManagedServiceRuntimeFixture({
           pluginCohort: options.pluginCohort,
           olderMark: options.olderMark,
           finalizeFailure: options.finalizeFailure,
+          candidateWorker: options.candidateWorker,
+          finalizerTimeout: options.finalizerTimeout,
         })
       : undefined;
   if (options?.requester) {
@@ -291,6 +295,7 @@ export async function prepareManagedServiceBoundaryFiles({
       const fault = ${JSON.stringify(options?.gatewayHealth)};
       if (fault === "throw") throw new Error("readiness probe unavailable");
       return { healthy: !["unready", "wrong-version", "wrong-build", "exited"].includes(fault),
+        healthRpcVerified: fault !== "http-only",
         runtime: { status: fault === "exited" ? "stopped" : "running", pid: fault === "exited" ? null : ${process.pid} },
         gatewayVersion: fault === "wrong-version" ? "0.0.1" : expectedVersion,
         gatewayBuildId: fault === "wrong-build" ? "another-build-same-version" : expectedBuildId };
