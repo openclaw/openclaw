@@ -37,6 +37,7 @@ import { installPluginFromNpmSpec } from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { listStaleLocalBundledPluginInstallRecords } from "./stale-local-bundled-plugin-install-records.js";
 import { formatClawHubInstallFailure, formatNpmInstallFailure } from "./update-attempt.js";
 import {
   buildLoadPathHelpers,
@@ -139,6 +140,35 @@ async function syncPluginsForUpdateChannelWithLease(
     logger.warn?.(warning);
   }
 
+  const retired = new Set(
+    listStaleLocalBundledPluginInstallRecords({ installRecords: installs, bundled, env }).map(
+      ({ pluginId }) => pluginId,
+    ),
+  );
+  for (const pluginId of Object.keys(installs)) {
+    if (retainedLinks.has(pluginId) || params.skipIds?.has(pluginId)) {
+      retired.delete(pluginId);
+      continue;
+    }
+    const bundledInfo = bundled.get(pluginId);
+    if (
+      params.channel === "dev" &&
+      bundledInfo &&
+      buildBundledPluginLoadPathAliases(bundledInfo.localPath).length > 0
+    ) {
+      // Packaged bundles belong to the release, not a second path installation.
+      retired.add(pluginId);
+      summary.switchedToBundled.push(pluginId);
+    }
+  }
+  if (retired.size > 0) {
+    installs = Object.fromEntries(
+      Object.entries(installs).filter(([pluginId]) => !retired.has(pluginId)),
+    );
+    next = { ...next, plugins: { ...next.plugins, installs } };
+    changed = true;
+  }
+
   if (params.channel === "dev") {
     for (const [pluginId, record] of Object.entries(installs)) {
       const bundledInfo = bundled.get(pluginId);
@@ -153,7 +183,6 @@ async function syncPluginsForUpdateChannelWithLease(
       if (alreadyBundled) {
         continue;
       }
-
       next = recordPluginInstall(next, {
         pluginId,
         source: "path",

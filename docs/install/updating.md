@@ -165,6 +165,13 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    in the same update details and warning count; they never fail the core update
    or trigger rollback.
 
+Packaged bundled plugins belong to the selected core release, not a second
+plugin installation. Channel synchronization retires obsolete compiled-bundle
+install records before it plans package updates; switching to a packaged bundle
+does not create another path install record. Plugin configuration, explicit local
+links, and source-checkout selections stay intact. Registered plugin host links
+are reconciled by the existing post-core plugin owner before activation reload.
+
 Once the resident launcher owns an installation, `gateway install` keeps that
 state directory's selected launcher as its service entry, including before the
 first pending trial replaces an unmodified npm fallback. Checked durable CLI
