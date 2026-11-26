@@ -3,6 +3,9 @@ import {
   buildCodexAppServerConnectionFingerprint as connectionFingerprint,
   buildCodexAppServerRuntimeFingerprint,
   buildCodexPluginAppCacheKey as appCacheKey,
+  buildLegacyLocalCodexPluginAppCacheKeys,
+  normalizeCodexAppServerLocalRuntimeFingerprint,
+  normalizeCodexPluginAppCacheKeyForLocalBinding,
 } from "./plugin-app-cache-key.js";
 
 function remoteStart() {
@@ -103,5 +106,199 @@ describe("resolveCodexPluginAppCacheEndpoint", () => {
     const second = connectionFingerprint(appServer);
 
     expect(first).not.toEqual(second);
+  });
+
+  it("keeps local-loopback runtime fingerprints stable across version and userAgent bumps", () => {
+    const localAppServer = { start: stdioStart(), connectionClass: "local-loopback" as const };
+    const v1 = buildCodexAppServerRuntimeFingerprint({
+      appServer: localAppServer,
+      appServerVersion: "0.172.0",
+      runtimeIdentity: {
+        serverVersion: "0.172.0",
+        userAgent: "openclaw/0.172.0 (linux)",
+        codexHome: "/tmp/local-codex-home",
+        platformFamily: "unix",
+        platformOs: "linux",
+      },
+    });
+    const v2 = buildCodexAppServerRuntimeFingerprint({
+      appServer: localAppServer,
+      appServerVersion: "0.172.1",
+      runtimeIdentity: {
+        serverVersion: "0.172.1",
+        userAgent: "openclaw/0.172.1 (linux)",
+        codexHome: "/tmp/local-codex-home",
+        platformFamily: "unix",
+        platformOs: "linux",
+      },
+    });
+    const differentHome = buildCodexAppServerRuntimeFingerprint({
+      appServer: localAppServer,
+      appServerVersion: "0.172.1",
+      runtimeIdentity: {
+        serverVersion: "0.172.1",
+        userAgent: "openclaw/0.172.1 (linux)",
+        codexHome: "/tmp/other-codex-home",
+        platformFamily: "unix",
+        platformOs: "linux",
+      },
+    });
+    const differentTransport = buildCodexAppServerRuntimeFingerprint({
+      appServer: {
+        start: { ...stdioStart(), transport: "websocket", url: "ws://127.0.0.1:4500" },
+        connectionClass: "local-loopback",
+      },
+      appServerVersion: "0.172.1",
+      runtimeIdentity: {
+        serverVersion: "0.172.1",
+        codexHome: "/tmp/local-codex-home",
+        platformFamily: "unix",
+        platformOs: "linux",
+      },
+    });
+
+    expect(v1).toBe(v2);
+    expect(v1).not.toBe(differentHome);
+    expect(v1).not.toBe(differentTransport);
+  });
+
+  it("normalizes local app cache keys across version bumps and reconstructs legacy keys", () => {
+    const localAppServer = { start: stdioStart(), connectionClass: "local-loopback" as const };
+    const keyV1 = appCacheKey({
+      appServer: localAppServer,
+      authProfileId: "profile-1",
+      appServerVersion: "0.172.0",
+      desktopGenerationFingerprint: "desktop-a",
+      runtimeIdentity: {
+        serverVersion: "0.172.0",
+        userAgent: "openclaw/0.172.0 (Linux Unknown; x86_64) unknown (openclaw; 2026.11.10)",
+        codexHome: "/tmp/local-codex-home",
+        platformFamily: "unix",
+        platformOs: "linux",
+      },
+    });
+    const keyV2 = appCacheKey({
+      appServer: localAppServer,
+      authProfileId: "profile-1",
+      appServerVersion: "0.172.1",
+      desktopGenerationFingerprint: "desktop-a",
+      runtimeIdentity: {
+        serverVersion: "0.172.1",
+        userAgent: "openclaw/0.172.1 (Linux Unknown; x86_64) unknown (openclaw; 2026.11.10)",
+        codexHome: "/tmp/local-codex-home",
+        platformFamily: "unix",
+        platformOs: "linux",
+      },
+    });
+    const differentProfile = appCacheKey({
+      appServer: localAppServer,
+      authProfileId: "profile-2",
+      appServerVersion: "0.172.1",
+      desktopGenerationFingerprint: "desktop-a",
+      runtimeIdentity: {
+        serverVersion: "0.172.1",
+        userAgent: "openclaw/0.172.1 (Linux Unknown; x86_64) unknown (openclaw; 2026.11.10)",
+        codexHome: "/tmp/local-codex-home",
+        platformFamily: "unix",
+        platformOs: "linux",
+      },
+    });
+
+    expect(normalizeCodexPluginAppCacheKeyForLocalBinding(keyV1)).toBe(
+      normalizeCodexPluginAppCacheKeyForLocalBinding(keyV2),
+    );
+    expect(normalizeCodexPluginAppCacheKeyForLocalBinding(keyV1)).not.toBe(
+      normalizeCodexPluginAppCacheKeyForLocalBinding(differentProfile),
+    );
+
+    const legacyRuntimeFp = JSON.stringify({
+      ...JSON.parse(
+        buildCodexAppServerRuntimeFingerprint({
+          appServer: localAppServer,
+          appServerVersion: "0.172.0",
+          runtimeIdentity: {
+            serverVersion: "0.172.0",
+            userAgent: "openclaw/0.172.0 (Linux Unknown; x86_64) unknown (openclaw; 2026.11.10)",
+            codexHome: "/tmp/local-codex-home",
+            platformFamily: "unix",
+            platformOs: "linux",
+          },
+        }),
+      ),
+      appServerVersion: "0.172.0",
+      runtimeIdentity: {
+        serverVersion: "0.172.0",
+        userAgent: "openclaw/0.172.0 (Linux Unknown; x86_64) unknown (openclaw; 2026.11.10)",
+        codexHome: "/tmp/local-codex-home",
+        platformFamily: "unix",
+        platformOs: "linux",
+      },
+    });
+    expect(
+      buildLegacyLocalCodexPluginAppCacheKeys({
+        currentAppCacheKey: keyV2,
+        legacyRuntimeFingerprint: legacyRuntimeFp,
+      }),
+    ).toContain(keyV1);
+    expect(
+      buildLegacyLocalCodexPluginAppCacheKeys({
+        currentAppCacheKey: differentProfile,
+        legacyRuntimeFingerprint: legacyRuntimeFp,
+      }),
+    ).not.toContain(keyV1);
+  });
+
+  it("keeps supervised connection fingerprints exact instead of normalizing them as local runtimes", () => {
+    const supervisedHomeA = connectionFingerprint({
+      start: {
+        ...stdioStart(),
+        homeScope: "user",
+        codexHome: "/tmp/supervised-home-a",
+        cwd: "/tmp/ws-a",
+      },
+      connectionClass: "local-loopback",
+    });
+    const supervisedHomeB = connectionFingerprint({
+      start: {
+        ...stdioStart(),
+        homeScope: "user",
+        codexHome: "/tmp/supervised-home-b",
+        cwd: "/tmp/ws-a",
+      },
+      connectionClass: "local-loopback",
+    });
+    const supervisedManagedScope = connectionFingerprint({
+      start: {
+        ...stdioStart(),
+        codexHome: "/tmp/supervised-home-a",
+        cwd: "/tmp/ws-a",
+      },
+      connectionClass: "local-loopback",
+    });
+    const localRuntime = buildCodexAppServerRuntimeFingerprint({
+      appServer: { start: stdioStart(), connectionClass: "local-loopback" },
+      appServerVersion: "0.172.0",
+      runtimeIdentity: {
+        serverVersion: "0.172.0",
+        userAgent: "openclaw/0.172.0 (linux)",
+        codexHome: "/tmp/supervised-home-a",
+      },
+    });
+    const currentCacheKey = appCacheKey({
+      appServer: { start: stdioStart() },
+      appServerVersion: "0.172.1",
+      runtimeIdentity: { serverVersion: "0.172.1", codexHome: "/tmp/supervised-home-a" },
+    });
+
+    expect(normalizeCodexAppServerLocalRuntimeFingerprint(supervisedHomeA)).toBeUndefined();
+    expect(normalizeCodexAppServerLocalRuntimeFingerprint(supervisedHomeB)).toBeUndefined();
+    expect(normalizeCodexAppServerLocalRuntimeFingerprint(supervisedManagedScope)).toBeUndefined();
+    expect(normalizeCodexAppServerLocalRuntimeFingerprint(localRuntime)).toBe(localRuntime);
+    expect(
+      buildLegacyLocalCodexPluginAppCacheKeys({
+        currentAppCacheKey: currentCacheKey,
+        legacyRuntimeFingerprint: supervisedHomeA,
+      }),
+    ).toEqual([]);
   });
 });

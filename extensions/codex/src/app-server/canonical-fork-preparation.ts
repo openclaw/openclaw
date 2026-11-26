@@ -31,7 +31,10 @@ import {
   applyCodexNativeSkillIsolation,
   resolveCodexNativeSkillIsolation,
 } from "./native-skill-isolation.js";
-import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
+import {
+  buildCodexPluginAppCacheKey,
+  normalizeCodexPluginAppCacheKeyForLocalBinding,
+} from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginThreadConfig,
   mergeCodexThreadConfigs,
@@ -151,18 +154,26 @@ export async function prepareCanonicalCodexFork(params: {
   assertCurrent();
   // Creation has native tools and no scheduled run, so only configured app policy
   // needs preparation, including an explicit deny-all policy.
-  const apps = shouldBuildCodexPluginThreadConfig(pluginConfig)
+  const forkPluginAppCacheKey = shouldBuildCodexPluginThreadConfig(pluginConfig)
+    ? buildCodexPluginAppCacheKey({
+        appServer,
+        agentDir: context.agentDir,
+        runtimeIdentity: context.client.getRuntimeIdentity(),
+        desktopGenerationFingerprint: readCodexAppServerClientDesktopGenerationFingerprint(
+          context.client,
+        ),
+      })
+    : undefined;
+  const apps = forkPluginAppCacheKey
     ? await buildCodexPluginThreadConfig({
         pluginConfig,
         configCwd: cwd,
-        appCacheKey: buildCodexPluginAppCacheKey({
-          appServer,
-          agentDir: context.agentDir,
-          runtimeIdentity: context.client.getRuntimeIdentity(),
-          desktopGenerationFingerprint: readCodexAppServerClientDesktopGenerationFingerprint(
-            context.client,
-          ),
-        }),
+        appCacheKey: forkPluginAppCacheKey,
+        bindingAppCacheKey:
+          appServer.connectionClass === "local-loopback"
+            ? (normalizeCodexPluginAppCacheKeyForLocalBinding(forkPluginAppCacheKey) ??
+              forkPluginAppCacheKey)
+            : forkPluginAppCacheKey,
         request: async (method, requestParams) => {
           assertCurrent();
           // Inventory reads may discover that setup is required; creation cannot

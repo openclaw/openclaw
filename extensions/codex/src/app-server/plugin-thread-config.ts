@@ -71,6 +71,7 @@ type BuildCodexPluginThreadConfigParams = {
   threadId?: string;
   appCache?: CodexAppInventoryCache;
   appCacheKey: string;
+  bindingAppCacheKey?: string;
   metadataCache?: CodexPluginMetadataCache;
   nowMs?: number;
 };
@@ -110,9 +111,13 @@ export function buildCodexPluginThreadConfigInputFingerprint(params: {
 export function buildCodexPluginThreadConfigTimeoutFallback(params: {
   policy: ResolvedCodexPluginsPolicy;
   appCacheKey: string;
+  bindingAppCacheKey?: string;
   message: string;
 }): CodexPluginThreadConfig {
-  const inputFingerprint = buildCodexPluginThreadConfigInputFingerprint(params);
+  const inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
+    policy: params.policy,
+    appCacheKey: params.bindingAppCacheKey ?? params.appCacheKey,
+  });
   return finishPluginThreadConfig({
     enabled: true,
     inputFingerprint,
@@ -130,7 +135,7 @@ export async function buildCodexPluginThreadConfig(
     params.policy ?? resolveCodexPluginsPolicy(readCodexPluginConfig(params.pluginConfig));
   const inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
     policy,
-    appCacheKey: params.appCacheKey,
+    appCacheKey: params.bindingAppCacheKey ?? params.appCacheKey,
   });
   if (!policy.enabled) {
     return finishPluginThreadConfig({

@@ -348,6 +348,7 @@ export async function startCodexAttemptThread(params: {
             const createPluginThreadConfig = prepareCodexPluginThreadConfigStartupProvider({
               startupPolicy: pluginStartupPolicy,
               appCacheKey: pluginAppCacheKey,
+              connectionClass: params.appServer.connectionClass,
               scheduledRuntimeAuthority: attemptParams.scheduledRuntimeAuthority,
             });
             let startupSandboxEnvironment: CodexSandboxExecEnvironment | undefined;

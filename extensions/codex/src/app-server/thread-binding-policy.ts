@@ -1,20 +1,40 @@
 import type { CodexAppServerConnectionClass } from "./config-contracts.js";
 import { normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
+import { normalizeCodexAppServerLocalRuntimeFingerprint } from "./plugin-app-cache-key.js";
+import { isCodexPluginThreadBindingStale } from "./plugin-thread-config.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import type {
   CodexPluginThreadConfigProvider,
   CodexStartOrResumeThreadParams,
 } from "./thread-lifecycle-types.js";
 
-export function shouldRotateCodexAppServerBindingForRuntime(params: {
+export function areCodexAppServerRuntimeFingerprintsCompatible(params: {
   connectionClass: CodexAppServerConnectionClass;
   current?: string;
   binding?: string;
 }): boolean {
   if (!params.current || params.binding === params.current) {
-    return false;
+    return true;
   }
-  return params.connectionClass === "remote" || Boolean(params.binding);
+  if (!params.binding) {
+    return params.connectionClass !== "remote";
+  }
+  if (params.connectionClass === "local-loopback") {
+    const normalizedCurrent = normalizeCodexAppServerLocalRuntimeFingerprint(params.current);
+    const normalizedBinding = normalizeCodexAppServerLocalRuntimeFingerprint(params.binding);
+    if (normalizedCurrent && normalizedBinding && normalizedCurrent === normalizedBinding) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function shouldRotateCodexAppServerBindingForRuntime(params: {
+  connectionClass: CodexAppServerConnectionClass;
+  current?: string;
+  binding?: string;
+}): boolean {
+  return !areCodexAppServerRuntimeFingerprintsCompatible(params);
 }
 
 type CodexGpt56MultiAgentVersion = "v1" | "v2";
@@ -78,6 +98,30 @@ export function isTransientWebSearchRestriction(
     return normalized === "*" || normalized === "web_search";
   });
 }
+export function shouldRotateCodexPluginThreadBinding(
+  binding: CodexAppServerThreadBinding,
+  pluginThreadConfig?: CodexPluginThreadConfigProvider,
+): boolean {
+  if (
+    !isCodexPluginThreadBindingStale({
+      codexPluginsEnabled: pluginThreadConfig?.enabled ?? false,
+      bindingFingerprint: binding.pluginAppsFingerprint,
+      bindingInputFingerprint: binding.pluginAppsInputFingerprint,
+      currentInputFingerprint: pluginThreadConfig?.inputFingerprint,
+      hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
+    })
+  ) {
+    return false;
+  }
+  return !(
+    pluginThreadConfig?.enabled &&
+    binding.pluginAppsFingerprint &&
+    binding.pluginAppsInputFingerprint &&
+    binding.pluginAppPolicyContext &&
+    pluginThreadConfig.matchesLegacyBindingInputFingerprint?.(binding) === true
+  );
+}
+
 export function shouldRecheckRecoverablePluginBinding(params: {
   binding: CodexAppServerThreadBinding;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
@@ -88,7 +132,8 @@ export function shouldRecheckRecoverablePluginBinding(params: {
   if (
     !params.binding.pluginAppsFingerprint ||
     !params.binding.pluginAppsInputFingerprint ||
-    params.binding.pluginAppsInputFingerprint !== params.pluginThreadConfig.inputFingerprint
+    (params.binding.pluginAppsInputFingerprint !== params.pluginThreadConfig.inputFingerprint &&
+      params.pluginThreadConfig.matchesLegacyBindingInputFingerprint?.(params.binding) !== true)
   ) {
     return false;
   }
