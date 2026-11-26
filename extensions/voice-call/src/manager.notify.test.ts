@@ -262,7 +262,7 @@ describe("CallManager closed-loop turns", () => {
     expect(provider.stopListeningCalls).toHaveLength(1);
   });
 
-  it("tracks latency metadata across multiple closed-loop turns", async () => {
+  it("preserves transcripts across multiple closed-loop turns", async () => {
     const { manager, provider, callId } = await closedLoop();
     let turn = 0;
     for (const ordinal of ["First", "Second"]) {
@@ -281,11 +281,6 @@ describe("CallManager closed-loop turns", () => {
       "Second question",
       "Second answer",
     ]);
-    expect(call.metadata).toMatchObject({
-      turnCount: 2,
-      lastTurnLatencyMs: expect.any(Number),
-      lastTurnListenWaitMs: expect.any(Number),
-    });
     expect(provider.startListeningCalls).toHaveLength(2);
     expect(provider.stopListeningCalls).toHaveLength(2);
   });

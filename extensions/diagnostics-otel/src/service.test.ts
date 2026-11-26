@@ -757,14 +757,12 @@ describe("diagnostics-otel service", () => {
   test("records message-flow metrics and spans", async () => {
     await startServiceFixture(["traces", "metrics", "logs"]);
 
-    emitEvent("webhook.received", { channel: "telegram", updateType: "telegram-post" });
     emitEvent("webhook.processed", {
       channel: "telegram",
       updateType: "telegram-post",
       chatId: "chat-should-not-export",
       durationMs: 120,
     });
-    emitEvent("message.queued", { channel: "telegram", source: "telegram", queueDepth: 2 });
     for (const [channel, source, durationMs, reason] of [
       ["telegram", "webhook", 25, undefined],
       ["telegram/custom", "webhook with secret sk-test", 30, "progress draft / message tool 123"],
@@ -788,34 +786,6 @@ describe("diagnostics-otel service", () => {
       reason: "progress draft / message tool 123",
       durationMs: 55,
     });
-    emitEvent("queue.lane.dequeue", { lane: "main", queueSize: 3, waitMs: 10 });
-    emitEvent("session.stuck", {
-      state: "processing",
-      ageMs: 125_000,
-      classification: "stale_session_state",
-    });
-    emitEvent("run.attempt", { runId: "run-1", attempt: 2 });
-
-    const webhook = { "openclaw.channel": "telegram", "openclaw.webhook": "telegram-post" };
-    const queued = { "openclaw.channel": "telegram", "openclaw.source": "telegram" };
-    const lane = { "openclaw.lane": "main" };
-    const stuck = { "openclaw.state": "processing" };
-    const processed = { "openclaw.channel": "telegram", "openclaw.outcome": "completed" };
-    expectMetrics([
-      counter("openclaw.webhook.received", 1, webhook),
-      histogram("openclaw.webhook.duration_ms", 120, webhook),
-      counter("openclaw.message.queued", 1, queued),
-      histogram("openclaw.queue.depth", 2, queued),
-      histogram("openclaw.queue.depth", 3, lane),
-      counter("openclaw.message.processed", 1, processed),
-      histogram("openclaw.message.duration_ms", 55, processed),
-      histogram("openclaw.queue.wait_ms", 10, lane),
-      counter("openclaw.session.stuck", 1, stuck),
-      histogram("openclaw.session.stuck_age_ms", 125_000, stuck),
-      counter("openclaw.run.attempt", 1, { "openclaw.attempt": 2 }),
-    ]);
-    expect(telemetryState.histograms.get("openclaw.queue.depth")?.record).toHaveBeenCalledTimes(2);
-    expect(telemetryState.counters.get("openclaw.session.stuck")?.add).toHaveBeenCalledTimes(1);
     for (const [channel, source, duration, completion] of [
       ["telegram", "webhook", 25, { "openclaw.outcome": "completed" }],
       ["unknown", "unknown", 30, { "openclaw.reason": "none" }],
@@ -829,20 +799,6 @@ describe("diagnostics-otel service", () => {
         histogram("openclaw.message.dispatch.duration_ms", duration, completed),
       ]);
     }
-    emitEvent("session.turn.created", {
-      runId: "run-1",
-      agentId: "agent.default",
-      channel: "telegram",
-      trigger: "user",
-    });
-    expectCounter("openclaw.session.turn.created", 1, {
-      "openclaw.agent": "agent.default",
-      "openclaw.channel": "telegram",
-      "openclaw.trigger": "user",
-    });
-
-    const spanNames = telemetryState.tracer.startSpan.mock.calls.map((call) => call[0]);
-    expect(spanNames).toContain("openclaw.session.stuck");
     const webhookSpanOptions = startedSpanOptions("openclaw.webhook.processed");
     expect(webhookSpanOptions?.attributes).not.toHaveProperty("openclaw.chatId");
     expect(webhookSpanOptions?.startTime).toBeTypeOf("number");

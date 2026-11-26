@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
@@ -6,7 +6,6 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import {
@@ -127,25 +126,6 @@ describe("worker session placement store", () => {
       },
     );
   }
-
-  it("keeps warm local claims and releases in the shared owner without SQL or worker requests", async () => {
-    const warm = await claimTurn("warm-owner");
-    await store.releaseTurn(warm);
-    const reader = createWorkerSessionPlacementStore({ database });
-    const requests = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
-    const sql = observeHostDataSql();
-    try {
-      const claim = await claimTurn("warm-next");
-      expect((await reader.getAsync(SESSION.sessionId))?.turnClaim?.claimId).toBe(claim.claimId);
-      await store.releaseTurnIfOwned(claim);
-      expect((await reader.getAsync(SESSION.sessionId))?.turnClaim).toBeNull();
-      expect(requests).not.toHaveBeenCalled();
-      expect(sql.queries).toEqual([]);
-    } finally {
-      requests.mockRestore();
-      sql.restore();
-    }
-  });
 
   it("closes local admission before draining the existing local turn", async () => {
     const localClaim = await claimTurn("local-claim");

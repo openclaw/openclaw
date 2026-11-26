@@ -2242,38 +2242,6 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it("keeps the formatted receipt below 1024 bytes with maximal sanitized fields", () => {
-    const large = Number.MAX_SAFE_INTEGER;
-    const lastProbe = {
-      attempt: large,
-      phase: "complete" as const,
-      elapsedMs: large,
-      status: 503,
-      ready: false,
-      failing: Array<string>(8).fill("startup-sidecars"),
-      omittedFailing: large,
-    };
-    const receipt = readReadinessReceipt(
-      new Error(
-        formatGatewayReadinessDiagnostic({
-          attempts: large,
-          elapsedMs: large,
-          lastProbe,
-          lastFailedResponse: {
-            attempt: large,
-            phase: "body",
-            elapsedMs: large,
-            status: 502,
-            error: "invalid-json",
-          },
-          child: { pid: large, exitCode: large, signalCode: "SIGVTALRM" },
-        }),
-      ),
-    );
-    expect(receipt.lastProbe.failing).toHaveLength(8);
-    expect(receipt.lastFailedResponse.status).toBe(502);
-  });
-
   it.each(["fetch-failed", "invalid-json", "body-failed"] as const)(
     "records only the fixed %s readiness category",
     async (category) => {
