@@ -374,7 +374,7 @@ suite.define(() => {
         const firstRow = first.locator(".chat-tool-row");
         await firstRow.waitFor();
         // Full verbosity must not turn opt-in inline previews into expanded cards.
-        expect(await firstRow.getAttribute("aria-expanded")).toBe("false");
+        await expect.poll(() => firstRow.getAttribute("aria-expanded")).toBe("false");
         await tool("first", {
           phase: "update",
           partialResult: { content: textContent("phase one\nphase two\n") },
@@ -500,9 +500,11 @@ suite.define(() => {
         await worked.click();
         await firstRow.waitFor();
         await expect.poll(() => preview.textContent()).toBe("phase three\nphase four\nphase five");
-        expect(
-          await pane.locator(".chat-activity-group--inline .chat-tool-row__cmd").allTextContents(),
-        ).toEqual([firstCommand, secondCommand]);
+        await expect
+          .poll(() =>
+            pane.locator(".chat-activity-group--inline .chat-tool-row__cmd").allTextContents(),
+          )
+          .toEqual([firstCommand, secondCommand]);
         expect(await firstRow.getAttribute("aria-expanded")).toBe("false");
         await writeFile(
           path.join(suite.artifactDir, "inline-completed-expanded.png"),

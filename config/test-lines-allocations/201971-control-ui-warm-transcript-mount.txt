@@ -15,5 +15,6 @@
 # replacement floor across desktop, narrow, landscape, short and native mobile modes,
 # including compact/hidden exceptions. These owner tests add 143 lines to the prior
 # 871-line branch; the invalid readiness-gate matrix has been removed.
-# Full branch growth is 1014 lines; the shared allowance remains 400.
-614
+# Await the lazy row's actual command titles independently of its eager preview.
+# Full branch growth is 1016 lines; the shared allowance remains 400.
+616
