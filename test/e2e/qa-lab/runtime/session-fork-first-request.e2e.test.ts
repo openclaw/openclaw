@@ -123,6 +123,8 @@ it(
         await gateway.call("sessions.create", {
           agentId: "qa",
           key: child,
+          // Title generation is independent model work, not a continuation of this child.
+          label: "Fork proof child",
           parentSessionKey: parent,
           fork: true,
         });
@@ -134,7 +136,12 @@ it(
         const current = body.messages.findIndex(
           (m) => m.role === "user" && messageText(m).includes(question),
         );
-        expect(current).toBeGreaterThan(0);
+        expect(
+          current,
+          JSON.stringify(
+            body.messages.map((m) => ({ role: m.role, text: messageText(m).slice(0, 90) })),
+          ),
+        ).toBeGreaterThan(0);
         expect(messageText(body.messages[current])).not.toContain(decision);
         expect(
           body.messages
