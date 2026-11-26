@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { callAgentHandler } from "../gateway/server-methods/agents-mutate.test-support.js";
+import { agentsHandlers } from "../gateway/server-methods/agents.js";
 import { recordMemoryArtifactWriteProvenance } from "../memory/memory-artifact-provenance.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
@@ -105,6 +107,57 @@ it.each(["agent", "worktree", "roster-less worktree"] as const)(
       expect(await load()).toEqual(["Shared preferences"]);
     }),
 );
+it("restores USER.md to automatic context when the owner saves an edit", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    registerMemoryCapability("memory-core", {
+      runtime: createMemoryRuntime({ runInBackgroundContext: (run) => run() }),
+    });
+    const workspaceDir = state.statePath("workspace");
+    const userFile = path.join(workspaceDir, "USER.md");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const config = { agents: { defaults: { workspace: workspaceDir } } };
+    const load = async () =>
+      (await resolveBootstrapContextForRun({ workspaceDir, config, agentId: "main" })).contextFiles
+        .filter((file) => file.path.endsWith("USER.md"))
+        .map((file) => file.content);
+    let origin: "agent" | "untrusted" = "agent";
+    const agentWrite = withMemoryWriteProvenance(
+      {
+        readFile: (file, signal?: AbortSignal) => fs.readFile(file, { signal }),
+        writeFile: (file, content, signal?: AbortSignal) => fs.writeFile(file, content, { signal }),
+      },
+      createMemoryWriteProvenanceObserver({
+        mutationRoot: workspaceDir,
+        workspaceDir,
+        resolveOriginClass: () => origin,
+      }),
+    ).writeFile;
+    const controlUiSave = async (content: string) => {
+      const respond = await callAgentHandler(
+        agentsHandlers["agents.files.set"]!,
+        "agents.files.set",
+        { agentId: "main", name: "USER.md", content },
+        { context: { getRuntimeConfig: () => config, broadcast: () => {} } as never },
+      );
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+    };
+
+    // A Control UI save between two owner writes leaves a stale record, not quarantine.
+    await agentWrite(userFile, "Prefers tea");
+    await controlUiSave("Prefers green tea");
+    await agentWrite(userFile, "Prefers green tea at 9");
+    expect(await load()).toEqual(["Prefers green tea at 9"]);
+
+    origin = "untrusted";
+    await agentWrite(userFile, "Injected preference");
+    expect(await load()).toEqual([]);
+    // Tracked writes on top of untrusted bytes keep the file excluded.
+    origin = "agent";
+    await agentWrite(userFile, "Injected preference, kept");
+    expect(await load()).toEqual([]);
+    await controlUiSave("Reviewed preference");
+    expect(await load()).toEqual(["Reviewed preference"]);
+  }));
 it.each(["local", "remote", "legacy"] as const)(
   "classifies %s paths without trusting aliases, missing files, or local decoys",
   (mode) =>

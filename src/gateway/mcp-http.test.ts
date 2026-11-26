@@ -707,7 +707,7 @@ describe("mcp loopback server", () => {
   it("passes session, account, message channel, and inbound event headers into shared tool resolution", async () => {
     const { runtime } = await startLoopbackServerForTest();
     const response = await sendLoopbackToolsList({
-      token: runtime.nonOwnerToken,
+      token: runtime.ownerToken,
       headers: {
         "x-session-key": "agent:main:telegram:group:chat123",
         "x-openclaw-session-id": "session-123",
@@ -744,7 +744,8 @@ describe("mcp loopback server", () => {
     expect(call.taskSuggestionDeliveryMode).toBe("gateway");
     expect(call.requireExplicitMessageTarget).toBe(true);
     expect(call.conversationReadOrigin).toBe("delegated");
-    expect(call.senderIsOwner).toBe(false);
+    // The raw owner token names the local host.
+    expect(call.senderIsOwner).toBe(true);
     expect(call.surface).toBe("loopback");
     expect(call.includeNodeExecTool).toBe(false);
     expect(new Set(call.excludeToolNames)).toEqual(

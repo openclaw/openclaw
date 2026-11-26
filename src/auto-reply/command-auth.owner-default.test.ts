@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 import { resolveOwnerPromptNumbers } from "../agents/owner-display.js";
 import { buildAgentSystemPrompt } from "../agents/system-prompt.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { decideTurnGrant } from "../gateway/operator-admission.js";
 import {
   isResetAuthorizedForContext,
   resolveCommandAuthorization as authorize,
 } from "./command-auth.js";
+import { bindCommandOwnerAuthority } from "./command-owner-authority.js";
+import { buildCommandContextForTest } from "./reply/commands-context.test-support.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 import { nativeGroupContext } from "./test-helpers/command-context-fixtures.js";
@@ -130,5 +133,70 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
     const revoked = resolve();
     expect(revoked.ownerList).toHaveLength(ownerIds.length - 1);
     expect(revoked).toMatchObject({ senderIsOwner: false, isAuthorizedSender: false });
+  });
+});
+
+// Same principal, same owner answer on every channel: admission's owner principal decides.
+describe("command owner comes from admission", () => {
+  const imessageOwner = "+15551234567";
+  const cfg: OpenClawConfig = {
+    commands: {
+      ownerAllowFrom: [
+        `imessage:${imessageOwner}`,
+        "discord:456",
+        "telegram:200482621",
+        "configured-owner",
+      ],
+    },
+  };
+  const imessage = (senderId: string): MsgContext => ({
+    Provider: "imessage",
+    Surface: "imessage",
+    From: `imessage:${senderId}`,
+    SenderId: senderId,
+    ChatType: "direct",
+  });
+  // Host ingress binds the owner it admitted for an asserted iMessage sender.
+  const admittedAtIngress = (ctx: MsgContext) => {
+    bindCommandOwnerAuthority(ctx, { isCurrent: () => true });
+    return ctx;
+  };
+
+  it.each<[string, MsgContext, boolean]>([
+    ["asserted owner", admittedAtIngress(imessage(imessageOwner)), true],
+    ["asserted owner, pre-turn (no ingress binding)", imessage(imessageOwner), true],
+    ["asserted non-owner", imessage("+19995550000"), false],
+    ["verified owner", sender("456"), true],
+    ["pre-turn native sender", { ...telegramGroup, ChatType: "direct" }, true],
+    [
+      "Control UI listed id without admin",
+      { Provider: "webchat", Surface: "webchat", SenderId: "configured-owner" },
+      true,
+    ],
+    [
+      "Control UI owner grant",
+      { Provider: "webchat", Surface: "webchat", TurnGrant: decideTurnGrant(["operator.admin"]) },
+      true,
+    ],
+  ])("%s", (_name, ctx, owner) => {
+    expect(authorize({ ctx, cfg, commandAuthorized: true })).toMatchObject({
+      senderIsOwner: owner,
+      isAuthorizedSender: owner,
+    });
+  });
+
+  it("/status from an asserted iMessage owner still says owner", () => {
+    const params = {
+      ctx: admittedAtIngress(imessage(imessageOwner)),
+      cfg,
+      isGroup: false,
+      triggerBodyNormalized: "/status",
+      commandAuthorized: true,
+    };
+    expect(buildCommandContextForTest(params)).toMatchObject({
+      senderId: imessageOwner,
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+    });
   });
 });

@@ -57,9 +57,12 @@ enum DashboardFailurePage {
         title: String, message: String, detail: String?, url: URL?, primaryButton: String? = nil) -> String
     {
         let primaryButton = primaryButton ?? """
-        <button type="button" class="primary"
-          onclick="window.webkit.messageHandlers.openclawGateways
-            .postMessage({type:'reload'})">\(self.htmlEscape(String(localized: "Reload")))</button>
+        <button type="button" class="primary" id="dashboard-reload"
+          onclick="if (this.getAttribute('aria-disabled') !== 'true') {
+            window.webkit.messageHandlers.openclawGateways.postMessage({type:'reload'});
+          }"><span>\(self.htmlEscape(String(localized: "Reload")))</span></button>
+        <span id="dashboard-reload-status" role="status"
+          data-label="\(self.htmlEscape(String(localized: "Connecting…")))"></span>
         """
         let connectionTitle = self.htmlEscape(String(localized: "Connection Settings…"))
         let detailHTML = detail.map { "<p class=\"detail\">\(self.htmlEscape($0))</p>" } ?? ""
@@ -93,6 +96,21 @@ enum DashboardFailurePage {
           </main>
         </body>
         </html>
+        """
+    }
+
+    static func reloadProgressScript(isReloading: Bool) -> String {
+        """
+        (() => {
+          if (location.href !== 'about:blank') return;
+          const button = document.getElementById('dashboard-reload');
+          if (!button) return;
+          const busy = \(isReloading);
+          button.setAttribute('aria-busy', busy);
+          button.setAttribute('aria-disabled', busy);
+          const status = document.getElementById('dashboard-reload-status');
+          status.textContent = busy ? status.dataset.label : '';
+        })()
         """
     }
 
@@ -223,6 +241,35 @@ enum DashboardFailurePage {
     button.primary { background: var(--primary); border-color: transparent; color: #fff; }
     button.primary:hover { background: var(--primary-hover); }
     button.primary:active { background: var(--primary-active); }
+    #dashboard-reload[aria-busy="true"] {
+      position: relative;
+      background: var(--primary);
+      cursor: progress;
+    }
+    #dashboard-reload[aria-busy="true"] span { opacity: 0; }
+    #dashboard-reload[aria-busy="true"]::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      margin: auto;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,.36);
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: dashboard-reload-spin .75s linear infinite;
+    }
+    @keyframes dashboard-reload-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      #dashboard-reload[aria-busy="true"]::after { animation: none; }
+    }
+    #dashboard-reload-status {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
     button.settings { background: transparent; border-color: transparent; }
     button.settings:hover { background: var(--button-background); }
     button.settings:active { background: var(--button-active); }

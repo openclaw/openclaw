@@ -178,15 +178,16 @@ export function createHostChannelInboundEventContextBuilder<
           }
           const prepared = batch.at(-1)?.operatorAuthority;
           const config = gateway.getRuntimeConfig();
-          // The operator decision is fixed here, when the message is admitted. A linked operator
-          // profile keeps its own grant and recoverable source.
+          // The operator decision is fixed here, when the message is admitted. A listed owner is
+          // the owner principal even when linked; another linked operator profile keeps its grant.
           const admitted =
             sender && owner.isLive() && owner.resolveGatewayContext?.() === gateway
-              ? linked && prepared
-                ? batch.every((input) => input?.operatorAuthority?.isCurrent(config))
+              ? (decideChannelOwnerPrincipal(config, sender) ??
+                (linked &&
+                prepared &&
+                batch.every((input) => input?.operatorAuthority?.isCurrent(config))
                   ? { ...prepared.operatorProfile, recoveryReference: prepared.recoveryReference }
-                  : undefined
-                : decideChannelOwnerPrincipal(config, sender)
+                  : undefined))
               : undefined;
           const operatorAuthority =
             admitted &&

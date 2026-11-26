@@ -1,4 +1,5 @@
 import type { JSX } from "@solidjs/web";
+import { Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   isPluginsHubRoute,
@@ -43,6 +44,7 @@ export function renderSidebarNavLink(params: {
   active: boolean;
   icon: JSX.Element;
   label: string;
+  indicator?: string;
   onNavigate: () => void;
 }): JSX.Element {
   return (
@@ -52,12 +54,20 @@ export function renderSidebarNavLink(params: {
       href={params.href}
       class={["nav-item", { "nav-item--active": params.active }]}
       aria-current={params.active ? "page" : undefined}
+      aria-description={params.indicator}
       onClick={(event: MouseEvent) => handleNavigationClick(event, () => params.onNavigate())}
     >
       <span class="nav-item__icon" aria-hidden="true">
         {params.icon}
       </span>
       <span class="nav-item__text">{params.label}</span>
+      <Show when={params.indicator}>
+        <span
+          class="sidebar-automations__failed"
+          style="position:absolute;inset-block-start:5px;inset-inline-end:5px;margin:0"
+          aria-hidden="true"
+        />
+      </Show>
     </a>
   );
 }

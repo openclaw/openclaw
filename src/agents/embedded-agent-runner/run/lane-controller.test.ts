@@ -830,6 +830,10 @@ describe("exact attempt deadline transfer", () => {
         abort.abort();
         break;
     }
+    expect(old.isCurrent()).toBe(false);
+    expect(old.isAttemptCurrent()).toBe(
+      invalidation === "revoked" || invalidation === "replaced admission",
+    );
     const deadline = operation.watchdog.snapshot().executionDeadlineAtMs;
     old.onAttemptDeadlineChanged({ kind: "bounded", deadlineAtMs: Date.now() });
     old.onAttemptTimeout(new Error("late timeout"));

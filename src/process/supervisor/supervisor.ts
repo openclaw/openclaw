@@ -377,10 +377,10 @@ export function createProcessSupervisor(): ProcessSupervisor & {
               })
             : createChildAdapter({
                 ...construction,
-                ...((requireProcessTree || hostExec) && !external
-                  ? { ownProcessTree: true as const }
-                  : {}),
+                ownProcessTree: (requireProcessTree || hostExec) && !external ? true : undefined,
                 ...(releaseOnRootExit ? { releaseOnRootExit: true as const } : {}),
+                retainNativeCustody:
+                  requireProcessTree && !releaseOnRootExit && !external ? true : undefined,
                 argv,
                 argv0: input.argv0,
                 exactEnv: input.exactEnv,

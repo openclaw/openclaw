@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
@@ -28,6 +28,7 @@ import {
   usageButton,
 } from "./usage-page.test-support.ts";
 import { openUsageDisplay } from "./view-render.test-support.ts";
+import { buildAggregatesFromSessions, usageTotals } from "./view.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 
@@ -38,6 +39,81 @@ function detailCalls<T extends readonly unknown[]>(request: { mock: { calls: T[]
 }
 
 describe("UsagePage detail requests", () => {
+  it("retires the old timeline and brush when a displayed day changes", async () => {
+    const first = "2026-05-13";
+    const last = "2026-05-14";
+    const midnight = Date.parse("2026-05-14T00:00:00Z");
+    const key = "agent:main:day-selection";
+    const early = usagePoints(midnight - 2000, 2, 0.25);
+    const late = usagePoints(midnight, 2, 0.5);
+    const daily = [first, last].map((date, index) => {
+      const cost = (index + 1) / 2;
+      return Object.assign(usageTotals(200, cost), { date, tokens: 200, cost });
+    });
+    const session = {
+      key,
+      agentId: "main",
+      usage: {
+        ...usageTotals(400, 1.5),
+        activityDates: [first, last],
+        dailyBreakdown: daily,
+      },
+    };
+    const result = {
+      ...cacheSnapshot("fresh").result,
+      sessions: [session],
+      totals: session.usage,
+      aggregates: { ...buildAggregatesFromSessions([session]), costDaily: daily },
+    };
+    const pending = deferred<{ points: typeof early }>();
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "sessions.usage") {
+        return result;
+      }
+      if (method === "sessions.usage.timeseries") {
+        return params?.selectedDays ? pending.promise : { points: [...early, ...late] };
+      }
+      return method === "sessions.usage.logs" ? { logs: [] } : { providers: [] };
+    });
+    const { page } = await loadUsagePage(request);
+    page.read().callbacks.filters.onScopeChange({ timeZone: "utc" });
+    page.read().callbacks.filters.onDatesChange({ startDate: first, endDate: last });
+    await settleUsagePage(page);
+    selectUsageSession(page);
+    const summary = () => textOf(page, ".timeseries-summary");
+    await waitForFast(() => expect(summary()).toContain("$1.50"));
+    page.read().callbacks.details.onTimeSeriesCursorRangeChange(midnight, midnight + 1000);
+    await page.updateComplete;
+    expect(summary()).toContain("$1.00");
+
+    const selectFirst = () => {
+      const button = page.querySelector<HTMLElement>(
+        '.daily-bar-wrapper[aria-label^="May 13, 2026:"]',
+      );
+      assert(button);
+      button.click();
+    };
+    selectFirst();
+    await waitForFast(() =>
+      expect(usageCalls(request, "sessions.usage.timeseries").at(-1)?.[1]).toMatchObject({
+        key,
+        mode: "utc",
+        startDate: first,
+        endDate: last,
+        selectedDays: [first],
+      }),
+    );
+    expect(page.read().detail.timeSeries).toBeNull();
+    expect(page.read().detail.timeSeriesCursorStart).toBeNull();
+    selectFirst();
+    await waitForFast(() => expect(summary()).toContain("$1.50"));
+    pending.resolve({ points: early });
+    await pending.promise;
+    await page.updateComplete;
+    expect(summary()).toContain("$1.50");
+    expect(page.read().detail.timeSeriesCursorEnd).toBeNull();
+  });
+
   it("retains accepted details while refreshes wait, fail, and retry", async () => {
     const snapshot = cacheSnapshot("fresh");
     const session = {

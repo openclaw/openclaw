@@ -57,6 +57,56 @@ function mountTool(
   return mountCard({ id: name, name, ...card }, options, container);
 }
 
+it.each(["image", "music", "video"])("labels an implicit %s generation call", async (kind) => {
+  const container = await mountTool(
+    `${kind}_generate`,
+    { args: { prompt: "Private fixture prompt" }, live: true },
+    { expanded: false, runActive: true },
+  );
+  expect(textOf(container, ".chat-tool-row__title")).toBe(`Generating ${kind}`);
+});
+
+it.each(["image", "music", "video"])(
+  "distinguishes %s generation requests from generated media in direct and dispatched rows",
+  async (kind) => {
+    const name = `${kind}_generate`;
+    const implicitArgs = { prompt: "Private fixture prompt" };
+    const args = { ...implicitArgs, action: "generate" };
+    const dispatchedArgs = { id: name, args: implicitArgs };
+    const tool = { id: name, name, source: "openclaw" };
+    const unit = kind === "music" ? "track" : kind;
+    for (const [details, text, title] of [
+      [
+        { async: true, status: "started", taskId: "task-fixture" },
+        `Background task started for ${kind} generation (task-fixture).`,
+        `Requested ${kind} generation`,
+      ],
+      [
+        { count: 1, attachments: [{ type: kind === "music" ? "audio" : kind, path: "/fixture" }] },
+        `Generated 1 ${unit} with fixture/model.`,
+        `Generated ${kind}`,
+      ],
+    ] as const) {
+      const result = { content: [{ type: "text", text }] };
+      const envelope = { tool, result: { ...result, details } };
+      const outputText = JSON.stringify({ tool, result });
+      for (const [toolName, card] of [
+        [name, { args, details }],
+        ["tool_call", { args: dispatchedArgs, details: envelope }],
+        [name, { args, outputText: text }],
+        ["tool_call", { args: dispatchedArgs, outputText }],
+      ] as const) {
+        const container = await mountTool(
+          toolName,
+          { ...card, completed: true },
+          { expanded: false },
+        );
+        expect(textOf(container, ".chat-tool-row__title")).toBe(title);
+      }
+    }
+  },
+);
+
 it("does not render MCP App previews on the tool surface", () => {
   const container = document.createElement("div");
   const preview = { ...canvas, viewId: "cv_app", mcpApp: { viewId: "cv_app" } } as const;

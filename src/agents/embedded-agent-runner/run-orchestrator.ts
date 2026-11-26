@@ -47,6 +47,7 @@ import {
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelFallbackAvailability } from "../model-selection-config.js";
 import {
+  createPreparedModelRuntimeSnapshotBorrow,
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
   withPreparedModelRuntimePluginGenerationScope,
@@ -368,7 +369,9 @@ async function runEmbeddedAgentForSession(
             });
           preparedRuntimeResource = preparedModelRuntimeLease;
           startupStages.mark("prepared-runtime");
-          let preparedLeaseActive = true;
+          let preparedSnapshotBorrow:
+            | ReturnType<typeof createPreparedModelRuntimeSnapshotBorrow>
+            | undefined;
           try {
             const preparedModelRuntimeOwnerSnapshot = await initializeReadOnlyRunModelCatalog(
               params,
@@ -582,13 +585,17 @@ async function runEmbeddedAgentForSession(
                   return runPrepared();
                 }),
               );
-            return params.pluginGeneration
-              ? await withPreparedModelRuntimePluginGenerationScope(
-                  preparedModelRuntimeLease.pluginGeneration,
-                  runWithPreparedRuntime,
-                  () => (preparedLeaseActive ? preparedModelRuntimeOwnerSnapshot : undefined),
-                )
-              : await runWithPreparedRuntime();
+            if (!params.pluginGeneration) {
+              return await runWithPreparedRuntime();
+            }
+            preparedSnapshotBorrow = createPreparedModelRuntimeSnapshotBorrow(
+              preparedModelRuntimeOwnerSnapshot,
+            );
+            return await withPreparedModelRuntimePluginGenerationScope(
+              preparedModelRuntimeLease.pluginGeneration,
+              runWithPreparedRuntime,
+              preparedSnapshotBorrow.read,
+            );
           } finally {
             const initialWriter = initialWriterResource;
             if (initialWriter) {
@@ -597,7 +604,7 @@ async function runEmbeddedAgentForSession(
               );
               void initialWriterCleanup.catch(() => {});
             }
-            preparedLeaseActive = false;
+            preparedSnapshotBorrow?.close();
           }
         };
         // The lane reports its existing result while this owner retains actual cleanup work.

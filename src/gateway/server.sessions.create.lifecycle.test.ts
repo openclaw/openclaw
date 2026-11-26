@@ -156,7 +156,7 @@ test.for([
       expect(createGatewayActiveWorkSnapshot().counts.sessionMutations).toBe(1);
       successor = directSessionReq(
         "sessions.patch",
-        { key: blockedKey, pinned: true },
+        { key: blockedKey, color: "purple" },
         { context },
       );
       void successor.then(() => {
@@ -167,8 +167,8 @@ test.for([
       expect(successorFinished).toBe(false);
       const created = readEntry(createdKey);
       expect(created?.sessionId).toBeTruthy();
-      expectOk(await rpcReq(ws, "sessions.patch", { key: createdKey, pinned: true }));
-      expect(readEntry(createdKey)?.pinnedAt).toEqual(expect.any(Number));
+      expectOk(await rpcReq(ws, "sessions.patch", { key: createdKey, color: "purple" }));
+      expect(readEntry(createdKey)?.color).toBe("purple");
     } finally {
       release.resolve();
       await Promise.allSettled([changing, creating, successor]);

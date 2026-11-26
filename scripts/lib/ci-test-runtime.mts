@@ -14,7 +14,11 @@ import {
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
-import { listNodeTestConfigFiles, listWholeConfigFiles } from "./ci-node-test-inventory.mts";
+import {
+  listNodeTestConfigFiles,
+  listNodeTestVolumeConfigFiles,
+  listWholeConfigFiles,
+} from "./ci-node-test-inventory.mts";
 import nativeBunQualification from "./ci-test-native-bun-qualification.json" with { type: "json" };
 import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 
@@ -130,6 +134,7 @@ const nodeRequiredFiles = new Set([
 // while qualifying Node workers independently of any guest runtime choice.
 const bothHostFiles = new Set([
   "test/scripts/node-cache-disabled-control.test.ts",
+  "test/scripts/node-cache-qualification.test.ts",
   "test/scripts/vitest-pair-benchmark.test.ts",
   // Cache fixtures spawn the host executable, so Bun cannot qualify Node's cache policy.
   "test/vitest-performance-config.test.ts",
@@ -345,7 +350,14 @@ function resolveAllRuntimeSelections(
         )
       : [];
   const inventories = ownerConfigs.map((config) => {
-    const inventory = listNodeTestConfigFiles(config);
+    // These whole configs keep their isolation and argv; only exception membership
+    // needs their effective inventory instead of one general plan per candidate.
+    const inventory =
+      listNodeTestConfigFiles(config) ??
+      (config === "test/vitest/vitest.unit-fast-fake-timers.config.ts" ||
+      config === "test/vitest/vitest.unit-fast-isolated.config.ts"
+        ? listNodeTestVolumeConfigFiles(config)
+        : undefined);
     if (inventory) {
       return inventory;
     }

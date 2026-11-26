@@ -135,7 +135,7 @@ function spawn(scenario: Scenario, response: ServerResponse, agentId: "main" | "
 }
 
 function expectRoleDenial(scenario: Scenario, body: string) {
-  const roleError = 'Your operator role cannot create sessions for agent "forbidden"';
+  const roleError = 'I did not start a session with agent "forbidden"';
   const denied = latestToolOutput(body).find(
     (record) => typeof record.error === "string" && record.error.includes(roleError),
   );

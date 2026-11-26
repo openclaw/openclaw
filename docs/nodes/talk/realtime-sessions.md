@@ -146,12 +146,10 @@ chat display. Native calls without negotiated host input control and direct
 WebSocket conversation seeds keep their existing representation.
 
 Generated agent-consult prompts are internal input, not spoken user turns. Native
-provider-owned consultations hide these records from chat but retain them in model
-history so later requests preserve the already-dispatched prefix. Reconnecting
-native calls can include these records in their bounded, quoted historical
-background. Other consult paths continue to exclude new generated records from
-later model context while providing the active consult with the full question,
-context, and response style. Raw archives and [session exports](/tools/slash-commands)
+provider-owned and chat-backed consultations hide these records from chat but
+retain them in model history so later requests preserve the already-dispatched
+prefix. Reconnecting native calls can include these records in their bounded,
+quoted historical background. Raw archives and [session exports](/tools/slash-commands)
 remain lossless; existing records are not rewritten.
 
 Chat-backed Talk stores the spoken answer without a second copy of the

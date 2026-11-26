@@ -32,7 +32,10 @@ export type RequesterMcpConnect = {
   catalog: McpToolCatalog;
   authorizedServerNames: readonly string[];
   configFingerprint: string;
-  createExecute: (serverName: string) => AnyAgentTool["execute"] | undefined;
+  createExecute: (
+    serverName: string,
+    options?: { assertCurrent: () => void },
+  ) => AnyAgentTool["execute"] | undefined;
 };
 
 type PreparedNativeMcpServerPolicy = {
@@ -150,6 +153,8 @@ export type SessionMcpRuntimeManager = {
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
     /** Trusted sender id; required to materialize requester-scoped MCP servers. */
     requesterSenderId?: string | null;
+    /** Turn-owned authority for the personal partition, never cached with a runtime. */
+    assertRequesterCurrent?: () => void;
     agentAccountId?: string | null;
     messageChannel?: string | null;
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;

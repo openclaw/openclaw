@@ -298,7 +298,16 @@ Documentation updates do not rebuild/replace packages.
 
 Beta notes freeze each beta's changelog/contribution record against npm's
 prepublication `beta` selection—even stable when beta/latest coincide—not
-necessarily the last GitHub prerelease. Stable notes accumulate since previous stable.
+necessarily the last GitHub prerelease. Stable notes accumulate since the previous
+published regular stable release, captured from npm latest before publication or
+supplied as its previously captured tag. Divergent release branches are supported:
+the shipped tag remains the semantic base, with canonical backport deduplication;
+a main-closeout commit is never a substitute for the shipped boundary. Recovery
+reuses that tag without consulting a moving registry selector. Extended-stable
+uses the previous published release on its own maintenance line. Missing legacy
+records produce diagnostics and retain uncertain contributions; stale legacy
+historical totals warn rather than replace explicit PR rows. Malformed selected
+or canonical historical records and unsupported exclusions remain errors.
 
 [Dependency locking](/gateway/security/dependency-locking) covers review;
 release archives carry npm-format locks separately from tarballs.

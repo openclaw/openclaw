@@ -23,6 +23,7 @@ import { registerGoogleMeetCli } from "./src/cli.js";
 import { resolveGoogleMeetConfig } from "./src/config.js";
 import { normalizeMeetUrl } from "./src/meet-url.js";
 import { buildGoogleMeetPreflightReport, fetchGoogleMeetArtifacts } from "./src/meet.js";
+import { registerCalendarActionTests } from "./src/test-support/calendar-action.test-helpers.js";
 import {
   createTestMeetRealtimeAudioTransport,
   meetAudioBridge,
@@ -1282,23 +1283,7 @@ describe("google-meet plugin", () => {
     });
   });
 
-  it.each(["latest", "calendar_events"] as const)(
-    "reports today's Meet calendar data through %s",
-    async (action) => {
-      stubMeetArtifactsApi();
-      const tool = getMeetTool(setup());
-      const request = { accessToken: "token", expiresAt: Date.now() + 120_000, today: true };
-      if (action === "latest") {
-        const result = await tool.execute("id", { action, ...request });
-        expect(result.details.calendarEvent?.meetingUri).toBe(MEET_URL);
-      } else {
-        const result = await tool.execute("id", { action, ...request });
-        expect(result.details.events).toHaveLength(1);
-        expect(result.details.events?.[0]?.selected).toBe(true);
-        expect(result.details.events?.[0]?.meetingUri).toBe(MEET_URL);
-      }
-    },
-  );
+  registerCalendarActionTests(() => getMeetTool(setup()));
 
   it("fails setup status when the configured Chrome node is not connected", async () => {
     const { tools } = setup(

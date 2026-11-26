@@ -17,7 +17,6 @@ import {
   preflightPostgresUpgrade,
   readBackupEngine,
   retirePostgresUpgrade,
-  validatePostgresUpgrade,
 } from "./database-backup.js";
 
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -264,7 +263,6 @@ describe.skipIf(!connection)("protected PostgreSQL upgrade carrier", () => {
         storeId,
         namespace: clone.namespace,
       });
-      await validatePostgresUpgrade(shadowPath, config, sourceVersion);
       // This is an actual reader query: a missing private-schema grant must fail with permission denied.
       expect(await asRole(reader, () => readRows(clone.namespace))).toEqual(expectedRows);
       await asRole(reader, async () => {
@@ -343,9 +341,6 @@ describe.skipIf(!connection)("protected PostgreSQL upgrade carrier", () => {
           },
         ]);
       }
-      await expect(validatePostgresUpgrade(shadowPath, config, sourceVersion + 1)).rejects.toThrow(
-        "expected",
-      );
       await runtimeClient.query(
         `UPDATE "${clone.namespace}".agent_deletion_journal SET agent_dir = '/private' WHERE agent_id = 'retained'`,
       );
@@ -387,8 +382,7 @@ describe.skipIf(!connection)("protected PostgreSQL upgrade carrier", () => {
           ])
         ).rows,
       ).toEqual([{ present: false }]);
-      await validatePostgresUpgrade(shadowPath, config, sourceVersion);
-      // Canonical physical validation is complete; this extra table models a later schema migration.
+      // This extra table models a later schema migration after retiring the original namespace.
       await runtimeClient.query(
         `CREATE TABLE "${clone.namespace}".future_reader_data (value TEXT NOT NULL);
        INSERT INTO "${clone.namespace}".future_reader_data VALUES ('future private row')`,

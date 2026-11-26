@@ -23,7 +23,6 @@ import {
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
-import { refreshStartupPluginQuarantine } from "./doctor-config-preflight-plugin-verification.js";
 import {
   rethrowStartupConfigFailure,
   throwStartupMigrationGuardRejected,
@@ -121,6 +120,8 @@ async function prepareStartupConfig(
     return result(read);
   }
 
+  const { refreshStartupPluginQuarantine } =
+    await import("./doctor-config-preflight-plugin-verification.js");
   const readAdmitted = () =>
     readAdmittedConfigSnapshot({
       env,

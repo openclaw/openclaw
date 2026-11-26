@@ -95,14 +95,28 @@ export async function readOwnerLinkStatus(params: {
             requiresSandbox && sandboxReadiness
               ? await sandboxReadiness(definition.agents)
               : undefined;
-          return {
+          const role: {
+            name: string;
+            defined: true;
+            sessions: typeof definition.sessions.others;
+            maxInvitedAccess?: typeof definition.sessions.maxInvitedAccess;
+            invitedPermission?: typeof definition.sessions.invitedPermission;
+            requiresSandbox: boolean;
+            sandbox: typeof sandbox;
+            admin: boolean;
+          } = {
             name,
-            defined: true as const,
+            defined: true,
             sessions: definition.sessions.others,
             requiresSandbox,
             sandbox,
             admin: definition.scopes.includes("operator.admin"),
           };
+          if (definition.sessions.maxInvitedAccess !== undefined) {
+            role.maxInvitedAccess = definition.sessions.maxInvitedAccess;
+            role.invitedPermission = definition.sessions.invitedPermission ?? "workspace";
+          }
+          return role;
         }),
     ),
     linked: Boolean(state),

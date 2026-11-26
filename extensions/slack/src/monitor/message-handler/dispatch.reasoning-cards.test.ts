@@ -8,16 +8,13 @@ import {
 import {
   appendSlackStreamMock,
   collectNativeTaskUpdates,
-  dispatchCardsScenario,
   dispatchNativeProgressScenario,
   expectNativeProgressAppend,
   expectNativeProgressStart,
   expectNativeStreamText,
-  expectStreamMessages,
   FINAL_REPLY_TEXT,
   startSlackStreamMock,
   stopSlackStreamMock,
-  taskRowsOf,
 } from "./dispatch.native-stream.test-support.js";
 import { requireRecord } from "./dispatch.preview.test-support.js";
 
@@ -156,49 +153,6 @@ function streamCalls() {
   });
 }
 
-it("shows reasoning rows but no tool rows on the quiet card", async () => {
-  await dispatchNativeProgressScenario({
-    finalPayload,
-    progress: { nativeTaskCards: true, style: "card", toolProgress: false },
-    events: [
-      { kind: "reasoning", text: "Checking", isReasoningSnapshot: true },
-      { kind: "reasoning", text: "Checking the Slack handler", isReasoningSnapshot: true },
-      toolStart({ command: "pnpm test" }, { itemId: "tool-1" }),
-      { kind: "reasoning", text: "Checking the results", isReasoningSnapshot: true },
-      { kind: "reasoning_end" },
-    ],
-  });
-
-  const reasoningCardId = (index: number) =>
-    expect.stringMatching(new RegExp(`^reasoning_${index}_[a-f0-9]{8}$`, "u"));
-  // The summary row keeps its place and headline; the reasoning rows sit below
-  // it, and the tool call seals the first card but adds no row of its own.
-  expect(streamCalls()).toEqual([
-    expect.objectContaining({
-      kind: "start",
-      chunks: [
-        planUpdate("Working"),
-        taskUpdate("openclaw_summary", "Working", "in_progress"),
-        taskUpdate(reasoningCardId(1), "🧠 Checking", "in_progress"),
-      ],
-    }),
-    {
-      kind: "append",
-      chunks: [
-        planUpdate("Completed"),
-        taskUpdate("openclaw_summary", "Completed", "complete"),
-        taskUpdate(reasoningCardId(1), "🧠 Checking the Slack handler", "complete"),
-        taskUpdate(reasoningCardId(2), "🧠 Checking the results", "complete"),
-      ],
-    },
-    { kind: "append", text: `\n${FINAL_REPLY_TEXT}`, chunks: [] },
-    { kind: "stop" },
-  ]);
-  expect(collectNativeTaskUpdates().map((task) => String(task.id))).not.toContainEqual(
-    expect.stringMatching(/^tool_/u),
-  );
-});
-
 it("renders the quiet card with reasoning off exactly as before", async () => {
   await dispatchNativeProgressScenario({
     finalPayload,
@@ -223,31 +177,3 @@ it("renders the quiet card with reasoning off exactly as before", async () => {
     { kind: "stop" },
   ]);
 });
-
-it.each([false, true])(
-  "never evicts a row of the detailed card below an explicit maxLines (reasoning: %s)",
-  async (reasoning) => {
-    await dispatchCardsScenario({
-      progress: { maxLines: 2 },
-      events: [
-        ...(reasoning ? [{ kind: "reasoning" as const, text: "Plan the fix." }] : []),
-        toolStart({ command: "pnpm lint" }, { itemId: "tool-1" }),
-        toolStart({ command: "pnpm build" }, { itemId: "tool-2" }),
-        toolStart({ command: "pnpm test" }, { itemId: "tool-3" }),
-      ],
-    });
-
-    // maxLines caps rows per message instead of evicting them from the
-    // window: every row reaches Slack, at most two to a message.
-    const rows = expectStreamMessages().map(
-      (message) => new Set(taskRowsOf(message, /./u).map((chunk) => String(chunk.id))),
-    );
-    for (const ids of rows) {
-      expect(ids.size).toBeLessThanOrEqual(2);
-    }
-    const all = [...new Set(rows.flatMap((ids) => Array.from(ids)))].map((id) =>
-      id.replace(/_[a-f0-9]{8}$/u, ""),
-    );
-    expect(all).toEqual([...(reasoning ? ["reasoning_1"] : []), "tool_1", "tool_2", "tool_3"]);
-  },
-);

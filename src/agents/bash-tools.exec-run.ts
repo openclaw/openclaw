@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { ShellCallReceipt } from "../config/sessions/transcript-shell-receipt.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { captureDiagnosticToolExecutionAwaiting } from "../infra/diagnostic-tool-execution-liveness.js";
 import {
@@ -18,7 +19,6 @@ import {
 } from "../infra/exec-control-command-guard.js";
 import { captureExecRequestOwners, readExecRequestOwners } from "../infra/exec-request-context.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isSecretEgressProxyActive } from "../secrets/egress-proxy/registry.js";
@@ -27,17 +27,12 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { reserveServiceSlot } from "./bash-process-adopted.js";
-import { listActiveProcessSessionReferences } from "./bash-process-references.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
-import {
-  buildBackgroundExecFollowUp,
-  buildExecRuntimeErrorOutcome,
-  MAX_EXEC_YIELD_MS,
-} from "./bash-tools.exec-output.js";
+import { buildExecRuntimeErrorOutcome, MAX_EXEC_YIELD_MS } from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
   assertDurableExecAvailable,
@@ -59,6 +54,7 @@ import {
 import {
   attachExecApprovalReview,
   buildExecForegroundResult,
+  buildExecRunningResult,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
 import {
@@ -74,6 +70,7 @@ import {
   createExecToolExecutionTimeoutResolver,
   resolveExecTimeoutDefaults,
 } from "./exec-tool-timeout.js";
+import { bindShellProcess, markShellCallResult } from "./shell-call-receipt.js";
 import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
@@ -393,6 +390,20 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           workdir,
         });
       }
+      let receipt: ShellCallReceipt | undefined;
+      // A deferred approval can dispatch after this tool returns. Admit its owner
+      // before handing it work, or admit the synchronous dispatch after preflight.
+      const admitShellDispatch = defaults?.admitShellCall
+        ? async () => {
+            signal?.throwIfAborted();
+            receipt ??= await defaults.admitShellCall!(toolCallId);
+            return receipt.recordDeferredOutcome;
+          }
+        : undefined;
+      const finish = (
+        result: Parameters<typeof attachExecApprovalReview>[0],
+        session?: ExecProcessHandle["session"],
+      ) => markShellCallResult(attachExecApprovalReview(result, approvalReview), receipt, session);
       let run: ExecProcessHandle;
       let settled = false;
       try {
@@ -436,6 +447,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         });
 
         const hostApprovalParams = () => ({
+          admitShellDispatch,
           approvalTransport,
           command: params.command,
           toolCallId,
@@ -472,17 +484,19 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         });
 
         if (host === "node") {
-          return executeNodeHostCommand({
-            ...hostApprovalParams(),
-            workdir,
-            executionContext,
-            requestedNode: params.node?.trim(),
-            boundNode: defaults?.node?.trim(),
-            foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
-            // Remote system.run has no process-session owner.
-            processContinuationAvailable: false,
-            notifyOnExit,
-          });
+          return finish(
+            await executeNodeHostCommand({
+              ...hostApprovalParams(),
+              workdir,
+              executionContext,
+              requestedNode: params.node?.trim(),
+              boundNode: defaults?.node?.trim(),
+              foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
+              // Remote system.run has no process-session owner.
+              processContinuationAvailable: false,
+              notifyOnExit,
+            }),
+          );
         }
 
         if (!workdir) {
@@ -531,7 +545,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           });
           const immediateResult = gatewayApproval.pendingResult ?? gatewayApproval.deniedResult;
           if (immediateResult) {
-            return attachExecApprovalReview(immediateResult, approvalReview);
+            return finish(immediateResult);
           }
           signal?.throwIfAborted();
           execCommandOverride = gatewayApproval.allowWithoutEnforcedCommand
@@ -553,6 +567,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         }
 
         signal?.throwIfAborted();
+        await admitShellDispatch?.();
         run = await runExecProcess({
           command: params.command,
           execCommand: execCommandOverride,
@@ -596,12 +611,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             settled = true;
           },
         });
+        bindShellProcess(run.session, receipt);
         run.session.startedByRunId = defaults?.runId;
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
         gatewayApproval?.releaseSpawn?.();
         discardPreparedSandboxWorkdir?.();
-        return attachExecApprovalReview(ExecProcessPreflightError.unwrap(error), approvalReview);
+        return finish(ExecProcessPreflightError.unwrap(error));
       }
 
       let yielded = false;
@@ -685,21 +701,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         if (toolAborted && !(signal?.reason instanceof ToolInterruptedByUser)) {
           throw createAbortError("Tool execution was aborted", { cause: signal?.reason });
         }
-        // Waiters started earlier in this turn are not in the turn-start snapshot.
-        const otherRunning = listActiveProcessSessionReferences({ scopeKey: run.session.scopeKey })
-          .filter((other) => other.sessionId !== run.session.id)
-          .map((other) => `${other.sessionId} (${other.name})`);
-        const backgroundFollowUp = buildBackgroundExecFollowUp(
-          run.session,
-          params.yieldMs,
-          otherRunning,
-        );
-        const deadlineAtMs = run.session.processActivity?.deadlineAtMs;
-        const deadline =
-          deadlineAtMs === undefined
-            ? ""
-            : `, times out in ${formatDurationCompact(Math.max(1_000, deadlineAtMs - Date.now()))}`;
-        return attachExecApprovalReview(
+        return finish(
           completed.status === "settled"
             ? buildExecForegroundResult({
                 outcome: completed.outcome,
@@ -707,29 +709,8 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                 warningText: getWarningText(),
                 session: run.session,
               })
-            : {
-                content: [
-                  {
-                    type: "text",
-                    text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
-                      run.session.pid ?? "n/a"
-                    })${deadline}. ${backgroundFollowUp}`,
-                  },
-                ],
-                details: {
-                  status: "running",
-                  sessionId: run.session.id,
-                  pid: run.session.pid ?? undefined,
-                  startedAt: run.startedAt,
-                  ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
-                  cwd: run.session.cwd,
-                  tail: run.session.tail,
-                  ...(warnings.length ? { warningText: warnings.join("\n") } : {}),
-                  // Structured callers receive details without the visible content.
-                  followUp: backgroundFollowUp,
-                },
-              },
-          approvalReview,
+            : buildExecRunningResult(run, params.yieldMs, warnings),
+          run.session,
         );
       } catch (error) {
         if (toolAborted) {
