@@ -235,7 +235,9 @@ it.skipIf(originalPlatform === "win32")(
 
     const reads = vi.mocked(fs.readFile);
     const unitReads = () =>
-      reads.mock.calls.map(([file]) => String(file)).filter((file) => file.endsWith(".service"));
+      reads.mock.calls
+        .map(([file]) => file)
+        .filter((file) => typeof file === "string" && file.endsWith(".service"));
     const expected = { scope: "system", unitPath: alias, unitName: "openclaw@gateway.service" };
     await expect(
       findInstalledSystemdGatewayScope({
