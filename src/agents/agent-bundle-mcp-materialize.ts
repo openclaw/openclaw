@@ -320,6 +320,8 @@ export function buildBundleMcpToolsFromCatalog(params: {
 
 export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
+  /** False disables server elicitation and App previews for this view, not its shared connection. */
+  presentMcpUi?: boolean;
   /** One run's authenticated requester, independent of the cached runtime's lifetime. */
   assertRequesterCurrent?: () => void;
   agentId?: string;
@@ -395,9 +397,11 @@ export async function materializeBundleMcpToolsForRun(params: {
       createExecute: (tool) => (toolCallId: string, input: unknown, signal?: AbortSignal) =>
         runWithSessionMcpRequestSignal(signal, async () => {
           const appRequester =
-            params.appRequester ??
-            runtime.appRequester ??
-            captureMcpFormRequester(runtime.sessionKey);
+            params.presentMcpUi === false
+              ? undefined
+              : (params.appRequester ??
+                runtime.appRequester ??
+                captureMcpFormRequester(runtime.sessionKey));
           if (!Object.hasOwn(catalog.servers, tool.serverName)) {
             const connect = connectSurface.createExecute(tool.serverName);
             if (connect) {
@@ -407,6 +411,16 @@ export async function materializeBundleMcpToolsForRun(params: {
           runtime.markUsed();
           const { serverName, toolName } = tool;
           const invoke = () => runtime.callTool(serverName, toolName, input);
+          const details = { mcpServer: serverName, mcpTool: toolName };
+          if (params.presentMcpUi === false) {
+            // Declare a non-interactive caller even if the physical callback inherited a handler.
+            // The shared transport still counts this request when disambiguating concurrent calls.
+            const result = await runWithMcpElicitationHandler(
+              async () => ({ action: "decline" }),
+              invoke,
+            );
+            return projectMcpCallToolResult(result, details);
+          }
           const result = await (runtime.sessionKey
             ? runWithMcpElicitationHandler(
                 createMcpClientElicitationHandler({
@@ -484,10 +498,7 @@ export async function materializeBundleMcpToolsForRun(params: {
                 invoke,
               )
             : invoke());
-          const agentResult = projectMcpCallToolResult(result, {
-            mcpServer: serverName,
-            mcpTool: toolName,
-          });
+          const agentResult = projectMcpCallToolResult(result, details);
           const scopedServer = runtime.isRequesterScopedServer?.(serverName) === true;
           const requesterId = appRequester?.profileId;
           // Transport sender ids are not Gateway profiles. Keep private channel
@@ -611,7 +622,7 @@ export async function materializeBundleMcpToolsForRun(params: {
     }
 
     return {
-      tools: connectSurface.withSignIn(tools),
+      tools: params.presentMcpUi === false ? tools : connectSurface.withSignIn(tools),
       appTools: appTools.toSorted((a, b) => a.name.localeCompare(b.name)),
       ...(catalog.diagnostics && catalog.diagnostics.length > 0
         ? { diagnostics: catalog.diagnostics }

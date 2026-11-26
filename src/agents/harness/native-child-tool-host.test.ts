@@ -10,6 +10,7 @@ import {
   setSessionMcpRuntimeScheduler,
 } from "../agent-bundle-mcp-manager-api.js";
 import { createMcpProbeFixture } from "../agent-bundle-mcp-probe.test-support.js";
+import { captureMcpFormRequester } from "../mcp-form-tool-approval.js";
 import {
   captureAgentPluginRuntimeRefresh,
   createAgentPluginRuntimeRefresh,
@@ -17,6 +18,7 @@ import {
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
+import { withAgentQuestionAnswerAuthority } from "./host-private-capabilities.js";
 import {
   runWithCodexNativeChildToolHost,
   retainCodexNativeChildToolSource,
@@ -75,8 +77,15 @@ it("admits a distinct child after foreground teardown only through its own live 
     ).rejects.toThrow(/No retained/);
     const foreground = new AsyncWorkScope();
     const refresh = createAgentPluginRuntimeRefresh();
-    const dispatchFromAppServer = refresh.run(() =>
-      foreground.run(() => AsyncLocalStorage.snapshot()),
+    const parentSession = "agent:main:parent";
+    const dispatchFromAppServer = withAgentQuestionAnswerAuthority(
+      {
+        sessionKey: parentSession,
+        requesterProfileId: "parent-viewer",
+        assertActive: parent.assertActive,
+        assertCaller: vi.fn(),
+      },
+      () => refresh.run(() => foreground.run(() => AsyncLocalStorage.snapshot())),
     );
     await foreground.drain();
     refresh.close();
@@ -85,6 +94,8 @@ it("admits a distinct child after foreground teardown only through its own live 
         runWithCodexNativeChildToolHost(parent, source, request, (host, id) =>
           captureAsyncWorkTracker()(() => {
             captureAgentPluginRuntimeRefresh().assertCurrent();
+            // The child neither needs nor inherits the foreground question creator.
+            expect(captureMcpFormRequester(parentSession)).toBeUndefined();
             return execute(host, id);
           }),
         ),

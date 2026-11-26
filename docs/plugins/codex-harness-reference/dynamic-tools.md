@@ -125,6 +125,9 @@ These calls use **OpenClaw host authority**. A child's native Codex sandbox and
 approval settings do not confine them. Host-side availability, tool and action
 policies and approvals still apply; an inherited tool schema is not a grant.
 Parent-session controls and reply delivery do not run on behalf of a child.
+An admitted child can keep using its granted tools after the foreground turn
+ends. Its MCP calls can return data, but cannot open an MCP form or App preview
+in the parent's session. Normal host-side tool approvals still apply.
 Execution requires a direct child on a host-owned stdio app-server connection
 and a retained requester identity. Shared WebSocket and Unix transports do
 not establish exclusive dispatch ownership. A system turn cannot borrow an

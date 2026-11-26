@@ -446,17 +446,16 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       storeAdmission: owner?.host ?? params.hostCapabilities,
-      ...(owner
+      presentMcpUi: !owner,
+      isTurnTainted: owner ? () => true : mcpOptions.isTurnTainted,
+      policyContext: owner
         ? {
-            policyContext: {
-              ...policyContext,
-              runSessionKey: owner.runSessionKey,
-              sessionId: owner.sessionId,
-              runId: owner.runId,
-            },
-            isTurnTainted: () => true,
+            ...policyContext,
+            runSessionKey: owner.runSessionKey,
+            sessionId: owner.sessionId,
+            runId: owner.runId,
           }
-        : {}),
+        : policyContext,
     });
     const acquireConfiguredMcp = (owner?: McpExecutionOwner) =>
       materializeStaticMcpToolsForHarnessRun({

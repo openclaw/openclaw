@@ -28,6 +28,7 @@ import type {
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import { captureHostToolPolicyConfigReader } from "./host-capability-workspace.js";
 import type { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import { withAgentQuestionAnswerAuthority } from "./host-private-capabilities.js";
 import {
   bindNativeChildToolSource,
   registerNativeChildToolIssuer,
@@ -44,7 +45,11 @@ async function runWithChildToolWork<T>(signal: AbortSignal, run: () => Promise<T
   signal.throwIfAborted();
   signal.addEventListener("abort", stop, { once: true });
   try {
-    return await runOutsideAsyncWorkScope(() => refresh.run(() => work.run(run)));
+    // Projected MCP tools consult question authority even for non-interactive calls.
+    // The child owns this call, not the foreground turn's right to ask its requester.
+    return await withAgentQuestionAnswerAuthority(undefined, () =>
+      runOutsideAsyncWorkScope(() => refresh.run(() => work.run(run))),
+    );
   } finally {
     try {
       await work.drain();
