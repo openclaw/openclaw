@@ -7,6 +7,7 @@ const runtime = "antigravity-native";
 export function createAntigravityAccountHarness(
   openStore: (assertCurrent?: () => void) => PluginStateKeyedStore<AgySessionBinding, 2>,
 ): AgentHarnessV2 {
+  const generation = new AbortController();
   return {
     id: runtime,
     label: "Google Antigravity",
@@ -28,6 +29,30 @@ export function createAntigravityAccountHarness(
         };
       }
       return { supported: true };
+    },
+    async loadModelCatalog() {
+      const signal = AbortSignal.any([generation.signal, AbortSignal.timeout(15_000)]);
+      try {
+        const { readAgyAccountCatalog } = await import("./account-catalog.js");
+        const { models } = await readAgyAccountCatalog(signal, 15_000, () =>
+          signal.throwIfAborted(),
+        );
+        return {
+          entries: models.map(({ id, label }) => ({
+            provider: runtime,
+            id,
+            name: label,
+            nativeRuntime: runtime,
+          })),
+          outcomes: [{ provider: runtime, status: "ready" }],
+        };
+      } catch {
+        generation.signal.throwIfAborted();
+        return { entries: [], outcomes: [{ provider: runtime, status: "unavailable" }] };
+      }
+    },
+    dispose() {
+      generation.abort();
     },
     async runAttempt(params) {
       const { runAccountAttempt } = await import("./account-turn.js");

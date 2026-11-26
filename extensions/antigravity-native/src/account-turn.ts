@@ -1,6 +1,4 @@
-import { readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
-import { delimiter, isAbsolute, join } from "node:path";
+import { realpath } from "node:fs/promises";
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness";
 import {
   AgentHarnessPreflightError,
@@ -8,10 +6,8 @@ import {
   emitAgentEvent,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readAgyAccountCatalog } from "./account-catalog.js";
 import { runBoundAgyTurn, type AgySessionBinding } from "./bound-turn.js";
-import { decodeAgyCatalog } from "./catalog.js";
 
 const runtime = "antigravity-native";
 type Attempt = Parameters<AgentHarnessV2["runAttempt"]>[0];
@@ -51,59 +47,12 @@ export async function runAccountAttempt(
     params.hostCapabilities.assertActive();
   };
   assertCurrent();
-  const home = await realpath(homedir());
-  const profile = join(home, ".gemini", "antigravity-cli");
-  const settingsPath = join(profile, "settings.json");
-  let settingsText: string | undefined;
-  try {
-    settingsText = await readFile(settingsPath, "utf8");
-  } catch (error) {
-    if (!isRecord(error) || error.code !== "ENOENT") {
-      throw new AgentHarnessPreflightError("Cannot read native Antigravity account settings.");
-    }
-  }
-  if (settingsText !== undefined) {
-    let settings: unknown;
-    try {
-      settings = JSON.parse(settingsText);
-    } catch {
-      throw new AgentHarnessPreflightError("Cannot parse native Antigravity account settings.");
-    }
-    if (
-      !isRecord(settings) ||
-      (settings.modelProvider !== undefined && settings.modelProvider !== "")
-    ) {
-      throw new AgentHarnessPreflightError(
-        "This native Antigravity profile is not in account sign-in mode. No Gemini key or alternate backend will be selected.",
-      );
-    }
-  }
-  // Native agy may run its own children under the owner's Full access consent. Never
-  // forward the Gateway environment or any host proxy, API key, or cloud identity.
-  const path = (process.env.PATH ?? "").split(delimiter).filter(isAbsolute).join(delimiter);
-  if (!path) {
-    throw new AgentHarnessPreflightError("Antigravity requires an absolute Gateway PATH entry.");
-  }
-  const env = { HOME: home, PATH: path, LANG: "C.UTF-8" };
-  assertCurrent();
   const workspace = await realpath(params.workspaceDir);
-  assertCurrent();
-  const catalog = await runCommandBuffered(["agy", "--output-format", "json", "models"], {
-    cwd: home,
-    preparedEnv: env,
+  const { profile, env, models } = await readAgyAccountCatalog(
     signal,
-    timeoutMs: Math.min(params.timeoutMs, 15_000),
-    killProcessTree: true,
-    maxOutputBytes: 1024 * 1024,
-    discardOutput: { stderr: true },
-  });
-  assertCurrent();
-  if (catalog.code !== 0 || catalog.termination !== "exit") {
-    throw new AgentHarnessPreflightError(
-      "Antigravity account model discovery failed. Check that agy is installed and signed in as the Gateway service user.",
-    );
-  }
-  const models = decodeAgyCatalog(catalog.stdout.toString("utf8"));
+    params.timeoutMs,
+    assertCurrent,
+  );
   const route = { backend: "account", profile, model: params.modelId } as const;
   const stream = createStreamingDirectiveAccumulator();
   let streamedText = "";
