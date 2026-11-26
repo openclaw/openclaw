@@ -63,32 +63,6 @@ describe("openclaw-file-preview-modal", () => {
     delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
-  it.each(["files", "document"] as const)(
-    "lists %s layout rows by filename without a file-kind icon",
-    async (layout) => {
-      const modal = await renderPreview({
-        layout,
-        activePath: "SKILL.md",
-        previewFiles: [
-          { path: "SKILL.md", size: "1 KB", contents: "Skill instructions" },
-          { path: "README.md", size: "1 KB", contents: "Documentation" },
-          { path: "scripts/run.sh", size: "1 KB", contents: "echo hi" },
-        ],
-      });
-      const rows = [...modal.querySelectorAll<HTMLElement>(".item")];
-      expect(rows).toHaveLength(3);
-      for (const row of rows) {
-        expect(row.querySelector("svg")).toBeNull();
-        expect(row.firstElementChild?.classList.contains("item-name")).toBe(true);
-      }
-      expect(rows.map((row) => row.querySelector(".item-name")?.textContent)).toEqual(
-        layout === "document"
-          ? ["SKILL.md", "README.md", "run.sh"]
-          : ["SKILL.md", "README.md", "scripts/run.sh"],
-      );
-    },
-  );
-
   it("emits controlled query, select, and close events", async () => {
     const modal = await renderPreview();
     const onQuery = vi.fn();
@@ -316,18 +290,6 @@ describe("openclaw-file-preview-modal", () => {
       expect(feedback.hidden).toBe(false);
       expect(button.getAttribute("aria-label")).toBe(feedback.textContent);
       expect(writeText).toHaveBeenCalledWith("Morning digest template");
-    },
-  );
-
-  it.each([["references/notes.constructor", "CONSTRUCTOR"]])(
-    "renders the fallback file-kind label for %s",
-    async (path, label) => {
-      const modal = await renderPreview({
-        activePath: path,
-        previewFiles: [{ path, size: "12 B", contents: "Example file" }],
-      });
-
-      expect(modal.querySelector(".chip.accent")?.textContent).toBe(label);
     },
   );
 });

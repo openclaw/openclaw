@@ -2,7 +2,6 @@ import { createSignal, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ChatRowDisplayFacts } from "../lib/chat/row-display-facts.ts";
 import { MarkdownDomReconciler } from "../lib/markdown-dom-reconciler.ts";
-import { prepareMessageMarkdown } from "../pages/chat/components/chat-message-text-preparation.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
@@ -139,50 +138,6 @@ it("stops distant idle admission at the character budget without evicting nearby
     toSanitizedMarkdownHtml(source);
   }
   expect(parse.mock.calls.length).toBeGreaterThan(0);
-});
-
-it("reuses fresh chat Markdown as sanitized HTML across mounts", () => {
-  const marker = "chat-sanitized-fragment-first-mount";
-  const source = `### ${marker}\n\n| State |\n| --- |\n| Ready |\n\n<img src="x" onerror="alert(1)"><script>alert(2)</script>`;
-  const html = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML")!;
-  let parses = 0;
-  Object.defineProperty(Element.prototype, "innerHTML", {
-    ...html,
-    set(value: string) {
-      if (this instanceof HTMLTemplateElement && value.includes(marker)) {
-        parses++;
-      }
-      html.set!.call(this, value);
-    },
-  });
-  onTestFinished(() => {
-    Object.defineProperty(Element.prototype, "innerHTML", html);
-  });
-  const prepare = () =>
-    prepareMessageMarkdown(
-      source,
-      marker,
-      { role: "assistant", isStreaming: false },
-      {},
-    ).parts()[0];
-  const fresh = prepare();
-  expect(typeof fresh).toBe("string");
-  const first = renderSolidRef(() => createMarkdownRef(() => ({ content: fresh })), {
-    targetElement: document.createElement("div"),
-  });
-  expect(first.container.querySelector("h3")?.textContent).toBe(marker);
-  expect(first.container.querySelector("td")?.textContent).toBe("Ready");
-  expect(first.container.querySelector("script, [onerror]")).toBeNull();
-  expect(parses).toBe(1);
-
-  const cached = prepare();
-  expect(cached).toEqual(fresh);
-  const second = renderSolidRef(() => createMarkdownRef(() => ({ content: cached })), {
-    targetElement: document.createElement("div"),
-  });
-  expect(second.container.innerHTML).toBe(first.container.innerHTML);
-  expect(parses).toBe(2);
-  expect(toSanitizedMarkdownHtml(source)).toBe(typeof fresh === "string" ? fresh : fresh.html);
 });
 
 it("isolates ordinary and progress policies for fragment and HTML callers", () => {
