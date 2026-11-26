@@ -417,6 +417,15 @@ export function createCopilotAgentHarness(
 
     runIsolatedCompletionV2,
 
+    runSideQuestion: (params) =>
+      trackOperation(async () => {
+        if (disposed) {
+          throw new Error("[copilot] harness has been disposed; cannot answer side questions");
+        }
+        const { runCopilotSideQuestion } = await import("./src/side-question.js");
+        return await runCopilotSideQuestion(params, getPool);
+      }),
+
     finalizeSettledTurn: async ({ attempt }) => {
       const result = await runHarnessAttempt(attempt, "settled-tool-finalization");
       return projectSettledTurnFinalizationAttemptResult(result);

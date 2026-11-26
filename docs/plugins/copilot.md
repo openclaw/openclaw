@@ -308,16 +308,14 @@ best-effort and logged.
 
 ## Side questions (`/btw`)
 
-`/btw` is **not** native on this harness. `createCopilotAgentHarness()`
-deliberately leaves `harness.runSideQuestion` undefined
-(asserted in `extensions/copilot/harness.test.ts`, `describe("runSideQuestion")`),
-so OpenClaw's `/btw` dispatcher (`src/agents/btw.ts`) falls through to the
-same path it uses for every non-Codex runtime: the configured model provider
-is called directly with a short side-question prompt and streamed back via
-`streamSimple` (no CLI session, no extra pool slot).
+`/btw` uses a fresh Copilot SDK session with the selected model and Fusion tier.
+OpenClaw supplies sanitized conversation context, including earlier images and
+the current question's images. The session has no tools, disables remote export
+before sending the prompt, and closes after the answer. It does not resume or
+append to the main Copilot conversation.
 
-This keeps Copilot CLI sessions reserved for the agent's main turn loop, and
-keeps `/btw` behavior identical to other non-Codex runtimes.
+When OpenClaw supplies a session-fork operation, that existing owner handles the
+fork instead of creating another side-question session.
 
 ## Doctor
 
