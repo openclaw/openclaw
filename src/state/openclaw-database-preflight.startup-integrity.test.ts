@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSelectedSessionEntryRows } from "../config/sessions/session-accessor.sqlite-entry-select.js";
 import { StateDatabaseOfflineMaintenanceError } from "../infra/gateway-state-owner-errors.js";
@@ -116,7 +117,8 @@ it.each(["schema lease", "offline maintenance"] as const)(
           : expect(inspection).rejects.toBeInstanceOf(StateDatabaseOfflineMaintenanceError);
       void asserted.catch(() => {});
       if (holder === "schema lease") {
-        await vi.waitFor(() => expect(fs.existsSync(receipt)).toBe(true));
+        // The inspection already owns the deadline for its cold child.
+        await waitForFixtureFile(receipt, inspection);
         lease.release();
       }
       await asserted;
