@@ -515,7 +515,7 @@ async function runCatalogRequest(
       const releasePrevious = prepared.release;
       Object.assign(prepared, acquiredGeneration);
       acquiredGeneration = undefined;
-      await releasePrevious();
+      await contexts.releaseGeneration(value.owner, prepared, releasePrevious);
     }
     if (discoveryPlan) {
       // Publish only after successful discovery/adoption; failed expansion must not
@@ -537,7 +537,7 @@ async function runCatalogRequest(
       work.beginClose();
       await work.runWhenIdle(() => undefined);
       if (acquiredGeneration) {
-        await contexts.releaseUnpublished(value.owner, acquiredGeneration);
+        await contexts.releaseGeneration(value.owner, acquiredGeneration);
       }
     } finally {
       // Registry retirement is admitted cleanup in this request; close only after it settles.
@@ -700,7 +700,7 @@ if (parentPort) {
                     } finally {
                       try {
                         if (attempted) {
-                          await contexts.releaseUnpublished(admission.owner, attempted);
+                          await contexts.releaseGeneration(admission.owner, attempted);
                         }
                       } finally {
                         previous = undefined;

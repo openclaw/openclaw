@@ -1,4 +1,4 @@
-import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
+import { materializeErrorStack, throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import type { PreparedModelCatalogWorkerTask } from "./prepared-model-catalog-worker.types.js";
 
@@ -46,6 +46,7 @@ export class PreparedCatalogContexts<T extends Generation> {
   private active?: Admission<T>;
   private readonly retiring = new Map<string, Promise<void>>();
   private readonly cleanupFailures = new Map<string, unknown>();
+  private readonly releasing = new Set<{ owners: Set<string>; completion: Promise<void> }>();
 
   get(workspaceDir: string | undefined) {
     return this.contexts.get(workspaceDir);
@@ -106,18 +107,47 @@ export class PreparedCatalogContexts<T extends Generation> {
       !this.cleanupFailures.has(owner) &&
       hasRetainedPluginRuntimeCloseError(error)
     ) {
+      materializeErrorStack(error);
       this.cleanupFailures.set(owner, error);
     }
   }
 
-  async releaseUnpublished(owner: string | undefined, generation: T): Promise<void> {
+  releaseGeneration(
+    owner: string | undefined,
+    generation: T,
+    release = () => generation.release(),
+  ): Promise<void> {
+    const previous = this.active?.previous;
+    return this.releaseForOwners(
+      owner,
+      previous?.prepared === generation ? previous.owners : undefined,
+      release,
+    );
+  }
+
+  private async releaseForOwners(
+    owner: string | undefined,
+    publishedOwners: ReadonlySet<string> | undefined,
+    release: () => void | Promise<void>,
+  ): Promise<void> {
+    // The successor's owner set can change during cleanup. Record each generation's own
+    // receipt before an enclosing release can hide its retained failure.
+    const owners = new Set(publishedOwners);
+    if (owner !== undefined) {
+      owners.add(owner);
+    }
+    const completion = (async () => await release())();
+    const pending = { owners, completion };
+    this.releasing.add(pending);
     try {
-      await generation.release();
+      await completion;
     } catch (error) {
-      // An enclosing generation can also fail in finally. Record each release at its owner
-      // before another failure can hide unfinished native cleanup from a deletion retry.
-      this.recordCleanupFailure(owner, error);
+      for (const owner of owners) {
+        this.recordCleanupFailure(owner, error);
+      }
       throw error;
+    } finally {
+      this.releasing.delete(pending);
     }
   }
 
@@ -164,6 +194,12 @@ export class PreparedCatalogContexts<T extends Generation> {
     // detached generations in finally; the resource receipt joins that exact cleanup.
     if (joinsActive && active) {
       releases.push((active.settled ??= Promise.withResolvers<void>()).promise);
+    } else {
+      for (const pending of this.releasing) {
+        if (pending.owners.has(owner)) {
+          releases.push(pending.completion);
+        }
+      }
     }
     throwIfSettledRejected(await Promise.allSettled(releases), "Catalog retirement failed");
     if (this.cleanupFailures.has(owner)) {
@@ -189,7 +225,11 @@ export class PreparedCatalogContexts<T extends Generation> {
         results.push(
           ...(await Promise.allSettled(
             // Scope growth mutates release; read it only after admitted work drains.
-            detached.map(async (context) => await context.prepared.release()),
+            detached.map((context) =>
+              this.releaseForOwners(admission.owner, context.owners, () =>
+                context.prepared.release(),
+              ),
+            ),
           )),
         );
       }

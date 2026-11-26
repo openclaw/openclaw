@@ -144,7 +144,7 @@ it.each(["idle", "unpublished"] as const)(
     const retirement = expect(contexts.retire([first])).rejects.toBe(failure);
     const duplicate = expect(contexts.retire([first])).rejects.toBe(failure);
     const release =
-      active && expect(contexts.releaseUnpublished(first, prepared)).rejects.toBe(failure);
+      active && expect(contexts.releaseGeneration(first, prepared)).rejects.toBe(failure);
     cleanup.reject(failure);
     await release;
     if (active) {
@@ -170,9 +170,9 @@ it("preserves retained scope-growth cleanup when outer disposal has a completed 
   const retirement = expect(contexts.retire([first])).rejects.toBe(retained);
   const closeBoth = async () => {
     try {
-      await contexts.releaseUnpublished(first, nested);
+      await contexts.releaseGeneration(first, nested);
     } finally {
-      await contexts.releaseUnpublished(first, outer);
+      await contexts.releaseGeneration(first, outer);
     }
   };
   await expect(closeBoth()).rejects.toBe(completed);
@@ -195,6 +195,43 @@ it("observes completed disposal faults without fencing a subsequent deletion", a
   await contexts.retire([first]);
   expect(prepared.release).toHaveBeenCalledOnce();
 });
+
+it.each(["replacement", "scope growth"])(
+  "keeps shared predecessor cleanup with both owners during %s",
+  async (mode) => {
+    const contexts = new PreparedCatalogContexts<TestGeneration>();
+    const predecessor = await seed(contexts, first);
+    const neighbor = await seed(contexts, elsewhere, "neighbor");
+    const admitted = contexts.begin(identity("workspace", "next"), second);
+    const cleanup = Promise.withResolvers<void>();
+    const retained = new PluginRuntimeCloseRetainedError(new Error("predecessor retained"));
+    predecessor.release.mockImplementation(() => cleanup.promise);
+    const releasePredecessor = predecessor.release;
+    let finishing: Promise<void>;
+    if (mode === "replacement") {
+      contexts.publish(admitted, generation());
+      finishing = contexts.finish(admitted);
+    } else {
+      predecessor.release = generation().release;
+      finishing = contexts
+        .releaseGeneration(second, predecessor, releasePredecessor)
+        .finally(() => contexts.finish(admitted));
+    }
+    const closed = expect(finishing).rejects.toBe(retained);
+    const deletion = expect(contexts.retire([first])).rejects.toBe(retained);
+    await contexts.retire(["unrelated"]);
+    cleanup.reject(retained);
+    await Promise.all([closed, deletion]);
+    await expect(contexts.retire([first])).rejects.toBe(retained);
+    await expect(contexts.retire([second])).rejects.toBe(retained);
+    expect(releasePredecessor).toHaveBeenCalledOnce();
+    const other = contexts.begin(identity("neighbor"), elsewhere);
+    expect(other.previous?.prepared).toBe(neighbor);
+    contexts.assertCurrent(other);
+    await contexts.finish(other);
+    expect(neighbor.release).not.toHaveBeenCalled();
+  },
+);
 
 it("releases failed replacements once and permits the same identity to be recreated", async () => {
   const contexts = new PreparedCatalogContexts<TestGeneration>();
