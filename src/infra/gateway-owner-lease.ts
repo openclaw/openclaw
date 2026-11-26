@@ -325,8 +325,7 @@ export function acquireGatewayOwnerLease(params: {
   };
   const payload = {
     owner: processOwner,
-    pidNsInitStartTicks:
-      process.platform === "linux" ? (getProcessStartTime(1) ?? undefined) : undefined,
+    pidNsInitStartTicks: getProcessStartTime(1) ?? undefined,
     port: params.port,
     mode: params.mode,
     supervisor: params.supervisor,

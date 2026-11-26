@@ -167,11 +167,11 @@ function assertTerminatedNamespace(
     if (!holder) {
       throw new Error(`Cannot identify the Gateway holder at ${observed.path}.`);
     }
-    // Only a locally reaped holder can be identified without a Gateway incarnation record.
+    // Only locally comparable PIDs can be checked without a recorded PID 1 start time.
     const matchesIncarnation =
       holder.pidNsInitStartTicks === undefined
         ? ownNamespace
-        : holder.role === "gateway" && holder.pidNsInitStartTicks === expected.pidNsInitStartTicks;
+        : holder.role !== undefined && holder.pidNsInitStartTicks === expected.pidNsInitStartTicks;
     assertHolder(observed.path, holder, matchesIncarnation);
   }
   if (inspection.lease) {
