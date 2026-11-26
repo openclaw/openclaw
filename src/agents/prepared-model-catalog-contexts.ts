@@ -110,11 +110,24 @@ export class PreparedCatalogContexts<T extends Generation> {
     }
   }
 
+  async releaseUnpublished(owner: string | undefined, generation: T): Promise<void> {
+    try {
+      await generation.release();
+    } catch (error) {
+      // An enclosing generation can also fail in finally. Record each release at its owner
+      // before another failure can hide unfinished native cleanup from a deletion retry.
+      this.recordCleanupFailure(owner, error);
+      throw error;
+    }
+  }
+
   async retire(owners: readonly string[]): Promise<void> {
     const results = await Promise.allSettled(
       owners.map((owner) => {
         const pending = this.retiring.get(owner);
-        if (pending) return pending;
+        if (pending) {
+          return pending;
+        }
         const retirement = this.retireOwner(owner)
           .catch((error: unknown) => {
             this.recordCleanupFailure(owner, error);
@@ -153,7 +166,9 @@ export class PreparedCatalogContexts<T extends Generation> {
       releases.push((active.settled ??= Promise.withResolvers<void>()).promise);
     }
     throwIfSettledRejected(await Promise.allSettled(releases), "Catalog retirement failed");
-    if (this.cleanupFailures.has(owner)) throw this.cleanupFailures.get(owner);
+    if (this.cleanupFailures.has(owner)) {
+      throw this.cleanupFailures.get(owner);
+    }
   }
 
   async finish(admission: Admission<T>): Promise<void> {

@@ -144,19 +144,47 @@ it.each(["idle", "unpublished"] as const)(
     const retirement = expect(contexts.retire([first])).rejects.toBe(failure);
     const duplicate = expect(contexts.retire([first])).rejects.toBe(failure);
     const release =
-      active &&
-      prepared
-        .release()
-        .catch((error: unknown) => contexts.recordCleanupFailure(active.owner, error));
+      active && expect(contexts.releaseUnpublished(first, prepared)).rejects.toBe(failure);
     cleanup.reject(failure);
     await release;
-    if (active) await contexts.finish(active);
+    if (active) {
+      await contexts.finish(active);
+    }
     await Promise.all([retirement, duplicate]);
     await expect(contexts.retire([first])).rejects.toBe(failure);
     await contexts.retire([elsewhere]);
     expect(prepared.release).toHaveBeenCalledOnce();
   },
 );
+
+it("preserves retained scope-growth cleanup when outer disposal has a completed fault", async () => {
+  const contexts = new PreparedCatalogContexts<TestGeneration>();
+  const survivor = await seed(contexts, second, "survivor");
+  const admission = contexts.begin(identity(), first);
+  const nested = generation();
+  const outer = generation();
+  const retained = new PluginRuntimeCloseRetainedError(new Error("native cleanup retained"));
+  const completed = new PluginRuntimeCloseCompletedError([], "outer callback failed");
+  nested.release.mockRejectedValue(retained);
+  outer.release.mockRejectedValue(completed);
+  const retirement = expect(contexts.retire([first])).rejects.toBe(retained);
+  const closeBoth = async () => {
+    try {
+      await contexts.releaseUnpublished(first, nested);
+    } finally {
+      await contexts.releaseUnpublished(first, outer);
+    }
+  };
+  await expect(closeBoth()).rejects.toBe(completed);
+  await contexts.finish(admission);
+  await retirement;
+  await expect(contexts.retire([first])).rejects.toBe(retained);
+  const other = contexts.begin(identity("survivor"), second);
+  expect(other.previous?.prepared).toBe(survivor);
+  contexts.assertCurrent(other);
+  await contexts.finish(other);
+  expect(survivor.release).not.toHaveBeenCalled();
+});
 
 it("observes completed disposal faults without fencing a subsequent deletion", async () => {
   const contexts = new PreparedCatalogContexts<TestGeneration>();

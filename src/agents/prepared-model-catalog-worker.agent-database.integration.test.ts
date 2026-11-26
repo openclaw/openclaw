@@ -70,12 +70,15 @@ describe("Gateway catalog worker agent database readers", () => {
         const post = nativeWorker.postMessage.bind(nativeWorker);
         const posting = vi.spyOn(nativeWorker, "postMessage").mockImplementation((...args) => {
           if (isRecord(args[0])) {
-            if ("input" in args[0] && !("responseId" in args[0])) events.push("task");
-            if (args[0].closeResource) events.push("close");
+            if ("input" in args[0] && !("responseId" in args[0])) {
+              events.push("task");
+            }
+            if (args[0].closeResource) {
+              events.push("close");
+            }
           }
           post(...args);
         });
-        const run = CatalogWorkerTaskPool.prototype.run;
         const dispatch = vi
           .spyOn(CatalogWorkerTaskPool.prototype, "run")
           .mockImplementationOnce(function (
@@ -83,17 +86,14 @@ describe("Gateway catalog worker agent database readers", () => {
             input,
             options,
           ) {
-            return run.call(
-              this,
-              () => {
-                const selected = typeof input === "function" ? input() : input;
-                expect(selected).not.toHaveProperty("value.pluginMetadataSnapshot");
-                // Retirement must not overtake a compact first request from this new owner.
-                queueMicrotask(() => void retire().then(retirement.resolve, retirement.reject));
-                return selected;
-              },
-              options,
-            );
+            dispatch.mockRestore();
+            return this.run(() => {
+              const selected = typeof input === "function" ? input() : input;
+              expect(selected).not.toHaveProperty("value.pluginMetadataSnapshot");
+              // Retirement must not overtake a compact first request from this new owner.
+              queueMicrotask(() => void retire().then(retirement.resolve, retirement.reject));
+              return selected;
+            }, options);
           });
         try {
           const [auth] = await Promise.all([

@@ -134,7 +134,9 @@ export async function retirePreparedModelCatalogAgent(
   agentDirs: ReadonlySet<string>,
 ): Promise<void> {
   const pool = gatewayCatalog.current?.pool;
-  if (!pool) return;
+  if (!pool) {
+    return;
+  }
   if (pool.isClosed) {
     // Closing fences admission before the worker and its native resources have exited.
     await pool.close();

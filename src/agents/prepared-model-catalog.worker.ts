@@ -191,7 +191,7 @@ async function runCatalogRequest(
   work: AsyncWorkScope,
   prepareGeneration: () => Promise<WorkerGeneration>,
   beginDiscovery: () => Promise<void>,
-  recordCleanupFailure: (error: unknown) => void,
+  contexts: PreparedCatalogContexts<WorkerGeneration>,
 ): Promise<PreparedModelWorkerOutcome> {
   const directoryOwner = value.input.agentId
     ? { agentId: value.input.agentId, agentDir: value.input.agentDir, env: value.input.env }
@@ -525,7 +525,7 @@ async function runCatalogRequest(
     return result;
   } catch (error) {
     // Preserve a retained native close before projecting the task error to wire text.
-    recordCleanupFailure(error);
+    contexts.recordCleanupFailure(value.owner, error);
     return {
       status: "failed",
       error: error instanceof Error ? error.message : String(error),
@@ -536,7 +536,9 @@ async function runCatalogRequest(
       // Join that admitted work before releasing its plugin generation and source context.
       work.beginClose();
       await work.runWhenIdle(() => undefined);
-      await acquiredGeneration?.release();
+      if (acquiredGeneration) {
+        await contexts.releaseUnpublished(value.owner, acquiredGeneration);
+      }
     } finally {
       // Registry retirement is admitted cleanup in this request; close only after it settles.
       await work.drain();
@@ -669,7 +671,7 @@ if (parentPort) {
                                   );
                                 }
                               },
-                              (error) => contexts.recordCleanupFailure(admission.owner, error),
+                              contexts,
                             ),
                           ),
                       ),
@@ -697,16 +699,14 @@ if (parentPort) {
                       }
                     } finally {
                       try {
-                        await attempted?.release();
+                        if (attempted) {
+                          await contexts.releaseUnpublished(admission.owner, attempted);
+                        }
                       } finally {
                         previous = undefined;
                       }
                     }
                   }
-                } catch (error) {
-                  // Failed disposal of an unpublished or unadopted generation escapes the task.
-                  contexts.recordCleanupFailure(admission.owner, error);
-                  throw error;
                 } finally {
                   // Disposal retains the request's source and credential scopes;
                   // successful cleanup can publish credential commits of its own.
