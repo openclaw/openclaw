@@ -176,10 +176,16 @@ if (command === "version") {
   process.stdout.write("27.0.0\n");
 } else if (command === "info") {
   const daemonId = fs.readFileSync(enginePath("daemon-id"), "utf8");
-  record({ argv: args, daemonId });
   const delayFile = enginePath("info-delay-ms");
   const delayMs = fs.existsSync(delayFile) ? Number(fs.readFileSync(delayFile, "utf8")) : 0;
-  setTimeout(() => print(daemonId), delayMs);
+  // The node host reads daemon security options to detect a rootless engine;
+  // that probe is not part of the recorded identity handshake.
+  if (args[args.indexOf("--format") + 1] === "{{json .SecurityOptions}}") {
+    setTimeout(() => print('["name=seccomp"]'), delayMs);
+  } else {
+    record({ argv: args, daemonId });
+    setTimeout(() => print(daemonId), delayMs);
+  }
 } else if (command === "create") {
   const id = createHash("sha256").update(JSON.stringify(args)).digest("hex");
   const labels = {};

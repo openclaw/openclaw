@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS } from "../bootstrap/node-startup-env.js";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
@@ -268,4 +269,18 @@ describe("macOS service trust", () => {
       }
     },
   );
+});
+
+describe("automatic CA provenance", () => {
+  it("records the automatic CA but not an operator CA", () => {
+    const automatic = serviceEnv({ NVM_DIR: "/home/u/.nvm" }, { platform: "linux" });
+    expect(automatic[OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]).toBe(automatic.NODE_EXTRA_CA_CERTS);
+
+    const explicit = serviceEnv(
+      { NODE_EXTRA_CA_CERTS: "/custom/ca.pem", NVM_DIR: "/home/u/.nvm" },
+      { platform: "linux" },
+    );
+    expect(explicit[OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]).toBeUndefined();
+    expect(explicit.NODE_EXTRA_CA_CERTS).toBe("/custom/ca.pem");
+  });
 });
