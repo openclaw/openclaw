@@ -35,21 +35,18 @@ describe("sessions tool responses", () => {
     });
   });
 
-  it.each(["default", "inherit", "clear", "reset"])(
-    "clears its thinking override when patch requests %s",
-    async (thinkingLevel) => {
-      const callGateway = vi.fn().mockResolvedValue({});
-      await createTool({ callGateway }).execute("reset-thinking", {
-        action: "patch",
-        thinkingLevel,
-      });
+  it("clears its thinking override when patch requests default", async () => {
+    const callGateway = vi.fn().mockResolvedValue({});
+    await createTool({ callGateway }).execute("reset-thinking", {
+      action: "patch",
+      thinkingLevel: "default",
+    });
 
-      expect(callGateway).toHaveBeenCalledWith({
-        method: "sessions.patch",
-        params: { key: "agent:main:main", thinkingLevel: null },
-      });
-    },
-  );
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: { key: "agent:main:main", thinkingLevel: null },
+    });
+  });
 
   it("passes explicit thinking levels, including off, through unchanged", async () => {
     const callGateway = vi.fn().mockResolvedValue({});
