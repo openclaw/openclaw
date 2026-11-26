@@ -114,6 +114,15 @@ describe("update conversation notices", () => {
           step: "repairing",
           status: status === "failed" ? ("failed" as const) : ("completed" as const),
         },
+        ...(status === "succeeded"
+          ? [
+              {
+                step: "finalize:repaired-run",
+                status: "completed" as const,
+                detail: "The earlier update failed during Gateway readiness.",
+              },
+            ]
+          : []),
       ],
     };
     const text = renderUpdateRunSummary(run);
@@ -123,6 +132,11 @@ describe("update conversation notices", () => {
         : "⚠️ OpenClaw repair failed: repair-failed.",
     );
     expect(text).not.toContain("OpenClaw updated");
+    if (status === "succeeded") {
+      expect(text).toContain(
+        "Repaired update: The earlier update failed during Gateway readiness.",
+      );
+    }
     expect(isUpdateRunTerminalNoticeText(text)).toBe(true);
   });
 

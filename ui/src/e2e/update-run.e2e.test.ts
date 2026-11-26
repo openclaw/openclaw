@@ -498,7 +498,7 @@ suite.define(() => {
         await text(runView, headline).first().waitFor();
         await text(runView, "Gateway downtime: 1s.", false).waitFor();
         await text(
-          runView,
+          runView.locator(".update-run-view__report-body"),
           "Integration 1: An optional integration needs attention. Review its configuration in Settings.",
           false,
         ).waitFor();

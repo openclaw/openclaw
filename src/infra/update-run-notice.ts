@@ -184,7 +184,15 @@ export function renderUpdateRunSummary(
         : nextStep,
     ].join("\n");
   }
-  return `${headline}\n${nextStep}`;
+  const repaired = run.steps
+    ?.findLast((step) => step.step === "finalize:repaired-run")
+    ?.detail?.replace(/\s+/gu, " ")
+    .trim();
+  return [
+    headline,
+    ...(repairRun && repaired ? [`Repaired update: ${repaired}`] : []),
+    nextStep,
+  ].join("\n");
 }
 
 /** Only this renderer's terminal summaries may settle an earlier completion. */
@@ -207,10 +215,15 @@ export function isUpdateRunTerminalNoticeText(text: string): boolean {
     return headline === "ℹ️ OpenClaw wasn't updated.";
   }
   if (/^✅ OpenClaw (?:updated(?: to .+)?|repair completed(?: for .+)?)\.$/u.test(lines[0] ?? "")) {
-    return (
-      lines.slice(1).join("\n").startsWith("Next: ") ||
-      lines.slice(1).join("\n") === UPDATE_RUN_DETAILS
-    );
+    const advice = lines
+      .slice(
+        lines[0]?.startsWith("✅ OpenClaw repair completed") &&
+          lines[1]?.startsWith("Repaired update: ")
+          ? 2
+          : 1,
+      )
+      .join("\n");
+    return advice.startsWith("Next: ") || advice === UPDATE_RUN_DETAILS;
   }
   const repairFailure = /^⚠️ OpenClaw repair failed: .+\.$/u.test(lines[0] ?? "");
   if (
