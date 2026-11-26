@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -22,6 +22,11 @@ import { commandFixture } from "./commands-handler-fixture.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+// The `/usage cost` reader has its own suite; here the card only formats what it returns.
+vi.mock("./commands-session-cost.runtime.js", () => ({
+  loadCurrentSessionCostSummary: async () => null,
+}));
 
 function makeParams(
   commandBodyNormalized: string,
@@ -289,6 +294,55 @@ describe("buildContextReply", () => {
         "",
         "More: /context list · /context detail · /context map · /context json",
       ].join("\n"),
+    );
+  });
+
+  it("measures the card against the last run's validated prompt budget, like the Control UI", async () => {
+    const usage = { input: 100, output: 5, cacheRead: 900, cacheWrite: 0, totalTokens: 1_005 };
+    await withTranscript(
+      [
+        { role: "user", content: "hi", timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "a" }], usage, timestamp: 2 },
+        { role: "assistant", content: [{ type: "text", text: "b" }], usage, timestamp: 3 },
+      ],
+      async (target) => {
+        const params = makeParams("/context", false, {
+          contextTokens: 8_192,
+          totalTokens: 4_000,
+          ...target,
+        });
+        const status: NonNullable<SessionEntry["contextBudgetStatus"]> = {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: Date.now(),
+          provider: "ollama",
+          model: "qwen2.5:7b",
+          route: "fits",
+          shouldCompact: false,
+          estimatedPromptTokens: 4_000,
+          contextTokenBudget: 8_192,
+          promptBudgetBeforeReserve: 5_000,
+          reserveTokens: 3_192,
+          effectiveReserveTokens: 3_192,
+          remainingPromptBudgetTokens: 1_000,
+          overflowTokens: 0,
+          toolResultReducibleChars: 0,
+          messageCount: 2,
+          unwindowedMessageCount: 2,
+        };
+        const entry = expectDefined(params.sessionEntry, "session entry");
+
+        entry.contextBudgetStatus = { ...status, sessionId: target.sessionId };
+        const lines = (await buildContextReply(params)).text?.split("\n");
+        expect(lines?.[0]).toBe("🧠 Prompt budget · 4k / 5k · 80%");
+        // Read from the stored transcript: both calls of the latest run count.
+        expect(lines).toContain("Latest run: 90.00% cache");
+        // A budget recorded for another model is not this session's limit.
+        entry.contextBudgetStatus = { ...status, sessionId: target.sessionId, model: "other" };
+        expect((await buildContextReply(params)).text?.split("\n")[0]).toBe(
+          "🧠 Prompt budget · 4k / 8.2k · 49%",
+        );
+      },
     );
   });
 

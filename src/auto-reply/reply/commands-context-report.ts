@@ -21,7 +21,10 @@ import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
-import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
+import {
+  resolveProjectedSessionContextBudgetStatus,
+  resolveProjectedSessionContextTokens,
+} from "../../config/sessions/context-token-provenance.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { formatInjectedWorkspaceFileLabel } from "../../config/sessions/session-system-prompt-report.js";
 import {
@@ -470,7 +473,16 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       text: formatContextBudget({
         report,
         used: cachedContextUsageTokens ?? null,
-        limit: session.contextTokens,
+        // Same limit as the Control UI: the last run's validated prompt budget, else the window.
+        limit:
+          asPositiveFiniteNumber(
+            resolveProjectedSessionContextBudgetStatus({
+              entry: targetSessionEntry,
+              provider: params.provider,
+              model,
+              contextTokens: session.contextTokens ?? undefined,
+            })?.promptBudgetBeforeReserve,
+          ) ?? session.contextTokens,
         entry: targetSessionEntry,
         recentMessages: await readLatestRunMessages(params, targetSessionEntry),
         sessionUsage: await loadCurrentSessionCostSummary({
