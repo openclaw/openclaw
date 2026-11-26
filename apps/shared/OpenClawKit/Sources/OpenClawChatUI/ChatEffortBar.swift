@@ -5,6 +5,8 @@ import SwiftUI
 /// the speed when the model has speed options. Only levels show; the name on the right follows the drag.
 struct ChatEffortBar: View {
     let viewModel: OpenClawChatViewModel
+    /// In the model sheet's Effort page the bar sits in a list row, which draws its own card.
+    var isSheetPage = false
     @State private var previewIndex: Int?
 
     var body: some View {
@@ -83,11 +85,11 @@ struct ChatEffortBar: View {
                     .accessibilityIdentifier("chat-effort-bar-locked")
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
+        .padding(.horizontal, self.isSheetPage ? 0 : 16)
+        .padding(.top, self.isSheetPage ? 6 : 14)
         .padding(.bottom, self.viewModel.selectedModelSupportsFastMode && lockReason == nil ? 8 : 14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(CleanChatComposerSurface(cornerRadius: ChatEffortBarMetrics.radius))
+        .modifier(ChatEffortBarSurface(isSheetPage: self.isSheetPage))
         .onChange(of: self.viewModel.thinkingLevelOptions) { _, _ in self.previewIndex = nil }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-effort-bar")
@@ -181,6 +183,19 @@ private struct ChatEffortTrack: View {
         let travel = max(1, self.width - ChatEffortBarMetrics.thumbWidth - 6)
         let fraction = min(1, max(0, (location - 3 - ChatEffortBarMetrics.thumbWidth / 2) / travel))
         return Int((fraction * CGFloat(self.count - 1)).rounded())
+    }
+}
+
+/// The floating bar's surface over the composer; none in a sheet list row.
+private struct ChatEffortBarSurface: ViewModifier {
+    let isSheetPage: Bool
+
+    func body(content: Content) -> some View {
+        if self.isSheetPage {
+            content
+        } else {
+            content.modifier(CleanChatComposerSurface(cornerRadius: ChatEffortBarMetrics.radius))
+        }
     }
 }
 

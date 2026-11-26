@@ -46,6 +46,19 @@ struct ChatModelPickerSheet: View {
             }
             .toolbar {
                 OpenClawSheetCloseItem(identifier: "chat-model-picker-close", action: self.onClose)
+                if self.viewModel.composerOffersEffortChoices {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        NavigationLink(value: ChatModelPickerRoute.effort) {
+                            HStack(spacing: 3) {
+                                Text("Effort")
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote.weight(.semibold))
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        .accessibilityIdentifier("chat-model-picker-effort")
+                    }
+                }
             }
             .navigationDestination(for: ChatModelPickerRoute.self) { route in
                 switch route {
@@ -57,6 +70,15 @@ struct ChatModelPickerSheet: View {
                         onPick: self.onPick)
                 case .accounts:
                     ChatModelAccountsPage(owner: self.accounts, viewModel: self.viewModel)
+                case .effort:
+                    List {
+                        Section {
+                            ChatEffortBar(viewModel: self.viewModel, isSheetPage: true)
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                    .navigationTitle(Text("Effort"))
+                    .navigationBarTitleDisplayMode(.inline)
                 case let .account(accountID):
                     ChatModelAccountPage(
                         owner: self.accounts,

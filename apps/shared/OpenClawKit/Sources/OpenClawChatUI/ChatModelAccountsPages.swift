@@ -8,6 +8,7 @@ enum ChatModelPickerRoute: Hashable {
     case provider(String)
     case accounts
     case account(String)
+    case effort
 }
 
 enum ChatModelAccountsPolicy {

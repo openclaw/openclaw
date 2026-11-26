@@ -1038,6 +1038,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/AndroidScreenshotFixture.kt","kind":"conditional-branch","surface":"android","id":"native.android.40b220b081e0f9d4","source":"Update Gateway settings"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.2065dce8171fac59","source":"Add to Favorites"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.f97bfdf58457390b","source":"Remove from Favorites"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.0cc417b9182718a3","source":"Effort"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.96b4ebe3abd13a42","source":"Favorites"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.4238f1cc6d590fc1","source":"Model"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatModelPickerSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.6d20efcfac60c169","source":"Providers"},
