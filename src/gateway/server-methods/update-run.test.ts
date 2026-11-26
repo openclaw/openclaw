@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { validateUpdateRunResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createGatewayUpdateLifecycle,
@@ -92,6 +93,8 @@ it("shows a Control UI update in the app instead of the conversation", async () 
     },
   );
   expect(payload).toMatchObject({ ok: true, noticeInApp: true });
+  expect(validateUpdateRunResult(payload)).toBe(true);
+  expect(validateUpdateRunResult({ ...payload, runId: null })).toBe(false);
   expect(payload.acknowledgement).toBeUndefined();
   expect((await getUpdateRunAsync(payload.runId))?.origin.noticeSurface).toBe("app");
   expect(broadcast).toHaveBeenCalledWith(
@@ -305,6 +308,11 @@ it("returns literal package guidance through current external update admission w
     code: "external-supervisor-update-required",
     externalSupervisorGuidance: { version: 1, action: "update", name: "Deployment host", command },
   });
+  expect(validateUpdateRunResult(payload), JSON.stringify(validateUpdateRunResult.errors)).toBe(
+    true,
+  );
+  expect(validateUpdateRunResult({ ...payload, ok: true })).toBe(false);
+  expect(validateUpdateRunResult({ ...payload, result: { status: "running" } })).toBe(false);
   expect(prepareUpdate).not.toHaveBeenCalled();
   expect(broadcast).not.toHaveBeenCalled();
   expect(await listUpdateRunsAsync()).toEqual([]);

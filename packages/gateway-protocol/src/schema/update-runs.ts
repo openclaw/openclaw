@@ -311,11 +311,8 @@ export const ExternalSupervisorGuidanceSchema = closedObject({
   command: Type.String({ minLength: 1, maxLength: 1024 }),
 });
 
-/** Existing update.run response fields remain available alongside the durable run identity. */
-export const UpdateRunResultSchema = closedObject({
-  runId,
-  ok: Type.Boolean(),
-  result: Type.Unknown(),
+/** Shared display fields for admitted runs and refusals that never created a run. */
+const updateRunResultFields = {
   ackDelivered: Type.Optional(Type.Boolean()),
   ackQueued: Type.Optional(Type.Boolean()),
   acknowledgement: Type.Optional(Type.String()),
@@ -326,7 +323,22 @@ export const UpdateRunResultSchema = closedObject({
   handoff: Type.Optional(Type.Unknown()),
   restart: Type.Optional(Type.Unknown()),
   sentinel: Type.Optional(Type.Unknown()),
-});
+};
+
+export const UpdateRunResultSchema = Type.Union([
+  closedObject({
+    ...updateRunResultFields,
+    runId,
+    ok: Type.Boolean(),
+    result: Type.Unknown(),
+  }),
+  closedObject({
+    ...updateRunResultFields,
+    runId: Type.Null(),
+    ok: Type.Literal(false),
+    result: closedObject({ status: Type.Literal("skipped"), reason: text }),
+  }),
+]);
 
 export type UpdateRunRecord = Static<typeof UpdateRunRecordSchema>;
 export type UpdateRunsGetParams = Static<typeof UpdateRunsGetParamsSchema>;

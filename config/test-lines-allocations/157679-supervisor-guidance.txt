@@ -1,2 +1,1 @@
-# 277 lines above the 400-line allowance: static manifest validation/activation and no-runtime discovery, current routed Gateway refusal boundaries, transient UI gating, and actual-bundle literal-command/clipboard proof exercise distinct consumers.
-277
+285
