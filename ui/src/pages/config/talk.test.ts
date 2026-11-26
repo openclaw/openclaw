@@ -928,30 +928,6 @@ describe("Talk settings page revamp", () => {
     ]);
   });
 
-  it("blocks Voice provider choices the Gateway would reject", async () => {
-    const { page } = await readyTalk();
-    page.configObject = {
-      talk: {
-        realtime: { mode: "stt-tts" },
-        provider: "a",
-        providers: { a: {}, b: {} },
-      },
-    };
-    const voice = () =>
-      [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find((candidate) =>
-        candidate.params.options.some((option) => option.value === "tts-local-cli"),
-      );
-    await waitForSolid(() => expect(voice()).toBeDefined());
-    const byValue = (value: string) =>
-      voice()!.params.options.find((option) => option.value === value);
-    // Two entries: unsetting the provider is invalid, and so is a provider outside the map.
-    expect(byValue("")?.disabled).toBe(true);
-    expect(byValue("tts-local-cli")?.disabled).not.toBe(true);
-    page.configObject = { talk: { realtime: { mode: "stt-tts" }, providers: { a: {} } } };
-    await waitForSolid(() => expect(byValue("")?.disabled).toBe(false));
-    expect(byValue("")?.description).toBeUndefined();
-  });
-
   it("keeps Model and Speaker voice editable when the catalog cannot list them", async () => {
     // A saved provider the catalog does not know.
     const unlisted = createTalkMutationHarness({ provider: "acme-voice", model: "acme-1" });

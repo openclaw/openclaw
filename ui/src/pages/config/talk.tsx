@@ -273,6 +273,8 @@ function ProviderRow(props: TalkViewProps) {
     );
     return model ? `${label} · ${model}` : label;
   };
+  const [editingCustom, setEditingCustom] = createSignal(false);
+  const customValue = "\0custom";
   const options = createMemo(() => [
     { value: TALK_PICKER_UNSET, label: autoLabel() },
     ...providers().map((provider) => ({
@@ -287,28 +289,41 @@ function ProviderRow(props: TalkViewProps) {
         ),
       ),
     })),
-    ...(unknownConfigured() ? [{ value: unknownConfigured()!, label: unknownConfigured()! }] : []),
+    { value: customValue, label: t("talkPage.provider.custom") },
   ]);
   return (
     <>
-      {providers().length === 0 ? (
+      <Show when={providers().length > 0}>
+        <SettingsPickerRow
+          title={t("talkPage.provider.title")}
+          description={route()}
+          value={
+            editingCustom() || unknownConfigured()
+              ? customValue
+              : (selected()?.id ?? TALK_PICKER_UNSET)
+          }
+          options={options()}
+          disabled={props.configBusy}
+          onChange={(value) => {
+            setEditingCustom(value === customValue);
+            if (value !== customValue) {
+              props.onProviderChange(value || null);
+            }
+          }}
+        />
+      </Show>
+      <Show when={providers().length === 0 || editingCustom() || unknownConfigured()}>
         <TalkTextRow
           field="provider"
           value={props.selection.provider}
           placeholder={t("talkPage.provider.auto")}
           disabled={props.configBusy}
-          onChange={props.onProviderChange}
+          onChange={(value) => {
+            setEditingCustom(false);
+            props.onProviderChange(value);
+          }}
         />
-      ) : (
-        <SettingsPickerRow
-          title={t("talkPage.provider.title")}
-          description={route()}
-          value={selected()?.id ?? unknownConfigured() ?? TALK_PICKER_UNSET}
-          options={options()}
-          disabled={props.configBusy}
-          onChange={(value) => props.onProviderChange(value || null)}
-        />
-      )}
+      </Show>
     </>
   );
 }

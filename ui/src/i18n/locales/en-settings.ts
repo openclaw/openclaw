@@ -460,6 +460,7 @@ const enSettings = {
       catalogFailedHint: "Couldn’t check realtime voice readiness.",
     },
     provider: {
+      custom: "Custom…",
       title: "Provider",
       auto: "Auto",
       autoNamed: "Auto ({provider})",

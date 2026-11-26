@@ -310,11 +310,16 @@ export function TalkSplitVoice(props: FieldsProps & { catalog: TalkCatalogState 
             })),
             { value: CUSTOM_COMMAND_PROVIDER, label: t("talkPage.revamp.customCommand") },
           ]}
-          onChange={(next) =>
-            next
-              ? runtimeConfig.patchForm(["talk", "provider"], next)
-              : runtimeConfig.removeFormValue(["talk", "provider"])
-          }
+          onChange={(next) => {
+            if (next === CUSTOM_COMMAND_PROVIDER && !entries().includes(CUSTOM_COMMAND_PROVIDER)) {
+              runtimeConfig.patchForm(["talk", "providers", CUSTOM_COMMAND_PROVIDER], {});
+            }
+            if (next) {
+              runtimeConfig.patchForm(["talk", "provider"], next);
+            } else {
+              runtimeConfig.removeFormValue(["talk", "provider"]);
+            }
+          }}
         />
       </Show>
       <Show when={selected() === CUSTOM_COMMAND_PROVIDER}>

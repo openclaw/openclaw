@@ -2,9 +2,9 @@
 // that feeds the provider/model/voice pickers; all writes go through the shared
 // config form draft so the embedded schema editor below stays in sync.
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
-import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
 import type { JSX } from "@solidjs/web";
 import { action, createMemo, createOptimistic, createSignal, onSettled } from "solid-js";
+import { TALK_CHAT_SETTINGS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -706,7 +706,7 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
     const snapshot = gateway.read().snapshot;
     return (
       snapshot.phase === "connected" &&
-      isGatewayCapabilityAdvertised(snapshot, GATEWAY_SERVER_CAPS.TALK_CHAT_SETTINGS) === true
+      isGatewayCapabilityAdvertised(snapshot, TALK_CHAT_SETTINGS) === true
     );
   };
   const runtime = projectRuntimeConfig(context.runtimeConfig);
