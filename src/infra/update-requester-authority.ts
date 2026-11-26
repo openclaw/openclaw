@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   withArtifactPreservingStateReads,
   withSynchronousArtifactPreservingStateSnapshot,
@@ -63,7 +64,12 @@ export function createDelegatedUpdateRequesterAuthority(
 ): Promise<UpdateRequesterAuthority> {
   return requester.authorizationSource?.startsWith("profile:")
     ? createManagedUpdateRequesterContinuationAuthority(requester, { runId, executor }, env)
-    : createManagedUpdateRequesterAuthority(requester, env);
+    : captureManagedUpdateRequester(
+        requester,
+        env ?? process.env,
+        (auth) => auth.resolveCommandOwnerAuthority,
+        { projectDoctorConfig: true },
+      );
 }
 
 /** Identity facts alone grant no effects; the helper composes them with its native owner. */
@@ -125,6 +131,7 @@ async function captureManagedUpdateRequester(
       "resolveCommandOwnerAuthority" | "resolveUpdateRequesterIdentityAuthority"
     >,
   ) => typeof import("../auto-reply/command-auth.js").resolveCommandOwnerAuthority,
+  options: { projectDoctorConfig?: boolean } = {},
 ): Promise<UpdateRequesterAuthority> {
   // Released drivers knew only configured owners. They must not acquire a newly linked profile
   // when an installed runtime later reconstructs their authority.
@@ -150,10 +157,22 @@ async function captureManagedUpdateRequester(
         import("../cli/plugin-registry-loader.js"),
         import("../plugins/loader-shared.js"),
       ]);
+      const doctor = options.projectDoctorConfig
+        ? await import("../commands/doctor/legacy-config-repair.js")
+        : undefined;
       const readCurrentConfig = () =>
         readCurrentConfigForPolicyCheck({
           env: authorityEnv,
           configPath: target.configPath,
+          projectInvalidConfig: doctor
+            ? (snapshot) => {
+                if (!isRecord(snapshot.parsed)) {
+                  return undefined;
+                }
+                const plan = doctor.planLegacyConfigForUpdateChannel(snapshot);
+                return plan?.changes.length ? plan.config : undefined;
+              }
+            : undefined,
         });
       let migrationDeferredChannels: string[] = [];
       await ensureCliPluginRegistryLoaded({
