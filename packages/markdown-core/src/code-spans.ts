@@ -6,6 +6,8 @@ export type InlineCodeState = {
   open: boolean;
   /** Backtick run length required to close the current inline code span. */
   ticks: number;
+  /** Cursor before a trailing backtick run that the next chunk may extend. */
+  pendingRun?: { length: number; open: boolean; ticks: number };
   /** Whether the previous chunk ended in prose with an unpaired backslash. */
   escaped?: boolean;
   /** Inline cursor before the unfinished delimiter line, if it needs to be reclassified. */
@@ -42,8 +44,13 @@ export function buildCodeSpanIndex(
     : -1;
   let beforePendingFence: InlineCodeState["beforePendingFence"];
   const inlineSpans: CodeSpan[] = [];
-  let open = initialState.open;
-  let ticks = initialState.ticks;
+  // Fence replay already includes its trailing markers. Only extend an inline
+  // run when the next chunk actually starts with another backtick.
+  const continuation = !carried && text.startsWith("`") ? inlineState?.pendingRun : undefined;
+  const cursor = continuation ?? initialState;
+  let open = cursor.open;
+  let ticks = cursor.ticks;
+  let pendingRun = text.length === 0 ? inlineState?.pendingRun : undefined;
   let openStart = open ? 0 : -1;
   // Outside code, a backslash escapes the next backtick (CommonMark); inside code it is literal.
   let escaped = !open && initialState.escaped === true;
@@ -83,10 +90,14 @@ export function buildCodeSpanIndex(
     }
 
     const runStart = i;
-    let runLength = 0;
+    let runLength = runStart === 0 ? (continuation?.length ?? 0) : 0;
     while (i < text.length && text[i] === "`") {
       runLength += 1;
       i += 1;
+    }
+
+    if (i === text.length) {
+      pendingRun = { length: runLength, open, ticks };
     }
 
     if (!open) {
@@ -113,6 +124,7 @@ export function buildCodeSpanIndex(
       open,
       ticks,
       ...(escaped ? { escaped } : {}),
+      ...(pendingRun ? { pendingRun } : {}),
       ...(pendingStart >= 0
         ? { beforePendingFence: beforePendingFence ?? { open, ticks, escaped } }
         : {}),

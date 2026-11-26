@@ -74,7 +74,7 @@ export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
     goal.tokenBudget === undefined
       ? ""
       : `Token budget: ${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
-  const note = goal.lastStatusNote ? `Note: ${goal.lastStatusNote}` : "";
+  const note = goal.lastStatusNote ? `Last status note: ${goal.lastStatusNote}` : "";
   const commands = resolveGoalCommandHint(goal.status);
   return [
     "Goal",
@@ -82,6 +82,7 @@ export function formatSessionGoalStatus(goal: SessionGoal | undefined): string {
     `Objective: ${goal.objective}`,
     `Tokens used: ${formatTokenCount(goal.tokensUsed)}`,
     ...(budget ? [budget] : []),
+    `Settled automatic turns: ${goal.continuationTurns}`,
     ...(note ? [note] : []),
     "",
     `Commands: ${commands}`,

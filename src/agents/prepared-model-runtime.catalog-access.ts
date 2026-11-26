@@ -403,6 +403,7 @@ export function createPersistentModelCatalogAccess(
       const startupProviders = new Set(params.agentFacts.providerIds.map(normalizeProvider));
       const rawCatalog = await augmentPreparedModelCatalogWithAgentHarness({
         input,
+        providerIds,
         nativeSelection: selection,
         snapshot: params.isCurrent()
           ? (published.inventory?.catalog ?? params.catalogFacts.modelCatalog)

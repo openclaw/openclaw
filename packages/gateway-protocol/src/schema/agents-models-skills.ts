@@ -490,6 +490,8 @@ export const SkillsWorkshopArchiveParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   name: NonEmptyString,
   reason: Type.Optional(Type.String({ minLength: 1, maxLength: 1_000 })),
+  /** Undo this restore of an archived skill while preserving its previous default version. */
+  undoRestoreChangeId: Type.Optional(NonEmptyString),
 });
 
 /** Restores a saved version (newest when omitted); the current live copy is versioned first. */

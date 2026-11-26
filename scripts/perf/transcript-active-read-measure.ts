@@ -22,6 +22,7 @@ import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
 import type { CurrentTranscriptProjection } from "../../src/config/sessions/session-accessor.sqlite-projection-read.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -241,12 +242,7 @@ for (const request of requests) {
   globalThis.gc();
   const inspector = values.mode === "allocation" ? new Session() : undefined;
   if (inspector) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const gc = new GCProfiler();
   gc.start();

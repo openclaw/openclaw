@@ -85,6 +85,18 @@ An inconclusive readiness check is reported separately from current serving heal
 This recovery repair is supplied by the candidate CLI; older updaters using
 `gateway restart --preserve-definition` can use it without an updater upgrade.
 
+For a Linux system service, run maintenance as the account in its `User=` setting
+with the service's existing `HOME`, `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
+`OPENCLAW_CONFIG_PATH`, and profile selectors. A plain `sudo openclaw update`
+uses root's selectors; it does not automatically adopt the service account.
+
+For an administrator-managed global npm package, replace the package with
+`sudo npm install -g openclaw@latest`, then restart the existing system unit with
+`sudo systemctl restart <unit>.service`. Use the installed unit's name and leave
+its service configuration and file ownership unchanged. Direct Gateway startup
+already migrates old configuration and database schemas in the selected state
+directory; no separate state copy or account adoption is needed.
+
 App-owned packages declare their update owner in `openclaw-install-owner.json`
 at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
 app updater to update the bundled Gateway and runtime together. The official
@@ -165,6 +177,13 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    in the same update details and warning count; they never fail the core update
    or trigger rollback.
 
+Packaged bundled plugins belong to the selected core release, not a second
+plugin installation. Channel synchronization retires obsolete compiled-bundle
+install records before it plans package updates; switching to a packaged bundle
+does not create another path install record. Plugin configuration, explicit local
+links, and source-checkout selections stay intact. Registered plugin host links
+are reconciled by the existing post-core plugin owner before activation reload.
+
 Once the resident launcher owns an installation, `gateway install` keeps that
 state directory's selected launcher as its service entry, including before the
 first pending trial replaces an unmodified npm fallback. Checked durable CLI
@@ -194,15 +213,6 @@ the update through Control UI or `openclaw update`. If it cannot accept the
 requested update over RPC, local preparation refuses visibly rather than
 claiming an unidentified installation. Stop the Gateway through its existing
 owner, then rerun the update. A stopped Gateway remains updatable.
-
-Early Git source-updater recovery is a compatibility exception. Its separate CLI
-worker never enters Gateway startup. It opens a repair run after the first
-readiness check and finishes rebuilding and cleanup after the second. Neither
-startup can report that repair complete; a failed release may not reach readiness
-at all. This layout shipped only in moving-`main` Git installs from 2026-11-17–19,
-not in any published release. Retire `update-early-release-recovery*.ts` and its
-early-layout check at the first regular stable cut after `v2026.11.8`. Keep an
-already-started recovery's retained code until that recovery finishes.
 
 `discoverDatabases` is the state transaction inventory. Boot uses that inventory
 to plan pending canonical schema steps and their derived minimum reader floors
@@ -356,15 +366,18 @@ crash-after-migration cases check the serving version, trial outcome, schema,
 and seeded row counts and contents. The fixture changes scratch source only;
 it does not change the shipped schema or replace the other platform cells.
 
-For schema-version or migration changes, CI additionally boots the tested
-merge build on a fixture created by the PR fork-point release, kills it
-before Gateway listen, and records committed schemas and reader floors from
-copies. Its rollback projection restores T's config preimage and raised-floor
-SQLite stores only; other databases stay byte-exact. The previous release must
-then serve its seeded cron, sessions, and message history. Lazy stores that
-did not advance are reported as untouched, not claimed migrated. The
-compatibility gate becomes required when the candidate includes the
-reader-floor contract; fixture, target-schema, and integrity errors always fail.
+For schema-version or migration changes, CI additionally prepares the tested
+merge build through the PR fork-point release's public updater, then boots its
+real resident launcher. It kills the candidate before Gateway listen and
+records committed schemas and reader floors from inspection copies. The
+resident retries and rolls back using its own restore implementation; the
+test harness never restores config or databases. T must serve its seeded cron,
+sessions, and message history. Raised-floor stores must return to T's schema
+and floor; unraised stores must retain T+1's schema and floor. Lazy stores that
+did not advance are reported as untouched, not claimed migrated. This gate is
+required: reader failures, invalid targets, integrity errors, and incomplete
+rollback fail the lane. A fork point whose updater cannot prepare the candidate
+must be rebased.
 
 The selected lane also runs the agent SQLite migration chain from the fork-point
 schema through the real maintenance owner. Its test-side native observer rejects
@@ -410,6 +423,17 @@ database objects, catalog snapshots, or queried row values.
 
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
+
+Gateway post-ready maintenance and `openclaw update repair` refresh the known
+legacy Git launcher from development build `d44f263`, which incorrectly counted
+`gateway status` as a start. The candidate must contain this repair. It applies
+only to that launcher's exact bytes in the selected, account-owned installation;
+custom launchers, other installations, read-only mode, and resident launchers
+are left unchanged. The repair preserves the legacy trial and genuine-start
+rollback behavior; it does not settle the trial or rewrite update history. This
+is recovery for an observed development install, not a stable-release migration.
+The normal next release update replaces the legacy launcher with the resident
+launcher.
 
 Prepared-release plugin maintenance normally runs after the candidate has migrated
 state and reported ready. Downgrades retain pre-trial maintenance because older
@@ -500,6 +524,12 @@ and service ownership revalidation finish. At activation, the legacy
 existing CLI paths keep working without retaining a separate release selection.
 This also applies with `--no-restart`; the launcher selects the pending candidate
 on its next start. The installed updater must contain this repair.
+
+Git preparation carries forward an existing host OpenClaw ID binding when its
+native crate still matches the target. If the binding needs rebuilding, that
+build must succeed in the prepared release before it can replace the serving
+Gateway. Checkouts without a host binding still skip the opt-in build. The
+installed updater must contain this change.
 
 Local npm frontends can offer their installed package to a managed package
 release. The resident release runs the update, with an explicit local package
@@ -1492,9 +1522,11 @@ transaction-local verification.
 SQLite upgrades default to a whole-database `quick_check`, a full
 `integrity_check` of the tables the migration rewrites or re-indexes, and the
 existing foreign-key checks. This avoids checking every unrelated index against
-its table during a routine upgrade. Structural corruption anywhere in the
-database and corruption in the migration's affected tables still refuse the
-migration; quarantine and rollback behavior are unchanged.
+its table during a routine upgrade. An agent database version step checks only the
+schema catalog and the tables it declares, so upgrade downtime does not grow with
+unrelated agent history; the next Gateway start checks the whole database in the
+background. Other structural corruption and corruption in the migration's affected
+tables still refuse the migration; quarantine and rollback behavior are unchanged.
 Historical upgrades use the same default even when recovery requires a full-file
 backup. Automatic original-state captures and disposable update rehearsals also
 honor the requested check, including same-version Doctor repairs. Automatic rollback

@@ -112,6 +112,54 @@ export function readTranscriptAppendIdentities(
   ).rows;
 }
 
+/** Each host receipt can own several independently accepted process observations. */
+export function readCommittedShellReceipts(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  keys: readonly string[],
+): Set<string> {
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor?.transcript.complete) {
+    const wanted = new Set(keys);
+    const found = new Set<string>();
+    for (const row of actor.transcript.identities.values()) {
+      const key = row.message_idempotency_key;
+      if (!key) {
+        continue;
+      }
+      const separator = key.lastIndexOf("/");
+      if (separator < 0) {
+        continue;
+      }
+      const owner = key.slice(0, separator);
+      if (wanted.has(owner)) {
+        found.add(owner);
+      }
+    }
+    return found;
+  }
+  // Observation UUIDs start with a lowercase hex digit. One bounded composite-index
+  // seek per pending command suffices, regardless of transcript size or poll count.
+  const seek = prepareSqliteQuerySync<string>(database.db, (parameter) =>
+    getSessionKysely(database.db)
+      .selectFrom("transcript_event_identities")
+      .select("seq")
+      .where("session_id", "=", sessionId)
+      .where(
+        "message_idempotency_key",
+        ">=",
+        parameter((key) => key + "/0"),
+      )
+      .where(
+        "message_idempotency_key",
+        "<",
+        parameter((key) => key + "/g"),
+      )
+      .limit(1),
+  );
+  return new Set(keys.filter((key) => seek(key).rows.length !== 0));
+}
+
 export function readIdempotencyKeyOwner(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,

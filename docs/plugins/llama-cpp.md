@@ -19,6 +19,65 @@ openclaw plugins install @openclaw/llama-cpp-provider
 openclaw onboard
 ```
 
+## Llama.app catalog and inference
+
+The same plugin supplies the separate `llama-app` provider for
+[Llama](https://llama.app). A connection can use its default API endpoint:
+
+```json5
+{
+  models: {
+    providers: {
+      "llama-app": {
+        baseUrl: "http://127.0.0.1:9931/v1",
+        api: "openai-completions",
+        models: [],
+      },
+    },
+  },
+}
+```
+
+The running app supplies its model list. References use
+`llama-app/<server-model-id>`, preserving slashes and quantization suffixes.
+Keyless local servers need no placeholder key in saved configuration.
+`LLAMA_APP_API_KEY` or the provider's normal API-key and header SecretRefs
+support protected endpoints without reusing llama.cpp credentials.
+
+This connection does not replace `models.providers.llama-cpp`, adopt its
+managed process, or change an existing default. Catalog refresh is passive:
+it never downloads, loads, wakes, or unloads models. The app remains responsible
+for the server and inference-triggered model loading. Run it on the Gateway
+host or use an endpoint the Gateway can reach.
+
+### Set up the app connection
+
+Fresh automatic setup prefers a usable model served by the Llama desktop app
+on the Gateway host. A standalone llama-server on the same port keeps its
+llama.cpp identity. For remote, forwarded, or externally managed servers,
+choose **Llama** explicitly to use the app connection. Existing configured models, saved sign-ins and supported
+cloud credentials retain their earlier priority. This preference never installs
+Llama or replaces a configured default.
+
+Choose **Llama** in provider setup. On a fresh machine, first get the app from
+[llama.app](https://llama.app/), choose and download a model inside Llama, and
+keep the app open. OpenClaw's setup explains this handoff; it does not install
+the app, choose a download on your behalf, or adopt the app's cache or process.
+If the server is unavailable or has no usable models, setup stays incomplete
+and names what to do before retrying.
+
+Guided detection is passive and preparation rechecks the exact selected model.
+The app may load a cold model when the subsequent inference probe runs. A
+successful tool-free setup probe does not qualify tools or vision.
+Normal merge-mode setup saves connection facts, not a snapshot of discovered
+model rows; authored overrides survive. Explicit model-catalog replace mode
+continues to seed the catalog through the shared connection policy.
+
+The endpoint must be reachable **from the Gateway**, not just the desktop app.
+In particular, Windows-host loopback and a WSL Gateway's loopback are not the
+same network location. Use an authenticated, reachable endpoint where required;
+setup does not change firewall, proxy, or WSL networking settings.
+
 ## Choose server ownership
 
 | Setup choice          | Process owner                 | Local embeddings |
@@ -392,16 +451,31 @@ Setting it to `false` disables private-network and configured-origin trust
 for both discovery and inference. Discovery has no separate retry or redirect
 exception.
 
-For discovered models, OpenClaw advertises reasoning and effort controls only
-when `/props` sets `chat_template_caps.supports_reasoning_effort` to `true`.
-Missing or false values leave those capabilities unadvertised. Explicit
-configured context and tool values remain authoritative over discovery.
+Reasoning output and reasoning-effort controls are separate capabilities.
+Automatic discovery advertises effort selection only when the server reports
+chat-template support for reasoning effort. A missing or false value does not
+establish that the model cannot produce reasoning output. Automatic
+thinking-control metadata still uses that effort capability; this integration
+does not add independent reasoning detection. Explicit configured reasoning and
+compatibility overrides remain authoritative, without model-name inference.
 
-Setup saves context limits and tool support only when live `/props` verifies
-them. Unloaded router models remain in the configured inventory with those
-fields unset. Runtime discovery uses a 128,000-token context fallback and keeps
-tools disabled while those facts are unknown; it does not save these defaults
-as model overrides. After loading a model yourself, refresh its live facts:
+When both limits are reported, OpenClaw keeps the model's native capacity in
+`contextWindow` and the effective serving limit in `contextTokens`.
+Native capacity comes from the model row's `context_length` or
+`meta.n_ctx_train`; the serving limit comes from generation settings in
+`/props` or the loaded row's `meta.n_ctx`. For example, a model can advertise
+40,960 tokens while its server slot is configured for 4,096. A cold row reporting
+only native capacity does not establish an effective serving limit. Discovered
+output budgets respect an observed serving limit; authored context overrides
+remain authoritative.
+
+Normal merge-mode setup saves the connection and preserves authored model
+overrides; discovered rows stay in the provider-owned runtime catalog. Explicit
+replace mode seeds discovered rows through the shared connection policy,
+leaving unverified context and tool fields unset. Inference preparation can use
+a 128,000-token context fallback and keeps unknown tools disabled, but those
+fallbacks are not advertised as catalog facts or saved as model overrides.
+After loading a model yourself, refresh its live facts:
 
 ```bash
 openclaw models list --provider llama-cpp --refresh

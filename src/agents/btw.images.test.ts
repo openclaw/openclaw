@@ -4,6 +4,7 @@ import type { ImageContent } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import type { PreparedAgentRunAdmission } from "./admitted-run-context.js";
 import * as btw from "./btw.test-support.js";
+import type { AgentHarnessSideQuestionParamsV2, AgentHarnessV2 } from "./harness/types.js";
 import type { StreamFn } from "./runtime/index.js";
 const QUESTION_IMAGE: ImageContent = {
   type: "image",
@@ -42,6 +43,87 @@ describe("runBtwSideQuestion", () => {
     await btw.runSideQuestion({ images: [QUESTION_IMAGE] });
 
     expect(hook).toHaveBeenCalledWith(expect.objectContaining({ images: [QUESTION_IMAGE] }));
+    expect(btw.streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("prepares image context and exact authorization for a native isolated side question", async () => {
+    let prepared:
+      | Awaited<
+          ReturnType<NonNullable<AgentHarnessSideQuestionParamsV2["prepareIsolatedSideQuestion"]>>
+        >
+      | undefined;
+    const hook = vi.fn(async (params: AgentHarnessSideQuestionParamsV2) => {
+      prepared = await params.prepareIsolatedSideQuestion!();
+      return { text: "Native side answer." };
+    });
+    btw.registerAgentHarness({
+      id: "copilot",
+      label: "Copilot fixture",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: hook,
+    } satisfies AgentHarnessV2);
+    btw.getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      messages: [
+        btw.createUserTranscriptMessage([{ type: "text", text: "Earlier image" }, QUESTION_IMAGE]),
+      ],
+      inFlightPrompt: "Keep working on the main task",
+    });
+    await expect(
+      btw.runSideQuestion({
+        cfg: btw.createRuntimeConfig(`${btw.DEFAULT_PROVIDER}/${btw.DEFAULT_MODEL}`, "copilot"),
+        images: [QUESTION_IMAGE],
+      }),
+    ).resolves.toEqual({ text: "Native side answer." });
+    expect(prepared).toMatchObject({
+      kind: "completion",
+      images: [QUESTION_IMAGE],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Earlier image" }, QUESTION_IMAGE] },
+      ],
+      params: {
+        authorization: { owner: "host", auth: { apiKey: "secret" } },
+        prompt: expect.stringContaining("Keep working on the main task"),
+      },
+    });
+    expect(btw.streamSimpleMock).not.toHaveBeenCalled();
+    if (prepared?.kind !== "completion") {
+      throw new Error("Missing isolated completion");
+    }
+    const completion = prepared;
+    expect(() => completion.params.assertCurrent?.()).toThrow();
+  });
+
+  it("keeps native isolated side questions on the existing session fork owner", async () => {
+    const onUsage = vi.fn();
+    const usage = { input: 5, output: 8, total: 13 };
+    const fork = vi.fn(async () => {
+      onUsage(usage);
+      return { text: "Fork answer." };
+    });
+    btw.registerAgentHarness({
+      id: "copilot",
+      label: "Copilot fixture",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      async runSideQuestion(params: AgentHarnessSideQuestionParamsV2) {
+        const prepared = await params.prepareIsolatedSideQuestion!();
+        await params.prepareIsolatedSideQuestion!();
+        if (prepared.kind !== "handled") {
+          throw new Error("Expected session fork result");
+        }
+        return prepared.result;
+      },
+    } satisfies AgentHarnessV2);
+    await expect(
+      btw.runSideQuestion({
+        cfg: btw.createRuntimeConfig(`${btw.DEFAULT_PROVIDER}/${btw.DEFAULT_MODEL}`, "copilot"),
+        sessionFork: fork,
+        onUsage,
+      }),
+    ).resolves.toEqual({ text: "Fork answer." });
+    expect(fork).toHaveBeenCalledOnce();
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith(usage);
     expect(btw.streamSimpleMock).not.toHaveBeenCalled();
   });
 

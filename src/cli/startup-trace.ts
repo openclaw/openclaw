@@ -18,13 +18,15 @@ type PendingTimelineEvent =
   | {
       type: "mark";
       name: string;
+      observedAt: number;
       durationMs: number;
       totalMs: number;
     }
   | {
       type: "span";
       name: string;
-      durationMs: number;
+      startedAt: number;
+      completedAt: number;
     };
 
 const CLI_STARTUP_TIMELINE_PHASE = "cli.startup";
@@ -204,6 +206,7 @@ export function createGatewayDispatchStartupTrace(
         {
           type: "mark",
           name: event.name,
+          timestamp: new Date(performance.timeOrigin + event.observedAt).toISOString(),
           phase: CLI_STARTUP_TIMELINE_PHASE,
           durationMs: event.durationMs,
           attributes: { totalMs: event.totalMs },
@@ -212,7 +215,7 @@ export function createGatewayDispatchStartupTrace(
       );
       return;
     }
-    module.emitCompletedDiagnosticsTimelineSpan(event.name, event.durationMs, {
+    module.emitCompletedDiagnosticsTimelineSpan(event.name, event, {
       phase: CLI_STARTUP_TIMELINE_PHASE,
       ...commonOptions,
     });
@@ -312,6 +315,7 @@ export function createGatewayDispatchStartupTrace(
       enqueueTimelineEvent({
         type: "mark",
         name: timelineName(name),
+        observedAt: now,
         durationMs,
         totalMs,
       });
@@ -331,6 +335,7 @@ export function createGatewayDispatchStartupTrace(
         );
       }
       let bufferCompletedTimelineSpan = false;
+      let timelineStartedAt = before;
       let completed = false;
       try {
         if (timelineModule && options.timeline !== false) {
@@ -352,6 +357,10 @@ export function createGatewayDispatchStartupTrace(
           }
           bufferCompletedTimelineSpan = timelineActivation === "unknown";
         }
+        // Match live spans: activation/import waits precede the measured operation.
+        if (bufferCompletedTimelineSpan) {
+          timelineStartedAt = performance.now();
+        }
         const result = await run();
         completed = true;
         return result;
@@ -361,7 +370,8 @@ export function createGatewayDispatchStartupTrace(
           enqueueTimelineEvent({
             type: "span",
             name: timelineName(name),
-            durationMs: now - before,
+            startedAt: timelineStartedAt,
+            completedAt: now,
           });
         }
         if (completed) {
