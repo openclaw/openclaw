@@ -25,14 +25,6 @@ function createDeadlineClock() {
   };
 }
 
-// A live PID whose identity the inspector cannot confirm: `/proc` reads fail
-// when the reader runs outside the container that wrote the lock, so the owner
-// stays "unknown" and the lock is never reclaimed, whatever its age.
-const unverifiableOwner = {
-  readProcessCmdline: () => null,
-  readProcessStartTime: () => null,
-};
-
 async function pathExists(target: string): Promise<boolean> {
   return fs
     .access(target)
@@ -85,7 +77,6 @@ describe("Gateway lock timeout diagnostics", () => {
         pollIntervalMs: 25,
         now: clock.now,
         sleep: clock.sleep,
-        ...unverifiableOwner,
       });
       await expect(attempt).rejects.toThrow(ownerLockPath);
     } finally {
@@ -121,7 +112,6 @@ describe("Gateway lock timeout diagnostics", () => {
       pollIntervalMs: 25,
       now: clock.now,
       sleep: clock.sleep,
-      ...unverifiableOwner,
     });
     await expect(attempt).rejects.toThrow(stateLockPath);
   });
@@ -150,7 +140,6 @@ describe("Gateway lock timeout diagnostics", () => {
       pollIntervalMs: 25,
       now: clock.now,
       sleep: clock.sleep,
-      ...unverifiableOwner,
     });
     await expect(attempt).rejects.toThrow(configLockPath);
   });

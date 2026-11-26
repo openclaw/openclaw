@@ -96,7 +96,6 @@ const sessionProjection = {
         key: string;
       }) => { entry: Record<string, unknown>; target: { key: string } } | undefined
     >(),
-  snapshot: vi.fn<(_target: { key: string }) => { row: { key: string; sessionId: unknown } }>(),
 };
 const createSessionRowProjectionMock = vi.fn(async (_options?: unknown) => sessionProjection);
 const buildGatewaySessionRowMock = vi.fn(
@@ -464,10 +463,6 @@ describe("EmbeddedTuiBackend", () => {
     });
     sessionProjection.present.mockClear();
     sessionProjection.withPreparedExactRows.mockClear();
-    sessionProjection.snapshot.mockReset();
-    sessionProjection.snapshot.mockImplementation(({ key }) => ({
-      row: { key, sessionId: loadSessionEntryMock.mock.results.at(-1)?.value?.entry?.sessionId },
-    }));
     createSessionRowProjectionMock.mockReset();
     createSessionRowProjectionMock.mockResolvedValue(sessionProjection);
     applySessionPatchProjectionMock.mockReset();

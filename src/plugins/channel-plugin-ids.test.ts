@@ -285,7 +285,6 @@ function createManifestRegistryFixtureWithWorkspaceDemoChannel(): PluginManifest
 
 function filterManifestRegistryForInstalledIndex(params: {
   pluginIds?: readonly string[];
-  includeDisabled?: boolean;
 }): PluginManifestRegistry {
   const registry = loadPluginManifestRegistryCore() as PluginManifestRegistry;
   const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
