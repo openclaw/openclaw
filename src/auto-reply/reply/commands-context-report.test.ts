@@ -13,9 +13,10 @@ import { persistSessionTranscriptTurn } from "../../config/sessions/session-acce
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
+import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { buildContextReply } from "./commands-context-report.js";
+import { buildContextReply, formatContextBudget } from "./commands-context-report.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { commandFixture } from "./commands-handler-fixture.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -289,6 +290,52 @@ describe("buildContextReply", () => {
         "More: /context list · /context detail · /context map · /context json",
       ].join("\n"),
     );
+  });
+
+  it("shows latest-run and whole-session cache and cost like the Control UI", () => {
+    const params = makeParams("/context", false);
+    const usage = (overrides: Partial<SessionCostSummary>): SessionCostSummary => ({
+      input: 500,
+      output: 0,
+      cacheRead: 9_000,
+      cacheWrite: 500,
+      totalTokens: 10_000,
+      totalCost: 154.52,
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+      cacheUnmeasuredInput: 0,
+      ...overrides,
+    });
+    const lines = (sessionUsage: SessionCostSummary | null) =>
+      formatContextBudget({
+        report: expectDefined(params.sessionEntry?.systemPromptReport),
+        used: 4_000,
+        limit: 8_192,
+        entry: { ...params.sessionEntry, cacheRead: 900, cacheWrite: 0, estimatedCostUsd: 0.306 },
+        sessionUsage,
+      })
+        .split("\n")
+        .filter((line) => /^(Latest run|Session total):/.test(line));
+
+    expect(lines(usage({}))).toEqual([
+      "Latest run: 90.00% cache · $0.31",
+      "Session total: 90.00% cache · $154.52",
+    ]);
+    // A partly priced total is a lower bound; usage without any price is never $0.
+    expect(lines(usage({ missingCostEntries: 2 }))[1]).toBe(
+      "Session total: 90.00% cache · ≥ $154.52",
+    );
+    expect(lines(usage({ totalCost: 0, missingCostEntries: 3 }))[1]).toBe(
+      "Session total: 90.00% cache · unpriced",
+    );
+    // Calls without a cache split are left out of the rate, not counted as misses.
+    expect(lines(usage({ input: 10_500, cacheUnmeasuredInput: 10_000 }))[1]).toBe(
+      "Session total: 90.00% cache · $154.52",
+    );
+    expect(lines(null)).toEqual(["Latest run: 90.00% cache · $0.31"]);
   });
 
   it("does not invent a message share when cached usage is stale", async () => {

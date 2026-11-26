@@ -20,7 +20,7 @@ Context is _not the same thing_ as "memory": memory can be stored on disk and re
 ## Quick start (inspect context)
 
 - `/status` → quick "how full is my window?" view + session settings.
-- `/context` → prompt budget card: how full the window is and where it goes (messages, workspace files, tool schemas, skills catalog, system instructions), plus latest-run cache hit and cost. Same categories as the Control UI context popover, on every chat channel. `/context help` lists the modes.
+- `/context` → prompt budget card: how full the window is and where it goes (messages, workspace files, tool schemas, skills catalog, system instructions), plus cache hit rate and cost for the latest run and the whole session. Same numbers as the Control UI context popover, on every chat channel. `/context help` lists the modes.
 - `/context list` → what's injected + rough sizes (per file + totals).
 - `/context detail` → deeper breakdown: per-file, per-tool schema sizes, per-skill entry sizes, system prompt size, and compactable transcript message counts.
 - `/context map` → WinDirStat-style treemap image of the current session's tracked context contributors.
@@ -84,12 +84,13 @@ Values vary by model, provider, tool policy, and what's in your workspace.
 🟨 Skills catalog · ~7.2k
 🟪 System instructions · ~8.4k
 
-Latest run: 97.76% cache hit · $0.31
+Latest run: 97.76% cache · $0.31
+Session total: 95.13% cache · $154.52
 
 More: /context list · /context detail · /context map · /context json
 ```
 
-The bar spans the context window; every non-empty category keeps at least one cell. Sizes are character estimates. **Messages & other** is the cached session total minus the tracked prompt, so it shows `unknown` while that total is stale.
+The bar spans the context window; every non-empty category keeps at least one cell. Sizes are character estimates. **Messages & other** is the cached session total minus the tracked prompt, so it shows `unknown` while that total is stale. **Session total** covers the current session instance, the same total as `/usage cost`; a partly priced total shows as a lower bound (`≥`) and usage with no price shows `unpriced`.
 
 ### `/context list`
 

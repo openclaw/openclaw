@@ -31,10 +31,15 @@ import {
 } from "../../config/sessions/types.js";
 import { readSessionMessagesWithSourceAsync } from "../../gateway/session-transcript-readers.js";
 import { iterateSessionTranscriptSourcePages } from "../../gateway/session-transcript-source-pages.js";
+import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
 import {
   buildContextBudgetCategories,
   type ContextCategory,
 } from "../../shared/context-budget-categories.js";
+import {
+  formatPromptCacheHitRate,
+  promptCacheHitRate,
+} from "../../shared/prompt-cache-hit-rate.js";
 import { formatUsd } from "../../utils/usage-format.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -73,6 +78,8 @@ export function formatContextBudget(params: {
   used: number | null;
   limit: number | null;
   entry?: SessionEntry;
+  /** Lifetime usage of this session instance; null when it has no recorded usage. */
+  sessionUsage?: SessionCostSummary | null;
 }): string {
   const { report, limit } = params;
   // A fresh session reports zero before its first run; that is no measurement.
@@ -127,15 +134,40 @@ export function formatContextBudget(params: {
   }
 
   const entry = params.entry;
-  const prompt = (entry?.inputTokens ?? 0) + (entry?.cacheRead ?? 0) + (entry?.cacheWrite ?? 0);
+  const latestRate =
+    entry?.cacheRead == null
+      ? null
+      : promptCacheHitRate({
+          input: entry.inputTokens ?? 0,
+          cacheRead: entry.cacheRead,
+          cacheWrite: entry.cacheWrite ?? 0,
+        });
   const latestRun = [
-    entry?.cacheRead != null && prompt > 0
-      ? `${(Math.floor((entry.cacheRead / prompt) * 10_000) / 100).toFixed(2)}% cache hit`
-      : null,
+    latestRate === null ? null : `${formatPromptCacheHitRate(latestRate)} cache`,
     formatUsd(entry?.estimatedCostUsd),
   ].filter(Boolean);
-  if (latestRun.length) {
-    lines.push("", `Latest run: ${latestRun.join(" · ")}`);
+  const total = params.sessionUsage;
+  // Same rules as the Control UI: an unfinished or partly unpriced total is a lower bound,
+  // and usage without any price is never shown as $0.
+  const partial = total ? total.staleSince !== undefined || total.missingCostEntries > 0 : false;
+  const sessionTotal = total
+    ? [
+        total.staleSince === undefined && promptCacheHitRate(total) !== null
+          ? `${formatPromptCacheHitRate(promptCacheHitRate(total))} cache`
+          : null,
+        total.totalCost === 0 && total.missingCostEntries > 0
+          ? "unpriced"
+          : `${partial ? "≥ " : ""}${formatUsd(total.totalCost)}`,
+      ].filter(Boolean)
+    : [];
+  if (latestRun.length || sessionTotal.length) {
+    lines.push("");
+    if (latestRun.length) {
+      lines.push(`Latest run: ${latestRun.join(" · ")}`);
+    }
+    if (sessionTotal.length) {
+      lines.push(`Session total: ${sessionTotal.join(" · ")}`);
+    }
   }
   if (report.source === "estimate") {
     lines.push("", "Estimated: no run has been recorded for this session yet.");
@@ -402,12 +434,20 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const report = await resolveContextReport(params);
 
   if (!sub) {
+    const { loadCurrentSessionCostSummary } = await import("./commands-session-cost.runtime.js");
     return {
       text: formatContextBudget({
         report,
         used: cachedContextUsageTokens ?? null,
         limit: session.contextTokens,
         entry: targetSessionEntry,
+        sessionUsage: await loadCurrentSessionCostSummary({
+          cfg: params.cfg,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          sessionEntry: targetSessionEntry,
+          storePath: params.storePath,
+        }),
       }),
     };
   }

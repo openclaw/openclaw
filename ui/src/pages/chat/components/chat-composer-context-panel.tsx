@@ -1,6 +1,10 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
 import { Errored, For, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
+import {
+  formatPromptCacheHitRate as formatCacheHitRate,
+  promptCacheHitRate,
+} from "../../../../../src/shared/prompt-cache-hit-rate.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -10,7 +14,6 @@ import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import type { ProviderQuotaGroup } from "../../../lib/provider-quota-summary.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { SessionCostTotal } from "../../../lib/session-context-report.ts";
-import { promptCacheHitRate } from "../../../lib/sessions/usage.ts";
 import type {
   ContextNoticeProps,
   getContextNoticeViewModel,
@@ -111,10 +114,6 @@ function latestRunCacheHitRate(messages: unknown[] | undefined): number | null {
   }
   return promptCacheHitRate(totals);
 }
-
-// Floors, so 100.00% only appears when every prompt token was a cache read.
-const formatCacheHitRate = (rate: number | null) =>
-  rate === null ? "—" : `${(Math.floor(rate * 10_000) / 100).toFixed(2)}%`;
 
 function formatContextCost(value: number) {
   return formatCost(value).replace(/(\.\d{2})0$/, "$1");
