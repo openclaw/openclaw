@@ -13,14 +13,8 @@ import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
-import { createTranscriptSpeakerLabels } from "./speaker-labels.js";
 import { runSummaryWork } from "./summary-work.js";
-import { summarizeTranscripts } from "./summary.js";
-import type {
-  TranscriptSessionDescriptor,
-  TranscriptUtterance,
-  TranscriptsSummary,
-} from "./types.js";
+import type { TranscriptSessionDescriptor, TranscriptsSummary } from "./types.js";
 
 const MODEL_SUMMARY_INPUT_MAX_CHARS = 48_000;
 const MODEL_SUMMARY_TIMEOUT_MS = 20_000;
@@ -149,7 +143,7 @@ export async function summarizeTranscriptsWithModel(params: {
   cfg: OpenClawConfig;
   agentId: string;
   session: TranscriptSessionDescriptor;
-  utterances: TranscriptUtterance[];
+  base: TranscriptsSummary;
   hasSpeakerAliases?: boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
@@ -166,19 +160,11 @@ export async function summarizeTranscriptsWithModel(params: {
     const primary = resolveNativeModelPrimary(params.cfg, params.agentId);
     const utility = resolveUtilityModelRefForAgent({ cfg: params.cfg, agentId: params.agentId });
     const models = [utility, primary].filter((ref) => Boolean(ref?.trim()));
-    if (!models.length || !params.utterances.length) {
+    const { base } = params;
+    if (!models.length || !base.transcript.length) {
       return undefined;
     }
-    let citeTurns = params.hasSpeakerAliases ?? false;
-    const base = summarizeTranscripts(
-      params,
-      createTranscriptSpeakerLabels(() => {
-        citeTurns = true;
-      }),
-    );
-    if (!base.transcript.length) {
-      return undefined;
-    }
+    const citeTurns = params.hasSpeakerAliases === true;
     // Inference reaches the agent tool graph. Load it only for a selected model,
     // inside the deadline, so fallback-only notes do not load the agent runtime.
     const {
