@@ -117,7 +117,7 @@ defineDiscordVoiceTests((harness) => {
         const wav = await readFile(request.filePath);
         const result = await transcribeAudioFile(request);
         uploads.push({
-          marker: wav[44],
+          marker: wav.readUInt8(44),
           bytes: wav.length,
           processing: result.decision?.attachmentProcessing?.[0],
         });
