@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
+import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import type { FollowupRun } from "./queue.js";
 
 type ThreadingParams = Parameters<NonNullable<ChannelThreadingAdapter["buildToolContext"]>>[0];
@@ -389,5 +391,28 @@ describe("agent-runner-utils", () => {
         currentMessageId: undefined,
       }),
     );
+  });
+
+  it("carries the cron finality default into scheduled session turns", async () => {
+    const scheduledAutomation = {
+      ...TEST_SCHEDULED_TURN,
+      job: makeCronJob({ sessionTarget: "session:main", wakeMode: "now" }),
+      // A configured cron target is delivery: omitted `final` must keep the turn going.
+      sourceDelivery: {
+        owner: "direct_fallback",
+        reason: "cron_announce",
+        target: { channel: "telegram", to: "user-1" },
+        normalFinal: "visible",
+        messageTool: {
+          enabled: true,
+          force: false,
+          requireExplicitTarget: true,
+          finalByDefault: false,
+        },
+        fallback: { directDelivery: true, skipWhenMessageToolSentToTarget: true },
+      },
+    } as unknown as FollowupRun["run"]["scheduledAutomation"];
+    const params = await buildExecution({ run: makeRun({ scheduledAutomation }) });
+    expect(params.messageToolFinalByDefault).toBe(false);
   });
 });

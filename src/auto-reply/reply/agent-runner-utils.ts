@@ -503,6 +503,12 @@ export async function buildEmbeddedRunExecutionParams(params: {
     silentExpected: params.run.silentExpected,
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
+    // A cron job's configured target is delivery, not a conversation to answer: its
+    // plan says an omitted `final` must let post-send work continue. Chat runs keep
+    // the default (a send answers the inbound message).
+    ...(automation?.sourceDelivery
+      ? { messageToolFinalByDefault: automation.sourceDelivery.messageTool.finalByDefault }
+      : {}),
     toolBindings: params.run.toolBindings,
     skillLibraryAuthoring: params.run.skillLibraryAuthoring,
     provider: params.provider,
