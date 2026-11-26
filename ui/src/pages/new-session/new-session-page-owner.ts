@@ -62,7 +62,18 @@ export class NewSessionPageOwner {
     this.submissionLifetimeValue = Promise.withResolvers<void>();
     this.listeners.publish();
   };
+  private get dictationBlocksSubmit(): boolean {
+    const dictation = this.dictation.dictation;
+    return (
+      this.dictation.active ||
+      (dictation?.requiresFormattingReview === true && dictation.transcribing)
+    );
+  }
+
   submit(background = false) {
+    if (this.dictationBlocksSubmit) {
+      return;
+    }
     const lifetime = this.submissionLifetime;
     const textarea = this.submission.composerTextarea.getTextarea();
     const restoreFocus = background && this.host.ownerDocument.activeElement === textarea;
@@ -429,13 +440,14 @@ export class NewSessionPageOwner {
     const isCatalogTarget = catalog.isTarget(this.data);
     const capabilities = submission.capabilities;
     const preferences = context?.theme.settings;
-    const dictationLocked = dictation.active;
+    const dictationBlocksSubmit = this.dictationBlocksSubmit;
     return {
       agent: place.selectedAgent(),
       agentId: place.agentId,
       attachmentDraft: submission.attachmentDraft,
       draftSource: submission.composerDraft,
-      canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),
+      canSubmit: !submission.submitting && !dictationBlocksSubmit && submission.canSubmit(),
+      dictationBlocksSubmit,
       submitDisabledReason: submission.submitDisabledReason(),
       onBlockedSubmit: () => submission.noteBlockedSubmitAttempt(),
       get dictationActive() {

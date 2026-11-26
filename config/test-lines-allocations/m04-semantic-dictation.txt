@@ -6,6 +6,7 @@
 # direct Markdown boundaries and one-finish browser consumers.
 # Browser coverage checks WAV capture, native recipient identity and Undo.
 # Each suite protects a separate required boundary; no serializer-only proof.
-# Net test growth against 04b854b239cd8ab8a14beae4914ed9c54d791e62: 2816 LF lines.
+# Browser coverage also checks retained drafts during finalization.
+# Net test growth against 2e3d8623b5a40482d8e1e803334727b3c865e128: 2842 LF lines.
 # Requested allocation covers the excess over the 400-line default allowance.
-2416
+2442

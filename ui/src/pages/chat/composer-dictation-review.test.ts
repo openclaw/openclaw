@@ -268,36 +268,44 @@ describe("reviewed dictation lifecycle", () => {
     expect(fixture.onCommit).not.toHaveBeenCalled();
   });
 
-  it.each(["window blur", "focus departure", "policy round-trip", "draft edit round-trip"])(
-    "latches %s while finalization is pending",
-    async (change) => {
-      const fixture = reviewFixture();
-      await startDirect(fixture.controller);
-      transcript("Shopping list bullet milk next item eggs");
-      const finished = fixture.controller.finishActive();
-      if (change === "window blur") {
-        window.dispatchEvent(new Event("blur"));
-      }
-      if (change === "focus departure") {
-        fixture.target.focused = false;
-        document.dispatchEvent(new Event("focusin"));
-        fixture.target.focused = true;
-      }
-      if (change === "policy round-trip") {
-        patchSettings({ dictationFormatting: undefined });
-        patchSettings({ dictationFormatting: { version: 1, mode: "explicit" } });
-      }
-      if (change === "draft edit round-trip") {
-        fixture.target.revision++;
-        document.dispatchEvent(new Event("input"));
-      }
-      emit({ type: "close", reason: "completed" });
-      await finished;
-      expect(fixture.controller.formattingReview?.canApply).toBe(false);
-      expect(fixture.controller.acceptFormatting("original")).toBe(false);
-      expect(fixture.onCommit).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    "window blur during capture",
+    "window blur",
+    "focus departure",
+    "policy round-trip",
+    "draft edit round-trip",
+  ])("keeps the transcript but invalidates insertion on %s", async (change) => {
+    const fixture = reviewFixture();
+    await startDirect(fixture.controller);
+    transcript("Shopping list bullet milk next item eggs");
+    if (change === "window blur during capture") {
+      window.dispatchEvent(new Event("blur"));
+      expect(fixture.controller.active).toBe(true);
+      expect(fixture.controller.transcribing).toBe(false);
+    }
+    const finished = fixture.controller.finishActive();
+    if (change === "window blur") {
+      window.dispatchEvent(new Event("blur"));
+    }
+    if (change === "focus departure") {
+      fixture.target.focused = false;
+      document.dispatchEvent(new Event("focusin"));
+      fixture.target.focused = true;
+    }
+    if (change === "policy round-trip") {
+      patchSettings({ dictationFormatting: undefined });
+      patchSettings({ dictationFormatting: { version: 1, mode: "explicit" } });
+    }
+    if (change === "draft edit round-trip") {
+      fixture.target.revision++;
+      document.dispatchEvent(new Event("input"));
+    }
+    emit({ type: "close", reason: "completed" });
+    await finished;
+    expect(fixture.controller.formattingReview?.canApply).toBe(false);
+    expect(fixture.controller.acceptFormatting("original")).toBe(false);
+    expect(fixture.onCommit).not.toHaveBeenCalled();
+  });
 
   it.each(["cancel", "scope", "account", "connection"])(
     "retires the source after %s",

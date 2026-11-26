@@ -149,7 +149,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
     if (!background && (event.shiftKey || (options.requiresModifier && !hasSubmitModifier))) {
       return;
     }
-    if (event.repeat) {
+    if (event.repeat || options.dictationBlocksSubmit) {
       event.preventDefault();
       return;
     }

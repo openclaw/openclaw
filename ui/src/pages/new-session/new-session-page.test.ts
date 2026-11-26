@@ -232,6 +232,9 @@ describe("new session draft route ownership", () => {
         vi.spyOn(DirectDictationControl.prototype, "active", "get").mockImplementation(
           () => dictating,
         );
+        vi.spyOn(DirectDictationControl.prototype, "locksDraft", "get").mockImplementation(
+          () => dictating,
+        );
       }
       const page = await mount(routeData("research"));
       await enterMessage(page, "Review the attachment");

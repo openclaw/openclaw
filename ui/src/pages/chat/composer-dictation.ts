@@ -499,39 +499,20 @@ export class ComposerDictationOwner extends EventTarget {
     void this.stop({ commit: false });
   };
 
-  // A latched microphone keeps recording in the background, but the reviewed
-  // insertion must not regain authority merely because the draft regains focus.
-  private readonly handleFormattingWindowLeave = (event: Event): void => {
+  private readonly observeFormattingTarget = (event?: Event): void => {
+    const capture = this.formattingCapture;
     if (
-      event.type === "visibilitychange" ? document.visibilityState !== "hidden" : this.connecting
-    ) {
-      return;
-    }
-    if (this.formattingCapture) {
-      this.formattingCapture.invalidated = true;
-    }
-    if (this.review) {
-      this.invalidateFormattingReview();
-    }
-  };
-
-  private readonly handleFormattingFocus = (): void => {
-    if (!this.formattingCapture || this.connecting || this.captureMode !== "explicit") {
-      return;
-    }
-    this.observeFormattingTarget();
-  };
-
-  private readonly observeFormattingTarget = (): void => {
-    if (
-      this.formattingCapture &&
-      !this.formattingCapture.invalidated &&
-      !formatting.sameDictationFormattingTarget(
-        this.formattingCapture.target,
-        this.options.readFormattingTarget?.(),
+      (capture || this.review) &&
+      formatting.formattingTargetChanged(
+        capture,
+        this.options.readFormattingTarget,
+        this.connecting,
+        event,
       )
     ) {
-      this.formattingCapture.invalidated = true;
+      if (capture) {
+        capture.invalidated = true;
+      }
       this.invalidateFormattingReview();
     }
   };
@@ -787,9 +768,9 @@ export class ComposerDictationOwner extends EventTarget {
       this.cancellationListeners = new AbortController();
       const options = { signal: this.cancellationListeners.signal };
       listen(document, "keydown", this.handleDocumentKeyDown, options);
-      listen(document, "visibilitychange", this.handleFormattingWindowLeave, options);
-      listen(window, "blur", this.handleFormattingWindowLeave, options);
-      listen(document, "focusin", this.handleFormattingFocus, options);
+      listen(document, "visibilitychange", this.observeFormattingTarget, options);
+      listen(window, "blur", this.observeFormattingTarget, options);
+      listen(document, "focusin", this.observeFormattingTarget, options);
       listen(document, "input", this.observeFormattingTarget, options);
       listen(document, "selectionchange", this.observeFormattingTarget, options);
       listen(window, "storage", this.handleSettingsStorage, options);

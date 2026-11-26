@@ -423,15 +423,27 @@ suite.define(() => {
       },
     ));
 
-  it("confirms exact paragraph words in the native New Session editor", () =>
+  it("blocks New Session submission during finalization, then reviews and undoes paragraphs", () =>
     suite.withPage(
       { permissions: ["microphone"], viewport: { width: 1280, height: 1000 } },
       async ({ page }) => {
         const fixture = await open(page, { route: "new", explicit: true });
+        const draft = "Keep this draft until review";
+        await fixture.textarea.fill(draft);
+        const start = button(fixture.shell, "Start session");
+        await expect.poll(() => start.isEnabled()).toBe(true);
+        await fixture.textarea.selectText();
         await fixture.start();
         const text = "Opening paragraph new paragraph closing paragraph";
-        await fixture.finish(text);
+        await fixture.emit(text);
+        await button(page, "Finish and review").click();
+        await fixture.gateway.waitForRequest("talk.session.close");
+        await fixture.textarea.press("Enter");
         await fixture.noSend();
+        expect(await fixture.textarea.inputValue()).toBe(draft);
+        expect(await start.isDisabled()).toBe(true);
+        await fixture.emit(text, true);
+        await fixture.close();
         const panel = review(page);
         expect(await panel.getByRole("region", { name: "Semantic preview" }).textContent()).toBe(
           text,
@@ -461,7 +473,7 @@ suite.define(() => {
           .toBe("Opening paragraph\n\nclosing paragraph");
         await fixture.textarea.focus();
         await page.keyboard.press("ControlOrMeta+z");
-        await expect.poll(() => fixture.textarea.inputValue()).toBe("");
+        await expect.poll(() => fixture.textarea.inputValue()).toBe(draft);
         await fixture.noSend();
       },
     ));
@@ -576,8 +588,11 @@ suite.define(() => {
           expect(
             await panel.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
           ).toBe(true);
+          // Finish can leave the mouse over a newly revealed control. Its tooltip
+          // gets the first Escape, so move off the composer before testing review Escape.
+          await page.mouse.move((page.viewportSize()?.width ?? 320) / 2, 2);
           await capture(page, `after-${presentation}-controls`, fixture.shell, controls[2]);
-          await page.keyboard.press("Escape");
+          await controls[2].press("Escape");
           await panel.waitFor({ state: "detached" });
           await fixture.noSend();
         },

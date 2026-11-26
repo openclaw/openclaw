@@ -164,6 +164,27 @@ export function scopeChanged(
   );
 }
 
+/** A latched mic can keep recording while its captured insertion authority expires. */
+export function formattingTargetChanged(
+  capture: DictationFormattingCapture | undefined,
+  readTarget: ComposerDictationOwnerOptions["readFormattingTarget"],
+  connecting: boolean,
+  event?: Event,
+): boolean {
+  if (event?.type === "visibilitychange") {
+    return document.visibilityState === "hidden";
+  }
+  if (event?.type === "blur") {
+    return !connecting;
+  }
+  return Boolean(
+    !(event?.type === "focusin" && connecting) &&
+    capture &&
+    !capture.invalidated &&
+    !sameDictationFormattingTarget(capture.target, readTarget?.()),
+  );
+}
+
 export function commitReceipt(committed: boolean | void): DictationFormattingReceipt {
   return committed === true
     ? "committed"
