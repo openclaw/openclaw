@@ -155,11 +155,12 @@ function PaneHeaderContent(props: {
   sessionKey: string;
   agentId: string;
   presentation: PresentationValue;
+  pending?: boolean;
 }) {
   const presented = usePanePresentation(() => props.presentation);
   return (
     <>
-      <PaneHeaderView {...props.header} />
+      <PaneHeaderView {...props.header} pending={props.pending} />
       {props.notice ? renderChatTopbarNotices(props.notice) : undefined}
       <openclaw-plugin-contributions
         prop:kind="session-header"
@@ -185,7 +186,11 @@ export type PaneLayoutData = {
   };
 };
 
-function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions }) {
+function PaneContent(props: {
+  data: PaneLayoutData;
+  questions: ComposerQuestions;
+  chromePending: boolean;
+}) {
   const presented = usePanePresentation(() => props.data.overlays.presentation);
   // A restored tool-only layout needs no conversation root until first revealed.
   // Once mounted, keep its composer and transcript DOM through later panel changes.
@@ -197,10 +202,18 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
     <Show
       when={props.data.subagentHeader}
       fallback={
-        <Show when={props.data.header}>{(value) => <PaneHeaderContent {...value()} />}</Show>
+        <Show when={props.data.header}>
+          {(value) => <PaneHeaderContent {...value()} pending={props.chromePending} />}
+        </Show>
       }
     >
-      {(value) => <PaneSubagentHeader {...value()} />}
+      {(value) => (
+        <PaneSubagentHeader
+          {...value()}
+          title={props.chromePending ? "" : value().title}
+          stop={props.chromePending ? undefined : value().stop}
+        />
+      )}
     </Show>
   );
   const primary = (
@@ -210,6 +223,7 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
           props={props.data.primary.chat}
           application={props.data.primary.application}
           questions={props.questions}
+          composerPending={props.chromePending}
         />
       </div>
     </Show>
@@ -247,6 +261,7 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
 export function PaneLayout(props: {
   layout: PaneLayoutData | null;
   questions: ComposerQuestions;
+  chromePending: boolean;
 }): SolidJSX.Element {
   return (
     <Show
@@ -256,10 +271,20 @@ export function PaneLayout(props: {
       {(layout) => (
         <Show
           when={layout().subagentHeader}
-          fallback={<PaneContent data={layout()} questions={props.questions} />}
+          fallback={
+            <PaneContent
+              data={layout()}
+              questions={props.questions}
+              chromePending={props.chromePending}
+            />
+          }
         >
           <section class="chat-subagent-detail">
-            <PaneContent data={layout()} questions={props.questions} />
+            <PaneContent
+              data={layout()}
+              questions={props.questions}
+              chromePending={props.chromePending}
+            />
           </section>
         </Show>
       )}

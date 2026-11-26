@@ -43,10 +43,10 @@ const ContinueInTerminalDialog = lazy(() => import("./continue-in-terminal-dialo
   export: "ContinueInTerminalDialog",
 });
 
-export function PaneHeaderView(props: ChatPaneHeaderPresentation) {
+export function PaneHeaderView(props: ChatPaneHeaderPresentation & { pending?: boolean }) {
   return (
     <>
-      <ChatPaneHeader {...props.header} />
+      <ChatPaneHeader {...props.header} pending={props.pending} />
       <Show when={props.continueInTerminal}>
         {(dialog) => (
           <ChatLazyBoundary onClose={() => dialog().onClose()}>
@@ -183,7 +183,7 @@ function ChatPaneHeaderChrome(
         },
       ]}
       role="group"
-      aria-label={props.agent?.name ?? props.title}
+      aria-label={props.pending ? t("common.loading") : (props.agent?.name ?? props.title)}
       tabindex={-1}
       onMouseDown={beginNativeWindowDrag}
     >
@@ -203,82 +203,87 @@ function ChatPaneHeaderChrome(
             />
           </openclaw-tooltip>
         </Show>
-        <Show when={!props.agent || !props.mergedChrome || props.editing}>
-          <IdentityCrumbs {...props} />
-        </Show>
-        <Show when={!props.mergedChrome}>
-          <div class="chat-pane__identity-actions">
-            {props.sessionMenu}
-            <Show when={!props.gatewayStatus?.kind && deviceOffline() && props.machineName}>
-              <span
-                ref={(element) => {
-                  deviceStatus = element;
-                }}
-                class="chat-pane__device-offline"
-                role="status"
-                aria-live="polite"
-              >
-                <Icon name="monitor" />
-                <HoverMarquee
-                  class="chat-pane__device-name"
-                  content={props.machineName}
-                  options={{ loop: true, host: () => deviceStatus }}
-                />
-                <span aria-hidden="true">·</span>
-                <span>{t("sessionsView.machineOffline")}</span>
-              </span>
-            </Show>
-          </div>
-        </Show>
-        <Show when={props.publicAccessIndicator}>
-          {(indicator) => <ChatSessionPublicIndicator {...indicator()} />}
-        </Show>
-        {props.mergedChrome || props.detailsControl || hasSharingControl() ? undefined : (
-          <PersonAvatarLink
-            standalone
-            link={
-              props.showOwnerChip
-                ? personActivityLink(
-                    props.session?.owner?.actor.identity?.type === "profile"
-                      ? props.session.owner.actor.identity.id
-                      : undefined,
-                    props.personActivity,
-                    props.session?.owner?.actor.label,
-                  )
-                : null
+        <Show when={!props.pending}>
+          <Show when={!props.agent || !props.mergedChrome || props.editing}>
+            <IdentityCrumbs {...props} />
+          </Show>
+          <Show when={!props.mergedChrome}>
+            <div class="chat-pane__identity-actions">
+              {props.sessionMenu}
+              <Show when={!props.gatewayStatus?.kind && deviceOffline() && props.machineName}>
+                <span
+                  ref={(element) => {
+                    deviceStatus = element;
+                  }}
+                  class="chat-pane__device-offline"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <Icon name="monitor" />
+                  <HoverMarquee
+                    class="chat-pane__device-name"
+                    content={props.machineName}
+                    options={{ loop: true, host: () => deviceStatus }}
+                  />
+                  <span aria-hidden="true">·</span>
+                  <span>{t("sessionsView.machineOffline")}</span>
+                </span>
+              </Show>
+            </div>
+          </Show>
+          <Show when={props.publicAccessIndicator}>
+            {(indicator) => <ChatSessionPublicIndicator {...indicator()} />}
+          </Show>
+          {props.mergedChrome || props.detailsControl || hasSharingControl() ? undefined : (
+            <PersonAvatarLink
+              standalone
+              link={
+                props.showOwnerChip
+                  ? personActivityLink(
+                      props.session?.owner?.actor.identity?.type === "profile"
+                        ? props.session.owner.actor.identity.id
+                        : undefined,
+                      props.personActivity,
+                      props.session?.owner?.actor.label,
+                    )
+                  : null
+              }
+            >
+              {renderSessionOwnerChip(
+                props.showOwnerChip ? props.session?.owner?.actor : undefined,
+                "header",
+                props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
+                props.ownerViewing,
+              )}
+            </PersonAvatarLink>
+          )}
+          {!props.mergedChrome &&
+          !props.detailsControl &&
+          props.showOwnerChip &&
+          headerPeople().length ? (
+            <openclaw-viewer-facepile
+              class="chat-pane__participants"
+              prop:staticParticipants={headerPeople()}
+              prop:totalCount={Math.max(
+                props.session?.participantCount ?? 0,
+                headerPeople().length,
+              )}
+              prop:maxVisible={4}
+              prop:personActivity={props.personActivity}
+            />
+          ) : undefined}
+          <Show
+            when={
+              props.detailsControl?.nativePresentation !== "desktop"
+                ? props.placementControl
+                : undefined
             }
           >
-            {renderSessionOwnerChip(
-              props.showOwnerChip ? props.session?.owner?.actor : undefined,
-              "header",
-              props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
-              props.ownerViewing,
-            )}
-          </PersonAvatarLink>
-        )}
-        {!props.mergedChrome &&
-        !props.detailsControl &&
-        props.showOwnerChip &&
-        headerPeople().length ? (
-          <openclaw-viewer-facepile
-            class="chat-pane__participants"
-            prop:staticParticipants={headerPeople()}
-            prop:totalCount={Math.max(props.session?.participantCount ?? 0, headerPeople().length)}
-            prop:maxVisible={4}
-            prop:personActivity={props.personActivity}
-          />
-        ) : undefined}
-        <Show
-          when={
-            props.detailsControl?.nativePresentation !== "desktop"
-              ? props.placementControl
-              : undefined
-          }
-        >
-          {(placement) => <ChatPanePlacement {...placement()} />}
+            {(placement) => <ChatPanePlacement {...placement()} />}
+          </Show>
         </Show>
       </div>
-      <Show when={props.mergedChrome ? props.agent : undefined}>
+      <Show when={!props.pending && props.mergedChrome ? props.agent : undefined}>
         {(agent) => (
           <div class="chat-pane__header-agent">
             <AgentCrumb {...props} agent={agent()} />
@@ -312,106 +317,108 @@ function ChatPaneHeaderChrome(
           </button>
         </Show>
         <div class="chat-pane__actions">
-          <Show when={!props.mergedChrome}>
+          <Show when={!props.pending}>
+            <Show when={!props.mergedChrome}>
+              <Show
+                when={
+                  props.gatewayStatus?.kind && props.gatewayStatus.kind !== "connected"
+                    ? props.gatewayStatus.kind
+                    : null
+                }
+              >
+                {(kind) => (
+                  <openclaw-tooltip
+                    prop:content={
+                      props.gatewayStatus?.lastError
+                        ? redactLoginFailureError(props.gatewayStatus.lastError)
+                        : ""
+                    }
+                  >
+                    <div class="chat-pane__connection">
+                      {/* Visual only: the app shell's live region owns connection announcements. */}
+                      <span class="chat-pane__connection-state">
+                        <span
+                          class={[
+                            "chat-pane__connection-icon",
+                            {
+                              btn__spinner:
+                                kind() !== "offline" &&
+                                kind() !== "reload-required" &&
+                                kind() !== "suspended" &&
+                                kind() !== "suspending",
+                            },
+                          ]}
+                          aria-hidden="true"
+                        >
+                          <Show
+                            when={
+                              kind() === "offline" ||
+                              kind() === "reload-required" ||
+                              kind() === "suspended" ||
+                              kind() === "suspending"
+                            }
+                          >
+                            <Icon
+                              name={
+                                kind() === "offline" || kind() === "reload-required"
+                                  ? "alertTriangle"
+                                  : "pause"
+                              }
+                            />
+                          </Show>
+                        </span>
+                        {props.savedConversation
+                          ? t("chat.savedConversation", { status: t(`connection.${kind()}`) })
+                          : t(`connection.${kind()}`)}
+                      </span>
+                      <Show when={canRetryGatewayStatus(kind()) && props.gatewayStatus?.onRetry}>
+                        <span class="chat-pane__connection-divider" aria-hidden="true" />
+                        <button
+                          type="button"
+                          class="chat-pane__connection-retry"
+                          onClick={() => props.gatewayStatus?.onRetry?.()}
+                        >
+                          {t("common.retry")}
+                        </button>
+                      </Show>
+                    </div>
+                  </openclaw-tooltip>
+                )}
+              </Show>
+            </Show>
+            <Show when={!props.narrow && (props.mergedChrome || !props.detailsControl)}>
+              <RunningSubagents count={props.runningSubagentCount} />
+            </Show>
+            <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
+            <Show when={incognito()}>
+              <openclaw-tooltip
+                prop:content={t("sessionsView.incognitoDescriptionTooltip")}
+                placement="bottom"
+                prop:openOnClick={true}
+              >
+                <IconButton
+                  class="chat-pane__incognito"
+                  icon="incognito"
+                  label={t("sessionsView.incognitoLabel")}
+                  tooltip={false}
+                />
+              </openclaw-tooltip>
+            </Show>
+            <Show when={!props.mergedChrome}>
+              <Show when={props.presence}>
+                {(presence) => <PaneHeaderPresence {...presence()} />}
+              </Show>
+            </Show>
             <Show
-              when={
-                props.gatewayStatus?.kind && props.gatewayStatus.kind !== "connected"
-                  ? props.gatewayStatus.kind
-                  : null
+              when={props.sharingControl}
+              fallback={
+                <Show when={!props.narrow && props.sharingPlaceholder}>
+                  {(display) => <ChatSessionSharingPlaceholder display={display()} />}
+                </Show>
               }
             >
-              {(kind) => (
-                <openclaw-tooltip
-                  prop:content={
-                    props.gatewayStatus?.lastError
-                      ? redactLoginFailureError(props.gatewayStatus.lastError)
-                      : ""
-                  }
-                >
-                  <div class="chat-pane__connection">
-                    {/* Visual only: the app shell's live region owns connection announcements. */}
-                    <span class="chat-pane__connection-state">
-                      <span
-                        class={[
-                          "chat-pane__connection-icon",
-                          {
-                            btn__spinner:
-                              kind() !== "offline" &&
-                              kind() !== "reload-required" &&
-                              kind() !== "suspended" &&
-                              kind() !== "suspending",
-                          },
-                        ]}
-                        aria-hidden="true"
-                      >
-                        <Show
-                          when={
-                            kind() === "offline" ||
-                            kind() === "reload-required" ||
-                            kind() === "suspended" ||
-                            kind() === "suspending"
-                          }
-                        >
-                          <Icon
-                            name={
-                              kind() === "offline" || kind() === "reload-required"
-                                ? "alertTriangle"
-                                : "pause"
-                            }
-                          />
-                        </Show>
-                      </span>
-                      {props.savedConversation
-                        ? t("chat.savedConversation", { status: t(`connection.${kind()}`) })
-                        : t(`connection.${kind()}`)}
-                    </span>
-                    <Show when={canRetryGatewayStatus(kind()) && props.gatewayStatus?.onRetry}>
-                      <span class="chat-pane__connection-divider" aria-hidden="true" />
-                      <button
-                        type="button"
-                        class="chat-pane__connection-retry"
-                        onClick={() => props.gatewayStatus?.onRetry?.()}
-                      >
-                        {t("common.retry")}
-                      </button>
-                    </Show>
-                  </div>
-                </openclaw-tooltip>
-              )}
+              {(sharing) => <ChatSessionSharing {...sharing()} />}
             </Show>
-          </Show>
-          <Show when={!props.narrow && (props.mergedChrome || !props.detailsControl)}>
-            <RunningSubagents count={props.runningSubagentCount} />
-          </Show>
-          <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
-          <Show when={incognito()}>
-            <openclaw-tooltip
-              prop:content={t("sessionsView.incognitoDescriptionTooltip")}
-              placement="bottom"
-              prop:openOnClick={true}
-            >
-              <IconButton
-                class="chat-pane__incognito"
-                icon="incognito"
-                label={t("sessionsView.incognitoLabel")}
-                tooltip={false}
-              />
-            </openclaw-tooltip>
-          </Show>
-          <Show when={!props.mergedChrome}>
-            <Show when={props.presence}>
-              {(presence) => <PaneHeaderPresence {...presence()} />}
-            </Show>
-          </Show>
-          <Show
-            when={props.sharingControl}
-            fallback={
-              <Show when={!props.narrow && props.sharingPlaceholder}>
-                {(display) => <ChatSessionSharingPlaceholder display={display()} />}
-              </Show>
-            }
-          >
-            {(sharing) => <ChatSessionSharing {...sharing()} />}
           </Show>
           {props.details}
           {/* The observed row (and its menu) retires offline; cached Details stays local. */}
@@ -441,7 +448,7 @@ function ChatPaneHeaderChrome(
               </Show>
             </button>
           </Show>
-          <Show when={props.mergedChrome}>{props.sessionMenu}</Show>
+          <Show when={!props.pending && props.mergedChrome}>{props.sessionMenu}</Show>
           <Show when={props.mergedChrome}>
             <ChatPaneLayoutMenu {...props} mobile />
           </Show>
@@ -478,7 +485,7 @@ function ChatPaneHeaderChrome(
           />
         </Show>
       </div>
-      <Show when={props.narrow && (props.mergedChrome || !props.detailsControl)}>
+      <Show when={!props.pending && props.narrow && (props.mergedChrome || !props.detailsControl)}>
         <RunningSubagents count={props.runningSubagentCount} />
       </Show>
     </div>

@@ -14,5 +14,7 @@
 # contained the two recovered-summary readiness-wait lines). Add 205 lines for
 # the shared cold-pane fixture and descriptor/history arrival, cached roster,
 # absent/new, failed/disconnected, and retired/parked-owner regression cases.
-# Full branch growth is 1076 lines; the shared allowance remains 400.
-676
+# Add 89 lines for accepted first-turn handoff, pending Incognito transcript,
+# distinct parked presentation lifetimes, and retained Details during admission.
+# Full branch growth is 1165 lines; the shared allowance remains 400.
+765

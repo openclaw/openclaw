@@ -133,6 +133,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       this.resourceSessionObservation()?.hasObserved ||
       isChatSessionProvenAbsent(state) ||
       state.chatSubmissions?.creation?.sessionKey === state.sessionKey ||
+      state.chatSubmissions?.readAcceptedCreate()?.creation.sessionKey === state.sessionKey ||
       state.hasPendingInitialTurn?.(state.sessionKey)
     ) {
       return false;

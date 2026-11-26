@@ -45,14 +45,15 @@ export function ChatPaneMobileChrome(props: {
         <ChatPaneMobileHeader
           active={props.mobile}
           onHeaderRef={props.header.onHeaderRef}
-          title={props.header.title}
+          title={props.header.pending ? "" : props.header.title}
           titlePending={
-            props.header.titlePending ??
-            (!props.header.catalog &&
-              isSessionTitlePending(props.header.session?.key ?? "", props.header.session))
+            props.header.pending ||
+            (props.header.titlePending ??
+              (!props.header.catalog &&
+                isSessionTitlePending(props.header.session?.key ?? "", props.header.session)))
           }
-          project={props.project}
-          publicAccess={props.header.publicAccessIndicator}
+          project={<Show when={!props.header.pending}>{props.project}</Show>}
+          publicAccess={props.header.pending ? undefined : props.header.publicAccessIndicator}
           incognito={props.incognito}
           navDrawerOpen={props.header.navDrawerOpen ?? false}
           onOpenDetails={(source) => props.header.onOpenDetails?.(source)}
@@ -78,7 +79,10 @@ export function ChatPaneMobileChrome(props: {
           people={
             <Show
               when={
-                mobileActivated() && !props.incognito && props.header.mobilePeople?.header.length
+                !props.header.pending &&
+                mobileActivated() &&
+                !props.incognito &&
+                props.header.mobilePeople?.header.length
               }
             >
               <Loading>
@@ -93,7 +97,7 @@ export function ChatPaneMobileChrome(props: {
               </Loading>
             </Show>
           }
-          actions={<Show when={props.mobile}>{props.sessionMenu}</Show>}
+          actions={<Show when={!props.header.pending && props.mobile}>{props.sessionMenu}</Show>}
         />
         <Show when={props.mobile}>{props.details}</Show>
       </div>

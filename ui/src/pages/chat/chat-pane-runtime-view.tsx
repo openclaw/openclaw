@@ -385,7 +385,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
           sources.forEach((source) => source?.read());
           composerCapabilities()?.read();
           prepareRender();
-          return runtime.render(providerReview, readRealtimeTalkConversation);
+          return {
+            ...runtime.render(providerReview, readRealtimeTalkConversation),
+            sessionPresentationPending: runtime.initialSessionPresentationPending(),
+          };
         },
         () => runtime.presented && runtime.presentation.documentVisible,
       );
@@ -408,15 +411,14 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
           });
         });
       }
-      // Admit a cold target's header/composer from its canonical facts, then retain
-      // the mounted view across refreshes. Cached snapshots keep their immediate path.
-      const constructed = createMemo<boolean>((previous) => {
-        frame();
-        return previous || (layoutReady() && !runtime.initialSessionPresentationPending());
+      // Only session chrome waits for its first facts. Transcript and accepted local
+      // turns must mount while startup is pending; later refreshes cannot re-hide chrome.
+      const sessionReady = createMemo<boolean>((previous) => {
+        return previous || !frame().sessionPresentationPending;
       });
       return (
         <Show
-          when={constructed()}
+          when={layoutReady()}
           fallback={<LoadingState route composer={runtime.ownsRouteComposer} />}
         >
           <MountedPane />
@@ -453,7 +455,11 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
             prop:agentId={runtime.agentId ?? parseAgentSessionKey(runtime.sessionKey)?.agentId}
             prop:sessionKey={runtime.sessionKey}
           >
-            <PaneLayout layout={frame().layout} questions={questions} />
+            <PaneLayout
+              layout={frame().layout}
+              questions={questions}
+              chromePending={!sessionReady()}
+            />
             <Show when={reviewVisited()}>
               <Errored
                 fallback={(error, reset) => (

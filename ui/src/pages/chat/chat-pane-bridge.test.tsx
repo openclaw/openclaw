@@ -12,6 +12,8 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { completeInitialSessionTurn } from "../new-session/initial-session-turn-handoff.ts";
+import { StartedSessionNavigation } from "../new-session/started-session-navigation.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import type { ChatPaneProps } from "./chat-pane.tsx";
 import "./chat-pane.tsx";
@@ -45,7 +47,10 @@ function mountedFixture(
 
 function mountPane(context: ApplicationContext, props: Partial<ChatPaneProps>) {
   const container = document.body.appendChild(createApplicationContextProvider(context));
-  const pane = Object.assign(document.createElement("openclaw-chat-pane"), props);
+  const pane = Object.assign(document.createElement("openclaw-chat-pane"), {
+    presentationId: crypto.randomUUID(),
+    ...props,
+  });
   container.append(pane);
   onTestFinished(() => container.remove());
   return { container, pane };
@@ -53,11 +58,23 @@ function mountPane(context: ApplicationContext, props: Partial<ChatPaneProps>) {
 
 const composerSelector = ".agent-chat__composer-combobox textarea";
 async function coldPane(
-  outcome: "archived" | "cached" | "active" | "absent" | "failed" | "creating",
+  outcome:
+    | "archived"
+    | "cached"
+    | "active"
+    | "absent"
+    | "failed"
+    | "creating"
+    | "accepted"
+    | "incognito",
 ) {
   installTranscriptDomMocks();
   onTestFinished(resetTranscriptTestDom);
-  const sessionKey = "agent:main:chat:11111111-1111-4111-8111-111111111111";
+  const sessionKey =
+    outcome === "incognito"
+      ? "agent:main:dashboard:incognito-expired"
+      : "agent:main:chat:11111111-1111-4111-8111-111111111111";
+  const absent = outcome === "absent" || outcome === "incognito";
   const row = {
     key: sessionKey,
     kind: "direct" as const,
@@ -83,20 +100,21 @@ async function coldPane(
     }
     await history.promise;
     if (outcome === "failed") throw new Error("Synthetic history unavailable");
+    if (outcome === "incognito") return { sessionKey, messages: [] };
     return {
       messages: [],
       sessionInfo: outcome === "absent" ? undefined : row,
       sessionId: outcome === "absent" ? null : row.sessionId,
     };
   };
-  const fixture = createMountedPanes(outcome === "absent" ? [] : [row], "main", roster.promise, {
+  const fixture = createMountedPanes(absent ? [] : [row], "main", roster.promise, {
     "sessions.describe": async (_method, raw) => {
       if (asOptionalRecord(raw)?.key !== sessionKey) {
         await successor.promise;
         return { session: null };
       }
       await descriptor.promise;
-      return { session: outcome === "absent" ? null : row };
+      return { session: absent ? null : row };
     },
     "chat.startup": readHistory,
     "chat.history": readHistory,
@@ -121,6 +139,41 @@ async function coldPane(
   }
   const gateway = fixture.context.gateway;
   const request = vi.spyOn(expectDefined(gateway.snapshot.client, "client"), "request");
+  if (outcome === "accepted") {
+    vi.spyOn(gateway, "setSessionKey").mockImplementation((sessionKey) =>
+      fixture.pane.applyGatewaySnapshot({ ...gateway.snapshot, sessionKey }),
+    );
+    const clearCreate = fixture.context.chatSubmissions.beginCreate({
+      creation: { sessionKey, admitted: true },
+      message: null,
+      canDisplay: () => true,
+    });
+    Object.assign(fixture.context, {
+      router: { getState: () => ({ matches: [] }) },
+      navigateAndWait: async () => {},
+    });
+    await completeInitialSessionTurn({
+      context: fixture.context,
+      client: expectDefined(gateway.snapshot.client, "client"),
+      agentId: "main",
+      result: {
+        key: sessionKey,
+        entry: row,
+        initialRun: { status: "started", runId: "first-turn" },
+      },
+      turn: { text: "Accepted initial question", attachments: [], createdAt: 1 },
+      instant: undefined,
+      navigation: new StartedSessionNavigation(),
+      isCurrent: () => true,
+      clearDraft: async () => clearCreate(),
+      completeInBackground: () => false,
+      finishNavigation: () => {},
+    });
+    expect(fixture.context.chatSubmissions.creation).toBeUndefined();
+    expect(fixture.context.chatSubmissions.readAcceptedCreate()?.creation.sessionKey).toBe(
+      sessionKey,
+    );
+  }
   const disk = vi
     .spyOn(snapshotDatabase, "readStoredChatSnapshotRecord")
     .mockResolvedValue(undefined);
@@ -210,6 +263,27 @@ it("keeps an admitted creation responsive while its first reads are pending", as
   expect(Boolean(pane.querySelector(".agent-chat__input"))).toBe(true);
 });
 
+it("keeps an accepted first turn visible after the provisional create retires", async () => {
+  const { pane, descriptor, history } = await coldPane("accepted");
+  await waitForSolid(() =>
+    expect(pane.querySelector(".chat-group.user")?.textContent ?? "").toContain(
+      "Accepted initial question",
+    ),
+  );
+  expect(pane.querySelector(".agent-chat__input")).not.toBeNull();
+  descriptor.resolve();
+  history.resolve();
+});
+
+it("mounts the empty Incognito transcript before its deferred startup settles", async () => {
+  const { pane, history } = await coldPane("incognito");
+  await waitForSolid(() => expect(pane.querySelector(".chat-thread-inner")).not.toBeNull());
+  expect(pane.querySelector(".chat-thread openclaw-panel-loading-skeleton")).toBeNull();
+  expect(pane.querySelector(".agent-chat__input")).toBeNull();
+  history.resolve();
+  await waitForSolid(() => expect(pane.textContent).toContain("Incognito session expired"));
+});
+
 it("reveals disconnection instead of holding a cold descriptor forever", async () => {
   const { pane, disconnect, descriptor, history } = await coldPane("archived");
   disconnect();
@@ -250,6 +324,19 @@ it.each(["retired", "parked"] as const)(
     expect(next.textContent).not.toContain(row.label);
     expect(Boolean(next.querySelector(".agent-chat__input"))).toBe(false);
     if (mode === "retired") expect(pane.children).toHaveLength(0);
+    else {
+      // Parked layout and admission facts stay frozen together until reveal.
+      expect(pane.querySelector(".chat-footer")?.getAttribute("aria-busy")).toBe("true");
+      expect(pane.querySelector(".agent-chat__disabled-banner--replacement")).toBeNull();
+      Object.assign(next, { active: false, presented: false });
+      Object.assign(pane, { active: true, presented: true });
+      await waitForSolid(() =>
+        expect(pane.querySelector(".agent-chat__disabled-banner--replacement")).not.toBeNull(),
+      );
+      expect(next.querySelector(".agent-chat__input")).toBeNull();
+      Object.assign(pane, { active: false, presented: false });
+      Object.assign(next, { active: true, presented: true });
+    }
     successor.resolve();
     await waitForSolid(() => expect(Boolean(next.querySelector(".agent-chat__input"))).toBe(true));
   },

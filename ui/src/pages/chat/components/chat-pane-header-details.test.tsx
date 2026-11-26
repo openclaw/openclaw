@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
 
-it("retains closed Details through header updates without reading transcript facts", () => {
+it.each([false, true])("retains Details while header facts settle (pending=%s)", (pending) => {
   let reads = 0;
   const chat = (sessionKey: string): ChatDetailsProps => ({
     sessionKey,
@@ -26,7 +26,7 @@ it("retains closed Details through header updates without reading transcript fac
     presentation: true,
     setRef,
   };
-  const mounted = mountChatPaneHeader([], { detailsControl });
+  const mounted = mountChatPaneHeader([], { detailsControl, pending });
   const selector = ".chat-pane__header-trailing > .chat-pane__actions > openclaw-chat-details";
   const details = mounted.container.querySelector<HTMLElement>(selector);
   expect(details).not.toBeNull();
@@ -38,6 +38,7 @@ it("retains closed Details through header updates without reading transcript fac
   expect(elements.frame.querySelector(".chat-details")).not.toBeNull();
 
   mounted.update({
+    pending: false,
     detailsControl: { ...detailsControl, chat: chat("agent:main:second") },
   });
   expect(reads).toBe(0);

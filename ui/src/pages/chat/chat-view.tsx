@@ -361,23 +361,24 @@ export function ChatView(input: {
   props: ChatProps;
   application?: ApplicationContext;
   questions: ComposerQuestions;
+  composerPending?: boolean;
 }) {
   return (
-    <Show
-      when={input.application}
-      keyed
-      fallback={<ChatContent props={input.props} questions={input.questions} />}
-    >
+    <Show when={input.application} keyed fallback={<ChatContent {...input} />}>
       {(application) => (
         <ApplicationProvider value={application}>
-          <ChatContent props={input.props} questions={input.questions} />
+          <ChatContent {...input} />
         </ApplicationProvider>
       )}
     </Show>
   );
 }
 
-function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) {
+function ChatContent(input: {
+  props: ChatProps;
+  questions: ComposerQuestions;
+  composerPending?: boolean;
+}) {
   // Composer sizing needs the viewport even before the virtualizer has rows.
   const { bind: bindTranscriptViewport, read: getTranscriptElement } =
     connectedElementRef<HTMLDivElement>();
@@ -634,33 +635,36 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                     <div
                       id={composerTargetId}
                       class="chat-footer"
+                      aria-busy={input.composerPending ? "true" : undefined}
                       onBlur={(event) => event.currentTarget.removeAttribute("tabindex")}
                       ref={[bindComposerFooter, elementRef(input.props.onFooterElementRef)]}
                       onWheel={forwardWheel}
                     >
-                      <TemplateSetupComposer chat={input.props}>
-                        <ChatSurface
-                          binding={{
-                            "prop:surface": "composer",
-                            "prop:props": {
-                              sessionKey: input.props.sessionKey,
-                              agentId: input.props.currentAgentId,
-                              draft: input.props.draft,
-                              canSend: input.props.canSend && !input.props.submitDisabledReason,
-                              sending: input.props.sending,
-                              disabledReason:
-                                input.props.submitDisabledReason ?? input.props.disabledReason,
-                              setDraft: input.props.onDraftChange,
-                              send: async () => input.props.onSend(),
-                              abort: input.props.onAbort,
-                            },
-                          }}
-                          viewProps={viewProps()}
-                          view={ChatComposerView}
-                          companion={ChatComposerCompanion}
-                          replacementRef={replacementComposer.bind}
-                        />
-                      </TemplateSetupComposer>
+                      <Show when={!input.composerPending}>
+                        <TemplateSetupComposer chat={input.props}>
+                          <ChatSurface
+                            binding={{
+                              "prop:surface": "composer",
+                              "prop:props": {
+                                sessionKey: input.props.sessionKey,
+                                agentId: input.props.currentAgentId,
+                                draft: input.props.draft,
+                                canSend: input.props.canSend && !input.props.submitDisabledReason,
+                                sending: input.props.sending,
+                                disabledReason:
+                                  input.props.submitDisabledReason ?? input.props.disabledReason,
+                                setDraft: input.props.onDraftChange,
+                                send: async () => input.props.onSend(),
+                                abort: input.props.onAbort,
+                              },
+                            }}
+                            viewProps={viewProps()}
+                            view={ChatComposerView}
+                            companion={ChatComposerCompanion}
+                            replacementRef={replacementComposer.bind}
+                          />
+                        </TemplateSetupComposer>
+                      </Show>
                     </div>
                   </div>
                 </div>
