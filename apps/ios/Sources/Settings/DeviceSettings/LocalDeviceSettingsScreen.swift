@@ -25,6 +25,8 @@ struct LocalDeviceSettingsScreen: View {
     @State private var consent = IOSDeviceSettingsConsentPresenter()
     @State private var consentAnchor = UIView(frame: .zero)
     @State private var permissions = IOSDeviceSettingsPermissions()
+    /// Empty is Automatic. Talk reads it each time it starts listening (TalkSpeechLocale).
+    @AppStorage(TalkSpeechLocale.phoneSelectionKey) private var talkLanguage = ""
 
     private var snapshot: DeviceSettingsSnapshot {
         IOSDeviceSettingsSnapshotProducer(appModel: self.appModel, appearanceModel: self.appearanceModel)
@@ -152,16 +154,40 @@ struct LocalDeviceSettingsScreen: View {
                 key: .speakerphoneEnabled,
                 value: snapshot.voice.speakerphoneEnabled,
                 onlyOff: onlyOff)
+            self.talkLanguagePicker
         } header: {
             SettingsSectionTitle("Voice")
         } footer: {
             Text(
                 """
                 Voice needs a supported device and microphone access. \
-                Change the provider, voice, and speech language in OpenClaw.
+                Change the provider and voice in OpenClaw.
                 """)
                 .font(SettingsType.footnote)
         }
+    }
+
+    /// The language Talk listens in: Automatic, the phone's own languages, then every other one the
+    /// recognizer supports, each named in its own language.
+    private var talkLanguagePicker: some View {
+        let choices = TalkSpeechLocale.choices()
+        return Picker(selection: self.$talkLanguage) {
+            Text("Automatic").font(OpenClawType.body).tag("")
+            Section {
+                ForEach(choices.phone) { choice in
+                    Text(verbatim: choice.name).font(OpenClawType.body).tag(choice.id)
+                }
+            }
+            Section {
+                ForEach(choices.others) { choice in
+                    Text(verbatim: choice.name).font(OpenClawType.body).tag(choice.id)
+                }
+            }
+        } label: {
+            Text("Language").font(SettingsType.label)
+        }
+        .pickerStyle(.navigationLink)
+        .accessibilityIdentifier("LocalDeviceSettings.talkLanguage")
     }
 
     /// Each permission is a short row with its iOS state as the value. A permission iOS has not

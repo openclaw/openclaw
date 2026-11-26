@@ -1505,8 +1505,10 @@ final class TalkModeManager {
             ])
         }
 
+        // Read at every start of listening, so a Language change applies to the next thing said.
         let resolvedSpeech = TalkSpeechLocale.makeRecognizer(
-            gatewaySelection: self.gatewaySpeechLocaleID)
+            gatewaySelection: self.gatewaySpeechLocaleID,
+            automaticCandidates: TalkSpeechLocale.phoneAutomaticCandidates)
         self.speechRecognizer = resolvedSpeech.recognizer
         guard let recognizer = speechRecognizer else {
             throw NSError(domain: "TalkMode", code: 1, userInfo: [
