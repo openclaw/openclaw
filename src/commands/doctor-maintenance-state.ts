@@ -24,9 +24,22 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { assertDoctorAgentLeaseAdmission } from "./doctor-agent-lease-refusal.js";
 import { acquireDoctorGatewayMaintenanceOwner } from "./doctor-maintenance-foreground.js";
+import {
+  traceDoctorMaintenancePending,
+  type DoctorMaintenancePending,
+} from "./doctor-maintenance-pending.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
 import { captureFreshDoctorMigrationTables } from "./doctor-migration-backup.js";
 import { sanitizeDoctorNote } from "./doctor/emit-notes.js";
+
+/** Reads only path metadata (lstat) of the legacy and current state roots. */
+export async function checkDoctorLegacyStateDirPending(
+  env: NodeJS.ProcessEnv,
+): Promise<DoctorMaintenancePending> {
+  const { resolvePendingLegacyStateDirMigrationPaths } =
+    await import("../infra/state-migrations.state-dir.js");
+  return resolvePendingLegacyStateDirMigrationPaths({ env }) ? "work" : "none";
+}
 
 /** Database custody can change paths while stopped-service custody remains with Doctor. */
 export async function createDoctorMaintenanceState(options: {
@@ -282,6 +295,9 @@ export async function createDoctorMaintenanceState(options: {
         );
         liveAuthorityReadsAdmitted = true;
       }
+      await traceDoctorMaintenancePending("legacy-state-dir", () =>
+        checkDoctorLegacyStateDirPending(env),
+      );
       const { prepareLegacyStateDirMigration } =
         await import("../infra/state-migrations.state-dir.js");
       const pending = resolvePendingLegacyStateDirMigrationPaths({ env });
