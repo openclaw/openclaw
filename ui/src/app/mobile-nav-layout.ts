@@ -14,6 +14,15 @@ const hasNativeShellClass = (...classNames: string[]) =>
     ...classNames,
   ].some((className) => document.documentElement.classList.contains(className));
 
+export function usesBrowserDrawer(mobileNavLayout: boolean): boolean {
+  return (
+    mobileNavLayout &&
+    !hasNativeShellClass("openclaw-native-desktop") &&
+    !isNativeEmbedHost() &&
+    !isNativeWebChromeHost()
+  );
+}
+
 export function mobileNavLayoutMediaQuery(): string {
   if (isNativeWebChromeHost()) {
     return `(max-width: ${NATIVE_WEB_CHROME_MOBILE_NAV_MAX_WIDTH}px)`;
@@ -22,7 +31,7 @@ export function mobileNavLayoutMediaQuery(): string {
 }
 
 export function isMobileNavLayout(): boolean {
-  return globalThis.matchMedia?.(mobileNavLayoutMediaQuery()).matches ?? false;
+  return globalThis.matchMedia(mobileNavLayoutMediaQuery()).matches;
 }
 
 function usesChatHeader(routeId: RouteId): boolean {
@@ -31,7 +40,7 @@ function usesChatHeader(routeId: RouteId): boolean {
     // The draft wears chat's header on phones, so opening a session moves nothing.
     (routeId === "new-session" &&
       !isNativeEmbedHost() &&
-      (globalThis.matchMedia?.(FLOATING_HEADER_MEDIA_QUERY).matches ?? false))
+      globalThis.matchMedia(FLOATING_HEADER_MEDIA_QUERY).matches)
   );
 }
 
@@ -64,7 +73,7 @@ export function shouldFloatShellHeader(params: {
     params.routeId !== "new-session" &&
     !params.onboarding &&
     !hasNativeShellClass("openclaw-native-desktop") &&
-    (globalThis.matchMedia?.(FLOATING_HEADER_MEDIA_QUERY).matches ?? false)
+    globalThis.matchMedia(FLOATING_HEADER_MEDIA_QUERY).matches
   );
 }
 

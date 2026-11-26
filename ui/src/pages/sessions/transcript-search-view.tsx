@@ -10,13 +10,18 @@ import {
   onSettled,
   Show,
 } from "solid-js";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { RetryAction } from "../../components/solid/settings-ui.tsx";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { TranscriptSearchResult, TranscriptSearchState } from "./transcript-search.ts";
+import {
+  TRANSCRIPT_SEARCH_QUERY_MAX_LENGTH,
+  type TranscriptSearchResult,
+  type TranscriptSearchState,
+} from "./transcript-search.ts";
 
 registerSessionOrganizationEnglish();
 
@@ -40,7 +45,8 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
   let trigger: HTMLButtonElement | undefined;
   const [expanded, setExpanded] = createSignal(false);
   const query = createMemo(() => props.transcriptSearchQuery);
-  const hasQuery = () => query().trim().length > 0;
+  const queryLength = createMemo(() => query().trim().length);
+  const tooLong = () => queryLength() > TRANSCRIPT_SEARCH_QUERY_MAX_LENGTH;
   // The retained controls observe pending work without holding the results boundary.
   const search = createDeferred(() => props.transcriptSearch, { loadingValue: null });
   const loading = () => isPending(search);
@@ -51,7 +57,7 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
       aria-label={t("sessionsView.transcriptSearchTitle")}
       onSubmit={(event: SubmitEvent) => {
         event.preventDefault();
-        if (props.transcriptSearchAvailable && hasQuery() && !loading()) {
+        if (props.transcriptSearchAvailable && queryLength() > 0 && !tooLong() && !loading()) {
           props.onTranscriptSearch();
         } else {
           input?.focus({ preventScroll: true });
@@ -64,7 +70,8 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
             ref={(element) => (input = element)}
             id="sessions-transcript-search-input"
             type="search"
-            maxlength="4096"
+            aria-invalid={tooLong() ? "true" : undefined}
+            aria-describedby={tooLong() ? "sessions-transcript-search-length" : undefined}
             aria-label={t("sessionsView.transcriptSearchInputLabel")}
             placeholder={t("sessionsView.transcriptSearchPlaceholder")}
             value={query()}
@@ -86,7 +93,7 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
               }
             }}
           />
-          <Show when={hasQuery()}>
+          <Show when={queryLength() > 0}>
             <button
               class="sessions-transcript-search__clear"
               type="button"
@@ -100,12 +107,18 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
             </button>
           </Show>
         </div>
+        <Show when={tooLong()}>
+          <span id="sessions-transcript-search-length" role="status">
+            {queryLength()} / {TRANSCRIPT_SEARCH_QUERY_MAX_LENGTH}
+          </span>
+        </Show>
       </Show>
-      <button
-        ref={(element) => (trigger = element)}
-        class="btn btn--xs btn--icon sessions-toolbar__icon sessions-transcript-search__trigger"
+      <IconButton
+        ref={(element: HTMLButtonElement) => (trigger = element)}
+        class="sessions-toolbar__icon sessions-transcript-search__trigger"
         type="submit"
-        aria-label={
+        icon={props.phoneLayout ? "textSearch" : "search"}
+        label={
           props.transcriptSearchAvailable
             ? t("sessionsView.transcriptSearchTitle")
             : t("sessionsView.transcriptSearchUnavailable")
@@ -120,9 +133,7 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
             onSettled(() => input?.focus({ preventScroll: true }));
           }
         }}
-      >
-        <Icon name={props.phoneLayout ? "textSearch" : "search"} />
-      </button>
+      />
     </form>
   );
 }

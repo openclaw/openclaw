@@ -2,6 +2,7 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.chat.PERSONAL_SESSION_PINS_CAPABILITY
 import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -151,6 +152,7 @@ class ConnectionManager internal constructor(
           // Android does not consume presence rosters; accept deltas to avoid unused full snapshots.
           add("presence-deltas")
           add("health-summary")
+          add(PERSONAL_SESSION_PINS_CAPABILITY)
         },
       commands = emptyList(),
       permissions = emptyMap(),

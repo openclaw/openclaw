@@ -8,6 +8,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { cronJobReadView } from "../../cron/job-read-view.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import type { CronJob } from "../../cron/types.js";
@@ -120,6 +121,69 @@ describe("automations output contract", () => {
     onTestFinished(clearRuntimeConfigSnapshot);
   });
 
+  it("composes a trusted plan and add receipt using real Code Mode bindings", async () => {
+    const saved = cronJobReadView(job);
+    const gatewayCall = vi.fn().mockResolvedValue(saved);
+    mockGateway(gatewayCall);
+    const tool = createCronTool({ requireCreationPlan: true });
+    const { createSubscribedCodeModeHarness } =
+      await import("../code-mode.bridge.lifecycle.test-support.js");
+    const { onAgentEventForRun } = await import("../../infra/agent-events.js");
+    const harness = createSubscribedCodeModeHarness({ name: "automation-create" });
+    onTestFinished(() => harness.dispose());
+    onTestFinished(resetCodeModeTestState);
+    const lifecycle: Array<Record<string, unknown>> = [];
+    onTestFinished(
+      onAgentEventForRun(harness.runId, (e) => {
+        if (e.stream === "tool" && e.data.name === tool.name) {
+          lifecycle.push(e.data);
+        }
+      }),
+    );
+    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, tool] });
+    const run = (code: string) =>
+      runUntilCompleted({ execTool: harness.tools[0]!, waitTool: harness.tools[1]!, code });
+    const composed =
+      await run(`const plan = await automations({action:"plan",names:["Invoice check"]});
+      const result = await automations({action:"add",job:${JSON.stringify(createJob)}});
+      return {plan, receipt:result.automationCreation};`);
+    expect(composed).toMatchObject({
+      status: "completed",
+      value: {
+        plan: { type: "automation_creation_plan", planId: expect.any(String) },
+        receipt: {
+          type: "automation_creation_result",
+          slotId: "1",
+          jobId: job.id,
+          status: "created",
+        },
+      },
+    });
+    expect(gatewayCall).toHaveBeenCalledTimes(1);
+    const nested = await harness.readNestedActivities();
+    expect(nested.map((m) => m.details)).toMatchObject([
+      {
+        toolName: tool.name,
+        input: { action: "plan" },
+        isError: false,
+        result: { details: { type: "automation_creation_plan" } },
+      },
+      {
+        toolName: tool.name,
+        input: { action: "add", job: { name: job.name } },
+        isError: false,
+        result: { details: { automationCreation: { jobId: job.id, status: "created" } } },
+      },
+    ]);
+    expect(lifecycle.filter((e) => e.phase === "result")).toMatchObject([
+      { isError: false, result: { details: { type: "automation_creation_plan" } } },
+      {
+        isError: false,
+        result: { details: { automationCreation: { jobId: job.id, status: "created" } } },
+      },
+    ]);
+  });
+
   it("keeps older full inventories valid after compact fallback", async () => {
     const gatewayCall = vi
       .fn()
@@ -144,6 +208,50 @@ describe("automations output contract", () => {
       inventoryHint: expect.stringContaining("Disabled automations are omitted"),
     });
     expectOutput(tool, result.details);
+  });
+
+  it("accepts the reauthorization flags that Gateway projections emit", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    onTestFinished(() => cron.stop());
+    const ownerSessionKey = "agent:main:telegram:direct:creator";
+    const blocked: CronJob = {
+      ...job,
+      id: "dm-capped-watcher",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "Check the queue", toolsAllow: ["read"] },
+      owner: { sessionKey: ownerSessionKey, accountId: "work" },
+      scheduledToolPolicy: { version: 1, mode: "account", ownerSessionKey, ownerAccountId: "work" },
+    };
+    const source = {
+      ...page,
+      jobs: [freezeJsonSnapshot(structuredClone(blocked))],
+      snapshotRevision: "blocked-inventory",
+    };
+    const compactList = { ...source, jobs: projectCronListJobs(cron, source, true) };
+    const details = cronJobReadView(blocked);
+    expect(compactList.jobs[0]).toMatchObject({ reauthorizationRequired: true });
+    expect(details).toMatchObject({ reauthorizationRequired: true });
+    const gatewayCall = vi
+      .fn()
+      .mockResolvedValueOnce(await cron.status())
+      .mockResolvedValueOnce(details)
+      .mockResolvedValueOnce(compactList)
+      .mockResolvedValueOnce({ ...source, jobs: projectCronListJobs(cron, source, false) });
+    const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createCronTool();
+    const outputSchema = expectDefined(tool.outputSchema, "automations output schema");
+    for (const args of [
+      { action: "status" },
+      { action: "get", jobId: blocked.id },
+      { action: "list" },
+      { action: "list" },
+    ]) {
+      const result = await tool.execute(`reauthorization-${args.action}`, args);
+      expect(Value.Errors(outputSchema, result.details), args.action).toEqual([]);
+    }
+    expect(gatewayCall).toHaveBeenCalledTimes(4);
   });
 
   it("still runs on a shipped Gateway that rejects the run wait", async () => {
@@ -322,6 +430,13 @@ async function consume() {
 async function checkContracts(action: "list" | "runs", input: Parameters<typeof automations>[0]) {
   const listed = await automations({ action: "list" });
   const { includeDisabled, inventoryHint }: { includeDisabled: boolean; inventoryHint: string } = listed;
+  await automations({action:"plan",names:["Invoice check", "Follow-up"]});
+  await automations({action:"add",position:2,job:${JSON.stringify(createJob)}});
+  const planned = await automations({action:"plan",slots:[{slotId:"invoice", name:"Invoice check"}]});
+  const bound = await automations({action:"add",planId:planned.planId,slotId:planned.slots[0].slotId,job:${JSON.stringify(createJob)}});
+  if (bound.automationCreation?.status === "created") {
+    const savedId: string = bound.automationCreation.jobId;
+  }
   // @ts-expect-error Invented invoice fields are not part of an automation.
   listed.jobs[0].invoiceTotal;
   const removed = await automations({ action: "remove", jobId: "invoice-check" });

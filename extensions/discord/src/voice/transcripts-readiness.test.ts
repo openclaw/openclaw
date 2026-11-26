@@ -336,7 +336,8 @@ defineDiscordVoiceTests(
           );
           if (origin === "native" && mode === "stt-tts") {
             expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledExactlyOnceWith({
-              getToolAuthorityOverlay: expect.any(Function),
+              assertCurrent: expect.any(Function),
+              getToolAuthorityOverlayAsync: expect.any(Function),
               sessionKey: expectDefined(entry.route?.sessionKey, "voice session route"),
               text: "Do not\nsend the update",
             });
@@ -348,7 +349,10 @@ defineDiscordVoiceTests(
             expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
             expect(agentCommandMock).not.toHaveBeenCalled();
           }
-          if (origin === "native" && mode !== "stt-tts") {
+          if (
+            (origin === "native" && mode !== "stt-tts") ||
+            (origin === "playback" && mode === "bidi")
+          ) {
             expect(sentAudioCount()).toBeGreaterThan(0);
           } else {
             expect(sentAudioCount()).toBe(0);

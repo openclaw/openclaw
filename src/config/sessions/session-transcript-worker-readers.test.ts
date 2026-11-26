@@ -1,6 +1,12 @@
 import path from "node:path";
+import { serialize } from "node:v8";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
+import { collectPreparedCompactionEntryFact } from "../../agents/embedded-agent-runner/prepared-compaction-plan.js";
+import { resolveImageSanitizationLimits } from "../../agents/image-sanitization.js";
+import type { SessionEntry } from "../../agents/sessions/session-manager-types.js";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
+import { resolveTranscriptPolicy } from "../../agents/transcript-policy.js";
 import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
@@ -188,6 +194,77 @@ function readFrames(frames: unknown[], eventCount: number, rawSeq = 7, encoding 
   );
   return readers.readTranscript(transcriptInput, signal);
 }
+
+it("charges planning preflight facts by their worker clone", async () => {
+  // Quoted multi-line requests inflate the UTF-16 JSON estimate, not the structured clone.
+  const entries: SessionEntry[] = Array.from({ length: 32 }, (_, index) => ({
+    type: "message",
+    id: `e${index}`,
+    parentId: index ? `e${index - 1}` : null,
+    timestamp: new Date(0).toISOString(),
+    message: { role: "user", content: `Request ${index}: "quoted"\n`.repeat(256), timestamp: 0 },
+  }));
+  const source = {
+    entries: entries.map((entry, index) => collectPreparedCompactionEntryFact(entry, index)),
+    version: version(entries.length),
+    leafEntryId: "e31",
+    boundaryCount: 0,
+    persistedSuffixStartSeq: 0,
+    transcriptMutationAt: null,
+    eventCount: entries.length,
+  };
+  const model = makeProviderModelFixture({
+    id: "fixture",
+    provider: "fixture",
+    api: "openai-completions",
+    baseUrl: "https://example.invalid/v1",
+  });
+  const input = {
+    target: { sessionId: "synthetic-session" },
+    resolvedScope: { agentId: "main", sessionId: "synthetic-session" },
+    operation: {
+      kind: "plan" as const,
+      source,
+      options: {
+        work: {
+          itemId: "synthetic-compaction",
+          mode: "manual" as const,
+          summaryOutputPolicy: "none" as const,
+          settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 1 },
+        },
+        qualityGuardEnabled: true,
+      },
+      replay: {
+        model,
+        policy: resolveTranscriptPolicy({
+          model,
+          modelApi: model.api,
+          provider: model.provider,
+          modelId: model.id,
+        }),
+        imageLimits: resolveImageSanitizationLimits(),
+        allowedToolNames: [],
+        signedThinkingProvider: false,
+        allowProviderOwnedThinkingReplay: false,
+        isOpenAIResponsesApi: false,
+        sessionId: "synthetic-session",
+        replayEnabled: true,
+      },
+    },
+  };
+  const dispatched = new Error("Stopped after admitting the worker request");
+  let charged = 0;
+  const readers = createSessionHistoryWorkerReaders(
+    createSessionHistoryWorkerRequestStub(async (_prepare, inputBytes) => {
+      charged = inputBytes;
+      throw dispatched;
+    }),
+  );
+  await expect(readers.readPreparedCompaction(input)).rejects.toBe(dispatched);
+  // The facts stay charged, but well under the UTF-16 JSON estimate that refused large windows.
+  expect(charged).toBeGreaterThanOrEqual(serialize(source).byteLength);
+  expect(charged).toBeLessThan(JSON.stringify(input).length);
+});
 
 it("keeps interleaved decorated readers on their own request runner", async () => {
   const first = Promise.withResolvers<boolean>();

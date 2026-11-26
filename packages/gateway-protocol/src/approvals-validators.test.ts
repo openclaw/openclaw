@@ -231,6 +231,48 @@ describe("session approval protocol", () => {
       event("terminal", { ...record, resolvedAtMs: terminal.resolvedAtMs, ...fields }),
     );
   });
+  it("accepts own-turn status only without reviewer payload or action fields", () => {
+    const status = {
+      phase: "participant",
+      sessionKey: "agent:main:main",
+      updatedAtMs: 1,
+      approvalId: "approval:123",
+      runId: "run-1",
+      participantId: "participant",
+      status: "pending",
+      expiresAtMs: 100,
+    };
+    events.accepts(status, { ...status, status: "terminal" });
+    for (const fields of [
+      { approval: pending },
+      { command: "private" },
+      { urlPath: "/approve/123" },
+      { allowedDecisions: ["allow-once"] },
+      { decision: "allow-once" },
+      { participantId: "" },
+    ]) {
+      events.rejects({ ...status, ...fields });
+    }
+    const replays = schemaValidation(p.SessionApprovalReplaySchema);
+    const replay = {
+      sessionKey: status.sessionKey,
+      updatedAtMs: 1,
+      approvals: [],
+      participantApprovals: [status],
+      truncated: false,
+    };
+    replays.accepts(replay);
+    replays.rejects({ ...replay, participantApprovals: [{ ...status, command: "private" }] });
+    events.accepts(
+      event("pending", { ...pending, turnActor: { id: "participant", label: "Pat" } }),
+      event("pending", { ...pending, canDecide: true }),
+      event("pending", { ...pending, canDecide: false }),
+    );
+    events.rejects(event("pending", { ...pending, turnActor: { label: "Pat" } }));
+    events.rejects(event("pending", { ...pending, canDecide: "true" }));
+    events.rejects({ ...status, canDecide: true });
+  });
+
   it("keeps pending replay authoritative", () => {
     const replay = {
       sessionKey: "agent:main:main",

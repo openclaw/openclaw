@@ -1,3 +1,4 @@
+import { createAiTransportHost, runWithAiTransportHost } from "@openclaw/ai";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -23,7 +24,7 @@ const completeSimple = vi.hoisted(() => vi.fn());
 // mock-isolation: Supply deterministic provider outcomes without registering live transports.
 vi.mock("../llm/stream.js", () => ({ completeSimple }));
 // mock-isolation: Provider runtime bootstrap is outside this request-lifecycle boundary.
-vi.mock("./ai-transport-runtime-host.js", () => ({}));
+vi.mock("./ai-transport-runtime-host.js", () => ({ configureAiTransportRuntimeHost: () => {} }));
 import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
 
 const model = makeProviderModelFixture({
@@ -41,11 +42,13 @@ const assistant = makeAssistantMessageFixture({
 });
 const messages = [{ role: "user" as const, content: "Generate a title", timestamp: 1 }];
 const complete = () =>
-  completeWithPreparedSimpleCompletionModel({
-    model,
-    auth: { apiKey: "synthetic", source: "test", mode: "api-key" },
-    context: { messages },
-  });
+  runWithAiTransportHost(createAiTransportHost(), () =>
+    completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: { apiKey: "synthetic", source: "test", mode: "api-key" },
+      context: { messages },
+    }),
+  );
 let stop: (() => void) | undefined;
 beforeEach(() => {
   resetDiagnosticEventsForTest();
@@ -67,7 +70,16 @@ it("does not serialize prompts for the default activity and stability listeners"
   completeSimple.mockResolvedValue(assistant);
   using stringify = vi.spyOn(JSON, "stringify");
 
-  await complete();
+  // A previous non-isolated test may have installed plugin callbacks from a narrow mock.
+  const unrelatedHost = createAiTransportHost({
+    plugin: {
+      ...createAiTransportHost().plugin,
+      resolveProviderStream: () => {
+        throw new Error("Unrelated test provider runtime must not be used");
+      },
+    },
+  });
+  await runWithAiTransportHost(unrelatedHost, complete);
   await waitForDiagnosticEventsDrained();
   expect(stringify.mock.calls.filter(([value]) => value === messages)).toHaveLength(0);
 });

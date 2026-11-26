@@ -318,6 +318,11 @@ actor TalkModeRuntime {
             lifecycleGeneration: lifecycleGeneration,
             recognitionAttempt: recognitionAttempt) else { return false }
 
+        // The native pause window must follow the recognizer, including automatic locale fallback.
+        self.silenceWindow = Self.nativeSilenceWindow(
+            configuredTimeoutMs: self.config?.snapshot.silenceTimeoutMs ?? Self.defaultSilenceTimeoutMs,
+            recognitionLocale: recognizer.locale)
+
         // AVAudioEngine materializes inputNode from the system default before CurrentDevice can bind.
         // Without a usable default, accessing inputNode can SIGABRT even when another UID is alive.
         guard selection.resolvedUID != nil, AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
@@ -1351,29 +1356,16 @@ extension TalkModeRuntime {
     }
 
     func applyTalkConfig(_ cfg: TalkModeGatewayConfigState) async {
-        guard let locale = await MainActor.run(body: { () -> String? in
-            guard let state = self.state() else { return nil }
-            state.seamColorHex = cfg.seamColorHex
-            return state.voiceWakeLocaleID
-        }) else { return }
-        self.commitTalkConfig(cfg, locale: locale)
+        guard await MainActor.run(body: { self.state() != nil }) else { return }
+        self.commitTalkConfig(cfg)
     }
 
-    func commitTalkConfig(_ cfg: TalkModeGatewayConfigState, locale: String) {
+    func commitTalkConfig(_ cfg: TalkModeGatewayConfigState) {
         self.config = cfg
         if !self.voiceOverrideActive {
             self.currentVoiceId = cfg.voiceId
         }
-        let configuredSilenceMs = cfg.snapshot.silenceTimeoutMs
-        let isCJKLocale = locale.hasPrefix("ko") || locale.hasPrefix("ja") || locale.hasPrefix("zh")
-        let effectiveSilenceMs = isCJKLocale ? max(configuredSilenceMs, 2000) : configuredSilenceMs
-        if isCJKLocale, configuredSilenceMs < 2000 {
-            self.logger
-                .info(
-                    "talk CJK locale: silence timeout clamped " +
-                        "\(configuredSilenceMs, privacy: .public)ms -> 2000ms")
-        }
-        self.silenceWindow = TimeInterval(effectiveSilenceMs) / 1000
+        self.silenceWindow = TimeInterval(cfg.snapshot.silenceTimeoutMs) / 1000
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
         let voiceLabel = cfg.voiceId.flatMap { $0.isEmpty ? nil : $0 } ?? "none"
         let modelLabel = cfg.modelId.flatMap { $0.isEmpty ? nil : $0 } ?? "none"
@@ -1391,6 +1383,12 @@ extension TalkModeRuntime {
                     "realtimeTransport=\(cfg.snapshot.realtime.transport ?? "default", privacy: .public) " +
                     "realtimeBrain=\(cfg.snapshot.realtime.brain ?? "default", privacy: .public) " +
                     "macOSRealtimeOptIn=\(self.macOSRealtimeRelayOptIn, privacy: .public)")
+    }
+
+    static func nativeSilenceWindow(configuredTimeoutMs: Int, recognitionLocale: Locale) -> TimeInterval {
+        let language = recognitionLocale.language.languageCode?.identifier
+        let isCJK = language == "ko" || language == "ja" || language == "zh"
+        return TimeInterval(isCJK ? max(configuredTimeoutMs, 2000) : configuredTimeoutMs) / 1000
     }
 
     // MARK: - Audio level handling

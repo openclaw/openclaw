@@ -66,7 +66,7 @@ new conversations when the client does not choose one.
 Add `https://mcp.openclaw.ai/mcp` as a plugin in ChatGPT or a custom connector
 in Claude. On the relay's connection page, choose **Sign in with your Gateway**
 and enter your Gateway's Control UI URL. Your browser opens the Gateway's
-**Connected apps** page, using its normal sign-in. The relay does not fetch your
+**Settings → Connected apps** page, using its normal sign-in. The relay does not fetch your
 Gateway URL or receive your Gateway credentials.
 
 Codex shares its MCP servers between the CLI and the desktop app. Add the relay
@@ -90,7 +90,7 @@ can never exceed your current Gateway permissions.
 
 ### Pair with a code
 
-1. Open **Connected apps** in your Gateway's Control UI and choose **Pair with
+1. Open **Settings → Connected apps** in your Gateway's Control UI and choose **Pair with
    code**. Select the access and create a code. On a single-user Gateway, you can
    also run `openclaw mcp-relay pair` on the Gateway host.
 2. On the relay's connection page, verify the app name and return host, enter the
@@ -104,11 +104,16 @@ signed in as yourself; the CLI refuses to create a person-less grant.
 
 ## Connected apps
 
-The **Connected apps** tab lists your grants and their access limits. You can
+The **Settings → Connected apps** page lists your grants and their access limits. You can
 revoke your own grants; administrators can see and revoke all grants. On
 single-user Gateways, operators with administrator access can create owner
 grants. On Gateways with verified profiles, each grant belongs to the person
 who approved it, including grants approved by an administrator.
+
+OpenClaw ID members use their own person grants even when the Gateway uses
+token authentication and has no local roles configured. Their membership role
+limits app operations and the embedded Control UI. Approvals made through a
+connected app also retain that person's original sign-in authority.
 
 ## Use several Gateways
 
@@ -228,6 +233,16 @@ is the intersection of the ceiling and the principal's current authority, so a
 role change also limits existing grants. Grants are not restricted to one
 conversation; normal principal and role visibility still applies.
 
+New person grants approved through OpenClaw ID also retain the approving
+membership and device listing. Removing the member or approving key, changing
+that member's role, or disabling OpenClaw ID closes active access. Re-adding a
+removed member or key requires a fresh approval. The same restriction follows
+an approval made through an already-connected app, including after restart.
+Local roles and approvals made through other sign-in paths remain independent.
+Before rollout, revoke and approve again any existing ID-origin grants created
+without this source binding; their original sign-in source cannot be inferred
+from the stored profile.
+
 Person grants approved through Gateway sign-in have an absolute refresh-token
 lifetime of 30 days. After that, sign in and approve again. Owner grants and
 pairing-code grants retain their existing relay token lifetime. Revocation,
@@ -256,8 +271,9 @@ own person grants require write access. Creating owner grants or revoking
 another person's grant requires administrator access. Grant listings include
 the principal and scope ceiling.
 
-Revocation is persisted locally before the Gateway notifies the relay. If the
-relay is offline, the Gateway still refuses further requests using that grant;
+Revocation is persisted locally before the Gateway notifies the relay. It also
+cancels runs under that grant, including work resumed after a Gateway restart. If
+the relay is offline, the Gateway still refuses further requests using that grant;
 the command reports whether the relay was notified. A revoked client must pair
 again to regain access.
 

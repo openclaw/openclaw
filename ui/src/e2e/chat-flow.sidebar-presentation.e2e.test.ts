@@ -254,7 +254,11 @@ suite.define(() => {
           return x === 0 ? 0 : readingDirection === "rtl" ? -x : x;
         }, direction);
       await label.waitFor({ state: "visible", timeout: 10_000 });
-      await expect.poll(() => mask(label)).toContain(direction === "rtl" ? "to left" : "to right");
+      await expect
+        .poll(() => mask(label))
+        .toBe(
+          `linear-gradient(to ${direction === "rtl" ? "left" : "right"}, rgb(0, 0, 0) calc(100% - 6px), rgba(0, 0, 0, 0))`,
+        );
       expect(await mask(shortLabel)).toBe("none");
       const rowWidth = await row.evaluate((element) => element.getBoundingClientRect().width);
 
@@ -396,7 +400,7 @@ suite.define(() => {
           .locator(`[data-session-key="${runningKey}"]`)
           .locator(".sidebar-session-indicator .session-glyph__ring")
           .evaluate((element) => {
-            const style = getComputedStyle(element);
+            const style = getComputedStyle(element, "::before");
             const accent = document.createElement("span").style;
             accent.color = style.getPropertyValue("--accent").trim();
             return {
@@ -475,6 +479,7 @@ suite.define(() => {
     expect(longLayout.singleLine).toBe(true);
     expect(longLayout.nameOverflowing).toBe(true);
     expect(longLayout.endcap.right).toBeLessThanOrEqual(longLayout.row.right);
+    expect(longLayout.endcap.left - longLayout.name.right).toBeCloseTo(6, 1);
     const intrinsicAtomWidth = longLayout.atoms.reduce((sum, atom) => sum + atom.width, 0);
     expect(intrinsicAtomWidth).toBeGreaterThan(0);
     expect(longLayout.endcap.width).toBeGreaterThanOrEqual(intrinsicAtomWidth);

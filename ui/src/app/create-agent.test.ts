@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { locationForRoute, routePageSpec, type RouteId } from "../app-route-paths.ts";
+import { i18n } from "../i18n/index.ts";
 import { agentCreationRejection } from "../lib/agents/creation.test-support.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import {
@@ -167,33 +168,35 @@ async function fixture(
 }
 
 describe("application agent creation", () => {
-  it.each(["read-only", "unadvertised", "unpaired"] as const)(
-    "refuses %s creation before opening a provisional chat",
-    async (access) => {
-      const { context, request, navigate, toast, publishGateway } = await fixture();
-      publishGateway({
-        hello:
-          access === "unpaired"
-            ? null
-            : gatewayHelloForMethods(
-                access === "unadvertised" ? [] : ["agents.create"],
-                access === "read-only" ? ["operator.read"] : ["operator.admin"],
-              ),
-      });
-      await createApplicationAgent(context);
-      expect(navigate).not.toHaveBeenCalled();
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list"]);
-      expect(context.chatSubmissions.creation).toBeUndefined();
-      await vi.waitFor(() =>
-        expect(toast.toasts[0]?.options.message).toContain("Pair this browser"),
-      );
-    },
-  );
+  it.each([
+    ["read-only", "You need admin access to create an agent."],
+    ["unadvertised", "This Gateway doesn’t support agent creation."],
+    ["unpaired", "Reconnect to create an agent."],
+  ] as const)("refuses %s creation before opening a provisional chat", async (access, message) => {
+    const { context, request, navigate, toast, publishGateway } = await fixture();
+    publishGateway({
+      hello:
+        access === "unpaired"
+          ? null
+          : gatewayHelloForMethods(
+              access === "unadvertised" ? [] : ["agents.create"],
+              access === "read-only" ? ["operator.read"] : ["operator.admin"],
+            ),
+    });
+    await createApplicationAgent(context);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list"]);
+    expect(context.chatSubmissions.creation).toBeUndefined();
+    await vi.waitFor(() => expect(toast.toasts[0]?.options.message).toBe(message));
+  });
 
   it("creates the chosen name and avatar and opens that agent's own chat", async () => {
     const avatar = "data:image/webp;base64,Ym90";
     const { context, request, roster, settledNavigation } = await fixture();
 
+    const previousLocale = i18n.getRequestedLocale();
+    onTestFinished(() => i18n.setLocale(previousLocale));
+    await i18n.setLocale("pt-BR");
     await createApplicationAgent(context, { name: "Scout", avatar });
     await settledNavigation();
 
@@ -204,6 +207,7 @@ describe("application agent creation", () => {
       agentId: agent?.id,
       name: "Scout",
       onboarding: true,
+      locale: "pt-BR",
       avatar,
     });
   });
@@ -268,7 +272,7 @@ describe("application agent creation", () => {
       "previous",
     );
     expect(toast.toasts[0]?.active).toBe(true);
-    expect(toast.querySelector(".app-toast__message")?.textContent).toContain(
+    expect(toast.querySelector(".app-toast__description")?.textContent).toContain(
       "Provider credentials expired",
     );
   });
@@ -345,8 +349,8 @@ describe("application agent creation", () => {
     await toast.updateComplete;
     await vi.dynamicImportSettled();
     expect(toast.toasts[0]?.active).toBe(true);
-    expect(toast.querySelector(".app-toast__message")?.textContent).toContain(
-      "Your agent was created, but its first message couldn't be sent",
+    expect(toast.querySelector(".app-toast__body")?.textContent).toContain(
+      "Your agent was created. Couldn’t send its first message.",
     );
   });
 });

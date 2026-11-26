@@ -46,11 +46,12 @@ if (values["owner-dir"]) {
   process.env.OPENCLAW_BENCH_BASELINE_DIR = path.resolve(values["owner-dir"]);
   await import("./worker-retained-heap-preload.ts");
 }
-const [{ withOpenClawTestState }, agent, entries, owner] = await Promise.all([
+const [{ withOpenClawTestState }, agent, entries, owner, { chatRef }] = await Promise.all([
   import("../../src/test-utils/openclaw-test-state.ts"),
   import("../../src/state/openclaw-agent-db.ts"),
   import("../../src/config/sessions/session-accessor.sqlite-entry-store.ts"),
   import("../../src/config/sessions/session-delivery-generation.ts"),
+  import("../../src/sessions/chat-ref.ts"),
 ]);
 let measuring = false;
 const calls = { statSync: 0, realpathSync: 0, realpathNative: 0 };
@@ -165,12 +166,12 @@ try {
     }
     await measure("delivery-preparation", preparations, async (count) => {
       for (let index = 0; index < count; index++) {
-        const delivery = await owner.prepareSessionDeliveryGeneration(facts);
+        const delivery = await owner.prepareChatDeliveryLease(chatRef(facts));
         delivery.assertCurrent();
         delivery.release();
       }
     });
-    const generation = await owner.prepareSessionGenerationFacts(facts);
+    const generation = await owner.prepareLeaseFacts(facts);
     try {
       await measure("generation-assertion", iterations, async (count) => {
         for (let index = 0; index < count; index++) {

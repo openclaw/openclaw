@@ -2,6 +2,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { INGRESS_CLAIM_LEASE_MS } from "./ingress-claim-owner.js";
+import { INGRESS_QUEUE_CAP_DROP_REASONS } from "./ingress-queue-cap-drop.js";
 import type {
   ChannelIngressFailedHealth,
   ChannelIngressPressureSnapshot,
@@ -25,6 +26,12 @@ export function countFailedChannelIngressQueueEntriesInDatabase(
         eb.fn.min<number>("failed_at").as("oldestFailedAt"),
       ])
       .where("status", "=", "failed")
+      .where((eb) =>
+        eb.or([
+          eb("failed_reason", "is", null),
+          eb("failed_reason", "not in", INGRESS_QUEUE_CAP_DROP_REASONS),
+        ]),
+      )
       .groupBy(["channel_id", "account_id"])
       .orderBy("channel_id", "asc")
       .orderBy("account_id", "asc"),
@@ -84,19 +91,28 @@ export function countChannelIngressQueuePressureInDatabase(
         "lanes.channel_id as channelId",
         "lanes.account_id as accountId",
         eb.fn.countAll<number>().filterWhere("lanes.pressuredCount", ">", 0).as("laneCount"),
-        eb.fn
-          .sum<number>("lanes.pendingCount")
-          .filterWhere("lanes.pressuredCount", ">", 0)
+        eb
+          .cast<number>(
+            eb.fn.sum("lanes.pendingCount").filterWhere("lanes.pressuredCount", ">", 0),
+            "bigint",
+          )
           .as("pendingCount"),
-        eb.fn
-          .sum<number>("lanes.claimedCount")
-          .filterWhere("lanes.pressuredCount", ">", 0)
+        eb
+          .cast<number>(
+            eb.fn.sum("lanes.claimedCount").filterWhere("lanes.pressuredCount", ">", 0),
+            "bigint",
+          )
           .as("claimedCount"),
-        eb(
-          eb.fn.sum<number>("lanes.activeCount").filterWhere("lanes.pressuredCount", ">", 0),
-          "-",
-          eb.fn.countAll<number>().filterWhere("lanes.pressuredCount", ">", 0),
-        ).as("blockedCount"),
+        eb
+          .cast<number>(
+            eb(
+              eb.fn.sum<number>("lanes.activeCount").filterWhere("lanes.pressuredCount", ">", 0),
+              "-",
+              eb.fn.countAll<number>().filterWhere("lanes.pressuredCount", ">", 0),
+            ),
+            "bigint",
+          )
+          .as("blockedCount"),
         eb.fn
           .min<number>("lanes.oldestReceivedAt")
           .filterWhere("lanes.pressuredCount", ">", 0)

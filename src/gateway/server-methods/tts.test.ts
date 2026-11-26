@@ -202,6 +202,35 @@ describe("ttsHandlers", () => {
     });
   });
 
+  it("identifies the primary unconfigured speech provider without hiding an attempted provider's error", async () => {
+    const unconfigured = {
+      provider: "openai",
+      outcome: "skipped",
+      reasonCode: "not_configured",
+    } as const;
+    const networkFailure = {
+      provider: "elevenlabs",
+      outcome: "failed",
+      reasonCode: "provider_error",
+    } as const;
+    mocks.synthesizeSpeech.mockResolvedValueOnce({ success: false, attempts: [unconfigured] });
+    const unavailable = await callTts("tts.speak", { text: "Hello." });
+    expect(unavailable.mock.calls[0]?.[2]).toMatchObject({
+      details: { unconfiguredSpeechProvider: "openai" },
+    });
+    mocks.synthesizeSpeech.mockResolvedValueOnce({
+      success: false,
+      error: "ElevenLabs network error",
+      attempts: [networkFailure, unconfigured],
+    });
+    const failed = await callTts("tts.speak", { text: "Hello." });
+    expectGatewayErrorResponse(failed, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "ElevenLabs network error",
+    });
+    expect(failed.mock.calls[0]?.[2]?.details).toBeUndefined();
+  });
+
   it.each([
     { text: "   ", message: "tts.speak requires text" },
     {

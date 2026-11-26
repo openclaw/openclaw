@@ -17,24 +17,22 @@ openclaw-board-document {
   background: var(--bg);
 }
 
-.board-document__close {
-  position: absolute;
-  z-index: 4;
-  top: max(10px, env(safe-area-inset-top));
-  right: max(10px, env(safe-area-inset-right));
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
-  min-height: 30px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(12px);
+openclaw-board-document > .board-document {
+  flex-direction: column;
 }
 
-.board-document__close svg {
-  width: 16px;
-  height: 16px;
+/* Document dismissal stays outside the scrollport: a widget menu can occupy
+   the top corner on first paint or after scrolling a later card there. */
+.board-document__close {
+  align-self: flex-end;
+  flex: none;
+  margin: max(4px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 4px;
+}
+
+@media (pointer: coarse) {
+  .board-document__close {
+    min-height: 44px;
+  }
 }
 
 .board-document__content {
@@ -43,10 +41,6 @@ openclaw-board-document {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-}
-
-.board-document__content .board-tabs {
-  padding-right: 38px;
 }
 
 .board-document__state {
@@ -58,6 +52,52 @@ openclaw-board-document {
   padding: 32px;
   color: var(--muted);
   text-align: center;
+}
+
+/* Keep a short list together; a taller list scrolls from its first choice to its exit. */
+.board-document__choices {
+  grid-template-columns: fit-content(28rem);
+  place-content: safe center;
+  justify-items: start;
+  gap: var(--space-3);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+
+.board-document__choices > h2,
+.board-document__choices > p {
+  margin: 0;
+}
+
+.board-document__choice {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.board-document__choice > a,
+.board-document__choice small > span {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.board-document__choice small {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25em;
+}
+
+/* Give the identifying session prefix priority over a long agent name. */
+.board-document__choice small > :last-child {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+/* The ghost button's label, not its invisible 14px padding and 1px border, shares the text guide. */
+.board-document__choices > .btn--ghost {
+  margin-inline-start: -15px;
 }
 
 .board-document__state--error {

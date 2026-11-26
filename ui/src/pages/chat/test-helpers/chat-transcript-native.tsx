@@ -1,8 +1,6 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
-import { onTestFinished, vi } from "vitest";
-import { registerMcpAppUnmountTarget } from "../../../components/mcp-app-unmount.ts";
+import { onTestFinished } from "vitest";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
@@ -19,6 +17,7 @@ import {
   flushDeferredRowPrune,
   type TestContentRow,
 } from "../components/chat-transcript.test-support.ts";
+import { settleChatMount } from "./chat-mount-frames.ts";
 
 class NativeFixture {
   constructor(
@@ -72,7 +71,8 @@ export function render(value: NativeContent, container: HTMLElement): void {
   if (existing) {
     existing.update({ value });
   } else {
-    mounts.set(container, mountSolid(Content, { value }, container));
+    const mount = () => mountSolid(Content, { value }, container);
+    mounts.set(container, transcript ? settleChatMount(mount) : mount());
   }
   transcript?.update();
 }
@@ -200,20 +200,6 @@ export async function mountTestTranscript(
   };
 }
 
-export function stubMcpAppLifecycle(
-  container: ParentNode,
-  teardown: () => Promise<void> = () => Promise.resolve(),
-) {
-  const app = expectDefined(
-    container.querySelector<HTMLElement>("mcp-app-view"),
-    "mounted MCP app",
-  );
-  const lifecycle = { restartAfterTeardown: vi.fn(), teardown: vi.fn(teardown) };
-  const target = Object.assign(app, lifecycle);
-  onTestFinished(registerMcpAppUnmountTarget(target));
-  return { app: target, ...lifecycle };
-}
-
 export function numberedContentRows(
   length: number,
   content: (index: number) => JSX.Element = (index) => <div>row {index}</div>,
@@ -223,10 +209,6 @@ export function numberedContentRows(
     key: `row:${index}`,
     content: content(index),
   }));
-}
-
-export function mcpRangeRows(appContent: JSX.Element): TestContentRow[] {
-  return numberedContentRows(24, (index) => (index === 23 ? appContent : <div>row {index}</div>));
 }
 
 export const contact = (identifier: number, target: EventTarget): Touch => ({

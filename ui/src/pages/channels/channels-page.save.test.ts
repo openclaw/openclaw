@@ -270,7 +270,7 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
 
   it.each([
     ["landed", "Saved", null],
-    ["not landed", "Unsaved changes", "Connection lost during Save. Your changes weren't saved."],
+    ["not landed", "Unsaved changes", "Couldn’t save your changes. Save again."],
   ] as const)(
     "reports a Save cut short by a dropped connection once a re-read shows it %s",
     async (outcome, status, alert) => {
@@ -284,7 +284,9 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
 
       gateway.emit({ phase: "reconnecting" });
       held.reject(new Error("gateway closed"));
-      await waitForSolid(() => expect(alertText(page)).toBe("Connection lost during Save."));
+      await waitForSolid(() =>
+        expect(alertText(page)).toBe("Disconnected while saving. Reconnect to check your changes."),
+      );
 
       if (outcome === "landed") {
         await setFile(telegram({ ...before.channels.telegram, dmPolicy: "pairing" }), "h1");

@@ -5,7 +5,7 @@ import type {
   ApprovalPresentation,
   ApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
-import { summarizeApprovalScopeLabel } from "../../app/approval-presentation.ts";
+import { approvalHostLabel, summarizeApprovalScopeLabel } from "../../app/approval-presentation.ts";
 import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
@@ -187,7 +187,7 @@ function renderApprovalPresentation(presentation: ApprovalPresentation) {
           {presentation.commandText}
         </pre>
         <dl class="approval-page__meta">
-          {renderMetaRow(t("execApproval.labels.host"), presentation.host)}
+          {renderMetaRow(t("execApproval.labels.host"), approvalHostLabel(presentation.host))}
           {renderMetaRow(t("approvalPage.nodeLabel"), presentation.nodeId)}
         </dl>
       </>

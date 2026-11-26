@@ -7,7 +7,6 @@ import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import type { AgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortable.js";
@@ -21,7 +20,6 @@ import {
   type FallbackAttemptRecord,
 } from "./failover-error.js";
 import { isLikelyContextOverflowError } from "./failover/classify.js";
-import type { FailoverReason } from "./failover/signal.js";
 import {
   MissingAgentHarnessError,
   isAgentHarnessPreflightError,
@@ -36,10 +34,12 @@ import {
   type ModelFallbackChainStopReason,
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
-import type {
-  FallbackAttempt,
-  ModelCandidate,
-  ModelFallbackAttemptProvenance,
+import {
+  MODEL_FALLBACK_SKIPPED_CODE,
+  type FallbackAttempt,
+  type ModelCandidate,
+  type ModelFallbackAttemptProvenance,
+  type ModelFallbackResultClassification,
 } from "./model-fallback.types.js";
 import { modelKey } from "./model-ref-shared.js";
 import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
@@ -116,22 +116,6 @@ export type ModelFallbackErrorHandler = (
 ) => void | Promise<void>;
 
 export type ModelFallbackStepHandler = (step: ModelFallbackStepFields) => void | Promise<void>;
-
-export type ModelFallbackResultClassification =
-  | {
-      agentTerminal?: AgentTerminalSnapshot;
-      message: string;
-      reason?: FailoverReason;
-      status?: number;
-      code?: string;
-      rawError?: string;
-      rateLimitRetriesExhausted?: number;
-      preserveResultOnExhaustion?: boolean;
-      preserveResultPriority?: number;
-    }
-  | { error: unknown }
-  | null
-  | undefined;
 
 /** Internal fallback execution also accepts producer-owned terminal causes. */
 type ModelFallbackAttemptClassification =
@@ -535,6 +519,7 @@ function buildFailedCandidateAttempt(
         : described.message,
     reason: described.reason ?? "unknown",
     rateLimitRetriesExhausted: described.rateLimitRetriesExhausted,
+    rateLimitResetAt: described.rateLimitResetAt,
     authMode: described.authMode,
     status: described.status,
     code: described.code,
@@ -655,7 +640,15 @@ export function throwFallbackFailureSummary(params: {
       authMode: lastAttempt?.authMode,
       status: lastAttempt?.status,
       rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
+      rateLimitResetAt: lastAttempt?.rateLimitResetAt,
       code: lastAttempt?.code,
+      userMessage:
+        params.lastError instanceof FailoverError &&
+        lastAttempt &&
+        lastAttempt.provider === params.lastError.provider &&
+        lastAttempt.code !== MODEL_FALLBACK_SKIPPED_CODE
+          ? params.lastError.userMessage
+          : undefined,
       cause: params.lastError instanceof Error ? params.lastError : undefined,
       sessionId: params.attribution?.sessionId,
       lane: params.attribution?.lane,

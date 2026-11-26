@@ -20,19 +20,20 @@ const runPowerShell = (command: string, env: NodeJS.ProcessEnv) =>
     timeout: 30_000,
   });
 it.skipIf(process.platform !== "win32").each([
-  ["Unicode", "utf-16le", "fffe"],
-  ["BigEndianUnicode", "utf-16be", "feff"],
-  ["utf8", "utf-8", "efbbbf"],
-  [null, "utf-8", ""],
+  ["Unicode", "utf-16le", "fffe", "state"],
+  ["BigEndianUnicode", "utf-16be", "feff", "state"],
+  ["utf8", "utf-8", "efbbbf", "state"],
+  [null, "utf-8", "", "state"],
+  [null, "utf-8", "efbbbf", "state ü 空"],
 ] as const)(
   "preserves and reloads a %s profile during completion installation and removal",
-  async (encoding, decoder, bom) => {
+  async (encoding, decoder, bom, stateDirectory) => {
     const homeDir = tempDirs.make("openclaw-powershell-profile-");
     const env = {
       HOME: homeDir,
       USERPROFILE: homeDir,
       OPENCLAW_HOME: undefined,
-      OPENCLAW_STATE_DIR: path.join(homeDir, "state"),
+      OPENCLAW_STATE_DIR: path.join(homeDir, stateDirectory),
       SHELL: "powershell.exe",
       ZDOTDIR: undefined,
       XDG_CONFIG_HOME: undefined,

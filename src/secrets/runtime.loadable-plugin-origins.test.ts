@@ -10,16 +10,13 @@ const manifestMocks = vi.hoisted(() => ({
     (snapshot: { plugins: Array<{ id: string; origin: string }> }) =>
       new Map(snapshot.plugins.map((record) => [record.id, record.origin])),
   ),
-  loadPluginMetadataSnapshot: vi.fn<() => { plugins: Array<{ id: string; origin: string }> }>(
-    () => ({
-      plugins: [],
-    }),
-  ),
+  loadPluginMetadataSnapshot: vi.fn(async () => ({ manifestRegistry: { plugins: [] } })),
 }));
 
+// mock-isolation: manifest discovery is stubbed so each case controls the plugin origins it sees.
 vi.mock("./runtime-manifest.runtime.js", () => ({
   listPluginOriginsFromMetadataSnapshot: manifestMocks.listPluginOriginsFromMetadataSnapshot,
-  resolveConfigWidePluginManifestRegistry: manifestMocks.loadPluginMetadataSnapshot,
+  resolveConfigWidePluginMetadataSnapshotAsync: manifestMocks.loadPluginMetadataSnapshot,
 }));
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
@@ -27,8 +24,7 @@ const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks()
 describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
   afterEach(() => {
     manifestMocks.listPluginOriginsFromMetadataSnapshot.mockClear();
-    manifestMocks.loadPluginMetadataSnapshot.mockReset();
-    manifestMocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins: [] });
+    manifestMocks.loadPluginMetadataSnapshot.mockClear();
   });
 
   it("keeps full plugin policy while projecting provider-auth assignments", async () => {

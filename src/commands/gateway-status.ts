@@ -4,7 +4,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
+import { parseGatewayClientPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
@@ -88,7 +88,7 @@ export async function gatewayStatusCommand(
   const overallTimeoutMs = parseTimeoutMsWithFallback(opts.timeout, defaultTimeoutMs, {
     invalidType: "error",
   });
-  const portOverride = parseGatewayPortOption(opts.port);
+  const portOverride = parseGatewayClientPortOption(opts.port);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
   });

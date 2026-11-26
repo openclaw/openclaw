@@ -192,7 +192,7 @@ describe("custom theme import helpers", () => {
 
     await expect(
       importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
-    ).rejects.toThrow("unreadable theme payload");
+    ).rejects.toThrow("unreadable theme file");
     expect(response["text"]).not.toHaveBeenCalled();
   });
 
@@ -204,7 +204,7 @@ describe("custom theme import helpers", () => {
 
     await expect(
       importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
-    ).rejects.toThrow("Unexpected redirect");
+    ).rejects.toThrow("redirected to an unexpected URL");
   });
 
   it.each([

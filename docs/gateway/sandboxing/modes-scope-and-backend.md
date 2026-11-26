@@ -52,7 +52,7 @@ Clearing the override does not remove sandbox containers or change other chats.
 Older versions that do not support this preference follow their configured
 sandbox policy instead.
 
-Native runtime selection and sending can offer **Continue for this chat** when an
+Native runtime selection and sending can offer **Continue for this session** when an
 administrator explicitly chooses the native agent's own permissions. This
 combines the optional sandbox opt-out with Full access and consent bound to that
 chat and runtime. Optional native tool and workspace restrictions are then

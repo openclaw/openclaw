@@ -1,6 +1,10 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
+import {
+  limitsAreAdvisory,
+  releaseBranchForChecks,
+  reportLimitViolations,
+} from "./lib/check-limits.mts";
 
 const LIMIT_RULES = new Set([
   "cyclomatic_complexity",
@@ -71,7 +75,9 @@ function parseReport(output: string): SwiftLintViolation[] {
 
 function run(): number {
   const args = ["lint", ...process.argv.slice(2)];
-  if (!limitsAreAdvisory()) {
+  const release = Boolean(releaseBranchForChecks());
+  const advisory = limitsAreAdvisory();
+  if (!advisory && !release) {
     const result = spawnSync("swiftlint", args, { stdio: "inherit" });
     if (result.error) {
       throw result.error;
@@ -93,8 +99,17 @@ function run(): number {
     return result.status ?? 1;
   }
 
-  const violations = parseReport(result.stdout);
-  const limits = violations.filter(isLimitViolation);
+  const reported = parseReport(result.stdout);
+  const violations = reported.filter(
+    (violation) =>
+      !(
+        release &&
+        ["file_length", "function_body_length", "line_length", "type_body_length"].includes(
+          violation.rule_id,
+        )
+      ),
+  );
+  const limits = violations.filter((violation) => advisory && isLimitViolation(violation));
   reportLimitViolations(
     limits.map((violation) => ({
       file: violation.file ? path.relative(REPO_ROOT, violation.file) : "config/swiftlint.yml",
@@ -103,7 +118,7 @@ function run(): number {
       message: violation.reason,
     })),
   );
-  const otherViolations = violations.filter((violation) => !isLimitViolation(violation));
+  const otherViolations = violations.filter((violation) => !limits.includes(violation));
   for (const violation of otherViolations) {
     console.error(
       `${violation.file ?? "SwiftLint"}:${violation.line ?? 0}:${violation.character ?? 0}: ${violation.severity.toLowerCase()}: ${violation.reason} (${violation.rule_id})`,
@@ -113,7 +128,7 @@ function run(): number {
   if (otherViolations.some((violation) => violation.severity === "Error")) {
     return 2;
   }
-  return limits.length > 0 ? 0 : (result.status ?? 1);
+  return limits.length > 0 || reported.length !== violations.length ? 0 : (result.status ?? 1);
 }
 
 try {

@@ -119,7 +119,6 @@ export function resolveNextRunAtMsOrDisable(params: {
   }
   autoDisableCronJob({
     job: params.job,
-    reason: "schedule-errors",
     atMs: params.state.deps.nowMs(),
     consecutiveErrors: 1,
     deferredNotifications: params.deferredNotifications,
@@ -453,7 +452,6 @@ export function recordScheduleComputeError(params: {
   if (errorCount >= MAX_SCHEDULE_ERRORS) {
     autoDisableCronJob({
       job,
-      reason: "schedule-errors",
       atMs: state.deps.nowMs(),
       consecutiveErrors: errorCount,
       deferredNotifications: params.deferredNotifications,
@@ -717,7 +715,10 @@ export function nextWakeAtMs(state: CronServiceState): number | undefined {
       isTimeScheduledJob(job) &&
       hasScheduledNextRunAtMs(job.state.nextRunAtMs)
     ) {
-      nextWake = Math.min(nextWake ?? Infinity, job.state.nextRunAtMs);
+      nextWake = Math.min(
+        nextWake ?? Infinity,
+        Math.max(job.state.nextRunAtMs, job.state.admissionDeferred?.retryAtMs ?? 0),
+      );
     }
   }
   return nextWake;

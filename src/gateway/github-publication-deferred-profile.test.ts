@@ -4,10 +4,12 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
@@ -40,12 +42,21 @@ async function createDeferredProfileFixture(foreign = false) {
     : f.guestProfile;
   const config = { ...f.config, gateway: { ...f.config.gateway, roles: undefined } };
   setRuntimeConfigSnapshot(config);
-  const client = createOperatorWsClient({ connId: `deferred-${profileId}`, scopes: guestScopes });
+  const socket = new EventEmitter();
+  onTestFinished(() => {
+    socket.emit("close");
+  });
+  const client = createOperatorWsClient({
+    connId: `deferred-${profileId}`,
+    scopes: guestScopes,
+    socket,
+  });
   prepareGatewayConnectOperatorAccess(client);
   const handler = {
     socket: { readyState: WEBSOCKET_OPEN_READY_STATE },
     connectionWork: new AbortController(),
     isClosed: () => false,
+    close: () => socket.emit("close"),
     getClient: () => client,
     buildRequestContext: () => ({}),
   };
@@ -53,6 +64,7 @@ async function createDeferredProfileFixture(foreign = false) {
     { configSnapshot: config, handler } as unknown as GatewayConnectPhaseContext,
     {
       authPolicy: captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" }),
+      authResult: { ok: true, method: "token" },
     } as DeviceAuthorizedGatewayConnect,
   );
   lifecycle.bind(client);
@@ -71,6 +83,9 @@ installGitHubPublicationTestHarness({
   creatorEmail: "publication-guest@example.test",
   sandbox: "required",
   realWorktree: true,
+});
+beforeEach(async () => {
+  onTestFinished((await prepareUserProfileCatalog()).release);
 });
 
 it.each(["own", "foreign"] as const)(

@@ -1,5 +1,6 @@
 import type { UsersMentionableParams, UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { createStore } from "solid-js";
+import { findMarkdownCodeRegions } from "../../../../../packages/markdown-core/src/markdown-code-regions.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
@@ -10,6 +11,8 @@ export type HumanMentionDirectory = {
   client: GatewayBrowserClient;
   ownerKey: string;
   params: UsersMentionableParams;
+  inviteAccessAvailable?: boolean;
+  members?: readonly { identityId: string }[];
 };
 
 export type HumanMentionMenuHost = {
@@ -47,12 +50,7 @@ export function findMentionTarget(value: string, caret: number): MentionTarget |
   }
   const beforeCaret = value.slice(0, caret);
   const line = beforeCaret.slice(beforeCaret.lastIndexOf("\n") + 1);
-  // Code and quoted examples are text, never people-picker invocations.
-  if (
-    /^\s*>/u.test(line) ||
-    (beforeCaret.match(/```/gu)?.length ?? 0) % 2 !== 0 ||
-    (line.match(/`/gu)?.length ?? 0) % 2 !== 0
-  ) {
+  if (/^\s*>/u.test(line)) {
     return null;
   }
   // Spaces can separate name parts, but a space immediately after @ ends the
@@ -63,12 +61,16 @@ export function findMentionTarget(value: string, caret: number): MentionTarget |
   }
   const query = match[1] ?? "";
   const start = caret - query.length - 1;
-  let end = caret;
-  // Replace the rest of the current word, not later words that may be ordinary prose.
-  while (end < value.length && /[\p{L}\p{N}\p{M}_.-]/u.test(value[end] ?? "")) {
-    end += 1;
+  // Unmatched inline backticks are prose, not a fence extending through the draft.
+  // Parse the full value so a closing delimiter after the caret still protects code.
+  if (
+    findMarkdownCodeRegions(value).some((region) => region.start <= start && start < region.end)
+  ) {
+    return null;
   }
-  return { start, end, query, value };
+  // Replace the rest of the current word, not later words that may be ordinary prose.
+  const suffix = /^[\p{L}\p{N}\p{M}_.-]+/u.exec(value.slice(caret))?.[0] ?? "";
+  return { start, end: caret + suffix.length, query, value };
 }
 
 export type MentionPerson = UsersMentionableResult["users"][number];
@@ -93,6 +95,10 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
     selectedProfileId: undefined,
   });
   const selectedAvatars = new Map<string, string>();
+  const selectedInviteOptions = new Map<
+    string,
+    NonNullable<MentionPerson["inviteAccessOptions"]>
+  >();
   const selectedAvatarUrls: ReadonlyMap<string, string> = selectedAvatars;
   let latestInput: MentionInput | undefined;
   let engine:
@@ -116,6 +122,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
         },
         setState,
         selectedAvatars,
+        selectedInviteOptions,
         cancelSearch,
         update,
         close,
@@ -129,6 +136,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
     return (
       directory?.client === next?.client &&
       directory?.ownerKey === next?.ownerKey &&
+      directory?.inviteAccessAvailable === next?.inviteAccessAvailable &&
       JSON.stringify(directory?.params) === JSON.stringify(next?.params)
     );
   }
@@ -142,6 +150,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
     setState(close);
     engine?.clear();
     selectedAvatars.clear();
+    selectedInviteOptions.clear();
     // Each lifetime owns a fresh descriptor, even if a caller reuses A after A → B → A.
     // Old requests must never become current again or retire a replacement query.
     directory = next ? { ...next } : undefined;
@@ -170,6 +179,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
     engineImport.dispose();
     engine?.clear();
     selectedAvatars.clear();
+    selectedInviteOptions.clear();
   }
 
   function update(
@@ -317,6 +327,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
     },
     state,
     selectedAvatarUrls,
+    selectedInviteOptions,
     externalAccess,
     syncDirectory,
     update: (input: MentionInput, intent: MentionIntent = "selection") =>

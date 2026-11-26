@@ -10,13 +10,11 @@ export async function finishLocalWorkspaceHandoff(
   handoff: NonNullable<InternalSessionEntry["localWorkspaceHandoff"]>,
 ) {
   owner.assertCurrent();
-  if (
-    handoff.worktreeId !== owner.worktree.id ||
-    handoff.toSessionId !== owner.sessionId ||
-    handoff.lifecycleRevision !== owner.lifecycleRevision
-  ) {
+  if (handoff.worktreeId !== owner.worktree.id || handoff.toSessionId !== owner.sessionId) {
     throw new Error("Local workspace handoff belongs to a different session incarnation");
   }
+  const projectionPath = await localWorkspaceProjectionPath(owner);
+  owner.assertCurrent();
   await withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
     const row = store.get();
     if (!row) {
@@ -24,14 +22,20 @@ export async function finishLocalWorkspaceHandoff(
         "Local workspace handoff lost its saved projection; recovery data was preserved",
       );
     }
-    if (row.session_id === owner.sessionId) {
-      assertLocalWorkspaceProjectionOwner(row, owner, localWorkspaceProjectionPath(owner));
+    // An in-place history cut keeps the session id and rotates only the lifecycle
+    // revision, so custody transfers on the incarnation pair, not the id alone.
+    if (row.session_id === owner.sessionId && row.lifecycle_revision === owner.lifecycleRevision) {
+      assertLocalWorkspaceProjectionOwner(row, owner, projectionPath);
       return;
     }
     assertLocalWorkspaceProjectionOwner(
       row,
-      { ...owner, sessionId: handoff.fromSessionId },
-      localWorkspaceProjectionPath(owner),
+      {
+        ...owner,
+        sessionId: handoff.fromSessionId,
+        lifecycleRevision: handoff.lifecycleRevision,
+      },
+      projectionPath,
     );
     if (
       row.revision !== handoff.projectionRevision ||
@@ -45,6 +49,10 @@ export async function finishLocalWorkspaceHandoff(
     }
     // Update only ownership. Baselines, inventories, files and recovery receipts stay put.
     // The store recovers committed facts after reply loss before releasing custody.
-    await store.update(row, { session_id: owner.sessionId }, owner.workerAuthority);
+    await store.update(
+      row,
+      { session_id: owner.sessionId, lifecycle_revision: owner.lifecycleRevision },
+      owner.workerAuthority,
+    );
   });
 }

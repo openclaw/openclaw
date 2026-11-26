@@ -11,6 +11,7 @@ import { combineGatewayLocalUserIngress } from "../../../gateway/local-user-ingr
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
+import { replyCallbackCustody } from "../reply-callback-custody.js";
 import {
   resolveReplyOperatorAuthorityKey,
   resolveReplyPersonalToolTargets,
@@ -71,7 +72,9 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
       operatorAuthority: run.operatorAuthority,
     }),
     resolveReplyOperatorAuthorityKey(run.operatorAuthority),
+    stableStringify(run.operatorAuthority?.participationCeiling ?? null),
     execution.senderId ?? "",
+    execution.mcpRequesterProfileId ?? "",
     JSON.stringify(execution.channelContext ?? null),
     stableStringify(execution.conversationToolPolicy ?? null),
     execution.senderE164 ?? "",
@@ -179,7 +182,6 @@ export async function prepareNextDeliveryGroup(
   const assertCurrent = () => {
     assertDrainCurrent();
     for (const item of items) {
-      item.operatorAuthority?.assertCurrent();
       if (isFollowupRunAborted(item)) {
         throw new FollowupRunDeferredError("Queued delivery source changed during preparation");
       }
@@ -231,7 +233,7 @@ export async function prepareNextDeliveryGroup(
   });
 }
 
-function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
+export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
   if (run.originatingReplyToMode === "off") {
     return undefined;
   }
@@ -344,6 +346,10 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
       : [],
   );
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
+  const callbackCustodies = items.flatMap((item) => {
+    const custody = item[replyCallbackCustody];
+    return custody ? [custody] : [];
+  });
   const explicitSkillSelections = [
     ...new Map(
       items
@@ -376,6 +382,19 @@ export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: Abort
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
+    [replyCallbackCustody]:
+      callbackCustodies.length > 0
+        ? {
+            retain: () => {
+              const releases = callbackCustodies.map((custody) => custody.retain());
+              return () => {
+                for (const release of releases) {
+                  release();
+                }
+              };
+            },
+          }
+        : undefined,
     turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
     replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
     queuedFollowupReplyDisposition: collectReplyDisposition(items),
@@ -419,6 +438,7 @@ export function getFollowupOriginRouting(source: FollowupRun) {
 export function createOverflowSummaryRetrySource(source: InternalFollowupRun): InternalFollowupRun {
   return {
     controllerInput: source.controllerInput,
+    ambientOverflowContext: source.ambientOverflowContext,
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
     createChannelCronAuthority: source.createChannelCronAuthority,
@@ -445,6 +465,7 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     ...getFollowupOriginRouting(source),
     abortSignal: source.abortSignal,
     deliveryCorrelations: source.deliveryCorrelations,
+    [replyCallbackCustody]: source[replyCallbackCustody],
     onQueueDisposition: source.onQueueDisposition,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     replyOperationRunStates: source.replyOperationRunStates,

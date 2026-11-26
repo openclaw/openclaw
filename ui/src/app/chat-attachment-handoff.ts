@@ -186,6 +186,7 @@ export function createChatAttachmentHandoff(
     () => !privateEntry(),
     () =>
       showToast({
+        severity: "error",
         actionPrimary: true,
         message: t("chat.privateDraftReload.blocked"),
         actionLabel: t("chat.privateDraftReload.review"),

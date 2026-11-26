@@ -1,3 +1,4 @@
+import { isNamedOperatorRoleEnforcementEnabled } from "openclaw/plugin-sdk/gateway-config-runtime";
 import type { PluginRuntime } from "../api.js";
 import type { VisitorTarget } from "./cloudflare.js";
 import { VisitorAccessError } from "./errors.js";
@@ -59,7 +60,7 @@ export function createVisitorAccessReader(
     const profile = (target: VisitorTarget) =>
       typeof target === "string" ? byEmail.get(target) : byGithub.get(target);
     const config = runtime.config.current();
-    const roles = config.gateway?.roles;
+    const roles = isNamedOperatorRoleEnforcementEnabled(config) ? config.gateway?.roles : undefined;
     const access = (target: VisitorTarget) => describeAccess(profile(target), roles);
     return {
       describe: (target) => access(target).description,
@@ -103,7 +104,7 @@ export function createVisitorAccessReader(
         const result = access(target);
         if (!result.invitable) {
           throw new VisitorAccessError(
-            `${result.description}. Configure a default role with isolated own-session work and shared-session viewing before inviting this person.`,
+            `${result.description}. Configure a default role with isolated own-session work and sessions.others: "invited" or "view" before inviting this person.`,
           );
         }
       },

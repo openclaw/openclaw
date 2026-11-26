@@ -198,8 +198,8 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Skills -> SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.SystemAgent -> SystemAgentSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Channels -> ChannelsSettingsScreen(state = viewModel.channelsState.collectAsState().value, isConnected = viewModel.isConnected.collectAsState().value, onRefresh = viewModel::refreshChannels, onBack = onBack)
+    SettingsRoute.Dreaming -> DreamingSettingsScreen(state = viewModel.dreamingState.collectAsState().value, isConnected = viewModel.isConnected.collectAsState().value, onRefresh = viewModel::refreshDreaming, onBack = onBack)
     SettingsRoute.Terminal -> TerminalSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Desktop -> DesktopScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -655,7 +655,8 @@ private fun VoiceSettingsScreen(
   val voiceWakeLastCommand by viewModel.voiceWakeLastTriggeredCommand.collectAsState()
   val voiceWakeWordsSaving by viewModel.voiceWakeWordsSaving.collectAsState()
   val voiceWakeWordsNoticeText by viewModel.voiceWakeWordsNoticeText.collectAsState()
-  var wakeWordDrafts by remember(voiceWakeWords) {
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  var wakeWordDrafts by remember(activeGatewayStableId, voiceWakeWords) {
     mutableStateOf(voiceWakeWords)
   }
   var audioInputDevices by remember { mutableStateOf<List<AudioInputDeviceOption>>(emptyList()) }
@@ -1757,6 +1758,7 @@ private fun GatewaySettingsScreen(
             },
             trailing = {
               Switch(
+                modifier = Modifier.semantics { contentDescription = entry.displayName },
                 checked = entry.stableId == activeGatewayStableId || entry.stableId in connectedGatewayStableIds,
                 onCheckedChange = { enabled ->
                   viewModel.setGatewayConnectionEnabled(entry.stableId, enabled)
@@ -1997,7 +1999,7 @@ internal fun gatewayAccessLabel(
 
 internal fun gatewayLimitedAccessUpgradeText(): String =
   nativeString(
-    "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+    "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the web app or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
   )
 
 @Composable

@@ -24,6 +24,7 @@ import {
 import {
   applyLocalSetupWorkspaceConfig,
   applySkipBootstrapConfig,
+  describeSetupToolProfile,
   resolveOnboardingWorkspaceConflict,
 } from "../onboard-config.js";
 import {
@@ -696,6 +697,10 @@ export async function runNonInteractiveLocalSetup(params: {
   }
 
   if (!opts.json) {
+    const toolProfileLine = describeSetupToolProfile(nextConfig, finalTarget.agentId);
+    if (toolProfileLine) {
+      runtime.log(toolProfileLine);
+    }
     runtime.log(
       `Tip: run \`${formatCliCommand("openclaw configure --section web")}\` to store your Brave API key for web_search. Docs: https://docs.openclaw.ai/tools/web`,
     );

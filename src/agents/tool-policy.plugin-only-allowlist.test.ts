@@ -12,6 +12,7 @@ import {
 const pluginGroups: PluginToolGroups = {
   all: ["lobster", "workflow_tool"],
   byPlugin: new Map([["lobster", ["lobster", "workflow_tool"]]]),
+  allowByPlugin: new Map([["lobster", ["lobster", "workflow_tool"]]]),
 };
 const coreTools = new Set(["read", "write", "exec", "session_status"]);
 

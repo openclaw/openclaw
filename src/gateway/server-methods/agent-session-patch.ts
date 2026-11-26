@@ -16,6 +16,8 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
@@ -41,7 +43,6 @@ export async function buildAgentSessionPatch(params: {
   canonicalSessionKey: string;
   storePath: string;
   expectedExistingSessionId?: string;
-  hasRestoredCronContinuation: boolean;
   resetPolicy: ReturnType<typeof import("../../config/sessions.js").resolveSessionResetPolicy>;
   now: number;
   requestedSessionId?: string;
@@ -67,7 +68,6 @@ export async function buildAgentSessionPatch(params: {
     : undefined;
   const skipImplicitExpiry =
     params.expectedExistingSessionId !== undefined ||
-    params.hasRestoredCronContinuation ||
     params.freshEntry?.modelSelectionLocked === true ||
     (params.resetPolicy.configured !== true && hasProviderOwnedSession(params.freshEntry));
   const freshness: SessionFreshness | undefined = params.freshEntry
@@ -124,9 +124,22 @@ export async function buildAgentSessionPatch(params: {
     Boolean(params.freshEntry?.sessionId) &&
     params.visibleRequest &&
     isRecoverableTerminalSessionStatus(params.freshEntry?.status);
+  const activeOperation = getSessionControllerOperation(
+    params.canonicalSessionKey,
+    captureSessionTarget({
+      storeScope: params.storePath,
+      sessionKey: params.canonicalSessionKey,
+      agentId: params.sessionAgentId,
+    }),
+  );
+  // Implicit expiry must leave the exact executing writer's lifecycle intact.
+  const deferImplicitRollover =
+    freshness?.fresh === false &&
+    activeOperation?.phase !== "queued" &&
+    activeOperation?.sessionId === params.freshEntry?.sessionId;
   const canReuseSession =
     Boolean(params.freshEntry?.sessionId) &&
-    ((freshness?.fresh ?? false) || recoverableTerminalSession) &&
+    ((freshness?.fresh ?? false) || deferImplicitRollover || recoverableTerminalSession) &&
     !(failedSession && !metadata?.present) &&
     !terminalMainTranscriptNewerThanRegistry;
   const usableRequestedSessionId =

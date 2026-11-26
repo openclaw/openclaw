@@ -60,6 +60,8 @@ export async function createAuthProbeWork(signal?: AbortSignal) {
     }
   }
   return {
+    /** Settles after detached cleanup finishes, including after its failure. */
+    settled: completion.promise.catch(() => {}),
     run<T>(operation: () => T | Promise<T>): Promise<T> {
       return work.track(operation);
     },

@@ -18,8 +18,10 @@ import {
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
 import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
+import { readGitHubPublicationConfiguration } from "../../agents/github-tool-identity-config.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { agentHarnessExposesOpenClawTools } from "../../agents/harness/tool-surface.js";
+import { isSessionProjectMoveEligible } from "../../agents/session-project-guidance.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { readToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
 import type { ToolPolicyLike } from "../../agents/tool-policy.js";
@@ -115,6 +117,11 @@ function buildToolsEffectiveCacheKey(context: TrustedToolsEffectiveContext): str
     replyToMode: optionalCacheString(context.replyToMode),
     webSearchEnabled: context.toolOverrides?.webSearch !== false,
     githubPublicationAvailable: context.githubPublicationAvailable,
+    sessionProjectMoveEligible: context.sessionProjectMoveEligible,
+    githubPublicationConfiguration:
+      !context.agentRuntime || context.agentRuntime === "openclaw"
+        ? readGitHubPublicationConfiguration({ config: context.cfg, agentId: context.agentId })
+        : undefined,
     // Prepared session ceilings can change without a config or session-id change.
     policy: Object.values<ToolPolicyLike | undefined>(
       resolveConversationToolPolicies({ capabilityProfile: context.capabilityProfile }),
@@ -296,6 +303,7 @@ async function resolveBaseToolsEffectiveInventory(
         replyToMode: context.replyToMode,
         webSearchEnabled: context.toolOverrides?.webSearch,
         githubPublicationAvailable: context.githubPublicationAvailable,
+        sessionProjectMoveEligible: context.sessionProjectMoveEligible,
       }),
     );
   } finally {
@@ -305,6 +313,7 @@ async function resolveBaseToolsEffectiveInventory(
 
 async function resolveReadOnlyToolsEffectiveInventory(
   context: TrustedToolsEffectiveContext,
+  includeMcpPluginOwnership: boolean,
 ): Promise<EffectiveToolInventoryResult> {
   const base = await resolveCachedBaseToolsEffective(context);
   const harness = context.agentHarnessId
@@ -334,6 +343,7 @@ async function resolveReadOnlyToolsEffectiveInventory(
           catalog,
           context,
           workspaceDir: context.workspaceDir,
+          pluginIdsByServer: includeMcpPluginOwnership ? mcpConfig.pluginIdsByServer : undefined,
         });
       }
     } catch (error) {
@@ -379,6 +389,7 @@ async function resolveReadOnlyToolsEffectiveInventory(
     catalog,
     context,
     workspaceDir: runtime.workspaceDir,
+    pluginIdsByServer: includeMcpPluginOwnership ? mcpConfig.pluginIdsByServer : undefined,
   });
 }
 
@@ -387,6 +398,7 @@ async function projectMcpCatalog(params: {
   catalog: Parameters<typeof buildBundleMcpToolsFromCatalog>[0]["catalog"];
   context: TrustedToolsEffectiveContext;
   workspaceDir: string;
+  pluginIdsByServer?: ReadonlyMap<string, string>;
 }): Promise<EffectiveToolInventoryResult> {
   const catalogNotices = (params.catalog.diagnostics ?? []).map(
     (diagnostic): EffectiveToolInventoryNotice => ({
@@ -439,7 +451,9 @@ async function projectMcpCatalog(params: {
             const mcp = getPluginToolMeta(tool)?.mcp;
             return {
               source: "mcp",
-              pluginId: BUNDLE_MCP_PLUGIN_ID,
+              // Config owns the association; a server's advertised name or title does not.
+              pluginId:
+                (mcp && params.pluginIdsByServer?.get(mcp.serverName)) ?? BUNDLE_MCP_PLUGIN_ID,
               ...(mcp
                 ? {
                     mcpServer: mcp.serverName,
@@ -505,17 +519,20 @@ async function resolveTrustedToolsEffectiveContext(
   const delivery = deliveryContextFromSession(loaded.entry);
   const origin = sessionDeliveryOrigin(loaded.entry);
   const resolvedModel = resolveSessionModelRef(loaded.cfg, loaded.entry, sessionAgentId);
-  const agentRuntime = resolveEffectiveAgentRuntime({
-    cfg: loaded.cfg,
-    provider: resolvedModel.provider,
-    modelId: resolvedModel.model,
-    agentScope: { kind: "prepared", agentId: sessionAgentId },
-    sessionKey: canonicalKey,
-    sessionEntry: loaded.entry,
-  });
+  const agentRuntime =
+    resolvedModel &&
+    resolveEffectiveAgentRuntime({
+      cfg: loaded.cfg,
+      provider: resolvedModel.provider,
+      modelId: resolvedModel.model,
+      agentScope: { kind: "prepared", agentId: sessionAgentId },
+      sessionKey: canonicalKey,
+      sessionEntry: loaded.entry,
+    });
   // Listing describes the brokered surface, never current publication authority.
   const githubPublicationAvailable =
     !params.localEmbedded &&
+    agentRuntime !== undefined &&
     agentHarnessExposesOpenClawTools(agentRuntime) &&
     !(await readAcpSessionMetaForEntryAsync({
       cfg: loaded.cfg,
@@ -538,8 +555,8 @@ async function resolveTrustedToolsEffectiveContext(
     pluginRegistryVersion: getActivePluginRegistryVersion(),
     channelRegistryVersion: getActivePluginChannelRegistryVersion(),
     nodePluginToolsVersion: getConnectedNodePluginToolsVersion(),
-    modelProvider: resolvedModel.provider,
-    modelId: resolvedModel.model,
+    modelProvider: resolvedModel?.provider,
+    modelId: resolvedModel?.model,
     messageProvider: delivery?.channel ?? origin?.provider,
     agentRuntime,
     accountId: delivery?.accountId ?? origin?.accountId,
@@ -556,6 +573,11 @@ async function resolveTrustedToolsEffectiveContext(
     spawnedBy: normalizeOptionalString(loaded.entry.spawnedBy),
     agentHarnessId: normalizeOptionalString(loaded.entry.agentHarnessId),
     githubPublicationAvailable,
+    sessionProjectMoveEligible: isSessionProjectMoveEligible(
+      loaded.cfg,
+      sessionAgentId,
+      loaded.entry,
+    ),
     toolOverrides: loaded.entry.toolOverrides,
     replyToMode: resolveReplyToMode(
       loaded.cfg,
@@ -627,7 +649,10 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
         if (!trustedContext) {
           return;
         }
-        const inventory = await resolveReadOnlyToolsEffectiveInventory(trustedContext);
+        const inventory = await resolveReadOnlyToolsEffectiveInventory(
+          trustedContext,
+          !sessionOnly,
+        );
         authority.assertCurrent();
         assertSourceCurrent();
         respond(true, sessionOnly ? projectSessionToolPreview(inventory) : inventory, undefined);

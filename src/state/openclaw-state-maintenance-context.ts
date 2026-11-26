@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import fs from "node:fs";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import fs, { type BigIntStats } from "node:fs";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type MaintenanceResource = {
@@ -28,6 +28,8 @@ export type OpenClawDatabaseMaintenanceScope = {
   assertOwnerCurrent(this: void, access?: "read"): void;
   assertDatabaseAccess(this: void, databasePath: string): void;
   assertCleanupDatabaseAccess(this: void, databasePath: string): void;
+  /** Resource lifetime only; authority is checked when work starts and at commit. */
+  assertAdmissionLifecycle(this: void): void;
   assertAdmission(this: void): void;
   assertReadAdmission(this: void): void;
   addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;
@@ -52,12 +54,20 @@ export function allowsMaintenanceLiveAuthorityReads(
   pathname: string,
 ): boolean {
   const canonicalPath = resolveIdentityPathViaExistingAncestorSync(pathname);
+  return hasAdmittedMaintenanceLiveAuthorityReads(scope, canonicalPath);
+}
+
+/** Ordinary readers consume the post-backup owner's prepared path, without probing custody. */
+export function hasAdmittedMaintenanceLiveAuthorityReads(
+  scope: OpenClawDatabaseMaintenanceScope,
+  pathname: string,
+): boolean {
   for (
     let current: OpenClawDatabaseMaintenanceScope | undefined = scope;
     current;
     current = maintenanceResources.parents.get(current)
   ) {
-    if (liveAuthorityReads.get(current)?.has(canonicalPath)) {
+    if (liveAuthorityReads.get(current)?.has(pathname)) {
       return true;
     }
   }
@@ -74,6 +84,21 @@ export function maintenanceOwnerHasSourceCustody(
   }
   scope.assertReadAdmission();
   return !allowsMaintenanceLiveAuthorityReads(scope, pathname);
+}
+
+/** An orphaned WAL read can reset its commit counter; only drained sources preserve custody. */
+export function readCustodiedDrainedSqliteSource(pathname: string): BigIntStats | undefined {
+  if (!maintenanceOwnerHasSourceCustody(getOpenClawDatabaseMaintenanceScope(), pathname)) {
+    return undefined;
+  }
+  const canonicalPath = resolveIdentityPathViaExistingAncestorSync(pathname);
+  if (
+    fs.existsSync(`${canonicalPath}-journal`) ||
+    (fs.statSync(`${canonicalPath}-wal`, { throwIfNoEntry: false })?.size ?? 0) > 0
+  ) {
+    return undefined;
+  }
+  return fs.statSync(canonicalPath, { bigint: true });
 }
 
 const MAINTENANCE_IN_PROCESS_COPY_MAX_BYTES = 64 * 1024 * 1024;
@@ -136,6 +161,7 @@ export function admitOpenClawMaintenanceLiveAuthorityReads(pathname: string): vo
     liveAuthorityReads.set(scope, admitted);
   }
   admitted.add(resolveIdentityPathViaExistingAncestorSync(pathname));
+  admitted.add(pathname);
 }
 
 /** Delayed work acquires its own resources instead of inheriting the completed scope. */

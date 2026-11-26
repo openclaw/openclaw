@@ -1,6 +1,7 @@
 import { BROWSER_IMAGE_MIME_TYPES } from "../../../../../src/shared/browser-image-mime-types.js";
 import { formatInlineCodeSpan } from "../../../../../src/shared/markdown-code.js";
-import { downloadArtifact, isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
+import { isHttpArtifactDownloadUrl } from "../../../api/artifact-download-url.ts";
+import { downloadArtifact } from "../../../api/artifact-download.ts";
 import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import {
   downloadSessionFile,
@@ -50,6 +51,7 @@ import type {
 } from "./chat-sidebar-content-types.ts";
 
 export { downloadSessionFile };
+export { checkFileLinkAvailability } from "./chat-file-link-availability.ts";
 
 type WorkspaceFileOptions = {
   requestPath: string;
@@ -86,7 +88,7 @@ export async function loadSessionWorkspaceFileContent(
       reference.result.source?.fileRoot !== document.workspaceSource?.fileRoot)
   ) {
     throw new Error(
-      "The document's workspace changed. Reopen the document before following its links.",
+      "The document’s workspace changed. Reopen the document before following its links.",
     );
   }
   return (

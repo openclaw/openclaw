@@ -6,6 +6,7 @@ import { captureAdaptiveModelRanking } from "./ci-adaptive-model.mts";
 import { planAdaptiveSelection } from "./ci-adaptive-selection.mjs";
 import {
   collectTestObservations,
+  decodeTestObservations,
   isObservationPath,
   observationContext,
 } from "./ci-test-observations.mjs";
@@ -19,7 +20,7 @@ type Prior = {
   archiveSha256: string;
   memberPath: string;
   memberSha256: string;
-  observations: { observations: Observations };
+  observations: { observations: unknown };
   comparison: {
     baseRevision: string;
     baseTree: string;
@@ -125,7 +126,7 @@ export function captureAdaptiveGraphDecision(options: {
         ) {
           throw new Error("Invalid prior identity");
         }
-        const baseline = prior.observations.observations;
+        const baseline = decodeTestObservations(prior.observations.observations);
         const context = observationContext(baseline.context);
         if (
           baseline.version !== 1 ||

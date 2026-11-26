@@ -303,7 +303,7 @@ suite.define(() => {
           await page.keyboard.press("ControlOrMeta+k");
           foreground = page
             .locator("openclaw-command-palette")
-            .getByRole("textbox", { name: "Search or start a task…" });
+            .getByRole("textbox", { name: "Search…" });
           await foreground.fill("Keep typing here");
         } else if (intent === "sidebar menu" || holdRail) {
           await page

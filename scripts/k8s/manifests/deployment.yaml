@@ -19,6 +19,9 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
+        # Avoid repeating kubelet's recursive mode changes when the root matches.
+        # This does not repair existing modes or govern delegated CSI ownership.
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       initContainers:
@@ -29,6 +32,7 @@ spec:
             - sh
             - -c
             - |
+              set -eu
               # Seed-if-missing: the PVC copy owns config after first boot so edits made
               # through OpenClaw (onboard, channels add, doctor --fix, Control UI) survive
               # restarts. ConfigMap edits need an explicit reseed (see docs/install/kubernetes.md).

@@ -34,6 +34,6 @@ Graceful Gateway shutdown cancels in-flight provisioning and releases its resour
 Startup does not reconstruct or replay that dispatch. The root session’s resume
 input can request provisioning again after checking current state. Durable resource
 identity, leases, and cleanup intent still prevent lost allocations from being
-blindly replaced; explicit **Stop cloud worker…** keeps its destruction behavior.
+blindly replaced; explicit **Stop cloud device…** keeps its destruction behavior.
 
 An interrupted legacy dispatch may have allocated a random lease without recording its ID. OpenClaw cannot identify that allocation safely from the old operation alone. It refuses reconstruction and slug adoption, retaining the unresolved allocation and cleanup record across restarts instead of treating the resource as gone. Identify and clean up any prior lease before starting a new dispatch; do not guess by slug. Automatic identification or settlement of the old record is not supported. Legacy records already marked failed are not reopened automatically.

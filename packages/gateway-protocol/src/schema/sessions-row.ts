@@ -15,7 +15,11 @@ import {
   EffectiveSessionCommunicationPolicySchema,
 } from "./sessions-communication.js";
 import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
-import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
+import {
+  SessionMemberPermissionLevelSchema,
+  SessionSharingRoleSchema,
+  SessionVisibilitySchema,
+} from "./sessions-sharing-values.js";
 
 /** Existing directory on a paired session host; never a Gateway-owned checkout. */
 export const SessionDeviceFolderSchema = closedObject({
@@ -127,6 +131,8 @@ export const SessionRowSchema = Type.Object(
     /** Response-local indexes into the list's sharedFacts; expand before merging rows. */
     sharedFacts: Type.Optional(Type.Array(Type.Integer({ minimum: 0 }))),
     sessionId: Type.Optional(Type.String()),
+    /** Saved transcript messages exist; omission means the history fact is not yet known. */
+    hasMessages: Type.Optional(Type.Boolean()),
     /** Incarnation revision for invalidating session-scoped client caches after resets. */
     lifecycleRevision: Type.Optional(NonEmptyString),
     /** Opaque saved model-selection inputs, unaffected by activity or display updates. */
@@ -229,6 +235,13 @@ export const SessionRowSchema = Type.Object(
         repoRoot: Type.String(),
       }),
     ),
+    worktreeState: Type.Optional(
+      Type.Union([
+        Type.Literal("ready"),
+        Type.Literal("removed-snapshot"),
+        Type.Literal("removed-fresh"),
+      ]),
+    ),
     repositoryWorkspaceId: Type.Optional(NonEmptyString),
     repository: Type.Optional(
       closedObject({
@@ -267,7 +280,9 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     /** Immutable presentation surface; independent of creation provenance. */
-    createdSurface: Type.Optional(Type.Literal("plugin-dock")),
+    createdSurface: Type.Optional(
+      Type.Union([Type.Literal("plugin-dock"), Type.Literal("github-publication")]),
+    ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
     participants: Type.Optional(
@@ -279,6 +294,10 @@ export const SessionRowSchema = Type.Object(
     participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
     sharingRole: Type.Optional(SessionSharingRoleSchema),
+    /** Recipient-local invitation level, only for ceiling-role participants. */
+    invitedAccess: Type.Optional(SessionMemberPermissionLevelSchema),
+    /** Recipient-local role/session permission ceiling for invited sends. */
+    invitedPermission: Type.Optional(SessionPermissionModeSchema),
     /** Recipient-local send admission; null explicitly clears a previous restriction. */
     sendDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     /** Recipient-local workspace admission; null clears a previous read restriction. */
@@ -303,6 +322,8 @@ export const SessionRowSchema = Type.Object(
     estimatedCostUsd: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
+    /** Prepared catalog name for the selected model, not the model serving a run. */
+    modelDisplayName: Type.Optional(Type.String()),
     /** Runtime model serving this session while it differs from the selected model. */
     activeModel: Type.Optional(Type.String()),
     activeModelProvider: Type.Optional(Type.String()),

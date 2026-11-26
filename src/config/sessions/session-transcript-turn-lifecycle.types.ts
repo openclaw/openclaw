@@ -5,6 +5,8 @@ export type SessionLifecycleRevisionExpectation = string | null;
 
 /** Authoritative lifecycle snapshot required for an atomic transcript admission. */
 export type SessionTranscriptTurnExpectedState = {
+  /** A deferred shell observation can attach only while its private dispatch receipt is outstanding. */
+  pendingShellCall?: { runId: string; key: string };
   /** When supplied, fences exact pending-final custody; null requires its absence. */
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"] | null;
   /** Rejects a run-owned turn after another admitted run takes writer ownership. */
@@ -15,12 +17,15 @@ export type SessionTranscriptTurnExpectedState = {
 
 /** Lifecycle fields committed with an accepted transcript turn. */
 export type SessionTranscriptTurnLifecyclePatch = {
+  activeWriterRunId?: SessionEntry["activeWriterRunId"];
   abortedLastRun?: boolean;
   endedAt?: number;
   lifecycleRunId?: SessionEntry["lifecycleRunId"];
+  lifecycleRestartScope?: SessionEntry["lifecycleRestartScope"];
   lastRunId?: SessionEntry["lastRunId"];
   lastRunError?: SessionEntry["lastRunError"];
   lastInteractionAt?: number;
+  lastActivityAt?: number;
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
   runtimeMs?: number;
   startedAt?: number;

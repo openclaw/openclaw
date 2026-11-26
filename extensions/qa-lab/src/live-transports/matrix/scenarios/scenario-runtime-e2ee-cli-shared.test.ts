@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { MatrixQaCliRunResult } from "./scenario-runtime-cli.js";
 import { parseMatrixQaCliJson } from "./scenario-runtime-e2ee-cli-shared.js";
 import {
+  assertMatrixQaCliCorruptSnapshotRefused,
   runMatrixQaCliJson,
   type MatrixQaCliRuntime,
 } from "./scenario-runtime-e2ee-destructive-recovery.js";
@@ -25,9 +26,16 @@ const rawDetail = "GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij
 const redactedDetail = "GET /_matrix/client/v3/sync?access_token=abcdef…ghij";
 const stdout = ` {"success":false,"backup":{"matchesDecryptionKey":null,"extra":false},"imported":0,"values":[0,false,null,""],"detail":"${rawDetail}"}\n`;
 const stderr = `{"fallback":true,"detail":"${rawDetail}"}`;
+const refusal = "Matrix crypto snapshot is corrupt; run openclaw matrix doctor inspect";
 
 it.each([
   ["returns authoritative stdout and redacted artifacts", "success", stdout, stderr],
+  [
+    "normalizes the CLI failure envelope before checking corrupt-snapshot refusal",
+    "cli-error",
+    JSON.stringify({ ok: false, error: { type: "cli_error", message: refusal } }),
+    stderr,
+  ],
   ["rejects malformed stdout despite valid stderr", "stdout", `  {]\n${rawDetail}\n`, stderr],
   ["labels malformed stderr when stdout is blank", "stderr", " \n", `\t{]\n${rawDetail}  `],
   [
@@ -64,17 +72,24 @@ it.each([
     label: "json-output",
     runtime,
   });
-  if (outcome === "success") {
+  if (outcome === "success" || outcome === "cli-error") {
     const actual = await pending;
     expect(actual.result).toBe(result);
-    expect(actual.payload).toStrictEqual({
-      success: false,
-      backup: { matchesDecryptionKey: null, extra: false },
-      imported: 0,
-      values: [0, false, null, ""],
-      detail: rawDetail,
-    });
+    expect(actual.payload).toStrictEqual(
+      outcome === "cli-error"
+        ? { success: false, error: refusal }
+        : {
+            success: false,
+            backup: { matchesDecryptionKey: null, extra: false },
+            imported: 0,
+            values: [0, false, null, ""],
+            detail: rawDetail,
+          },
+    );
     expect(actual.artifacts).toEqual(artifacts);
+    if (outcome === "cli-error") {
+      assertMatrixQaCliCorruptSnapshotRefused(actual, { readGeneration: () => "corrupt" });
+    }
   } else {
     const failure = await pending.catch((caught: unknown) => caught);
     expect(failure).toBeInstanceOf(Error);

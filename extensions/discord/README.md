@@ -2,6 +2,12 @@
 
 Official OpenClaw channel plugin for Discord servers, channels, DMs, slash commands, and app events.
 
+Voice input has a packet-inactivity deadline even when a speaker disconnects
+without a speaking-end event. `voice.captureSilenceGraceMs` still controls the
+grace after the SDK detects silence. Active recordings flush
+bounded WAV segments to disk; stream errors discard the incomplete segment and
+release the speaker subscription. Continuous capture remains registered.
+
 Install from OpenClaw:
 
 ```bash

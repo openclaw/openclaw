@@ -317,6 +317,7 @@ async function mutateAcpSessionMeta(
               skipMaintenance,
               maintenanceConfig,
               storePath: store.storePath,
+              source: execution.fileIdentity,
             });
             kickSessionHistoryDiskBudgetMaintenance({
               agentId: scope.agentId,

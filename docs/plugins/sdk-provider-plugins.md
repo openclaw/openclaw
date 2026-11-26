@@ -29,15 +29,24 @@ API calls, not exported OpenClaw functions.
 </Tip>
 
 Auth methods can return `agentRuntimeId` with `defaultModel` when sign-in belongs
-to a native harness. Model Setup applies that runtime to the selected agent's
+to a native harness. Models applies that runtime to the selected agent's
 model entry, not to global model defaults.
 
 `ProviderAuthContext.agentId` identifies the target agent when the caller has one.
 Native sign-in methods may use it to check previously remembered permissions.
 After explicit user consent, return `ProviderAuthResult.nativeRuntimeConsent`
-with the accepted harness IDs. Model Setup stages those permissions on that
+with the accepted harness IDs. Models stages those permissions on that
 agent in the same verified config commit as the runtime routing and plugin enable.
 Do not write a separate permission store or infer consent from successful login.
+
+`ProviderAuthContext.nodes` lets a sign-in method reach paired nodes, for example
+to finish a loopback redirect on the device that runs the browser. It offers
+`list` and `invoke` with the same shapes as `api.runtime.nodes`, except that
+`invoke` takes no `scopes` or `sessionKey`. It is present only when sign-in runs
+inside the Gateway (Control UI, chat `/login`, or `openclaw models auth login`
+against a running Gateway). Offline CLI sign-in leaves it undefined, so treat
+node access as optional. Each call goes through Gateway `node.invoke` command policy with the
+sign-in caller's authority.
 
 ## Checklist before you open a provider PR
 
@@ -54,7 +63,7 @@ Do not write a separate permission store or infer consent from successful login.
   the row to `src/plugins/contracts/catalog-thinking-profiles.contract.test.ts`.
   Use `compat.thinkingLevels` when the offered ladder differs from what the map implies.
 - **Live listing needs both halves.** The entry sets `catalog.liveModelDiscovery`
-  and the manifest declares `modelCatalog.discovery: { "<provider>": "refreshable" }`.
+  and the manifest declares `modelCatalog.discovery: { "<provider>": "refreshable" }` (equivalent to `runtime`).
   Without the manifest half, the Gateway never refreshes the provider and only
   catalog rows appear.
 - **Row IDs match the listing.** Use the ID the vendor's model list returns.
@@ -159,6 +168,9 @@ token requests and persistence; the listener deadline does not cancel that work.
 By default, the listener binds every loopback address resolved for the redirect
 hostname. `bindHostname` adds a loopback host. Use `bindOnlyHostname` instead to
 preserve a provider's exact Node bind host (`localhost`, `127.0.0.1`, or `::1`).
+Port `0` in `redirectUrl` asks for a free port; read the bound redirect from the
+returned `redirectUrl` and use it in both the authorization URL and the token
+exchange.
 
 ## Declare physical credential ownership
 

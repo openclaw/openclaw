@@ -2,6 +2,7 @@ import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { isExplicitChatFork } from "../../../config/sessions/session-entry-lineage.js";
 import { readSessionEntrySummariesInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
   selectBoundedModelRequests,
@@ -11,26 +12,35 @@ import {
   sessionEntryCommitGuardOptions,
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
+import { isOwnedTranscriptPayload } from "../../../config/sessions/transcript-json.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
+import { shouldMergeConsecutiveTurns } from "../../embedded-agent-helpers/turns.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
+import { isLocalBaseUrl } from "../../model-catalog-route.js";
+import { sessionManagerInheritedMessages } from "../../sessions/session-manager-current-turn.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
+import { describePastProjectMoves } from "../project-move-replay.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
+import { projectCopiedForkMessages } from "./fork-working-context.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 
 function boundSettledFinalizationMessages(attempt: EmbeddedRunAttemptInternalParams) {
+  // Selection never reads entry timestamps, and these entries are neither persisted nor
+  // sent to the model. Context-engine messages may omit timestamps, so use a fixed value.
+  const timestamp = new Date(0).toISOString();
   const requests: ModelContextRequest[] = attempt.settledTurnFinalizationMessages!.map(
     (message, index) => ({
       entry: {
         type: "message",
         id: String(index),
         parentId: index ? String(index - 1) : null,
-        timestamp: new Date(message.timestamp).toISOString(),
+        timestamp,
         message,
         seq: index,
       },
@@ -77,6 +87,7 @@ export async function prepareEmbeddedAttemptHistory(
   const { effectiveWorkspace, sessionAgentId } = input.setup;
   const sandboxed = input.setup.sandbox?.enabled === true;
   const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
+  let explicitChatFork = false;
   let systemPromptText = input.prepared.sessionRuntime.state.systemPromptText;
   const setSystemPrompt = (nextSystemPrompt: string) => {
     systemPromptText = nextSystemPrompt;
@@ -102,12 +113,32 @@ export async function prepareEmbeddedAttemptHistory(
       sessionId: attempt.sessionId,
       policy: transcriptPolicy,
     });
+    const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
+      agentId: sessionAgentId,
+    });
+    const sessionEntry =
+      attempt.sessionKey && attempt.sessionPersistence !== "detached" && !isSettledTurnFinalization
+        ? await loadAttemptSessionEntryAfterQuotaMaintenance(
+            { agentId: sessionAgentId, storePath, sessionKey: attempt.sessionKey },
+            assertActive,
+          )
+        : undefined;
+    const inherited =
+      attempt.sessionKey &&
+      sessionEntry?.forkSource &&
+      sessionEntry.forkSource.entryId === undefined &&
+      isExplicitChatFork(attempt.sessionKey, sessionEntry.createdVia, sessionEntry.spawnDepth)
+        ? sessionManager[sessionManagerInheritedMessages]?.()
+        : undefined;
+    explicitChatFork = inherited !== undefined;
     const prior = await sanitizeSessionHistory({
       ...replayContext(),
       messages: bindToolResultPromptProjectionKeys(
         isSettledTurnFinalization && attempt.settledTurnFinalizationMessages
           ? boundSettledFinalizationMessages(attempt)
-          : activeSession.messages,
+          : inherited
+            ? projectCopiedForkMessages(activeSession.messages, inherited)
+            : activeSession.messages,
         input.prepared.sessionRuntime.toolResultPromptProjectionState,
       ),
       allowedToolNames: replayAllowedToolNames,
@@ -115,7 +146,13 @@ export async function prepareEmbeddedAttemptHistory(
     });
     input.setup.prepStages.mark("history-sanitize");
     cacheTrace?.recordStage("session:sanitized", { messages: prior });
-    const validated = await validateReplayTurns({ ...replayContext(), messages: prior });
+    // Keep each keyed user row intact until prompt() has resolved the current turn.
+    // The stream boundary merges projected rows for providers requiring alternation.
+    let validated = await validateReplayTurns({
+      ...replayContext(),
+      messages: prior,
+      preserveUserTurns: true,
+    });
     input.setup.prepStages.mark("history-validation");
 
     if (
@@ -123,14 +160,14 @@ export async function prepareEmbeddedAttemptHistory(
       attempt.sessionPersistence !== "detached" &&
       !isSettledTurnFinalization
     ) {
-      const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
-        agentId: sessionAgentId,
-      });
-      const sessionEntry = await loadAttemptSessionEntryAfterQuotaMaintenance(
-        { agentId: sessionAgentId, storePath, sessionKey: attempt.sessionKey },
-        assertActive,
-      );
       assertActive();
+      if (
+        sessionEntry?.priorWorkspace &&
+        attempt.model.api === "openai-completions" &&
+        !isLocalBaseUrl(attempt.model.baseUrl)
+      ) {
+        validated = describePastProjectMoves(validated);
+      }
       const suspension = sessionEntry?.quotaSuspension;
       if (sessionEntry && suspension?.state === "resuming") {
         const entries = await readSessionEntrySummariesInWorker({
@@ -209,16 +246,25 @@ export async function prepareEmbeddedAttemptHistory(
         heartbeatFiltered,
         limitHistoryTurns(
           heartbeatFiltered,
-          getHistoryLimitFromSessionKey(attempt.sessionKey, attempt.config, {
-            accountId: attempt.agentAccountId,
-            peerId: attempt.conversationRoutePeerId,
-            chatType: attempt.chatType,
-          }),
+          // A fork runs under its own key but keeps its source conversation's history window.
+          getHistoryLimitFromSessionKey(
+            attempt.sandboxSessionKey ?? attempt.sessionKey,
+            attempt.config,
+            {
+              accountId: attempt.agentAccountId,
+              peerId: attempt.conversationRoutePeerId,
+              chatType: attempt.chatType,
+            },
+          ),
+          {
+            groupConsecutiveUserTurns:
+              transcriptPolicy.validateAnthropicTurns &&
+              shouldMergeConsecutiveTurns(transcriptPolicy, attempt.model.api),
+          },
         ),
         attempt.model,
         {
           sessionId: attempt.sessionId,
-          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: compactionReplayEnabled,
         },
       );
@@ -259,9 +305,12 @@ export async function prepareEmbeddedAttemptHistory(
     warn: (message) => log.warn(message),
   });
   input.setup.prepStages.mark("context-engine");
-  // Restored history stays writable through preparation; published replies are complete.
+  // Seal restored model history once; transcript admission already seals retained messages.
   for (const message of messages) {
-    if (message.role === "assistant") {
+    if (
+      (message.role === "assistant" || message.role === "user" || message.role === "toolResult") &&
+      !isOwnedTranscriptPayload(message)
+    ) {
       freezeJsonSnapshot(message);
     }
   }
@@ -269,5 +318,5 @@ export async function prepareEmbeddedAttemptHistory(
   if (systemPrompt !== systemPromptText) {
     setSystemPrompt(systemPrompt);
   }
-  return prepared;
+  return { ...prepared, ...(explicitChatFork ? { explicitChatFork: true as const } : {}) };
 }

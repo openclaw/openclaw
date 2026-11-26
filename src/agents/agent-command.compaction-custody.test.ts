@@ -38,14 +38,25 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(["ordinary", "embedded", "preflight", "postrun", "twice", "rebind", "revoked"] as const)(
-  "retains final transport custody across accepted compaction (%s)",
+it.each([
+  "ordinary",
+  "embedded",
+  "preflight",
+  "postrun",
+  "twice",
+  "rebind",
+  "revoked",
+  "writer-replaced",
+  "lifecycle-replaced",
+] as const)(
+  "retains final transport custody only for the admitted writer and accepted compaction (%s)",
   async (mode) => {
     const {
       acceptCompactionSuccessor,
       loadSessionEntry,
       replaceSessionEntry,
       patchSessionEntryCore,
+      claimAgentSessionWriter,
     } = compactionTestRuntime;
     const sessionId = "original-session";
     const sessionKey = "agent:main:dashboard:compaction-custody";
@@ -98,7 +109,28 @@ it.each(["ordinary", "embedded", "preflight", "postrun", "twice", "rebind", "rev
       });
     }
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
-      if (mode !== "ordinary" && mode !== "preflight" && mode !== "postrun") {
+      if (mode !== "postrun") {
+        const claimed = await claimAgentSessionWriter({
+          ...params,
+          agentId: params.sessionAgentId,
+          config: params.cfg,
+          prompt: params.body,
+        });
+        if (!claimed) {
+          throw new Error("missing persisted writer claim");
+        }
+        params.onCompactionAccounting?.({
+          kind: "durable",
+          count: 0,
+          target: {
+            ...target,
+            sessionId: claimed.entry.sessionId,
+            lifecycleRevision: claimed.entry.lifecycleRevision,
+            activeWriterRunId: claimed.entry.activeWriterRunId,
+          },
+        });
+      }
+      if (["embedded", "twice", "rebind", "revoked"].includes(mode)) {
         let accepted = await accept("successor");
         if (mode === "twice") {
           accepted = await accept("second-successor");
@@ -118,6 +150,12 @@ it.each(["ordinary", "embedded", "preflight", "postrun", "twice", "rebind", "rev
       }
       if (mode === "rebind") {
         await patchSessionEntryCore(target, () => ({ sessionId: "unauthorized" }));
+      }
+      if (mode === "writer-replaced") {
+        await patchSessionEntryCore(target, () => ({ activeWriterRunId: "replacement-writer" }));
+      }
+      if (mode === "lifecycle-replaced") {
+        await patchSessionEntryCore(target, () => ({ lifecycleRevision: "replacement-revision" }));
       }
       if (mode === "revoked") {
         revoked = true;

@@ -382,6 +382,18 @@ export const createTelegramMessageProcessor = (
             // owner-local resource teardown gated on core claim release.
             void drainLifecycle?.onAbandoned();
           },
+          onDropped: async (reason) => {
+            if (adopted) {
+              return;
+            }
+            const dropped = await settle({ kind: "dropped", reason }, "terminal");
+            if (dropped.kind !== "dropped") {
+              throw dropped.kind === "failed-retryable"
+                ? dropped.error
+                : new Error("telegram spooled queue drop was not completed");
+            }
+            await drainLifecycle?.onDropped?.(reason);
+          },
         });
         if (adopted) {
           return { kind: "completed" } satisfies TelegramMessageProcessingResult;

@@ -1,32 +1,27 @@
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import "../../styles/settings.css";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
-import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
 import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
-import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPage, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
 import { registerEnglishCatalog, t, getLocale } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 // Page stars must override the shared mini-star rules loaded by lobster-pet-look.
 import "../../styles/lobsterdex.css";
+import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 
 registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerPreferencesEnglish);
-
-type LobsterdexCopyFeedback = { paletteId: LobsterPetPaletteId; status: "copied" | "error" };
 
 function formatLobsterdexDate(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString(getLocale());
@@ -56,15 +51,6 @@ export function LobsterdexPage() {
       seen: String(seenCount()),
       total: String(LOBSTER_PET_PALETTES.length),
     });
-  const [copyFeedback, setCopyFeedback] = createSignal<LobsterdexCopyFeedback | null>(null);
-  let disposed = false;
-  let copyAttempt = 0;
-  let copyResetTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  onSettled(() => () => {
-    disposed = true;
-    copyAttempt += 1;
-    globalThis.clearTimeout(copyResetTimer);
-  });
   onSettled(() => {
     const card = cards.get(location.hash);
     if (!card || !host.contains(card)) {
@@ -90,34 +76,9 @@ export function LobsterdexPage() {
     };
   });
 
-  async function copyLink(paletteId: LobsterPetPaletteId) {
-    const attempt = ++copyAttempt;
-    setCopyFeedback(null);
-    globalThis.clearTimeout(copyResetTimer);
-    copyResetTimer = undefined;
-    const url = `${location.origin}${location.pathname}#lobsterdex-${paletteId}`;
-    const copied = await copyToClipboard(url, () => !disposed && attempt === copyAttempt);
-    if (disposed || attempt !== copyAttempt) {
-      return;
-    }
-    setCopyFeedback({ paletteId, status: copied ? "copied" : "error" });
-    copyResetTimer = globalThis.setTimeout(() => {
-      setCopyFeedback(null);
-      copyResetTimer = undefined;
-    }, 1_500);
-  }
-
   function LobsterdexView(props: { entries: ReturnType<typeof getLobsterdexEntries> }) {
     return (
       <section class="lobsterdex-page">
-        <span class="sr-only" role="status">
-          {copyFeedback()?.status === "copied" ? t("common.copied") : undefined}
-        </span>
-        {copyFeedback()?.status === "error" && (
-          <div class="callout danger" role="alert">
-            {t("common.copyFailed")}
-          </div>
-        )}
         <section class="lobsterdex-page__grid" aria-label={countLabel()}>
           <For each={LOBSTER_PET_PALETTES}>
             {(palette) => {
@@ -145,23 +106,6 @@ export function LobsterdexPage() {
                   ref={(element) => cards.set(`#lobsterdex-${palette.id}`, element)}
                   class={["lobsterdex-page__card", { "lobsterdex-page__card--unseen": !entry() }]}
                 >
-                  <button
-                    type="button"
-                    class="lobsterdex-page__copy-link"
-                    aria-label={t("quickSettings.appearance.lobsterdexCardCopyLink")}
-                    onClick={() => void copyLink(palette.id)}
-                  >
-                    <span aria-hidden="true">
-                      <Icon
-                        name={
-                          copyFeedback()?.status === "copied" &&
-                          copyFeedback()?.paletteId === palette.id
-                            ? "check"
-                            : "link"
-                        }
-                      />
-                    </span>
-                  </button>
                   <div
                     class={[
                       "lobsterdex-page__sprite",

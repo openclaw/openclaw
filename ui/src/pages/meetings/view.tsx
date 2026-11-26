@@ -1,7 +1,16 @@
 import type { TranscriptSessionSummary } from "@openclaw/gateway-protocol";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { Errored, For, Loading, Show, createMemo, latest, onSettled } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createProjection,
+  latest,
+  onSettled,
+} from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
@@ -21,6 +30,7 @@ import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../config/settings-targets.ts";
 import { MeetingSummary } from "./meeting-summary.tsx";
 import {
+  isTranscriptQueryTooLong,
   transcriptRouteSearch,
   transcriptListParams,
   TRANSCRIPT_QUERY_LIMIT,
@@ -208,9 +218,10 @@ function MeetingRow(props: TranscriptsViewProps & { entry: TranscriptSessionSumm
 }
 
 function Library(props: TranscriptsViewProps) {
+  const sessions = createProjection(() => props.list?.sessions ?? [], [], { key: "selector" });
   const days = createMemo(() => {
     const result = new Map<string, TranscriptSessionSummary[]>();
-    for (const entry of props.list?.sessions ?? []) {
+    for (const entry of sessions) {
       const day = new Date(entry.startedAt).toLocaleDateString(undefined, {
         year: "numeric",
         month: "long",
@@ -527,10 +538,12 @@ function Reader(props: TranscriptsViewProps) {
                       {(utterance) => (
                         <li>
                           <div class="transcripts-utterance__byline">
-                            <strong>
-                              {utterance().speakerLabel ??
-                                utterance().speakerId ??
-                                t("transcripts.unknownSpeaker")}
+                            <strong title={utterance().speakerLabel ?? utterance().speakerId}>
+                              <bdi>
+                                {utterance().speakerLabel ??
+                                  utterance().speakerId ??
+                                  t("transcripts.unknownSpeaker")}
+                              </bdi>
                             </strong>
                             <SourceTime value={utterance().startedAt ?? utterance().endedAt} />
                           </div>
@@ -569,6 +582,7 @@ function Reader(props: TranscriptsViewProps) {
 
 export function TranscriptsView(props: TranscriptsViewProps) {
   const captureTarget = SETTINGS_SEARCH_TARGETS.meetingCapture;
+  const queryTooLong = createMemo(() => isTranscriptQueryTooLong(props.drafts.query ?? ""));
   const phone = createPhoneLayout();
   const captureHref = () =>
     pathForRoute(captureTarget.routeId, props.basePath) + captureTarget.search + captureTarget.hash;
@@ -661,8 +675,17 @@ export function TranscriptsView(props: TranscriptsViewProps) {
             aria-label={t("transcripts.library")}
             aria-busy={props.listLoading ? "true" : "false"}
           >
-            <Filters {...props} phone={phone()} />
-            <Library {...props} />
+            <Filters {...props} phone={phone()} queryTooLong={queryTooLong()} />
+            <Show
+              when={!queryTooLong()}
+              fallback={
+                <p id="transcript-query-length-error" role="alert">
+                  {t("transcripts.queryTooLong", { limit: String(TRANSCRIPT_QUERY_LIMIT) })}
+                </p>
+              }
+            >
+              <Library {...props} />
+            </Show>
           </section>
           {new URLSearchParams(props.search).get("selector") ? <Reader {...props} /> : null}
         </div>

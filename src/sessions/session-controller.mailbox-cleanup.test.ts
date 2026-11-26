@@ -1,11 +1,14 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import { createQueueSettings, createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
 import { completeFollowupRunLifecycle } from "../auto-reply/reply/queue/lifecycle.js";
 import { clearFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { expectCollected } from "../test-utils/retention.js";
 import {
   captureSessionControllerMailboxSummarySources as summarySources,
   clearSessionControllerMailbox as clearMailbox,
@@ -28,6 +31,53 @@ function makeRun(key: string, prompt: string) {
 function inputFor(run: ReturnType<typeof createQueueTestRun>) {
   return expectDefined(run.controllerInput, "Expected an enqueued controller input");
 }
+
+it("keeps receipt expiry and deduplication without retaining completed run contexts", async () => {
+  const context = new AsyncLocalStorage<SessionManager>();
+  const managers: WeakRef<SessionManager>[] = [];
+  const mailboxes: ReturnType<typeof inputFor>["mailbox"][] = [];
+  const settings = createQueueSettings({ mode: "followup" });
+  const receiptRun = (key: string) =>
+    createQueueTestRun({ prompt: key, messageId: key }, { sessionId: key, sessionKey: key });
+  const complete = async (key: string) => {
+    const run = receiptRun(key);
+    expect(enqueueFollowupRun(key, run, settings)).toBe(true);
+    const claim = await claimSessionControllerInput(run);
+    mailboxes.push(claim.mailbox);
+    releaseSessionControllerClaim(claim);
+    await claim.settlement.promise;
+  };
+  const runWithManager = (key: string) => {
+    const manager = SessionManager.inMemory();
+    managers.push(new WeakRef(manager));
+    return context.run(manager, complete, key);
+  };
+  try {
+    for (let index = 0; index < 6; index++) {
+      await runWithManager(`agent:main:receipt-retention-${randomUUID()}`);
+    }
+    for (const mailbox of mailboxes) {
+      expect(mailbox.entries).toHaveLength(0);
+      expect(mailbox.timer).toBeDefined();
+      expect(mailbox.recentSources.size).toBe(1);
+      expect(enqueueFollowupRun(mailbox.key, receiptRun(mailbox.key), settings)).toBe(false);
+    }
+    await expectCollected(...managers);
+    for (const mailbox of mailboxes) {
+      for (const receipt of mailbox.recentSources.values()) {
+        receipt.expires = Date.now() + 20;
+      }
+      mailbox.wake();
+    }
+    await expect.poll(() => mailboxes.every((mailbox) => !existingMailbox(mailbox.key))).toBe(true);
+  } finally {
+    for (const mailbox of mailboxes) {
+      mailbox.recentSources.clear();
+      clearFollowupQueue(mailbox.key, mailbox);
+    }
+    context.disable();
+  }
+});
 
 it("notifies a native producer once when a full clear retains its pending cleanup", async () => {
   const key = `agent:main:mailbox-clear-native-${randomUUID()}`;

@@ -281,48 +281,86 @@ describe("createSlackMessageHandler", () => {
     expect(flushKeyMock).not.toHaveBeenCalled();
   });
 
-  it("carries durable ingress ownership into prepared dispatch", async () => {
-    prepareMock.mockResolvedValueOnce({
-      ctxPayload: {},
-      route: { sessionKey: "agent:main:slack:channel:C111" },
-    });
-    const turnAdoptionLifecycle = { ...lifecycle(), onSessionRouted: vi.fn(async () => {}) };
-    const handler = testHandler();
-    const handled = handler(makeMessage("1.550"), {
-      awaitDispatch: true,
-      turnAdoptionLifecycle,
-    });
+  it.each([
+    ["adopted", undefined],
+    ["queue-cap-old", undefined],
+    ["queue-cap-new", "async"],
+    ["queue-cap-new", "sync"],
+  ] as const)(
+    "carries durable ingress ownership through %s (%s failure)",
+    async (outcome, failureKind) => {
+      const handle = makeClaim("terminal-source");
+      const peerDrop = vi.fn();
+      mockReplayGuard({ claim: async () => ({ kind: "claimed", handle }) });
+      prepareMock.mockResolvedValueOnce({
+        ctxPayload: {},
+        route: { sessionKey: "agent:main:slack:channel:C111" },
+      });
+      const turnAdoptionLifecycle = {
+        ...lifecycle(),
+        onSessionRouted: vi.fn(async () => {}),
+        onDropped: vi.fn(() => {
+          const failure = new Error("terminal settlement failed");
+          if (failureKind === "sync") {
+            throw failure;
+          }
+          return failureKind ? Promise.reject(failure) : undefined;
+        }),
+      };
+      dispatchMock.mockImplementationOnce(async (prepared) => {
+        prepared.turnAdoptionLifecycle?.onDeferred?.();
+      });
+      const handler = testHandler();
+      const handled = handler(makeMessage("1.550"), {
+        awaitDispatch: true,
+        turnAdoptionLifecycle,
+      });
 
-    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
-    expect(resolveThreadTsMock).toHaveBeenCalledWith({
-      message: expect.objectContaining({ channel: "C111", ts: "1.550" }),
-      source: "message",
-      turnAdoptionLifecycle,
-    });
-    let settled = false;
-    void handled.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    await runOnFlush();
-    await expect(handled).resolves.toBeUndefined();
+      await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
+      expect(resolveThreadTsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ turnAdoptionLifecycle }),
+      );
+      const settled = vi.fn();
+      void handled.then(settled);
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      await onFlushCallbacks[0]!(queuedEntries(), (params) =>
+        createTestInboundDebounceFlush({
+          ...params,
+          dispatch: (admission) => params.dispatch({ ...admission, onDropped: peerDrop }),
+        }),
+      ).completion;
+      await expect(handled).resolves.toBeUndefined();
 
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(turnAdoptionLifecycle.onSessionRouted).toHaveBeenCalledExactlyOnceWith(
-      "agent:main:slack:channel:C111",
-    );
-    expect(turnAdoptionLifecycle.onSessionRouted.mock.invocationCallOrder[0]).toBeLessThan(
-      dispatchMock.mock.invocationCallOrder[0] ?? 0,
-    );
-    const prepared = dispatchMock.mock.calls[0]![0];
-    expect(prepared.turnAdoptionLifecycle?.admission).toBe("exclusive");
-    expect(prepared.turnAdoptionLifecycle?.abortSignal).toBe(turnAdoptionLifecycle.abortSignal);
-    await prepared.turnAdoptionLifecycle?.onAdopted();
-    expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledTimes(1);
-    prepared.turnAdoptionLifecycle?.onDeferred?.();
-    expect(turnAdoptionLifecycle.onDeferred).toHaveBeenCalledTimes(1);
-  });
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(turnAdoptionLifecycle.onSessionRouted).toHaveBeenCalledExactlyOnceWith(
+        "agent:main:slack:channel:C111",
+      );
+      expect(turnAdoptionLifecycle.onSessionRouted.mock.invocationCallOrder[0]).toBeLessThan(
+        dispatchMock.mock.invocationCallOrder[0] ?? 0,
+      );
+      const prepared = dispatchMock.mock.calls[0]![0];
+      expect(prepared.turnAdoptionLifecycle?.admission).toBe("exclusive");
+      expect(prepared.turnAdoptionLifecycle?.abortSignal).toBe(turnAdoptionLifecycle.abortSignal);
+      if (outcome === "adopted") {
+        await prepared.turnAdoptionLifecycle?.onAdopted();
+        expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledOnce();
+      } else {
+        const drop = prepared.turnAdoptionLifecycle?.onDropped?.(outcome);
+        if (outcome === "queue-cap-new") {
+          await expect(drop).rejects.toThrow("terminal settlement failed");
+        } else {
+          await drop;
+        }
+        expect(turnAdoptionLifecycle.onDropped).toHaveBeenCalledExactlyOnceWith(outcome);
+        expect(peerDrop).toHaveBeenCalledExactlyOnceWith(outcome);
+        expect(turnAdoptionLifecycle.onAbandoned).not.toHaveBeenCalled();
+      }
+      expect(handle.commit).toHaveBeenCalledTimes(outcome === "queue-cap-new" ? 0 : 1);
+      expect(handle.release).toHaveBeenCalledTimes(outcome === "queue-cap-new" ? 1 : 0);
+      expect(turnAdoptionLifecycle.onDeferred).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([false, true])(
     "prepares twins once and dispatches only when allowed (denied=%s)",

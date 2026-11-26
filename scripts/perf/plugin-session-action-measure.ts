@@ -18,6 +18,7 @@ import type { GatewayRequestHandlerOptions } from "../../src/gateway/server-meth
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../src/plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../src/plugins/status.test-helpers.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [mode = "timing", rawIterations = "3000", rawWarmup = "200"] = process.argv.slice(2);
 const iterations = Number(rawIterations);
@@ -104,12 +105,7 @@ await withPluginRuntimeGatewayRequestScope(
       }
     });
     if (mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 4096,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 4096);
     } else {
       observer.observe({ entryTypes: ["gc"] });
     }
