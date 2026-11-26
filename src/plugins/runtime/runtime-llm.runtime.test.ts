@@ -92,6 +92,11 @@ type MockCalls = {
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
+function requireArray(value: unknown, label: string): unknown[] {
+  expect(Array.isArray(value), label).toBe(true);
+  return value as unknown[];
+}
+
 function expectFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
   for (const [key, value] of Object.entries(expected)) {
     expect(record[key], key).toEqual(value);
@@ -517,6 +522,13 @@ describe("runtime.llm.complete", () => {
           cfg,
         },
       );
+      const context = requireRecord(completionArg.context, "completion context");
+      expect(context.systemPrompt).toBe("Be terse.");
+      const [message] = requireArray(context.messages, "completion messages");
+      expectFields(requireRecord(message, "completion message"), {
+        role: "user",
+        content: "Ping",
+      });
       expectFields(requireRecord(completionArg.options, "completion options"), {
         maxTokens: 64,
         temperature: 0.2,

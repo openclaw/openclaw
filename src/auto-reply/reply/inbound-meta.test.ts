@@ -257,6 +257,28 @@ describe("buildInboundUserContextPrefix", () => {
     excludes?: string[];
   }>([
     {
+      name: "includes the original source modality in per-turn conversation metadata",
+      context: {
+        ChatType: "direct",
+        OriginatingChannel: "telegram",
+        SourceModality: "voice",
+        MediaType: "audio/ogg",
+      },
+      expected: { source_modality: "voice" },
+    },
+    {
+      name: "derives a source modality from media when the channel does not provide one",
+      context: {
+        ChatType: "direct",
+        OriginatingChannel: "discord",
+        media: [
+          { path: "/tmp/report.pdf", contentType: "application/pdf" },
+          { path: "/tmp/photo.png", contentType: "image/png" },
+        ],
+      },
+      expected: { source_modality: "document" },
+    },
+    {
       name: "omits invalid timestamps instead of throwing",
       context: { ChatType: "group", MessageSid: "msg-with-bad-ts", Timestamp: 1e20 },
       expected: { timestamp: undefined },
@@ -270,6 +292,21 @@ describe("buildInboundUserContextPrefix", () => {
     for (const fragment of excludes) {
       expect(text).not.toContain(fragment);
     }
+  });
+
+  it("renders reply metadata without a body but not without any reply fields", () => {
+    const text = buildInboundUserContextPrefix({
+      ReplyToId: "message-42",
+      ReplyToSender: "Attachment Sender",
+    } as TemplateContext);
+
+    expect(parseReplyPayload(text)).toEqual({
+      message_id: "message-42",
+      sender_label: "Attachment Sender",
+    });
+    expect(buildInboundUserContextPrefix({} as TemplateContext)).not.toContain(
+      "Reply target of current user message",
+    );
   });
 
   it("keeps Telegram current-message quote even when context already includes the target", () => {
