@@ -85,6 +85,11 @@ if (args[0] === "inspect") {
   if (!state.exists) finish(1, "No such container: " + args.at(-1));
   const status = {Running: state.running, Paused: false, Pid: state.running ? 1 : 0, StartedAt: "2026-11-20T00:00:00Z"};
   if (args[2] === "{{json .State}}") finish(0, JSON.stringify(status));
+  if (args[2]?.startsWith("{{.Id}}\n{{.State.Running}}\n")) {
+    const fields = [id, state.running, true, state.hash ?? "<no value>"];
+    if (args[2].endsWith("{{.State.Paused}}")) fields.push(false);
+    finish(0, fields.join("\n") + "\n");
+  }
   finish(0, JSON.stringify({Id: id, State: status, Labels: {"openclaw.configHash": state.hash}, ReadonlyRootfs: true, Mounts: state.mounts, Tmpfs: {}}));
 }
 if (args[0] === "start") {
@@ -149,7 +154,10 @@ finish(1, "Unexpected Docker fixture command: " + JSON.stringify(args));
           .map((line) => JSON.parse(line));
       const runPayload = async () => {
         const result = await runtime.executePayload(input);
-        expect(result).toMatchObject({ kind: "completed", state: "cron-sandbox-ready" });
+        expect(result, JSON.stringify(result)).toMatchObject({
+          kind: "completed",
+          state: "cron-sandbox-ready",
+        });
       };
       const stop = (failStart = false) => writeState({ ...readState(), running: false, failStart });
 
