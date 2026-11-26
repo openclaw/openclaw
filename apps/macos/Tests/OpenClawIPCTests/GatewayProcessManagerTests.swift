@@ -341,6 +341,66 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test func `app-hosted start failure names the failing stage and path`() async throws {
+        let port = try self.availableGatewayPort()
+        let logDirectory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: logDirectory) }
+        try await self.withLaunchAgentEnvironment(port: port, logDirectory: logDirectory) {
+            let supervisor = GatewayChildSupervisor(launcher: { _ in throw POSIXError(.EACCES) })
+            let manager = GatewayProcessManager(childSupervisor: supervisor)
+            manager.desiredActive = true
+            defer { manager.desiredActive = false }
+            let runtime = BundledRuntime(root: logDirectory.appendingPathComponent("runtime"))
+
+            await manager.startAppHostedGateway(startGeneration: manager.gatewayStartGeneration, runtime: runtime)
+
+            guard case let .failed(reason) = manager.status else {
+                Issue.record("expected the start failure")
+                return
+            }
+            #expect(reason.contains("start the Gateway process"))
+            #expect(reason.contains(runtime.bun.path))
+            #expect(reason.contains(POSIXError(.EACCES).localizedDescription))
+            #expect(manager.log.contains(reason))
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func `app-hosted log setup failure names the log target instead of Bun`(blockLogFolder: Bool) async throws {
+        let port = try self.availableGatewayPort()
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let logDirectory = root.appendingPathComponent("logs")
+        try await self.withLaunchAgentEnvironment(port: port, logDirectory: logDirectory) {
+            // Use file-type conflicts so both failures are deterministic even as root.
+            let expected: String
+            if blockLogFolder {
+                try Data().write(to: logDirectory)
+                expected = "Could not create the Gateway log folder \(logDirectory.path):"
+            } else {
+                let profileSuffix = AppProfile.current.name.map { "-\($0)" } ?? ""
+                let logURL = logDirectory.appendingPathComponent("openclaw-gateway\(profileSuffix).log")
+                try FileManager.default.createDirectory(at: logURL, withIntermediateDirectories: true)
+                expected = "Could not open the Gateway log file \(logURL.path):"
+            }
+            let manager = GatewayProcessManager()
+            manager.desiredActive = true
+            defer { manager.desiredActive = false }
+            let runtime = BundledRuntime(root: root.appendingPathComponent("runtime"))
+
+            await manager.startAppHostedGateway(startGeneration: manager.gatewayStartGeneration, runtime: runtime)
+
+            guard case let .failed(reason) = manager.status else {
+                Issue.record("expected a log setup failure")
+                return
+            }
+            #expect(reason.hasPrefix(expected))
+            if !blockLogFolder { #expect(reason.contains(POSIXError(.EISDIR).localizedDescription)) }
+            #expect(!reason.contains(runtime.bun.path))
+            #expect(manager.log.contains("[gateway] \(reason)\n"))
+        }
+    }
+
     private func availableGatewayPort() throws -> Int {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -379,6 +439,7 @@ struct GatewayProcessManagerTests {
         mode: String,
         port: Int? = nil,
         homeDirectory: URL? = nil,
+        logDirectory: URL? = nil,
         _ body: () async throws -> T) async throws -> T
     {
         let isolatedHome = try homeDirectory ?? makeTempDirForTests()
@@ -391,10 +452,11 @@ struct GatewayProcessManagerTests {
         try Data(config.utf8)
             .write(to: URL(fileURLWithPath: configPath))
         defer { try? FileManager.default.removeItem(atPath: configPath) }
-        let environment: [String: String?] = [
+        var environment: [String: String?] = [
             "OPENCLAW_CONFIG_PATH": configPath,
             "OPENCLAW_GATEWAY_PORT": nil,
         ]
+        if let logDirectory { environment["OPENCLAW_LOG_DIR"] = logDirectory.path }
         return try await TestIsolation.withIsolatedState(
             launchAgentHomeDirectory: isolatedHome,
             env: environment)
@@ -410,6 +472,7 @@ struct GatewayProcessManagerTests {
         mode: String = "local",
         port: Int? = nil,
         homeDirectory: URL? = nil,
+        logDirectory: URL? = nil,
         statusPayload: String? =
             #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#,
         statusPayloads: [String]? = nil,
@@ -419,7 +482,9 @@ struct GatewayProcessManagerTests {
     {
         let marker = temporaryDirectoryForTests()
             .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
-        return try await self.withGatewayConfig(mode: mode, port: port, homeDirectory: homeDirectory) {
+        return try await self.withGatewayConfig(
+            mode: mode, port: port, homeDirectory: homeDirectory, logDirectory: logDirectory)
+        {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { arguments in
                 if commandDelayNanoseconds > 0 {

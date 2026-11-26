@@ -57,6 +57,11 @@ final class GatewayChildSupervisor {
         }
     }
 
+    struct LogSetupError: LocalizedError {
+        let message: String
+        var errorDescription: String? { self.message }
+    }
+
     struct Child: Sendable {
         let waitUntilStarted: @Sendable () async throws -> Int32
         let wait: @Sendable () async -> Failure
@@ -214,12 +219,20 @@ final class GatewayChildSupervisor {
 
     private static func launch(configuration: Configuration) throws -> Child {
         let logURL = URL(fileURLWithPath: configuration.logPath)
-        try FileManager.default.createDirectory(
-            at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let logDirectory = logURL.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+        } catch {
+            throw LogSetupError(
+                message: "Could not create the Gateway log folder \(logDirectory.path): \(error.localizedDescription)")
+        }
         // Darwin's SETEXEC session spawn needs this descriptor open for its file actions.
         // Subprocess applies CLOEXEC_DEFAULT to close unrelated descriptors in the child.
         let descriptor = Darwin.open(logURL.path, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR)
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard descriptor >= 0 else {
+            let reason = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO).localizedDescription
+            throw LogSetupError(message: "Could not open the Gateway log file \(logURL.path): \(reason)")
+        }
         let log = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         let lifeline = Pipe()
         let process = ManagedProcess.launch(

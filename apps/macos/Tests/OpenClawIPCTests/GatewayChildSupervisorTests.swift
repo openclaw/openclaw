@@ -82,6 +82,27 @@ struct GatewayChildSupervisorTests {
         }
     }
 
+    @Test(.enabled(if: geteuid() != 0, "The log-open permission check requires a non-root user"))
+    func `default launcher names the log file when it cannot be opened`() async throws {
+        let directory = try makeTempDirForTests()
+        defer {
+            chmod(directory.path, 0o700)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        try #require(chmod(directory.path, 0o500) == 0)
+        let logURL = directory.appendingPathComponent("gateway.log")
+        let supervisor = GatewayChildSupervisor()
+        do {
+            _ = try await supervisor.start(configuration: self.configuration(logPath: logURL.path)) { _ in }
+            Issue.record("an unwritable log directory was accepted")
+        } catch {
+            #expect(error.localizedDescription.contains("Gateway log file"))
+            #expect(error.localizedDescription.contains(logURL.path))
+            #expect(error.localizedDescription.contains(POSIXError(.EACCES).localizedDescription))
+        }
+        await supervisor.stop()
+    }
+
     @Test func `quit deadlines preserve the hosted Gateway drain budget`() {
         #expect(AppTerminationTiming.cleanupDeadlineSeconds(hasAppHostedGateway: false) == 2)
         #expect(AppTerminationTiming.signalExitFailsafeSeconds(hasAppHostedGateway: false) == 3)

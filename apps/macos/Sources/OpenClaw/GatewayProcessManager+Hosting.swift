@@ -322,9 +322,12 @@ extension GatewayProcessManager {
             self.fail(reason)
             return
         }
+        let stateDirectory = AppProfile.current.stateDirectoryURL()
+        var stage = "inspect the Gateway runtime selection"
         do {
             let pin = try await GatewayLaunchAgentManager.runtimePinRecord(
-                stateDirectory: AppProfile.current.stateDirectoryURL(), profile: .current)
+                stateDirectory: stateDirectory, profile: .current)
+            stage = "prepare the bundled runtime"
             let runtime: BundledRuntime = if let selectedRuntime {
                 selectedRuntime
             } else if pin?.status == .migrationPending {
@@ -339,8 +342,11 @@ extension GatewayProcessManager {
                 return
             }
             guard self.isCurrentGatewayStart(startGeneration) else { return }
+            stage = "build the Gateway environment (profile state: \(stateDirectory.path))"
             let environment = try self.appHostedEnvironment(runtime: runtime)
+            stage = "prepare the Gateway auth token (config: \(OpenClawPaths.configURL.path))"
             try OpenClawConfigFile.ensureAppHostedGatewayAuth(environment: environment)
+            stage = "start the Gateway process (\(runtime.bun.path))"
             let pid = try await self.childSupervisor.start(configuration: .init(
                 bun: runtime.bun,
                 packageRoot: runtime.packageRoot,
@@ -355,9 +361,11 @@ extension GatewayProcessManager {
             await self.observeChildReadiness(pid: pid, port: port, generation: startGeneration)
         } catch {
             guard self.isCurrentGatewayStart(startGeneration) else { return }
-            self.fail(error.localizedDescription)
-            self.appendLog("[gateway] \(error.localizedDescription)\n")
-            self.logger.error("gateway child launch failed: \(error.localizedDescription, privacy: .public)")
+            let message = (error as? GatewayChildSupervisor.LogSetupError)?.message
+                ?? "Could not \(stage): \(error.localizedDescription)"
+            self.fail(message)
+            self.appendLog("[gateway] \(message)\n")
+            self.logger.error("gateway child launch failed: \(message, privacy: .private)")
         }
     }
 
