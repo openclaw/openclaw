@@ -329,7 +329,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       const noticeCrash = window.startsWith("notice-");
       await using resources = new AsyncDisposableStack();
       const caseStartedAt = performance.now();
-      let restartStartedAt: number | undefined;
+      let restartStartedAt: number | undefined = undefined;
       let recoveredRequests = 0;
       let phase = "fixture.setup";
       let phaseReported = false;
