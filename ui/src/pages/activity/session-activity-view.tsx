@@ -391,8 +391,11 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
       ? (people().find((person) => person.id === props.filters.personId) ?? identity())
       : null,
   );
+  function changeFilters(changes: Partial<SessionActivityFilters>) {
+    props.onFiltersChange({ ...props.filters, query: props.searchInputValue, ...changes });
+  }
   function selectTime(time: SessionActivityFilters["time"]) {
-    props.onFiltersChange({ ...props.filters, query: props.searchInputValue, time });
+    changeFilters({ time });
   }
   function feedback(error: string | undefined, pending: boolean) {
     return (
@@ -418,9 +421,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
             aria-label={t("activityFeed.searchPlaceholder")}
             value={props.searchInputValue}
             placeholder={t("activityFeed.searchPlaceholder")}
-            onInput={(event) =>
-              props.onFiltersChange({ ...props.filters, query: event.currentTarget.value })
-            }
+            onInput={(event) => changeFilters({ query: event.currentTarget.value })}
           />
         </label>
         <SettingsSegmented
@@ -439,6 +440,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         />
         <PeopleControl
           view={props}
+          onPersonChange={(personId) => changeFilters({ personId })}
           people={people()}
           selectedPerson={selectedPerson()}
           totalSessions={projection().timeCount}
