@@ -8,15 +8,13 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { readGatewayLockProcessCmdline } from "../infra/gateway-lock-process.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
-import { servingGitReleaseSlot } from "../infra/git-release-paths.js";
 import { readPackageVersion } from "../infra/package-json.js";
-import { readPackageReleaseSlotSync } from "../infra/package-release-slot-path.js";
 import { resolveUpdateInstallKind } from "../infra/update-check.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { detectGlobalInstallManagerForRoot } from "../infra/update-global.js";
 import { ignoreNonCleanupCommandError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { readTrial, resolvePrefix } from "./store.js";
+import { resolvePrefix } from "./store.js";
 
 type CheckoutIdentity = NonNullable<UpdateRunParams["checkout"]>;
 
@@ -94,16 +92,6 @@ export async function updateInstallationMismatch(
     .map((value) => value.replace(/[^\w@%+=:,./-]/gu, "\\$&"))
     .join(" ");
   return `This state directory uses the OpenClaw installation at ${installedRoot}, not the invoking installation. Nothing changed. To update that installation, run: ${command}`;
-}
-
-/** A published release or trial keeps the resident owner, including before first activation. */
-export async function hasReleaseUpdateOwner(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<boolean> {
-  const prefix = resolvePrefix(env);
-  return Boolean(
-    readPackageReleaseSlotSync(servingGitReleaseSlot(prefix)) || (await readTrial(prefix))?.v === 2,
-  );
 }
 
 /** A node-only package stays with its installer; no Gateway can activate a release trial. */

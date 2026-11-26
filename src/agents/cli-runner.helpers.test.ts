@@ -132,6 +132,22 @@ describe("prepareCliPromptImagePayload prompt references", () => {
     expect(result.imagePaths).toHaveLength(1);
   });
 
+  it("keeps images within the configured imageMaxDimensionPx", async () => {
+    const workspaceDir = imageWorkspace();
+    const imagePath = path.join(workspaceDir, "wide.png");
+    const image = createSolidPngBuffer(1600, 8, { r: 0, g: 0, b: 255 });
+    await fs.writeFile(imagePath, image);
+    const prepared = await prepareCliPromptImagePayload({
+      backend: codexImages,
+      prompt: "describe the attachment",
+      workspaceDir,
+      config: { agents: { defaults: { imageMaxDimensionPx: 2400 } } },
+      media: [{ path: imagePath, contentType: "image/png" }],
+    });
+
+    await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(image);
+  });
+
   it("surfaces inline sanitization failure when a preceding image fact is suppressed", async () => {
     await expect(
       prepareCliPromptImagePayload({
