@@ -150,11 +150,11 @@ describe("Agent-specific tool filtering", () => {
     expectToolNames(toolNames, ["exec", "read", "apply_patch"], ["write"]);
   });
 
-  it("uses the configured default agent for lean local-model filtering on legacy session keys", () => {
+  it("uses the configured default agent profile on legacy session keys", () => {
     expectConfiguredTools(
-      agentConfig({ local: { experimental: { localModelLean: true } } }),
-      ["read"],
-      ["browser", "automations", "message"],
+      agentConfig({ local: { agentProfileId: "openclaw/small" } }),
+      ["read", "automations"],
+      ["browser", "message"],
       {
         sessionKey: "main",
         agentDir: "/tmp/agent-local",

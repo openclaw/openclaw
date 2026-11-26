@@ -66,7 +66,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     const {
       codeModeControlsEnabledForRun,
       codeModeSkills,
-      localModelLeanPreserveToolNames,
+      agentProfilePreserveToolNames,
       runtimeCapabilityProfile,
       toolSearchConfig,
       toolSearchControlsEnabledForRun,
@@ -91,7 +91,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         toolExecutionAllow: attempt.toolExecutionAllow,
         executeTool: input.executeCodeModeTool,
         codeModeSkills,
-        preserveToolNames: localModelLeanPreserveToolNames,
+        preserveToolNames: agentProfilePreserveToolNames,
       },
     });
     const toolSearch = compacted.catalog;

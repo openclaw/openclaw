@@ -41,7 +41,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 const option = (name) => process.argv[process.argv.indexOf(name) + 1];
 const workspace = option("--cwd");
-if (process.argv.includes("--local-model-lean")) throw new Error("unexpected lean profile");
+if (process.argv.includes("--local-model-lean")) throw new Error("unexpected deprecated profile flag");
 const config = JSON.parse(await fs.readFile(option("--config"), "utf8"));
 if (config.agents.defaults.models[option("--model")].agentRuntime.id !== "openclaw"
   || config.agents.defaults.fastModeDefault !== false

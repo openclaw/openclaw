@@ -1,7 +1,8 @@
+import type { ModelSizeClass } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
+import { filterToolsByAgentProfile, type ResolvedAgentProfile } from "./agent-profiles.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { filterLocalModelLeanTools } from "./local-model-lean.js";
 import { resolveNativeWebSearchRoute } from "./native-web-search.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import type { WebSearchToolPolicyParams } from "./web-search-tool-policy.js";
@@ -20,18 +21,22 @@ export function applyModelProviderToolPolicy(
     agentDir?: string;
     preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "metadataSnapshot">;
     modelCompat?: ModelCompatConfig;
+    modelSizeClass?: ModelSizeClass;
+    resolvedAgentProfile?: ResolvedAgentProfile;
     suppressManagedWebSearch?: boolean;
     runtimeToolAllowlist?: string[];
     preparedRequesterPolicy?: WebSearchToolPolicyParams["preparedRequesterPolicy"];
-    localModelLeanPreserveToolNames?: string[];
+    agentProfilePreserveToolNames?: string[];
   },
 ): AnyAgentTool[] {
-  const tools = filterLocalModelLeanTools({
+  const tools = filterToolsByAgentProfile({
     tools: toolsInput,
     config: params?.config,
     agentId: params?.agentId,
     sessionKey: params?.sessionKey,
-    preserveToolNames: params?.localModelLeanPreserveToolNames ?? params?.runtimeToolAllowlist,
+    modelSizeClass: params?.modelSizeClass,
+    resolvedProfile: params?.resolvedAgentProfile,
+    preserveToolNames: params?.agentProfilePreserveToolNames ?? params?.runtimeToolAllowlist,
   });
 
   if (

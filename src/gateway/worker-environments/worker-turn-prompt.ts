@@ -1,6 +1,9 @@
 import type { WorkerToolSurface } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { resolveAgentProfile } from "../../agents/agent-profiles.js";
+import { resolveProfileModelSizeClass } from "../../agents/agent-profiles/model-size-class.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agents/agent-project-settings.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveContextSerialization } from "../../agents/context-serialization/resolve.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { prepareEmbeddedAttemptBootstrap } from "../../agents/embedded-agent-runner/run/attempt-bootstrap-prepare.js";
 import {
@@ -121,9 +124,18 @@ export async function prepareWorkerTurnPrompt(params: {
         pluginMetadataSnapshot: preparedModelRuntime.metadataSnapshot,
       }),
   };
+  const agentProfile = resolveAgentProfile({
+    config: turn.config,
+    agentId: turn.agentId,
+    sessionKey: turn.sessionKey,
+    // The worker turn runs the approved model, so that model, not the primary, selects the profile.
+    modelSizeClass: resolveProfileModelSizeClass(model),
+  });
+  const contextSerialization = resolveContextSerialization({ resolvedProfile: agentProfile });
   const bootstrap = await prepareEmbeddedAttemptBootstrap({
     attempt,
     setup,
+    agentProfile,
     hasReadTool: capabilityToolNames.has("read"),
     isRawModelRun,
   });
@@ -131,6 +143,7 @@ export async function prepareWorkerTurnPrompt(params: {
   const prompt = await prepareEmbeddedAttemptSystemPrompt({
     attempt,
     setup,
+    agentProfile,
     bootstrap,
     remoteWorkspace: true,
     workerPlacement: true,
@@ -313,6 +326,7 @@ export async function prepareWorkerTurnPrompt(params: {
     messages: params.history,
     prompt: assembly,
     capabilityToolNames,
+    contextSerialization,
     executionHost: false,
     sessionVersion: params.manager.getHeader()?.version,
     boundaryTimezone: resolveUserTimezone(turn.config?.agents?.defaults?.userTimezone),

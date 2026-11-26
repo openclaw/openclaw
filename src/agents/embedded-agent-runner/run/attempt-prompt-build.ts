@@ -15,6 +15,8 @@ import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { McpToolCatalogDiagnostic } from "../../agent-bundle-mcp-catalog.types.js";
+import { selectCurrentInboundContext } from "../../context-serialization/project.js";
+import type { ResolvedContextSerialization } from "../../context-serialization/resolve.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import {
   buildAgentInternalEventContext,
@@ -393,6 +395,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   attempt: PromptContextAttempt;
   capabilityToolNames: ReadonlySet<string>;
   boundaryTimezone?: string;
+  contextSerialization?: ResolvedContextSerialization;
   includeBoundaryTimestamp: boolean;
   isRawModelRun: boolean;
   messages: AgentMessage[];
@@ -407,6 +410,10 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
 }) {
   const { attempt } = input;
+  const contextSerialization = input.contextSerialization ?? {
+    mode: "default",
+    source: "fallback",
+  };
   const isDispatchedCanonicalFallback =
     !input.isRawModelRun &&
     !attempt.skipPreparedUserTurnMessage &&
@@ -487,17 +494,36 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     fragments: eventFragments,
     allowRuntimeOnly: !attempt.suppressNextUserMessagePersistence,
   });
+  const inboundProjection = selectCurrentInboundContext({
+    context: attempt.currentInboundContext,
+    serialization: contextSerialization,
+  });
   const promptForSession = promptSubmission.prompt;
   const promptForModel = isDispatchedCanonicalFallback
     ? promptForSession
     : (promptSubmission.modelPrompt ?? promptSubmission.prompt);
-  const fragments: RuntimeContextFragment[] = [
-    ...((escapedProjection ? attempt.currentInboundContext?.fragments : undefined) ??
-      (attempt.currentInboundContext?.text
-        ? [{ kind: "conversation-data" as const, text: attempt.currentInboundContext.text }]
-        : [])),
-    ...eventFragments,
-  ];
+  const defaultInboundFragments: RuntimeContextFragment[] =
+    (escapedProjection ? attempt.currentInboundContext?.fragments : undefined) ??
+    (attempt.currentInboundContext?.text
+      ? [{ kind: "conversation-data" as const, text: attempt.currentInboundContext.text }]
+      : []);
+  // Compact mode swaps in the compact projection. Instructions such as the delivery directive
+  // stay instructions, and the compact facts stay quoted data, exactly as in default mode.
+  // A context with no compact projection keeps the producer's own fragments, so a producer's
+  // reply instruction (a subagent completion, for example) stays an instruction.
+  const hasCompactProjection =
+    attempt.currentInboundContext?.compactText !== undefined ||
+    attempt.currentInboundContext?.compactResumableText !== undefined;
+  const compactInboundFragments: RuntimeContextFragment[] =
+    (escapedProjection ? attempt.currentInboundContext?.compactFragments : undefined) ??
+    (hasCompactProjection
+      ? inboundProjection.text
+        ? [{ kind: "conversation-data" as const, text: inboundProjection.text }]
+        : []
+      : defaultInboundFragments);
+  const inboundFragments =
+    contextSerialization.mode === "default" ? defaultInboundFragments : compactInboundFragments;
+  const fragments: RuntimeContextFragment[] = [...inboundFragments, ...eventFragments];
   const currentUserTimestampOverride =
     !input.isRawModelRun && typeof preparedUserTurnTimestamp === "number"
       ? {
@@ -569,6 +595,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     });
   const hookMessagesForCurrentPrompt = projectHistoryForCurrentPrompt(messagesForCurrentPrompt);
   if (input.systemPromptReport) {
+    input.systemPromptReport.contextSerialization = inboundProjection.report;
     input.systemPromptReport.currentTurn = {
       ...(attempt.currentInboundEventKind ? { kind: attempt.currentInboundEventKind } : {}),
       promptChars: promptForModel.length,
@@ -590,6 +617,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   return {
     aggregatePressureEngaged,
     contextTokenBudget,
+    contextSerializationReport: inboundProjection.report,
     ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),
     effectivePrompt: input.prompt.effectivePrompt,
     hookMessagesForCurrentPrompt,

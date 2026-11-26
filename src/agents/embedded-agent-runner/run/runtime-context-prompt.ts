@@ -11,6 +11,8 @@ import {
   memoizeFrozenPlainDataProjection,
   isDeeplyFrozenPlainData,
 } from "../../../shared/immutable-data.js";
+import { selectCurrentInboundContext } from "../../context-serialization/project.js";
+import type { ResolvedContextSerialization } from "../../context-serialization/resolve.js";
 import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   STEERING_RUNTIME_CONTEXT,
@@ -68,14 +70,21 @@ export function appendCurrentInboundContext(
   return {
     ...context,
     text: append(context?.text),
+    ...(context?.compactText !== undefined ? { compactText: append(context.compactText) } : {}),
     ...(context?.resumableText !== undefined
       ? { resumableText: append(context.resumableText) }
+      : {}),
+    ...(context?.compactResumableText !== undefined
+      ? { compactResumableText: append(context.compactResumableText) }
       : {}),
     fragments: [
       ...(context?.fragments ??
         (context?.text ? [{ kind: "conversation-data" as const, text: context.text }] : [])),
       ...fragments,
     ],
+    ...(context?.compactFragments
+      ? { compactFragments: [...context.compactFragments, ...fragments] }
+      : {}),
   };
 }
 
@@ -83,12 +92,14 @@ export function buildCurrentInboundPrompt(params: {
   context: CurrentInboundPromptContext | undefined;
   prompt: string;
   preferResumableText?: boolean;
+  serialization?: ResolvedContextSerialization;
 }): string {
-  const contextText =
-    params.preferResumableText === true
-      ? (params.context?.resumableText ?? params.context?.text)
-      : params.context?.text;
-  const prefix = contextText?.trim() ?? "";
+  const selected = selectCurrentInboundContext({
+    context: params.context,
+    serialization: params.serialization ?? { mode: "default", source: "fallback" },
+    preferResumableText: params.preferResumableText,
+  });
+  const prefix = selected.text.trim();
   return [prefix, params.prompt].filter(Boolean).join(params.context?.promptJoiner ?? "\n\n");
 }
 

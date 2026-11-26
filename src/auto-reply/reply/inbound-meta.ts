@@ -16,6 +16,7 @@ import { formatContextJsonBlock, selectInboundHistoryContext } from "./channel-p
 import { CURRENT_MESSAGE_MARKER } from "./history.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { formatTelegramCurrentMessageContext } from "./inbound-meta.current-message.js";
+import { buildLocationContextPayload } from "./inbound-meta.payloads.js";
 import {
   MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS,
   normalizePromptMetadataString,
@@ -102,23 +103,33 @@ export function refreshActiveGoalContext(
     injectedGoals,
     activeGoalContext,
   );
+  const refreshVariant = (text: string | undefined) =>
+    text === undefined
+      ? undefined
+      : refreshActiveGoalContextText(text, injectedGoals, activeGoalContext);
+  const refreshedCompactText = refreshVariant(context.compactText);
   const refreshedResumableText = context.resumableText
     ? refreshActiveGoalContextText(context.resumableText, injectedGoals, activeGoalContext)
     : undefined;
+  const refreshedCompactResumableText = refreshVariant(context.compactResumableText);
   if (!refreshedText) {
     return undefined;
   }
   return {
     ...context,
     text: refreshedText,
+    ...(refreshedCompactText !== undefined ? { compactText: refreshedCompactText } : {}),
     ...(refreshedResumableText !== undefined
       ? { resumableText: refreshedResumableText || undefined }
+      : {}),
+    ...(refreshedCompactResumableText !== undefined
+      ? { compactResumableText: refreshedCompactResumableText }
       : {}),
     injectedGoalContexts: activeGoalContext ? [activeGoalContext] : undefined,
   };
 }
 
-function normalizePromptMediaPath(value: unknown): string | undefined {
+export function normalizePromptMediaPath(value: unknown): string | undefined {
   const mediaPath = normalizePromptMetadataString(value);
   if (!mediaPath) {
     return undefined;
@@ -192,7 +203,7 @@ function formatChatWindowMessage(
   return `${details.length > 0 ? `${details.join(" ")} ` : ""}${sender}: ${content}`;
 }
 
-function isChatWindowStructuredContext(
+export function isChatWindowStructuredContext(
   entry: NonNullable<TemplateContext["ChannelStructuredContext"]>[number],
 ): entry is NonNullable<TemplateContext["ChannelStructuredContext"]>[number] & {
   payload: Record<string, unknown>;
@@ -208,6 +219,45 @@ function isChatWindowHistoryContext(
   }
   const relation = normalizePromptMetadataString(entry.payload["relation"]);
   return relation === "before_current_message" || relation === "selected_for_current_message";
+}
+
+/**
+ * Reports which inbound context a chat window already carries, so a builder does not send it twice.
+ * `replyChainMessageIds` lists the reply-chain entries the builder would render.
+ */
+export function resolveChatWindowCoverage(
+  ctx: TemplateContext,
+  replyChainMessageIds: readonly unknown[],
+): { coversHistory: boolean; coversReplyContext: boolean } {
+  const structuredContext = ctx.ChannelStructuredContext ?? [];
+  const chatWindowMessageIds = new Set<string>();
+  for (const entry of structuredContext) {
+    if (!isChatWindowStructuredContext(entry)) {
+      continue;
+    }
+    const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
+    for (const message of messages) {
+      if (!isRecord(message)) {
+        continue;
+      }
+      const id = normalizePromptMetadataString(message["message_id"]);
+      if (id) {
+        chatWindowMessageIds.add(id);
+      }
+    }
+  }
+  const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
+  const coversReplyContext =
+    replyChainMessageIds.length > 0
+      ? replyChainMessageIds.every((value) => {
+          const id = normalizePromptMetadataString(value);
+          return id ? chatWindowMessageIds.has(id) : false;
+        })
+      : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
+  return {
+    coversHistory: structuredContext.some(isChatWindowHistoryContext),
+    coversReplyContext,
+  };
 }
 
 export function resolveInboundUserContextPromptJoiner(ctx: TemplateContext): " " | undefined {
@@ -351,31 +401,14 @@ export function buildInboundUserContextPrefix(
       ];
     }) ?? [];
   const structuredContext = ctx.ChannelStructuredContext ?? [];
-  const chatWindowMessageIds = new Set<string>();
-  for (const entry of structuredContext) {
-    if (!isChatWindowStructuredContext(entry)) {
-      continue;
-    }
-    const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
-    for (const message of messages) {
-      if (!isRecord(message)) {
-        continue;
-      }
-      const id = normalizePromptMetadataString(message["message_id"]);
-      if (id) {
-        chatWindowMessageIds.add(id);
-      }
-    }
-  }
   const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
-  const chatWindowCoversReplyContext =
-    replyChainPayload.length > 0
-      ? replyChainPayload.every((entry) => {
-          const messageIdLocal = normalizePromptMetadataString(entry["message_id"]);
-          return messageIdLocal ? chatWindowMessageIds.has(messageIdLocal) : false;
-        })
-      : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
-  const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);
+  const {
+    coversReplyContext: chatWindowCoversReplyContext,
+    coversHistory: chatWindowCoversHistory,
+  } = resolveChatWindowCoverage(
+    ctx,
+    replyChainPayload.map((entry) => entry["message_id"]),
+  );
   const currentMessageContext = formatTelegramCurrentMessageContext(ctx);
   const senderId = normalizePromptMetadataString(ctx.SenderId);
   const senderE164 = normalizePromptMetadataString(ctx.SenderE164);
@@ -471,20 +504,8 @@ export function buildInboundUserContextPrefix(
     appendJsonContext("Forwarded message context:", forwardedContext);
   }
 
-  const locationContext = {
-    latitude: ctx.LocationLat,
-    longitude: ctx.LocationLon,
-    accuracy_m:
-      ctx.LocationAccuracy !== undefined && Number.isFinite(ctx.LocationAccuracy)
-        ? ctx.LocationAccuracy
-        : undefined,
-    source: normalizePromptMetadataString(ctx.LocationSource),
-    is_live: ctx.LocationIsLive === true ? true : undefined,
-    name: sanitizePromptBody(ctx.LocationName),
-    address: sanitizePromptBody(ctx.LocationAddress),
-    caption: sanitizePromptBody(ctx.LocationCaption),
-  };
-  if (Object.values(locationContext).some((value) => value !== undefined)) {
+  const locationContext = buildLocationContextPayload(ctx);
+  if (locationContext) {
     appendJsonContext("Location:", locationContext);
   }
 

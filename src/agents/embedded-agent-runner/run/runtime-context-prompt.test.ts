@@ -123,6 +123,24 @@ describe("runtime context prompt submission", () => {
     },
   );
 
+  it("appends added instructions to the compact fragments next to the default ones", () => {
+    const added = appendCurrentInboundContext(
+      {
+        text: "Full",
+        compactText: "Short",
+        fragments: [{ kind: "conversation-data", text: "Full" }],
+        compactFragments: [{ kind: "conversation-data", text: "Short" }],
+      },
+      [{ kind: "runtime-instruction", text: "Use the selected item." }],
+    );
+
+    expect(added.compactFragments).toEqual([
+      { kind: "conversation-data", text: "Short" },
+      { kind: "runtime-instruction", text: "Use the selected item." },
+    ]);
+    expect(added.compactText).toContain("Use the selected item.");
+  });
+
   it("carries producer provenance in hidden custom messages and hides their display", () => {
     const text = "Conversation info: channel=telegram";
     const fragments = [{ kind: "conversation-data" as const, text }];

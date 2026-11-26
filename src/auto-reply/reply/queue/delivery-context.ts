@@ -261,24 +261,56 @@ export function collectCurrentInboundContext(
   if (items.length <= 1) {
     return contexts[0]?.context;
   }
-  const renderField = (field: "text" | "resumableText") => {
+  const renderContext = (
+    select: (context: NonNullable<FollowupRun["currentInboundContext"]>) => string | undefined,
+  ) => {
     const blocks = contexts.flatMap(({ context, index }) => {
-      const value = context[field];
+      const value = select(context);
       return value ? [`Queued #${index + 1} context:\n${value}`] : [];
     });
     return blocks.length > 0 ? blocks.join("\n\n") : undefined;
   };
-  const text = renderField("text");
+  const text = renderContext((context) => context.text);
   if (!text) {
     return undefined;
   }
-  const resumableText = renderField("resumableText");
+  const resumableText = renderContext((context) => context.resumableText);
+  const hasCompactProjection = contexts.some(
+    ({ context }) =>
+      context.compactText !== undefined || context.compactResumableText !== undefined,
+  );
+  const compactText = hasCompactProjection
+    ? renderContext((context) => context.compactText ?? context.text)
+    : undefined;
+  const compactResumableText = hasCompactProjection
+    ? renderContext(
+        (context) =>
+          context.compactResumableText ??
+          context.compactText ??
+          context.resumableText ??
+          context.text,
+      )
+    : undefined;
   const injectedGoalContexts = [
     ...new Set(contexts.flatMap(({ context }) => context.injectedGoalContexts ?? [])),
   ];
+  const serializationStats = contexts.reduce<
+    NonNullable<FollowupRun["currentInboundContext"]>["serializationStats"]
+  >((total, { context }) => {
+    const stats = context.serializationStats;
+    if (!stats) {
+      return total;
+    }
+    return {
+      removedSessionMessages: (total?.removedSessionMessages ?? 0) + stats.removedSessionMessages,
+      deduplicatedMessages: (total?.deduplicatedMessages ?? 0) + stats.deduplicatedMessages,
+    };
+  }, undefined);
   return {
     text,
+    ...(compactText !== undefined ? { compactText } : {}),
     ...(resumableText ? { resumableText } : {}),
+    ...(compactResumableText !== undefined ? { compactResumableText } : {}),
     fragments: contexts.flatMap(({ context, index }) => {
       const fragments: RuntimeContextFragment[] = [
         { kind: "runtime-instruction", text: `Queued #${index + 1} context:` },
@@ -287,7 +319,23 @@ export function collectCurrentInboundContext(
         context.fragments ?? [{ kind: "conversation-data", text: context.text }],
       );
     }),
+    ...(hasCompactProjection
+      ? {
+          compactFragments: contexts.flatMap(({ context, index }) => {
+            const fragments: RuntimeContextFragment[] = [
+              { kind: "runtime-instruction", text: `Queued #${index + 1} context:` },
+            ];
+            return fragments.concat(
+              context.compactFragments ??
+                (context.compactText !== undefined || context.compactResumableText !== undefined
+                  ? [{ kind: "conversation-data", text: context.compactText ?? context.text }]
+                  : (context.fragments ?? [{ kind: "conversation-data", text: context.text }])),
+            );
+          }),
+        }
+      : {}),
     promptJoiner: "\n\n",
+    ...(serializationStats ? { serializationStats } : {}),
     ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
   };
 }

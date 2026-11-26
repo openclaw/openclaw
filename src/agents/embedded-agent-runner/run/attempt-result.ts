@@ -150,6 +150,13 @@ export function completeEmbeddedAttemptResult(
   const { subscription, deferredLifecycleOwner } = input.preparedStreamRuntime.stream;
   const { bootstrapPromptWarning } = bootstrap;
   const hookAgentId = input.setup.sessionAgentId;
+  if (
+    systemPrompt.systemPromptReport?.contextSerialization &&
+    settled.attemptUsage?.input !== undefined
+  ) {
+    systemPrompt.systemPromptReport.contextSerialization.providerInputTokens =
+      settled.attemptUsage.input;
+  }
   // Output hooks can reenter the runtime; project only the state settled before they run.
   const state = {
     agentTerminal: input.state.agentTerminal,

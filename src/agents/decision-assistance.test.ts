@@ -6,7 +6,7 @@ import { isDecisionAssistanceEligible } from "./decision-assistance.js";
 describe("Decision assistance foundation", () => {
   it.each([
     { experimental: undefined, decisionModel: "example/decision" },
-    { experimental: { localModelLean: true }, decisionModel: "example/decision" },
+    { experimental: { usageRankedToolIndex: true }, decisionModel: "example/decision" },
     { experimental: { decisionAssistance: true }, decisionModel: undefined },
   ])("requires explicit consent and a decision model: %j", (input) => {
     const defaults = AgentDefaultsBaseSchema.parse(input);

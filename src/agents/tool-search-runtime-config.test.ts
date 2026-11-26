@@ -9,9 +9,14 @@ const pluginConfig = (marker: unknown) => ({
   entries: { "example-plugin": { config: { marker } } },
 });
 
-function createRuntimeConfigPair(localModelLean = true) {
+function createRuntimeConfigPair(useSmallProfile = true) {
   const sourceConfig = {
-    agents: { defaults: { experimental: { localModelLean } }, entries: { main: {} } },
+    agents: {
+      defaults: {
+        agentProfileId: useSmallProfile ? "openclaw/small" : "openclaw/base",
+      },
+      entries: { main: {} },
+    },
     plugins: pluginConfig(secretMarker()),
   } as OpenClawConfig;
   const runtimeConfig = { ...sourceConfig, plugins: pluginConfig("resolved") } as OpenClawConfig;
@@ -36,11 +41,11 @@ describe("Tool Search runtime snapshot selection", () => {
   afterEach(() => resetConfigRuntimeState());
 
   it.each([true, false])(
-    "applies Tool Search after selecting the resolved snapshot for forced replies (lean: %s)",
-    (localModelLean) => {
-      const { runtimeConfig, sourceConfig } = createRuntimeConfigPair(localModelLean);
+    "applies Tool Search after selecting the resolved snapshot for forced replies (small profile: %s)",
+    (useSmallProfile) => {
+      const { runtimeConfig, sourceConfig } = createRuntimeConfigPair(useSmallProfile);
       const resolved = resolveSurface(sourceConfig, {
-        model: localModelLean ? undefined : { toolSearchMode: "tools" },
+        model: useSmallProfile ? undefined : { toolSearchMode: "tools" },
       });
 
       expect(resolved?.tools?.toolSearch).toEqual({

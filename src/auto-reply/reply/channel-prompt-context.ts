@@ -41,13 +41,13 @@ function sanitizeContextJsonString(value: string): string {
   );
 }
 
+/** Serializes untrusted context with every nested string bounded and its fences neutralized. */
+export function formatContextJson(payload: unknown): string {
+  return JSON.stringify(mapNestedStrings(payload, sanitizeContextJsonString));
+}
+
 export function formatContextJsonBlock(label: string, payload: unknown): string {
-  return [
-    label,
-    "```json",
-    JSON.stringify(mapNestedStrings(payload, sanitizeContextJsonString)),
-    "```",
-  ].join("\n");
+  return [label, "```json", formatContextJson(payload), "```"].join("\n");
 }
 
 /** Preserve a platform-selected window; legacy pending buffers keep their defensive tail cap. */

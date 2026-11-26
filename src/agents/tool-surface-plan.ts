@@ -1,13 +1,20 @@
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
+import type { ModelSizeClass } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  applyAgentProfileToolSearchDefaults,
+  hasCompactToolProfile,
+  resolveAgentProfile,
+  type ResolvedAgentProfile,
+} from "./agent-profiles.js";
+import { resolveProfileModelSizeClass } from "./agent-profiles/model-size-class.js";
 import { getActiveAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import {
   applyCodeModeCatalog,
   isCodeModeEngagedForModel,
   resolveCodeModeConfig,
 } from "./code-mode.js";
-import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import { normalizeToolPolicyName, readToolAllowlistIntersection } from "./tool-policy-shared.js";
 import type { ToolSearchConfig } from "./tool-search-protocol.js";
@@ -22,9 +29,16 @@ export type AgentToolSurfacePlanParams = {
   agentId?: string;
   sessionKey?: string;
   forceDirectMessageTool: boolean;
-  model?: { api?: string; compat?: unknown; toolSearchMode?: "tools" | false };
+  model?: {
+    api?: string;
+    compat?: unknown;
+    modelSizeClass?: ModelSizeClass;
+    parameterCount?: number;
+    toolSearchMode?: "tools" | false;
+  };
   modelProvider?: string;
   modelId?: string;
+  resolvedProfile?: ResolvedAgentProfile;
   codeModeOverride?: boolean | "auto";
   disableToolSearch?: true;
   toolsEnabled: boolean;
@@ -56,12 +70,21 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
   // Select before overlay cloning; cloning source config first loses snapshot identity and can
   // reintroduce unresolved SecretRefs into plugin tool factories.
   const runtimeConfig = selectLiveRuntimeConfig(params.config);
+  const profileConfig = completionPrivateMessageOnly
+    ? runtimeConfig
+    : applyAgentProfileToolSearchDefaults({
+        config: runtimeConfig,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        modelSizeClass: resolveProfileModelSizeClass(params.model),
+        resolvedProfile: params.resolvedProfile,
+      });
   const selectedToolConfig: OpenClawConfig | undefined =
     completionPrivateMessageOnly ||
+    profileConfig !== runtimeConfig ||
     runtimeConfig?.tools?.toolSearch !== undefined ||
-    (params.model?.toolSearchMode !== "tools" &&
-      !isLocalModelLeanEnabled({ ...params, config: runtimeConfig }))
-      ? runtimeConfig
+    params.model?.toolSearchMode !== "tools"
+      ? profileConfig
       : {
           ...runtimeConfig,
           tools: {
@@ -109,7 +132,16 @@ export function prepareAgentToolSurfacePresentation(
   return {
     codeMode: { ...plan.codeModeConfig, enabled: plan.codeModeControlsEnabled },
     toolSearch: { ...plan.toolSearchConfig, enabled: plan.toolSearchControlsEnabled },
-    toolSearchDirectoryLean: isLocalModelLeanEnabled(params),
+    // Wire name kept for gateway and worker version skew; a rename needs a dual read first.
+    toolSearchDirectoryLean: hasCompactToolProfile(
+      params.resolvedProfile ??
+        resolveAgentProfile({
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          modelSizeClass: resolveProfileModelSizeClass(params.model),
+        }),
+    ),
     forceDirectMessageTool: params.forceDirectMessageTool,
   };
 }

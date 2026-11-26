@@ -135,7 +135,7 @@ it.each([
         toolSearchControlsEnabledForRun: runtime.toolSearchControlsEnabled,
         toolSearchConfig: runtime.plan.toolSearchConfig,
         toolSearchCatalogRef: runtime.toolSearchCatalogRef,
-        localModelLeanPreserveToolNames: [],
+        agentProfilePreserveToolNames: [],
         runtimeCapabilityProfile: resolveConversationCapabilityProfile({ config, agentId: "main" }),
       } as unknown as PrepareInput["toolBase"];
       const signal = new AbortController().signal;

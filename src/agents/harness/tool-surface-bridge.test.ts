@@ -275,7 +275,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   it("returns the canonical directory only after applying prompt policy", () => {
     const runtime = configuredRuntime({
       config: {
-        agents: { defaults: { experimental: { localModelLean: false } } },
+        agents: { defaults: { agentProfileId: "openclaw/base" } },
         tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } },
       },
       model: { contextWindow: 8_000 },
@@ -302,7 +302,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     const toolsAllow = attachToolAllowlistIntersection([], [["web_*"], ["*_search"]]);
     const runtime = configuredRuntime({
       config: {
-        agents: { defaults: { experimental: { localModelLean: false } } },
+        agents: { defaults: { agentProfileId: "openclaw/base" } },
         tools: { codeMode: true, toolSearch: false },
       },
       executeTool: async () => ({ content: [], details: {} }),
@@ -323,7 +323,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     expect(toolSchemaDirectoryPrompt).not.toContain("- memory_search ");
   });
 
-  it("keeps browser callable through automatic Tool Search for message-tool-only replies with lean disabled", async () => {
+  it("keeps browser callable through automatic Tool Search for message-tool-only replies with the base profile", async () => {
     let calls = 0;
     const browser = {
       ...createStubTool("browser"),
@@ -333,7 +333,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       },
     };
     const config: OpenClawConfig = {
-      agents: { defaults: { experimental: { localModelLean: false } } },
+      agents: { defaults: { agentProfileId: "openclaw/base" } },
     };
     const runtime = configuredRuntime({
       config,
@@ -422,9 +422,24 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     });
   });
 
+  it("selects the agent profile from the route-matched parameter count", () => {
+    const config: OpenClawConfig = { agents: { defaults: { agentProfileId: "auto" } } };
+    expect(
+      createRuntime(config, { model: { parameterCount: 8_190_735_360 } }).agentProfile.profile.id,
+    ).toBe("openclaw/small");
+    expect(createRuntime(config, { model: {} }).agentProfile.profile.id).toBe("openclaw/base");
+  });
+
+  it("keeps the base profile for a reported parameter count while size selection is off", () => {
+    const runtime = createRuntime({}, { model: { parameterCount: 8_190_735_360 } });
+
+    expect(runtime.agentProfile.profile.id).toBe("openclaw/base");
+    expect(runtime.agentProfile.selectionSource).toBe("fallback");
+  });
+
   it("filters raw SDK tools but does not refilter prepared constructor output", () => {
     const config: OpenClawConfig = {
-      agents: { defaults: { experimental: { localModelLean: true } } },
+      agents: { defaults: { agentProfileId: "openclaw/small" } },
       tools: { alsoAllow: ["image_generate"], toolSearch: { enabled: false } },
     };
     const runtime = createRuntime(config);
@@ -434,20 +449,37 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     ).toEqual(["read", "image_generate"]);
     expect(
       toolNames(
-        runtime.compactTools(tools(["read", "browser"]), { localModelLeanApplied: true }).tools,
+        runtime.compactTools(tools(["read", "browser"]), { agentProfileApplied: true }).tools,
       ),
     ).toEqual(["read", "browser"]);
   });
 
+  it("keeps the automations tool on the harness surface of the small profile", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { agentProfileId: "openclaw/small" } },
+      tools: { toolSearch: { enabled: false } },
+    };
+    const runtime = createRuntime(config);
+
+    expect(
+      toolNames(runtime.compactTools(tools(["read", "browser", "automations", "exec"])).tools),
+    ).toEqual(["read", "automations", "exec"]);
+  });
+
   it.each(
-    [true, false].flatMap((lean) => ["agentId", "sessionKey"].map((scope) => ({ lean, scope }))),
+    [true, false].flatMap((compact) =>
+      ["agentId", "sessionKey"].map((scope) => ({ compact, scope })),
+    ),
   )(
-    "preserves lean=$lean directory presentation across worker projection via $scope",
-    ({ lean, scope }) => {
+    "preserves compact=$compact directory presentation across worker projection via $scope",
+    ({ compact, scope }) => {
       const config: OpenClawConfig = {
         agents: {
-          defaults: { experimental: { localModelLean: !lean } },
-          entries: { main: {}, scoped: { experimental: { localModelLean: lean } } },
+          defaults: { agentProfileId: compact ? "openclaw/base" : "openclaw/small" },
+          entries: {
+            main: {},
+            scoped: { agentProfileId: compact ? "openclaw/small" : "openclaw/base" },
+          },
         },
         tools: { codeMode: false, toolSearch: { mode: "tools" } },
       };
@@ -463,15 +495,62 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       const surface = runtime.compactTools([lookup, createStubTool("browser")]);
       const prompt = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
       expect(prompt).toContain("- fixture_lookup (core)");
-      expect(prompt?.includes("Search the local archive.")).toBe(!lean);
-      expect(prompt?.includes("- browser (core)")).toBe(!lean);
+      expect(prompt?.includes("Search the local archive.")).toBe(!compact);
+      expect(prompt?.includes("- browser (core)")).toBe(!compact);
       const projected = worker.compactTools([lookup], { prepared: { preserveToolNames: [] } });
       const directory = projected.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
       expect(directory?.split("\n").filter((line) => line.startsWith("- "))).toEqual([
-        lean ? "- fixture_lookup (core)" : "- fixture_lookup (core): Search the local archive.",
+        compact ? "- fixture_lookup (core)" : "- fixture_lookup (core): Search the local archive.",
       ]);
     },
   );
+
+  it.each(["openclaw/base", "openclaw/small"] as const)(
+    "keeps the gateway-selected %s on a worker whose model reports a small parameter count and trusts the Gateway's tool projection",
+    (selected) => {
+      const model = { parameterCount: 8_190_735_360 };
+      const config: OpenClawConfig = {
+        agents: { defaults: { agentProfileId: selected } },
+        tools: { codeMode: false, toolSearch: false },
+      };
+      const worker = rawRuntime({
+        model,
+        presentation: structuredClone(preparePresentation({ config, model })),
+      });
+
+      expect(worker.agentProfile.profile.id).toBe(selected);
+      expect(
+        toolNames(
+          worker.compactTools(tools(["read", "browser", "message"]), {
+            prepared: { preserveToolNames: [] },
+          }).tools,
+        ),
+      ).toEqual(["read", "browser", "message"]);
+    },
+  );
+
+  it("keeps a tool that only the prepared preserve list allows after catalog compaction", () => {
+    const config: OpenClawConfig = {
+      agents: { defaults: { agentProfileId: "openclaw/small" } },
+      tools: { toolSearch: { enabled: false } },
+    };
+    const runtime = createRuntime(config);
+
+    expect(
+      toolNames(
+        runtime.compactTools(tools(["read", "browser"]), {
+          prepared: { preserveToolNames: ["browser"] },
+        }).tools,
+      ),
+    ).toEqual(["read", "browser"]);
+    expect(
+      toolNames(
+        runtime.compactTools(tools(["read", "browser"]), {
+          prepared: { preserveToolNames: [] },
+        }).tools,
+      ),
+    ).toEqual(["read"]);
+  });
 
   it("atomically filters and restores direct tools plus the hidden catalog", () => {
     const runtime = createRuntime({ tools: { toolSearch: true } });

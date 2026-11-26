@@ -53,10 +53,6 @@ import {
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
 } from "../bootstrap-budget.js";
-import {
-  makeBootstrapWarn as makeBootstrapWarnImpl,
-  resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
-} from "../bootstrap-files.js";
 import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import {
   CLI_AUTH_EPOCH_VERSION,
@@ -72,6 +68,7 @@ import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
 } from "../command/attempt-execution.helpers.js";
+import { selectCurrentInboundContext } from "../context-serialization/project.js";
 import {
   resolvePromptBuildHookResult,
   type ResolvedPromptBuildHookResult,
@@ -141,6 +138,7 @@ import {
   resolveCliRuntimeToolPolicy,
   resolveCliToolAvailabilityHash,
 } from "./prepare-tool-policy.js";
+import { prepareCliAgentProfileContext } from "./prepare.agent-profile.js";
 import {
   buildCliVisibleReplyGuidance,
   finalizeCliSystemPrompt,
@@ -558,7 +556,11 @@ async function prepareCliRunContextWithinReadFence(
   // CLI's own menu resolves it to; OpenClaw keeps no alias table of its own.
   const requestedContextModelId = params.nativeModelId ?? modelId;
   const normalizedContextModelId = params.nativeModelId ?? normalizedCatalogModel;
-  const { contextWindowInfo, providerThinkingLevel } = resolveCliModelCapabilities({
+  const {
+    contextWindowInfo,
+    providerThinkingLevel,
+    modelSizeClass: agentProfileModelSizeClass,
+  } = resolveCliModelCapabilities({
     run: params,
     runConfig,
     workspaceDir,
@@ -617,25 +619,16 @@ async function prepareCliRunContextWithinReadFence(
     { ...params, ...workspaceResolution, sessionRoot: params.sessionEntry?.sessionRoot },
     params.bootstrapWorkspaceDir ?? canonicalWorkspace,
   );
-  const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPrefix
-    ? { bootstrapFiles: [], contextFiles: [] }
-    : await resolveBootstrapContextForRunImpl({
-        workspaceDir: bootstrapWorkspaceDir,
-        executionWorkspaceDir: params.sessionEntry?.sessionRoot ?? workspaceDir,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        bootstrapUserProfileId: params.bootstrapUserProfileId,
-        chatType: runtimeChatType,
-        agentId: sessionAgentId,
-        contextMode: params.bootstrapContextMode,
-        runKind: params.bootstrapContextRunKind,
-        warn: makeBootstrapWarnImpl({
-          sessionLabel,
-          workspaceDir: bootstrapWorkspaceDir,
-          warn: (message) => cliBackendLog.warn(message),
-        }),
-      });
+  const profiled = await prepareCliAgentProfileContext({
+    params,
+    skipsTurnPrefix,
+    sessionAgentId,
+    sessionLabel,
+    modelSizeClass: agentProfileModelSizeClass,
+    workspaceDir,
+    bootstrapWorkspaceDir,
+    runtimeChatType,
+  });
   // Ring-zero OpenClaw runs replace the bundle MCP surface entirely: no
   // loopback server, no plugin/user servers. A selectable backend also removes
   // its native tools, leaving only this openclaw stdio server.
@@ -792,7 +785,7 @@ async function prepareCliRunContextWithinReadFence(
       ? undefined
       : await resolveWorkspaceBootstrapRouting({
           isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
-          bootstrapFiles,
+          bootstrapFiles: profiled.bootstrapFiles,
           bootstrapFilesProvideAccess: false,
           bootstrapContextRunKind: params.bootstrapContextRunKind,
           trigger: params.trigger,
@@ -806,11 +799,13 @@ async function prepareCliRunContextWithinReadFence(
   const bootstrapMode = bootstrapRouting?.bootstrapMode ?? "none";
   const includeBootstrapInSystemContext = bootstrapRouting?.includeBootstrapInSystemContext ?? true;
   const contextFiles = includeBootstrapInSystemContext
-    ? resolvedContextFiles
-    : resolvedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
+    ? profiled.resolvedContextFiles
+    : profiled.resolvedContextFiles.filter(
+        (file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()),
+      );
   const bootstrapFilesForInjectionStats = includeBootstrapInSystemContext
-    ? bootstrapFiles
-    : bootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
+    ? profiled.bootstrapSourceFiles
+    : profiled.bootstrapSourceFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
   const bootstrapInjectionStats = buildBootstrapInjectionStats({
     bootstrapFiles: bootstrapFilesForInjectionStats,
     injectedFiles: contextFiles,
@@ -1444,6 +1439,7 @@ async function prepareCliRunContextWithinReadFence(
       const current = buildCliCurrentPrompt(params, reusableCliSession, {
         ...sessionPromptContext,
         privateContext: executionTarget.kind === "plugin",
+        serialization: profiled.contextSerialization,
       });
       ({
         prompt: preparedPrompt,
@@ -1511,6 +1507,7 @@ async function prepareCliRunContextWithinReadFence(
       sessionKey: params.sessionKey,
       provider: params.provider,
       model: modelId,
+      agentProfile: profiled.agentProfileReport,
       workspaceDir,
       bootstrapMaxChars,
       bootstrapTotalMaxChars,
@@ -1520,6 +1517,7 @@ async function prepareCliRunContextWithinReadFence(
       }),
       sandbox: { mode: "off", sandboxed: false },
       systemPrompt,
+      workspaceContext: profiled.workspaceContextReport,
       injectedWorkspaceFiles: bootstrapInjectionStats,
       skillsPrompt: preparedSkills.prompt,
       tools: promptTools,
@@ -1531,6 +1529,13 @@ async function prepareCliRunContextWithinReadFence(
           .join("\n\n").length,
       },
     });
+    // Report the projection this route sends; a private transport sends producer fragments instead.
+    if (!skipsTurnPreparation && executionTarget.kind !== "plugin") {
+      systemPromptReport.contextSerialization = selectCurrentInboundContext({
+        context: params.currentInboundContext,
+        serialization: profiled.contextSerialization,
+      }).report;
+    }
     const buildPreparedContext = (preparedParams: PreparedCliRunContext["params"]) => ({
       params: preparedParams,
       bindQuestionAnswerAuthority,

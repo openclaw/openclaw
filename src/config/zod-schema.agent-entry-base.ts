@@ -1,6 +1,7 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { z } from "zod";
 import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
+import { AGENT_PROFILE_SELECTORS } from "./agent-profile-ids.js";
 import { AgentModelSchema, DecisionModelSchema } from "./zod-schema.agent-model.js";
 import { RecommendedPromptsSchema } from "./zod-schema.recommended-prompts.js";
 
@@ -112,12 +113,8 @@ export const AgentEntryBaseSchema = z.strictObject({
     .optional(),
   bootstrapMaxChars: z.number().int().positive().optional(),
   bootstrapTotalMaxChars: z.number().int().positive().optional(),
+  agentProfileId: z.enum(AGENT_PROFILE_SELECTORS).optional(),
   sharedUserDir: z.string().trim().min(1).optional(),
-  experimental: z
-    .strictObject({
-      localModelLean: z.boolean().optional(),
-    })
-    .optional(),
   skills: z.array(z.string()).optional(),
   subagents: z
     .strictObject({

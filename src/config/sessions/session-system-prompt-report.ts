@@ -6,6 +6,19 @@ export type SessionSystemPromptReport = {
   sessionKey?: string;
   provider?: string;
   model?: string;
+  agentProfile?: {
+    id: string;
+    selectionSource: string;
+  };
+  contextSerialization?: {
+    mode: "default" | "compact";
+    source: "agent-explicit" | "defaults-explicit" | "agent-profile" | "fallback";
+    defaultChars: number;
+    serializedChars: number;
+    removedSessionMessages: number;
+    deduplicatedMessages: number;
+    providerInputTokens?: number;
+  };
   workspaceDir?: string;
   bootstrapMaxChars?: number;
   bootstrapTotalMaxChars?: number;
@@ -17,6 +30,24 @@ export type SessionSystemPromptReport = {
     truncatedFiles?: number;
     nearLimitFiles?: number;
     totalNearLimit?: boolean;
+  };
+  workspaceContext?: {
+    totalMaxChars: number;
+    operatorMaxChars: number;
+    operatorTotalMaxChars: number;
+    rawChars: number;
+    injectedChars: number;
+    truncatedChars: number;
+    entries: Array<{
+      section: string;
+      path: string;
+      missing: boolean;
+      rawChars: number;
+      effectiveMaxChars: number;
+      injectedChars: number;
+      truncated: boolean;
+      causes: Array<"section-limit" | "aggregate-limit">;
+    }>;
   };
   sandbox?: {
     mode?: string;

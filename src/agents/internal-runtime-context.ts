@@ -83,10 +83,19 @@ export function projectRuntimeContextFragments(fragments: RuntimeContextFragment
 
 export type CurrentInboundPromptContext = {
   text: string;
+  /** Compact projection owned by the context producer. */
+  compactText?: string;
   /** Producer-owned fragments for model projection; text remains the legacy rendering. */
   fragments?: RuntimeContextFragment[];
+  /** Fragments of the compact projection, with instructions kept apart from conversation data. */
+  compactFragments?: RuntimeContextFragment[];
   resumableText?: string;
+  compactResumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
+  serializationStats?: {
+    removedSessionMessages: number;
+    deduplicatedMessages: number;
+  };
   /** Generated goal blocks owned by inbound-context assembly, never user text. */
   injectedGoalContexts?: string[];
 };

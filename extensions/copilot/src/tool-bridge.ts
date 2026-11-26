@@ -186,7 +186,7 @@ export async function createCopilotToolBridge(
     { toolMeta: getPluginToolMeta },
   );
   const compactedTools = toolSurfaceRuntime.compactTools(allowedSourceTools, {
-    localModelLeanApplied: true,
+    agentProfileApplied: true,
   });
   // The constructor output is bound before catalog compaction so hidden tools
   // cannot outlive the attempt. Bind only controls created by compaction here;
@@ -335,6 +335,7 @@ async function buildOpenClawCodingToolsOptions(
     abortSignal: a.abortSignal,
     modelProvider: input.modelProvider,
     modelId: input.modelId,
+    resolvedAgentProfile: toolSurfaceRuntime?.agentProfile,
     includeCoreTools: toolPlan.includeCoreTools,
     includeToolSearchControls: toolSurfaceRuntime?.includeToolSearchControls,
     toolSearchCatalogRef: toolSurfaceRuntime?.toolSearchCatalogRef,

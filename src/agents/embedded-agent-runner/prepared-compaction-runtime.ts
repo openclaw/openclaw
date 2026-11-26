@@ -11,6 +11,7 @@ import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
+import { resolveProfileModelSizeClass } from "../agent-profiles/model-size-class.js";
 import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.async.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../auth-profiles/store-runtime.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
@@ -169,6 +170,9 @@ export async function buildPreparedCompactionRuntime(
             sessionId: params.sessionId,
             chatType: params.chatType,
             agentId: sessionAgentId,
+            modelProvider: provider,
+            modelId,
+            modelSizeClass: resolveProfileModelSizeClass(runtimeModel),
             warn: makeBootstrapWarn({
               sessionLabel,
               warn: (message) => log.warn(message),

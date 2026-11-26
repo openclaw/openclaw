@@ -6,6 +6,7 @@ import {
   peekSystemEventEntries,
 } from "../../infra/system-events.js";
 import type { runReplyAgent } from "./agent-runner-run.js";
+import { registerCompactInboundContextCases } from "./get-reply-run.compact-context.test-support.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import { nonReasoningModelState } from "./get-reply-run.test-support.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
@@ -20,6 +21,8 @@ export function registerSystemEventAdmissionCases({
   ) => ReturnType<typeof runPreparedReply>;
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
 }): void {
+  registerCompactInboundContextCases({ runPrepared, requireRunReplyAgentCall });
+
   it("reports an unsupported thinking override to the session event owner before starting", async () => {
     const onFailed = vi.fn();
     const onStarted = vi.fn();

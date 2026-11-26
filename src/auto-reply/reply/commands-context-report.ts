@@ -593,13 +593,44 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
   const totalsLine = `Session tokens (cached): ${cachedContextUsageTokens != null ? `${formatInt(cachedContextUsageTokens)} total` : "unknown"} / ctx=${contextWindowLabel}`;
   const detailed = sub === "detail" || sub === "deep";
+  const { agentProfile } = report;
+  const contextSerializationLine = report.contextSerialization
+    ? [
+        `Context serialization: ${report.contextSerialization.mode} (${report.contextSerialization.source})`,
+        `Inbound context: ${formatInt(report.contextSerialization.serializedChars)} chars from ${formatInt(report.contextSerialization.defaultChars)} default chars; removed ${formatInt(report.contextSerialization.removedSessionMessages)} transcript duplicate(s) and ${formatInt(report.contextSerialization.deduplicatedMessages)} duplicate history item(s)`,
+        ...(report.contextSerialization.providerInputTokens !== undefined
+          ? [
+              `Provider input tokens (turn): ${formatInt(report.contextSerialization.providerInputTokens)}`,
+            ]
+          : []),
+      ]
+    : [];
+  const workspaceContextLines = report.workspaceContext
+    ? [
+        `Agent Profile workspace context: ${formatInt(report.workspaceContext.injectedChars)} / ${formatInt(report.workspaceContext.totalMaxChars)} chars; ${formatInt(report.workspaceContext.truncatedChars)} chars removed`,
+        ...(detailed
+          ? [
+              "Agent Profile workspace sections:",
+              ...report.workspaceContext.entries.map((section) => {
+                const causes = section.causes.length > 0 ? ` (${section.causes.join(", ")})` : "";
+                return `- ${section.section}: ${formatInt(section.injectedChars)} / ${formatInt(section.rawChars)} chars${causes}`;
+              }),
+            ]
+          : []),
+      ]
+    : [];
   const lines = [
     detailed ? "🧠 Context breakdown (detailed)" : "🧠 Context breakdown",
     `Workspace: ${workspaceLabel}`,
     `Bootstrap max/file: ${bootstrapMaxLabel}`,
     `Bootstrap max/total: ${bootstrapTotalLabel}`,
+    ...(agentProfile
+      ? [`Agent Profile: ${agentProfile.id} (selection source: ${agentProfile.selectionSource})`]
+      : []),
+    ...workspaceContextLines,
     sandboxLine,
     systemPromptLine,
+    ...contextSerializationLine,
     ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
     ...(nativeUnverifiedWarningLines.length ? ["", ...nativeUnverifiedWarningLines] : []),
     "",
