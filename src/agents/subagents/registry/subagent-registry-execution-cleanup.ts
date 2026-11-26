@@ -13,6 +13,7 @@ import {
 import { sessionTargetOwnersMatch } from "../../../sessions/session-controller.target.js";
 import {
   captureExecRequestCancellation,
+  hasExecRequestCancellationWork,
   stopSessionExecProcesses,
 } from "../../bash-process-control.js";
 import { resolveActiveEmbeddedRunOwnerByRunId } from "../../embedded-agent-runner/runs.js";
@@ -240,12 +241,12 @@ export function captureSubagentRetainedWork() {
       Boolean(entry.requesterSettleWake) ||
       captureSubagentEmbeddedExecution(entry) !== undefined ||
       hasRetainedControllerExecution(entry) ||
-      captureExecRequestCancellation({
+      hasExecRequestCancellationWork({
         runId: entry.runId,
         sessionKey: entry.childSessionKey,
         sessionId: entry.childSessionIdentity?.sessionId,
         agentId: entry.childAgentId,
-      }).owners.length > 0 ||
+      }) ||
       (children.get(entry.childSessionKey) ?? []).some((child) => hasRetainedWork(child, visited))
     );
   };

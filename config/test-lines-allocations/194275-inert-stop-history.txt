@@ -1,0 +1,3 @@
+122
+# Gateway Stop regression: removed inert child storage is skipped while a
+# completed child's retained wake still retires through the real registry.
