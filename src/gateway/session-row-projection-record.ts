@@ -26,7 +26,7 @@ import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { resolveGatewaySessionActiveModel } from "./session-row-model-facts.js";
 import { sameSelectionFacts, type SelectionRow } from "./session-row-selection-facts.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
-import { sessionTitleRequests } from "./session-title-state.js";
+import { isTitlePending } from "./session-title-state.js";
 import type { SessionChildActivity, SessionListRowContext } from "./session-utils-contracts.js";
 import { sameSessionRowChildLinkEntry } from "./session-utils-projection.js";
 import * as rowProjection from "./session-utils-row.js";
@@ -117,6 +117,7 @@ export type Row = Pick<GatewaySessionRow, "hasMessages"> & {
   materializedSequence?: number;
   profileRevision?: number;
   subagentRevision?: number;
+  fallbackTitle?: string | null;
   lastMessagePreview?: string;
   lastAssistantMessage?: GatewaySessionRow["lastAssistantMessage"];
   fallbackModel?: ReturnType<
@@ -397,7 +398,11 @@ export function publishTranscriptFields(
   row: MaterializedRow,
   fields: Pick<
     Row,
-    "hasMessages" | "lastMessagePreview" | "lastAssistantMessage" | "fallbackModel"
+    | "hasMessages"
+    | "lastMessagePreview"
+    | "lastAssistantMessage"
+    | "fallbackModel"
+    | "fallbackTitle"
   >,
   cfg: Inputs["cfg"],
   context: SessionListRowContext,
@@ -416,6 +421,7 @@ export function publishTranscriptFields(
     activeModel: fields.fallbackModel ?? null,
   });
   if (
+    (fields.fallbackTitle === undefined || row.fallbackTitle === fields.fallbackTitle) &&
     row.hasMessages === fields.hasMessages &&
     row.lastMessagePreview === fields.lastMessagePreview &&
     isDeepStrictEqual(row.lastAssistantMessage, fields.lastAssistantMessage) &&
@@ -428,8 +434,16 @@ export function publishTranscriptFields(
     lastMessagePreview: fields.lastMessagePreview,
     lastAssistantMessage: fields.lastAssistantMessage,
   };
+  if (fields.fallbackTitle !== undefined) {
+    row.fallbackTitle = fields.fallbackTitle;
+  }
   Object.assign(row, transcript, { fallbackModel });
-  row.materialized = rowProjection.replaceSessionRowFacts(row.materialized, transcript);
+  row.materialized = rowProjection.replaceSessionRowFacts(row.materialized, {
+    ...transcript,
+    ...(!row.materialized.row.derivedTitle && row.fallbackTitle
+      ? { derivedTitle: row.fallbackTitle }
+      : {}),
+  });
   return true;
 }
 
@@ -486,14 +500,7 @@ export function present(
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;
-  // Naming belongs to the in-flight owner, not persisted or materialized row state.
-  row.titlePending =
-    !record.entry.titleFallbackReady &&
-    sessionTitleRequests.isPending({
-      storePath: record.storeTarget.storePath,
-      sessionKey: record.key,
-      sessionId: record.entry.sessionId,
-    });
+  row.titlePending = isTitlePending(record);
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;
@@ -577,6 +584,7 @@ export function dematerialize(row: Row): Row {
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
+    fallbackTitle: undefined,
     membership: new Set<string>(),
     lastMessagePreview: undefined,
     lastAssistantMessage: undefined,
@@ -722,6 +730,7 @@ export function acquireSessionRowEntry(params: {
         : undefined,
     ...(generation !== row.generation
       ? {
+          fallbackTitle: undefined,
           lastMessagePreview: undefined,
           lastAssistantMessage: undefined,
           fallbackModel: undefined,

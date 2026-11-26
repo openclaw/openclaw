@@ -524,6 +524,30 @@ it.each(["disposal", "replacement"] as const)(
   },
 );
 
+it("shows the first task after a failed title without promoting transcript text to a saved name", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot(cfg);
+    const { target, query } = seedTranscriptRow("fallback-title");
+    await appendTranscript(
+      target,
+      { role: "user", content: "Compare the release checklist" },
+      { role: "assistant", content: "Here is the checklist." },
+    );
+    await upsertSessionEntryCore(target, { titleFallbackReady: true });
+    using projection = await createTestProjection({ cfg });
+    await projection.ensureMaterialized();
+    await vi.waitFor(() =>
+      expect(projection.snapshot(query, display).row?.derivedTitle).toBe(
+        "Compare the release checklist",
+      ),
+    );
+    expect(loadSessionEntry(target)?.displayName).toBeUndefined();
+    expect(
+      projection.snapshot(query, { includeDerivedTitles: false }).row?.derivedTitle,
+    ).toBeUndefined();
+  });
+});
+
 it("eventually fills legacy titles and previews without waiting during startup or changing activity", async ({
   signal,
 }) => {

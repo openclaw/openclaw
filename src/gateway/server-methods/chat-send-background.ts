@@ -6,6 +6,8 @@ import {
   isDashboardSessionTitleCandidate,
   maybeGenerateDashboardSessionTitle,
 } from "../dashboard-session-title.js";
+import type { CreatedGatewaySession } from "../session-create-service.types.js";
+import { sessionTitleRequests, hasExplicitSessionName } from "../session-title-state.js";
 import { formatForLog } from "../ws-log.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { emitSessionTitleChanged } from "./session-change-event.js";
@@ -20,6 +22,25 @@ type DashboardSessionTitleRequest = {
   sessionKey: string;
   storePath: string;
 };
+
+export function holdCreatedDashboardSessionTitle(
+  holds: DisposableStack,
+  created: CreatedGatewaySession,
+  source: string,
+) {
+  if (
+    !hasExplicitSessionName(created.entry) &&
+    isDashboardSessionTitleCandidate({ sessionKey: created.key, userMessage: source })
+  ) {
+    holds.defer(
+      sessionTitleRequests.holdCreation({
+        storePath: created.storePath,
+        sessionKey: created.key,
+        sessionId: created.entry.sessionId,
+      }),
+    );
+  }
+}
 
 export function scheduleCreatedDashboardSessionTitle(
   created: {

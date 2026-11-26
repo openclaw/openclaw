@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -29,7 +29,7 @@ it.each([false, true])(
       };
       const generation = createDeferredCore<boolean>();
       const snapshot = () => projection.snapshot({ agentId: "main", key }).row;
-      expect(snapshot()?.titlePending).toBe(false);
+      await vi.waitFor(() => expect(snapshot()?.titlePending).toBe(false));
       const before = projection.materializedCount;
       const started = createDeferredCore();
       const request = sessionTitleRequests.run(target, (markStarted) => {

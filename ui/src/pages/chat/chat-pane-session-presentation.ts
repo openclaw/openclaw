@@ -24,7 +24,7 @@ export function chatSessionPresentationTitle(
   );
   // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
   const source = presentation ?? row;
-  if (!source && createdTitle) {
+  if (!source && createdTitle !== undefined) {
     return createdTitle;
   }
   if (!source && pending) {

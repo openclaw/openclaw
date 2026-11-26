@@ -106,6 +106,7 @@ export async function repairLegacySessionTitles(params: {
             if (
               !recoveredFromProjections &&
               !entry.incognito &&
+              !entry.titleFallbackReady &&
               !isIncognitoSessionKey(sessionKey) &&
               // Spawn owns child labels; its first user message is a runtime task envelope.
               !isSubagentSessionKey(sessionKey) &&
