@@ -247,7 +247,7 @@ function resolveOwnerAllowFromList(
   params: AllowFromParams & {
     providerId?: ChannelId;
     allowFrom?: Array<string | number>;
-    discordMigrationPending?: boolean;
+    migrationDeferredChannels?: readonly string[];
   },
 ): string[] {
   const raw = params.allowFrom ?? params.cfg.commands?.ownerAllowFrom;
@@ -271,14 +271,16 @@ function resolveOwnerAllowFromList(
       continue;
     }
     const remainder = trimmed.slice(separatorIndex + 1).trim();
-    // Normally the channel formats its typed direct target. A delegated update
-    // may temporarily lack Discord's formatter while Doctor owns its migration.
+    // Normally the channel formats its typed direct target. A delegated update may lack the
+    // formatter while Doctor owns the channel plugin's migration; the exact user ID still names
+    // the owner. Without the plugin, its target style is unknown, so this accepts the typed
+    // form for any deferred channel; the ID must still match the sender exactly.
     if (
       normalizeChatChannelId(prefix) &&
       /^[^:]+:user:[^:\s*]+$/i.test(trimmed) &&
       params.plugin?.messaging?.directTargetStyle !== "user-prefixed"
     ) {
-      if (!params.plugin && channel === "discord" && params.discordMigrationPending) {
+      if (!params.plugin && params.migrationDeferredChannels?.includes(channel)) {
         filtered.push(remainder.slice("user:".length));
       }
       continue;
@@ -585,7 +587,7 @@ export function resolveConfiguredCommandOwners(
 export function isConfiguredCommandOwner(
   cfg: OpenClawConfig,
   requester: { channel?: string; accountId?: string; senderId?: string; senderE164?: string },
-  options: { discordMigrationPending?: boolean } = {},
+  options: { migrationDeferredChannels?: readonly string[] } = {},
 ): boolean {
   const providerId = normalizeAnyChannelId(requester.channel) ?? requester.channel;
   const plugin = providerId ? getLoadedChannelPluginForRead(providerId) : undefined;

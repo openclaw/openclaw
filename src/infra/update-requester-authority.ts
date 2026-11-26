@@ -155,7 +155,7 @@ async function captureManagedUpdateRequester(
           env: authorityEnv,
           configPath: target.configPath,
         });
-      let discordMigrationPending = false;
+      let migrationDeferredChannels: string[] = [];
       await ensureCliPluginRegistryLoaded({
         scope: "configured-channels",
         routeLogsToStderr: true,
@@ -166,9 +166,9 @@ async function captureManagedUpdateRequester(
         if (!(error instanceof PluginLoadFailureError && error.onlyPendingStateMigrations)) {
           throw error;
         }
-        discordMigrationPending = error.registry.diagnostics.some(
-          (entry) => entry.pluginId === "discord" && entry.code === "plugin-state-migration",
-        );
+        migrationDeferredChannels = error.registry.plugins
+          .filter((plugin) => plugin.status === "error")
+          .flatMap((plugin) => plugin.channelIds);
       });
       const authority =
         authorizationSource === "configured-owner"
@@ -186,7 +186,7 @@ async function captureManagedUpdateRequester(
             () => {
               const config = readCurrentConfig();
               return authorizationSource === "configured-owner"
-                ? isConfiguredCommandOwner(config, admittedRequester, { discordMigrationPending })
+                ? isConfiguredCommandOwner(config, admittedRequester, { migrationDeferredChannels })
                 : authority?.source === authorizationSource && authority.isCurrent(config);
             },
             { current: { env: authorityEnv } },
