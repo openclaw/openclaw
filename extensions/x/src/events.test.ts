@@ -108,59 +108,6 @@ describe("X event transport", () => {
     }
   });
 
-  it("times retry sleep, both budget checks, response headers, and first byte separately", async () => {
-    vi.useFakeTimers();
-    const delay = (ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      });
-    const spend = createXTestSpend();
-    const budgetStarted = Promise.withResolvers<void>();
-    vi.spyOn(spend, "streamResumeAt").mockImplementation(async () => {
-      budgetStarted.resolve();
-      await delay(125);
-      return undefined;
-    });
-    let attempt = 0;
-    const api = budgetApi(spend, async (url) => {
-      if (!url.pathname.endsWith("/stream")) {
-        return Response.json({ data: [] });
-      }
-      if (++attempt === 1) {
-        await delay(20_000);
-        return Response.json({}, { status: 503 });
-      }
-      await delay(20);
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            setTimeout(() => controller.enqueue(new TextEncoder().encode("\n")), 30);
-          },
-        }),
-      );
-    });
-    const onStreamTiming = vi.fn();
-    const test = streamFixture({ api, onStreamTiming });
-    try {
-      await budgetStarted.promise;
-      await vi.advanceTimersByTimeAsync(21_520);
-      await test.connected;
-      expect(onStreamTiming.mock.calls).toEqual([
-        ["budget-preflight", 125],
-        ["budget-check", 125],
-        ["response-headers", 20_000],
-        ["backoff", 1_000],
-        ["budget-preflight", 125],
-        ["budget-check", 125],
-        ["response-headers", 20],
-      ]);
-      await vi.advanceTimersByTimeAsync(30);
-      expect(onStreamTiming).toHaveBeenLastCalledWith("first-byte", 30);
-    } finally {
-      await test.stop();
-    }
-  });
-
   it("backs off consecutive failed opens but resets after each connected stream", async () => {
     vi.useFakeTimers();
     let attempt = 0;

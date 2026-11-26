@@ -19,6 +19,7 @@ import {
 import type { PluginServiceCronHost } from "../plugins/service-cron.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { broadcastPluginRegistryChanged } from "./events.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
@@ -223,11 +224,7 @@ export async function startGatewayPostAttachRuntime(params: {
       return await disposeUnattached();
     }
     pluginRegistry = loaded.pluginRegistry;
-    params.broadcast?.(
-      "plugins.changed",
-      { generation: getPluginRegistryVersion(pluginRegistry) },
-      { dropIfSlow: true },
-    );
+    broadcastPluginRegistryChanged(params.broadcast, getPluginRegistryVersion(pluginRegistry));
     params.startupTrace?.detail("plugins.runtime-post-bind", [
       [
         "loadedPluginCount",

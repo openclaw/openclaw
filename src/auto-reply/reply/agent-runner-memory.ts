@@ -44,7 +44,8 @@ import { acknowledgeReplySessionTransition } from "../../sessions/session-contro
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ReplyPayload } from "../types.js";
 import {
-  defersTokenCompactionToChatGPTBoundary,
+  adoptCompactedFollowupSession,
+  defersTokenCompactionToRequestBoundary,
   followupOwnsNativeCompaction,
   followupUsesCliRuntime,
   resolveFollowupAgentRuntimeId,
@@ -88,7 +89,7 @@ import {
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
-import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import type { FollowupRun } from "./queue.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -279,7 +280,11 @@ export async function runSessionCompactionIfNeeded(params: {
   if (
     shouldCompactByTokens &&
     !shouldCompactByTranscriptBytes &&
-    (await defersTokenCompactionToChatGPTBoundary(params.followupRun.run))
+    (await defersTokenCompactionToRequestBoundary(
+      params.followupRun.run,
+      tokenCountForCompaction,
+      contextWindowTokens,
+    ))
   ) {
     assertActive();
     return entry;
@@ -490,19 +495,7 @@ export async function runSessionCompactionIfNeeded(params: {
     await notifyCompaction(notice.phase, notice.text);
     assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;
-    const previousSessionId = params.followupRun.run.sessionId;
-    params.followupRun.run.sessionId = entry.sessionId;
-    params.onSessionIdChanged?.(entry.sessionId);
-    const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
-    if (queueKey) {
-      params.followupRun.run.sessionFile = queueKey;
-      refreshQueuedFollowupSession({
-        key: queueKey,
-        previousSessionId,
-        nextSessionId: entry.sessionId,
-        nextSessionFile: queueKey,
-      });
-    }
+    adoptCompactedFollowupSession(params, entry.sessionId);
     return entry;
   } catch (err) {
     if (!terminalCompactionNoticeSent && !params.abortSignal?.aborted) {

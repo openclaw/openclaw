@@ -618,11 +618,11 @@ async function initSessionStateAttemptLocked(
     sessionStartedAt: isNewSession
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
-    lastInteractionAt: isSystemEvent
-      ? baseEntry?.lastInteractionAt
-      : recordedActivity
-        ? Math.max(baseEntry?.lastInteractionAt ?? 0, recordedActivity.at)
-        : now,
+    // An inbound message is visible chat content; internal turns keep both stored values.
+    ...(!isSystemEvent && {
+      lastInteractionAt: Math.max(baseEntry?.lastInteractionAt ?? 0, recordedActivity?.at ?? now),
+      lastActivityAt: Math.max(baseEntry?.lastActivityAt ?? 0, recordedActivity?.at ?? now),
+    }),
     agentStatus: isSystemEvent ? baseEntry?.agentStatus : undefined,
     pinnedAt: entry?.pinnedAt,
     snoozedUntil: isSystemEvent ? entry?.snoozedUntil : undefined,

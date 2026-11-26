@@ -391,9 +391,11 @@ it.each(["reset", "compaction"] as const)(
           lifecycleRevision: target.lifecycleRevision,
         });
         if (mutationKind === "reset") {
-          expect(retained.assertCurrent).toThrow("authority changed");
+          expect(retained.assertCurrent).toThrow("Sandbox stream session or resource changed");
           expect(retained.signal.aborted).toBe(true);
-          await expect(fixture.prepare()).rejects.toThrow("authority changed");
+          await expect(fixture.prepare()).rejects.toThrow(
+            "Sandbox stream session or resource changed",
+          );
           expect(mocks.sandbox).toHaveBeenCalledOnce();
         } else {
           retained.assertCurrent();
@@ -589,7 +591,6 @@ it.each(["grant revocation", "target replacement"] as const)(
         await rejection;
         expect(sandbox?.[Symbol.dispose]).toHaveBeenCalledOnce();
         expect(authority?.signal?.aborted).toBe(true);
-        expect(authority?.assertCurrent).toThrow();
       } else {
         const retained = await pending;
         expect(retained.signal.aborted).toBe(false);

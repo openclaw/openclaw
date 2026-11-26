@@ -526,7 +526,7 @@ it.each(["release", "replacement", "rotation", "abort"] as const)(
         await manager.drain();
         expect(broadcast).toHaveBeenCalledWith(
           "question.resolved",
-          { id, status: "cancelled" },
+          { id, status: "cancelled", resolvedBy: "requester-inactive" },
           publicationOptions,
         );
         expect(
@@ -619,7 +619,7 @@ it("diverts operator-entered credentials into the store and exposes only a store
     await manager.drain();
     expect(broadcast).toHaveBeenCalledWith(
       "question.resolved",
-      { id, status: "answered", answers: safeAnswers },
+      { id, status: "answered", answers: safeAnswers, resolvedBy: "control-ui" },
       publicationOptions,
     );
     expect(JSON.stringify([resolved, manager.get(id), broadcast.mock.calls])).not.toContain(value);
@@ -706,11 +706,10 @@ it("rejects masked env requests while preserving ordinary question host validati
     ).toMatchObject(invalidRequest);
     expect(manager.get(ordinaryId)?.status).toBe("pending");
     const id = await requestSecretQuestion();
-    expect(await call("question.resolve", { id, cancel: true })).toEqual([
-      true,
-      { status: "cancelled" },
-      undefined,
-    ]);
+    expect(
+      await call("question.resolve", { id, cancel: true, resolvedBy: "chat-composer-replacement" }),
+    ).toEqual([true, { status: "cancelled" }, undefined]);
+    expect(manager.get(id)).not.toHaveProperty("resolvedBy");
   });
 });
 

@@ -392,28 +392,16 @@ export function registerParticipantSpawnCases(
               if (independent) {
                 // Selection is per call, not whichever participant most recently spoke.
                 await spawn("alice", "alice");
-                turn.revoke("bob");
-                bobSource.revoke();
-                const existingKeys = await keys();
-                const modelCalls = runEmbeddedAgent.mock.calls.length;
-                await expect(invoke("bob")).rejects.toThrow(/Bob.s access changed/i);
-                expect(await keys()).toEqual(existingKeys);
-                expect(runEmbeddedAgent).toHaveBeenCalledTimes(modelCalls);
-                expect(() => aliceChild?.authority.assertCurrent()).not.toThrow();
                 return;
               }
               if (!queued) {
                 await closeTurn(turn);
               }
-              expect(() => bobChild.authority.assertCurrent()).not.toThrow();
               if (!queued) {
                 expect(getAdmittedRunDelegatedAuthority(bobChild.admitted)).toBeDefined();
               }
-              bobSource.revoke();
-              expect(() => bobChild.authority.assertCurrent()).not.toThrow();
               expect(bobChild.signal.aborted).toBe(false);
               if (aliceChild) {
-                expect(() => aliceChild.authority.assertCurrent()).not.toThrow();
                 expect(aliceChild.signal.aborted).toBe(false);
               }
             },

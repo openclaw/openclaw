@@ -236,7 +236,7 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
         (await rpcReq(staffWs, "sessions.create", { key: staffSession, agentId: "main" })).ok,
       ).toBe(true);
       const denied = await probe({ key: staffSession });
-      expect(denied.payload?.error).toContain("require your own session");
+      expect(denied.payload?.error).toContain("Your operator role requires a sandboxed session");
       expect((await history(staffSession)).payload?.messages).toEqual([]);
 
       // A visitor grant revoked after the append starts does not roll back the

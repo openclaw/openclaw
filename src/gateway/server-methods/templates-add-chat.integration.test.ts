@@ -12,18 +12,30 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CronJobCreate } from "../../cron/types.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { ClawHubSourceError } from "../../templates/clawhub-source-artifact.js";
 import type { withResolvedClawHubSource } from "../../templates/clawhub-source.js";
-import { readTemplateManifestFile } from "../../templates/reader.js";
-import { buildTemplateOpeningMessage } from "../../templates/setup-prompt.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { createDeletionCron } from "./agents-delete.fixture.test-support.js";
+import { cronAddHandler } from "./cron-add.js";
+import { createCronCallerClient } from "./cron.validation.test-support.js";
+import {
+  coordinate,
+  trust,
+  skillIntegrity,
+  expedia,
+  travelCopilot,
+  writeTemplate,
+  exists,
+} from "./templates-add-chat.package.test-support.js";
 import { templatesAddHandlers } from "./templates-add.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -127,101 +139,16 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
-const coordinate = { packageName: "@fixture/travel-copilot", version: "0.2.8" };
-const trust = {
-  riskAcknowledgementRequired: false,
-  trustRecord: {
-    clawhubTrustDisposition: "clean" as const,
-    clawhubTrustCheckedAt: "2026-11-12T00:00:00.000Z",
-  },
-};
-const skillIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
-const expedia = { ref: "@expediagroup/expedia-openclaw", version: "1.0.4" };
-
-/** Travel Copilot's shape: a minimal profile, registry and bundled dependencies, an automation. */
-const travelCopilot = {
-  schemaVersion: 1,
-  agent: {
-    id: "travel-copilot",
-    name: "Travel Copilot",
-    tools: { profile: "minimal", alsoAllow: ["web_fetch"] },
-  },
-  workspace: {
-    bootstrapFiles: { "SOUL.md": { source: "workspace/SOUL.md" } },
-    files: [{ path: "reference/airports.md", source: "workspace/reference/airports.md" }],
-  },
-  skills: [{ ref: "@steipete/goplaces", version: "1.0.0" }, { path: "skills/itinerary" }],
-  plugins: [expedia, { path: "plugins/trip-notes" }],
-  mcpServers: { docs: { url: "https://mcp.example.com/docs", transport: "streamable-http" } },
-  automations: [
-    {
-      id: "fare-watch",
-      schedule: { cron: "0 8 * * *", timezone: "UTC" },
-      session: "main",
-      message: "Check tracked fares.",
-    },
-  ],
-};
-
-async function writeTemplate(root: string, manifest: Record<string, unknown> = travelCopilot) {
-  const files: Record<string, string> = {
-    "package.json": JSON.stringify({
-      ...coordinate,
-      name: coordinate.packageName,
-      openclaw: { template: "CLAW.md" },
-    }),
-    "CLAW.md": `---\n${JSON.stringify(manifest)}\n---\n`,
-    "BOOTSTRAP.md": "Ask where the traveller wants to go first.\n",
-    "workspace/SOUL.md": "Plan practical trips.\n",
-    "workspace/reference/airports.md": "LIS: Lisbon.\n",
-    "workspace/CLAW.md": "The Template's own notes.\n",
-    "skills/itinerary/SKILL.md":
-      "---\nname: itinerary\ndescription: Build a day-by-day itinerary.\n---\nList each day.\n",
-    "plugins/trip-notes/package.json": JSON.stringify({
-      name: "trip-notes",
-      version: "1.0.0",
-      type: "module",
-      openclaw: { extensions: ["./index.js"] },
-    }),
-    "plugins/trip-notes/openclaw.plugin.json": JSON.stringify({
-      id: "trip-notes",
-      configSchema: { type: "object", properties: {} },
-    }),
-    "plugins/trip-notes/index.js": "export default { id: 'trip-notes', register() {} };\n",
-  };
-  for (const [name, content] of Object.entries(files)) {
-    await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
-    await fs.writeFile(path.join(root, name), content);
-  }
-  const source = await readTemplateManifestFile(root);
-  if (!source.ok) {
-    throw new Error(JSON.stringify(source.diagnostics));
-  }
-  source.source = {
-    ...source.source,
-    kind: "package",
-    name: coordinate.packageName,
-    version: coordinate.version,
-    integrityKind: "artifact",
-  };
-  return source;
-}
-
-const exists = (file: string) =>
-  fs.stat(file).then(
-    () => true,
-    () => false,
-  );
-
 /** One isolated Gateway request owner: real config, state, sessions and installers. */
 async function withGateway(
   run: (gateway: {
     state: OpenClawTestState;
     config: () => OpenClawConfig;
     root: string;
-    cron: { add: ReturnType<typeof vi.fn>; jobs: unknown[] };
+    cron: ReturnType<typeof createDeletionCron>["cron"];
+    cronAddCount: () => number;
     events: Array<{ stage: string; agentId: string }>;
-    add: (params: Record<string, unknown>) => Promise<Parameters<RespondFn>>;
+    add: (params: Record<string, unknown>, timeZone?: string) => Promise<Parameters<RespondFn>>;
     workspace: (agentId: string) => string;
   }) => Promise<void>,
   entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {},
@@ -271,7 +198,8 @@ async function withGateway(
           return { ok: true, slug: params.slug, version: params.version, targetDir };
         },
       );
-      const cron = { add: vi.fn(), jobs: [] as unknown[] };
+      const { cron, stop } = createDeletionCron(state);
+      const cronAdd = vi.spyOn(cron, "add");
       const events: Array<{ stage: string; agentId: string }> = [];
       let request = 0;
       try {
@@ -280,9 +208,10 @@ async function withGateway(
           config: () => config,
           root: state.path("registry-artifact"),
           cron,
+          cronAddCount: () => cronAdd.mock.calls.length,
           events,
           workspace: (agentId) => config.agents!.entries![agentId]!.workspace!,
-          add: async (params) => {
+          add: async (params, timeZone) => {
             const respond = vi.fn<RespondFn>();
             await templatesAddHandlers["templates.add.apply"]!({
               req: { type: "req", id: `add-${++request}`, method: "templates.add.apply" },
@@ -290,7 +219,11 @@ async function withGateway(
               respond,
               client: {
                 connId: "administrator",
-                connect: { role: "operator", scopes: ["operator.admin"], client: { mode: "ui" } },
+                connect: {
+                  role: "operator",
+                  scopes: ["operator.admin"],
+                  client: { mode: "ui", timeZone },
+                },
               },
               context: {
                 getRuntimeConfig: () => config,
@@ -302,12 +235,7 @@ async function withGateway(
                 },
                 broadcastToConnIds: (_event: string, payload: { stage: string; agentId: string }) =>
                   events.push({ stage: payload.stage, agentId: payload.agentId }),
-                cron: {
-                  add: cron.add,
-                  list: async () => cron.jobs,
-                  removeAgentJobsTransactional: async (_agentId: string, commit: () => unknown) =>
-                    await commit(),
-                },
+                cron,
               },
               isWebchatConnect: () => false,
             } as unknown as GatewayRequestHandlerOptions);
@@ -317,6 +245,7 @@ async function withGateway(
         });
       } finally {
         unsubscribe();
+        await stop();
       }
     },
   );
@@ -333,6 +262,200 @@ function deliver(source: Awaited<ReturnType<typeof writeTemplate>>) {
 
 const chatAdd = { mode: "chat", source: coordinate, agentId: "travel-copilot" };
 const sessionKey = "agent:travel-copilot:main";
+
+it("keeps chat setup retryable when the opening lists zero jobs and replies successfully", async () => {
+  await withGateway(async (gateway) => {
+    deliver(
+      await writeTemplate(gateway.root, {
+        schemaVersion: 1,
+        agent: { id: "travel-copilot" },
+        automations: [
+          {
+            id: "weekly-digest",
+            name: "Weekly digest",
+            enabled: false,
+            schedule: { cron: "0 17 * * 5", timezone: "UTC" },
+            session: "main",
+            message: "Weekly digest.",
+          },
+        ],
+      }),
+    );
+    greeting.mockImplementation(async (options) => {
+      expect(await options.context.cron.list({ includeDisabled: true })).toEqual([]);
+      // A successful, visible model reply with no plan or add, as in the live failure.
+    });
+    const [ok, result] = await gateway.add(chatAdd, "America/New_York");
+    expect(ok).toBe(true);
+    expect(result).toMatchObject({
+      status: "partial",
+      readiness: { ready: false },
+      agentRetained: true,
+      initializationPending: true,
+      sessionKey,
+      error: {
+        code: "template_automations_incomplete",
+        message: expect.stringContaining("weekly-digest"),
+      },
+    });
+    expect(await gateway.cron.list({ includeDisabled: true })).toEqual([]);
+    expect(
+      (await readSessionEntryReadOnlyInWorker({ agentId: "travel-copilot", sessionKey }))
+        ?.templateSetup?.deviceTimeZone,
+    ).toBe("America/New_York");
+    // A pre-verification checkpoint might already mark this same visible reply complete.
+    // Recover its requirements from the pinned source, not the editable workspace manifest.
+    const scope = { agentId: chatAdd.agentId, sessionKey };
+    await patchSessionEntryCore(scope, (entry) => {
+      const { requiredAutomationIds: _i, declared: _d, ...legacy } = entry!.templateSetup!;
+      return { templateSetup: { ...legacy, openingComplete: true } };
+    });
+    await fs.writeFile(
+      path.join(gateway.workspace(scope.agentId), "CLAW.md"),
+      "---\nautomations: []\n---\n",
+    );
+    const sources = resolveSource.mock.calls.length;
+    const [, resumed] = await gateway.add({ ...chatAdd, resume: true }, "Asia/Tokyo");
+    expect(resumed).toMatchObject({
+      status: "partial",
+      initializationPending: true,
+      error: { code: "template_automations_incomplete" },
+    });
+    const prompts = greeting.mock.calls.map((call) => call[4] as string);
+    const zoned = '"schedule":{"kind":"cron","expr":"0 17 * * 5","tz":"America/New_York"}';
+    expect(prompts[0]).toContain(zoned);
+    // A receipt saved before declarations were recorded still loads; its opening reads the manifest.
+    expect(prompts.at(-1)).toContain("Read `CLAW.md` once for its `automations` entries");
+    expect(prompts.at(-1)).toContain('"tz":"America/New_York"');
+    expect(prompts.join("\n")).not.toContain("Asia/Tokyo");
+    expect(prompts.join("\n")).not.toContain('"action":"list","includeDisabled":true');
+    expect((await readSessionEntryReadOnlyInWorker(scope))?.templateSetup).toMatchObject({
+      requiredAutomationIds: ["weekly-digest"],
+      deviceTimeZone: "America/New_York",
+    });
+    expect(greeting).toHaveBeenCalledTimes(2);
+    expect(resolveSource).toHaveBeenCalledTimes(sources + 1);
+  });
+});
+
+// The opening turn is deterministic; scheduler writes, operator edits, and receipts are real.
+it("completes only missing owned declarations on another device, preserving existing jobs", async () => {
+  await withGateway(async (gateway) => {
+    const agentId = chatAdd.agentId;
+    const ids = ["weekly", "edited", "last"];
+    const job = (id: string, tz: string): CronJobCreate => ({
+      declarationKey: `template:${agentId}:${id}`,
+      name: "Weekly digest",
+      agentId,
+      owner: { agentId, sessionKey },
+      enabled: false,
+      sessionTarget: `session:${sessionKey}`,
+      wakeMode: "now",
+      schedule: { kind: "cron", expr: "0 17 * * 5", tz },
+      payload: { kind: "agentTurn", message: "Check weekly.", toolsAllow: ["read"] },
+      delivery: { mode: "none" },
+    });
+    deliver(
+      await writeTemplate(gateway.root, {
+        schemaVersion: 1,
+        agent: { id: agentId },
+        automations: ids.map((id) => ({
+          id,
+          name: "Weekly digest",
+          enabled: false,
+          schedule: { cron: "0 17 * * 5", timezone: "UTC" },
+          session: "main",
+          message: "Check weekly.",
+        })),
+      }),
+    );
+    // The right key and even the right target are not proof of this conversation's ownership.
+    const foreign = await gateway.cron.add({
+      ...job("last", "UTC"),
+      owner: { agentId, sessionKey: `agent:${agentId}:other` },
+    });
+    const list = () => gateway.cron.list({ includeDisabled: true });
+    const otherAccount = await gateway.cron.add(
+      {
+        ...job("last", "UTC"),
+        owner: { agentId, sessionKey, accountId: "another" },
+      },
+      { matchesExisting: () => false },
+    );
+    const createFromOpening = async (prompt: string, requested: string[]) => {
+      const add = JSON.parse(
+        prompt.split("\n").find((line) => line.startsWith('{"action":"add"'))!,
+      );
+      for (const id of requested) {
+        const respond = vi.fn<RespondFn>();
+        await cronAddHandler({
+          req: { type: "req", id: "declaration-" + id, method: "cron.add" },
+          params: job(id, add.job.schedule.tz),
+          client: createCronCallerClient(agentId, "default", sessionKey),
+          context: {
+            cron: gateway.cron,
+            getRuntimeConfig: gateway.config,
+            logGateway: { info: vi.fn() },
+          },
+          isWebchatConnect: () => false,
+          respond,
+        } as unknown as GatewayRequestHandlerOptions);
+        expect(respond.mock.calls[0], id).toMatchObject([true, expect.anything(), undefined]);
+      }
+    };
+    greeting.mockImplementationOnce(async (_options, _id, _key, _opening, prompt) => {
+      await createFromOpening(prompt, ["weekly", "edited"]);
+    });
+    const [, first] = await gateway.add(chatAdd, "America/New_York");
+    expect(first).toMatchObject({
+      status: "partial",
+      initializationPending: true,
+      error: { code: "template_automations_incomplete", message: expect.stringContaining("last") },
+    });
+    const before = await list();
+    expect(before).toHaveLength(4);
+    const weekly = before.find((row) => row.declarationKey?.endsWith(":weekly"))!;
+    const edited = before.find((row) => row.declarationKey?.endsWith(":edited"))!;
+    expect(weekly).toMatchObject({ enabled: false, schedule: { tz: "America/New_York" } });
+    const userSchedule = { kind: "cron", expr: "5 12 * * 1", tz: "Europe/Paris" } as const;
+    await gateway.cron.update(edited.id, { enabled: true, schedule: userSchedule });
+    const sourceReads = resolveSource.mock.calls.length;
+    greeting.mockImplementationOnce(async (_options, _id, _key, _opening, prompt) => {
+      // Even when the model re-submits every slot, its declarations must only fill missing jobs.
+      await createFromOpening(prompt, ids);
+    });
+    const [, retry] = await gateway.add({ ...chatAdd, resume: true }, "Asia/Tokyo");
+    expect(retry).toMatchObject({ status: "complete", readiness: { ready: true }, sessionKey });
+    const after = await list();
+    expect(after).toHaveLength(5);
+    expect(after).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: weekly.id, enabled: false, schedule: weekly.schedule }),
+        expect.objectContaining({ id: edited.id, enabled: true, schedule: userSchedule }),
+        expect.objectContaining({
+          id: foreign.id,
+          owner: foreign.owner,
+          schedule: foreign.schedule,
+        }),
+        expect.objectContaining({
+          id: otherAccount.id,
+          owner: otherAccount.owner,
+          schedule: otherAccount.schedule,
+        }),
+        expect.objectContaining({
+          declarationKey: `template:${agentId}:last`,
+          owner: { agentId, sessionKey, accountId: "default" },
+          enabled: false,
+          schedule: { kind: "cron", expr: "0 17 * * 5", tz: "America/New_York" },
+        }),
+      ]),
+    );
+    expect(
+      (await readSessionEntryReadOnlyInWorker({ agentId, sessionKey }))?.templateSetup,
+    ).toBeUndefined();
+    expect(resolveSource).toHaveBeenCalledTimes(sourceReads);
+  });
+});
 
 // Resolve the saved agent through the same profile/config layers used by tool construction.
 it.each<{
@@ -487,8 +610,8 @@ it("creates the Template's agent without a plan and reports dependencies after i
       url: "https://mcp.example.com/docs",
     });
 
-    // Left to the conversation: no automation, and the referenced plugin is untouched.
-    expect(gateway.cron.add).not.toHaveBeenCalled();
+    // This release declares no routines, and the referenced plugin is untouched.
+    expect(gateway.cronAddCount()).toBe(0);
     for (const call of [...Object.values(registry), ...Object.values(probe)]) {
       expect(call).not.toHaveBeenCalled();
     }
@@ -501,14 +624,15 @@ it("creates the Template's agent without a plan and reports dependencies after i
       "travel-copilot",
       sessionKey,
       "template",
-      buildTemplateOpeningMessage(
-        { failures: [], mcpServers: [] },
-        { agentId: "travel-copilot", sessionKey },
-        true,
-      ),
+      expect.any(String),
       expect.any(Function),
       expect.any(Function),
     ]);
+    // The opening carries what the manifest declares, so the turn needs no manifest read.
+    const opening = greeting.mock.calls[0]![4] as string;
+    expect(opening).toContain("The Gateway is still installing declared skills");
+    expect(opening).toContain("@expediagroup/expedia-openclaw");
+    expect(opening).not.toContain('"action":"list","includeDisabled":true');
     expect(atGreeting.pending).toBeUndefined();
     // Dependencies wait for the opening turn's first model request, so the greeting
     // is not prepared while installers hold the Gateway's main thread.
@@ -554,7 +678,7 @@ it.each([false, true])(
 
       if (retry) {
         greeting.mockRejectedValueOnce(new Error("Fixture first setup turn failed"));
-        const [firstOk, first] = await gateway.add(chatAdd);
+        const [firstOk, first] = await gateway.add(chatAdd, "Invalid/Timezone");
         expect(firstOk).toBe(true);
         expect(first).toMatchObject({
           status: "partial",
@@ -562,7 +686,10 @@ it.each([false, true])(
           initializationPending: true,
         });
       }
-      const [ok, result] = await gateway.add({ ...chatAdd, ...(retry ? { resume: true } : {}) });
+      const [ok, result] = await gateway.add(
+        { ...chatAdd, ...(retry ? { resume: true } : {}) },
+        retry ? "Asia/Tokyo" : undefined,
+      );
 
       expect(ok, JSON.stringify(result)).toBe(true);
       expect(result).toMatchObject({
@@ -593,6 +720,11 @@ it.each([false, true])(
         ? (greeting.mock.calls.at(-1)![4] as string)
         : JSON.stringify(dependencyReport.mock.calls.at(-1)![2]);
       expect(prompt).toContain("search");
+      if (retry) {
+        // This release declares no automations, so the opening has nothing to schedule.
+        expect(prompt).not.toContain('"action":"add"');
+        expect(prompt).not.toContain("Asia/Tokyo");
+      }
       const report = (
         await readSessionEntryReadOnlyInWorker({ agentId: "travel-copilot", sessionKey })
       )?.templateSetup?.report;
@@ -753,7 +885,7 @@ it("retries only the hidden setup after a failed first turn, preserving files an
   await withGateway(async (gateway) => {
     deliver(await writeTemplate(gateway.root));
     greeting.mockRejectedValueOnce(new Error("Fixture first turn failed"));
-    const [ok, first] = await gateway.add(chatAdd);
+    const [ok, first] = await gateway.add(chatAdd, "America/New_York");
     expect(ok).toBe(true);
     expect(first).toMatchObject({
       agentId: "travel-copilot",
@@ -768,7 +900,7 @@ it("retries only the hidden setup after a failed first turn, preserving files an
     const firstPrompt = greeting.mock.calls[0]![4];
     const release = Promise.withResolvers<void>();
     greeting.mockImplementationOnce(() => release.promise);
-    const retry = gateway.add({ ...chatAdd, resume: true });
+    const retry = gateway.add({ ...chatAdd, resume: true }, "Asia/Tokyo");
     await vi.waitFor(() => expect(greeting).toHaveBeenCalledTimes(2));
     const concurrent = gateway.add({ ...chatAdd, resume: true });
     release.resolve();
@@ -791,6 +923,17 @@ it("retries only the hidden setup after a failed first turn, preserving files an
     expect(resolveSource).toHaveBeenCalledTimes(sourceReads);
     expect(greeting).toHaveBeenCalledTimes(2);
     expect(firstPrompt).toContain("still installing declared");
+    for (const prompt of [firstPrompt, greeting.mock.calls[1]![4]]) {
+      // This release declares no automations: nothing to schedule, list, or skip.
+      expect(prompt).not.toContain('"action":"add"');
+      expect(prompt).not.toContain('"action":"list","includeDisabled":true');
+      expect(prompt).not.toContain("Asia/Tokyo");
+      expect(prompt).toContain('"packageName":"@expediagroup/expedia-openclaw"');
+    }
+    expect(await fs.readFile(path.join(workspace, "CLAW.md"))).toEqual(
+      await fs.readFile(path.join(gateway.root, "CLAW.md")),
+    );
+    expect(gateway.cronAddCount()).toBe(0);
     expect(greeting.mock.calls[1]![4]).not.toContain("still installing declared");
     expect(greeting.mock.calls[1]![4]).toContain('The Gateway added these servers: ["docs"]');
 

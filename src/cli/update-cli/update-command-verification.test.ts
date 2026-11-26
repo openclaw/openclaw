@@ -925,9 +925,15 @@ it.each([
     vi.mocked(service.readRuntime).mockResolvedValue({ status, systemd });
     const ancestry = { complete: true, pids: new Set([process.pid]) };
     vi.spyOn(stale, "inspectSelfAndAncestorPidsSync").mockReturnValue(ancestry);
-    const setFree = () =>
+    const setFree = () => {
       restart.inspectPortUsage.mockResolvedValue(restart.portUsage([], { port: gatewayPort }));
+      restart.readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+    };
     const staleError = new Error("gateway install changed; run: openclaw gateway restart");
+    const fileOwner = (pid: number) => ({ pid, port: gatewayPort, startTime: 123 });
+    restart.readActiveGatewayLockIdentity.mockResolvedValue(
+      fileOwner(port === "foreign" ? 8001 : running.pid),
+    );
     if (port === "free") {
       setFree();
     } else if (port === "woke") {
@@ -935,11 +941,6 @@ it.each([
     } else if (port !== "healthy") {
       rpc.mockRejectedValue(staleError);
     }
-    restart.readActiveGatewayLockIdentity.mockResolvedValue({
-      pid: port === "foreign" ? 8001 : running.pid,
-      port: gatewayPort,
-      startTime: 123,
-    });
     vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(
       port === "reused" ? 456 : 123,
     );
@@ -953,6 +954,7 @@ it.each([
       if (port === "leased") {
         const unknown = { ...successor, state: "unknown" as const };
         lease.mockImplementation((q) => (q?.current ? unknown : undefined));
+        restart.readActiveGatewayLockIdentity.mockResolvedValue(fileOwner(successor.pid));
       }
       if (replaces) {
         now.mockReturnValue(10_100);
@@ -963,6 +965,9 @@ it.each([
           pid: port === "unmatched" ? pid + 1 : pid,
         });
         serve(pid);
+        restart.readActiveGatewayLockIdentity.mockResolvedValue(
+          fileOwner(port === "unmatched" ? pid + 1 : pid),
+        );
       } else if (port !== "busy") {
         setFree();
       }

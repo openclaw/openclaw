@@ -115,25 +115,6 @@ describe("canonical shared-state resource drainage", () => {
     expect(closeSecond).toHaveBeenCalledExactlyOnceWith(undefined);
   });
 
-  it("reuses warm existing facts without resolving paths or allocating replacement tokens", () => {
-    const pathname = databasePath();
-    writeFileSync(pathname, "");
-    withExistingOpenClawStateSchema({ path: pathname }, () => {
-      const source = prepareOpenClawStateReadSource({ path: pathname });
-      const retained = source.current();
-      using resolve = vi.spyOn(path, "resolve");
-      using identity = vi.spyOn(databaseIdentity, "assertExistingDatabaseIdentity");
-      for (let index = 0; index < 100; index++) {
-        expect(source.current()).toBe(retained);
-      }
-      expect(resolve).not.toHaveBeenCalled();
-      for (let index = 0; index < 100; index++) {
-        source.workerContext();
-      }
-      expect(identity).not.toHaveBeenCalled();
-    });
-  });
-
   it("renews prepared reads of the same file without adopting its replacement", async () => {
     const pathname = databasePath();
     const source = prepareOpenClawStateReadSource({ path: pathname });

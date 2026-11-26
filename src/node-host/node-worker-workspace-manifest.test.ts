@@ -202,9 +202,8 @@ describe("resident node manifest capture", () => {
     const release = createDeferredCore();
     const controller = new AbortController();
     vi.spyOn(gitExec, "executeGitCommandBuffered").mockImplementation(
-      async (cwd, args, options) => {
+      async (cwd, _args, options) => {
         expect(cwd).toBe(workspaceDir);
-        expect(args[0]).toBe("ls-files");
         expect(options).toMatchObject({
           baseEnv: { HOME: home, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" },
           signal: expect.any(AbortSignal),

@@ -72,7 +72,6 @@ import {
 } from "../sessions/session-agent-status.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
-import { isReadMarkerOnly } from "./server-methods/session-unread-ack.js";
 import {
   createSessionAccessProgramValidation,
   prepareSessionPatchModelSelection,
@@ -87,11 +86,11 @@ import {
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
 import { validateSessionPatchAdmission } from "./sessions-patch-admission.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
+import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
 import {
-  applySessionsPatchDisplayMetadata,
-  isSessionIconColorOnlyPatch,
-} from "./sessions-patch-display-metadata.js";
-import { applySessionPatchLifecycleFlags } from "./sessions-patch-lifecycle-flags.js";
+  applySessionPatchLifecycleFlags,
+  preservesSessionRecency,
+} from "./sessions-patch-lifecycle-flags.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 import { resolveSessionPatchThinkingProfile } from "./sessions-patch-thinking.js";
 
@@ -257,10 +256,8 @@ function* projectSessionPatchSteps(
   }
 
   const existing = params.existingEntry && projectCanonicalSessionEntryShape(params.existingEntry);
-  // Marking read/unread or changing the icon/color is not session activity: ageing the
-  // row here would move the session to the top of recency order, so only the patch commits.
-  const recencyNeutral = isReadMarkerOnly(patch) || isSessionIconColorOnlyPatch(patch);
-  const nextUpdatedAt = recencyNeutral
+  // Cold storage and sidebar ordering both consume updatedAt. An archive has its own clock.
+  const nextUpdatedAt = preservesSessionRecency(patch)
     ? (existing?.updatedAt ?? now)
     : Math.max(existing?.updatedAt ?? 0, now);
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
@@ -578,6 +575,7 @@ function* projectSessionPatchSteps(
       const runtime = resolveModelRuntimeDirective({
         cfg,
         provider: selection.provider,
+        previousProvider: previousModel?.provider,
         rawRuntime: patch.agentRuntime ?? undefined,
         sessionEntry: next,
       });

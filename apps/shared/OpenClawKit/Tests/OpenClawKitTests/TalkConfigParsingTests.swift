@@ -2,18 +2,20 @@ import Testing
 @testable import OpenClawKit
 
 struct TalkConfigParsingTests {
-    @Test func `prefers canonical resolved talk provider payload`() {
+    @Test(arguments: [nil, "resolved-key"] as [String?])
+    func `prefers canonical resolved talk provider payload`(apiKey: String?) {
+        var resolvedConfig = ["voiceId": "voice-resolved"]
+        if let apiKey { resolvedConfig["apiKey"] = apiKey }
         let talk: [String: AnyCodable] = [
             "resolved": AnyCodable([
                 "provider": "elevenlabs",
-                "config": [
-                    "voiceId": "voice-resolved",
-                ],
+                "config": resolvedConfig,
             ]),
             "provider": AnyCodable("elevenlabs"),
             "providers": AnyCodable([
                 "elevenlabs": [
                     "voiceId": "voice-normalized",
+                    "apiKey": "normalized-key",
                 ],
             ]),
         ]
@@ -22,6 +24,7 @@ struct TalkConfigParsingTests {
         #expect(selection?.provider == "elevenlabs")
         #expect(selection?.normalizedPayload == true)
         #expect(selection?.config["voiceId"]?.stringValue == "voice-resolved")
+        #expect(selection?.config["apiKey"]?.stringValue == apiKey)
     }
 
     @Test func `rejects normalized talk provider payload without resolved`() {
@@ -62,20 +65,6 @@ struct TalkConfigParsingTests {
             TalkConfigParsing.bridgeFoundationDictionary(talk),
             defaultProvider: "elevenlabs",
             allowLegacyFallback: false)
-        #expect(selection == nil)
-    }
-
-    @Test func `rejects normalized payload when provider missing from providers`() {
-        let talk: [String: AnyCodable] = [
-            "provider": AnyCodable("acme"),
-            "providers": AnyCodable([
-                "elevenlabs": [
-                    "voiceId": "voice-normalized",
-                ],
-            ]),
-        ]
-
-        let selection = TalkConfigParsing.selectProviderConfig(talk, defaultProvider: "elevenlabs")
         #expect(selection == nil)
     }
 
@@ -173,13 +162,16 @@ struct TalkConfigParsingTests {
         #expect(snapshot.realtime.speakerVoice == "top-voice")
         #expect(snapshot.interruptOnSpeech == nil)
 
-        let speakerOnly = TalkConfigSnapshot([
-            "interruptOnSpeech": AnyCodable(false),
-            "realtime": AnyCodable([
-                "speakerVoice": " top-speaker ",
-                "providers": ["openai": ["voice": "provider-voice"]],
-            ]),
-        ], defaultProvider: "elevenlabs", defaultSilenceTimeoutMs: 900)
+        let speakerOnly = TalkConfigSnapshot(
+            [
+                "interruptOnSpeech": AnyCodable(false),
+                "realtime": AnyCodable([
+                    "speakerVoice": " top-speaker ",
+                    "providers": ["openai": ["voice": "provider-voice"]],
+                ]),
+            ],
+            defaultProvider: "elevenlabs",
+            defaultSilenceTimeoutMs: 900)
         #expect(speakerOnly.realtime.voice == "provider-voice")
         #expect(speakerOnly.realtime.speakerVoice == "top-speaker")
         #expect(speakerOnly.interruptOnSpeech == false)

@@ -15,6 +15,7 @@ export function observeSqliteWalPeriodicWork(
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = new GatewayScheduler({ clock: clock.clock });
   let periodic: (() => void | Promise<unknown>) | undefined;
+  let periodicId: string | undefined;
   GatewayScheduler.prototype.scope = function (this: GatewayScheduler) {
     if (!select()) {
       return originalScope.call(this);
@@ -24,9 +25,10 @@ export function observeSqliteWalPeriodicWork(
       ...scope,
       schedule(params) {
         if (params.id.startsWith("sqlite-wal:") && params.id.endsWith(`:${phase}`)) {
-          if (periodic) {
+          if (periodic && periodicId !== params.id) {
             throw new Error("Expected one published WAL maintenance owner");
           }
+          periodicId = params.id;
           const registrationContext = AsyncLocalStorage.snapshot();
           periodic = () => {
             if (scope.signal.aborted) {

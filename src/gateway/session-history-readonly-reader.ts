@@ -181,6 +181,7 @@ export function createReadonlySessionHistoryReader(
       readSnapshot((projection) => ({
         database: projection.database.db,
         generation: projection.generation,
+        updatedAt: projection.version.updatedAt,
         indexedSeq: projection.state.indexedSeq,
         leafEventId: projection.state.leafEventId,
       })),

@@ -1,6 +1,7 @@
 import type { AgentToolSurfacePresentation } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ModelSizeClass } from "../../config/types.models.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import {
   filterToolsByAgentProfile,
   hasCompactToolProfile,
@@ -56,6 +57,8 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     modelToolsEnabled: boolean;
     /** False when the harness cannot dispatch an unregistered catalog name directly. */
     supportsDeferredToolCalls?: boolean;
+    /** True when the runner loads an on-demand catalog tool on its first direct call by name. */
+    loadsOnDemandTools?: boolean;
     prompt?: string;
     runId?: string;
     runtimeToolAllowlist?: readonly string[];
@@ -65,6 +68,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     scheduledToolPolicy?: ScheduledToolPolicyContext;
     sourceReplyDeliveryMode?: string;
   },
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority,
 ) {
   const presentation = input.presentation;
   const params = presentation
@@ -129,6 +133,9 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
   } = plan;
   const toolSearchCatalogRef =
     toolSearchControlsEnabled || codeModeControlsEnabled ? createToolSearchCatalogRef() : undefined;
+  if (toolSearchCatalogRef && params.loadsOnDemandTools === true) {
+    toolSearchCatalogRef.loadsOnDemandTools = true;
+  }
   const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.runtimeToolAllowlist, {
     forceToolNames: [
       ...(toolSearchControlsEnabled ? TOOL_SEARCH_CONTROL_TOOL_NAMES : []),
@@ -200,6 +207,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     const controls = createControls
       ? createControls({
           ...params,
+          pluginExecutionAuthority,
           runtimeConfig: codeModeControlsEnabled ? params.config : toolSearchRuntimeConfig,
           modelContextWindowTokens: params.contextTokenBudget ?? params.model?.contextWindow,
           catalogRef: toolSearchCatalogRef,

@@ -144,6 +144,7 @@ export async function prepareWorkerTurnPrompt(params: {
     agentProfile,
     bootstrap,
     remoteWorkspace: true,
+    workerPlacement: true,
     referencePaths: { docsPath: null, sourcePath: null },
     activeContextEngine: params.contextEngine,
     capabilityToolNames,

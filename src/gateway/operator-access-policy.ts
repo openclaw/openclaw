@@ -1,12 +1,14 @@
 import {
-  gatewayOperatorAccessError,
   readGatewayOperatorAccessCause,
   type GatewayOperatorAccessCause,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorAccessDecision } from "../infra/operator-access-decision.js";
-import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
+import {
+  GatewayOperatorAccessDeniedError,
+  GatewayOperatorAccessUnavailableError,
+} from "../infra/operator-authority-error.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { assertBoundGatewayAccessDecision } from "../plugins/gateway-access-policy-registration.js";
@@ -27,12 +29,7 @@ import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.j
 export const GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE =
   "Gateway access is not active for this account; ask a Gateway administrator to grant or restore access.";
 
-export class GatewayOperatorAccessDeniedError extends Error {
-  constructor(readonly accessCause: GatewayOperatorAccessCause = "policy-check-failed") {
-    super(gatewayOperatorAccessError(accessCause).message);
-    this.name = "GatewayOperatorAccessDeniedError";
-  }
-}
+export { GatewayOperatorAccessDeniedError };
 
 export { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 const log = createSubsystemLogger("gateway/access");

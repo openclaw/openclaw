@@ -4,7 +4,9 @@ import path from "node:path";
 import { resolveStateDir, resolveConfigPath } from "../config/paths.js";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { servingGitReleaseSlot } from "../infra/git-release-paths.js";
 import { collectPackageReleases } from "../infra/package-release-retention.js";
+import { readPackageReleaseSlotSync } from "../infra/package-release-slot-path.js";
 import {
   capturePackageReleaseSlot,
   switchPackageReleaseLink,
@@ -22,6 +24,7 @@ export type Trial = {
   createdAt: number;
   attempts: number;
   config?: string;
+  acceptCapabilities?: boolean;
   restoring?: Array<{ suffix: string; files: string[] }>;
   outcome?: {
     status: "succeeded" | "rolled-back";
@@ -37,6 +40,16 @@ export type UpdateLock = { runId: string; pid: number; startedAt: number; deadli
 
 export function resolvePrefix(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "git-install");
+}
+
+/** A published release or trial keeps the resident owner, including before first activation. */
+export async function hasReleaseUpdateOwner(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const prefix = resolvePrefix(env);
+  return Boolean(
+    readPackageReleaseSlotSync(servingGitReleaseSlot(prefix)) || (await readTrial(prefix))?.v === 2,
+  );
 }
 
 function releaseRootOf(id: string, prefix = resolvePrefix()): string {
@@ -95,7 +108,10 @@ export function writeTrial(trial: Trial, prefix = resolvePrefix()): Promise<void
 }
 
 export async function createTrialPending(
-  input: Pick<Trial, "runId" | "target" | "previous" | "version" | "buildId">,
+  input: Pick<
+    Trial,
+    "runId" | "target" | "previous" | "version" | "buildId" | "acceptCapabilities"
+  >,
   prefix = resolvePrefix(),
 ): Promise<Trial> {
   const previous = await readTrial(prefix);

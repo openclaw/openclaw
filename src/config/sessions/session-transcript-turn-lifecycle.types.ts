@@ -23,6 +23,7 @@ export type SessionTranscriptTurnLifecyclePatch = {
   lastRunId?: SessionEntry["lastRunId"];
   lastRunError?: SessionEntry["lastRunError"];
   lastInteractionAt?: number;
+  lastActivityAt?: number;
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
   runtimeMs?: number;
   startedAt?: number;

@@ -462,6 +462,7 @@ function* createOpenClawToolsSteps(
   // sessions_create runs through the visible-spawn owner, so both tools share one trusted context.
   const sessionsSpawnToolOptions = {
     ...options,
+    assertActive: options?.assertInvocationCurrent,
     // Only a keyed parent has a stored incarnation for spawn to check.
     expectedParentSessionId:
       (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
@@ -470,9 +471,6 @@ function* createOpenClawToolsSteps(
     // A scheduled owner run carries no sender bit; its children record the owner
     // bit the occurrence was admitted with, as the run's own memory audience does.
     senderIsOwner: scheduledTargets?.spawnSenderIsOwner ?? options?.senderIsOwner,
-    ...(scheduledTargets?.spawnSenderIsOwner
-      ? { assertSenderOwnerCurrent: scheduledTargets.assertOwnerCurrent }
-      : {}),
     completionOwnerKey: options?.runSessionKey,
     currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
     currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,
@@ -639,7 +637,7 @@ function* createOpenClawToolsSteps(
       ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
       requesterProfileId: options?.gatewayUiCommandTarget?.profileId,
-      supportsActiveOnly: !embedded,
+      gatewayBacked: !embedded,
       requireSessionReadOwner: embedded,
     }),
     createSessionsHistoryTool({

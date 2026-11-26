@@ -38,13 +38,6 @@ describe("usage-format", () => {
   });
 });
 
-const unpriced = {
-  provider: "unpriced-fixture",
-  model: "unpriced",
-  config: {},
-  allowPluginNormalization: false,
-};
-
 describe("usage cost estimation", () => {
   it("never reprices an incomplete mixed-model total after another aggregation", () => {
     const attempt = accumulate(
@@ -89,7 +82,6 @@ describe("usage cost estimation", () => {
     expect(
       estimateAggregateUsageCost({
         usage: { input: 1_000, output: 500, cost: { total: 0, totalOrigin: "provider-billed" } },
-        ...unpriced,
       }),
     ).toBe(0);
   });
@@ -97,7 +89,7 @@ describe("usage cost estimation", () => {
   it("keeps recorded zero components through nested sums without covering an unpriced call", () => {
     const recorded = normalizeUsage({ input: 1_000, cost: { total: 0, input: 0.25 } });
     const run = accumulate(toNormalizedUsage(accumulate(recorded)));
-    const total = () => estimateAggregateUsageCost({ ...unpriced, usage: toNormalizedUsage(run) });
+    const total = () => estimateAggregateUsageCost({ usage: toNormalizedUsage(run) });
     expect(total()).toBe(0);
     expect(toNormalizedUsage(run)?.cost?.totalOrigin).toBeUndefined();
     mergeUsageIntoAccumulator(run, normalizeUsage({ input: 1_000, cost: { total: 0 } }));
