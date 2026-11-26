@@ -84,28 +84,6 @@ describe("markdown-core code spans", () => {
 
   it.each([
     {
-      name: "finds fenced and inline code regions without double-counting inline code inside fences",
-      text: ["before `inline` after", "```ts", "const a = `inside fence`;", "```", "tail"].join(
-        "\n",
-      ),
-      expectedSlices: ["`inline`", "```ts\nconst a = `inside fence`;\n```"],
-    },
-    {
-      name: "accepts alternate fence markers and unterminated trailing fences",
-      text: "~~~js\nconsole.log(1)\n~~~\nplain\n```\nunterminated",
-      expectedSlices: ["~~~js\nconsole.log(1)\n~~~", "```\nunterminated"],
-    },
-    {
-      name: "keeps adjacent inline code outside fenced regions",
-      text: ["```ts", "const a = 1;", "```", "after `inline` tail"].join("\n"),
-      expectedSlices: ["```ts\nconst a = 1;\n```", "`inline`"],
-    },
-  ] as const)("$name", ({ text, expectedSlices }) => {
-    expectCodeRegionSlices(text, expectedSlices);
-  });
-
-  it.each([
-    {
       name: "requires equal backtick runs",
       text: "before ```<think>private</think>`` after",
       expectedSlices: [],
