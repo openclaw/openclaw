@@ -1,34 +1,45 @@
 ---
 doc-schema-version: 1
-summary: "M06 shared dictation vocabulary prototype, ownership decisions, acceptance gaps, and evidence boundaries"
+summary: "M06 shared vocabulary decision, bounded first-flow proposal, prototype evidence, and qualification runbooks"
 read_when:
   - "Reviewing shared dictation vocabulary authorization and storage proposals"
-  - "Qualifying vocabulary hints, revocation, or collection management"
+  - "Qualifying selected vocabulary, admitted work, recovery, or saved-data compatibility"
 title: "Shared dictation vocabulary experiment"
 ---
 
 # Shared dictation vocabulary experiment
 
-**Status: prerequisite prototype; M06 is incomplete.** The implementation contains
-internal vocabulary validation, resolution, collection operations, snapshot leases,
-and an optional guard at the existing Talk transcription relay. It does not enable
-shared dictionaries for a production installation. There is no accepted collection
-permission mapping, production store registration, collection RPC or management UI,
-qualified provider adapter, or complete P03/M11 integration.
+This experiment records the decision needed for selected shared vocabulary, the
+unregistered prototype, and the proof needed for one real Talk flow.
+**Status: PLAN ONLY / NEEDS MAINTAINER. M06 remains incomplete.** The prototype
+contains validation, resolution, mutable collection operations, snapshot leases,
+and an optional relay guard. Production Talk does not select or transmit those
+collections. This documentation revision changes no runtime behavior.
 
 The selected issue is [openclaw/openclaw#205633](https://github.com/openclaw/openclaw/issues/205633).
 It remains open. [Issue #191109](https://github.com/openclaw/openclaw/issues/191109)
 is adjacent transcription-hint work; it is neither the implementation's parent nor
-proof of shared authorization or provider acceptance. P03, M06, and M11 are local
-design identifiers from the supplied dictation package, not upstream PR numbers.
+proof of shared authorization or provider acceptance. The coordinated personal
+vocabulary proposal is now [P03 issue #205856](https://github.com/openclaw/openclaw/issues/205856).
+Its common schema, personal store, and integration contract remain unaccepted.
+M11 is a separate refinement proposal, not a required new service for this slice.
+
+The [issue review](https://github.com/openclaw/openclaw/issues/205633#issuecomment-7178208349)
+and [PR review](https://github.com/openclaw/openclaw/pull/205820#issuecomment-7185670785)
+ask for a smaller owner/common-term contract, admitted-request semantics, real
+behavior proof, and saved-data compatibility. The PR review completed November 26,
+2026 at 2:37 AM ET against `56aef23a43aea74de1f20ed6e1cf81cc3c1756a5`, with zero
+actionable code findings and two proof blockers. A refresh at 11:08 AM ET found
+the same durable review and no human acceptance in the inspected discussions.
+The review covers that historical head, not subsequent documentation commits.
 
 | Review identity            | Recorded value                                                                                                                                                                                                                      |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Implementation source base | `openclaw/openclaw:main`, `04b854b239cd8ab8a14beae4914ed9c54d791e62`                                                                                                                                                                |
 | Published fork branch      | `CompleteDotTech/openclaw:feat/dictation-shared-dictionaries`                                                                                                                                                                       |
-| Accepted P03 or M11 parent | None identified in the inspected base                                                                                                                                                                                               |
-| Tested implementation head | Exact commit and source hashes are recorded in the accompanying `validation-receipt.json`; the PR body must identify its published head.                                                                                            |
-| Upstream review draft      | [openclaw/openclaw#205820](https://github.com/openclaw/openclaw/pull/205820); exact current head/base and CI state are recorded in the PR and validation receipt. Production integration/readiness still require design acceptance. |
+| Accepted common vocabulary parent | None. P03 is a proposal, and M11 is not a mandatory dependency of the recommended flow. |
+| Historical qualification head | `70bac82c4c24bded28615002d52701940ee3494a`, followed by documentation head `56aef23a43aea74de1f20ed6e1cf81cc3c1756a5`. No product checks were rerun for this documentation revision. |
+| Upstream review draft | [openclaw/openclaw#205820](https://github.com/openclaw/openclaw/pull/205820), open and unmerged at the refresh. Production readiness still needs design acceptance and proof. |
 
 The recovered four-commit implementation was published through the authenticated
 GitHub connection. Published head `927da4c148bd31c913a647366249b982a51bd9ff` has
@@ -44,30 +55,119 @@ acceptance. Repository guidance permits an upstream
 draft to seek design review; production contract activation and readiness remain
 gated on the recorded decision. Subsequent qualification evidence is recorded below.
 
-The supplied `IMPLEMENTATION_PROMPT.md`, `ISSUE.md`, `PR.md`, `ARCHITECTURE.md`,
-`IMPLEMENTATION_WORKFLOW.md`, and `VALIDATION_PLAN.md` require all twelve acceptance
-criteria. A foundation or a passing fixture cannot close the full feature issue.
+The original issue has twelve acceptance criteria. The ledger below preserves each
+one and identifies proposed amendments or deferrals. This narrower document cannot
+resolve the original issue or silently replace its confidentiality and revocation
+promises. Historical receipts mentioned below were external qualification artifacts,
+not files supplied by this repository or evidence of a new run.
+
+## Decision for the first flow
+
+Should Talk support selected shared vocabulary, and what is the smallest common
+personal/shared term, owner, storage, and admission contract needed for one real flow?
+
+| Option | Behavior and cost | Acceptance would unlock |
+| --- | --- | --- |
+| Recommended: one common contract and one bounded flow | Agree the P03 term/resolver contract, one optional plugin/configuration owner, and one existing Talk client/provider path. Requires an accepted public integration seam and real qualification. | A small production implementation in the existing draft, followed by the runbooks below. Broader management stays deferred. |
+| Existing configured provider hints | Exercise the provider-owned prompt configuration under its existing authority. It has no shared collection selection or common personal/shared lifecycle. | An explicitly limited provider experiment, without claiming M06 or P03 support. |
+| Defer shared dictionaries | Preserve ordinary dictation and existing supported personal/configuration behavior while ownership or provider support is unresolved. | An explicit deferral with the original criteria still open. |
+
+The recommendation is an optional feature decision. The current review does not
+identify an existing-behavior defect that justifies inventing a repair.
+
+### Proposed client, owner, and bounds
+
+Every entry here needs acceptance. No table entry registers a permission, settings
+key, SDK export, storage namespace, or supported provider capability.
+
+| Boundary | Proposed first slice | Remaining decision or qualification |
+| --- | --- | --- |
+| Client | Linux desktop Chromium Control UI, `en-US` utterances, existing `mode: "transcription"`, `transport: "gateway-relay"`, `brain: "none"`. | Exact OS/browser/microphone and language mapping. `en-US` describes the spoken test scope, not a new Talk wire field. Native/mobile and other transports remain unqualified. |
+| Common term and resolver | Start review with the internal `VocabularyTerm` fields `id`, `canonical`, `aliases`, `locales`, and `enabled`. Use one P03/shared normalization, protection, bounds, and conflict policy. | P03 owns the personal contract. This internal type is not an accepted public schema. Session choice, personal override, selected non-conflicting shared entries, then baseline is proposed precedence. Equal-priority conflicts stay visible and omitted. |
+| Shared storage | An optional vocabulary plugin provisions an administrator-controlled static catalog through an accepted existing configuration mechanism. Talk consumes a bounded projection. Derived snapshots last only for their request. | Name the plugin/configuration owner and public SDK seam, content visibility, reload/deletion/backup policy, and unknown-version behavior. If the SDK cannot express this, record that gap before adding a contract. No shared database, sidecar, `users.prefs` catalog, transcript cache, or new audio retention is proposed. |
+| Visibility and use | One trusted Gateway domain. Recommend `operator.read` for inspection, the actual existing Talk/session admission and disclosure policy for use, and admin configuration for provisioning. | Explicitly accept the change from confidential workspace membership. These existing scopes are not discovered dictionary permissions. Project grants and guessed IDs do not establish collection membership. Preserve the legitimate own-session route. |
+| Provider | Qualify only the existing OpenAI realtime-transcription adapter first. | Verify the exact selected endpoint/model, encoded hint field, byte/token/term budgets, and actual recognition. No Gemini or alternate-provider support is claimed. |
+| Capture and insertion | Keep the existing Talk, `ComposerDictationOwner`, `ComposerDictationSession`, `ComposerDictationCommits`, input, destination, and Undo owners. | One named integrator must coordinate schema, classifier, handler, client, adapter, and visible status. The proposed browser `dictationPreparation` policy is not vocabulary storage or an accepted hook. M11 refinement remains optional and separately gated. |
+
+For the owner decision, propose four configured and four selected collections,
+256 entries per collection, 65,536 UTF-8 bytes per complete serialized collection,
+and 262,144 bytes for the complete catalog envelope. All limits apply together:
+four maximum-size records plus the outer envelope can exceed the catalog limit.
+P03 must separately bound personal and session inputs.
+
+Propose 4,096 UTF-8 bytes for the complete encoded provider hint field/template,
+subject to every lower verified adapter byte, token, and term limit. Count escaping
+and envelope overhead. Explain deterministic omission. These values are unaccepted,
+unmeasured proposal bounds, not provider quotas or a result for the old 5,000-term
+target. Broad editing, import/export, audit history, tombstones, and offline leases
+remain outside this first slice.
+
+### Proposed admission, Stop, and recovery
+
+Admit current selection, disclosure policy, and session authority once when work
+starts. Normal catalog changes apply to the next request. New, queued, retried,
+and replayed work needs fresh admission. Already admitted work may finish subject
+to the actual transport and destination lifecycle. This explicitly amends AC04's
+unconditional pre-egress/pre-commit feature reauthorization requirement.
+
+Fresh authority does not mean silently changing pinned personal content. The
+current [P03 proposal](https://github.com/openclaw/openclaw/issues/205856) pins the
+personal revision at capture admission. A retry of that attempt should preserve it
+while obtaining current authority and resolving shared selection as accepted.
+If the old personal revision is unavailable or current policy forbids its use,
+report refusal or a changed-version outcome and require an explicit restart.
+This grants no new retention right. Recording again is a new capture, not proof
+that an old attempt was retried.
+
+Preserve the real requester/session/target, send/connect, socket-generation,
+publication, input-revision, and destination guards. At the inspected M06 head,
+WebSocket connection data resolves before the later current-authority check, and
+the inbound handler checks socket ownership before capture/parse without a fresh
+`ensureCurrent` call. [P02 draft #205876](https://github.com/openclaw/openclaw/pull/205876)
+addresses credential-dispatch and inbound-frame authority, but remains unmerged.
+Verify an accepted, landed equivalent of those transport checks before live
+qualification. Admission once neither removes existing guards nor proves missing
+P02 hardening already exists. P02 supplies no selected-context consent source.
+
+Normal Stop may drain authorized final transcripts. Discard and retired ownership
+prevent their corresponding late publication. Hinted speech-to-text (STT) output
+keeps its hint lineage, even if later processing adds no hints. Cancellation cannot
+recall previously disclosed terms or turn that output into a hint-free baseline.
+
+The first recovery proposal is manual correction of eligible text or an explicit
+new recording. The browser has no replayable retained-audio artifact, and the file
+path removes its temporary audio. The prototype `vocabularyRecovery` descriptor
+does not retain or replay audio. Re-transcribing old audio requires a separately
+accepted retention/recovery owner and current admission.
 
 ## Existing owners and missing contracts
 
 | Responsibility                            | Existing owner                                                                                                         | M06 boundary and remaining decision                                                                                                                                                                                                                                 |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Authenticated people                      | `src/state/user-profiles.ts`, `user-profiles-owner.ts`, and `user-profile-list.ts`                                     | Reuse canonical identities. A profile or connected Gateway alone does not authorize a dictionary.                                                                                                                                                                   |
-| Operator roles and project access         | `src/gateway/operator-role-policy.ts` and `src/gateway/project-access.ts`                                              | Host policy must map dictionary read, edit, manage, export, and provider disclosure to accepted scope permissions. Existing project access is not automatically confidential collection membership.                                                                 |
-| OpenClaw ID authority                     | `src/gateway/openclaw-id/authority.ts`, `claw-store.ts`, and `tunnel-principal.ts`                                     | Existing principal/membership invalidation can inform an accepted host mapping; the vocabulary package does not recreate those identities or maintain a membership database.                                                                                        |
+| Operator roles and project access | `src/gateway/operator-role-policy.ts` and `src/gateway/project-access.ts` | Accept the proposed trusted-Gateway read/use/admin mapping before enabling it. Wider edit/export and confidential membership remain separate decisions. |
+| OpenClaw ID authority | `src/gateway/openclaw-id/authority.ts`, `claw-store.ts`, and `tunnel-principal.ts` | Preserve actual principal and transport authority. Do not manufacture a vocabulary membership database or a second revocation service. |
 | Plugin request authority                  | `src/plugin-sdk/gateway-request-authority.ts` and `src/plugins/runtime/gateway-request-scope.types.ts`                 | The inspected `GatewayRequestAuthorityV1` exposes current request authority and person attribution, but no accepted dictionary/workspace membership capability. A plugin must not infer it from a scope string or import private Gateway policy to manufacture one. |
-| Durable plugin state                      | `src/plugin-state/plugin-state-store.ts`, its types, and `src/plugin-sdk/plugin-state-store-runtime.ts`                | Use the existing worker-backed V2 store and action-bound authority. Namespace, retention, quota, and collection representation still require acceptance.                                                                                                            |
+| Durable plugin state | `src/plugin-state/plugin-state-store.ts`, its types, and `src/plugin-sdk/plugin-state-store-runtime.ts` | The historical mutable prototype injects this V2 store. The recommended static catalog does not activate it. Any later mutable namespace, retention, quota, or representation needs its own accepted contract. |
 | Speech session and transcript publication | `src/gateway/talk/handlers/session.ts` and `src/gateway/talk/transcription-relay.ts`                                   | Keep transcription in the existing `mode: "transcription"`, `brain: "none"` owner. The optional lease guard does not create a recognizer or insertion owner.                                                                                                        |
 | Browser dictation                         | `ui/src/pages/chat/composer-dictation-session.ts`, `composer-dictation.ts`, and `composer-direct-dictation.ts`         | Existing clients remain their own capture/draft owners. This prototype adds no collection picker, accessible management, source inspector, or recovery controls.                                                                                                    |
 | Provider capabilities                     | `src/realtime-transcription/provider-types.ts`, `provider-contexts.ts`, and `src/plugins/capability-provider.types.ts` | An accepted adapter must supply verified hint fields and exact budgets. No production provider advertises this prototype's vocabulary capability.                                                                                                                   |
-| Personal vocabulary and refinement        | P03 and M11 proposed contracts                                                                                         | Neither accepted contract was located in the inspected base. New internal vocabulary types are a minimal proposed prerequisite, not a claim that P03 or M11 is complete.                                                                                            |
+| Personal vocabulary and refinement | P03 common vocabulary proposal and existing Talk/composer owners | P03 remains unaccepted. A separate M11 framework is not required for the first flow, and this proposal does not enable remote refinement. |
 
 [Operator scopes](/gateway/operator-scopes) describe collaboration within a trusted
 Gateway domain. Project/source access also covers broader use cases than private
 dictionary membership. Reusing either surface without an explicit mapping would
-silently change its confidentiality meaning. The host must own that decision and
-provide live revocation, expiry, and provider-disclosure grants. With no such
-authority, shared collection operations fail before opening storage.
+silently change its confidentiality meaning. The proposed trusted-Gateway scope
+requires an explicit maintainer amendment to AC01, alongside the AC04 amendment.
+The current prototype's grant checks are described below as historical behavior,
+not the accepted mapping or lifecycle of the narrower proposal.
+
+The closed `TalkSessionCreateParamsSchema` has no collection-selection field.
+Own-session classification accepts only `sessionKey`, `mode`, `transport`, and
+`brain`. The production session handler never constructs a vocabulary envelope,
+and the relay passes `providerConfig` unchanged. These are linked source gaps:
+schema, scope classification, handler, client, and provider serialization must move
+together after acceptance. A configured provider prompt alone does not fill them.
 
 The [storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes)
 requires recorded design acceptance for public contracts, schemas, retention,
@@ -78,6 +178,12 @@ it does not constitute acceptance. The present code is unregistered and introduc
 no SQL schema, personal-store migration, plugin SDK export, or public RPC.
 
 ## Implemented internal boundaries
+
+This section describes the unchanged, unregistered historical prototype at
+`56aef23a43aea74de1f20ed6e1cf81cc3c1756a5`. Its mutable store, repeated grant checks,
+and lease invalidation are broader than the proposed first flow. No source cutover
+to the new storage or admission recommendation has occurred. An accepted cutover
+must retire superseded policy and callers together, with focused production proof.
 
 `src/realtime-transcription/vocabulary-types.ts` defines proposed immutable term,
 collection, source, conflict, capability, and live-grant types.
@@ -127,6 +233,10 @@ write a personal dictionary. Private personal inputs in fixtures do not establis
 a working production personal-vocabulary lifecycle or visible conflict UI.
 
 ### Collection storage, concurrency, and audit proposal
+
+These are the historical mutable prototype's operations and proposed durability
+obligations. They are deferred from the recommended administrator-provisioned
+static catalog, which has no collaborative writes, exports, audit ring, or tombstones.
 
 The collection service requires an opener bound to a live `VocabularyGrant` and
 the existing `PluginStateKeyedStore<VocabularyCollection, 2>` operations `observe`,
@@ -194,6 +304,10 @@ or an automatic migration. No production personal store is opened by this code.
 
 ### Snapshot authority and provider disclosure
 
+The following lease behavior remains in the prototype. Its repeated feature
+authorization and immediate invalidation differ from the proposed admission rule.
+The documentation amendment does not change that code or claim it is ready to enable.
+
 A snapshot copies its selected collections and personal/session inputs, pins
 source revisions, and bounds resolution before exposing an immutable view. A
 separate host `disclose` grant binds shared content to the selected provider.
@@ -215,21 +329,18 @@ Synthetic measurements validate budgeting behavior only. No OpenAI, Gemini,
 local-provider, or other live endpoint is qualified by this experiment. An
 existing prompt field in `extensions/openai/realtime-transcription-provider-factory.ts`
 does not prove acceptance, effective hinting, or safe use of the new term contract.
-A documentation review on November 26, 2026 checked the existing OpenAI adapter
-against the [current client-event reference](https://developers.openai.com/api/reference/resources/realtime/client-events).
-Its `session.audio.input.transcription.prompt` is documented as optional free-form
-context for the adapter's `gpt-4o-transcribe` default, excluding diarization.
-The existing fake-WebSocket provider test checks configured prompt serialization;
-it does not establish live acceptance. The [archived November 2025 Cookbook](https://developers.openai.com/cookbook/examples/realtime_out_of_band_transcription)
-mentions a 1,024-token limit but warns its API information may be outdated. The
-exact current token, byte and term budgets therefore remain unverified. Neither
-source qualifies a 5,000-term/400-KiB provider payload. The [deprecation table](https://developers.openai.com/api/docs/deprecations)
-also schedules the current default model's shutdown for February 26, 2027;
-provider-owner migration and live qualification remain separate required work.
+At this source head, the adapter uses
+`wss://api.openai.com/v1/realtime?intent=transcription`, defaults to
+`gpt-4o-transcribe`, and serializes configured context into
+`session.audio.input.transcription.prompt`. These are source facts, not current
+remote-service guarantees. The fake-WebSocket provider test checks serialization
+only. Recheck the selected model, lifecycle, endpoint documentation, and actual
+token/byte/term budgets during live qualification. No historical quota quotation
+qualifies the proposed payload or establishes recognition benefit.
 No provider route is selected from term text and no alternative route is attempted.
 The lease currently binds one provider/capability to both nominal stages. It does
-not qualify differing STT and refinement endpoints or their distinct budgets; that
-requires the accepted M11/provider integration.
+not qualify differing STT and refinement endpoints or their distinct budgets.
+Remote refinement remains a separate decision outside the first flow.
 
 ### Hinted STT lineage and recovery
 
@@ -242,9 +353,9 @@ events. Provider error messages are redacted for vocabulary-bound sessions.
 
 This connects the prototype to an existing publication owner, but no production
 session handler constructs the lease or sends its hints through a qualified
-adapter. M11's full generation, refinement, final acceptance, and insertion
-coordination remains absent. The host must make every relevant permission change
-observable to `assertCurrent` and invalidation subscribers before publication.
+adapter. The prototype's invalidation callbacks depend on a host integration that
+does not exist. The recommended flow instead uses accepted P03 vocabulary and
+the existing Talk/composer lifecycle. No new M11 coordinator is required.
 
 A newly arriving result from hinted STT cannot become a supposedly independent raw
 fallback after revocation. Already accepted user-owned material remains under its
@@ -256,6 +367,12 @@ and performs no insertion. Actual recovery controls and the retained-audio polic
 integration are blocked; the descriptor is not a working retranscription flow.
 
 ## Acceptance and evidence ledger
+
+The criterion names below map individually to the original
+[issue acceptance criteria](https://github.com/openclaw/openclaw/issues/205633).
+The first-slice column records proposed changes only. Original AC01's confidential
+scope and AC04's unconditional reauthorization are not satisfied by those proposals.
+Maintainers must accept any amendment, and deferred criteria remain unresolved.
 
 **PARTIAL** means source and focused regression cases cover a prerequisite while
 the complete production criterion remains unmet. **BLOCKED** means the required
@@ -274,30 +391,33 @@ themselves claim a successful run.
 | E7          | Production qualification                                                | Accepted host/store mapping, real two-editor operations, saved-state migration, endpoint payload/quota checks, spoken corpus, actual keyboard/screen-reader controls, and supported-client recovery. NOT RUN; required dependencies absent.                                                                                 |
 | E8          | `src/realtime-transcription/vocabulary-collections.integration.test.ts` | Actual V2 retained worker store with synthetic grants: concurrent CAS, atomic malformed import, tombstones after orderly worker close/reopen, final commit-admission revocation, and an exact 400-KiB/5,000-term draft plus full audit ring. No production ACL, migration, namespace-exhaustion, or crash-durability claim. |
 
-| Criterion                        | Status  | Production owner and current coverage                                                                                                                                        | Missing proof                                                                                                                                                                                             | Artifact / tested head                                |
-| -------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| AC01 — Authorized scope          | PARTIAL | Host authorization plus collection/snapshot owners; E1/E3 fail closed and bind requested scopes to grants.                                                                   | Accepted real membership/ACL mapping, store opener, RPC, guessed-ID matrix against those production boundaries.                                                                                           | E1/E3; observed focused run; receipt head             |
-| AC02 — Resolution                | PARTIAL | Proposed P03 resolver; E2 checks session/personal/shared precedence and unresolved conflicts.                                                                                | Accepted P03 integration, real private personal lifecycle, visible selection/source/conflict UI.                                                                                                          | E2; observed focused run; receipt head                |
-| AC03 — Provider contract         | PARTIAL | Provider adapter owner; E2/E3 bound synthetic canonical-list hints and expose unsupported/truncated status.                                                                  | Verified endpoint fields, tokenizer/payload limits, actual authorized transport, visible capability disclosure, refusal without rerouting.                                                                | E2/E3/E7; live proof NOT RUN                          |
-| AC04 — Revocation                | PARTIAL | Host authority, snapshot owner, existing Talk relay, future M11/M10; E3/E4 cover hinted lineage and late-result rejection.                                                   | Production membership invalidation, actual hint dispatch/refinement/insertion races, explicit authorized retranscription and no-audio UI recovery.                                                        | E3/E4/E5/E7; observed focused run; receipt head       |
-| AC05 — Concurrent edits          | PARTIAL | V2 store owner and collection service; E1/E8 cover CAS, complete-import rejection, tombstones, uncertain receipts, and actual worker reopening.                              | Accepted production namespace/authority mapping and real management conflict recovery.                                                                                                                    | E1/E8 observed; production client proof NOT RUN       |
-| AC06 — Migration                 | PARTIAL | Existing store/migration owner; prototype preserves unknown versions and limits export to one authorized draft.                                                              | Accepted migration/rollback/retention contract and actual saved-state upgrade/downgrade proof; no P03 migration exists here.                                                                              | E1/E7; migration NOT RUN                              |
-| AC07 — Offline lifecycle         | PARTIAL | Host authority and utterance owner; E1/E3 reject expired/disconnected grants and require fresh work after reconnect.                                                         | Real connectivity changes, visible unavailable state, accepted personal-only path, retry/reconnect integration.                                                                                           | E1/E3/E7; client proof NOT RUN                        |
-| AC08 — Isolation                 | PARTIAL | Validator, capability adapter, route owner; E2 rejects malformed imports and keeps hostile text in a data list.                                                              | Qualified adapter encoding, real no-tool/no-mode/no-route behavior, cross-scope transport inspection.                                                                                                     | E2/E4/E7; live proof NOT RUN                          |
-| AC09 — Accessibility and clients | BLOCKED | Existing browser/native client owners.                                                                                                                                       | Collection selection/management, source inspection, conflicts, recovery, keyboard and supported screen-reader trials.                                                                                     | E7; NOT RUN; no UI added                              |
-| AC10 — Privacy                   | PARTIAL | Collection, snapshot, relay, store and diagnostic owners; E1/E3/E4/E8 separate audit/export, retain minimized worker records, and redact vocabulary-bound provider failures. | Accepted audit visibility/retention, real telemetry/cache/admin/export review, production resource lifecycle proof.                                                                                       | E1/E3/E4/E8; observed runs; receipt head              |
-| AC11 — Performance               | PARTIAL | Validator/resolver, store and adapter owners; bounds are encoded; E8 verifies an exact maximum draft with full audit fits the actual store value quota.                      | A repeatable below-50-ms target (the refreshed compact case misses it), cumulative allocation instrumentation, production resource proof, and actual provider quotas. Synthetic timing results are below. | E2/E6/E8; observed benchmark/store runs; receipt head |
-| AC12 — Semantic regression       | PARTIAL | P03, provider, and future M11 validation owners; E2 preserves exact spelling and performs no transcript substitution.                                                        | Spoken common-word/identifier/negation/number/literal corpus, real hinted recognition, and unaffected personal-only dictation.                                                                            | E2/E7; spoken/client proof NOT RUN                    |
+| Criterion                        | Status  | Original target and historical prototype coverage                                                                                                                                        | Original missing proof                                                                                                                                                                                             | Historical evidence                                | Proposed first-slice disposition |
+| -------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | --- |
+| AC01 — Authorized scope          | PARTIAL | Host authorization plus collection/snapshot owners; E1/E3 fail closed and bind requested scopes to grants.                                                                   | Accepted real membership/ACL mapping, store opener, RPC, guessed-ID matrix against those production boundaries.                                                                                           | E1/E3; observed focused run; receipt head             | AMEND: trusted-Gateway read/use/admin proposal needs explicit acceptance. Confidential workspace membership and broader writes/export remain unresolved. |
+| AC02 — Resolution                | PARTIAL | Proposed P03 resolver; E2 checks session/personal/shared precedence and unresolved conflicts.                                                                                | Accepted P03 integration, real private personal lifecycle, visible selection/source/conflict UI.                                                                                                          | E2; observed focused run; receipt head                | RETAIN: one accepted P03/shared resolver, private personal data, precedence, and visible conflicts need real integration. |
+| AC03 — Provider contract         | PARTIAL | Provider adapter owner; E2/E3 bound synthetic canonical-list hints and expose unsupported/truncated status.                                                                  | Verified endpoint fields, tokenizer/payload limits, actual authorized transport, visible capability disclosure, refusal without rerouting.                                                                | E2/E3/E7; live proof NOT RUN                          | RETAIN: qualify one named adapter/endpoint. Visible budgets and unsupported status need actual client/provider proof. |
+| AC04 — Revocation                | PARTIAL | Host authority, snapshot owner, existing Talk relay, future M11/M10; E3/E4 cover hinted lineage and late-result rejection.                                                   | Production membership invalidation, actual hint dispatch/refinement/insertion races, explicit authorized retranscription and no-audio UI recovery.                                                        | E3/E4/E5/E7; observed focused run; receipt head       | AMEND: fresh admission for new work, admitted work may finish under real transport/Stop/owner guards. Keep lineage, no recall, and explicit recovery. |
+| AC05 — Concurrent edits          | PARTIAL | V2 store owner and collection service; E1/E8 cover CAS, complete-import rejection, tombstones, uncertain receipts, and actual worker reopening.                              | Accepted production namespace/authority mapping and real management conflict recovery.                                                                                                                    | E1/E8 observed; production client proof NOT RUN       | DEFER: the static first catalog has no collaborative editing, imports, or deletion synchronization. Historical CAS fixtures do not complete this criterion. |
+| AC06 — Migration                 | PARTIAL | Existing store/migration owner; prototype preserves unknown versions and limits export to one authorized draft.                                                              | Accepted migration/rollback/retention contract and actual saved-state upgrade/downgrade proof; no P03 migration exists here.                                                                              | E1/E7; migration NOT RUN                              | RETAIN personal nonpublication and real stable-to-candidate preservation. Broader collection migrations/export and downgrade semantics need separate acceptance. |
+| AC07 — Offline lifecycle         | PARTIAL | Host authority and utterance owner; E1/E3 reject expired/disconnected grants and require fresh work after reconnect.                                                         | Real connectivity changes, visible unavailable state, accepted personal-only path, retry/reconnect integration.                                                                                           | E1/E3/E7; client proof NOT RUN                        | CLARIFY: unavailable fresh authority blocks new shared work visibly. Admit retries afresh while preserving P03's proposed personal pin once accepted. A reconnect alone does not change identity. |
+| AC08 — Isolation                 | PARTIAL | Validator, capability adapter, route owner; E2 rejects malformed imports and keeps hostile text in a data list.                                                              | Qualified adapter encoding, real no-tool/no-mode/no-route behavior, cross-scope transport inspection.                                                                                                     | E2/E4/E7; live proof NOT RUN                          | RETAIN inert data and no tool/mode/provider changes. The trusted-Gateway proposal does not establish hostile-tenant confidentiality. |
+| AC09 — Accessibility and clients | BLOCKED | Existing browser/native client owners.                                                                                                                                       | Collection selection/management, source inspection, conflicts, recovery, keyboard and supported screen-reader trials.                                                                                     | E7; NOT RUN; no UI added                              | RETAIN for the first browser flow. Broader advertised consumption and management remain deferred until their own evidence exists. |
+| AC10 — Privacy                   | PARTIAL | Collection, snapshot, relay, store and diagnostic owners; E1/E3/E4/E8 separate audit/export, retain minimized worker records, and redact vocabulary-bound provider failures. | Accepted audit visibility/retention, real telemetry/cache/admin/export review, production resource lifecycle proof.                                                                                       | E1/E3/E4/E8; observed runs; receipt head              | RETAIN: accept static configuration visibility, deletion, backups, and request-only snapshot lifetime. No new transcript or audio retention. |
+| AC11 — Performance               | PARTIAL | Validator/resolver, store and adapter owners; bounds are encoded; E8 verifies an exact maximum draft with full audit fits the actual store value quota.                      | A repeatable below-50-ms target (the refreshed compact case misses it), cumulative allocation instrumentation, production resource proof, and actual provider quotas. Synthetic timing results are below. | E2/E6/E8; observed benchmark/store runs; receipt head | CHANGE BOUNDS: measure the accepted smaller catalog and provider limits. Original maximum-scale and cumulative-allocation proof remain unmet. |
+| AC12 — Semantic regression       | PARTIAL | P03, provider, and future M11 validation owners; E2 preserves exact spelling and performs no transcript substitution.                                                        | Spoken common-word/identifier/negation/number/literal corpus, real hinted recognition, and unaffected personal-only dictation.                                                                            | E2/E7; spoken/client proof NOT RUN                    | RETAIN: real paired spoken trials and ordinary/personal baseline. Helper normalization or one spelling success cannot establish this criterion. |
 
 ### Observed local verification
 
-Refreshed qualification on November 26, 2026 uses this checkout's own physical,
-complete workspace installation, reconciled with frozen lockfile and pinned pnpm
-12.15.0. The dependency supply-chain check passed for 1,764 packages. Tests use the
+The following historical qualification ran on November 26, 2026 at implementation
+head `70bac82c4c24bded28615002d52701940ee3494a` and was recorded by documentation
+head `56aef23a43aea74de1f20ed6e1cf81cc3c1756a5`. It used a physical complete workspace
+installation, reconciled with the frozen lockfile and pinned pnpm 12.15.0.
+The dependency supply-chain check passed for 1,764 packages. Tests used the
 repository's `run-vitest.mjs` wrapper, installed patched Vitest, Node 24.22.3,
 standard project configurations, one worker, and the supported throttled mode.
-Commands, logs, source hashes, and the final published-head mapping are retained
-with the validation receipt.
+Commands, logs, and source hashes were recorded with the external validation
+receipt. That receipt is not a repository artifact. These observations are retained
+without claiming a fresh installation, rerun, or new-head CI result.
 
 | Check                                                                             | Observed result                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -315,7 +435,7 @@ with the validation receipt.
 | Full build                                                                        | BLOCKED: default preflight could not see the process memory limit and stopped before cleaning output. A supported explicit 1,536-MiB heap attempt completed native protocol, script checks, plugin assets, AI and package phases, then failed in main `tsdown` when a child received SIGKILL; overall exit 1. No full-build success is claimed.                                                                                                        |
 | Required unused-file scan                                                         | FAIL / BLOCKED: the production Knip scan reports `src/realtime-transcription/vocabulary-collections.ts` as unused because it has no production registration. The full-tree scan exhausted the explicit 1,536-MiB JavaScript heap and aborted (SIGABRT). No entrypoint or ignore was fabricated to hide the unregistered proposal.                                                                                                                      |
 | Other full test/script type graphs                                                | NOT RUN to completion; the full core graph remains capacity-blocked. The earlier narrow pure-boundary check is not a substitute.                                                                                                                                                                                                                                                                                                                       |
-| Required CI                                                                       | NOT RUN to completion. At qualification head `70bac82c4c24bded28615002d52701940ee3494a`, [CI](https://github.com/openclaw/openclaw/actions/runs/45773743254) reports `action_required` with zero jobs; [Proof](https://github.com/openclaw/openclaw/runs/139752289972) is skipped. PR context/evidence passed, which is not build/test proof. Current-head status is recorded in the PR/receipt.                                                       |
+| Required CI                                                                       | NOT RUN to completion. At qualification head `70bac82c4c24bded28615002d52701940ee3494a`, [CI](https://github.com/openclaw/openclaw/actions/runs/45773743254) reports `action_required` with zero jobs; [Proof](https://github.com/openclaw/openclaw/runs/139752289972) is skipped. PR context/evidence passed, which is not build/test proof. This row is historical evidence for that qualification head only.                                                       |
 | Production authorization, migration, UI/accessibility, provider and spoken corpus | NOT RUN; accepted production integration is absent. E8 qualifies actual worker storage under synthetic grants only.                                                                                                                                                                                                                                                                                                                                    |
 
 The first E8 attempt failed during setup because the thread owner had no host
@@ -407,7 +527,8 @@ not per-call peak memory, cumulative allocated bytes, or a leak-proof claim.
 Automatic GC is included when it happens inside timed calls; explicit GC occurs
 only between batches. Raw samples and all memory counters are retained.
 
-Reproduce the benchmark after installing the normal repository dependencies:
+Reproduce the benchmark only in the policy-approved execution environment after
+installing the normal repository dependencies:
 
 ```bash
 node --expose-gc --import ./scripts/tsx.mjs scripts/bench-vocabulary.mts
@@ -438,43 +559,165 @@ prerequisites for review; none is an accepted enabled product contract.
 
 ## Migration, rollback, and qualification sequence
 
-No existing dictionary data is migrated and no production namespace is opened by
-this prototype. The proposed initial activation is explicit collection selection
-with personal precedence and current online authority. It must never discover
-personal terms and publish them as an upgrade step.
+No production namespace is opened and no personal dictionary is migrated by this
+prototype. An upgrade must never discover personal terms and publish them as
+shared data. The proposed first activation is explicit selection through the
+accepted static configuration and Talk owners. Unknown versions stay intact and
+visibly unavailable under their accepted reader policy.
 
-An accepted rollout needs a versioned namespace/representation decision and a
-bounded, idempotent, scope-preserving migration owned by the existing store. Use
-actual supported saved state for upgrade and rollback tests. Unknown collection
-versions must remain intact; neither an older binary nor an import may reinterpret
-them as an empty collection. Backups inherit the owning store's access and
-retention policy; exporting a draft does not substitute for a consistent backup.
+The following procedures are **NOT RUN**. They address the review's real-behavior
+and compatibility blockers after the owner decision and production entry point
+exist. A runbook, release lookup, synthetic grant, helper result, or screenshot from
+another PR is not execution evidence.
 
-The proposed rollback is to disable shared resolution at its eventual registration
-point, invalidate active leases, and stop new disclosure while preserving personal
-records, collection rows, and tombstones. No deployed feature switch is added in
-this prototype. Destructive downgrades, tombstone deletion, or altered retention
-need a separately accepted migration/recovery plan. Already accepted documents
-and already dispatched provider requests retain their existing policy and truthful
-outcome; rollback does not claim to erase or recall them.
+### Record the implementation decision
 
-Before enabling the feature, complete the following dependencies:
+Before implementation, record acceptance of the common P03 term/resolver and
+personal store, trusted-Gateway visibility, read/use/admin mapping, AC04 amendment,
+static catalog bounds and configuration owner, retention/deletion/backup policy,
+and the named Talk/client/provider integrator. Record which original criteria
+remain deferred. Keep absent/disabled behavior and remote refinement off.
 
-1. Accept P03's common term/protection/provider contract and the host collection
-   permission, provider-disclosure, store namespace, and retention mapping.
-2. Bind the accepted grants to real V2 worker operations; prove production
-   authorization, CAS settlement, unknown outcomes, quotas, and restart behavior.
-3. Integrate one snapshot into the existing speech owner and accepted M11
-   generation/result lifecycle, including final publication and explicit recovery.
-4. Qualify each advertised provider's actual endpoint, encoded limits, hostile-data
-   handling, failure route, and spoken semantic corpus.
-5. Implement and test collection selection, management, sources, conflicts,
-   unavailable state, and recovery on each advertised client.
-6. Record final measured evidence and required review/CI against the published
-   head. Keep issue #205633 open until its agreed complete scope is satisfied.
+Confirm the actual public SDK seam and any required transport prerequisite.
+The closed request schema, own-session classifier, handler, client, and adapter
+need a coordinated change. Do not register the broader mutable store or add a
+second authorization/lease service to make the runbook appear executable.
 
-Browser Control UI consumption and management are both unqualified. Native,
-mobile, remote, and headless clients are likewise unqualified. Existing dictation
-support on those surfaces is not evidence of shared-vocabulary support. The
-internal prototype can inform the accepted integration without advertising a
-complete client, offline, system-wide insertion, or provider capability.
+### Qualify one real product journey
+
+Use a policy-approved execution environment, an isolated task-owned Gateway
+state/config directory, a free port, and a new browser profile. A copied checkout
+alone is not isolation for untrusted fork scripts. Provider access requires
+reviewed-source authority and separately authorized task access. Missing hardware,
+provider access, or assistive technology leaves the affected proof NOT COLLECTED.
+
+Build the exact accepted candidate with its pinned toolchain and documented
+`pnpm build` and `pnpm ui:build` commands. Record commit/tree and build identity.
+Verify that the Gateway serves the resulting `dist/control-ui` assets and that
+the browser-fetched hashes match. Configure local mode and authentication through
+the existing owner. With task-specific paths and the verified free port set, the
+foreground command is:
+
+```bash
+OPENCLAW_STATE_DIR="$M06_STATE_DIR" OPENCLAW_CONFIG_PATH="$M06_CONFIG_PATH" \
+  pnpm openclaw gateway run --bind loopback --port "$M06_GATEWAY_PORT"
+```
+
+Use a physical microphone, fictional terms, and the named screen reader. Capture
+only sanitized observations. Exclude credentials, headers, raw HARs, audio payloads,
+IP addresses, contact details, private endpoints, and unrelated content from saved
+evidence. Record the public endpoint, selected model, fictional hint field, exact
+byte/token accounting, source revisions, and resulting fictional text.
+
+| Case | Action through the actual product | Required observation |
+| --- | --- | --- |
+| Feature off | Dictate into an existing draft with shared selection absent, then Stop and Undo. | Existing behavior and unrelated draft survive. No shared hints or automatic Send occurs. |
+| Selected round trip | Select the accepted catalog through the real client and speak its fictional term. | Visible sources and disclosure, selected hints in the actual provider request, and a real final transcript in the correct draft. An unselected canary, disabled term, and wrong-locale term are absent. |
+| Precedence and conflict | Use a personal override and two equal-priority shared aliases. | Accepted deterministic resolution, visible omitted conflict, and unchanged stored personal/shared data. |
+| Bounds and unsupported route | Use exact-limit and next-over-limit input through the accepted provisioning/selection boundary. Exercise the accepted unsupported configuration. | Full encoded accounting and visible omission/refusal/unsupported status, with the draft preserved and no silent route change. |
+| Admitted work and next request | Change catalog/policy through its accepted owner during a capture, let it settle, then start another. | Admitted work follows its pinned snapshot under actual transport ownership. New work uses current policy. No claim that sent hints were recalled. |
+| Retry of the same attempt | If an accepted retry control exists, edit personal/shared data after capture and use it. | Fresh authority, accepted shared resolution, and the original P03 personal revision. An unavailable or forbidden pin requires visible refusal or explicit changed-version restart. A new recording does not prove this case. |
+| Stop, discard, and authority | Separately exercise normal Stop, discard, destination retirement, and real retained-authority refusal. | Authorized final drain survives normal Stop. Discard/retired owners reject late publication. Verify the actual credential-dispatch, inbound-frame, and publication boundaries after the prerequisite lands. |
+| Failure and recovery | Interrupt the supported provider/transport path in the controlled environment. Correct eligible text manually or explicitly record again. | Recoverable outcome, no unrelated draft loss, hidden replay, or automatic Send. Hinted text keeps its lineage. Old-audio retranscription remains unavailable without an accepted retained-audio owner. |
+| Accessibility | Repeat selection, source inspection, conflicts, Stop/discard, recovery, and Undo using only the keyboard, then the named screen reader. | Actual focus, names, state announcements, reachable recovery, and preserved draft. An accessibility-tree dump alone is not a screen-reader trial. |
+
+Separate transport acceptance from recognition benefit. Record paired shared-off/on
+spoken trials with expected words, actual unedited provider text, endpoint/model,
+microphone/browser/settings, and the accepted scoring rule. Include common words,
+identifiers, negation, numbers, and literal spans. Preserve failures and ambiguous
+results. One spelling success does not establish a general benefit.
+
+Measure vocabulary preparation and user-visible latency at the accepted bounds.
+Record hardware, serialized size, samples, warmups, allocations, and excluded
+authentication/network/model costs. The earlier maximum-bound benchmark remains
+historical evidence and cannot qualify a newly narrowed flow.
+
+### Exercise the actual latest stable upgrade
+
+The November 26, 2026 release lookup resolved
+[latest stable v2026.11.10](https://github.com/openclaw/openclaw/releases/tag/v2026.11.10),
+published November 25 at 12:42 AM ET, to commit
+`6ea542fd97e2876aa4c871ccc494ed5419a03c5c`. Resolve latest stable again when running
+this procedure. Record release/package integrity and candidate commit/tree/served
+asset hashes separately. Both inspected source versions say `2026.11.10`, so a
+matching version string does not identify the candidate build.
+
+This is a manual stable-package-to-exact-candidate transition through canonical
+startup. It does not prove managed-service update orchestration or automatic
+launcher rollback. Keep both installations, state, browser profile, and recovery
+data in the new allowed environment. Never open the same state with both Gateways.
+
+1. Install the actual stable release into a task-owned prefix using its supported
+   package-install procedure. Record artifact integrity and tool versions. Create
+   valid settings, a draft, and personal vocabulary only through interfaces that
+   actually exist in stable. If stable has no accepted personal-term store, record
+   that missing lineage. Invented old database rows cannot prove compatibility.
+2. Exercise stable feature-off dictation and supported personal behavior. Record
+   each value's owner. Preserve the task browser profile for browser-local settings
+   and drafts, which a Gateway backup alone does not cover.
+3. Stop the task Gateway through its owner. Use the stable
+   [backup and restore owner](/cli/backup) to create and verify a recoverable
+   baseline. Keep credentials outside the fictional fixture where supported.
+   Never export a backup, raw database, or config that contains credential-like
+   values. Retain only sanitized receipts, hashes, and the data-owner inventory.
+4. Start the built exact candidate with the same isolated state/config, using the
+   foreground command above. Let canonical startup/migration owners handle data.
+   Record refusal or failure honestly. Do not coerce schema versions or force
+   Doctor repairs to manufacture a passing result.
+5. Verify the served candidate, then reload the same browser profile. Confirm
+   exact personal settings, draft contents, and any valid stable personal terms
+   still load and work. Shared selection stays absent/off. No personal term becomes
+   shared and no remote refinement or provider disclosure is enabled by upgrade.
+6. Opt into the accepted shared flow separately and run the relevant product
+   cases above. Test unsupported future schema through an accepted owner/import
+   boundary in a separate disposable fixture. If no such boundary exists, leave
+   that row NOT COLLECTED. Preserve original data and show the refusal/recovery
+   outcome instead of declaring arbitrary future versions readable.
+
+### Separate downgrade from baseline restoration
+
+A direct downgrade tests whether stable can open candidate-written state. Run it
+only when the accepted reader/schema contract permits it. A baseline restoration
+starts stable from its verified pre-upgrade backup in a fresh recovery directory.
+That proves recovery of the baseline only. It does not prove stable can read new
+records or preserve candidate-only writes.
+
+Use the canonical backup restore result and its actual manifest paths, perform
+the documented offline activation checks, then verify personal and feature-off
+behavior again. Keep browser-local recovery separate. Any retained collection
+format, audit history, tombstone, migration, or deletion policy beyond the static
+proposal needs separate acceptance before it can define rollback obligations.
+
+Disabling future shared selection should prevent new shared work while already
+admitted work follows its actual lifetime. Do not prescribe immediate vocabulary
+lease invalidation as the new rollback policy. Existing transport refusals and
+explicit discard still apply. No deployed feature switch exists in this prototype.
+
+### Record results without closing unmet criteria
+
+For every executed case, record the exact candidate and served assets, accepted
+decision, environment, fictional input, start/end conditions, action, observed
+result, and sanitized evidence. Label setup failures, product failures, missing
+controls, and unrun proof separately. Link actual behavior and upgrade results
+before claiming either review blocker is satisfied.
+
+Current disposition: the decision and procedures are documented. Owner acceptance,
+production selection/serialization, live provider/microphone/accessibility evidence,
+new-scope performance, and real stable-to-candidate compatibility remain pending.
+The original wider criteria remain open.
+
+## Source checkpoints for this revision
+
+These immutable sources explain the current gaps. They are source evidence, not
+runtime qualification or acceptance of the proposed replacement contracts.
+
+- [Talk create schema](https://github.com/CompleteDotTech/openclaw/blob/56aef23a43aea74de1f20ed6e1cf81cc3c1756a5/packages/gateway-protocol/src/schema/channels.ts)
+  and [own-session classifier](https://github.com/CompleteDotTech/openclaw/blob/56aef23a43aea74de1f20ed6e1cf81cc3c1756a5/src/shared/session-method-scopes-base.ts).
+- [Talk session authority](https://github.com/CompleteDotTech/openclaw/blob/56aef23a43aea74de1f20ed6e1cf81cc3c1756a5/src/gateway/talk/handlers/session.ts)
+  and [relay publication/Stop owner](https://github.com/CompleteDotTech/openclaw/blob/56aef23a43aea74de1f20ed6e1cf81cc3c1756a5/src/gateway/talk/transcription-relay.ts).
+- [WebSocket connection and inbound boundaries](https://github.com/CompleteDotTech/openclaw/blob/56aef23a43aea74de1f20ed6e1cf81cc3c1756a5/src/realtime-transcription/websocket-session.ts)
+  and [OpenAI configured prompt serialization](https://github.com/CompleteDotTech/openclaw/blob/56aef23a43aea74de1f20ed6e1cf81cc3c1756a5/extensions/openai/realtime-transcription-provider-factory.ts).
+- [Browser capture and transcript lifetime](https://github.com/CompleteDotTech/openclaw/blob/56aef23a43aea74de1f20ed6e1cf81cc3c1756a5/ui/src/pages/chat/composer-dictation-session.ts)
+  and [file-audio cleanup](https://github.com/CompleteDotTech/openclaw/blob/56aef23a43aea74de1f20ed6e1cf81cc3c1756a5/src/gateway/talk/file-transcription.ts).
+- [Trust model](/gateway/security/trust-model), [operator scopes](/gateway/operator-scopes),
+  and [storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).
