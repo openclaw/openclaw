@@ -83,6 +83,14 @@ async function run(argv) {
     return text.slice(0, /[\uDC00-\uDFFF]/.test(text[cap] ?? "") ? cap - 1 : cap);
   };
 
+  // Discord and Slack user mentions (<@id>, <@!id>, <@id|label>) read as @name when the author
+  // appears in the export or the row names the mentioned user.
+  const withNames = (text, labels, payload) =>
+    text.replace(/<@!?([0-9A-Z]+)(?:\|[^>]*)?>/g, (mention, id) => {
+      const name = labels.get(id) ?? payload.mention_names?.[id];
+      return name ? "@" + name : mention;
+    });
+
   // Renders one message as transcript lines: time, author, reply target, then the text.
   function messageLines(row, byId, labels, day) {
     const { payload } = row;
@@ -94,7 +102,9 @@ async function run(argv) {
         target.occurred_at.slice(0, 10) === day
           ? clock(target.occurred_at)
           : target.occurred_at.slice(0, 10) + " " + clock(target.occurred_at);
-      const content = target.payload.deleted_at ? "[deleted]" : target.payload.content || "";
+      const content = target.payload.deleted_at
+        ? "[deleted]"
+        : withNames(target.payload.content || "", labels, target.payload);
       const quote =
         target.occurred_at.slice(0, 10) === day
           ? ""
@@ -103,14 +113,9 @@ async function run(argv) {
     } else if (payload.reply_to_message_id) {
       reply = " ↩ earlier message";
     }
-    // Discord and Slack user mentions (<@id>, <@!id>, <@id|label>) read as @name when the author
-    // appears in the export or the row names the mentioned user.
     let text = payload.deleted_at
       ? "[deleted]"
-      : (payload.content || "[no text]").replace(/<@!?([0-9A-Z]+)(?:\|[^>]*)?>/g, (mention, id) => {
-          const name = labels.get(id) ?? payload.mention_names?.[id];
-          return name ? "@" + name : mention;
-        });
+      : withNames(payload.content || "[no text]", labels, payload);
     if (payload.has_attachments) {
       text += " [attachment]";
     }
@@ -122,12 +127,17 @@ async function run(argv) {
   }
 
   // Groups a day's messages into sections: the channel itself first, then each thread by first message.
-  function sections(dayRows) {
+  function sections(dayRows, labels) {
     const groups = new Map();
     for (const row of dayRows) {
       const key = row.payload.thread_id ?? "";
       if (!groups.has(key)) {
-        groups.set(key, { title: key ? "Thread: " + row.payload.thread_name : channel, rows: [] });
+        groups.set(key, {
+          title: key
+            ? "Thread: " + withNames(row.payload.thread_name, labels, row.payload)
+            : channel,
+          rows: [],
+        });
       }
       groups.get(key).rows.push(row);
     }
@@ -147,7 +157,7 @@ async function run(argv) {
 
   // Keep sections together when they fit, and split larger sections only between messages.
   function pack(dayRows, byId, labels, day) {
-    const groups = sections(dayRows).map((section) => ({
+    const groups = sections(dayRows, labels).map((section) => ({
       title: section.title,
       rows: section.rows,
       blocks: section.rows.map((row) => {

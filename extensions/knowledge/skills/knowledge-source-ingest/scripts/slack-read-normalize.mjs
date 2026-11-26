@@ -129,7 +129,10 @@ async function run(argv) {
   };
   const rows = [...messages.values()].map((message) => {
     const reply = Boolean(message.thread_ts) && message.thread_ts !== message.ts;
-    const mentioned = mentionsOf(message.text);
+    // A reply also names the users its thread's name mentions.
+    const mentioned = mentionsOf(
+      reply ? message.text + " " + threadName(message.thread_ts) : message.text,
+    );
     const author = message.user ?? message.bot_id ?? "unknown";
     const occurredAt = instant(message.ts, "A message");
     const files = Array.isArray(message.files) ? message.files : [];

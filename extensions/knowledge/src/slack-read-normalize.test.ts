@@ -159,6 +159,14 @@ it("names mentioned users from the read without changing the message or its hash
   const dir = tempDirs.make("slack-read-mentions-");
   const file = (name: string) => path.join(dir, name);
   const message = { ts: "1790000100.000200", user: "U2", text: "<@U7> and <@U8|old> please look" };
+  // A thread root and a reply two days later, which quotes its root.
+  const root = {
+    ts: "1790000300.000300",
+    user: "U2",
+    text: "<@U7> costs",
+    thread_ts: "1790000300.000300",
+  };
+  const reply = { ts: "1790172800.000400", user: "U2", text: "done", thread_ts: root.ts };
   const normalize = async (name: string, read: object) => {
     await writeFile(file(`${name}.json`), JSON.stringify(read));
     run("slack-read-normalize.mjs", [
@@ -171,11 +179,11 @@ it("names mentioned users from the read without changing the message or its hash
       "--output",
       file(`${name}.jsonl`),
     ]);
-    return JSON.parse(await readFile(file(`${name}.jsonl`), "utf8"));
+    return JSON.parse((await readFile(file(`${name}.jsonl`), "utf8")).split("\n")[0]);
   };
   const named = await normalize("named", {
     channelId: "C1",
-    messages: [message],
+    messages: [message, root, reply],
     userProfiles: { U7: { display_name: "Cy", name: "cy" } },
   });
   const bare = await normalize("bare", { channelId: "C1", messages: [message] });
@@ -196,6 +204,10 @@ it("names mentioned users from the read without changing the message or its hash
   const day = await readFile(path.join(file("transcript"), "2026-09-21.txt"), "utf8");
   // A user no read named keeps Slack's mention.
   expect(day).toContain("14:15 U2: @Cy and <@U8|old> please look");
+  // Thread names and reply quotes name mentioned users too.
+  const later = await readFile(path.join(file("transcript"), "2026-09-23.txt"), "utf8");
+  expect(later).toContain("## Thread: @Cy costs");
+  expect(later).toContain('↩ U2 2026-09-21 14:18 "@Cy costs": done');
 });
 
 it("keeps an unchanged reply's hash whether or not its root was read, and changes it on an edit", async () => {
