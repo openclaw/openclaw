@@ -1,10 +1,11 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { patchSettings } from "../app/settings.ts";
 import {
   mountRoster,
   settleRoster,
 } from "../test-helpers/app-sidebar-cases/roster.test-support.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import { catalogPage } from "../test-helpers/app-sidebar.ts";
 import "../test-helpers/load-styles.ts";
 import "./app-sidebar.tsx";
 
@@ -144,18 +145,10 @@ it("keeps agent switching available without a Home session", async () => {
   expect(sidebar.querySelector(".sidebar-agent-card__main")?.textContent).toContain("Scout");
 });
 
-it("shows child sessions for an off-list pinned parent", async () => {
+it("opens a catalog-adopted parent's child from its personal pin", async () => {
   const parent = "agent:main:offlist-parent";
   const child = "agent:main:offlist-child";
-  const filler = Array.from({ length: 30 }, (_, index) => ({
-    key: `agent:main:recent-${index}`,
-    agentId: "main",
-    kind: "direct" as const,
-    updatedAt: 1000 - index,
-    label: `Recent ${index}`,
-  }));
   const { sidebar } = await mountRoster(undefined, [
-    ...filler,
     {
       key: parent,
       agentId: "main",
@@ -174,6 +167,18 @@ it("shows child sessions for an off-list pinned parent", async () => {
     },
   ]);
   patchSettings({ sidebarAgentsMode: "chip" });
+  sidebar.sessionData.sessionCatalogs = catalogPage([
+    { threadId: "parent", name: "Off-list parent", sessionKey: parent },
+  ]).catalogs;
+  sidebar.sessionData.requestSessionDataUpdate();
+  await settleRoster(sidebar);
+
+  const parentRow = `[data-session-key="${parent}"]`;
+  expect(sidebar.querySelectorAll(parentRow)).toHaveLength(1);
+  expect(
+    sidebar.querySelector(`[data-session-section="catalog:codex"] ${parentRow}`),
+  ).not.toBeNull();
+
   sidebar.sidebarEntries = [`session:${parent}`];
   await settleRoster(sidebar);
 
@@ -184,7 +189,32 @@ it("shows child sessions for an off-list pinned parent", async () => {
   toggle.click();
   await settleRoster(sidebar);
   expect(toggle.getAttribute("aria-expanded")).toBe("true");
-  expect(pins.querySelector(`[data-session-key="${child}"]`)?.textContent).toContain(
-    "Off-list child",
+  const childLink = pins.querySelector<HTMLAnchorElement>(`[data-session-key="${child}"] a`)!;
+  expect(childLink.textContent).toContain("Off-list child");
+  sidebar.onNavigate = vi.fn();
+  childLink.click();
+  expect(sidebar.onNavigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main/offlist-child" });
+});
+
+it("keeps a descriptor-only pin navigable without inventing a child row", async () => {
+  const parent = "agent:main:described-parent";
+  const child = "agent:main:unavailable-child";
+  const { sidebar } = await mountRoster(undefined, [], undefined, [
+    { key: parent, agentId: "main", kind: "direct", label: "Saved parent", childSessions: [child] },
+  ]);
+  patchSettings({ sidebarAgentsMode: "chip" });
+  sidebar.sidebarEntries = [`session:${parent}`];
+  await settleRoster(sidebar);
+
+  const pins = ".sidebar-recent-sessions--pinned";
+  const parentLink = () =>
+    sidebar.querySelector<HTMLAnchorElement>(`${pins} [data-session-key="${parent}"] a`);
+  await vi.waitFor(() => expect(parentLink()?.textContent).toContain("Saved parent"));
+  expect(sidebar.querySelector(`${pins} [data-session-key="${child}"]`)).toBeNull();
+  sidebar.onNavigate = vi.fn();
+  parentLink()!.click();
+  expect(sidebar.onNavigate).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({ pathname: "/chat/main/described-parent" }),
   );
 });
