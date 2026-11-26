@@ -241,12 +241,18 @@ export async function recordCuratedMemoryArtifactRewrite(params: {
 
 async function readCurrentBytes(workspaceDir: string, relativePath: string): Promise<Uint8Array> {
   const access = getAgentWorkspaceAccess(workspaceDir);
+  const filePath = path.join(workspaceDir, relativePath);
+  // Memory maintenance reads curated files whole; the document bridge applies the bootstrap cap.
+  const maintenance = access?.memoryFiles?.maintenance;
+  if (maintenance) {
+    return await maintenance.readFile(filePath);
+  }
   return access
     ? await access.bridge.readFile({
         filePath: relativePath,
         maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
       })
-    : await fs.readFile(path.join(workspaceDir, relativePath));
+    : await fs.readFile(filePath);
 }
 
 export async function clearMemoryArtifactProvenance(params: {

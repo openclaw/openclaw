@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
+import { createWorkspaceMemoryFileClient } from "../agents/workspace-memory-client.js";
 import * as pluginState from "../plugin-state/plugin-state-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import {
@@ -158,24 +159,48 @@ test.for(["write", "rollback", "clear"] as const)(
   },
 );
 
-test.for(["local", "remote"] as const)(
+test.for(["local", "remote document", "remote memory maintenance"] as const)(
   "applies a curated record only to the %s bytes it hashed",
   async (storage, { tempRoot, address }) => {
     const daily = { ...address, relativePath: "memory/2026-08-20.md" };
-    const storageDir = storage === "local" ? tempRoot : path.join(tempRoot, "remote");
+    const remote = storage !== "local";
+    const storageDir = remote ? path.join(tempRoot, "remote") : tempRoot;
     await mkdir(path.join(storageDir, "memory"), { recursive: true });
-    const release =
-      storage === "remote"
-        ? registerAgentWorkspaceAccess(tempRoot, {
-            bridge: {
-              readFile: ({ filePath }) => readFile(path.join(storageDir, filePath)),
-              writeFile: async () => {},
-              stat: async () => null,
+    // Memory maintenance reads whole files; the capped document bridge refuses large ones.
+    const memoryFiles =
+      storage === "remote memory maintenance"
+        ? createWorkspaceMemoryFileClient({
+            workspaceDir: tempRoot,
+            remoteWorkspaceDir: "/remote",
+            signal: new AbortController().signal,
+            request: async (request) => {
+              const { method, args } = JSON.parse(request) as { method: string; args: string[] };
+              expect(method).toBe("readFile");
+              const bytes = await readFile(
+                path.join(storageDir, path.posix.relative("/remote", args[0]!)),
+              );
+              return JSON.stringify({ result: bytes.toString("base64") });
             },
+            subscribe: async () => {},
           })
         : undefined;
+    const release = remote
+      ? registerAgentWorkspaceAccess(tempRoot, {
+          bridge: {
+            readFile: async ({ filePath }) => {
+              if (memoryFiles) {
+                throw new Error("Workspace document exceeds its read bound");
+              }
+              return await readFile(path.join(storageDir, filePath));
+            },
+            writeFile: async () => {},
+            stat: async () => null,
+          },
+          ...(memoryFiles ? { memoryFiles } : {}),
+        })
+      : undefined;
     try {
-      if (storage === "remote") {
+      if (remote) {
         await writeFile(path.join(tempRoot, "MEMORY.md"), "local decoy");
       }
       // A missing file is unreadable and keeps its record.
