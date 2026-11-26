@@ -200,7 +200,14 @@ it("keeps a descriptor-only pin navigable without inventing a child row", async 
   const parent = "agent:main:described-parent";
   const child = "agent:main:unavailable-child";
   const { sidebar } = await mountRoster(undefined, [], undefined, [
-    { key: parent, agentId: "main", kind: "direct", label: "Saved parent", childSessions: [child] },
+    {
+      key: parent,
+      sessionId: "described-parent",
+      agentId: "main",
+      kind: "direct",
+      label: "Saved parent",
+      childSessions: [child],
+    },
   ]);
   patchSettings({ sidebarAgentsMode: "chip" });
   sidebar.sidebarEntries = [`session:${parent}`];
