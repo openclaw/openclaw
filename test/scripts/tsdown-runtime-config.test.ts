@@ -245,6 +245,7 @@ describe("tsdown config", () => {
     for (const [graph, bundleFsSafe] of [
       [runtimeGraph("plugins/runtime/index"), false],
       [runtimeGraph("infra/sqlite-readonly-location.worker"), true],
+      [runtimeGraph("plugins/plugin-generation-preparation.worker"), true],
     ] as const) {
       const alwaysBundle = graph.deps?.alwaysBundle;
       const external = (await inputOptions(graph))?.external;
