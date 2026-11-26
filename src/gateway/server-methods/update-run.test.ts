@@ -312,7 +312,9 @@ it("returns literal package guidance through current external update admission w
     true,
   );
   expect(validateUpdateRunResult({ ...payload, ok: true })).toBe(false);
-  expect(validateUpdateRunResult({ ...payload, result: { status: "running" } })).toBe(false);
+  expect(
+    validateUpdateRunResult({ ...payload, result: { ...payload.result, status: "running" } }),
+  ).toBe(false);
   expect(prepareUpdate).not.toHaveBeenCalled();
   expect(broadcast).not.toHaveBeenCalled();
   expect(await listUpdateRunsAsync()).toEqual([]);

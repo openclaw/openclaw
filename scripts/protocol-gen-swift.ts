@@ -428,6 +428,18 @@ function emitBoardEventParamsModels(schema: JsonSchema): string {
   return `${emitStruct("BoardEventParams", legacy)}\n${emitStruct("BoardTicketEventParams", ticket)}`;
 }
 
+function emitUpdateRunResultModels(schema: JsonSchema): string {
+  const variants = schema.anyOf ?? schema.oneOf ?? [];
+  const admitted = variants.find((variant) => variant.properties?.runId?.type === "string");
+  const refused = variants.find((variant) => variant.properties?.runId?.type === "null");
+  if (!admitted || !refused) {
+    throw new Error("UpdateRunResult must retain admitted and no-run object variants");
+  }
+  // The admitted receipt shipped as a struct before the schema became a union.
+  // Retain its source API and give pre-admission refusals their own projection.
+  return `${emitStruct("UpdateRunResult", admitted)}\n${emitStruct("RefusedUpdateRunResult", refused)}`;
+}
+
 function emitStructCustomCodable(
   name: string,
   props: Record<string, JsonSchema>,
@@ -850,13 +862,17 @@ export function generateSwiftProtocol(): string {
       parts.push(emitBoardEventParamsModels(schema));
       continue;
     }
+    if (name === "UpdateRunResult") {
+      parts.push(emitUpdateRunResultModels(schema));
+      continue;
+    }
     if (schema.type === "object") {
       parts.push(emitStruct(name, schema));
     }
   }
 
   for (const [name, schema] of definitions) {
-    if (name === "GatewayFrame" || name === "BoardEventParams") {
+    if (name === "GatewayFrame" || name === "BoardEventParams" || name === "UpdateRunResult") {
       continue;
     }
     const union = emitDiscriminatedUnion(name, schema);
