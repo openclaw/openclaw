@@ -199,9 +199,10 @@ describe("Teams inbound content", () => {
 
     it("keeps a file-only message instead of dropping it as empty", async () => {
       graph.mockResolvedValue({ media: [pdf] });
-      expect(
-        await prepare({ ...dmWithoutFile, graphMediaFallback: true, rawBody: "" }),
-      ).toEqual({ agentBody: "", inboundMedia: [pdf] });
+      expect(await prepare({ ...dmWithoutFile, graphMediaFallback: true, rawBody: "" })).toEqual({
+        agentBody: "",
+        inboundMedia: [pdf],
+      });
     });
 
     it.each<[string, ContentOptions]>([
@@ -218,7 +219,11 @@ describe("Teams inbound content", () => {
 
     it("leaves attachment markers on the Bot Framework path", async () => {
       botFramework.mockResolvedValue({ media: [pdf], attachmentCount: 1 });
-      const result = await prepare({ ...dmWithoutFile, attachments: markedHtml, graphMediaFallback: true });
+      const result = await prepare({
+        ...dmWithoutFile,
+        attachments: markedHtml,
+        graphMediaFallback: true,
+      });
       expect(botFramework).toHaveBeenCalledTimes(1);
       expect(graph).not.toHaveBeenCalled();
       expect(result?.inboundMedia).toEqual([pdf]);
