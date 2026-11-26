@@ -18,8 +18,8 @@ function receiptWrite(assertCurrent: () => void) {
   return { requireWriteSuccess: true, skipMaintenance: true, assertCommitAllowed: assertCurrent };
 }
 
-/** Record custody before a native writer starts and return that writer's settlement operation. */
-export async function beginNativeRestartRecovery(
+/** Record custody before a native writer starts; terminal lifecycle settlement clears it. */
+export async function recordNativeRestartRecovery(
   target:
     | (Omit<EntryScope, "sessionKey"> & {
         sessionKey?: string;
@@ -29,9 +29,9 @@ export async function beginNativeRestartRecovery(
     | undefined,
   sessionId: string,
   assertCurrent: () => void,
-): Promise<(() => Promise<void>) | undefined | null> {
+): Promise<boolean> {
   if (!target?.sessionKey || !target.expectedWriterRunId) {
-    return undefined; // Standalone calls without a Gateway writer cannot recover a turn.
+    return true; // Standalone calls without a Gateway writer cannot recover a turn.
   }
   const scope = { ...target, sessionKey: target.sessionKey };
   const writer = {
@@ -53,19 +53,10 @@ export async function beginNativeRestartRecovery(
     marked?.nativeRestartRecovery?.runId !== writer.runId ||
     marked.nativeRestartRecovery.state !== "running"
   ) {
-    return null;
+    return false;
   }
   assertCurrent();
-  return async () => {
-    await patchSessionEntryCore(
-      scope,
-      (entry) =>
-        ownsRun(entry) && entry.nativeRestartRecovery?.runId === writer.runId
-          ? { nativeRestartRecovery: undefined }
-          : null,
-      receiptWrite(assertCurrent),
-    );
-  };
+  return true;
 }
 
 /** Classify only the interrupted run named by the current session entry. */

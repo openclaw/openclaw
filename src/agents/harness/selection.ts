@@ -288,7 +288,6 @@ export async function runAgentHarnessAttempt(
           );
     try {
       modelExecution?.assertCurrent();
-      let settleNativeRestartReceipt: (() => Promise<void>) | undefined;
       const result = await runAgentHarnessLifecycleAttempt(
         harness,
         modelExecution
@@ -321,27 +320,23 @@ export async function runAgentHarnessAttempt(
           if (harness.interruptedRestartRecovery !== "explicit-resume") {
             return harness.runAttempt(attempt);
           }
-          const { beginNativeRestartRecovery } =
+          const { recordNativeRestartRecovery } =
             await import("../../config/sessions/session-native-restart-recovery.js");
-          const settlement = await beginNativeRestartRecovery(
+          const recorded = await recordNativeRestartRecovery(
             params.sessionTarget,
             params.sessionId,
             () => attempt.hostCapabilities?.assertActive(),
           );
-          if (settlement === null) {
+          if (!recorded) {
             throw new AgentHarnessPreflightError(
               "Cannot record restart recovery for this native turn. No native work started.",
             );
           }
-          settleNativeRestartReceipt = settlement;
           return harness.runAttempt(attempt);
         },
       );
       await nativeSessionRuntime?.assertCurrent();
       modelExecution?.assertCurrent();
-      if (result.terminal.kind === "ok") {
-        await settleNativeRestartReceipt?.();
-      }
       return result;
     } finally {
       modelExecution?.release();
