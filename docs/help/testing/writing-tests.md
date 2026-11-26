@@ -13,6 +13,14 @@ I/O fixtures and independent expected values. Prefer focused integration tests
 and independent unit contracts over mocked internal decisions or whole-product
 boots. Name the credible regression and what the test cannot prove.
 
+Verify the reported user flow in a disposable run and summarize the observation
+in the PR. Never commit that reproduction harness as a `.e2e.test.ts` file. For CI,
+start with one fast, non-mocked unit or narrow contract test in the existing owner
+suite. Add a new `.e2e.test.ts` or test file using `startGatewayWithClient` only
+when the defect is in Gateway transport, process lifecycle or startup wiring and
+no narrower test can expose it. In [#205573](https://github.com/openclaw/openclaw/pull/205573),
+plugin quarantine after reload could be checked without starting a Gateway.
+
 Work in vertical slices: failing behavior, coherent repair, passing proof.
 Regressions must fail on the original defect, not fixture setup; report unavailable
 baseline proof. Refactor under green tests and preserve distinct contracts when
@@ -26,6 +34,14 @@ changing code or proof. Too many private controls suggest fragmented ownership,
 not a need for test-only exports.
 
 ## Cost budget
+
+Before changing testing rules in `AGENTS.md` or in response to an eval, weigh
+which additional defects the rule would catch against its net test LOC and CI
+seconds on representative fixes. [#168083](https://github.com/openclaw/openclaw/pull/168083)
+favored focused proof; [#176308](https://github.com/openclaw/openclaw/pull/176308)
+required end-to-end proof; [#197557](https://github.com/openclaw/openclaw/pull/197557)
+removed rules that drove speculative work. An improved eval score alone does not
+justify a recurring CI cost.
 
 Measure every new or changed test file with
 `pnpm test <file> --maxWorkers=1`; report wall time and CI seconds once available;
