@@ -50,4 +50,28 @@ describe("media-understanding provider registry", () => {
     expect(provider?.describeImages).toBeUndefined();
     expect(getMediaUnderstandingProvider("textOnly", registry)).toBeUndefined();
   });
+
+  it("does not copy hooks between a historical alias and a separately registered provider", () => {
+    const googleImage = vi.fn(async () => ({ text: "google" }));
+    const geminiImage = vi.fn(async () => ({ text: "gemini" }));
+    for (const providers of [
+      [
+        { id: "google", capabilities: ["video" as const], describeImage: googleImage },
+        { id: "gemini", capabilities: ["image" as const], describeImage: geminiImage },
+      ],
+      [
+        { id: "gemini", capabilities: ["image" as const], describeImage: geminiImage },
+        { id: "google", capabilities: ["video" as const], describeImage: googleImage },
+      ],
+    ]) {
+      const registry = buildMediaUnderstandingRegistry(undefined, undefined, providers);
+      expect(getMediaUnderstandingProvider("gemini", registry)?.describeImage).toBe(geminiImage);
+      expect(getMediaUnderstandingProvider("google", registry)?.describeImage).toBe(googleImage);
+    }
+
+    const googleOnly = buildMediaUnderstandingRegistry(undefined, undefined, [
+      { id: "google", capabilities: ["image"], describeImage: googleImage },
+    ]);
+    expect(getMediaUnderstandingProvider("gemini", googleOnly)?.describeImage).toBe(googleImage);
+  });
 });

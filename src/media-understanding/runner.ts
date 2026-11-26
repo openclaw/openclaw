@@ -8,7 +8,7 @@ import type { ActiveMediaModel } from "../../packages/media-understanding-common
 import { formatDecisionSummary } from "../../packages/media-understanding-common/src/format.js";
 import {
   normalizeMediaExecutionProviderId,
-  normalizeMediaProviderId,
+  resolveMediaProviderKey,
 } from "../../packages/media-understanding-common/src/provider-id.js";
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
 import type {
@@ -106,11 +106,17 @@ function resolveConfiguredKeyProviderOrder(params: {
   fallbackProviders: readonly string[];
 }): string[] {
   const configuredProviders = Object.keys(params.cfg.models?.providers ?? {})
-    .map((providerId) => normalizeMediaExecutionProviderId(providerId))
+    .map((providerId) =>
+      resolveMediaProviderKey(
+        providerId,
+        params.providerRegistry,
+        normalizeMediaExecutionProviderId,
+      ),
+    )
     .filter(Boolean);
   const supportedProviders = uniqueStrings(configuredProviders).filter((providerId) =>
     providerSupportsCapability(
-      params.providerRegistry.get(normalizeMediaProviderId(providerId)),
+      getMediaUnderstandingProvider(providerId, params.providerRegistry),
       params.capability,
     ),
   );
@@ -214,8 +220,8 @@ async function resolveAutoImageModelId(
   const providerId = params.providerId;
   const matches = catalog.filter(
     (entry) =>
-      normalizeMediaProviderId(entry.provider) === normalizeMediaProviderId(providerId) &&
-      modelSupportsVision(entry),
+      resolveMediaProviderKey(entry.provider, params.providerRegistry) ===
+        resolveMediaProviderKey(providerId, params.providerRegistry) && modelSupportsVision(entry),
   );
   const autoEntry = matches.find((entry) => normalizeLowercaseStringOrEmpty(entry.id) === "auto");
   return normalizeOptionalString((autoEntry ?? matches[0])?.id);
@@ -315,8 +321,10 @@ async function activeModelSupportsNativeVision(
 async function* resolveAutoAudioEntries(
   params: AutoModelSelectionParams & { language?: string },
 ): AsyncGenerator<ResolvedMediaModelEntry> {
-  const activeProvider = normalizeMediaExecutionProviderId(
-    params.activeModel?.provider?.trim() ?? "",
+  const activeProvider = resolveMediaProviderKey(
+    params.activeModel?.provider ?? "",
+    params.providerRegistry,
+    normalizeMediaExecutionProviderId,
   );
   const providers = uniqueStrings([
     ...(activeProvider ? [activeProvider] : []),
@@ -356,7 +364,11 @@ async function resolveAutoEntries(
     providerRegistry:
       params.providerRegistry ?? buildMediaUnderstandingRegistry(undefined, params.cfg),
   };
-  const activeProvider = normalizeMediaExecutionProviderId(prepared.activeModel?.provider ?? "");
+  const activeProvider = resolveMediaProviderKey(
+    prepared.activeModel?.provider ?? "",
+    prepared.providerRegistry,
+    normalizeMediaExecutionProviderId,
+  );
   if (activeProvider) {
     const activeEntry = await resolveAutoProviderModelEntry(
       prepared,

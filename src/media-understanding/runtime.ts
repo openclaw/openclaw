@@ -8,6 +8,10 @@ import {
   findDecisionReason,
   normalizeDecisionReason,
 } from "../../packages/media-understanding-common/src/format.js";
+import {
+  normalizeMediaExecutionProviderId,
+  resolveMediaProviderKey,
+} from "../../packages/media-understanding-common/src/provider-id.js";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -25,7 +29,6 @@ import { assertMediaExecutionCurrent, type MediaExecutionContext } from "./provi
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
-  normalizeMediaProviderId,
 } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMediaRuntimeTimeoutMs, resolveModelEntries } from "./resolve.js";
 import type { MediaRequestOverrides } from "./runner.entries.js";
@@ -291,7 +294,12 @@ export async function describePreparedImageWithModel(
   assertMediaExecutionCurrent(execution);
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
-  const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
+  const providerId = resolveMediaProviderKey(
+    params.provider,
+    providerRegistry,
+    normalizeMediaExecutionProviderId,
+  );
+  const provider = getMediaUnderstandingProvider(providerId, providerRegistry);
   const describeImage = provider?.describeImage ?? describeImageWithModel;
   const agentDir =
     params.agentDir ??
@@ -303,7 +311,7 @@ export async function describePreparedImageWithModel(
     maxBytes: MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
     modelPolicy: await resolveImageCompressionModelPolicy({
       cfg: params.cfg,
-      provider: params.provider,
+      provider: providerId,
       model: params.model,
       agentDir,
       workspaceDir: params.workspaceDir,
@@ -314,7 +322,7 @@ export async function describePreparedImageWithModel(
     buffer: image.buffer,
     fileName: image.fileName ?? params.image.fileName,
     mime: image.mime,
-    provider: params.provider,
+    provider: providerId,
     model: params.model,
     prompt: params.prompt,
     maxTokens: params.maxTokens,

@@ -1,0 +1,2 @@
+106
+# #193380 provider routing regressions cover payload and credential delivery to the exact provider, plus legacy alias fallback, for audio and image.
