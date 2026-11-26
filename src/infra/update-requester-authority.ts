@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type * as ChannelOperatorAuthority from "../gateway/channel-operator-authority.js";
 import {
   withArtifactPreservingStateReads,
   withSynchronousArtifactPreservingStateSnapshot,
@@ -52,7 +53,11 @@ export async function createManagedUpdateRequesterAuthority(
   requester: UpdateRequester,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<UpdateRequesterAuthority> {
-  return captureManagedUpdateRequester(requester, env, (auth) => auth.resolveCommandOwnerAuthority);
+  return captureManagedUpdateRequester(
+    requester,
+    env,
+    (auth) => auth.resolveChannelOperatorAdminAuthority,
+  );
 }
 
 /** Reconstruct delegated authority from the source recorded by the original admission. */
@@ -67,7 +72,7 @@ export function createDelegatedUpdateRequesterAuthority(
     : captureManagedUpdateRequester(
         requester,
         env ?? process.env,
-        (auth) => auth.resolveCommandOwnerAuthority,
+        (auth) => auth.resolveChannelOperatorAdminAuthority,
         { projectDoctorConfig: true },
       );
 }
@@ -80,7 +85,7 @@ export async function prepareUpdateRequesterIdentity(
   const identity = await captureManagedUpdateRequester(
     requester,
     env,
-    (auth) => auth.resolveUpdateRequesterIdentityAuthority,
+    (auth) => auth.resolveUpdateChannelOperatorAdminIdentityAuthority,
   );
   return Object.freeze({
     requester: identity.requester,
@@ -127,10 +132,10 @@ async function captureManagedUpdateRequester(
   env: NodeJS.ProcessEnv,
   selectResolver: (
     auth: Pick<
-      typeof import("../auto-reply/command-auth.js"),
-      "resolveCommandOwnerAuthority" | "resolveUpdateRequesterIdentityAuthority"
+      typeof ChannelOperatorAuthority,
+      "resolveChannelOperatorAdminAuthority" | "resolveUpdateChannelOperatorAdminIdentityAuthority"
     >,
-  ) => typeof import("../auto-reply/command-auth.js").resolveCommandOwnerAuthority,
+  ) => typeof ChannelOperatorAuthority.resolveChannelOperatorAdminAuthority,
   options: { projectDoctorConfig?: boolean } = {},
 ): Promise<UpdateRequesterAuthority> {
   // Released drivers knew only configured owners. They must not acquire a newly linked profile
@@ -142,16 +147,17 @@ async function captureManagedUpdateRequester(
       const authorityEnv = { ...env };
       const target = resolveInstallationTarget(authorityEnv);
       const [
+        { captureCommandOwnerIdentity, isConfiguredCommandOwner },
         {
-          isConfiguredCommandOwner,
-          resolveCommandOwnerAuthority,
-          resolveUpdateRequesterIdentityAuthority,
+          resolveChannelOperatorAdminAuthority,
+          resolveUpdateChannelOperatorAdminIdentityAuthority,
         },
         { readCurrentConfigForPolicyCheck },
         { ensureCliPluginRegistryLoaded },
         { PluginLoadFailureError },
       ] = await Promise.all([
-        import("../auto-reply/command-auth.js"),
+        import("../auto-reply/command-owner-facts.js"),
+        import("../gateway/channel-operator-authority.js"),
         // Keep synchronous authority checks on the reader loaded at admission.
         import("../config/io.js"),
         import("../cli/plugin-registry-loader.js"),
@@ -188,12 +194,15 @@ async function captureManagedUpdateRequester(
       const authority =
         authorizationSource === "configured-owner"
           ? undefined
-          : selectResolver({
-              resolveCommandOwnerAuthority,
-              resolveUpdateRequesterIdentityAuthority,
-            })(readCurrentConfig(), admittedRequester, {
-              env: authorityEnv,
-            });
+          : captureCommandOwnerIdentity(
+              readCurrentConfig(),
+              admittedRequester,
+              { env: authorityEnv },
+              selectResolver({
+                resolveChannelOperatorAdminAuthority,
+                resolveUpdateChannelOperatorAdminIdentityAuthority,
+              }),
+            );
       return Object.freeze({
         requester: admittedRequester,
         isCurrent: () =>
