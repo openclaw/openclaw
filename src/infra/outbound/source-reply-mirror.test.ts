@@ -9,11 +9,22 @@ const channelPluginMocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   getLoadedChannelPlugin: vi.fn(),
 }));
-const transcriptMocks = vi.hoisted(() => ({ append: vi.fn(async () => ({ ok: true })) }));
+const transcriptMocks = vi.hoisted(() => ({
+  append: vi.fn(async (_params?: { prepareDisplayContent?: () => Promise<unknown> }) => ({
+    ok: true,
+  })),
+}));
+const previewFailure = {
+  type: "attachment_error",
+  attachment: { code: "delivery-failed", kind: "document", label: "report.pdf" },
+};
 vi.mock("../../config/sessions.js", () => ({
   appendAssistantMessageToSessionTranscript: transcriptMocks.append,
 }));
 vi.mock("../../channels/plugins/index.js", () => channelPluginMocks);
+vi.mock("../../gateway/server-methods/chat-assistant-content.js", () => ({
+  buildAssistantReplyContent: async () => ({ assistantContent: [previewFailure] }),
+}));
 
 type Source = Parameters<typeof isDeliveredCurrentSourceReply>[0];
 type MirrorSource = Source & { sessionKey: string };
@@ -192,3 +203,31 @@ it.each([
     expect.objectContaining({ sessionKey: params.sessionKey, text }),
   );
 });
+
+it.each([
+  ["with a platform receipt", { ok: true, messageId: "sent-1" }, true],
+  ["without a platform receipt", { ok: true }, false],
+] as const)(
+  "mirrors an unavailable attachment preview %s",
+  async (_name, deliveredPayload, sent) => {
+    await expect(
+      mirrorDeliveredSourceReplyToTranscript({
+        ...direct,
+        deliveredPayload,
+        deliveredPayloads: [{ mediaUrl: "/workspace/output/report.pdf" }],
+        mediaAccess: { localRoots: ["/workspace/output"] },
+      }),
+    ).resolves.toBe(true);
+
+    const prepareDisplayContent = transcriptMocks.append.mock.lastCall?.[0]?.prepareDisplayContent;
+    expect(prepareDisplayContent).toBeDefined();
+    await expect(prepareDisplayContent?.()).resolves.toEqual([
+      sent
+        ? {
+            type: "text",
+            text: "Attachment sent to the channel. Preview unavailable in chat history.",
+          }
+        : previewFailure,
+    ]);
+  },
+);

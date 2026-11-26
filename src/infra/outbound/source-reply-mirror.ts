@@ -527,6 +527,21 @@ export async function mirrorDeliveredSourceReplyToTranscript(
                     abortSignal: params.abortSignal,
                     includeSensitiveMedia: false,
                   });
+                  // A platform receipt establishes delivery, not permission to embed the file.
+                  if (
+                    deliveryFact?.primaryPlatformMessageId &&
+                    assistantContent?.some((block) => block.type === "attachment_error")
+                  ) {
+                    const displayContent = assistantContent.filter(
+                      (block) => block.type !== "attachment_error",
+                    );
+                    displayContent.push({
+                      type: "text",
+                      text: "Attachment sent to the channel. Preview unavailable in chat history.",
+                    });
+                    preparedBlocks = displayContent;
+                    return displayContent;
+                  }
                   preparedBlocks = assistantContent ?? [];
                   return assistantContent;
                 },
