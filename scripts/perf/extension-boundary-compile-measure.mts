@@ -1,11 +1,11 @@
 /**
  * Measure the real package-boundary worker after preparing its declarations.
- * Run: node --import ./scripts/tsx.mjs scripts/perf/extension-boundary-compile-measure.mts
+ * Run: node scripts/perf/extension-boundary-compile-measure.mts
  * REV_OR_SNAPSHOT_DIRECTORY_URL CONFIG [--count] [--manifest]. Use --warm as CONFIG
  * to measure package-boundary preparation with already-current SDK receipts.
- * Snapshots contain the worker/emitter, or the receipt input owner for --warm, and
- * the shared declaration input boundary at
- * their repository-relative paths. Alternate sources in fresh processes; use
+ * Snapshots contain the shared input boundary and either the worker/emitter or
+ * the receipt input owner for --warm, at their repository-relative paths.
+ * Alternate sources in fresh processes; use
  * external GNU time for CPU and peak RSS. Count runs are separate.
  */
 import { execFileSync } from "node:child_process";
@@ -46,6 +46,8 @@ const hook = registerHooks({
       : nextLoad(url, context);
   },
 });
+// The TSX bootstrap imports the input boundary; select its source before loading it.
+await import("../tsx.mjs");
 if (!warm) {
   fs.mkdirSync(path.join(root, ".artifacts"), { recursive: true });
 }
