@@ -171,6 +171,15 @@ const inputHandlers = new WeakMap<HTMLElement, () => void>();
 
 function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRailElement) {
   let textarea: HTMLTextAreaElement | undefined;
+  let invalidateInputIntent: (() => void) | undefined;
+  const registerInputIntent = (listener: () => void) => {
+    invalidateInputIntent = listener;
+    return () => {
+      if (invalidateInputIntent === listener) {
+        invalidateInputIntent = undefined;
+      }
+    };
+  };
   let thread!: HTMLDivElement;
   const focusComposer = () => {
     if (textarea && !textarea.disabled) {
@@ -199,7 +208,13 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       selectionContextOnly: true,
       imagesOnly: true,
       disabled: !props.connected,
-      onAttachmentsChange: props.onAttachmentsChange,
+      onAttachmentsChange: (attachments) => {
+        const accepted = props.onAttachmentsChange?.(attachments);
+        if (accepted !== false) {
+          invalidateInputIntent?.();
+        }
+        return accepted;
+      },
       onOpenImage: props.onOpenImage,
       onPendingReadsChange: (delta) => {
         if (readSignal) {
@@ -436,6 +451,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       />
       <SessionRailComposer
         textareaRef={(element) => (textarea = element)}
+        registerInputIntent={registerInputIntent}
         agentId={props.agentId}
         sessionKey={props.sessionKey}
         companion={props.companion}

@@ -1,4 +1,5 @@
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createOverlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
@@ -456,7 +457,7 @@ it("retains an earlier recording's error while the next microphone connects", as
     connected: false,
     enabled: false,
     realtimeTalkActive: false,
-    onCommit: () => {},
+    onCommit: () => false,
     onError: () => {},
   });
   const connecting = vi.spyOn(capture, "connecting", "get").mockReturnValue(true);
@@ -474,4 +475,109 @@ it("retains an earlier recording's error while the next microphone connects", as
   owner.dictation.dispatchEvent(new Event("change"));
   expect(owner.dictationError).toBeNull();
   capture.dispose();
+});
+
+it("keeps dictated input eligible but retires an earlier Send after a user edit or another submit", async () => {
+  const observed = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
+  await mount(routeData("research"));
+  const owner = observed.mock.contexts[0];
+  assert.instanceOf(owner, NewSessionPageOwner);
+  const capture = new ComposerDictationOwner({
+    client: null,
+    connected: false,
+    enabled: false,
+    realtimeTalkActive: false,
+    onCommit: () => false,
+    onError: () => {},
+  });
+  onTestFinished(() => capture.dispose());
+  vi.spyOn(owner.dictation, "dictation", "get").mockReturnValue(capture);
+
+  const originalSend = capture.capturePublicationGuard();
+  owner.setMessageFromUser("Maybe we can ship Friday", undefined, "dictation");
+  expect(originalSend()).toBe(true);
+  owner.setMessageFromUser("Maybe we can ship next Friday");
+  expect(originalSend()).toBe(false);
+
+  const pendingSend = capture.capturePublicationGuard();
+  vi.spyOn(owner.submission, "canSubmit").mockReturnValue(true);
+  const submit = vi.spyOn(owner.submission, "submit").mockImplementation(async () => {
+    // The actual page owner must withdraw the earlier Send before invoking submission.
+    expect(pendingSend()).toBe(false);
+  });
+  await owner.submit();
+  expect(submit).toHaveBeenCalledOnce();
+  expect(pendingSend()).toBe(false);
+});
+
+it.each([
+  "unchanged",
+  "compositionstart",
+  "beforeinput",
+  "attachment-add",
+  "attachment-remove",
+  "attachment-replace",
+  "read-admission",
+  "read-settlement",
+  "read-cancel",
+])("retires held dictation Send for New Session input intent: %s", async (intent) => {
+  const observed = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
+  const page = await mount(routeData("research"));
+  const owner = observed.mock.contexts[0];
+  assert.instanceOf(owner, NewSessionPageOwner);
+  const capture = owner.dictation.dictation;
+  assert.instanceOf(capture, ComposerDictationOwner);
+  const attachment = { id: "first-file", mimeType: "text/plain", fileName: "notes.txt" };
+  const attachmentDraft = owner.submission.attachmentDraft;
+  if (intent === "attachment-remove" || intent === "attachment-replace") {
+    attachmentDraft.replace([attachment]);
+  }
+  const reads = attachmentDraft.reads;
+  const entry =
+    intent === "read-settlement" || intent === "read-cancel"
+      ? reads.begin([new File(["notes"], "notes.txt")], [], {
+          getAttachments: () => attachmentDraft.attachments,
+          onAttachmentsChange: (attachments) => attachmentDraft.replace(attachments),
+        })[0]
+      : undefined;
+  const finish = createDeferred<boolean>();
+  const active = vi.spyOn(capture, "active", "get").mockReturnValue(true);
+  vi.spyOn(capture, "finishActive").mockReturnValue(finish.promise);
+  const submit = vi.spyOn(owner, "submit").mockResolvedValue(undefined);
+  owner.dictation.dispatchEvent(new Event("change"));
+  await settle(page);
+  const send = page.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
+  assert.instanceOf(send, HTMLButtonElement);
+  send.click();
+  active.mockReturnValue(false);
+  owner.dictation.dispatchEvent(new Event("change"));
+  await settle(page);
+  const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message");
+  assert.instanceOf(textarea, HTMLTextAreaElement);
+  expect(textarea.readOnly).toBe(false);
+  if (intent === "compositionstart") {
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+  } else if (intent === "beforeinput") {
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", { bubbles: true, inputType: "insertText" }),
+    );
+  } else if (intent === "attachment-add") {
+    attachmentDraft.replace([attachment]);
+  } else if (intent === "attachment-remove") {
+    attachmentDraft.replace([]);
+  } else if (intent === "attachment-replace") {
+    attachmentDraft.replace([{ ...attachment, id: "replacement-file" }]);
+  } else if (intent === "read-admission") {
+    reads.begin([new File(["notes"], "notes.txt")], [], {
+      getAttachments: () => attachmentDraft.attachments,
+      onAttachmentsChange: (attachments) => attachmentDraft.replace(attachments),
+    });
+  } else if (intent === "read-settlement" && entry) {
+    reads.complete(entry);
+  } else if (intent === "read-cancel" && entry) {
+    reads.remove(entry);
+  }
+  finish.resolve(true);
+  await settle(page);
+  expect(submit).toHaveBeenCalledTimes(intent === "unchanged" ? 1 : 0);
 });

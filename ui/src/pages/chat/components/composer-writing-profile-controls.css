@@ -1,0 +1,75 @@
+.composer-writing-profiles {
+  min-width: 0;
+  max-width: 100%;
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.composer-writing-profiles summary {
+  cursor: var(--cursor-action);
+  color: var(--text-strong);
+}
+
+.composer-writing-profiles__body {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  max-width: 34rem;
+}
+
+.composer-writing-profiles__body p,
+.composer-writing-profiles__inspection h3 {
+  margin: 0;
+  font-size: inherit;
+  line-height: 1.5;
+}
+
+.composer-writing-profiles__body label {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.composer-writing-profiles__body textarea,
+.composer-writing-profiles__body select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.composer-writing-profiles__body textarea {
+  resize: vertical;
+  margin-block: var(--space-2);
+}
+
+.composer-writing-profiles__body pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.composer-writing-profiles__inspection {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.composer-writing-profiles__inspection dl {
+  display: grid;
+  grid-template-columns: minmax(6rem, 1fr) minmax(0, 2fr);
+  gap: var(--space-2);
+  margin-block: var(--space-2);
+}
+
+.composer-writing-profiles__inspection dd {
+  margin: 0;
+}
+
+.composer-writing-profiles__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.composer-writing-profiles__actions a {
+  cursor: pointer;
+}

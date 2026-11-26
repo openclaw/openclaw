@@ -120,6 +120,7 @@ export function queueComposerSubmit(state: ChatComposerState, draft: string | nu
 }
 
 export function markComposerInputIntent(state: ChatComposerState, key: string): void {
+  state.dictation?.invalidatePendingSend();
   state.editRevision += 1;
   state.composerInputIntentKey = key;
 }

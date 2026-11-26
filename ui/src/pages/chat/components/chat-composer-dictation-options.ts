@@ -14,6 +14,10 @@ export function createComposerDictationOptions(
 ) {
   return {
     client: props.gatewayClient ?? null,
+    gateway: props.contextGateway,
+    readDraft: () => state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft,
+    readDraftKey: () => composerDraftKey(props),
+    readSendRevision: () => props.attachmentReads?.revision ?? 0,
     sessionKey: props.sessionKey,
     draftKey: composerDraftKey(props),
     connected: props.connected,
@@ -39,7 +43,7 @@ export function createComposerDictationOptions(
         preservePreview,
       );
       if (!insertion) {
-        return;
+        return false;
       }
       if (target) {
         target.value = insertion.value;
@@ -55,6 +59,7 @@ export function createComposerDictationOptions(
         focusComposerInput(textarea, { preventScroll: true });
         selectComposerInput(textarea, insertion.caret, insertion.caret);
       });
+      return true;
     },
     onError: (
       message: string,

@@ -130,6 +130,7 @@ export function renderComposerTextarea(
           ) {
             return;
           }
+          context().state.dictation?.invalidatePendingSend();
           event.currentTarget.setAttribute("data-composing", "");
           context().dismissPrediction();
           context().state.mentionMenu.close();

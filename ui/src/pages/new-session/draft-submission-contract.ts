@@ -25,6 +25,7 @@ export type DraftSubmissionCallbacks = {
   retainForHandoff?: () => RetainedNewSessionDraft | undefined;
   takePreparedTitle?: () => string | undefined;
   onMessageChange?: (message: string) => void;
+  onInputIntent?: () => void;
   changed: () => void;
   closeTransientUi: () => void;
   onAccepted?: (result: SessionCreateOutcome & { agentId: string }) => void;

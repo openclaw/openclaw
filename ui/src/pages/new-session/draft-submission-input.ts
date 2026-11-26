@@ -5,6 +5,7 @@ import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { attachmentBatchRejection } from "../chat/components/chat-attachment-admission.ts";
 import { foldPastedTextAttachments } from "../chat/pasted-text-card.ts";
@@ -47,12 +48,22 @@ export function prepareDraftSubmission(
     attachmentDraft: { attachments: ChatAttachment[] };
     pendingPlacement: PendingSessionPlacementRecoveryState;
     visibility: NewSessionVisibility;
+    setError: (message: string) => void;
   },
   place: DraftPlaceState,
   startup?: DraftStartupResumption,
   background = false,
 ) {
   const pending = draft.pendingPlacement;
+  if (
+    !uploadsEnabled(context.config) &&
+    (draft.attachmentDraft.attachments.length ||
+      pending.attachments?.length ||
+      startup?.params.attachments?.length)
+  ) {
+    draft.setError(uploadsDisabledMessage());
+    return null;
+  }
   const pendingPlacement = !startup && Boolean(pending.sessionKey);
   const quoted = quoteSelectionAttachments(
     trimHumanMentions(draft.message, draft.mentions),

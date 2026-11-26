@@ -12,6 +12,11 @@ import {
   USER_PREFS_ENTRY_LIMIT,
   USER_PREFS_VALUE_BYTES,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import {
+  validateWritingProfileCatalog,
+  WRITING_PROFILE_LIMITS,
+  WRITING_PROFILES_PREFERENCE_KEY,
+} from "../shared/dictation-writing-profiles.js";
 import type {
   PreparedUserPreferenceUpdate,
   UserPreferenceError,
@@ -62,9 +67,17 @@ function prepareEntries(
     if (valueJson === undefined) {
       return err({ code: "invalid-value", key: prefKey });
     }
-    if (Buffer.byteLength(valueJson, "utf8") > USER_PREFS_VALUE_BYTES) {
+    const writingProfiles = prefKey === WRITING_PROFILES_PREFERENCE_KEY;
+    const maximumBytes = writingProfiles
+      ? WRITING_PROFILE_LIMITS.catalogBytes
+      : USER_PREFS_VALUE_BYTES;
+    if (Buffer.byteLength(valueJson, "utf8") > maximumBytes) {
       return err({ code: "value-too-large", key: prefKey });
     }
+    if (writingProfiles && !validateWritingProfileCatalog(value).ok) {
+      return err({ code: "invalid-value", key: prefKey });
+    }
+    // Keep the supplied record intact: expectedEntries compares the exact saved value.
     serialized.push({ prefKey, valueJson });
   }
   return ok({ serialized, deletionKeys });
@@ -80,6 +93,12 @@ export function prepareUserPreferenceUpdate(
 ): Result<PreparedUserPreferenceUpdate, UserPreferenceError> {
   if (Object.hasOwn(entries, CRON_FAILURE_DISMISSALS_KEY)) {
     return err({ code: "invalid-key", key: CRON_FAILURE_DISMISSALS_KEY });
+  }
+  if (
+    Object.hasOwn(entries, WRITING_PROFILES_PREFERENCE_KEY) &&
+    !Object.hasOwn(expectedEntries, WRITING_PROFILES_PREFERENCE_KEY)
+  ) {
+    return err({ code: "invalid-value", key: WRITING_PROFILES_PREFERENCE_KEY });
   }
   const prepared = prepareEntries(entries, options.trustedProxyGitCoauthor);
   if (!prepared.ok) {

@@ -67,6 +67,9 @@ export class NewSessionPageOwner {
     const textarea = this.submission.composerTextarea.getTextarea();
     const restoreFocus = background && this.host.ownerDocument.activeElement === textarea;
     const operation = async () => {
+      if (this.submission.canSubmit()) {
+        this.dictation.dictation?.invalidatePendingSend();
+      }
       await this.submission.submit(undefined, background);
       if (
         restoreFocus &&
@@ -158,6 +161,7 @@ export class NewSessionPageOwner {
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
         changed: this.changed,
+        onInputIntent: () => this.noteComposerInputIntent(),
         activeElement: () => this.host.ownerDocument.activeElement,
         onInvalidate: () => {
           this.retireSubmissionPresentation();
@@ -212,11 +216,12 @@ export class NewSessionPageOwner {
     this.dictation = new DirectDictationControl({
       textarea: this.submission.composerTextarea,
       getClient: () => this.gateway.client,
+      readSendRevision: () => this.submission.attachmentDraft.reads.revision,
       prepareSession: () => this.submission.sessionStartup.prepareDictationSession(),
       getSessionKey: () => this.submission.sessionStartup.dictationSessionKey(),
       isConnected: () => this.gateway.connected,
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
-      onMessage: (message) => this.setMessageFromUser(message),
+      onMessage: (message) => this.setMessageFromUser(message, undefined, "dictation"),
       onError: (message) => {
         this.dictationError = message;
         this.changed();
@@ -405,11 +410,22 @@ export class NewSessionPageOwner {
       : catalog.routeKeyFromSearch(window.location.search);
   }
 
-  setMessageFromUser(message: string, mentions?: readonly HumanMention[]) {
+  setMessageFromUser(
+    message: string,
+    mentions?: readonly HumanMention[],
+    source: "user" | "dictation" = "user",
+  ) {
     if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
+      if (source === "user") {
+        this.noteComposerInputIntent();
+      }
       this.submission.setMessage(message, mentions);
       this.messageOwnerKey = catalog.routeKeyFromSearch(window.location.search);
     }
+  }
+
+  noteComposerInputIntent() {
+    this.dictation.dictation?.invalidatePendingSend();
   }
 
   openConnectMachine() {
@@ -470,6 +486,7 @@ export class NewSessionPageOwner {
       onUnsupportedAttachment: () =>
         submission.setError(t("newSession.terminalAttachmentsUnsupported")),
       onInput: (message, mentions) => this.setMessageFromUser(message, mentions),
+      onInputIntent: () => this.noteComposerInputIntent(),
       onOpenImage: this.setImageLightbox,
       onOpenSidebar: this.openAttachmentPanel,
       onSubmit: () => void this.submit(),

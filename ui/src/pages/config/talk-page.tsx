@@ -8,6 +8,7 @@ import { createDeferredCore, type Deferred } from "../../../../src/shared/deferr
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { UserFacingError } from "../../lib/format-error.ts";
 import { canonicalModelAuthProviderId, loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
@@ -16,6 +17,7 @@ import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts"
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectMutableSource, projectOwner } from "../../lib/reactive/projection.ts";
+import { DictationWritingProfilesSection } from "./dictation-writing-profiles-section.tsx";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
   resolveTalkModelFamilySettings,
@@ -765,7 +767,14 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
             configBusy={configBusy()}
           />
         )}
-        editor={props.buildEditor?.()}
+        editor={
+          <>
+            <SettingsPage>
+              <DictationWritingProfilesSection />
+            </SettingsPage>
+            {props.buildEditor?.()}
+          </>
+        }
       />
     </openclaw-talk-settings>
   );

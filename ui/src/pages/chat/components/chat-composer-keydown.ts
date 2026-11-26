@@ -155,6 +155,7 @@ export function createComposerKeyDownHandler({
         keyCode: event.keyCode,
       });
       if (result.handled) {
+        state.dictation?.invalidatePendingSend();
         state.editRevision += 1;
         if (result.preventDefault) {
           event.preventDefault();
