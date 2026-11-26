@@ -674,6 +674,50 @@ data in the new allowed environment. Never open the same state with both Gateway
    that row NOT COLLECTED. Preserve original data and show the refusal/recovery
    outcome instead of declaring arbitrary future versions readable.
 
+#### Observed stable-to-draft compatibility — November 26, 2026
+
+**PASS for the exercised saved data.** Started the published npm release
+`openclaw@2026.11.10` (`6ea542fd97e2876aa4c871ccc494ed5419a03c5c`), then
+manually switched the stopped loopback Gateway to the exact draft source
+`23d1c727c5ec12230e232697e8ee8a6716d200ee` (tree
+`2881525aff8116d1e1e66ff834592f878975ab07`). The source diff from ClawSweeper's
+reviewed `56aef23a43ae` consists only of this experiment document. Both runs
+used the same isolated state, config, origin, and persistent browser profile.
+No provider credentials, audio capture, or inference were used.
+
+- Stable's `config set --batch-file` wrote `talk.speechLocale: en-NZ`,
+  `talk.interruptOnSpeech: false`, and `agents.defaults.userTimezone: Pacific/Auckland`.
+  Stable's `sessions.create` Gateway RPC created the synthetic session **Kestrel
+  launch notes**. In Chromium, selected Dark appearance and saved the unsent
+  text **Kestrel launch notes: check the aurora schedule.** on New Session.
+  Reloaded the stable UI and observed both values before the transition.
+- Stopped stable, ran `backup create --no-include-workspace --verify`, and
+  started the candidate with `pnpm openclaw gateway run --bind loopback --port …`.
+  Candidate `config validate --json` passed and the config SHA-256 was unchanged.
+  `config get` returned the exact timezone; `talk.config` returned the exact speech
+  locale and interruption setting; `sessions.describe` returned the original key,
+  ID, and label. `talk.catalog` remained unconfigured for transcription, with no
+  shared-vocabulary selection exposed. This was a catalog check, not a speech run.
+- Reopened the same Chromium profile against the candidate. Dark appearance
+  and the exact unsent draft reloaded; the draft was still editable. The
+  candidate's profile-backed preference RPC was not independently verified;
+  this assertion covers the loaded browser appearance. Both browser-fetched
+  entry modules matched their install's file bytes: stable SHA-256
+  `adb5cf16af7c96b6c34ab8d78211cb64b234170c648729cf6a36986584212fca`; candidate
+  `6e5d4fd57bebbd12a040a94e32f07968f8d4414ef629649b92a20ac818b1c9a9`.
+- Candidate `pnpm build` ran its Control UI build step (Node 24.22.3, pnpm
+  12.15.0); the UI budget report flagged largest CSS gzip (57.3 KiB versus 56.9 KiB)
+  and chat-boot requests (21 versus 20). Browser: Playwright 1.64.1 with
+  headless Chromium 156.0.8078.4 on Linux x64.
+
+**Not run:** Real-provider transcription (including ordinary feature-off speech),
+selected shared vocabulary and transcript recovery, direct downgrade, backup
+restoration, the managed updater, or CI for this evidence update. The published
+stable release has no identified shipped personal-dictionary store to seed;
+no invented personal-term rows were used. The separate personal-vocabulary
+proposal is [#205880](https://github.com/openclaw/openclaw/pull/205880). A verified
+stable backup is not a restore test or acceptance of a new storage format.
+
 ### Separate downgrade from baseline restoration
 
 A direct downgrade tests whether stable can open candidate-written state. Run it
@@ -701,9 +745,10 @@ result, and sanitized evidence. Label setup failures, product failures, missing
 controls, and unrun proof separately. Link actual behavior and upgrade results
 before claiming either review blocker is satisfied.
 
-Current disposition: the decision and procedures are documented. Owner acceptance,
-production selection/serialization, live provider/microphone/accessibility evidence,
-new-scope performance, and real stable-to-candidate compatibility remain pending.
+Current disposition: the exercised stable settings, session, and browser draft
+survived the manual transition. Owner acceptance, production selection and
+serialization, live provider/microphone/accessibility evidence, new-scope
+performance, and future personal-dictionary compatibility remain pending.
 The original wider criteria remain open.
 
 ## Source checkpoints for this revision
