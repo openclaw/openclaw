@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FailoverError } from "../agents/failover-error.js";
+import { IsolatedCompletionError } from "../agents/isolated-completion-output.js";
 import { runUtilityCompletion } from "../agents/utility-completion.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
@@ -49,7 +50,7 @@ afterEach(() => {
   setCurrentPluginMetadataSnapshot(undefined);
 });
 
-it.each(["exact tool cap", "invalid schema", "manifest alias"])(
+it.each(["exact tool cap", "invalid schema", "manifest alias", "isolated timeout"])(
   "warns once when %s failures disable observation, and retries on the next run",
   async (failure) => {
     const notices: AgentEventPayload[] = [];
@@ -64,9 +65,12 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
       }
       return preparedModel();
     });
-    const completeModel = vi.fn(async () =>
-      modelMessage({ headline: "Working", health: "on-track", planProgress: null }),
-    );
+    const completeModel = vi.fn(async () => {
+      if (failure === "isolated timeout") {
+        throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion timed out.");
+      }
+      return modelMessage({ headline: "Working", health: "on-track", planProgress: null });
+    });
     const harness = createHarness({
       prepareModel,
       completeModel,
@@ -100,7 +104,9 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
           data: {
             phase: "warning",
             message: expect.stringMatching(
-              /openai\/gpt-test.*choose a capable utility model.*utilityModel\.fallbacks/u,
+              failure === "isolated timeout"
+                ? /timed out.*chat continues/u
+                : /openai\/gpt-test.*choose a capable utility model.*utilityModel\.fallbacks/u,
             ),
           },
         },
@@ -301,18 +307,29 @@ it("aborts stuck completions at the cap and disables the run after two failures"
   const completeModel = completionAfter();
   const signal = (index: number) => completeModel.mock.calls[index]?.[0].abortSignal;
   const harness = createHarness({ completeModel });
-  await startAndAddToolNotes(harness.observer);
-  await advance(12_000);
-  await advance(29_999);
-  expect(signal(0)?.aborted).toBe(false);
-  await advance(1);
-  expect(signal(0)?.aborted).toBe(true);
-  expect(completeModel).toHaveBeenCalledTimes(2);
-  await advance(30_000);
-  expect(signal(1)?.aborted).toBe(true);
-  await advance(60_000);
-  expect(completeModel).toHaveBeenCalledTimes(2);
-  expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
+  const messages: unknown[] = [];
+  const unsubscribe = onAgentEvent((evt) => {
+    if (evt.stream === "notice") {
+      messages.push(evt.data.message);
+    }
+  });
+  try {
+    await startAndAddToolNotes(harness.observer);
+    await advance(12_000);
+    await advance(29_999);
+    expect(signal(0)?.aborted).toBe(false);
+    await advance(1);
+    expect(signal(0)?.aborted).toBe(true);
+    expect(completeModel).toHaveBeenCalledTimes(2);
+    await advance(30_000);
+    expect(signal(1)?.aborted).toBe(true);
+    await advance(60_000);
+    expect(completeModel).toHaveBeenCalledTimes(2);
+    expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
+    expect(messages).toEqual([expect.stringMatching(/timed out.*chat continues/u)]);
+  } finally {
+    unsubscribe();
+  }
 });
 
 it("budgets one model call per configured utility candidate", async () => {
