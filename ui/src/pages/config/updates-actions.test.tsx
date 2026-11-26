@@ -96,6 +96,48 @@ it("offers retry after rollback without telling the user to diagnose before retr
   expect(onUpdateNow).toHaveBeenCalledOnce();
 });
 
+it.each([false, true])(
+  "keeps precise failure recovery and only offers whole-update retry before core commit (%s)",
+  (committed) => {
+    const nextAction = committed ? "openclaw plugins reload brave codex" : "openclaw update";
+    const run = createUpdateRunFixture({
+      status: "failed",
+      phase: "finished",
+      reason: committed ? "plugin-activation-failed" : "activation-failed",
+      origin: { nextAction },
+      verification: {
+        booted: committed,
+        serviceRunning: committed,
+        coreReady: committed,
+        versionMatch: committed,
+        runningVersion: committed ? "2026.9.2" : "2026.9.1",
+      },
+      steps: [{ step: committed ? "plugins" : "activating", status: "failed" }],
+    });
+    const onUpdateNow = vi.fn(async () => {});
+    renderUpdates({
+      onUpdateNow,
+      gatewayVersion: committed ? "2026.9.2" : "2026.9.1",
+      update: { updateRun: run, reportableUpdateFailureId: run.runId },
+    });
+    const attempt = container;
+    const retry = [...attempt.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Retry update",
+    );
+    expect(Boolean(retry)).toBe(!committed);
+    expect(attempt.textContent).toContain(nextAction);
+    expect(attempt.textContent).toContain("Report update failure");
+    expect(attempt.textContent).toContain("Step details");
+    if (committed) {
+      expect(attempt.textContent).not.toContain("openclaw triage");
+      expect(onUpdateNow).not.toHaveBeenCalled();
+    } else {
+      retry!.click();
+      expect(onUpdateNow).toHaveBeenCalledOnce();
+    }
+  },
+);
+
 it("shows a failed confirmation load and retries the command", async () => {
   const onUpdateNow = vi
     .fn<() => Promise<void>>()

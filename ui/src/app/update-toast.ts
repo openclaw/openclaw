@@ -1,3 +1,5 @@
+import { renderUpdateRunSummary } from "../../../src/infra/update-run-notice.ts";
+import { hasCommittedUpdateRunCore } from "../../../src/infra/update-run-record.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { showToast, type ToastSeverity } from "../lib/toast.ts";
@@ -25,14 +27,21 @@ export function bindUpdateToast(
     registerUpdateActionsEnglish();
     const running = run.status === "running";
     const waiting = running && run.phase === "requested";
+    const committedCore = hasCommittedUpdateRunCore(run) && (running || run.status === "failed");
     const reconnecting = running && gateway.snapshot.phase !== "connected";
     const key = running ? (waiting ? "preparing" : "processing") : run.status;
-    const message = reconnecting ? t("updates.dialog.reconnecting") : t(`updates.run.toast.${key}`);
-    const description = reconnecting
-      ? t("updates.run.reconnecting")
-      : running && !waiting
-        ? t(`updates.run.phase.${run.phase}`)
-        : undefined;
+    const message = committedCore
+      ? renderUpdateRunSummary(run)
+      : reconnecting
+        ? t("updates.dialog.reconnecting")
+        : t(`updates.run.toast.${key}`);
+    const description = committedCore
+      ? undefined
+      : reconnecting
+        ? t("updates.run.reconnecting")
+        : running && !waiting
+          ? t(`updates.run.phase.${run.phase}`)
+          : undefined;
     const actionLabel = running ? undefined : t("updates.run.toast.details");
     const severity: ToastSeverity = running
       ? "progress"

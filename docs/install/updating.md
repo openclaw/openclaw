@@ -69,9 +69,10 @@ Managed start/restart keeps the selected release. Use
 `openclaw update --tag <version>` for an explicit downgrade. An explicit
 `--tag` or `--channel` remains your target selection instead of the npm package.
 
-Plugin maintenance failures are warnings, not failed core updates. Retry them
-with `openclaw plugins update --all`. An already-current installation still maintains
-plugins and restarts only when needed and restart was requested.
+Plugin maintenance cannot roll back a committed core update. If a required plugin
+step fails, the final update result is failed and names the version still serving,
+the failed step, and its exact recovery command. An already-current installation
+still maintains plugins and restarts only when needed and restart was requested.
 
 Older installed updaters still perform their first hop with their shipped update
 flow. The compatibility and recovery details below also cover those older
@@ -154,16 +155,25 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    After activation of a modern launcher trial, only the Gateway that is ready settles the run
    from the launcher trial and preparation lock. A published trial takes precedence
    over an expired lock for the same run. Only a Gateway that runs the target build
-   records success; restored files alone do not prove that the previous Gateway
-   is serving. Startup does not infer a failed update from PID reuse or uptime.
-7. After success is recorded, the serving release runs advisory Doctor inspections
+   records the target core as committed and serving. The aggregate run finishes
+   once required plugin work settles; a failed step cannot produce a successful
+   result. Restored files alone do not prove that the previous Gateway is serving.
+   Startup does not infer a failed update from PID reuse or uptime.
+7. After the aggregate result is recorded, the serving release runs advisory Doctor inspections
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
    completion, fail the update, or trigger rollback.
 8. The serving release updates installed plugins in the background, then reloads
-   changed plugins through the existing runtime lifecycle. Plugin failures appear
-   in the same update details and warning count; they never fail the core update
-   or trigger rollback.
+   changed plugins through the existing runtime lifecycle. The CLI returns when
+   the new core is serving and says when plugin activation is still running;
+   it does not wait for background maintenance or claim terminal success early.
+   `openclaw update status` and the final outcome notice show the aggregate result.
+   A failed plugin step does not stop the serving core or retry the whole update.
+
+The temporary compatibility path for explicit `--accept-capabilities` through an
+older Gateway waits for plugin settlement before its existing consent follow-up.
+Normal updates and Gateways that accept the consent field use the early serving-core
+result; no additional background continuation or notification replay is created.
 
 Once the resident launcher owns an installation, `gateway install` keeps that
 state directory's selected launcher as its service entry, including before the

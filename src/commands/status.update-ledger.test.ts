@@ -60,12 +60,14 @@ function recordRun(params: {
   before?: UpdateRunRecord["before"];
   after?: UpdateRunRecord["after"];
   verification?: UpdateRunRecord["verification"];
+  origin?: UpdateRunRecord["origin"];
 }) {
   now += 1000;
   const run = createUpdateRun({
     trigger: "cli",
     target: params.target ?? { kind: "git" },
     before: params.before,
+    origin: params.origin,
   });
   if (params.after) {
     recordUpdateRunPhase(run.runId, "verifying", { after: params.after });
@@ -107,6 +109,36 @@ const recovered = (identity: {
 });
 
 describe("status update ledger evidence", () => {
+  it.each([
+    ["committed", {}, true],
+    ["incomplete", { coreReady: false }, false],
+    ["rollback", { rollbackOutcome: { status: "failed", reason: "restore failed" } }, false],
+  ] as const)("keeps precise plugin recovery for %s core", async (_name, patch, committed) => {
+    const action = "Run `openclaw plugins update --all`.";
+    recordRun({
+      status: "failed",
+      reason: "plugin-failed",
+      target,
+      after: candidate,
+      origin: { nextAction: action },
+      verification: { ...observed(candidate, true), booted: true, coreReady: true, ...patch },
+      steps: [{ step: "plugins", status: "failed", detail: "Plugin update failed" }],
+    });
+    const rows = await buildStatusUpdateRows(null, {
+      localGatewayHealthy: true,
+      gatewayServer: candidate,
+    });
+    const text = rows[0]?.Value;
+    if (committed) {
+      expect(text).toContain("core committed; 2026.9.7 is serving. Failed step: plugins.");
+      expect(text).toContain(`Next: ${action}`);
+      expect(text).not.toContain("run `openclaw update`");
+    } else {
+      expect(text).not.toContain("core committed");
+      expect(text).toContain("run `openclaw update`");
+    }
+  });
+
   it.each`
     name                                                                 | params                                                                                                                                                                                   | server                                       | historical | detail                                                                                                                          | healthy
     ${"old healthy version after a failed swap"}                         | ${{ after: { version: "2026.9.6" }, verification: observed({ version: "2026.9.6" }, false) }}                                                                                            | ${{ version: "2026.9.6" }}                   | ${false}   | ${"Gateway is still serving 2026.9.6; the update to 2026.9.7 did not complete — run `openclaw update`."}                        | ${true}

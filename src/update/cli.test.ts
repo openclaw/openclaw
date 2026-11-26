@@ -10,6 +10,7 @@ import type { CallGatewayOptions } from "../gateway/call-options.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
 import * as updateRunReader from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../infra/update-run-record.test-support.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import * as stateDatabaseCache from "../state/openclaw-state-db-cache.js";
@@ -50,7 +51,8 @@ const packageTarget = vi.hoisted(() => ({ version: "" }));
 const confirmDowngrade = vi.hoisted(() =>
   vi.fn<() => Promise<"confirmed" | "cancelled" | "confirmation-required">>(),
 );
-const createRun = vi.hoisted(() => vi.fn(async () => ({ runId: "run-cli" })));
+const gatewayRunId = vi.hoisted(() => "e901d247-3929-4f73-94ef-0e54efbcfb73");
+const createRun = vi.hoisted(() => vi.fn(async () => ({ runId: gatewayRunId })));
 const mutateConfig = vi.hoisted(() => vi.fn());
 vi.mock("../config/mutate.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfigMutate>()),
@@ -103,16 +105,14 @@ vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
 }));
 vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-reader.js")>()),
-  getUpdateRunAsync: async () => ({
-    ...localRun,
-    before: { version: "2026.11.8" },
-    runId: "run-cli",
-    reason: "already-current",
-    steps: [],
-    after: {},
-  }),
+  getUpdateRunAsync: async () =>
+    createUpdateRunRecordFixture(gatewayRunId, {
+      ...localRun,
+      before: { version: "2026.11.8" },
+      reason: "already-current",
+    }),
 }));
-const runsGet = vi.hoisted(() => [] as Array<() => unknown>);
+const runsGet = vi.hoisted(() => [] as Array<() => { run: Partial<UpdateRunRecord> | null }>);
 vi.mock("../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: async (request: CallGatewayOptions) => {
@@ -139,11 +139,12 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
       request.assertDispatchCurrent?.();
       sent.push(structuredClone(request.params));
       return runsGet.length
-        ? { runId: "run-1", ok: true }
+        ? { runId: gatewayRunId, ok: true }
         : { runId: null, ok: false, message: "refused for the test" };
     }
     if (request.method === "update.runs.get" && runsGet.length) {
-      return runsGet.shift()!();
+      const { run } = runsGet.shift()!();
+      return { run: run ? createUpdateRunRecordFixture(gatewayRunId, run) : null };
     }
     throw new Error(`unexpected ${request.method}`);
   },
@@ -316,6 +317,53 @@ it("leaves kept-runtime lines to the cleanup owner's log", async () => {
   expect(log.mock.calls.map(([line]) => line)).toEqual([removed, "Already up to date."]);
 });
 
+it.each([false, true])(
+  "returns on committed-core facts without waiting for background plugins (json=%s)",
+  async (json) => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    runsGet.push(
+      () => ({
+        run: {
+          status: "running",
+          phase: "verifying",
+          finishedAtMs: null,
+          after: { version: "2.0.0", buildId: "new-build" },
+          verification: {
+            booted: true,
+            serviceRunning: true,
+            coreReady: true,
+            versionMatch: true,
+            runningVersion: "2.0.0",
+            runningBuildId: "new-build",
+          },
+          steps: [{ step: "plugins", status: "in_progress" }],
+        },
+      }),
+      () => {
+        throw new Error("The CLI waited for background plugin completion");
+      },
+    );
+    await runReleaseUpdateCli({ json, restart: true, runningRoot: root });
+    expect(runsGet).toHaveLength(1);
+    expect(process.exitCode).toBe(0);
+    expect(error).not.toHaveBeenCalled();
+    if (json) {
+      expect(output).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "running", finishedAtMs: null }),
+      );
+    } else {
+      expect(log.mock.calls.flat().join("\n")).toContain("2.0.0 is installed and serving");
+      expect(log.mock.calls.flat().join("\n")).toContain(
+        "Plugin activation continues in the background",
+      );
+      expect(log.mock.calls.flat().join("\n")).toContain("openclaw update status");
+      expect(log.mock.calls.flat().join("\n")).not.toContain("Updated to");
+    }
+  },
+);
+
 it("says the update is still running when the --timeout budget ends first", async () => {
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -381,28 +429,54 @@ it.each([undefined, "beta"] as const)(
   },
 );
 
-it("updates an older Gateway before applying capability consent through its replacement", async () => {
-  capabilities.push(false, true);
-  runsGet.push(
-    () => ({ run: { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} } }),
-    () => ({ run: { status: "skipped", phase: "finished", steps: [], after: {}, origin: {} } }),
-  );
-  await runReleaseUpdateCli({
-    json: true,
-    restart: true,
-    runningRoot: root,
-    acceptCapabilities: true,
-  });
-  expect(sent).toEqual([
-    {},
-    {
-      checkout: { gitCommonDir: await fs.realpath(path.join(root, ".git")) },
-      acceptCapabilities: true,
-    },
-  ]);
-  expect(prepared).toEqual([]);
-  expect(process.exitCode).toBe(0);
-});
+it.each(["succeeded", "failed"] as const)(
+  "keeps the old-Gateway consent bridge terminal-only after committed core (%s)",
+  async (status) => {
+    capabilities.push(false, true);
+    const entered = Promise.withResolvers<void>();
+    const verification = {
+      booted: true,
+      serviceRunning: true,
+      coreReady: true,
+      versionMatch: true,
+      runningVersion: "2.0.0",
+    };
+    runsGet.push(
+      () => {
+        entered.resolve();
+        return {
+          run: { status: "running", phase: "verifying", verification, finishedAtMs: null },
+        };
+      },
+      () => ({ run: { status, phase: "finished", verification } }),
+      () => ({ run: { status: "skipped", phase: "finished" } }),
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const updating = runReleaseUpdateCli({
+        json: true,
+        restart: true,
+        runningRoot: root,
+        acceptCapabilities: true,
+      });
+      await entered.promise;
+      expect(sent).toEqual([{}]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await updating;
+      expect(sent).toEqual([
+        {},
+        {
+          checkout: { gitCommonDir: await fs.realpath(path.join(root, ".git")) },
+          acceptCapabilities: true,
+        },
+      ]);
+      expect(prepared).toEqual([]);
+      expect(process.exitCode).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
 
 it("does not claim consent was applied when the replacement Gateway still lacks support", async () => {
   capabilities.push(false, false);
@@ -490,7 +564,7 @@ it("restarts the local Gateway after preparing an explicit package tag and follo
   const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   runsGet.push(() => ({
     run: {
-      runId: "run-cli",
+      runId: gatewayRunId,
       status: "succeeded",
       phase: "finished",
       steps: [],

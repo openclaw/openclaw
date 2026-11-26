@@ -1,5 +1,5 @@
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
+import { hasCommittedUpdateRunCore, type UpdateRunRecord } from "./update-run-record.js";
 
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type NoticeRun = Pick<UpdateRunRecord, "status" | "reason"> &
@@ -63,6 +63,23 @@ export function renderUpdateRunSummary(
   const nextStep = options.manualCommand
     ? `Open Settings → Updates in the OpenClaw app for details. To continue, run \`${options.manualCommand}\` in your terminal.`
     : "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.";
+  if (run.verification && hasCommittedUpdateRunCore({ verification: run.verification })) {
+    const serving = run.verification.runningVersion ?? "the installed version";
+    if (run.status === "running") {
+      return [
+        `⬆️ OpenClaw core committed; ${serving} is installed and serving.`,
+        "Plugin activation continues in the background. Run `openclaw update status` for the final result and final notice.",
+      ].join("\n");
+    }
+    const failedStep = run.steps?.findLast((step) => step.status === "failed");
+    if (run.status === "failed" && failedStep) {
+      return [
+        `⚠️ OpenClaw core committed; ${serving} is serving.`,
+        `Failed step: ${failedStep.step}.`,
+        run.origin?.nextAction ? `Next: ${run.origin.nextAction}` : nextStep,
+      ].join("\n");
+    }
+  }
   if (run.status === "failed" && run.steps) {
     const phase =
       run.steps.findLast(
@@ -109,6 +126,16 @@ export function renderUpdateRunSummary(
 /** Only this renderer's terminal summaries may settle an earlier completion. */
 export function isUpdateRunTerminalNoticeText(text: string): boolean {
   const lines = text.split("\n");
+  if (
+    /^⚠️ OpenClaw core committed; .+ is serving\.$/u.test(lines[0] ?? "") &&
+    /^Failed step: .+\.$/u.test(lines[1] ?? "") &&
+    (lines.slice(2).join("\n").startsWith("Next: ") ||
+      (lines.length === 3 &&
+        lines[2] ===
+          "For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal."))
+  ) {
+    return true;
+  }
   if (lines[0] === UPDATE_RUN_HEADLINES.get("failed") && lines.length >= 3 && lines.length <= 4) {
     const failure = (lines.length === 4 ? lines[2] : lines[1]) ?? "";
     if (

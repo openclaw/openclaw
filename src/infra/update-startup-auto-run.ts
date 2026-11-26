@@ -16,7 +16,7 @@ import type { TrackedDevUpdateTarget } from "./update-dev-target.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import { getUpdateRunAsync as getUpdateRun, listUpdateRunsAsync } from "./update-run-reader.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
+import { hasCommittedUpdateRunCore, type UpdateRunRecord } from "./update-run-record.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { AUTO_UPDATE_STEP_TIMEOUT_MS } from "./update-run-timeouts.js";
 import {
@@ -130,6 +130,7 @@ function activationFailureSignature(run: UpdateRunRecord): string | undefined {
   // A failed activation usually restores the previous release, which records `rolled-back`.
   if (
     run.trigger !== "campaign" ||
+    hasCommittedUpdateRunCore(run) ||
     (run.status !== "failed" && run.status !== "rolled-back") ||
     !run.reason
   ) {
@@ -215,6 +216,7 @@ export async function runCampaignUpdate(params: {
   // success, or an intervening operator run breaks the streak without another state store.
   const failureClass = (run: UpdateRunRecord) =>
     run.trigger === "campaign" &&
+    !hasCommittedUpdateRunCore(run) &&
     (run.status === "failed" || run.status === "rolled-back") &&
     run.target.channel === params.channel &&
     (params.mode === "git" ? run.target.sha : run.target.version) === params.version

@@ -51,7 +51,7 @@ export function registerAlreadyCurrentUpdateTests() {
         exitCode: 0,
       },
       {
-        name: "a plugin failure without failing the core update",
+        name: "a required plugin failure without replacing the current core",
         result: pluginResult({ status: "error", reason: "fixture plugin update failed" }),
         changed: false,
         detail: "fixture plugin update failed\nRun `openclaw plugins update --all` to retry.",
@@ -112,7 +112,15 @@ export function registerAlreadyCurrentUpdateTests() {
           ...(expected.changed ? ["--accept-capabilities"] : []),
         ]);
         const record = await getUpdateRunAsync(run.runId);
-        expect(record).toMatchObject({ status: "skipped", reason: "already-current" });
+        expect(record).toMatchObject(
+          expected.result.status === "error"
+            ? {
+                status: "failed",
+                reason: "plugins",
+                origin: { nextAction: "openclaw plugins update --all" },
+              }
+            : { status: "skipped", reason: "already-current" },
+        );
         const plugins = record?.steps.find(({ step }) => step === "plugins");
         expect(plugins?.status).toBe(expected.result.status === "error" ? "failed" : "completed");
         expect(plugins?.detail).toBe(expected.detail);

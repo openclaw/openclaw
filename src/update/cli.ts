@@ -22,8 +22,9 @@ import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
+import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
-import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { hasCommittedUpdateRunCore, type UpdateRunRecord } from "../infra/update-run-record.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -310,15 +311,18 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
   let record = request
     ? await followRun(
         request.runId,
-        opts.json,
+        opts,
         Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
+        request,
       )
     : await updateWithoutGateway({ ...opts, timeoutMs });
   if (
     request &&
     !request.supportsConsent &&
     opts.acceptCapabilities &&
-    (record?.status === "succeeded" || record?.status === "skipped")
+    (record?.status === "succeeded" ||
+      record?.status === "skipped" ||
+      (record?.status === "failed" && hasCommittedUpdateRunCore(record)))
   ) {
     // Shipped Gateways reject unknown fields. Update once with the old request, then
     // apply consent through the now-new Gateway's existing already-current/plugin path.
@@ -326,8 +330,9 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     record = retry
       ? await followRun(
           retry.runId,
-          opts.json,
+          opts,
           Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
+          retry,
         )
       : record;
   }
@@ -343,7 +348,7 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     const releaseAdmission = opts.json ? record.origin.releaseAdmission : undefined;
     record = await followRun(
       record.runId,
-      opts.json,
+      opts,
       Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
     );
     // The local preparer recorded admission; the Gateway follow-up carries only wire fields.
@@ -353,7 +358,10 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
   }
   report(record, opts.json);
   process.exitCode =
-    record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
+    record?.status === "succeeded" ||
+    record?.status === "skipped" ||
+    (record?.status === "running" && hasCommittedUpdateRunCore(record)) ||
+    isPendingActivation(record)
       ? 0
       : 1;
 }
@@ -483,8 +491,9 @@ async function requestGatewayUpdate(
 /** The Gateway restarts during a run; until the deadline, its unavailability is expected. */
 async function followRun(
   runId: string,
-  json: boolean,
+  opts: Pick<ReleaseUpdateOptions, "json" | "acceptCapabilities">,
   budgetMs: number,
+  request?: { supportsConsent: boolean },
 ): Promise<UpdateRunRecord | undefined> {
   const deadline = Date.now() + budgetMs;
   let lastLine = "";
@@ -513,11 +522,15 @@ async function followRun(
     if (record) {
       const step = record.steps.at(-1)?.step ?? record.phase;
       const line = `${record.phase}: ${step}`;
-      if (!json && line !== lastLine) {
+      if (!opts.json && line !== lastLine) {
         defaultRuntime.log(line);
         lastLine = line;
       }
-      if (record.status !== "running") {
+      if (
+        record.status !== "running" ||
+        ((!opts.acceptCapabilities || request?.supportsConsent !== false) &&
+          hasCommittedUpdateRunCore(record))
+      ) {
         return record;
       }
     }
@@ -579,6 +592,19 @@ function updateFailure(record: UpdateRunRecord | undefined): string | undefined 
 function report(record: UpdateRunRecord | undefined, json: boolean) {
   if (json) {
     defaultRuntime.writeJson(record ?? { status: "unknown" });
+    return;
+  }
+  if (
+    record &&
+    (record.status === "running" || record.status === "failed") &&
+    hasCommittedUpdateRunCore(record)
+  ) {
+    const summary = renderUpdateRunSummary(record);
+    if (record.status === "failed") {
+      defaultRuntime.error(summary);
+    } else {
+      defaultRuntime.log(summary);
+    }
     return;
   }
   // The CLI stopped following before the run finished (its --timeout budget); the run goes on.

@@ -200,6 +200,31 @@ export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): strin
   ];
 }
 
+/** Supplemental failures need attention without regrading a saved core outcome. */
+export function formatUpdateRunAttention(
+  steps: readonly UpdateRunStep[],
+  warningCount: number,
+  phases: ReadonlySet<string>,
+): string {
+  let attentionCount = warningCount;
+  for (const step of steps) {
+    if (step.status !== "failed" || phases.has(step.step)) {
+      continue;
+    }
+    const warningStep = `warning:${step.step}`;
+    const warned = steps.some(
+      (warning) =>
+        warning.step === warningStep && warning.status === "completed" && Boolean(warning.detail),
+    );
+    if (!warned) {
+      attentionCount++;
+    }
+  }
+  return attentionCount > 0
+    ? `; ${attentionCount} warning${attentionCount === 1 ? " needs" : "s need"} attention`
+    : "";
+}
+
 /** Shared bounded receipt for history and rollback-readable diagnostics. */
 export function formatUpdateDoctorLintReceipt(
   step: Pick<

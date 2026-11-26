@@ -843,20 +843,66 @@ it.each<[string | null, string[], string]>([
   expectChatBudget(report.markdown);
 });
 
+it.each([
+  ["committed", {}, true],
+  ["incomplete", { booted: false }, false],
+  ["rollback", { rollbackOutcome: { status: "failed", reason: "restore failed" } }, false],
+] as const)("reports %s core and exact failed-step recovery", (_name, patch, committed) => {
+  const action = `Run \`openclaw plugins reload ${Array.from({ length: 120 }, (_, index) => `plugin-${index}`).join(" ")}\`.`;
+  const report = render({
+    status: "failed",
+    reason: "plugin-failed",
+    verification: {
+      booted: true,
+      serviceRunning: true,
+      coreReady: true,
+      versionMatch: true,
+      runningVersion: "2026.9.2",
+      ...patch,
+    },
+    origin: { nextAction: action, doctorHint: "Run openclaw doctor" },
+    steps: [failedStep("plugins", { detail: "diagnostic ".repeat(400) })],
+  });
+  if (committed) {
+    expect(report.headline).toBe(
+      "⚠️ OpenClaw core committed; 2026.9.2 is serving. Failed step: plugins.",
+    );
+    expect(report.markdown.endsWith(action)).toBe(true);
+    expect(report.lines).toContain(action);
+    expect(report.markdown).not.toContain("Historical recovery advice");
+    expect(report.markdown).not.toContain("Run openclaw doctor");
+    expect(report.markdown).not.toContain("triage");
+  } else {
+    expect(report.headline).toBe("⚠️ OpenClaw update failed: plugin-failed.");
+  }
+  expect(report.lines.join("\n")).toContain("Failed: plugins");
+});
+
+it("reports serving core while required plugins remain pending", () => {
+  const report = render({
+    status: "running",
+    phase: "verifying",
+    verification: {
+      booted: true,
+      serviceRunning: true,
+      coreReady: true,
+      versionMatch: true,
+      runningVersion: "2026.9.2",
+    },
+    steps: [{ step: "plugins", status: "in_progress" }],
+  });
+  expect(report.headline).toBe(
+    "⬆️ OpenClaw update in progress: core committed; 2026.9.2 is installed and serving. Plugin activation continues in the background. Run `openclaw update status` for the final result and final notice.",
+  );
+  expect(report.markdown).not.toContain("✅");
+});
+
 it.each<[UpdateRunRecord["status"], string | null, string, Step[]?]>([
   [
     "succeeded",
     null,
     "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1); 1 warning needs attention.",
-  ],
-  [
-    "succeeded",
-    null,
-    "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1); 1 warning needs attention.",
-    [
-      failedStep("plugins"),
-      { step: "warning:plugins", status: "completed", detail: "Plugin maintenance needs a retry." },
-    ],
+    [{ step: "warning:doctor", status: "completed", detail: "Doctor maintenance is advisory." }],
   ],
   ["running", null, "⬆️ OpenClaw update in progress: verifying."],
   ["skipped", null, "ℹ️ OpenClaw update skipped: unknown reason."],

@@ -25,6 +25,7 @@ import { resolveUpdateRunVerifiedServingVersion } from "./update-run-notice.js";
 import { formatUpdateRunOmittedSteps } from "./update-run-omission.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "./update-run-owed-step.js";
 import {
+  hasCommittedUpdateRunCore,
   isAcknowledgedAbandonedUpdateRun,
   isUpdateRepairRun,
   UPDATE_RUN_REPAIRED_STEP,
@@ -32,7 +33,11 @@ import {
 } from "./update-run-record.js";
 import { prependUpdateRunCause } from "./update-run-report-cause.js";
 import type { UpdateRunReportHealth } from "./update-run-report-health.js";
-import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
+import {
+  formatUpdateRunAttention,
+  updateRunStepsFromResultStep,
+  updateRunWarningMessages,
+} from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 import { formatUpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
@@ -176,6 +181,9 @@ function formatUpdateVersion(identity: UpdateRunRecord["after"]): string | undef
 }
 
 function recoveryHints(run: ReportInput, nextAction?: string): string[] {
+  if (hasCommittedUpdateRunCore(run) && run.steps.some((step) => step.status === "failed")) {
+    return [];
+  }
   if (run.target?.installationMethod === "ocm") {
     return nextAction ? [] : run.origin.nextAction ? [run.origin.nextAction] : [];
   }
@@ -244,11 +252,17 @@ export function renderUpdateRunReport(
   } = {},
 ): UpdateRunReport {
   const repairRun = isUpdateRepairRun(run);
+  const committedCore = hasCommittedUpdateRunCore(run);
+  const committedFailure =
+    run.status === "failed" && committedCore
+      ? run.steps.findLast((step) => step.status === "failed")
+      : undefined;
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
   const currentHealth: UpdateRunReportHealth | undefined =
     opts.currentHealth ??
     (run.target?.installationMethod !== "ocm" &&
     run.status !== "running" &&
+    !committedFailure &&
     opts.nextAction === undefined &&
     run.origin.nextAction
       ? { kind: "unavailable" }
@@ -300,27 +314,7 @@ export function renderUpdateRunReport(
   let headline: string;
   switch (run.status) {
     case "succeeded": {
-      // Supplemental failures need attention without changing a successful core outcome.
-      let attentionCount = warnings.length;
-      for (const step of run.steps) {
-        if (step.status !== "failed" || PHASES.has(step.step)) {
-          continue;
-        }
-        const warningStep = `warning:${step.step}`;
-        const warned = run.steps.some(
-          (warning) =>
-            warning.step === warningStep &&
-            warning.status === "completed" &&
-            Boolean(warning.detail),
-        );
-        if (!warned) {
-          attentionCount++;
-        }
-      }
-      const attention =
-        attentionCount > 0
-          ? `; ${attentionCount} warning${attentionCount === 1 ? " needs" : "s need"} attention`
-          : "";
+      const attention = formatUpdateRunAttention(run.steps, warnings.length, PHASES);
       headline = repairRun
         ? `✅ OpenClaw repair completed${after ? ` for ${after}` : ""}${attention}.`
         : after
@@ -331,13 +325,15 @@ export function renderUpdateRunReport(
     case "failed":
       headline = reconciled
         ? "ℹ️ OpenClaw abandoned update reconciled."
-        : run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON
-          ? `ℹ️ OpenClaw update abandoned: ${reason}.`
-          : refusalLine
-            ? `⚠️ ${refusalLine}`
-            : runtimeCheckFailed
-              ? "⚠️ OpenClaw could not complete the update. A required system check failed."
-              : `⚠️ OpenClaw ${run.reason === "repair-failed" || repairRun ? "repair" : "update"} failed: ${reason}.`;
+        : committedFailure
+          ? `⚠️ OpenClaw core committed; ${run.verification.runningVersion ?? run.after.version ?? "the installed version"} is serving. Failed step: ${committedFailure.step}.`
+          : run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON
+            ? `ℹ️ OpenClaw update abandoned: ${reason}.`
+            : refusalLine
+              ? `⚠️ ${refusalLine}`
+              : runtimeCheckFailed
+                ? "⚠️ OpenClaw could not complete the update. A required system check failed."
+                : `⚠️ OpenClaw ${run.reason === "repair-failed" || repairRun ? "repair" : "update"} failed: ${reason}.`;
       break;
     case "skipped":
       headline =
@@ -353,7 +349,9 @@ export function renderUpdateRunReport(
       headline = `↩️ OpenClaw update rolled back to ${after ?? running ?? before ?? "the previous version"}: ${reason}.`;
       break;
     case "running":
-      headline = `${IN_PROGRESS_REPORT_PREFIX}${run.target?.installationMethod === "ocm" ? "managed by OCM" : run.phase}.`;
+      headline = committedCore
+        ? `${IN_PROGRESS_REPORT_PREFIX}core committed; ${run.verification.runningVersion ?? run.after.version ?? "the installed version"} is installed and serving. Plugin activation continues in the background. Run \`openclaw update status\` for the final result and final notice.`
+        : `${IN_PROGRESS_REPORT_PREFIX}${run.target?.installationMethod === "ocm" ? "managed by OCM" : run.phase}.`;
       break;
   }
   headline = bounded(headline, 500);
@@ -369,7 +367,9 @@ export function renderUpdateRunReport(
     currentHealth &&
     (currentHealth.kind === "responding" ||
       run.verification.rollbackOutcome?.status !== "succeeded") &&
-    (runtimeVerificationRecovered || (!run.origin.nextAction && !opts.nextAction))
+    (committedFailure ||
+      runtimeVerificationRecovered ||
+      (!run.origin.nextAction && !opts.nextAction))
   ) {
     lines.push(formatUpdateRunCurrentHealth(currentHealth));
     if (runtimeVerificationRecovered) {
@@ -540,11 +540,14 @@ export function renderUpdateRunReport(
       ? UPDATE_INSTALL_SKIP_GUIDANCE[run.reason]
       : undefined;
   const savedAction =
-    opts.nextAction ??
+    (committedFailure ? run.origin.nextAction : opts.nextAction) ??
     (runtimeVerificationRecovered ? undefined : run.origin.nextAction) ??
     skipGuidance;
   const nextAction =
-    savedAction && currentHealth && run.verification.rollbackOutcome?.status !== "succeeded"
+    savedAction &&
+    currentHealth &&
+    !committedFailure &&
+    run.verification.rollbackOutcome?.status !== "succeeded"
       ? `${formatUpdateRunCurrentHealth(currentHealth)} ${
           currentHealth.kind === "responding"
             ? "This observation supersedes saved claims that the Gateway is stopped; other recovery constraints still apply. The recorded update outcome is unchanged."
@@ -566,26 +569,30 @@ export function renderUpdateRunReport(
           ? "Doctor could not promote config changes. Review the named keys and writer refusal before continuing recovery."
           : "Doctor could not promote config changes. Review the named keys and writer refusal, then run openclaw doctor --fix under your own authority, or openclaw triage."
         : undefined;
-  const hints = reconciled
-    ? []
-    : run.status === "running"
-      ? opts.nextAction
-        ? [opts.nextAction]
-        : recoveryHints(run)
-      : repairHint
-        ? [repairHint, ...(nextAction ? [nextAction] : [])]
-        : [
-            ...new Set(
-              [
-                // Install ownership refusals need the deployment workflow, not Doctor repair.
-                skipGuidance
-                  ? undefined
-                  : (opts.doctorHint ?? facts.doctorHint ?? run.origin.doctorHint),
-                ...recoveryHints(run, nextAction),
-                nextAction,
-              ].filter((line): line is string => Boolean(line)),
-            ),
-          ];
+  const hints = committedFailure
+    ? nextAction
+      ? [nextAction]
+      : []
+    : reconciled
+      ? []
+      : run.status === "running"
+        ? opts.nextAction
+          ? [opts.nextAction]
+          : recoveryHints(run)
+        : repairHint
+          ? [repairHint, ...(nextAction ? [nextAction] : [])]
+          : [
+              ...new Set(
+                [
+                  // Install ownership refusals need the deployment workflow, not Doctor repair.
+                  skipGuidance
+                    ? undefined
+                    : (opts.doctorHint ?? facts.doctorHint ?? run.origin.doctorHint),
+                  ...recoveryHints(run, nextAction),
+                  nextAction,
+                ].filter((line): line is string => Boolean(line)),
+              ),
+            ];
   prependUpdateRunCause(run, lines);
   const repairedDetail = run.steps.find((step) => step.step === UPDATE_RUN_REPAIRED_STEP)?.detail;
   const repaired = repairedDetail ? [`Repaired update: ${repairedDetail}`] : [];
@@ -629,7 +636,7 @@ export function renderUpdateRunReport(
   }
   lines.push(...hints);
   const body = [headline, ...lines.filter((line) => line !== next)].join("\n");
-  const suffix = next ? `\n${bounded(next, 1100)}` : "";
+  const suffix = next ? `\n${committedFailure ? next : bounded(next, 1100)}` : "";
   return { headline, lines, markdown: `${bounded(body, markdownLimit - suffix.length)}${suffix}` };
 }
 

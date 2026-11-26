@@ -120,6 +120,19 @@ export function isUpdateRepairRun(run: Pick<UpdateRunRecord, "steps">): boolean 
   return steps.has("repairing") && !steps.has("staging") && !steps.has("validating");
 }
 
+/** The target core is serving; aggregate maintenance may still be running or failed. */
+export function hasCommittedUpdateRunCore(run: Pick<UpdateRunRecord, "verification">): boolean {
+  const { verification } = run;
+  return (
+    verification.booted === true &&
+    verification.serviceRunning === true &&
+    verification.coreReady === true &&
+    verification.versionMatch === true &&
+    !verification.rollbackOutcome &&
+    !verification.recovery?.packageRollbackVerified
+  );
+}
+
 /** Operational captures and in-memory recovery fields are outside the public run schema. */
 export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecord {
   const origin = { ...record.origin };

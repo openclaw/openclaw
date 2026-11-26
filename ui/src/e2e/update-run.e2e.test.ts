@@ -133,9 +133,57 @@ suite.define(() => {
           path: path.join(suite.artifactDir, "update-toast-failed.png"),
           animations: "disabled",
         });
+        const serving = {
+          ...running,
+          runId: "b4903c19-6636-45b1-9533-ddfd6a969e21",
+          createdAtMs: failed.updatedAtMs + 1,
+          phase: "verifying",
+          verification: {
+            booted: true,
+            serviceRunning: true,
+            coreReady: true,
+            versionMatch: true,
+            runningVersion: "2.0.0",
+          },
+          steps: [{ step: "plugins", status: "in_progress" }],
+          updatedAtMs: failed.updatedAtMs + 2,
+        } as const;
+        await gateway.setMethodResponse("update.runs.get", { run: serving });
+        await gateway.setMethodResponse("update.status", { activeRun: serving, lastRun: failed });
+        await gateway.emitGatewayEvent("update.run.changed", serving);
+        await toast
+          .getByText("OpenClaw update failed", { exact: true })
+          .waitFor({ state: "detached" });
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "update-toast-core-serving.png"),
+          animations: "disabled",
+        });
+        await toast.getByText(/2\.0\.0 is installed and serving/).waitFor();
+        await toast.getByText(/Plugin activation continues in the background/).waitFor();
+        expect(await toast.count()).toBe(1);
+        const pluginFailed = {
+          ...serving,
+          phase: "finished",
+          status: "failed",
+          reason: "plugin-activation-failed",
+          origin: { ...serving.origin, nextAction: "openclaw plugins reload brave codex" },
+          steps: [{ step: "plugins", status: "failed" }],
+          updatedAtMs: serving.updatedAtMs + 1,
+        } as const;
+        await gateway.setMethodResponse("update.runs.get", { run: pluginFailed });
+        await gateway.setMethodResponse("update.status", { lastRun: pluginFailed });
+        await gateway.emitGatewayEvent("update.run.changed", pluginFailed);
+        await toast.getByText(/core committed; 2\.0\.0 is serving/).waitFor();
+        await toast.getByText(/Failed step: plugins\./).waitFor();
+        await toast.getByText(/openclaw plugins reload brave codex/).waitFor();
+        expect(await toast.count()).toBe(1);
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "update-toast-plugin-failed.png"),
+          animations: "disabled",
+        });
         await page.clock.install();
         await page.clock.fastForward(60_000);
-        await toast.getByText("OpenClaw update failed").waitFor();
+        await toast.getByText(/openclaw plugins reload brave codex/).waitFor();
         await toast.getByRole("button", { name: "Dismiss" }).click();
         await toast.waitFor({ state: "detached" });
         await page.goto(`${suite.server.baseUrl}settings/updates`);

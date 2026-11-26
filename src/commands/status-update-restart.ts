@@ -4,7 +4,10 @@ import type { GatewayProbeServerSummary } from "../gateway/probe.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { projectUpdateRunHistory } from "../infra/update-run-history-projection.js";
 import { getUpdateRun, getUpdateRunAsync } from "../infra/update-run-ledger.js";
-import { isAcknowledgedAbandonedUpdateRun } from "../infra/update-run-record.js";
+import {
+  hasCommittedUpdateRunCore,
+  isAcknowledgedAbandonedUpdateRun,
+} from "../infra/update-run-record.js";
 import {
   renderUpdateRunReport,
   resolveUpdateRunIdentity,
@@ -27,6 +30,10 @@ function renderStatusReport(
 ) {
   const report = renderUpdateRunReport(run);
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
+  const committedFailure =
+    run.status === "failed" &&
+    hasCommittedUpdateRunCore(run) &&
+    run.steps.some((step) => step.status === "failed");
   const history =
     !reconciled && opts.localGatewayHealthy
       ? projectUpdateRunHistory(run, opts.gatewayServer)
@@ -84,10 +91,13 @@ function renderStatusReport(
           .find((fact) => fact.message)?.message
       : undefined;
   let headline = message ? `${report.headline} ${message}` : report.headline;
+  if (committedFailure && run.origin.nextAction) {
+    headline += `\nNext: ${run.origin.nextAction}`;
+  }
   const label = (value: string) => sanitizeTerminalText(value).slice(0, 240);
   const servingLabel = label(servingVersion ?? "an unknown version");
   const targetLabel = label(targetVersion ?? "an unknown target");
-  if (observedFailure) {
+  if (observedFailure && !committedFailure) {
     const current =
       (buildMismatch || targetIdentityUnavailable) && servingBuild
         ? `${servingLabel} (build ${label(servingBuild)})`

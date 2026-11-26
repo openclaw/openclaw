@@ -633,6 +633,12 @@ console.log(JSON.stringify(process.argv[3] === 'check-release'
   ? {ok:true,surfaces:[],warnings:[{code:'configured-plugin-path-unavailable',message:'Fixture plugin path is unavailable'}]}
   : {status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));`,
       );
+      if (build === "installed") {
+        await fs.copyFile(
+          path.join(packedRoot, "openclaw.mjs"),
+          path.join(runningRoot, "openclaw.mjs"),
+        );
+      }
       const archive = path.join(root, "candidate.tgz");
       await exec("tar", ["-czf", archive, "-C", path.dirname(packedRoot), "package"]);
       await executable(

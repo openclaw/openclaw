@@ -483,7 +483,7 @@ it.each(["warning", "error"] as const)(
 );
 
 it.each([undefined, true, false])(
-  "finishes core before plugin maintenance, preserving late failures (consent=%s)",
+  "settles the aggregate once after plugins without delaying the committed core (consent=%s)",
   async (acceptCapabilities) => {
     const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-plugins-"));
     directories.push(state);
@@ -491,6 +491,7 @@ it.each([undefined, true, false])(
     const options = { env: process.env };
     openOpenClawStateDatabase(options);
     const run = await createUpdateRunAsync({ trigger: "control-ui" }, options);
+    await recordUpdateRunStepAsync(run.runId, { step: "notice:ack", status: "completed" });
     const entered = Promise.withResolvers<void>();
     const command = Promise.withResolvers<SpawnResult>();
     const targets = [
@@ -555,17 +556,24 @@ it.each([undefined, true, false])(
       integrityDrifts: [],
       reloadTargets: targets,
     };
+    await writeTrial(trial);
     const work = new AsyncWorkScope();
-    let finishedAtMs: number | null | undefined;
     try {
       await work.run(() => settleRunFromTrial(trial));
       await entered.promise;
       const committed = await getUpdateRunAsync(run.runId, options);
-      expect(committed).toMatchObject({ status: "succeeded", phase: "finished" });
-      finishedAtMs = committed?.finishedAtMs;
-      expect(finishedAtMs).toEqual(expect.any(Number));
-      expect(committed?.steps).not.toContainEqual(expect.objectContaining({ step: "plugins" }));
-      expect(await readTrial()).toMatchObject({ reported: true });
+      expect(committed).toMatchObject({
+        status: "running",
+        phase: "verifying",
+        finishedAtMs: null,
+        verification: { coreReady: true, serviceRunning: true, versionMatch: true },
+      });
+      expect(committed?.steps).toContainEqual(
+        expect.objectContaining({ step: "plugins", status: "in_progress" }),
+      );
+      expect(await readTrial()).toMatchObject({ phase: "committed" });
+      expect((await readTrial())?.reported).not.toBe(true);
+      expect(notices).toEqual([]);
       expect(runPostActivationInspections).not.toHaveBeenCalled();
       expect(reload).not.toHaveBeenCalled();
       const [argv, commandOptions] = vi.mocked(runCommandWithTimeout).mock.calls[0]!;
@@ -586,9 +594,9 @@ it.each([undefined, true, false])(
     }
     const maintained = await getUpdateRunAsync(run.runId, options);
     expect(maintained).toMatchObject({
-      status: "succeeded",
+      status: acceptCapabilities ? "succeeded" : "failed",
       phase: "finished",
-      finishedAtMs,
+      finishedAtMs: expect.any(Number),
     });
     expect(maintained?.steps).toContainEqual(
       expect.objectContaining({
@@ -598,19 +606,23 @@ it.each([undefined, true, false])(
     );
     expect(reload).toHaveBeenCalledExactlyOnceWith(targets);
     expect(runPostActivationInspections).toHaveBeenCalledOnce();
+    expect(notices).toEqual([
+      { runId: run.runId, kind: "finished", status: acceptCapabilities ? "succeeded" : "failed" },
+    ]);
+    expect(await readTrial()).toMatchObject({ phase: "committed", reported: true });
     const report = renderUpdateRunReport(maintained!);
     if (failed) {
       const pluginStep = maintained?.steps.find(({ step }) => step === "plugins");
       expect(pluginStep?.detail).toContain("broken: package download failed");
       expect(pluginStep?.detail).toContain("openclaw plugins update broken");
-      expect(report.headline).toMatch(/; 1 warning needs attention\.$/u);
+      expect(report.headline).toContain("core committed");
       expect(report.lines.join("\n")).toContain("broken: package download failed");
       expect(report.lines.join("\n")).toContain("openclaw plugins update broken");
     } else if (!acceptCapabilities) {
       const pluginStep = maintained?.steps.find(({ step }) => step === "plugins");
       expect(pluginStep?.detail).toContain("changed after the installation batch");
       expect(pluginStep?.detail).toContain("openclaw plugins reload updated restored");
-      expect(report.headline).toMatch(/; 1 warning needs attention\.$/u);
+      expect(report.headline).toContain("core committed");
     } else {
       expect(report.headline).not.toContain("needs attention");
     }
@@ -686,8 +698,10 @@ process.stdout.write("maintenance-ready\\n");`,
     expect((await stopped.promise).termination).toBe("signal");
     expect(runPostActivationInspections).not.toHaveBeenCalled();
     const finished = await getUpdateRunAsync(run.runId);
-    expect(finished?.status).toBe("succeeded");
-    expect(finished?.steps).not.toContainEqual(expect.objectContaining({ step: "plugins" }));
+    expect(finished?.status).toBe("running");
+    expect(finished?.steps).toContainEqual(
+      expect.objectContaining({ step: "plugins", status: "in_progress" }),
+    );
   } finally {
     if (childPid && !commandFinished) {
       killProcessTree(childPid, { detached: true, force: true });
