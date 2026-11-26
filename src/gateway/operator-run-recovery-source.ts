@@ -18,7 +18,7 @@ import {
   type OperatorRunRecoverySnapshot,
   type QueuedOperatorRecoverySource,
 } from "./operator-run-recovery-source.codec.js";
-import { resolveGatewayUiAdminSource } from "./operator-scopes.js";
+import { isGatewayUiAdmin } from "./operator-scopes.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 
 /** Durable evidence when serializable; same-process starts also pass their original live facts. */
@@ -207,7 +207,7 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
       generation: "",
       fallbackCredentialGeneration: authPolicy.fallbackCredentialGeneration,
     },
-    automationAdmin: resolveGatewayUiAdminSource(client) !== undefined,
+    automationAdmin: isGatewayUiAdmin(client),
     controlUiAdmin: client.internal?.controlUiAdmin === true,
     localOperator: client.internal?.isLocalClient === true,
     sourceIngress: isBrowserOperatorUiClient(client.connect.client) ? "control-ui" : "internal",

@@ -14,6 +14,8 @@ import {
 } from "../state/agent-deletion-journal-recovery.kernel.js";
 import type { HeldAgentDatabase } from "../state/agent-deletion-journal.types.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_V26_SQL } from "../state/openclaw-agent-schema-v25.test-support.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -53,7 +55,7 @@ async function withFixture(
     sharedPath: string;
   }) => Promise<void>,
   agentId = "main",
-  schemaVersion = 24,
+  schemaVersion: 24 | 26 = 24,
 ) {
   const root = fs.realpathSync.native(dirs.make("doctor-published-journal-"));
   const env = {
@@ -74,13 +76,7 @@ async function withFixture(
     fs.mkdirSync(path.dirname(agentPath), { recursive: true });
     using agent = new DatabaseSync(agentPath);
     agent.exec(
-      fs.readFileSync(
-        new URL(
-          `../../test/fixtures/sqlite/openclaw-agent-schema-v${schemaVersion}.sql`,
-          import.meta.url,
-        ),
-        "utf8",
-      ),
+      schemaVersion === 24 ? OPENCLAW_AGENT_SCHEMA_V24_SQL : OPENCLAW_AGENT_SCHEMA_V26_SQL,
     );
     agent.exec(`PRAGMA user_version = ${schemaVersion}`);
     agent

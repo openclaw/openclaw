@@ -132,11 +132,7 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
       (file === "extensions/knowledge/src/retrieval.ts" &&
         (match.construct === "fts5" ||
           match.construct === "temp-schema" ||
-          match.construct === "rowid")) ||
-      // The startup upgrade rebuilds local SQLite files by copy and swap; PostgreSQL stores
-      // never take this path. Row identity (rowid) and storage-class checks (typeof) are file-private.
-      (file === "src/state/sqlite-copy-swap.ts" && match.construct === "rowid") ||
-      (file === "src/state/state-upgrade-tree.ts" && match.construct === "typeof");
+          match.construct === "rowid"));
     const { line, character } = source.getLineAndCharacterOfPosition(position);
     sites.push({
       ...match,

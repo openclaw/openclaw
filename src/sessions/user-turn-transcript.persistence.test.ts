@@ -323,6 +323,23 @@ describe("persistUserTurnTranscript", () => {
         String(value),
       ]),
     },
+    {
+      name: "the approver as sender with suggestion credit for its author",
+      input: {
+        text: "why you no answer",
+        timestamp: 1_700_000_000_000,
+        sender: { id: "josh", name: "Josh", identity: { type: "profile" as const, id: "josh" } },
+        suggestedBy: { id: "jason", name: "Jason" },
+      },
+      metadata: {
+        senderId: "josh",
+        senderName: "Josh",
+        senderIdentity: { type: "profile", id: "josh" },
+        suggestedBy: { id: "jason", name: "Jason" },
+      },
+      config: undefined,
+      forbidden: [],
+    },
   ])("round-trips $name", async ({ input, metadata, config, forbidden }) => {
     const expected = userMessage(input.text, { timestamp: input.timestamp, __openclaw: metadata });
     const appended = await writeInput(structuredClone(input), { config, updateMode: "none" });

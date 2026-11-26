@@ -924,7 +924,7 @@ jobs:
         approve_plugins_clawhub_release,
       ]
     if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_publish_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@ef56b2cb287f0db5462b92dea8e4b63325d0341c # reviewed sealed receipt and final-effect proof contract
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@11f935929080ad9ff2fc539154b6521c1b85c123 # trusted publishing errors, sealed receipts, final-effect proof
     permissions:
       actions: read
       contents: read

@@ -40,6 +40,7 @@ function panelPlacement(line: HTMLElement, panel: HTMLElement): "bottom" | "top"
 export function ChatRunFailureNotice(props: {
   feedback?: ControlUiSurfaceProps["run-failure-feedback"];
   summary: string;
+  summaryAsTitle?: true;
   cause?: RunFailureCause;
   /** The cause provider's presentation from the chat's model catalog. */
   presentation?: Pick<ProviderPresentation, "providerName">;
@@ -53,10 +54,6 @@ export function ChatRunFailureNotice(props: {
   const [placement, setPlacement] = createSignal<"bottom" | "top">("bottom");
   let panel: PopoverHandle | undefined;
   const fixTitle = () => props.cause && FIX_TITLES.get(props.cause.failoverReason!);
-  const title = () =>
-    t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
-      provider: providerDisplayLabel(props.cause?.provider ?? "", props.presentation),
-    });
   const app = useOptionalApplication();
   const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
   const startNewSession = () =>
@@ -66,6 +63,11 @@ export function ChatRunFailureNotice(props: {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
     return firstLine.length <= 240 ? firstLine : undefined;
   });
+  const title = () =>
+    (props.summaryAsTitle ? concise() : undefined) ||
+    t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
+      provider: providerDisplayLabel(props.cause?.provider ?? "", props.presentation),
+    });
   // The well always holds the full error, so a one-line error is not repeated above it.
   const lead = createMemo(() => (concise() === detail() ? undefined : concise()));
   const logRef = createScrollStateRef(

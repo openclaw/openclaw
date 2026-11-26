@@ -15,10 +15,15 @@ import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 const CLAUDE_CLI_RUNTIME_ID = "claude-cli";
 const ANTHROPIC_WILDCARD_REF = "anthropic/*";
 
-/** Project the account menu onto canonical identities without admitting hosted-only models. */
+/**
+ * Project the account menu onto canonical identities without admitting hosted-only models.
+ * `loadCatalogRows` supplies the effective catalog (bundled plus hosted): it describes a listed
+ * ID the snapshot holds no Anthropic row for, and never lists one. It runs only for a listing.
+ */
 export function projectClaudeCliNativeCatalog(
   snapshot: ModelCatalogSnapshot,
   cliOnly: boolean,
+  loadCatalogRows: () => readonly ModelCatalogEntry[] = () => [],
 ): ModelCatalogSnapshot {
   const listing = snapshot.providerOutcomes?.find(
     (outcome) => outcome.provider === CLAUDE_CLI_RUNTIME_ID && outcome.listedModelIds !== undefined,
@@ -29,21 +34,28 @@ export function projectClaudeCliNativeCatalog(
     (entry) => entry.provider === CLAUDE_CLI_RUNTIME_ID && listed.has(entry.id),
   );
   const metadata = new Map(
-    [...(snapshot.staticEntries ?? []), ...snapshot.entries]
+    [
+      ...(nativeRows.length ? loadCatalogRows() : []),
+      ...(snapshot.staticEntries ?? []),
+      ...snapshot.entries,
+    ]
       .filter((entry) => entry.provider === "anthropic")
       .map((entry) => [entry.id, entry]),
   );
   const enrichedNativeRows: ModelCatalogEntry[] = [];
   const canonical: ModelCatalogEntry[] = [];
   for (const entry of nativeRows) {
+    const donor = metadata.get(entry.id);
     const enriched = {
       ...entry,
-      ...metadata.get(entry.id),
+      ...donor,
       id: entry.id,
       provider: CLAUDE_CLI_RUNTIME_ID,
       name: entry.name,
       reasoning: entry.reasoning,
       thinkingLevelMap: entry.thinkingLevelMap,
+      // Hosted rows may declare document input, which registry rows never carry.
+      input: donor?.input?.filter((item) => item !== "document") ?? entry.input,
     };
     enrichedNativeRows.push(enriched);
     if (nativeOnly) {

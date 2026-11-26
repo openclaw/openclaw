@@ -101,12 +101,14 @@ const modeFor = (row: Row): Mode =>
 // them.
 const WRITER_GRANT: TurnGrant = {
   owner: false,
+  automations: "self",
   skillAuthoring: true,
   questionReplace: true,
   commands: "none",
 };
 const OWNER_GRANT: TurnGrant = {
   owner: true,
+  automations: "manage",
   skillAuthoring: true,
   questionReplace: true,
   commands: "all",
@@ -122,10 +124,12 @@ const MATRIX: Partial<Record<Kind, ["OWNER" | "PERSON", TurnGrant]>> = {
   "trusted-proxy:control-ui": ["PERSON", WRITER_GRANT],
   channel: ["PERSON", WRITER_GRANT],
 };
-// Unlinked Discord senders: a verified `commands.ownerAllowFrom` sender is the owner principal,
-// with the owner's full grant; an allowlisted non-owner (guest) gets no operator grant.
+// Discord senders: a verified `commands.ownerAllowFrom` sender is the owner principal, with the
+// owner's full grant, also when linked to a non-admin profile (listed owner wins); an allowlisted
+// non-owner (guest) gets no operator grant.
 const CHANNEL_SENDER_GRANT: Record<string, TurnGrant | undefined> = {
   "owner-revoked-before-start": OWNER_GRANT,
+  "listed-linked-owner": OWNER_GRANT,
   "mixed-owner-group": undefined,
 };
 
@@ -176,6 +180,7 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
       ["tailscale-device:internal", "widened-grant"],
       ["channel", "mixed-owner-group"],
       ["channel", "owner-revoked-before-start"],
+      ["channel", "listed-linked-owner"],
     ] as const)("%s: %s", { timeout: 90_000 }, async ([kind, scenario], { signal }) => {
       const c = await runCase(fixture, rows[kind], scenario, signal);
       if (scenario in CHANNEL_SENDER_GRANT) {

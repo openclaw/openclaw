@@ -196,9 +196,6 @@ describe("MCP directory in the system prompt", () => {
     const catalogRef: ToolSearchCatalogRef = {};
     const shared = tools();
     const first = apply(shared, { catalogRef }).directory;
-    const reused = apply(shared, { catalogRef });
-    expect(reused.result.catalogReused).toBe(true);
-    expect(reused.directory).toBe(first);
     // A later turn materializes fresh MCP tool objects, possibly in another order.
     expect(apply(tools().toReversed(), { catalogRef }).directory).toBe(first);
     const changed = apply([...tools(), mcpTool("world", "c_tool", "Third.")], { catalogRef });

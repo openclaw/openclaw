@@ -99,7 +99,9 @@ are not ranked, and Claude CLI runs keep Claude's native `ToolSearch`. The lab
 does not enable Code Mode or Tool Search, authorize any tool, or change search
 results. Core coding tools retain their pinned places. Each surface reserves part
 of its existing budget for new tools, and selected entries render in canonical
-order.
+order. A tool counts as new for 14 days after the agent first offers it in a
+ranked prompt; tools already available when the agent first ranks are not new.
+Space new tools do not use goes to ranked tools.
 
 Successful calls contribute to a score with a 14-day half-life. Failed,
 cancelled, pending, client-delegated, and incognito calls do not count. Nested
@@ -468,13 +470,12 @@ Member role names use 1–64 lowercase letters, digits, `-`, or `_`, starting wi
 letter. Other configured names are shown as unavailable rather than renamed.
 Approving a request grants exactly the role named in its invite.
 
-From an approved owner browser, choose **Change role** on a member, select a defined
-role, and save. The browser signs the membership change with its owner device key, and the Gateway
-assigns that role to the linked profile. The member's connections and active work
-are cut off; reconnects use the new profile limits. A raised role reaches browsers
+To change a member's role later, an administrator uses **Settings → Team → Roles**,
+which assigns the role to the linked profile with `users.setRole`. The member's
+connections and active work are cut off; reconnects use the new profile limits. A raised role reaches browsers
 that were already approved without a new device approval. Members whose
-role was deleted are marked **Blocked** with the missing role's name; choose another
-role to restore access. Members who can load the Access plugin see their own role,
+role was deleted are marked **Blocked** with the missing role's name; assign another
+role in **Settings → Team → Roles** to restore access. Members who can load the Access plugin see their own role,
 not other people's access or owner controls. The plugin currently requires
 `operator.read`; session-read-only members, including the Viewer preset, cannot
 open it.

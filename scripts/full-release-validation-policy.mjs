@@ -27,6 +27,7 @@ import {
   buildReleaseValidationManifest,
   releaseManifestChildEvidence,
 } from "./lib/full-release-manifest.mjs";
+import { npmPreparationJobName } from "./lib/full-release-publication-inputs.mjs";
 import {
   BETA_FINAL_EVIDENCE_REUSE_POLICY,
   classifyBetaPromotionComparison,
@@ -1125,7 +1126,7 @@ export function buildReleaseExecutionPlan(input) {
       result: stringValue(input.resolveTargetResult, "missing"),
     },
     {
-      name: "Prepare release npm artifacts",
+      name: npmPreparationJobName(input.qualificationInputs),
       required:
         buildOnly || rerunGroup === "all" || (!reused && booleanValue(input.candidateRequired)),
       result: stringValue(input.npmPreparationResult, "skipped"),
@@ -3036,10 +3037,17 @@ function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
   return lines;
 }
 
-export function formatReleaseStateOutcome(payload) {
-  const lines = [`Full Release Validation state: ${payload.state}`];
+export function formatReleaseStateOutcome(payload, { observedDrainStatus } = {}) {
+  const label =
+    observedDrainStatus === undefined
+      ? "Full Release Validation state"
+      : "Release Decision snapshot";
+  const lines = [`${label}: ${payload.state}`];
   lines.push(...releaseStateDetailLines(payload));
-  if (payload.state === "blocked_diagnostics_running") {
+  if (
+    payload.state === "blocked_diagnostics_running" &&
+    (observedDrainStatus === undefined || observedDrainStatus === "in_progress")
+  ) {
     lines.push(
       "Diagnostic Drain is still collecting terminal evidence; diagnose now, retry later.",
     );

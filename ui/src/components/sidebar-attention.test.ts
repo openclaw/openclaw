@@ -29,17 +29,8 @@ import "./sidebar-attention.tsx";
 
 const ATTENTION_KEY = 'openclaw.control.sidebarAttention.v2:["ws://gateway.test","alice"]';
 
-function cronResponse(id?: string, nextRunAtMs?: number) {
-  const page = cronPage(id);
-  const job = page.jobs[0];
-  if (job && nextRunAtMs !== undefined) {
-    Object.assign(job, {
-      lastRunStatus: "ok",
-      nextRunAtMs,
-      nextRunAt: new Date(nextRunAtMs).toISOString(),
-    });
-  }
-  return { ...page, snapshotRevision: "sidebar-attention-cron-fixture" };
+function cronResponse(id?: string) {
+  return { ...cronPage(id), snapshotRevision: "sidebar-attention-cron-fixture" };
 }
 
 const mentionItem = (id: string) => ({ ...inboxMention(id), sessionKey: "agent:writer:review" });
@@ -50,8 +41,6 @@ function authStatus(ts: number, status: "missing" | "ok" = "missing"): ModelAuth
 
 function authItems(agentId: string, modelAuthStatus = authStatus(1)) {
   return buildSidebarAttentionEntries({
-    cronJobs: [],
-    cronSchedulerEnabled: true,
     modelAuthStatus,
     modelAuthAgentId: agentId,
     now: 0,
@@ -67,9 +56,6 @@ function selection(selectedId: string, scopeId: string | null = selectedId) {
 
 function respond(responses: Record<string, unknown>) {
   return vi.fn(async (method: string) => {
-    if (method === "users.prefs.get") {
-      return { status: "ok", entries: {} };
-    }
     if (!Object.hasOwn(responses, method)) {
       throw new Error(`Unexpected request: ${method}`);
     }
@@ -80,12 +66,6 @@ function respond(responses: Record<string, unknown>) {
 
 function queuedResponses(responses: Record<string, unknown[]>) {
   return vi.fn((method: string) => {
-    if (method === "users.prefs.get") {
-      return Promise.resolve({ status: "ok", entries: {} });
-    }
-    if (method === "cron.acknowledgeFailure") {
-      return Promise.resolve({ acknowledgedAtMs: 0 });
-    }
     const response = responses[method]?.shift();
     if (!response) {
       throw new Error(`Unexpected request: ${method}`);
@@ -105,10 +85,6 @@ function eventGateway(
     gateway: harness.gateway,
     emit: (event: string) => harness.emitEvent(event, {}),
   };
-}
-
-function cronStatus(jobs: number, enabled = true) {
-  return { enabled, triggersEnabled: true, jobs };
 }
 
 function issues(element: ParentNode, suffix: string) {
@@ -385,7 +361,6 @@ describe("sidebar attention refresh ownership", () => {
   it("wraps panel focus across collapsed details, expanded actions and an empty tab", async () => {
     const request = respond({
       "cron.list": cronResponse(),
-      "cron.status": cronStatus(0),
       "models.authStatus": authStatus(1),
     });
     const harness = createGatewayHarness(mockClient(request));
@@ -468,7 +443,6 @@ describe("sidebar attention refresh ownership", () => {
     let result = { gatewayInstanceId: "boot-a", revision: 1, items: [mentionItem("first")] };
     const request = respond({
       "cron.list": cronResponse(),
-      "cron.status": cronStatus(0),
       "models.authStatus": { ts: 1, providers: [] },
       "mentions.list": () => result,
     });
@@ -547,7 +521,6 @@ describe("sidebar attention refresh ownership", () => {
   it("keeps loaded health attention across a view-only remount", async () => {
     const request = respond({
       "cron.list": cronResponse("failed"),
-      "cron.status": cronStatus(1),
       "models.authStatus": authStatus(1),
     });
     const harness = createGatewayHarness(mockClient(request));
@@ -556,65 +529,13 @@ describe("sidebar attention refresh ownership", () => {
       gateway: harness.gateway,
       agentSelection: selection("main", null),
     });
-    await waitForFast(() => expect(issues(element, "button__count")?.textContent).toBe("2"));
+    await waitForFast(() => expect(issues(element, "button__count")?.textContent).toBe("1"));
 
     element.remove();
     provider.append(element);
 
-    expect(issues(element, "button__count")?.textContent).toBe("2");
+    expect(issues(element, "button__count")?.textContent).toBe("1");
   });
-
-  it("keeps overdue jobs out of the Inbox while the scheduler is disabled", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(300_002);
-    const request = respond({
-      "cron.list": cronResponse("overdue-id", 1),
-      "cron.status": cronStatus(1, false),
-    });
-    const harness = createGatewayHarness(mockClient(request));
-    harness.update({ selfUser: { id: "alice", name: "Alice" } });
-
-    const { element } = await mountAttention({ gateway: harness.gateway });
-
-    await waitForFast(() => expect(request).toHaveBeenCalledWith("cron.status", {}));
-    expect(issues(element, "button__count")).toBeNull();
-  });
-
-  it.each(["visible", "hidden"] as const)(
-    "publishes a quiet automation's overdue warning after a %s deadline without polling",
-    async (presentation) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(Date.UTC(2026, 8, 22));
-      let visibility: DocumentVisibilityState = "visible";
-      vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-      vi.stubGlobal("localStorage", createTestStorageMock());
-      const deadline = Date.now() + 300_000;
-      const request = respond({
-        "cron.list": cronResponse("quiet-deadline", Date.now()),
-        "cron.status": cronStatus(1),
-      });
-      const harness = createGatewayHarness(mockClient(request));
-      const { element } = await mountAttention({ gateway: harness.gateway });
-      expect(request).toHaveBeenCalledTimes(2);
-      if (presentation === "hidden") {
-        visibility = "hidden";
-        document.dispatchEvent(new Event("visibilitychange"));
-      }
-      await vi.advanceTimersByTimeAsync(deadline - Date.now());
-      flush();
-      expect(issues(element, "button__count")).toBeNull();
-      await vi.advanceTimersByTimeAsync(1);
-      flush();
-      if (presentation === "hidden") {
-        expect(issues(element, "button__count")).toBeNull();
-        visibility = "visible";
-        document.dispatchEvent(new Event("visibilitychange"));
-        flush();
-      }
-      expect(issues(element, "button__count")?.textContent).toBe("1");
-      await vi.advanceTimersByTimeAsync(30 * 60_000);
-      expect(request).toHaveBeenCalledTimes(2);
-    },
-  );
 
   it.each(["open", "close"] as const)(
     "does not let obsolete %s focus steal a later interaction",
@@ -673,7 +594,6 @@ describe("sidebar attention refresh ownership", () => {
       "exec.approval.resolve": () => resolution.promise,
       "update.status": { sentinel: null, updateAvailable: null },
       "cron.list": cronResponse(),
-      "cron.status": cronStatus(0),
       "exec.approval.list": [],
       "plugin.approval.list": [],
       "openclaw.approval.list": [],
@@ -741,7 +661,6 @@ describe("sidebar attention refresh ownership", () => {
           pendingCron.promise,
           Promise.resolve(cronResponse("current")),
         ],
-        "cron.status": Array.from({ length: 3 }, () => Promise.resolve(cronStatus(1))),
         "models.authStatus": [
           Promise.resolve(authStatus(1)),
           staleAuth.promise,
@@ -788,7 +707,6 @@ describe("sidebar attention refresh ownership", () => {
       localStorage.setItem(
         ATTENTION_KEY,
         JSON.stringify({
-          cronFailed: ["dismissed-cron"],
           modelAuthExpired: ["agent:writer\nold-provider"],
         }),
       );
@@ -813,13 +731,11 @@ describe("sidebar attention refresh ownership", () => {
 
       now = 200_000;
       emit("cron.inventory.changed");
-      const healthReads = () =>
-        request.mock.calls.filter(([method]) =>
-          ["cron.list", "cron.status", "models.authStatus"].includes(method),
-        );
       invalidateModelAuthStatusRequests(client);
       emit("chat.metadata.changed");
-      await waitForFast(() => expect(healthReads()).toHaveLength(6));
+      await waitForFast(() =>
+        expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2),
+      );
 
       selectionState.selectedId = "writer";
       for (const listener of selectionListeners) {
@@ -828,7 +744,7 @@ describe("sidebar attention refresh ownership", () => {
 
       flush();
       expect(attention(element, "modelAuthExpired")).toBeNull();
-      expect(attention(element, "cronFailed")).not.toBeNull();
+      expect(store.hasFailedAutomation).toBe(true);
       expect(attention(element, "updateAvailable")).not.toBeNull();
       expect(element.querySelector('[data-approval-id="approval-1"]')).not.toBeNull();
 
@@ -858,20 +774,19 @@ describe("sidebar attention refresh ownership", () => {
 
       expect(authText(element)).toContain("writer");
       expect(localStorage.getItem(ATTENTION_KEY)).toBe(storedDismissals);
-      expect(attention(element, "cronFailed")).not.toBeNull();
+      expect(store.hasFailedAutomation).toBe(true);
       expect(attention(element, "updateAvailable")).not.toBeNull();
       expect(element.querySelector('[data-approval-id="approval-1"]')).not.toBeNull();
     },
   );
 
-  it("opens top-mounted attention downward and clears stale live automation alerts", async () => {
+  it("opens top-mounted attention downward and offers account help", async () => {
     const request = queuedResponses({
-      "cron.list": [cronResponse("failed"), cronResponse()],
-      "cron.status": [cronStatus(1), cronStatus(0)],
+      "cron.list": [cronResponse()],
       "models.authStatus": [authStatus(1)],
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, emit } = eventGateway(
+    const { gateway } = eventGateway(
       {
         client,
         phase: "connected",
@@ -902,7 +817,7 @@ describe("sidebar attention refresh ownership", () => {
     const { element, trigger } = await mountAttention({ gateway, overlays, agentSelection });
     vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(new DOMRect(20, 10, 32, 32));
     trigger.click();
-    await waitForFast(() => expect(attention(element, "cronFailed")).not.toBeNull());
+    await waitForFast(() => expect(attention(element, "modelAuthExpired")).not.toBeNull());
     const panel = issues(element, "panel")!;
     expect(panel.style).toMatchObject({ top: "50px", bottom: "" });
     expect(panel.style.getPropertyValue("--sidebar-issues-panel-top")).toBe("50px");
@@ -931,10 +846,6 @@ describe("sidebar attention refresh ownership", () => {
     } finally {
       custodianAlertStore.dismiss();
     }
-    await openPanel(element, trigger);
-
-    emit("cron.inventory.changed");
-    await waitForFast(() => expect(attention(element, "cronFailed")).toBeNull());
   });
 });
 

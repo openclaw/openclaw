@@ -24,23 +24,21 @@ export async function prepareNativePluginMockGatewayScenario({
     return { scenario, assets: new Map<string, { body: Buffer; contentType: string }>() };
   }
   const { catalog, assets } = await prepareNativeControlUiPluginFixtures(nativePlugins);
-  const preparedScenario = catalog.plugins.length
-    ? {
-        ...scenario,
-        featureMethods: [
-          ...new Set([
-            ...(scenario.featureMethods ?? defaultControlUiFeatureMethods),
-            "plugins.controlUi.list",
-            "plugins.controlUi.report",
-          ]),
-        ],
-        methodResponses: {
-          ...scenario.methodResponses,
-          "plugins.controlUi.list": catalog,
-          "plugins.controlUi.report": { ok: true },
-        },
-      }
-    : scenario;
+  const preparedScenario = {
+    ...scenario,
+    featureMethods: [
+      ...new Set([
+        ...(scenario.featureMethods ?? defaultControlUiFeatureMethods),
+        "plugins.controlUi.list",
+        "plugins.controlUi.report",
+      ]),
+    ],
+    methodResponses: {
+      ...scenario.methodResponses,
+      "plugins.controlUi.list": catalog,
+      "plugins.controlUi.report": { ok: true },
+    },
+  };
   return { scenario: preparedScenario, assets };
 }
 
