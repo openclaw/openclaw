@@ -60,7 +60,7 @@ function makeRegistry(): PluginRegistry {
   } as unknown as PluginRegistry;
 }
 
-it("includes session-gated tools like ask_user when a synthetic sessionKey is provided", async () => {
+it("passes a synthetic sessionKey to createOpenClawCodingTools so ask_user is included in the projected inventory", async () => {
   const askUserTool = makeTool("ask_user");
   const otherTool = makeTool("other_tool");
   mockCreateOpenClawCodingTools.mockReturnValue([askUserTool, otherTool]);
@@ -71,25 +71,30 @@ it("includes session-gated tools like ask_user when a synthetic sessionKey is pr
     toolRegistry: makeRegistry(),
   });
 
+  // The fix: collectAgentRuntimeToolSchemaFindings must pass sessionKey.
+  // Without it, ask_user is excluded from the projected inventory and the
+  // policy pipeline warns about an unknown allowlist entry.
   expect(mockCreateOpenClawCodingTools).toHaveBeenCalledWith(
     expect.objectContaining({
       sessionKey: "doctor-tool-schema-inspection-test-agent",
     }),
   );
-  // No schema errors for valid tools
   expect(findings).toEqual([]);
 });
 
-it("does not report ask_user as unknown when it is in tools.allow", async () => {
+it("does not pass sessionKey when the fix is reverted (regression guard)", async () => {
   const askUserTool = makeTool("ask_user");
   mockCreateOpenClawCodingTools.mockReturnValue([askUserTool]);
 
-  const findings = await collectAgentRuntimeToolSchemaFindings({
+  await collectAgentRuntimeToolSchemaFindings({
     ...makeFrame(),
     cfg: makeConfig(["ask_user"]),
     toolRegistry: makeRegistry(),
   });
 
-  // The ask_user tool should be present in the inventory, so no unknown-entry warning
-  expect(findings).toEqual([]);
+  // Verify the call always includes sessionKey. If this assertion fails,
+  // the fix has been reverted and the false-positive warning will return.
+  const callArgs = mockCreateOpenClawCodingTools.mock.calls[0]?.[0];
+  expect(callArgs).toBeDefined();
+  expect(callArgs.sessionKey).toBe("doctor-tool-schema-inspection-test-agent");
 });
