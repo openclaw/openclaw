@@ -203,6 +203,13 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
+  it.each(["voiceid", "voice_id"])("parses %s directive alias for OpenAI voice", (key) => {
+    expect(parseDirective(key, "nova")).toEqual({
+      handled: true,
+      overrides: { voice: "nova" },
+    });
+  });
+
   it("ignores OpenAI speed directives when allowVoiceSettings is disabled", () => {
     expect(parseDirective("speed", "1.5", undefined, false)).toEqual({ handled: true });
   });

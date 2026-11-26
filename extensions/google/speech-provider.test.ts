@@ -508,3 +508,24 @@ it.each([
     speakers: SPEAKERS,
   });
 });
+
+it.each(["voice", "voiceid", "voice_id"])(
+  "parses %s directive alias for Google voiceName",
+  async (key) => {
+    const parsed = provider.parseDirectiveToken?.({
+      key,
+      value: "Aoede",
+      policy: createSpeechDirectivePolicy({ allowVoice: true }),
+    });
+    expect(parsed).toEqual({
+      handled: true,
+      overrides: { voiceName: "Aoede" },
+    });
+
+    await synthesize({
+      text: "Hello from Aoede.",
+      providerOverrides: parsed?.overrides,
+    });
+    expect(recorded().body).toEqual(legacyBody("Hello from Aoede.", "Aoede"));
+  },
+);
