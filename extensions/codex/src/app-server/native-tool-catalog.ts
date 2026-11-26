@@ -196,7 +196,6 @@ export async function loadCodexNativeToolCatalog(params: {
       "Saved Codex declarations require the original verified local binding and selected native connection; the thread is preserved.",
     );
   }
-  assertCurrent();
   const metadata = await withCodexClientWorkspace(client, (state, maxCachedSessions) =>
     readCodexWorkspaceSessionMeta(
       client,
