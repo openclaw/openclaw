@@ -111,7 +111,7 @@ function hashRuntimeArtifactFile(params: {
   }
   const changedMessage = `plugin runtime artifact file changed while reading: ${params.relativePath}`;
   try {
-    const hashed = hashFileDescriptorSync(opened.fd, opened.stat.size);
+    const hashed = hashFileDescriptorSync(opened.fd, { maxBytes: opened.stat.size });
     const after = fs.fstatSync(opened.fd);
     const identity = fs.fstatSync(opened.fd, { bigint: true });
     if (
