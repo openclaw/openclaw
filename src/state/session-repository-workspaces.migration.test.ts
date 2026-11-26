@@ -76,6 +76,7 @@ it.each(["runtime", "doctor", "absent-repository"] as const)(
         scope,
         [
           "operator_approvals",
+          "worker_session_placements",
           "session_repository_workspaces",
           "worker_workspace_pending_results",
           "worker_environments",

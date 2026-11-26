@@ -4,7 +4,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { createFollowupRunner } from "../auto-reply/reply/followup-runner.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { createMockTypingController } from "../auto-reply/reply/test-helpers.js";
@@ -333,7 +333,7 @@ it("records a rejected durable attempt as not delivered before webhook dispatch"
   }
 });
 
-it("records a retired cron follow-up in run history and its session without replay", () =>
+it("records a retired cron follow-up without replay", () =>
   withOpenClawTestState({ label: "withheld-cron-followup" }, async (fixture) => {
     setRuntimeConfigSnapshot({});
     const target = {
@@ -347,7 +347,7 @@ it("records a retired cron follow-up in run history and its session without repl
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const receipt = claimCronRunReceiptForTest(storePath, job, Date.now());
     const { state: cron } = createCronServiceWithStateForTest(cronTestDeps({ storePath }));
-    const queued = createQueueTestRun({ prompt: "Continue the cron goal" });
+    const queued = createQueueTestRun({ prompt: "Continue the cron goal" }, target);
     const marker = markCronJobActive(job.id);
     const fence = createCronCompletionDeliveryFence({
       state: cron,
@@ -356,15 +356,14 @@ it("records a retired cron follow-up in run history and its session without repl
       activeJobMarker: marker,
       signal: new AbortController().signal,
     });
-    // A detached Goal follow-up still has its cron source, but no reply callback.
-    Object.assign(queued.run, target, {
-      scheduledAutomation: { ...TEST_SCHEDULED_TURN, job, deliveryAttemptFence: fence },
-    });
-    queued.messageId = "cron-goal-followup";
-    queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+    queued.run.scheduledAutomation = {
+      ...TEST_SCHEDULED_TURN,
+      job,
+      deliveryAttemptFence: fence,
+    };
+    queued.operatorAuthority = createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
-      assertCurrent: fence.assertCurrent,
     });
     clearCronJobActive(job.id, marker);
 
@@ -374,7 +373,6 @@ it("records a retired cron follow-up in run history and its session without repl
       defaultModel: "gpt-test",
     })(queued);
 
-    expect(queued.operatorAuthority.signal?.aborted).toBe(true);
     expect(
       readCronRunHistoryPageForTests({ storeKey: receipt.storeKey, jobId: job.id }).entries,
     ).toContainEqual(

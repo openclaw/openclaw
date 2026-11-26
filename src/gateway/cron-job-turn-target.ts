@@ -1,89 +1,57 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SessionEventTarget } from "../auto-reply/reply/session-event-contract.js";
 import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-handoff.js";
-import { checkRequesterOwner } from "../cron/execution-context-admission.js";
 import { resolveScheduledRequester } from "../cron/execution-context.js";
 import type { CronStoredJob } from "../cron/types.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
-import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
+import { hasAutomationAdminDelegation } from "./operator-run-recovery-source.codec.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
-/**
- * Captures the owner conversation for a turn the scheduler starts about one job (its failure
- * repair or a notice), acting for the job's recorded requester: the requester its scheduled
- * runs act for. An owner requester keeps owner tools while it stays an owner; a non-owner
- * requester gets none; a job with no recorded requester falls back to the session
- * principal like other unattributed system turns.
- */
+/** Capture the requester's reference; the event admits it when its work starts. */
 export async function captureCronJobTurnTarget(params: {
   job: CronStoredJob;
   agentId: string;
   sessionKey: string;
   context: GatewayRequestContext;
-}): Promise<{ target: SessionEventTarget; release: () => void }> {
+}): Promise<SessionEventTarget> {
   const { job, agentId, sessionKey, context } = params;
-  const capture = (options?: Parameters<typeof captureSessionEventTargetForHost>[2]) =>
-    captureSessionEventTargetForHost(agentId, sessionKey, options);
-  const nonOwner = async () => ({
-    // A known requester that is not, or no longer, an owner: never the session principal.
-    target: await capture({ requesterOwner: {} }),
-    release: () => {},
-  });
-  let requester: ReturnType<typeof resolveScheduledRequester>;
-  try {
-    requester = resolveScheduledRequester(job);
-  } catch {
-    // An undecodable stored operator source; its scheduled runs fail the same way.
-    return await nonOwner();
-  }
+  const capture = async (options?: Parameters<typeof captureSessionEventTargetForHost>[2]) => {
+    const target = await captureSessionEventTargetForHost(agentId, sessionKey, options);
+    bindGatewayContextResolver(target, context.resolveGatewayContext ?? (() => context));
+    return target;
+  };
+  const requester = resolveScheduledRequester(job);
   if (requester.kind === "unknown") {
-    return { target: await capture(), release: () => {} };
+    return await capture();
   }
   if (requester.kind !== "operator-source") {
-    const { owner, isOwner } = await checkRequesterOwner(context.getRuntimeConfig(), requester);
-    // Recheck against the Gateway's current config before each owner-only effect, as
-    // completions do for their requester; a revocation while queued is refused.
     const assertCurrent = () => {
-      if (!isOwner?.(context.getRuntimeConfig())) {
-        throw new Error("The requester that authorized this automation is no longer an owner.");
+      const current = context.cron.getJob(job.id);
+      if (!current || !isDeepStrictEqual(resolveScheduledRequester(current), requester)) {
+        throw new Error("Automation requester changed.");
       }
     };
-    const target = await capture({ requesterOwner: owner && isOwner ? { assertCurrent } : {} });
-    return { target, release: () => {} };
+    return await capture({ scheduledRequester: requester, assertCurrent });
   }
-  // Parent-bound sources follow their chat by key; standalone sources retain device authority independently.
   const { source } = requester;
-  const captured = job.operatorSource;
-  let operator: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
-  try {
-    if (
-      source.agentId !== agentId ||
-      (source.kind !== "gateway" && source.sessionKey !== sessionKey)
-    ) {
-      throw new Error("Automation operator source names another conversation");
-    }
-    operator = await restoreGatewayOperatorSource({
-      snapshot: source.snapshot,
-      target: source.kind === "gateway" ? undefined : { agentId, sessionKey },
-      context,
-      assertCurrent: () => {
-        if (!isDeepStrictEqual(context.cron.getJob(job.id)?.operatorSource, captured)) {
-          throw new Error("Automation operator source changed");
-        }
-      },
-    });
-    // As for the job's in-session runs, a restored source is an owner only when it was an
-    // authenticated UI administrator; otherwise it is the job's non-owner requester.
-    const target = await capture({
-      operatorAuthority: operator.authority,
-      ...(operator.automationAdmin &&
-      operatorScopeSatisfied("operator.admin", operator.authority.scopes)
-        ? { ownerContinuation: true as const }
-        : {}),
-    });
-    return { target, release: operator.release };
-  } catch {
-    operator?.release();
-    return await nonOwner();
+  if (
+    source.agentId !== agentId ||
+    (source.kind !== "gateway" && source.sessionKey !== sessionKey)
+  ) {
+    throw new Error("Automation operator source names another conversation");
   }
+  const captured = job.operatorSource;
+  return await capture({
+    operatorSource: source,
+    ...(hasAutomationAdminDelegation(source.snapshot) &&
+    operatorScopeSatisfied("operator.admin", source.snapshot.scopes)
+      ? { ownerContinuation: true as const }
+      : {}),
+    assertCurrent: () => {
+      if (!isDeepStrictEqual(context.cron.getJob(job.id)?.operatorSource, captured)) {
+        throw new Error("Automation operator source changed");
+      }
+    },
+  });
 }

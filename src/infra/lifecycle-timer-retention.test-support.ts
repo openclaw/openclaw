@@ -48,7 +48,6 @@ function sweeperFixture() {
     isTerminalTailActive: unexpected,
     sessionEffectsHostCurrent: unexpected,
     shouldSuppressSessionEffects: unexpected,
-    discardTerminalDelivery: unexpected,
     shouldEmitEndedHookForRun: unexpected,
     emitSubagentEndedHookForRun: unexpected,
     callGateway: unexpected,

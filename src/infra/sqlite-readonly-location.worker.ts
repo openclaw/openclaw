@@ -6,7 +6,6 @@ import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs"
 import type { AuthProfileReadDatabaseOpener } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
-import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { jsonFieldBatches } from "./json-field-transfer.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
@@ -17,7 +16,6 @@ import {
   isSqliteLockError,
   sqliteExtendedResultCode,
 } from "./sqlite-error-diagnostics.js";
-import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import {
   forkSqlitePrivateSnapshotInProcess,
   readSqlitePrivateSnapshotFamily,
@@ -218,6 +216,8 @@ async function inspect(
       if (!expectedSourceIdentity) {
         throw new Error("SQLite metadata snapshot requires a captured source identity");
       }
+      const [{ assertStateDatabaseAccessAllowed }, { hasVerifiedLiveSqliteOwner }] =
+        await Promise.all([import("./gateway-state-owner.js"), import("./sqlite-live-owner.js")]);
       assertExistingDatabaseIdentity(
         pathname,
         expectedSourceIdentity.key,

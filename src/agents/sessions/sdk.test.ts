@@ -508,7 +508,6 @@ it.each(["after_provider_response", "tool_call", "no_hook"] as const)(
 it("records declared max thinking in a new embedded session", async () => {
   const sessionManager = SessionManager.inMemory();
   const { session } = await createSdkSession({
-    cleanupProviderSessionResourcesOnDispose: false,
     model: {
       ...testModel,
       id: "custom-reasoner",

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { preparedRequestSuffix } from "../provider-options.js";
-import { PROVIDER_DEFERRED_TOOL_NAMES } from "../provider-types.js";
+import { NATIVE_HISTORICAL_TOOL_CALL, PROVIDER_DEFERRED_TOOL_NAMES } from "../provider-types.js";
 import type { Context, Model } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
@@ -35,6 +35,44 @@ describe("Chat Completions historical tools", () => {
     description: "Get forecast",
     parameters: { type: "object" },
   };
+  it("keeps a marked call and result native without advertising the retired tool", () => {
+    const model = makeCompletionsModel({ baseUrl: "http://127.0.0.1:8080/v1", reasoning: false });
+    const move = {
+      type: "toolCall" as const,
+      id: "call_move",
+      name: "session_project",
+      arguments: { action: "move", projectId: "garden" },
+      [NATIVE_HISTORICAL_TOOL_CALL]: true,
+    };
+    const result = '{"status":"moved","projectId":"garden","branch":"openclaw/garden"}';
+    const request = buildOpenAICompletionsRequest(
+      model,
+      {
+        tools: [replayTool],
+        messages: [
+          { role: "user", content: "Move to the garden project.", timestamp: 1 },
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            content: [move],
+            usage: createZeroUsage(),
+            stopReason: "toolUse",
+            timestamp: 2,
+          },
+          makeTextToolResult(move.id, move.name, result, false, 3),
+        ],
+      },
+      undefined,
+      { mode: "managed" },
+    );
+    expect(request.tools?.map((entry) => entry.function.name)).toEqual([replayTool.name]);
+    expect(request.messages.slice(1)).toMatchObject([
+      { role: "assistant", tool_calls: [{ id: move.id, function: { name: move.name } }] },
+      { role: "tool", tool_call_id: move.id, content: result },
+    ]);
+  });
   it.each(["direct", "managed"] as const)(
     "projects undeclared history against the outgoing catalog without changing the transcript (%s)",
     (mode) => {

@@ -8,7 +8,7 @@ read_when:
   - You are implementing or debugging tool discovery for OpenClaw runs
 ---
 
-Tool Search is an experimental OpenClaw agent runtime feature. It gives agents one
+Tool Search is an OpenClaw agent runtime feature. It gives agents one
 compact way to discover and call large tool catalogs. It is useful when the run
 has many available tools but the model is likely to need only a few of them.
 
@@ -26,6 +26,9 @@ policy-approved capabilities available. It does not enable lean mode or remove
 optional tools. Set `tools.toolSearch: false` to restore direct schemas. Engaged
 [Code Mode](/tools/code-mode) takes precedence, and Codex keeps its native surface.
 This automatic default does not rewrite the configuration file.
+Manage the global setting in **Settings → Agents → Agent defaults → Tools →
+Tool Search**. Changes apply to future replies without restarting the Gateway;
+turning it off or on preserves an authored mode and other Tool Search options.
 
 Embedded runs with a local model on the native Ollama transport keep
 policy-approved `web_search`, `web_fetch`, `memory_search`, and `memory_get`
@@ -38,7 +41,9 @@ When enabled for OpenClaw runs, the model automatically receives a bounded
 directory of the available trusted tool names and descriptions, plus the
 structured `tool_search`, `tool_describe`, and `dispatch_action` controls. Setting
 `tools.toolSearch: true` or an object without a mode selects this structured
-surface. Direct-only tools remain visible alongside the controls.
+surface. Direct-only tools remain visible alongside the controls. On the default
+OpenClaw runner, an admitted `progress_card` also appears with its full schema
+in the first model request, so the agent can update the card without searching.
 
 The directory scales with the active model's context window. When space is tight,
 descriptions shorten before tool names are omitted; every authorized catalog
@@ -81,7 +86,7 @@ OpenClaw keeps the same authorized tools and maps the enabled/disabled setting t
 native deferral. The native tool does not use OpenClaw's search modes, limits, or
 include/exclude selectors. See [CLI backends](/gateway/cli-backends#keeping-claude-code-orchestration-tools-on-managed-turns).
 
-Codex harness runs do not receive these experimental OpenClaw Tool Search
+Codex harness runs do not receive these OpenClaw Tool Search
 controls. OpenClaw passes product capabilities to Codex as dynamic tools, and
 Codex owns the stable native code mode, native tool search, deferred dynamic
 tools, and nested tool calls.
@@ -413,6 +418,32 @@ Turn-authority gates preserve their refusal text without running the target;
 Code Mode also includes that guidance in the returned value's `message` field.
 This exemption uses private runtime provenance, not tool-authored `gated` or
 `status` fields.
+
+### On-demand tools
+
+Tools marked `catalogMode: "on-demand"` (currently `computer` and, on
+unsandboxed or adopting sessions, `github_publish`) start in the catalog with a
+short entry whose `call` field says they load as top-level tools once looked up.
+The prompt directory marks their rows `[loads on lookup]` and the Code Mode
+index marks them `[top-level call only; not from exec]`.
+
+In the embedded harness, looking one up loads it: `tool_describe` adds its
+definition to the next provider request in the same turn, so the model can call
+it by name right away. A refused `dispatch_action` loads it the same way, and so
+does a direct call by name. In Code Mode, `describe()` or a refused guest call
+loads it for the following turns.
+The tool is recorded in the session's tool pin, so every later turn of the
+prompt series sends it as a normal direct tool, including after a Gateway
+restart. `/new`, `/reset`, compaction and a model change start a new series,
+and the tool is deferred again until it is looked up again. Loading changes the
+provider tool list once, on the request after the lookup.
+
+`dispatch_action` and Code Mode guest calls never run on-demand tools, because
+a catalog bridge cannot carry a screenshot result or a turn handoff; they load
+the tool and say to call it directly. Harnesses that cannot load a tool
+mid-session (Copilot, Codex, cloud workers, headless catalogs) keep on-demand
+tools direct.
+With Tool Search and Code Mode off, every tool is direct as before.
 
 If `dispatch_action` names a direct-only tool declared for the current turn, it returns
 guidance to call that tool directly by its declared name and parameters. It does

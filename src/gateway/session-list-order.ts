@@ -1,12 +1,26 @@
 // Bounded session-list ordering shared by synchronous and asynchronous projections.
 
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
+import {
+  isPinnableSessionEntry,
+  personalSessionPinRank,
+} from "../config/sessions/session-pin-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 
 export type SessionEntryPair = [string, SessionEntry];
+
+export type SessionPinRank = (pair: SessionEntryPair) => number;
+
+export function createPersonalSessionPinRank(
+  pins: ReadonlyMap<string, number> | null | undefined,
+  now: number,
+): SessionPinRank | undefined {
+  return pins === undefined
+    ? undefined
+    : ([key, entry]) => (pins ? personalSessionPinRank(pins, key, entry, now) : 0);
+}
 
 function sessionEntryPin([key, entry]: SessionEntryPair): number {
   return entry.pinnedAt !== undefined && isPinnableSessionEntry(key, entry) ? entry.pinnedAt : 0;
@@ -40,15 +54,17 @@ export function sortAndLimitSessionEntries(
   entries: SessionEntryPair[],
   limit: number | undefined,
   sortBy: SessionsListParams["sortBy"] = "updatedAt",
+  personalPinRank?: SessionPinRank,
 ): SessionEntryPair[] {
   const timestamps = new Float64Array(entries.length);
-  const pins = sortBy === "updatedAt" ? new Float64Array(entries.length) : undefined;
+  const pins =
+    personalPinRank || sortBy === "updatedAt" ? new Float64Array(entries.length) : undefined;
   const indices = Array<number>(entries.length);
   for (let index = 0; index < entries.length; index++) {
     const pair = entries[index]!;
     timestamps[index] = sessionEntryTime(pair[1], sortBy);
     if (pins) {
-      pins[index] = sessionEntryPin(pair);
+      pins[index] = (personalPinRank ?? sessionEntryPin)(pair);
     }
     indices[index] = index;
   }
@@ -71,6 +87,7 @@ export function mergeSessionEntryPages(
   pages: SessionEntryPair[][],
   limit: number | undefined,
   sortBy: SessionsListParams["sortBy"] = "updatedAt",
+  personalPinRank?: SessionPinRank,
 ): SessionEntryPair[] {
   if (limit === 0) {
     return [];
@@ -83,7 +100,7 @@ export function mergeSessionEntryPages(
         page,
         index: 0,
         pair,
-        pin: sortBy === "updatedAt" ? sessionEntryPin(pair) : 0,
+        pin: personalPinRank?.(pair) ?? (sortBy === "updatedAt" ? sessionEntryPin(pair) : 0),
         time: sessionEntryTime(pair[1], sortBy),
       };
     });
@@ -101,7 +118,8 @@ export function mergeSessionEntryPages(
       continue;
     }
     head.pair = head.page[head.index]!;
-    head.pin = sortBy === "updatedAt" ? sessionEntryPin(head.pair) : 0;
+    head.pin =
+      personalPinRank?.(head.pair) ?? (sortBy === "updatedAt" ? sessionEntryPin(head.pair) : 0);
     head.time = sessionEntryTime(head.pair[1], sortBy);
     let low = 0;
     let high = heads.length;

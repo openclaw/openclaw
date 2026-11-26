@@ -13,7 +13,12 @@ import { z } from "zod";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 import type { SlackActionClientOpts } from "./action-context.js";
 import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
-import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
+import {
+  appendSlackNativeDataFallbackText,
+  buildSlackBlocksFallbackText,
+  hasSlackNativeDataBlock,
+  stripSlackNativeDataBlocks,
+} from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, createSlackWriteClient, getSlackWriteClient } from "./client.js";
 import {
@@ -34,18 +39,14 @@ import { hasSlackMessageTableBlock, resolveSlackMessageText } from "./monitor/bl
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
-import {
-  appendSlackNativeDataFallbackText,
-  hasSlackNativeDataBlock,
-  isSlackInvalidBlocksError,
-  stripSlackNativeDataBlocks,
-} from "./native-data-blocks.js";
+import { isSlackInvalidBlocksError } from "./native-data-blocks.js";
 import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
 import { sendMessageSlack } from "./send.js";
 import { formatSlackTarget } from "./target-parsing.js";
 import { resolveSlackBotToken } from "./token.js";
 import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
 import type { SlackAttachment } from "./types.js";
+import { addSlackAuthorProfiles, type SlackMessageUserProfile } from "./user-profiles.js";
 
 export type { SlackActionClientOpts } from "./action-context.js";
 
@@ -53,6 +54,7 @@ export type SlackMessageSummary = {
   ts?: string;
   text?: string;
   user?: string;
+  user_profile?: SlackMessageUserProfile;
   thread_ts?: string;
   blocks?: unknown[];
   attachments?: SlackAttachment[];
@@ -208,16 +210,20 @@ function normalizeSlackReadTimestamp(
   return formatEpochSeconds(parsed);
 }
 
-async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
-  if (opts.client && !opts.assertDirectAdapterHandoff) {
-    return opts.client;
-  }
-  const accountId = opts.cfg
+function resolveActionAccountId(opts: SlackActionClientOpts): string {
+  return opts.cfg
     ? resolveSlackAccount({
         cfg: requireRuntimeConfig(opts.cfg, "Slack actions"),
         accountId: opts.accountId,
       }).accountId
     : normalizeAccountId(opts.accountId);
+}
+
+async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write" = "read") {
+  if (opts.client && !opts.assertDirectAdapterHandoff) {
+    return opts.client;
+  }
+  const accountId = resolveActionAccountId(opts);
   assertSlackDetachedTargetAllowed(accountId, opts.teamId);
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   const clientTeamId = opts.omitTeamId ? undefined : opts.teamId;
@@ -524,6 +530,8 @@ export async function readSlackMessages(
     after?: string;
     threadId?: string;
     messageId?: string;
+    /** Adds each author's Slack profile names as `user_profile`, one `users.info` per distinct author. */
+    includeAuthorProfiles?: boolean;
   } = {},
 ): Promise<{ messages: SlackMessageSummary[]; hasMore: boolean }> {
   const exactMessageId = opts.messageId?.trim();
@@ -565,7 +573,15 @@ export async function readSlackMessages(
     )
     .map(renderSlackReadMessageText);
   return {
-    messages,
+    messages: opts.includeAuthorProfiles
+      ? await addSlackAuthorProfiles({
+          accountId: resolveActionAccountId(opts),
+          teamId: opts.teamId,
+          token: opts.client ? opts.token : resolveToken(opts.token, opts.accountId, opts.cfg),
+          client,
+          messages,
+        })
+      : messages,
     hasMore: exactMessageId ? false : Boolean(result.has_more),
   };
 }

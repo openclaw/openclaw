@@ -19,7 +19,11 @@ import {
   RecordedUpdateRunDriverSchema as recordedDriver,
   UpdateRunDriverSchema as driver,
 } from "./update-run-driver-schema.js";
-import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
+import {
+  UPDATE_RUN_TEXT_LIMIT,
+  UPDATE_RUN_DIAGNOSTIC_LIMIT,
+  UPDATE_RUN_STEP_LIMIT,
+} from "./update-run-limits.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
 
 export const UPDATE_ADMISSION_PROTOCOL = 1;
@@ -251,8 +255,6 @@ const UpdateRunGitActivationSchema = z.object({
   previousBuildId: z.string().min(1).max(96).nullable(),
 });
 
-export type UpdateRunGitActivation = z.infer<typeof UpdateRunGitActivationSchema>;
-
 export const UpdateRunRecordSchema = z.object({
   runId: z.uuid(),
   createdAtMs: timestamp,
@@ -270,6 +272,15 @@ export const UpdateRunRecordSchema = z.object({
       .optional(),
     admission: admission.optional(),
     candidateAdmission: candidateAdmission.optional(),
+    releaseAdmission: z
+      .object({
+        owner: z.literal("candidate"),
+        candidateVersion: text,
+        verdict: z.enum(["admit", "refuse"]),
+        reason: text.optional(),
+        warnings: z.array(z.object({ code: text, message: text })).max(UPDATE_RUN_DIAGNOSTIC_LIMIT),
+      })
+      .optional(),
     updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
     driver: recordedDriver.optional(),
     managedHandoff: z.object({ parent: driver, helper: driver }).optional(),
@@ -297,6 +308,7 @@ export const UpdateRunRecordSchema = z.object({
       })
       .optional(),
     sessionKey: text.optional(),
+    noticeSurface: z.literal("app").optional(),
     deliveryContext: z
       .object({
         channel: text.optional(),
@@ -323,7 +335,7 @@ export const UpdateRunRecordSchema = z.object({
   }),
   before: version,
   after: version,
-  steps: z.array(UpdateRunStepSchema).max(128),
+  steps: z.array(UpdateRunStepSchema).max(UPDATE_RUN_STEP_LIMIT),
   verification: z.object({
     rollbackOutcome: UpdateRollbackOutcomeSchema.nullable().optional(),
     recovery: updateRecoverySchema.nullable().optional(),

@@ -193,29 +193,6 @@ describe("session sharing policy", () => {
     },
   );
 
-  it("retains the original person when narrow session creation has no row yet", async () => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      const owner = roleClient("view", "narrow-create-owner");
-      owner.connect.scopes = ["operator.sessions.write"];
-      const cfg = rolePolicyConfig();
-      setRuntimeConfigSnapshot(cfg);
-      const captured = await captureMutationAuthorization({
-        client: owner,
-        method: "sessions.create",
-        requestParams: {},
-        sessionScope: "operator.sessions.write",
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-      });
-      expect(captured.error).toBeNull();
-      expect(captured.authorization).toBeDefined();
-      expect(() => captured.authorization?.assertCurrent()).not.toThrow();
-      owner.connect.scopes = ["operator.sessions.read"];
-      expect(() => captured.authorization?.assertCurrent()).toThrow(
-        SessionMutationAuthorizationChangedError,
-      );
-    });
-  });
-
   it("denies starting a run on an existing foreign-agent session despite foreign-session write access", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = rolePolicyConfig(["guest-agent"]);

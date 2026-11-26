@@ -6,21 +6,28 @@ import {
   createOptimistic,
   createSignal,
   Errored,
+  lazy,
   onSettled,
   Show,
 } from "solid-js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { currentDisplaySpeechConfig } from "../../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { sharedRuntimeConfigProjection } from "../../../lib/reactive/shared-application-projections.ts";
 import { GatewaySpeechPlayback, resolveSpeechTextLimit } from "../../../lib/speech-playback.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
-type ReadAloudProps = { text: string; buttonRef?: (element: HTMLButtonElement) => void };
+const ReadAloudStatus = lazy(() => import("./chat-read-aloud-status.tsx"));
+
+type ReadAloudProps = {
+  text: string;
+  sessionKey?: string;
+  buttonRef?: (element: HTMLButtonElement) => void;
+};
 
 function speechAvailable(context: Pick<ApplicationContext, "gateway" | "runtimeConfig">) {
   return (
@@ -33,12 +40,12 @@ export function ReadAloud(props: ReadAloudProps) {
   const context = useOptionalApplication();
   return (
     <Show when={context}>
-      <ReadAloudControl text={props.text} buttonRef={(element) => props.buttonRef?.(element)} />
+      <ReadAloudControl input={props} />
     </Show>
   );
 }
 
-function ReadAloudControl(props: ReadAloudProps) {
+function ReadAloudControl(props: { input: ReadAloudProps }) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const config = sharedRuntimeConfigProjection(context.runtimeConfig);
@@ -52,7 +59,8 @@ function ReadAloudControl(props: ReadAloudProps) {
         snapshot.client?.recoveryScope,
         snapshot.client?.offlineRecoveryRetired,
         connectionRevision,
-        props.text,
+        props.input.text,
+        props.input.sessionKey,
         snapshot.phase === "connected" &&
           snapshot.hello !== null &&
           !canCallGatewayMethod(snapshot, "tts.speak", "operator.write"),
@@ -77,8 +85,7 @@ function ReadAloudControl(props: ReadAloudProps) {
     // Unconfigured rows need no playback lifecycle. Once used, retain Stop through reconnects.
     <Show when={available() || activated()}>
       <ReadAloudPlayback
-        text={props.text}
-        buttonRef={(element) => props.buttonRef?.(element)}
+        input={props.input}
         available={available()}
         onActivate={() => setActivated(true)}
         onReady={(stop) => (stopPlayback = stop)}
@@ -87,13 +94,12 @@ function ReadAloudControl(props: ReadAloudProps) {
   );
 }
 
-function ReadAloudPlayback(
-  props: ReadAloudProps & {
-    available: boolean;
-    onActivate: () => void;
-    onReady: (stop: (() => void) | undefined) => void;
-  },
-) {
+function ReadAloudPlayback(props: {
+  input: ReadAloudProps;
+  available: boolean;
+  onActivate: () => void;
+  onReady: (stop: (() => void) | undefined) => void;
+}) {
   const context = useApplication();
   const playback = new GatewaySpeechPlayback();
   const [playing, setPlaying] = createOptimistic(false);
@@ -143,7 +149,7 @@ function ReadAloudPlayback(
       try {
         await playback.speak(
           client,
-          props.text,
+          props.input.text,
           "tts.speak",
           () =>
             isCurrent() &&
@@ -171,16 +177,9 @@ function ReadAloudPlayback(
   return (
     <Show when={playing() || props.available}>
       <openclaw-tooltip>
-        <span slot="content">
-          <Show when={!playing()} fallback={label()}>
-            <Errored fallback={(error) => formatUiError(error())}>
-              {outcome()}
-              {label()}
-            </Errored>
-          </Show>
-        </span>
+        <span slot="content">{label()}</span>
         <button
-          ref={(element) => props.buttonRef?.(element)}
+          ref={(element) => props.input.buttonRef?.(element)}
           class="chat-read-aloud-btn"
           type="button"
           aria-label={label()}
@@ -189,12 +188,18 @@ function ReadAloudPlayback(
         >
           <Icon name={playing() ? "square" : "volume2"} />
         </button>
-        <Show when={!playing()}>
-          <Errored fallback={(error) => <span role="status">{formatUiError(error())}</span>}>
-            {outcome()}
-          </Errored>
-        </Show>
       </openclaw-tooltip>
+      <Show when={!playing()}>
+        <Errored
+          fallback={(error) => (
+            <ChatLazyBoundary>
+              <ReadAloudStatus error={error()} sessionKey={props.input.sessionKey} />
+            </ChatLazyBoundary>
+          )}
+        >
+          {outcome()}
+        </Errored>
+      </Show>
     </Show>
   );
 }

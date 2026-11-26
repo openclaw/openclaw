@@ -1,7 +1,9 @@
+import { resolveReplyExecOverrides } from "../../auto-reply/reply/get-reply-exec-overrides.js";
 import {
   isSessionPersonalBootstrapTurn,
   resolveTurnPersonalProfiles,
 } from "../../sessions/session-participant-input.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { resolveCommandReplyExpectation } from "../reply-completion.js";
 import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
@@ -29,6 +31,11 @@ export function buildCommonCommandRunParams(
     cwd: params.cwd,
     config: params.cfg,
     toolOverrides: params.sessionEntry?.toolOverrides,
+    // Preserve the admitted session node/cwd binding for both command backends.
+    execOverrides: resolveReplyExecOverrides({
+      sessionEntry: params.sessionEntry,
+      agentExecDefaults: resolveAgentConfig(params.cfg, params.sessionAgentId)?.tools?.exec,
+    }),
     modelHasVision: params.modelHasVision,
     model: params.modelOverride,
     modelRoutingProvenance: params.modelRoutingProvenance,

@@ -32,6 +32,10 @@ export function ProjectChip(props: ProjectChipProps) {
     }
     return pathDisplayName(deviceFolder.path.trim()) || t("newSession.deviceFolder");
   };
+  const folderWarning = () =>
+    props.params.place.deviceFolder
+      ? props.params.place.deviceFolderRuntimeUnsupportedReason
+      : undefined;
   return (
     <SessionPicker
       lazy
@@ -53,7 +57,12 @@ export function ProjectChip(props: ProjectChipProps) {
           </Errored>
         </Show>
       }
-      triggerAttributes={{ "data-project-id": props.params.place.browser.projectId || undefined }}
+      summary={folderWarning() ? t("newSession.deviceFolderModelUnsupported") : undefined}
+      triggerAttributes={{
+        "data-project-id": props.params.place.browser.projectId || undefined,
+        title: props.params.place.deviceFolder?.path,
+        "aria-description": folderWarning() ?? props.params.place.deviceFolder?.path,
+      }}
       params={props.params}
     >
       <ProjectPickerContent

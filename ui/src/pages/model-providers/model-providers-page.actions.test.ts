@@ -121,6 +121,11 @@ describe("ModelProvidersPage mutation presentation", () => {
     );
     const page = appendPage(context);
     await waitForProviders(page);
+    const moreSettings = page.querySelector<HTMLButtonElement>("[data-models-more-settings]")!;
+    if (moreSettings.getAttribute("aria-expanded") !== "true") {
+      moreSettings.click();
+      await page.updateComplete;
+    }
     const previous = page.view.props.defaultModels.primary;
     const pending = deferred<boolean>();
     runtimeConfig.patch.mockImplementationOnce(() => pending.promise);
@@ -154,6 +159,11 @@ describe("ModelProvidersPage mutation presentation", () => {
       const { context, runtimeConfig } = createHarness("main");
       const page = appendPage(context);
       await waitForProviders(page);
+      const moreSettings = page.querySelector<HTMLButtonElement>("[data-models-more-settings]")!;
+      if (moreSettings.getAttribute("aria-expanded") !== "true") {
+        moreSettings.click();
+        await page.updateComplete;
+      }
       const groups = page.querySelectorAll<HTMLElement>(
         '.model-providers__defaults [role="radiogroup"]',
       );

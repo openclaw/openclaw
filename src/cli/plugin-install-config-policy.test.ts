@@ -8,7 +8,7 @@ import {
   resolvePluginInstallRequestContext,
 } from "../plugins/install-config.js";
 import type { OfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
-import { resolvePluginInstallPreactionRequest } from "./plugin-install-config-policy.js";
+import { allowsPluginInstallConfigRecovery } from "./plugin-install-config-policy.js";
 
 const fixture = vi.hoisted(() => ({ entries: [] as OfficialExternalPluginCatalogEntry[] }));
 vi.mock("../plugins/bundled-sources.js", async (importOriginal) => ({
@@ -37,10 +37,7 @@ function parse(spec: string, marketplace?: string) {
     .option("--marketplace <source>")
     .action(() => {});
   command.parse([spec, ...(marketplace ? ["--marketplace", marketplace] : [])], { from: "user" });
-  return resolvePluginInstallPreactionRequest({
-    actionCommand: command,
-    commandPath: ["plugins", "install"],
-  });
+  return allowsPluginInstallConfigRecovery(command);
 }
 
 it.each([
@@ -53,20 +50,20 @@ it.each([
   ["clawhub:@fixture/recovery@1.2.3", true, false],
 ] as const)("respects %s source ownership (recovery=%s)", (spec, allowed, ownsRecovery) => {
   catalog(allowed);
-  const request = parse(spec);
-  expect(request).toEqual({
-    rawSpec: spec,
-    ...(ownsRecovery
-      ? {
-          installKind: "plugin",
-          bundledPluginId: "official-demo",
-          allowInvalidConfigRecovery: allowed,
-        }
-      : {}),
+  expect(resolvePluginInstallRequestContext({ rawSpec: spec })).toEqual({
+    ok: true,
+    request: {
+      rawSpec: spec,
+      ...(ownsRecovery
+        ? {
+            installKind: "plugin",
+            bundledPluginId: "official-demo",
+            allowInvalidConfigRecovery: allowed,
+          }
+        : {}),
+    },
   });
-  expect(resolvePluginInstallInvalidConfigPolicy(request)).toBe(
-    ownsRecovery && allowed ? "allow-plugin-recovery" : "deny",
-  );
+  expect(parse(spec)).toBe(ownsRecovery && allowed);
 });
 
 it.each(["npm", "clawhub"] as const)(
@@ -98,20 +95,23 @@ it.each([
   })) {
     fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
   }
-  const request = parse(prefix + dir);
-  expect(request).toMatchObject({
-    bundledPluginId: "local-demo",
-    allowInvalidConfigRecovery: allowed,
+  expect(resolvePluginInstallRequestContext({ rawSpec: prefix + dir })).toMatchObject({
+    ok: true,
+    request: {
+      bundledPluginId: "local-demo",
+      allowInvalidConfigRecovery: allowed,
+    },
   });
-  expect(resolvePluginInstallInvalidConfigPolicy(request)).toBe(
-    allowed ? "allow-plugin-recovery" : "deny",
-  );
+  expect(parse(prefix + dir)).toBe(allowed);
 });
 
 it("excludes marketplace requests from catalog recovery", () => {
   catalog();
-  const request = parse("@fixture/recovery", "fixture-marketplace");
-  expect(request).toMatchObject({ marketplace: "fixture-marketplace", installKind: "plugin" });
-  expect(request?.bundledPluginId).toBeUndefined();
-  expect(resolvePluginInstallInvalidConfigPolicy(request)).toBe("deny");
+  const rawSpec = "npm:@fixture/recovery";
+  const marketplace = "fixture-marketplace";
+  expect(resolvePluginInstallRequestContext({ rawSpec, marketplace })).toEqual({
+    ok: true,
+    request: { rawSpec, marketplace, installKind: "plugin" },
+  });
+  expect(parse(rawSpec, marketplace)).toBe(false);
 });

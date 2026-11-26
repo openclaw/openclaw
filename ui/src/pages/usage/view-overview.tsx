@@ -5,6 +5,7 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../../../src/infra/session-cost-usage-totals.js";
+import { measuredPromptTokens } from "../../../../src/shared/prompt-cache-hit-rate.js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -13,9 +14,8 @@ import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import "../../components/tooltip.ts";
-import { measuredPromptTokens } from "../../lib/sessions/usage.ts";
+import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { formatIsoDate } from "./helpers.ts";
 import {

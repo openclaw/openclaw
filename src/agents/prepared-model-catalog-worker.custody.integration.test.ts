@@ -8,6 +8,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import * as captureResources from "../plugins/plugin-capture-native-resource.client.js";
 import { sweepPluginSourceCapturesForTest } from "../plugins/plugin-source-capture-directory.test-support.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
@@ -302,6 +303,11 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       failures.push(event.phase);
     }
   });
+  // Broker startup retries use real timers before the admission watchdog's clock is frozen.
+  const warmCapture = await captureResources.createPluginCaptureOwner(
+    captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }),
+  );
+  await warmCapture.close();
   const started = performance.now();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   const fakeNow = performance.now.bind(performance);

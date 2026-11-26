@@ -3,12 +3,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, expect, it as baseIt, vi } from "vitest";
-import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import {
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
-} from "../utils/usage-format.js";
+} from "../model-catalog/usage-pricing.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { configFor as modelConfig, modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
 import {

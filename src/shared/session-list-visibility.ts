@@ -27,6 +27,13 @@ export function isCronSessionDisplayKey(key: string): boolean {
   return /^(?:cron:|agent::*[^:]+:+cron:+[^:])/u.test(normalizeLowercaseStringOrEmpty(key));
 }
 
+/** GitHub publication custody keys: stable checkout IDs and the earlier per-invocation UUIDv8 IDs. */
+export function isReservedGitHubPublicationSessionKey(key: string): boolean {
+  return /^agent:[^:]+:dashboard:(?:github-publication-[a-f0-9]{32}|github-[a-f0-9]{8}-[a-f0-9]{4}-8[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/iu.test(
+    key,
+  );
+}
+
 /**
  * Classify internal lanes from provenance or reserved keys, never transcript text.
  * Legacy rows without either and operator-named CLI sessions remain discoverable.

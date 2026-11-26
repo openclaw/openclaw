@@ -129,7 +129,7 @@ it("expires delivery without releasing native work that ignores cancellation", a
     await owner.drain();
     expect(getActiveGatewayRootWorkCount()).toBe(before);
     expect(sourceReleased).toHaveBeenCalledOnce();
-    expect(() => retainGatewayDeviceRevocation(caller.isCurrent)).toThrow("no longer active");
+    expect(() => retainGatewayDeviceRevocation(caller.isCurrent)).toThrow("Gateway request ended");
   } finally {
     release.resolve();
     lifetime.retire();

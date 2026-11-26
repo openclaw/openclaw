@@ -19,7 +19,6 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -29,6 +28,7 @@ import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
+import type { AssistantTranscriptMessage } from "./assistant-transcript-preparer.test-support.js";
 import * as attemptStartup from "./attempt-startup.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
@@ -1053,7 +1053,7 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "sessions-terminal-disconnect.json"),
       "session-terminal-disconnect",
     );
-    const preparedMessages: AssistantMessage[] = [];
+    const preparedMessages: AssistantTranscriptMessage[] = [];
     params.prepareAssistantTranscriptMessage = (message) => {
       preparedMessages.push(structuredClone(message));
       return message;

@@ -24,6 +24,7 @@ import {
   closeDefaultRetainedNativeWorkerSource,
   createRetainedNativeWorker,
 } from "../../src/infra/worker-native-lifecycle.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const mode = process.argv[2] ?? "timing";
 assert(mode === "timing" || mode === "allocation");
@@ -154,12 +155,7 @@ try {
   }
   await setImmediate();
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   observer.observe({ entryTypes: ["gc"] });
   const beforeMessages = getWorkerMessageMetrics();

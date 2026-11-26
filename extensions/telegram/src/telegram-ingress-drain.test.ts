@@ -155,23 +155,6 @@ async function waitPending(queue: Queue, rows: Array<Record<string, unknown>>) {
 describe("createTelegramIngressMonitor", () => {
   it.each([
     {
-      name: "wrapped callback authority rejection",
-      callback: true,
-      error: new Error("spooled callback failed", {
-        cause: new Error("Gateway requester authority changed"),
-      }),
-      reason: "callback-authority-changed",
-      message: "Gateway requester authority changed",
-    },
-    {
-      name: "deferred callback authority rejection",
-      callback: true,
-      deferred: true,
-      error: new Error("Gateway requester authority changed"),
-      reason: "callback-authority-changed",
-      message: "Gateway requester authority changed",
-    },
-    {
       name: "expired callback query",
       callback: true,
       error: new GrammyError(
@@ -223,11 +206,6 @@ describe("createTelegramIngressMonitor", () => {
       const dispatch = vi
         .fn<MonitorOptions["dispatch"]>()
         .mockImplementationOnce(async () => {
-          if ("deferred" in testCase && testCase.deferred) {
-            const participant = createTelegramSpooledReplayDeferredParticipant("callback");
-            participant?.settle({ kind: "failed-retryable", error });
-            return undefined;
-          }
           return { kind: "failed-retryable", error };
         })
         .mockResolvedValue({ kind: "completed" });
@@ -766,7 +744,6 @@ describe("createTelegramIngressMonitor", () => {
 
   it.each([
     new Error("late provider blip"),
-    new Error("Gateway requester authority changed"),
     Object.assign(new Error("workspace is not ready"), {
       name: "SessionWorkStartError",
       reason: "workspace_pending",

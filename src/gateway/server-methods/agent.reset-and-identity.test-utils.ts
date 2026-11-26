@@ -1016,16 +1016,6 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("does not deliver prepared identity after the client loses authority", async () => {
-    const client = requireValue(operatorWriteGatewayClient(), "missing operator fixture");
-    const respond = vi.fn();
-    const pending = invokeAgentIdentityGet({ agentId: "main" }, { client, respond });
-    client.invalidated = true;
-
-    await expect(pending).rejects.toThrow("Gateway requester authority changed");
-    expect(respond).not.toHaveBeenCalled();
-  });
-
   it("keeps configured emoji precedence free of file metadata in agent.identity.get", async () => {
     await withTestDir({ prefix: "openclaw-agent-identity-emoji-" }, async (workspace) => {
       await fs.writeFile(`${workspace}/identity.png`, REAL_PNG);

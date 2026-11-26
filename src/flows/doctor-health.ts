@@ -1,6 +1,11 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import type { BackupSqliteSnapshotFact } from "../commands/backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import {
+  traceDoctorMaintenancePending,
+  type DoctorMaintenancePending,
+  type DoctorMaintenancePendingCheck,
+} from "../commands/doctor-maintenance-pending.js";
 import { createDoctorWriteAuthority } from "../commands/doctor-policy-custody.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import * as doctorMode from "../commands/doctor-repair-mode.js";
@@ -156,7 +161,7 @@ async function runDoctorHealthFlowWithResult(
   let maintenance: Awaited<
     ReturnType<typeof import("../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
-  let sqliteNoCowPaths: string[] = [];
+  let sqliteNoCow: { paths: string[]; pending: DoctorMaintenancePending } | undefined;
   const preflightOptions = {
     preserveSourceArtifacts: writeAuthority?.databaseGenerations ? (true as const) : undefined,
   };
@@ -249,6 +254,8 @@ async function runDoctorHealthFlowWithResult(
         }),
       }),
     );
+    const tracePending = (step: string, check?: DoctorMaintenancePendingCheck) =>
+      maintenance ? traceDoctorMaintenancePending(step, check) : undefined;
     const runChecks = async () => {
       signal?.throwIfAborted();
       const doctorRuntime = maintenance ? repairRuntime : effectiveRuntime;
@@ -314,6 +321,7 @@ async function runDoctorHealthFlowWithResult(
 
       const { prepareDoctorClientCredentials } =
         await import("../commands/doctor-client-credentials.js");
+      await tracePending("client-credentials");
       if (
         !(await prepareDoctorClientCredentials({
           runtime: doctorRuntime,
@@ -328,6 +336,7 @@ async function runDoctorHealthFlowWithResult(
       }
 
       if (maintenance && (options.repair === true || options.yes === true)) {
+        await tracePending("state-database-repair");
         const repairedState = await measure("doctor.state-database-repair", () =>
           startup.repairDoctorStateDatabase(
             effectiveRuntime,
@@ -343,6 +352,7 @@ async function runDoctorHealthFlowWithResult(
       if (maintenance) {
         const { prepareDoctorMigrationBackups } =
           await import("../commands/doctor-heartbeat-migration-backup.js");
+        await tracePending("database-migrations");
         await prepareDoctorMigrationBackups({
           schemas,
           env: process.env,
@@ -354,6 +364,7 @@ async function runDoctorHealthFlowWithResult(
         });
       }
 
+      await tracePending("state-schema", () => startup.checkDoctorStateSchemaPending(schemas));
       const stateSchemaPreparation = await measure("doctor.state-schema", () =>
         startup.prepareDoctorStateSchema(
           schemas,
@@ -361,6 +372,7 @@ async function runDoctorHealthFlowWithResult(
           options.fullIntegrityCheck ? "full" : "quick",
         ),
       );
+      await tracePending("runtime-checks");
       const preparedRuntime = await startup.prepareDoctorRuntimeChecks(
         schemas,
         root,
@@ -369,13 +381,14 @@ async function runDoctorHealthFlowWithResult(
         options,
       );
       schemas = preparedRuntime.schemas;
-      sqliteNoCowPaths = preparedRuntime.nocowPaths;
+      sqliteNoCow = preparedRuntime.nocow;
 
       const discovery = schemas.agentDatabaseMigrationDiscovery;
       if (discovery && discovery.stateDir === preparedArchiveDiscovery?.stateDir) {
         discovery.preparedTranscriptArchives = preparedArchiveDiscovery?.preparedTranscriptArchives;
       }
       const { loadAndMaybeMigrateDoctorConfig } = await import("../commands/doctor-config-flow.js");
+      await tracePending("config-flow");
       const configResult = await measure("doctor.config-flow", () =>
         loadAndMaybeMigrateDoctorConfig({
           options,
@@ -451,6 +464,7 @@ async function runDoctorHealthFlowWithResult(
       if (maintenance) {
         const { validateDoctorExternalConfigForStartup } =
           await import("./doctor-external-config.js");
+        await tracePending("external-config");
         if (
           !(await measure("doctor.external-config", () =>
             validateDoctorExternalConfigForStartup(effectiveRuntime),
@@ -461,6 +475,7 @@ async function runDoctorHealthFlowWithResult(
         }
         const { assertDoctorMaintenanceReady } =
           await import("../commands/doctor-maintenance-inspection.js");
+        await tracePending("maintenance-ready");
         const readiness = await measure("doctor.maintenance-ready", () =>
           assertDoctorMaintenanceReady(
             ctx.cfg,
@@ -481,6 +496,7 @@ async function runDoctorHealthFlowWithResult(
         }
         const { repairGatewayMaintenanceStartupFailures } =
           await import("../infra/gateway-boot-lifecycle.js");
+        await tracePending("boot-lifecycle");
         repairGatewayMaintenanceStartupFailures();
       }
       return ctx;
@@ -500,35 +516,18 @@ async function runDoctorHealthFlowWithResult(
               signal,
             ),
       );
-      if (ctx && maintenance && options.repair === true && sqliteNoCowPaths.length > 0) {
-        if (
-          doctorMode.resolveDoctorRepairMode(options).updateInProgress &&
-          !isTruthyEnvValue(process.env[updatePhase.DOCTOR_SQLITE_NOCOW_REPAIR_ENV])
-        ) {
-          effectiveRuntime.log(
-            "SQLite NOCOW repair deferred: the managed updater did not request the store rewrite in this run.",
-          );
-        } else {
-          const activeMaintenance = maintenance;
-          await measure("doctor.sqlite-nocow", () =>
-            activeMaintenance.repairSqliteNoCow(sqliteNoCowPaths),
-          );
-        }
-      }
-      if (ctx && maintenance && ctx.prompter.shouldRepair) {
-        const activeMaintenance = maintenance;
-        if (
-          doctorMode.isDoctorUpdateRepairMode(ctx.prompter.repairMode) &&
-          sqliteReclamationAgents
-        ) {
-          const agents = sqliteReclamationAgents;
-          await measure("doctor.sqlite-reclamation", () =>
-            activeMaintenance.enableSqliteReclamation(agents),
-          );
-        }
-        await measure("doctor.retained-runtimes", () =>
-          activeMaintenance.cleanupRetainedRuntimes(),
-        );
+      if (ctx && maintenance && sqliteNoCow) {
+        const { runDoctorPostCheckMaintenance } =
+          await import("./doctor-health-maintenance-steps.js");
+        await runDoctorPostCheckMaintenance({
+          maintenance,
+          ctx,
+          options,
+          runtime: effectiveRuntime,
+          measure,
+          sqliteNoCow,
+          sqliteReclamationAgents,
+        });
       }
     } catch (error) {
       failure = error;

@@ -495,7 +495,7 @@ describe("sessions_send dispatch admission", () => {
     ) =>
       attachActiveEmbeddedRun("target-session", handle, targetSessionKey, file, "main", operation);
     attach(sibling, operations[1]!);
-    const captured = await operatorCapture.captureGatewayOperatorRunAuthority({
+    const captured = await operatorCapture.prepareGatewayOperatorRunAuthority({
       client: owner,
       context,
       hasCurrentClientAuthority: source.isCurrent,
@@ -635,9 +635,9 @@ describe("sessions_send dispatch admission", () => {
       const capturing = createDeferredCore();
       const allowCapture = createDeferredCore();
       let invocationStarted = false;
-      const capture = operatorCapture.captureGatewayOperatorRunAuthority;
+      const capture = operatorCapture.prepareGatewayOperatorRunAuthority;
       const heldCapture = vi
-        .spyOn(operatorCapture, "captureGatewayOperatorRunAuthority")
+        .spyOn(operatorCapture, "prepareGatewayOperatorRunAuthority")
         .mockImplementation(async (...args) => {
           const captured = await capture(...args);
           if (invocationStarted) {
@@ -884,14 +884,38 @@ describe("sessions_send dispatch admission", () => {
     }
   });
 
-  it.each(["rejected", "pending"] as const)(
+  it("preserves the accepted receipt when the caller is revoked during dispatch", async () => {
+    const controller = new AbortController();
+    const callGateway = mockAgentGateway(async () => {
+      controller.abort(new Error("Caller revoked after acceptance"));
+      return { runId, status: "accepted" };
+    }, true);
+    const result = await execute(
+      createTool({ callGateway, signal: controller.signal }),
+      "accepted-before-revocation",
+    );
+    expect(result.details).toMatchObject({
+      runId,
+      status: "accepted",
+      sessionKey: targetSessionKey,
+    });
+    expect(requestParams(callGateway, "agent")).toHaveLength(1);
+    expect(requestParams(callGateway, "agent.wait")).toHaveLength(0);
+  });
+
+  it.each(["rejected", "revoked", "pending"] as const)(
     "does not install a watch or start A2A when admission is %s",
     async (admission) => {
+      const controller = new AbortController();
+      const rejection = "Task admission failed before dispatch";
       const callGateway = mockGateway(async (request) => {
         switch (request.method) {
           case "agent":
-            if (admission === "rejected") {
-              throw new Error("Task admission failed before dispatch");
+            if (admission !== "pending") {
+              if (admission === "revoked") {
+                controller.abort(new Error(rejection));
+              }
+              throw new Error(rejection);
             }
             return { runId, status: "in_flight", admissionPending: true };
           case "agent.wait":
@@ -900,17 +924,18 @@ describe("sessions_send dispatch admission", () => {
             return unexpectedRequest(request);
         }
       }, true);
-      const result = await execute(createTool({ callGateway }), "send-followup", {
-        watch: true,
-        timeoutSeconds: 1,
-      });
+      const result = await execute(
+        createTool({ callGateway, signal: controller.signal }),
+        "send-followup",
+        { watch: true, timeoutSeconds: 1 },
+      );
       expect.soft(result.details).toMatchObject({
         status: "error",
         runId,
         sessionKey: targetSessionKey,
         error:
-          admission === "rejected"
-            ? "Task admission failed before dispatch"
+          admission !== "pending"
+            ? rejection
             : expect.stringMatching(/admission|unconfirmed|pending/i),
       });
       if (admission === "pending") {

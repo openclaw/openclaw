@@ -285,7 +285,7 @@
   opacity: 0.5;
 }
 
-.session-actions-page__row > span:not(.session-menu__icon) {
+.session-actions-page__row > span:not(.session-menu__icon, .session-menu__avatar) {
   flex: 1;
 }
 

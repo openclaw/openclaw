@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createConfigResolutionFacts, setConfigResolutionFacts } from "./resolution-facts.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot as getSnapshot,
@@ -41,6 +42,8 @@ it.each<[string, Config, string, boolean]>([
     false,
   ],
   ["authored browser profiles", { browser: { profiles: {} } }, "config-presentation", true],
+  ["browser settings", { browser: { headless: true } }, "config-presentation", false],
+  ["logging", { logging: { level: "debug" } }, "config-presentation", true],
   ["agent identity", identity(), "config-profiles", false],
   ["authored sidebar preferences", sidebar(), "config-presentation", true],
   ["authored agent identity", identity(), "config-profiles", true],
@@ -51,6 +54,35 @@ it.each<[string, Config, string, boolean]>([
   const next = { ...initial, ...change };
   setSnapshot(next, authored ? structuredClone(next) : undefined);
   expect(published).toHaveBeenCalledExactlyOnceWith({ all: true, scope });
+});
+
+it.each<[string, Config]>([
+  ["model catalog", { models: { mode: "replace" } }],
+  ["provider credentials", { auth: { order: { openai: ["second"] } } }],
+  ["agent model", { agents: { defaults: { model: { primary: "openai/second" } } } }],
+  ["runtime placement", { cloudWorkers: { requiredProfile: "fixture" } }],
+  ["unknown dependency", Object.assign({ ui: {} }, { futureModelPolicy: { enabled: true } })],
+])("invalidates model metadata for %s", (_label, change) => {
+  setSnapshot({});
+  const before = modelKey();
+  setSnapshot(change);
+  expect(modelKey()).not.toBe(before);
+});
+
+it("scopes resolution provenance to the same reader dependencies as values", () => {
+  const initial: Config = {};
+  setConfigResolutionFacts(initial, createConfigResolutionFacts([]));
+  setSnapshot(initial);
+  const before = modelKey();
+  const changes = watchChanges();
+  const next: Config = {};
+  setConfigResolutionFacts(
+    next,
+    createConfigResolutionFacts([{ configPath: "browser.cdpUrl", varName: "BROWSER_URL" }]),
+  );
+  setSnapshot(next);
+  expect(modelKey()).toBe(before);
+  expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config-presentation" });
 });
 
 it("reuses publication hashes and model keys across equal mutable fleet clones", () => {

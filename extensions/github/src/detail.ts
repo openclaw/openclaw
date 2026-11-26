@@ -59,7 +59,7 @@ const PARTIAL_CACHE_MS = 30_000;
 const CACHE_LIMIT = 32;
 type CachedDocument = {
   document: ControlUiLinkReaderDocument;
-  itemPage: Awaited<ReturnType<ReadDetailPage>>;
+  itemPage?: Awaited<ReturnType<ReadDetailPage>>;
   repositoryId?: number;
   repositoryUrls: string[];
 };
@@ -522,11 +522,11 @@ async function loadGitHubDetailWithIdentity(
         throw new ControlUiGitHubError(409, "GitHub pull request changed; refresh the reader");
       }
     }
-    const result = { document, itemPage, repositoryId, repositoryUrls: [...repositoryUrls] };
+    const result = { document, repositoryId, repositoryUrls: [...repositoryUrls] };
     // Public-only delivery is checked after all awaited content reads, including
     // optional comments/files; a failed authority check cannot become partial data.
     await assertDelivery(result);
-    return result;
+    return section === "overview" && parsed.kind !== "issue" ? { ...result, itemPage } : result;
   };
   const entry = {
     expiresAt: performance.now() + SUCCESS_CACHE_MS,

@@ -283,7 +283,7 @@ suite.define(() => {
         const section = await visitAppearance(page, true);
         await gateway.waitForRequest("users.background.get");
         expect(await section.locator("[data-background-source]").count()).toBe(3);
-        await expectSelected(section, "theme");
+        await expectSelected(section, "none");
 
         const image = await imageFixture(page);
         const asset = imageAsset(image.jpeg);
@@ -396,17 +396,34 @@ suite.define(() => {
       },
     ));
 
-  it("saves an initial explicit None only with the absent-value CAS", () =>
+  it("starts with None and paints theme artwork only after opting in", () =>
     suite.withPage({ viewport: desktop }, async ({ page }) => {
       const gateway = await installBackground(page, null, {
         methodResponses: { "users.prefs.set": { status: "conflict" } },
       });
       await visitAppearance(page, true);
       await gateway.waitForRequest("users.background.get");
-      const preference = preferenceFor("none");
-      await changePreference(page, gateway, () => source(page, "none").click(), preference);
-      await page.reload();
       await expectSelected(page, "none");
+      const theme = preferenceFor("theme");
+      await changePreference(page, gateway, () => source(page, "theme").click(), theme);
+      await page.reload();
+      await expectSelected(page, "theme");
+      await openRoute(page, "new", "new-session");
+      const artwork = page.locator(".session-background__image--theme");
+      await artwork.waitFor({ state: "visible" });
+      expect(await artwork.evaluate((node) => getComputedStyle(node).backgroundImage)).toMatch(
+        /claw-light[^/]*.webp/u,
+      );
+      await visitAppearance(page);
+      await changePreference(
+        page,
+        gateway,
+        () => source(page, "none").click(),
+        preferenceFor("none"),
+        theme,
+      );
+      await openRoute(page, "new", "new-session");
+      await expectCount(page, backgroundImage, 0);
     }));
 
   it.each(["none", "theme"] as const)(

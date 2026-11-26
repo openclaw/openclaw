@@ -12,7 +12,7 @@ import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
 } from "./methods/registry.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { listSystemChanges } from "./server-methods/system-changes.js";
 import { usersHandlers } from "./server-methods/users.js";
 import {
@@ -51,7 +51,7 @@ it("looks up, assigns and clears a profile role under the original operator", as
         params: Record<string, unknown>,
       ) => {
         const source = expectDefined(
-          await captureGatewayOperatorRunAuthority({ client, context }),
+          await prepareGatewayOperatorRunAuthority({ client, context }),
           "operator admission",
         );
         try {

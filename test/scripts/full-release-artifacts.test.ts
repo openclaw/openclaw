@@ -1,11 +1,27 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { runInNewContext } from "node:vm";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
+import { continueFailed, preflightContinuation } from "../../scripts/frv.mjs";
+import { selectPublicationArtifactSource } from "../../scripts/full-release-artifacts.mjs";
+import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
+import {
+  buildReleaseExecutionPlanArtifact,
+  validateReleaseExecutionPlanArtifact,
+  releaseExecutionPlanSha256,
+  releaseChildSpec,
+} from "../../scripts/full-release-validation-policy.mjs";
+import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
+import { validateReleaseRunEvidence } from "../../scripts/release-ci-summary.mjs";
+import { authenticateCandidateOwnedArtifact } from "../../scripts/validate-full-release-validation-evidence.mjs";
+import { fullReleaseCandidateManifestFixture } from "../helpers/full-release-candidate.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
+import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 
 const SCRIPT = resolve("scripts/full-release-artifacts.mjs");
 const REPOSITORY = "openclaw/openclaw";
@@ -214,15 +230,20 @@ globalThis.fetch = async (input, init) => {
     api(`actions/runs/${path}`, workflowRun(overrides));
   const jobsApi = (attempt: number, jobs: unknown[]) =>
     list(`actions/runs/81/attempts/${attempt}/jobs?per_page=100&page=1`, "jobs", jobs);
-  const run = (command: string, env: NodeJS.ProcessEnv = {}, script = SCRIPT) => {
+  const run = (
+    command: string,
+    env: NodeJS.ProcessEnv = {},
+    script = SCRIPT,
+    { preloadFetch = true, executable = process.execPath } = {},
+  ) => {
     const directory = join(root, `invocation-${++invocation}`);
     mkdirSync(directory);
     const outputPath = join(directory, "github-output");
     const callsPath = join(directory, "calls.jsonl");
     writeFileSync(responsesPath, JSON.stringify({ responses, downloads, calls: {} }));
     const result = spawnSync(
-      process.execPath,
-      ["--import", pathToFileURL(preloadPath).href, script, command],
+      executable,
+      [...(preloadFetch ? ["--import", pathToFileURL(preloadPath).href] : []), script, command],
       {
         cwd: root,
         encoding: "utf8",
@@ -525,10 +546,10 @@ function publicationReuseFixture(
   const sdk = sdkArchive.metadata;
   const pluginArchive = withPayloads
     ? test.artifactFiles(
-        `plugin-npm-prepared-${SOURCE_SHA}-101-1`,
+        `plugin-npm-prepared-${SOURCE_SHA}-1001-1`,
         { "prepared.json": "{}" },
         false,
-        101,
+        1001,
       )
     : null;
   const plugin = pluginArchive
@@ -538,7 +559,7 @@ function publicationReuseFixture(
         workflowSha: TOOLING_SHA,
         workflowHeadBranch: workflowRef,
         workflowEvent: "workflow_dispatch",
-        runId: 101,
+        runId: 1001,
         runAttempt: 1,
         artifactId: pluginArchive.metadata.id,
         artifactName: pluginArchive.metadata.name,
@@ -547,9 +568,9 @@ function publicationReuseFixture(
       }
     : null;
   if (plugin) {
-    for (const suffix of ["101", "101/attempts/1"]) {
+    for (const suffix of ["1001", "1001/attempts/1"]) {
       test.runApi(suffix, {
-        id: 101,
+        id: 1001,
         ...completed,
         head_branch: workflowRef,
         path: plugin.workflowPath,
@@ -589,6 +610,7 @@ process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
   );
   return {
     ...test,
+    publicationArtifacts: evidence.manifest.publicationArtifacts,
     docker,
     sdk,
     payloads,
@@ -600,7 +622,11 @@ process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
       ...architectureArchives,
       ...(pluginArchive ? [pluginArchive] : []),
     ],
-    verifyRetained: (options: Record<string, unknown>, root = evidence.manifest) => {
+    verifyRetained: (
+      options: Record<string, unknown>,
+      root = evidence.manifest,
+      env: NodeJS.ProcessEnv = {},
+    ) => {
       const entrypoint = join(test.root, "verify-retained.mjs");
       writeFileSync(
         entrypoint,
@@ -616,6 +642,7 @@ console.log(JSON.stringify(result));
           // Recovery tooling can differ; original identities come only from root.
           PARENT_WORKFLOW_SHA: "f".repeat(40),
           PLUGIN_NPM_REQUIRED: withPayloads ? "true" : "false",
+          ...env,
         },
         entrypoint,
       );
@@ -1077,6 +1104,105 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     expect(receipt.outputs).toEqual(test.outputs);
   });
 
+  it.each([
+    ["both ready", "success", true, ""],
+    ["source pending", null, true, "Fixture reached another artifact poll"],
+    ["source failed", "failure", false, "ended with failure"],
+    ["source skipped", "skipped", true, "ended with skipped"],
+    ["source only", "success", false, "Fixture reached another artifact poll"],
+  ] as const)(
+    "joins the original source and raw package for scheduling: %s",
+    (_case, conclusion, raw, error) => {
+      const test = fixture();
+      const source = {
+        ...test.jobs[0],
+        name: "Prepare npm artifacts / Check npm release source",
+        id: 903,
+        status: conclusion ? "completed" : "in_progress",
+        conclusion,
+        html_url: "https://example.com/job/903",
+      };
+      test.jobsApi(1, [...test.jobs, source]);
+      if (raw) {
+        test.rawArtifact();
+      } else {
+        test.list(
+          "actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-1&per_page=100",
+          "artifacts",
+          [],
+        );
+      }
+      const result = test.wait("source-and-package", { FIXTURE_STOP_ON_WAIT: "true" });
+      if (error) {
+        expectRejected(result, error);
+        expect(result.outputs.prepared_bundle_json).toBeUndefined();
+      } else {
+        expectSuccess(result);
+        expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
+      }
+    },
+  );
+
+  it.each(["skipped", "neutral", "missing descriptor"])(
+    "stops on terminal package evidence: %s",
+    (fault) => {
+      const test = fixture();
+      test.jobsApi(1, [
+        { ...test.jobs[0], conclusion: fault === "missing descriptor" ? "success" : fault },
+        { ...test.jobs[0], id: 903, name: "Prepare npm artifacts / Check npm release source" },
+      ]);
+      test.runApi("81", completed);
+      test.list(
+        "actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-1&per_page=100",
+        "artifacts",
+        [],
+      );
+      expectRejected(
+        test.wait("source-and-package", { FIXTURE_ADVANCE_RETRY_CLOCK: "true" }),
+        fault === "missing descriptor" ? "no verified package descriptor" : `ended with ${fault}`,
+      );
+    },
+  );
+
+  it.each([
+    ["green original", "success", 1, ""],
+    ["failed original", "failure", 1, "ended with failure"],
+    ["skipped original", "skipped", 1, "ended with skipped"],
+    ["cancelled original", "cancelled", 1, "ended with cancelled"],
+    ["missing original", "success", 0, "Missing successful"],
+    ["ambiguous original", "success", 2, "Ambiguous scheduling job"],
+  ] as const)(
+    "uses only the initial parent preparation on rerun: %s",
+    (_case, conclusion, count, error) => {
+      const test = fixture();
+      const job = {
+        ...test.jobs[0],
+        run_id: 51,
+        name: "Prepare initial release npm artifacts",
+        conclusion,
+      };
+      test.runApi("51/attempts/1", {
+        id: 51,
+        path: ".github/workflows/full-release-validation.yml",
+        status: "completed",
+      });
+      test.list("actions/runs/51/attempts/1/jobs?per_page=100&page=1", "jobs", [
+        ...Array.from({ length: count }, (_, index) => ({ ...job, id: 901 + index })),
+        { ...job, id: 903, name: "Prepare release npm artifacts", conclusion: "skipped" },
+      ]);
+      const result = test.run("verify-initial-npm", {
+        GITHUB_RUN_ATTEMPT: "2",
+        FIXTURE_STOP_ON_WAIT: "true",
+      });
+      if (error) {
+        expectRejected(result, error);
+      } else {
+        expectSuccess(result);
+      }
+      expect(Object.keys(result.apiCalls).join(" ")).not.toContain("attempts/2");
+    },
+  );
+
   it("keeps polling when the npm descriptor appears before its producer job completes", () => {
     const test = fixture();
     const pending = { ...test.jobs[0], status: "in_progress", conclusion: null };
@@ -1295,5 +1421,752 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     const result = test.wait("raw");
     expectRejected(result, "Artifact npm producer failed");
     expect(result.calls).toEqual([]);
+  });
+});
+
+function selectionFixture(
+  options: {
+    packageMismatch?: boolean;
+    tamperedReceipt?: boolean;
+    workloadChanged?: boolean;
+    preflightFirst?: boolean;
+    bothNpmExecuted?: boolean;
+  } = {},
+) {
+  const retained = publicationReuseFixture(false, true);
+  const f = candidatePublicationFixture({
+    runId: "51",
+    preflightFirst: options.preflightFirst,
+    candidateSha: SOURCE_SHA,
+    qualificationSha: TOOLING_SHA,
+    candidateVersion: "2026.8.1",
+    releaseProfile: "stable",
+  });
+  f.parent.conclusion = "failure";
+  const current = candidatePublicationFixture({
+    runId: "99",
+    preflightFirst: options.preflightFirst,
+    candidateSha: f.c,
+    qualificationSha: "c".repeat(40),
+    candidateVersion: "2026.8.1",
+    releaseProfile: "stable",
+    publicationArtifactSource: { runId: "51", runAttempt: 1 },
+  });
+  const request = f.plan.candidateRequest;
+  const candidate = fullReleaseCandidateManifestFixture({
+    ...request,
+    upgradeSurvivorBaseline: request.upgradeBaseline,
+    upgradeSurvivorBaselines: request.upgradeSurvivorBaselines.join(" "),
+  });
+  candidate.package.version = f.plan.targetVersion;
+  candidate.package.packageSha256 = retained.raw.package.sha256;
+  candidate.sharedImage.packageSha256 = retained.raw.package.sha256;
+  for (const part of [
+    candidate.package,
+    candidate.sharedImage,
+    candidate.prepublishPluginRegistry,
+  ]) {
+    part.artifact.expiresAt = "2099-01-01T00:00:00Z";
+  }
+  const candidateBytes = makeStoredZip({
+    "full-release-candidate.json": JSON.stringify(candidate),
+  });
+  f.plan.candidate = buildFullReleaseCandidateBinding({
+    manifest: candidate,
+    artifact: {
+      id: "104",
+      name: "full-release-candidate-v2-" + candidate.requestSha256,
+      digest: sha256(candidateBytes),
+      expiresAt: "2099-01-01T00:00:00Z",
+      runId: "77",
+      runAttempt: "1",
+    },
+  });
+  f.plan.sha256 = releaseExecutionPlanSha256(f.plan);
+  const qualified = structuredClone(retained.qualified);
+  if (options.packageMismatch) {
+    qualified.preparedBundle.package.sha256 = "0".repeat(64);
+  }
+  const archives = new Map<string, Buffer>([["104", candidateBytes]]);
+  const artifacts = new Map<string, Array<Record<string, unknown>>>();
+  const runs = new Map<string, Record<string, unknown>>();
+  const logs = new Map<number, string>();
+  const jobs: Array<Record<string, unknown>> = [
+    {
+      id: 521,
+      name: options.preflightFirst
+        ? "Prepare release npm artifacts"
+        : "Prepare initial release npm artifacts",
+      conclusion: options.bothNpmExecuted ? "success" : "skipped",
+    },
+  ];
+  for (const { stage, id, name } of [
+    {
+      stage: "npm",
+      id: "81",
+      name: options.preflightFirst
+        ? "Prepare initial release npm artifacts"
+        : "Prepare release npm artifacts",
+    },
+    { stage: "docker", id: "91", name: "Prepare release Docker artifacts" },
+  ]) {
+    const run = {
+      ...f.parent,
+      id: Number(id),
+      conclusion: "success",
+      path: ".github/workflows/full-release-artifacts.yml",
+      display_title: "Full Release Artifacts full-release-validation-51-1-artifacts-" + stage,
+    };
+    runs.set(id, run);
+    const receipt = {
+      schema: "openclaw.full-release-artifact-receipt/v1",
+      stage,
+      sourceSha: options.tamperedReceipt ? "0".repeat(40) : f.c,
+      toolingSha: f.q,
+      dispatchId: "full-release-validation-51-1-artifacts-" + stage,
+      repository: f.repository,
+      workflowRef: f.branch,
+      releaseTag: "v" + f.plan.targetVersion,
+      preflightPhase: "all",
+      runId: id,
+      runAttempt: "1",
+      outputs:
+        stage === "npm"
+          ? {
+              prepared_bundle_json: JSON.stringify(qualified.preparedBundle),
+              qualified_preflight_bundle_json: JSON.stringify(qualified),
+            }
+          : {
+              prepared_run_id: id,
+              prepared_run_attempt: "1",
+              prepared_artifact_name: retained.docker.preparedArtifactName,
+              prepared_manifest_sha256: retained.docker.preparedManifestSha256,
+            },
+    };
+    const bytes = makeStoredZip({ "artifact-receipt.json": JSON.stringify(receipt) });
+    archives.set(id, bytes);
+    artifacts.set(id, [
+      {
+        id: Number(id),
+        name: "full-release-artifact-receipt-" + id + "-1",
+        digest: "sha256:" + sha256(bytes),
+        size_in_bytes: bytes.length,
+        expired: false,
+        workflow_run: { id: Number(id), head_sha: f.q },
+      },
+    ]);
+    jobs.push({ id: Number(id), name });
+    logs.set(
+      Number(id),
+      "Dispatched full-release-artifacts.yml: https://github.com/openclaw/openclaw/actions/runs/" +
+        id +
+        " (attempt 1)",
+    );
+  }
+  const plugin = retained.publicationArtifacts.pluginNpm!;
+  const pluginArchive = retained.artifact(
+    plugin.artifactName,
+    "plugin-npm-prepared.json",
+    {
+      producer: {
+        repository: plugin.repository,
+        workflowPath: plugin.workflowPath,
+        workflowSha: plugin.workflowSha,
+        workflowHeadBranch: plugin.workflowHeadBranch,
+        workflowEvent: plugin.workflowEvent,
+        runId: plugin.runId,
+        runAttempt: plugin.runAttempt,
+      },
+    },
+    false,
+    1001,
+  );
+  archives.set(String(pluginArchive.metadata.id), pluginArchive.bytes);
+  artifacts.set("1001", [pluginArchive.metadata]);
+  runs.set("1001", {
+    ...f.parent,
+    id: 1001,
+    conclusion: "success",
+    path: ".github/workflows/plugin-npm-release.yml",
+  });
+  jobs.push({ id: 1001, name: "Prepare exact plugin npm artifacts" });
+  logs.set(
+    1001,
+    "Dispatched plugin-npm-release.yml: https://github.com/openclaw/openclaw/actions/runs/1001 (attempt 1)",
+  );
+  const candidateRun = {
+    ...f.parent,
+    id: 77,
+    conclusion: "success",
+    path: ".github/workflows/full-release-validation.yml",
+  };
+  const constituents = [
+    f.plan.candidate.evidenceArtifact,
+    candidate.package.artifact,
+    candidate.sharedImage.artifact,
+    candidate.prepublishPluginRegistry.artifact,
+  ];
+  const client = {
+    ...f.client,
+    readWorkloadIdentity: async (path: string) => {
+      if (path.startsWith("compare/")) {
+        return {
+          status: "ahead",
+          merge_base_commit: { sha: f.q },
+          files: [
+            {
+              filename: options.workloadChanged
+                ? "src/index.ts"
+                : ".github/workflows/full-release-validation.yml",
+              status: "modified",
+            },
+          ],
+        };
+      }
+      const source = Buffer.from("jobs:\n  checks:\n    runs-on: ubuntu-latest\n");
+      const blobSha = createHash("sha1")
+        .update("blob " + source.length + "\0")
+        .update(source)
+        .digest("hex");
+      const root = path === "git/commits/" + f.q ? "1".repeat(40) : "2".repeat(40);
+      if (path.startsWith("git/commits/")) {
+        return { sha: path.slice(12), tree: { sha: root } };
+      }
+      if (path.startsWith("git/blobs/")) {
+        return {
+          sha: blobSha,
+          encoding: "base64",
+          content: source.toString("base64"),
+          size: source.length,
+        };
+      }
+      const sha = path.slice(10);
+      const entry = (name: string, oid: string, type = "tree") => ({
+        path: name,
+        sha: oid,
+        type,
+        mode: type === "tree" ? "040000" : "100644",
+      });
+      const tree =
+        sha === "3".repeat(40)
+          ? [entry("workflows", "4".repeat(40))]
+          : sha === "4".repeat(40)
+            ? [entry("openclaw-release-checks.yml", blobSha, "blob")]
+            : [entry(".github", "3".repeat(40)), entry("src", sha)];
+      return { sha, truncated: false, tree };
+    },
+    getRun: async (id: string) => runs.get(id) ?? f.client.getRun(id),
+    getRunAttempt: (id: string, attempt: number) =>
+      id === "77" ? candidateRun : f.client.getRunAttempt(id, attempt),
+    getRunAttemptJobs: async (id: string) =>
+      id === "77"
+        ? [candidate.producer, candidate.publisher].map((job) => ({
+            id: Number(job.jobId),
+            name: job.jobName,
+            status: "completed",
+            conclusion: "success",
+            head_sha: f.q,
+            run_id: 77,
+            run_attempt: 1,
+          }))
+        : [...(await f.client.getRunAttemptJobs(id)), ...jobs],
+    getJobLog: async (id: number) => logs.get(id) ?? f.client.getJobLog(id),
+    getRunArtifacts: (id: string) => artifacts.get(id) ?? [],
+    getArtifact: async (id: string) => {
+      const receipt = [...artifacts.values()].flat().find((entry) => String(entry.id) === id);
+      if (receipt) {
+        return receipt;
+      }
+      const a = constituents.find((entry) => entry.id === id)!;
+      return {
+        id: Number(id),
+        name: a.name,
+        digest: "sha256:" + a.digest,
+        expires_at: a.expiresAt,
+        expired: false,
+        size_in_bytes: candidateBytes.length,
+        workflow_run: { id: Number(a.runId), head_sha: f.q },
+      };
+    },
+    downloadArtifactArchive: async ({
+      expected,
+    }: {
+      expected: { artifactId: number; artifactDigest: string };
+    }) => {
+      const archiveBytes = archives.get(String(expected.artifactId))!;
+      if ("sha256:" + sha256(archiveBytes) !== expected.artifactDigest) {
+        throw new Error("archive digest mismatch");
+      }
+      return {
+        archiveBytes,
+        artifactMetadata: await client.getArtifact(String(expected.artifactId)),
+      };
+    },
+    verifyRetainedPublicationArtifacts: vi.fn(
+      async (root: Parameters<typeof retained.verifyRetained>[1], env: NodeJS.ProcessEnv) => {
+        const verified = expectSuccess(
+          retained.verifyRetained({ verifyPayloads: true }, root, {
+            RELEASE_TAG: env.RELEASE_TAG,
+          }),
+        );
+        return JSON.parse(verified.stdout);
+      },
+    ),
+  };
+  const env = {
+    GITHUB_REPOSITORY: f.repository,
+    GITHUB_RUN_ID: "99",
+    GITHUB_RUN_ATTEMPT: "1",
+    TARGET_SHA: f.c,
+    PARENT_WORKFLOW_SHA: current.q,
+    SOURCE_ADMISSION_JSON: JSON.stringify(current.source),
+    CANDIDATE_REQUEST_JSON: JSON.stringify({ ...candidate.request, toolingSha: current.q }),
+    RELEASE_TAG: "v" + candidate.package.version,
+  };
+  return { f, current, client, env, candidate, archives, artifacts, qualified };
+}
+
+async function selectedPublicationFixture(preflightFirst = false) {
+  const { f, current, client, env } = selectionFixture({ preflightFirst });
+  const selected = await selectPublicationArtifactSource(
+    { runId: "51", runAttempt: 1 },
+    env,
+    client,
+  );
+  Object.assign(
+    current.plan,
+    buildReleaseExecutionPlanArtifact({
+      ...current.plan,
+      expected: current.plan,
+      candidate: selected.candidate,
+      publicationArtifactSource: selected.source,
+    }),
+  );
+  Object.assign(current.manifest, {
+    candidateBinding: selected.candidate,
+    publicationArtifactSource: selected.source,
+    publicationArtifacts: selected.publicationArtifacts,
+    executionPlanSha256: current.plan.sha256,
+  });
+  expect(validateReleaseExecutionPlanArtifact(current.plan).candidate).toEqual(selected.candidate);
+  const finalClient = {
+    ...current.client,
+    selectPublicationArtifactSource(
+      selection: { runId: string; runAttempt: number },
+      selectionEnv: NodeJS.ProcessEnv,
+    ) {
+      return selectPublicationArtifactSource(selection, selectionEnv, this);
+    },
+    readWorkloadIdentity: client.readWorkloadIdentity,
+    getArtifact: client.getArtifact,
+    getRunArtifacts: client.getRunArtifacts,
+    downloadArtifactArchive: client.downloadArtifactArchive,
+    verifyRetainedPublicationArtifacts: client.verifyRetainedPublicationArtifacts,
+    getRun: (id: string) =>
+      ["51", "77", "81", "91", "1001"].includes(id) ? client.getRun(id) : current.client.getRun(id),
+    getRunAttempt: (id: string, attempt: number) =>
+      ["51", "77", "81", "91", "1001"].includes(id)
+        ? client.getRunAttempt(id, attempt)
+        : current.client.getRunAttempt(id, attempt),
+    getRunAttemptJobs: async (id: string) => {
+      if (id === "51") {
+        // Preserve the original fixture's job identities for source authentication.
+        const jobs = structuredClone(await client.getRunAttemptJobs(id));
+        for (const job of jobs) {
+          job.id = Number(job.id) + 1e12;
+        }
+        return jobs;
+      }
+      return id === "77" ? client.getRunAttemptJobs(id) : current.client.getRunAttemptJobs(id);
+    },
+    getJobLog: (id: number) =>
+      id >= 1e12 ? client.getJobLog(id - 1e12) : current.client.getJobLog(id),
+    getWorkflowSource: (sha: string, path?: string) =>
+      sha === f.q
+        ? f.client.getWorkflowSource(sha, path)
+        : current.client.getWorkflowSource(sha, path),
+    loadExecutionPlanEvidence: (id: string) =>
+      id === "51"
+        ? f.client.loadExecutionPlanEvidence()
+        : current.client.loadExecutionPlanEvidence(),
+    verifyQualificationAdmission: (
+      options: Parameters<typeof current.client.verifyQualificationAdmission>[0],
+    ) =>
+      options.qualificationSha === f.q
+        ? f.client.verifyQualificationAdmission(options)
+        : current.client.verifyQualificationAdmission(options),
+  };
+  return { f, current, client, env, selected, finalClient };
+}
+
+async function retainedRecoveryFixture(legacy = false, preflightFirst = false) {
+  const selectedFixture = await selectedPublicationFixture(preflightFirst);
+  const { current, finalClient } = selectedFixture;
+  if (legacy) {
+    const getWorkflowSource = finalClient.getWorkflowSource;
+    finalClient.getWorkflowSource = (sha: string, path?: string) =>
+      getWorkflowSource(sha, path).replace('  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"\n', "");
+  }
+  const parentJobs = await current.client.getRunAttemptJobs(current.runId);
+  const parallel = "Prepare release npm artifacts";
+  const initial = "Prepare initial release npm artifacts";
+  parentJobs.push({
+    ...parentJobs[0]!,
+    id: 19999,
+    name: preflightFirst ? parallel : initial,
+    conclusion: "skipped",
+  });
+  for (const name of [
+    preflightFirst ? initial : parallel,
+    "Prepare release Docker artifacts",
+    "Prepare exact plugin npm artifacts",
+    ...current.plan.children
+      .filter((entry) => entry.selected)
+      .map((entry) => releaseChildSpec(entry.key).parentJobName),
+  ]) {
+    if (!parentJobs.some((job) => job.name === name)) {
+      parentJobs.push({ ...parentJobs[0]!, id: 20000 + parentJobs.length, name });
+    }
+  }
+  const logs = new Map<number, string>();
+  for (const job of parentJobs) {
+    const child = current.plan.children.find(
+      (entry) => entry.selected && releaseChildSpec(entry.key).parentJobName === job.name,
+    );
+    logs.set(
+      job.id,
+      [
+        "RERUN_GROUP: all",
+        "FAIL_FAST: false",
+        `TARGET_SHA: ${current.c}`,
+        ...(child
+          ? [
+              "CI_RELEASE_SCOPE: npm-stable",
+              "-f publish_reports=false",
+              `Dispatched ${releaseChildSpec(child.key).workflow}: https://github.com/${current.repository}/actions/runs/${child.runId} (attempt 1)`,
+            ]
+          : ["Retained original artifact descriptor"]),
+      ].join("\n"),
+    );
+  }
+  const client = {
+    repository: current.repository,
+    getReleaseEvidenceClient: () => finalClient,
+    getRunAttempt: async (id: string, attempt: number) =>
+      id === current.runId
+        ? { ...current.parent, display_title: "Full Release Validation" }
+        : finalClient.getRunAttempt(id, attempt),
+    getParentJobs: async () => parentJobs,
+    getJobLog: async (id: number) => logs.get(id)!,
+    getRun: finalClient.getRun,
+    getAttemptJobs: finalClient.getRunAttemptJobs,
+    rerunJob: vi.fn(),
+    rerunParent: vi.fn(),
+  };
+  return { ...selectedFixture, recoveryClient: client, parentJobs, logs };
+}
+
+describe("explicit publication artifact selection", () => {
+  it.each([false, true])(
+    "recovers retained bytes with the admitted npm slot and existing credential (preflight first: %s)",
+    async (preflightFirst) => {
+      const { current, recoveryClient, finalClient } = await retainedRecoveryFixture(
+        false,
+        preflightFirst,
+      );
+      const downloadArchive = finalClient.downloadArtifactArchive;
+      let downloads = 0;
+      finalClient.downloadArtifactArchive = async (options) => {
+        if (!("token" in options) || options.token !== "synthetic-recovery-token") {
+          throw new Error("Retained candidate download omitted the existing GitHub credential");
+        }
+        downloads += 1;
+        return downloadArchive(options);
+      };
+      vi.stubEnv("GH_TOKEN", "synthetic-recovery-token");
+      try {
+        await preflightContinuation(current.plan, current.runId, recoveryClient);
+        expect(downloads).toBeGreaterThan(0);
+        expect(JSON.stringify(current.plan)).not.toContain("synthetic-recovery-token");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+  it.each([false, true])(
+    "recovers a retained-original parent without inventing a new npm dispatch (legacy: %s)",
+    async (legacy) => {
+      const { current, recoveryClient, client } = await retainedRecoveryFixture(legacy);
+      client.verifyRetainedPublicationArtifacts.mockClear();
+      const before = JSON.stringify(current.plan);
+      await expect(
+        preflightContinuation(current.plan, current.runId, recoveryClient),
+      ).resolves.toMatchObject({
+        artifactProducers: [],
+        pendingArtifactProducers: false,
+      });
+      expect(client.verifyRetainedPublicationArtifacts).toHaveBeenCalledOnce();
+      expect(JSON.stringify(current.plan)).toBe(before);
+      const normalCi = current.plan.children.find((entry) => entry.key === "normalCi")!;
+      const [job] = await recoveryClient.getAttemptJobs(normalCi.runId);
+      if (typeof job?.name !== "string") {
+        throw new Error("Expected the fixture normal CI job name");
+      }
+      await expect(
+        continueFailed(current.plan, current.runId, recoveryClient, {
+          job: `normalCi:${job.name}`,
+          noFollow: true,
+          dryRun: true,
+          log: () => {},
+        }),
+      ).resolves.toMatchObject({ action: "would-rerun" });
+      expect(recoveryClient.rerunJob).not.toHaveBeenCalled();
+      expect(recoveryClient.rerunParent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["missing", "forged", "ambiguous"])(
+    "refuses %s retained-original evidence before retry",
+    async (fault) => {
+      const { current, recoveryClient, finalClient } = await retainedRecoveryFixture();
+      if (fault === "missing") {
+        const getRunArtifacts = finalClient.getRunArtifacts;
+        finalClient.getRunArtifacts = (id: string) => (id === "81" ? [] : getRunArtifacts(id));
+      } else {
+        const getJobLog = finalClient.getJobLog;
+        finalClient.getJobLog = async (id: number) => {
+          const log = await getJobLog(id);
+          return id !== 1e12 + 81
+            ? log
+            : fault === "forged"
+              ? log.replace("openclaw/openclaw", "forged/repository")
+              : log + "\n" + log;
+        };
+      }
+      await expect(
+        continueFailed(current.plan, current.runId, recoveryClient, {
+          job: "normalCi:checks-node-compact-large-17 (node)",
+          noFollow: true,
+          log: () => {},
+        }),
+      ).rejects.toThrow(
+        fault === "forged" ? "original dispatch identity differs" : "missing or ambiguous",
+      );
+      expect(recoveryClient.rerunJob).not.toHaveBeenCalled();
+      expect(recoveryClient.rerunParent).not.toHaveBeenCalled();
+    },
+  );
+  it.each([true, false])(
+    "runs workflow selection in its provisioned checkout (admitted Q: %s)",
+    (admitted) => {
+      const test = fixture();
+      const steps = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"))
+        .jobs.evidence_reuse.steps;
+      const install = steps.find(
+        (step: { name?: string }) => step.name === "Install qualification verifier dependencies",
+      );
+      const selection = steps.find((step: { id?: string }) => step.id === "artifacts");
+      const source = {
+        ...(admitted ? { qualificationAdmission: { workflowSha: "c".repeat(40) } } : {}),
+        coverage: {
+          publication_artifact_source_json: JSON.stringify({ runId: "51", runAttempt: 1 }),
+        },
+      };
+      const context = {
+        needs: {
+          resolve_target: {
+            result: "success",
+            outputs: { source_admission_json: JSON.stringify(source) },
+          },
+        },
+        github: { workspace: test.root },
+        fromJSON: JSON.parse,
+        format: (pattern: string, workspace: string) => pattern.replace("{0}", workspace),
+      };
+      const evaluate = (expression: string) =>
+        runInNewContext(expression.replace(/^\s*\$\{\{|\}\}\s*$/gu, "").trim(), context);
+      for (const checkout of ["workflow", "qualification-verifier"]) {
+        // Copy real scripts, not a symlink that could resolve dependencies in the source checkout.
+        cpSync("scripts", join(test.root, checkout, "scripts"), { recursive: true });
+      }
+      const provisioned = evaluate(install["working-directory"]);
+      expect(provisioned).toBe(admitted ? "qualification-verifier" : "workflow");
+      symlinkSync(resolve("node_modules"), join(test.root, provisioned, "node_modules"), "dir");
+      expect(
+        existsSync(
+          join(test.root, admitted ? "workflow" : "qualification-verifier", "node_modules"),
+        ),
+      ).toBe(false);
+      const script = join(test.root, "select-artifacts.sh");
+      writeFileSync(script, selection.run);
+      const result = test.run(
+        "reuse",
+        {
+          SOURCE_ADMISSION_JSON: JSON.stringify(source),
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: evaluate(
+            selection.env.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR,
+          ),
+        },
+        script,
+        { preloadFetch: false, executable: "bash" },
+      );
+      expect(result.status, result.stderr).toBe(1);
+      expectRejected(
+        result,
+        "Selected publication artifact parent attempt changed or is not terminal",
+      );
+      expect(result.apiCalls[`repos/${REPOSITORY}/actions/runs/51`]).toBe(1);
+      expect(result.outputs).toEqual({});
+      expect(selection.env.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
+    },
+  );
+  it("runs explicit selection through the direct CLI and reports asynchronous evidence rejection", () => {
+    const test = fixture();
+    // Match the workflow node command, without preloads or the test runner's Bun executable.
+    const result = test.run(
+      "reuse",
+      {
+        SOURCE_ADMISSION_JSON: JSON.stringify({
+          coverage: {
+            publication_artifact_source_json: JSON.stringify({ runId: "51", runAttempt: 1 }),
+          },
+        }),
+      },
+      SCRIPT,
+      { preloadFetch: false, executable: "node" },
+    );
+    expect(result.status, result.stderr).toBe(1);
+    expectRejected(
+      result,
+      "Selected publication artifact parent attempt changed or is not terminal",
+    );
+    expect(result.apiCalls[`repos/${REPOSITORY}/actions/runs/51`]).toBe(1);
+    expect(result.outputs).toEqual({});
+  });
+  it("rejects a caller release tag that differs from the sealed candidate", async () => {
+    const { client, env } = selectionFixture();
+    await expect(
+      selectPublicationArtifactSource(
+        { runId: "51", runAttempt: 1 },
+        { ...env, RELEASE_TAG: "v2026.8.2" },
+        client,
+      ),
+    ).rejects.toThrow("release tag differs from the sealed candidate");
+    expect(client.verifyRetainedPublicationArtifacts).not.toHaveBeenCalled();
+  });
+  it("keeps exact receipt tag equality in the real retained verifier", () => {
+    const retained = publicationReuseFixture(false, true);
+    expectRejected(
+      retained.verifyRetained({ verifyPayloads: true }, undefined, { RELEASE_TAG: "v2026.8.2" }),
+      RECEIPT_MISMATCH,
+    );
+  });
+  it("rejects an inactive npm slot that also executed", async () => {
+    const { client, env } = selectionFixture({ preflightFirst: true, bothNpmExecuted: true });
+    await expect(
+      selectPublicationArtifactSource({ runId: "51", runAttempt: 1 }, env, client),
+    ).rejects.toThrow("inactive npm scheduling slot also executed");
+  });
+  it("adopts exact original bytes from a failed parent without changing producer Q", async () => {
+    const { f, client, env } = selectionFixture();
+    const selected = await selectPublicationArtifactSource(
+      { runId: "51", runAttempt: 1 },
+      env,
+      client,
+    );
+    expect(selected.candidate).toEqual(f.plan.candidate);
+    expect(selected.source).toEqual(f.source);
+    expect(selected.outputs.publication_artifacts_reused).toBe("true");
+    expect(client.verifyRetainedPublicationArtifacts).toHaveBeenCalledOnce();
+  });
+  it("seals and authenticates historical bytes through final verification and publication", async () => {
+    const { f, current, client, selected, finalClient } = await selectedPublicationFixture();
+    const options = {
+      repository: current.repository,
+      runId: current.runId,
+      trustedWorkflowSha: current.p,
+      trustedWorkflowFullRef: current.publisherFullRef,
+      trustedWorkflowRef: current.publisherFullRef.replace("refs/tags/", ""),
+      verifierSourceSha: current.p,
+      verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
+    };
+    const downloadArchive = finalClient.downloadArtifactArchive;
+    let authenticatedDownloads = 0;
+    finalClient.downloadArtifactArchive = async (downloadOptions) => {
+      if (!("token" in downloadOptions) || downloadOptions.token !== "synthetic-verifier-token") {
+        throw new Error("Final verifier omitted the existing GitHub credential");
+      }
+      authenticatedDownloads += 1;
+      return downloadArchive(downloadOptions);
+    };
+    vi.stubEnv("GH_TOKEN", "synthetic-verifier-token");
+    let evidence;
+    try {
+      evidence = await validateReleaseRunEvidence(options, finalClient);
+      expect(authenticatedDownloads).toBeGreaterThan(0);
+      expect(JSON.stringify(current.plan)).not.toContain("synthetic-verifier-token");
+    } finally {
+      vi.unstubAllEnvs();
+      finalClient.downloadArtifactArchive = downloadArchive;
+    }
+    expect(evidence.current.conclusion).toBe("success");
+    expect(client.verifyRetainedPublicationArtifacts).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ RELEASE_TAG: "v" + selected.candidate.package.version }),
+    );
+    expect(
+      validateFullReleaseNpmPreflight({
+        manifest: current.manifest,
+        repository: current.repository,
+        runId: current.runId,
+        runAttempt: "1",
+        sourceSha: f.c,
+        toolingSha: f.q,
+      }),
+    ).toEqual(selected.publicationArtifacts.npmPreflight);
+    await expect(
+      authenticateCandidateOwnedArtifact({
+        manifest: current.manifest,
+        repository: current.repository,
+        candidateSha: f.c,
+        qualificationSha: f.q,
+        publisherSha: current.p,
+        publisherFullRef: current.publisherFullRef,
+        client: finalClient,
+      }),
+    ).resolves.toMatchObject({ current: { conclusion: "success" } });
+    current.manifest.publicationArtifacts = structuredClone(selected.publicationArtifacts);
+    current.manifest.publicationArtifacts.npmPreflight.manifestSha256 = "0".repeat(64);
+    await expect(validateReleaseRunEvidence(options, finalClient)).rejects.toThrow(
+      "historical producers",
+    );
+  });
+  it("rejects changed candidate workload inputs", async () => {
+    const { client, env, candidate } = selectionFixture();
+    env.CANDIDATE_REQUEST_JSON = JSON.stringify({
+      ...candidate.request,
+      toolingSha: env.PARENT_WORKFLOW_SHA,
+      releaseSoak: !candidate.request.releaseSoak,
+    });
+    await expect(
+      selectPublicationArtifactSource({ runId: "51", runAttempt: 1 }, env, client),
+    ).rejects.toThrow("admitted workload inputs");
+    expect(client.verifyRetainedPublicationArtifacts).not.toHaveBeenCalled();
+  });
+  it.each([
+    [{ packageMismatch: true }, "prepared publication bytes"],
+    [{ tamperedReceipt: true }, "receipt discovery identity"],
+  ] as const)("rejects changed publication evidence %j", async (options, message) => {
+    const { client, env } = selectionFixture(options);
+    await expect(
+      selectPublicationArtifactSource({ runId: "51", runAttempt: 1 }, env, client),
+    ).rejects.toThrow(message);
+    expect(client.verifyRetainedPublicationArtifacts).not.toHaveBeenCalled();
+  });
+  it("rejects a changed selected parent attempt", async () => {
+    const { client, env } = selectionFixture();
+    await expect(
+      selectPublicationArtifactSource({ runId: "51", runAttempt: 2 }, env, client),
+    ).rejects.toThrow("attempt changed");
   });
 });

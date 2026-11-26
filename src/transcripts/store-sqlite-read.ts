@@ -10,6 +10,8 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { createTranscriptSpeakerLabels, presentTranscriptTurn } from "./speaker-labels.js";
+import { iterateTranscriptSpeakerObservations } from "./store-speakers.js";
 import {
   meetingTranscriptDb,
   meetingTranscriptSessionQuery,
@@ -85,8 +87,9 @@ type SummarySnapshotRow = Pick<
   | "created_at_ms"
   | "updated_at_ms"
 >;
+type SummarySnapshotSelector = TranscriptSessionIdentity & { minimumNextSequence: number };
 const summarySnapshotQuery = createSqliteQueryCache((database: EngineConnection) =>
-  prepareSqliteQueryTakeFirstSync<TranscriptSessionIdentity, SummarySnapshotRow>(
+  prepareSqliteQueryTakeFirstSync<SummarySnapshotSelector, SummarySnapshotRow>(
     database,
     (parameter) =>
       meetingTranscriptDb(database)
@@ -100,6 +103,12 @@ const summarySnapshotQuery = createSqliteQueryCache((database: EngineConnection)
           "started_at",
           "=",
           parameter((value) => value.startedAt),
+        )
+        // An idle live tick can finish before loading the prior notes, speech and speaker roster.
+        .where(
+          "next_utterance_seq",
+          ">=",
+          parameter((value) => value.minimumNextSequence),
         )
         // Retain native integer decoding while omitting unrelated export bookkeeping.
         .select([
@@ -119,18 +128,49 @@ export function readTranscriptSummarySnapshot(
   database: EngineConnection,
   session: TranscriptSessionIdentity,
   maxUtterances: number,
+  minimumNextSequence = 0,
 ): TranscriptSummarySnapshot | undefined {
-  const row = summarySnapshotQuery(database)(session);
+  const row = summarySnapshotQuery(database)({ ...session, minimumNextSequence });
   if (!row) {
     return undefined;
   }
   const summaryRevision = readStoredTranscriptSummaryRevision(database, session);
+  const query = meetingTranscriptUtteranceQuery(database, session).select([
+    "sequence",
+    "speaker_id",
+    "speaker_label",
+    "text",
+  ]);
+  const limit = resolveOptionalIntegerOption(maxUtterances, { min: 1 });
+  const rows =
+    limit === undefined
+      ? executeSqliteQuerySync(database, query.orderBy("sequence", "asc")).rows
+      : executeSqliteQuerySync(
+          database,
+          query.orderBy("sequence", "desc").limit(limit),
+        ).rows.toReversed();
+  let hasSpeakerAliases = false;
+  const label = createTranscriptSpeakerLabels(() => {
+    hasSpeakerAliases = true;
+  });
+  const first = rows[0];
+  // Seed only earlier names. A later name cannot identify an earlier anonymous turn.
+  if (first && row.next_utterance_seq > rows.length) {
+    for (const speaker of iterateTranscriptSpeakerObservations(database, session, first.sequence)) {
+      label(speaker.speaker_id, speaker.speaker_label);
+    }
+  }
+  const turns = rows.flatMap(
+    (turn) => presentTranscriptTurn(turn.text, label(turn.speaker_id, turn.speaker_label)) ?? [],
+  );
   return {
+    ...(hasSpeakerAliases ? { hasSpeakerAliases: true } : {}),
     inputRevision: transcriptSummaryInputRevisionFromRow(row),
     nextSequence: row.next_utterance_seq,
     stoppedAt: row.stopped_at ?? undefined,
     summaryRevision: summaryRevision ?? "",
-    utterances: readTranscriptUtterances(database, session, maxUtterances),
+    turns,
+    utteranceCount: rows.length,
   };
 }
 
@@ -281,18 +321,11 @@ export function readTranscriptSessionByIdentity(
 export function readTranscriptUtterances(
   database: EngineConnection,
   session: TranscriptSessionIdentity,
-  maxUtterances?: number,
 ): TranscriptUtterance[] {
-  const limit = resolveOptionalIntegerOption(maxUtterances, { min: 1 });
-  const query = meetingTranscriptUtteranceQuery(database, session).selectAll();
-  if (limit === undefined) {
-    return executeSqliteQuerySync(database, query.orderBy("sequence", "asc")).rows.map(
-      utteranceFromRow,
-    );
-  }
-  return executeSqliteQuerySync(database, query.orderBy("sequence", "desc").limit(limit))
-    .rows.toReversed()
-    .map(utteranceFromRow);
+  return executeSqliteQuerySync(
+    database,
+    meetingTranscriptUtteranceQuery(database, session).selectAll().orderBy("sequence", "asc"),
+  ).rows.map(utteranceFromRow);
 }
 
 export function readStoredTranscriptSummary(

@@ -2,18 +2,20 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-recall-measure.ts \
 //   --state-dir <new-directory> --sessions 600 --keys 130 [--owner-ref <baseline-sha>]
 // Reuse the fixture serially with --reuse; alternate fresh baseline/candidate processes.
-// Acceptance: identical results, one preparation per candidate batch, lower main-thread
-// CPU and sampled allocation, no reproducible >20% latency regression; >=5 samples + A/A.
+// Acceptance: identical ordered results, lower consume/main-thread CPU and V8 allocation
+// beyond A/A spread, no sustained >20% worker CPU or p95 wall regression.
+// Run >=5 serial, rotated A1/A2/B processes per fixture size. First calls are reported separately.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import type { HeapProfiler } from "node:inspector";
-import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
+import { transformSync } from "esbuild";
 import type { SessionsSearchResult } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
@@ -38,20 +40,36 @@ const iterations = Number(values.iterations),
   samples = Number(values.samples);
 assert([sessions, keys, iterations, samples].every((n) => Number.isSafeInteger(n) && n > 0));
 assert(sessions >= 300 && keys >= 100 && keys <= sessions);
-const ownerPath = "src/gateway/server-methods/sessions-search-recall.ts";
-const ownerUrl = new URL(`../../${ownerPath}`, import.meta.url);
-const source = values["owner-ref"]
-  ? execFileSync("git", ["show", `${values["owner-ref"]}:${ownerPath}`], { encoding: "utf8" })
-  : readFileSync(ownerUrl, "utf8");
-if (values["owner-ref"]) {
-  registerHooks({
-    load(url, context, next) {
-      return url === ownerUrl.href
-        ? { format: "module-typescript", source, shortCircuit: true }
-        : next(url, context);
-    },
-  });
-}
+const sources = new Map(
+  [
+    "src/gateway/server-methods/sessions-search-recall.ts",
+    "src/gateway/session-utils-list.ts",
+    "src/gateway/session-row-selection.ts",
+    "src/gateway/session-row-prepared-read.ts",
+  ].map((filename) => {
+    const url = new URL(`../../${filename}`, import.meta.url);
+    return [
+      url.href,
+      values["owner-ref"]
+        ? execFileSync("git", ["show", `${values["owner-ref"]}:${filename}`], { encoding: "utf8" })
+        : readFileSync(url, "utf8"),
+    ];
+  }),
+);
+const compiled = new Map(
+  [...sources].map(([url, source]) => [
+    url,
+    transformSync(source, { loader: "ts", format: "esm", target: "esnext" }).code,
+  ]),
+);
+registerHooks({
+  load(url, context, next) {
+    const source = compiled.get(url);
+    return source === undefined
+      ? next(url, context)
+      : { format: "module", source, shortCircuit: true };
+  },
+});
 const anchor = Date.UTC(2026, 10, 1);
 const configPath = path.join(root, "openclaw.json");
 const cfg: OpenClawConfig = {
@@ -60,8 +78,9 @@ const cfg: OpenClawConfig = {
     entries: { main: { workspace: path.join(root, "workspace") } },
     defaults: { systemAgent: { agentId: "main" } },
   },
-  tools: { sessions: { visibility: "self" } },
+  tools: { sessions: { visibility: "all" } },
   plugins: { enabled: false },
+  logging: { file: path.join(root, "gateway.log") },
   session: { maintenance: { maxEntries: sessions * 2 } },
 };
 if (!values.reuse) {
@@ -82,7 +101,7 @@ const stateDb = await import("../../src/state/openclaw-state-db.js");
 const { retainSessionListForegroundWork } =
   await import("../../src/gateway/session-projection-work.js");
 const release = retainSessionListForegroundWork();
-const inspector = new Session();
+const fixture = { sessions, keys, transcriptBytes: 8 * 1024 * 1024 };
 let projection:
   | import("../../src/gateway/session-row-projection.js").SessionRowProjection
   | undefined;
@@ -95,7 +114,7 @@ try {
       retainedRuns: 0,
       seed: 2637,
       now: anchor,
-      transcriptBytes: 0,
+      transcriptBytes: fixture.transcriptBytes,
       sessionKeys: Array.from({ length: keys }, (_, i) => `agent:main:recall-${i}`),
     });
     const { replaceSessionEntry, persistSessionTranscriptTurn } =
@@ -115,16 +134,22 @@ try {
         cwd: "/synthetic",
         updateMode: "none",
         messages: [
-          { now: anchor + i, message: { role: "user", content: "recallbenchmark needle" } },
+          {
+            now: anchor + i,
+            message: {
+              role: "user",
+              content:
+                i % 4 === 1
+                  ? "The notification worker rollout checklist is ready for review."
+                  : "Planning notes for the notification worker rollout. 明天下午开会讨论排期。",
+            },
+          },
         ],
       });
     }
-    writeFileSync(path.join(root, "fixture.json"), JSON.stringify({ sessions, keys }));
+    writeFileSync(path.join(root, "fixture.json"), JSON.stringify(fixture));
   }
-  assert.deepEqual(JSON.parse(readFileSync(path.join(root, "fixture.json"), "utf8")), {
-    sessions,
-    keys,
-  });
+  assert.deepEqual(JSON.parse(readFileSync(path.join(root, "fixture.json"), "utf8")), fixture);
   const { createSessionRowProjection } =
     await import("../../src/gateway/session-row-projection.js");
   const { searchRecallSessionTranscripts } =
@@ -132,79 +157,136 @@ try {
   projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
   await projection.ensureMaterialized();
   assert(projection.selectEntries({ sortBy: null }).length >= sessions);
-  // Self visibility forces the worker to authorize every matching key before concluding.
-  const read = async () => {
+  let consumeCpuMicros = 0;
+  let consumeCount = 0;
+  const withRows = projection.withPreparedExactRows.bind(projection);
+  projection.withPreparedExactRows = (queries, consume, options) =>
+    withRows(
+      queries,
+      (view) => {
+        const before = process.threadCpuUsage();
+        try {
+          return consume(view);
+        } finally {
+          const used = process.threadCpuUsage(before);
+          consumeCpuMicros += used.user + used.system;
+          consumeCount++;
+        }
+      },
+      options,
+    );
+  const { getTrackedWorkerCpuSources } = await import("../../src/infra/worker-cpu.js");
+  const queries = [
+    { query: "notification worker", visibility: "all", count: 25 },
+    { query: "rollout checklist", visibility: "self", count: 1 },
+    { query: "会", visibility: "self", count: 0 },
+  ] as const;
+  const read = async ({ query, visibility }: (typeof queries)[number]) => {
     let published: SessionsSearchResult | undefined;
-    const historicalResult: unknown = await searchRecallSessionTranscripts({
+    await searchRecallSessionTranscripts({
       projection: projection!,
-      query: "recallbenchmark",
+      query,
       limit: 25,
-      recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:unmatched-requester" },
+      recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:recall-1", visibility },
       onResult: (result) => {
         published = result;
       },
     });
-    // --owner-ref can load a historical owner that returned its page instead of publishing it.
-    return published ?? historicalResult;
+    assert(published);
+    return published;
   };
-  const coldStart = performance.now();
-  const expected = await read();
-  const coldMs = performance.now() - coldStart;
-  assert.deepEqual(expected, { results: [] });
-  for (let i = 0; i < 3; i++) {
-    assert.deepEqual(await read(), expected);
-  }
-  const bytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-    node.selfSize + node.children.reduce((sum, child) => sum + bytes(child), 0);
-  inspector.connect();
   const results = [];
-  for (let sample = 0; sample < samples; sample++) {
-    global.gc();
-    if (values.allocation) {
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 4096,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
+  for (const query of queries) {
+    const coldStart = performance.now();
+    let expected = await read(query);
+    const firstWallMs = performance.now() - coldStart;
+    const firstIndexing = expected.indexing === true;
+    const deadline = performance.now() + 30_000;
+    while (expected.indexing && performance.now() < deadline) {
+      await delay(100);
+      expected = await read(query);
+    }
+    assert(!expected.indexing, "fixture transcript index did not settle");
+    assert.equal(expected.results.length, query.count);
+    for (let i = 0; i < 3; i++) {
+      assert.deepEqual(await read(query), expected);
+    }
+    const source = getTrackedWorkerCpuSources();
+    assert(source.workers.length > 0);
+    const workerCpu = async () => {
+      assert.equal(source.currentRevision(), source.revision, "worker set changed during sampling");
+      const lifetime = new AbortController();
+      try {
+        // Idle worker handles are unref'ed. Keep the harness alive until the sample settles.
+        const usage = await Promise.race([
+          Promise.all(source.workers.map((worker) => worker.cpuUsage())),
+          delay(5_000, undefined, { signal: lifetime.signal }).then(() => {
+            throw new Error("Native worker CPU sample timed out");
+          }),
+        ]);
+        return usage.reduce((sum, used) => {
+          assert(used, "could not read native worker CPU");
+          return sum + used.user + used.system;
+        }, 0);
+      } finally {
+        lifetime.abort();
+      }
+    };
+    const measured = [];
+    for (let sample = 0; sample < samples; sample++) {
+      global.gc();
+      consumeCpuMicros = consumeCount = 0;
+      const load = loadavg();
+      const workerBefore = await workerCpu();
+      const wall = new Float64Array(iterations);
+      const observed = [];
+      const allocatedBefore = values.allocation ? getHeapStatistics().total_allocated_bytes : 0;
+      const before = process.threadCpuUsage();
+      for (let i = 0; i < iterations; i++) {
+        const started = performance.now();
+        observed.push(await read(query));
+        wall[i] = performance.now() - started;
+      }
+      const cpu = process.threadCpuUsage(before);
+      const allocatedBytes = values.allocation
+        ? (getHeapStatistics().total_allocated_bytes - allocatedBefore) / iterations
+        : undefined;
+      const workerCpuMs = ((await workerCpu()) - workerBefore) / 1000 / iterations;
+      for (const result of observed) {
+        assert.deepEqual(result, expected);
+      }
+      measured.push({
+        sample,
+        load,
+        cpuMs: (cpu.user + cpu.system) / 1000 / iterations,
+        consumeCpuMs: consumeCpuMicros / 1000 / iterations,
+        consumeCount: consumeCount / iterations,
+        workerCpuMs,
+        allocatedBytes,
+        wallP95Ms: wall.toSorted()[Math.ceil(iterations * 0.95) - 1]!,
       });
     }
-    const load = loadavg(),
-      before = process.threadCpuUsage(),
-      started = performance.now();
-    let last: Awaited<ReturnType<typeof read>> = expected;
-    for (let i = 0; i < iterations; i++) {
-      last = await read();
-    }
-    const elapsed = performance.now() - started,
-      cpu = process.threadCpuUsage(before);
-    const profile = values.allocation
-      ? (await inspector.post("HeapProfiler.stopSampling")).profile
-      : undefined;
-    assert.deepEqual(last, expected);
     results.push({
-      sample,
-      load,
-      wallMs: elapsed / iterations,
-      cpuMs: (cpu.user + cpu.system) / 1000 / iterations,
-      allocatedBytes: profile ? bytes(profile.head) / iterations : undefined,
+      ...query,
+      firstWallMs,
+      firstIndexing,
+      digest: createHash("sha256").update(JSON.stringify(expected)).digest("hex"),
+      measured,
     });
-    if (profile) {
-      writeFileSync(path.join(root, "last.heapprofile"), JSON.stringify(profile));
-    }
   }
   console.log(
     JSON.stringify({
       ownerRef: values["owner-ref"] ?? "working-tree",
-      sourceHash: createHash("sha256").update(source).digest("hex"),
-      sessions,
-      keys,
+      sourceHash: createHash("sha256")
+        .update(JSON.stringify([...sources.values()]))
+        .digest("hex"),
+      ...fixture,
       iterations,
       allocation: Boolean(values.allocation),
-      coldMs,
       results,
     }),
   );
 } finally {
-  inspector.disconnect();
   projection?.dispose();
   release();
   await agentDb.closeOpenClawAgentDatabasesAsync();

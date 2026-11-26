@@ -4,7 +4,6 @@ import {
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
 } from "../agents/github-tool-identity.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
@@ -19,7 +18,6 @@ import {
   SESSION_ID,
   SESSION_KEY,
   createTestGitHubPublicationCoordinator,
-  githubPublicationTestMocks,
   overrideCommands,
 } from "./github-publication.test-support.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
@@ -29,7 +27,6 @@ import type { GatewayClient, GatewayRequestContext } from "./server-methods/type
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-const mocks = githubPublicationTestMocks();
 export const personalPublicationAccount = { accountId: 101, login: "personal-alice" };
 const account = personalPublicationAccount;
 const profileId = "ghp_22222222222222222222222222222222";
@@ -256,20 +253,4 @@ export async function restartPersonalPublicationFixture(fixture: PersonalFixture
   );
   fixture.coordinator = createTestGitHubPublicationCoordinator({ placements: fixture.placements });
   fixture.action = await preparePersonalPublicationFixtureAction(fixture);
-}
-
-export async function createForeignPublicationSession(otherOwner: string, incognito = false) {
-  const entry = {
-    sessionId: SESSION_ID,
-    updatedAt: Date.now(),
-    visibility: "draft" as const,
-    ...(incognito ? { incognito: true as const } : {}),
-    createdActor: { type: "human" as const, source: "profile" as const, id: otherOwner },
-  };
-  await upsertSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY }, entry);
-  const original = mocks.loadSession.getMockImplementation()!;
-  mocks.loadSession.mockImplementation((key: string) => ({
-    ...original(key),
-    entry: { ...original(key).entry, ...entry },
-  }));
 }

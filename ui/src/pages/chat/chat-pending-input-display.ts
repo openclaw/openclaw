@@ -47,12 +47,13 @@ function describePendingInputMessage(
 export function preparePendingInputQueueItems(
   inputs: ChatPendingInputsPage["items"],
   preparation: PendingInputPreparation,
+  cancelling?: ReadonlySet<string>,
 ): ChatQueueDisplayItem[] {
   return inputs
     .filter(
       (input) =>
-        input.queued &&
-        input.state === "queued" &&
+        ((input.queued && input.state === "queued") ||
+          (input.state === "cancelled" && input.endCause === "revoked")) &&
         input.runId &&
         !messageSubagentCompletions(input.message).length,
     )
@@ -63,6 +64,8 @@ export function preparePendingInputQueueItems(
       createdAt: input.acceptedAt,
       pendingRunId: input.runId,
       serverQueued: true,
+      removing: cancelling?.has(input.id),
+      cancelled: input.state === "cancelled" ? true : undefined,
       sender: normalizeMessage(input.message).sender ?? undefined,
     }));
 }
@@ -101,7 +104,7 @@ export function preparePendingInputItems(
   const items: ChatItem[] = [];
   for (const input of inputs) {
     // Legacy interrupted custody is retained in storage but has no presentation.
-    if (input.state !== "queued" && input.state !== "cancelled") {
+    if (input.endCause === "revoked" || (input.state !== "queued" && input.state !== "cancelled")) {
       continue;
     }
     let pendingStatus: PendingInputStatus = input.state;

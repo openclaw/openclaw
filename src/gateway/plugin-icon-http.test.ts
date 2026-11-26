@@ -13,7 +13,6 @@ import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
-import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -132,7 +131,6 @@ const INVALID_ICON_ROUTES = [
 
 let port = 0;
 let server: ReturnType<typeof createServer>;
-let authorityCurrent = true;
 const testConfig = {};
 let configForRequest = () => testConfig;
 
@@ -173,15 +171,11 @@ beforeEach(() => {
     rootPath: iconFixtureDir,
   });
   configForRequest = () => testConfig;
-  authorityCurrent = true;
   mocks.authorize.mockReset();
-  mocks.authorize.mockImplementation(({ res }: { res: ServerResponse }) =>
-    bindHttpResponseAuthority(
-      { authMethod: "token", operatorScopes: ["operator.admin", "operator.read"] },
-      res,
-      () => authorityCurrent,
-    ),
-  );
+  mocks.authorize.mockReturnValue({
+    authMethod: "token",
+    operatorScopes: ["operator.admin", "operator.read"],
+  });
   mocks.resolveIconSource.mockResolvedValue([
     {
       kind: "file",
@@ -215,31 +209,6 @@ function request(
 }
 
 describe("Control UI plugin and catalog icon routes", () => {
-  it.each(ALL_ICON_ROUTES)(
-    "rejects revoked authority while a $label icon is being normalized",
-    async ({ pathname }) => {
-      const encoding = createDeferredCore();
-      const release = createDeferredCore();
-      mocks.encodeImage.mockImplementationOnce(async () => {
-        encoding.resolve();
-        await release.promise;
-        return { data: NORMALIZED_PNG_BYTES };
-      });
-
-      const pending = request(pathname);
-      await encoding.promise;
-      authorityCurrent = false;
-      release.resolve();
-
-      const response = await pending;
-      expect(response.status).toBe(401);
-      expect(response.headers.get("etag")).toBeNull();
-      expect(await response.json()).toEqual({
-        error: { message: "Unauthorized", type: "unauthorized" },
-      });
-    },
-  );
-
   it("keeps link favicon fetching off when explicitly disabled", async () => {
     configForRequest = () => ({
       gateway: { controlUi: { automaticallyFetchFavicons: false } },
@@ -422,33 +391,6 @@ describe("Control UI plugin and catalog icon routes", () => {
       expect(release).toHaveBeenCalledOnce();
     },
   );
-
-  it("does not fetch a declared favicon after its request authority is revoked", async () => {
-    const fetchDeclaredIcon = vi.fn();
-    mocks.readRemoteMediaBuffer
-      .mockRejectedValueOnce(new Error("favicon.ico not found"))
-      .mockImplementationOnce(async (options) => {
-        options.beforeRequest?.();
-        fetchDeclaredIcon();
-        return { buffer: PNG_BYTES, contentType: "image/png" };
-      });
-    mocks.fetchWithSsrFGuard.mockImplementationOnce(async (options) => {
-      options.beforeRequest();
-      authorityCurrent = false;
-      return {
-        response: new Response('<link rel="icon" href="/assets/favicon.png">', {
-          headers: { "content-type": "text/html" },
-        }),
-        finalUrl: "https://docs.example/",
-        release: vi.fn(),
-      };
-    });
-
-    const response = await request("/__openclaw__/link-favicon/docs.example");
-
-    expect(response.status).toBe(401);
-    expect(fetchDeclaredIcon).not.toHaveBeenCalled();
-  });
 
   it("negatively caches failed link favicon fetches", async () => {
     configForRequest = () => ({

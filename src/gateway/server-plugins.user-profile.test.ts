@@ -140,7 +140,7 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
             plugins.rollbackPluginGlobalSideEffects(record.id, record);
           }
           gate.release();
-          if (closedOwner === "role") {
+          if (closedOwner === "role" || closedOwner === "caller") {
             await expect(pending).resolves.toBeUndefined();
             expect(applied).toBe(true);
             await expect(scoped(params, callback)).rejects.toThrow();
