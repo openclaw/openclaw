@@ -34,6 +34,13 @@ extension OpenClawChatViewModel {
         let session = sessionSnapshot ?? self.currentSessionSnapshot()
         let target = self.currentModelPatchTarget()
         let settingsRevision = self.settingsPatchRevisionsByTarget[target, default: 0]
+        // Show the last list this server sent at once; the answer below replaces it if it changed.
+        let cacheKey = self.modelCatalogCacheKey
+        if self.modelChoices.isEmpty, let cacheKey, let cached = ChatModelCatalogCache.load(cacheKey) {
+            self.modelChoices = cached
+            self.syncSelectedModel()
+            self.syncThinkingLevelOptions()
+        }
         do {
             let catalog = try await transport.loadModelCatalog(
                 sessionKey: session.key,
@@ -41,7 +48,10 @@ extension OpenClawChatViewModel {
             guard self.isCurrentSession(session), requestID == self.nextModelCatalogRequestID else {
                 return
             }
-            self.modelChoices = catalog.choices
+            if self.modelChoices != catalog.choices {
+                self.modelChoices = catalog.choices
+            }
+            if let cacheKey { ChatModelCatalogCache.store(catalog.choices, key: cacheKey) }
             self.modelSelectionPolicy = catalog.modelSelectionPolicy
             self.modelCatalogInvalidated = false
             self.modelAvailabilityIsSessionScoped = catalog.availabilityIsSessionScoped
@@ -56,7 +66,9 @@ extension OpenClawChatViewModel {
         } catch {
             guard self.isCurrentSession(session), requestID == self.nextModelCatalogRequestID else { return }
             #if os(iOS)
-            // The model sheet says so with its own Try again row, and tries again when it opens.
+            // With a list on screen a failed refresh says nothing; with none, the model sheet says so with
+            // its own Try again row, and tries again when it opens.
+            guard self.modelChoices.isEmpty else { return }
             self.modelCatalogMessage = String(localized: "Couldn’t load models.")
             #else
             self.modelCatalogMessage = String(localized: "Model choices could not load. Reconnect and try again.")
@@ -601,11 +613,11 @@ extension OpenClawChatViewModel {
             effective: next ?? baselineEffectiveFastMode,
             sessionKey: sessionKey)
         let requestID = self.reserveSessionSettingsRequest(for: target)
-        self.latestFastModeRequestIDsByTarget[target] = requestID
+        self.optimisticSettingsLanes[target, default: .init()].latestFastModeRequestID = requestID
         self.enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
             guard let self else { return }
             // Latest wins: a speed that a newer pick replaced before its turn is never sent.
-            guard requestID == self.latestFastModeRequestIDsByTarget[target] else { return }
+            guard requestID == self.optimisticSettingsLanes[target]?.latestFastModeRequestID else { return }
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
                 let result = try await Self.retryingOnce {
@@ -629,7 +641,7 @@ extension OpenClawChatViewModel {
                     fastModeOverride: .some(acceptedOverride),
                     effectiveFastMode: acceptedEffective)
                 // A newer pick made while this one was saving keeps the screen.
-                if requestID == self.latestFastModeRequestIDsByTarget[target],
+                if requestID == self.optimisticSettingsLanes[target]?.latestFastModeRequestID,
                    let state = self.modelControlState(for: target, originalSessionKey: sessionKey)
                 {
                     self.updateCurrentSessionFastMode(
@@ -639,7 +651,7 @@ extension OpenClawChatViewModel {
                         exactMatchOnly: state.exactMatchOnly)
                 }
             } catch {
-                if requestID == self.latestFastModeRequestIDsByTarget[target],
+                if requestID == self.optimisticSettingsLanes[target]?.latestFastModeRequestID,
                    let state = self.modelControlState(for: target, originalSessionKey: sessionKey)
                 {
                     let accepted = self.acceptedFastModesByTarget[target]

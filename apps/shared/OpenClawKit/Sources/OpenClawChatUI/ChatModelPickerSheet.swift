@@ -80,7 +80,12 @@ struct ChatModelPickerSheet: View {
         // A catalog that failed or came back empty loads again each time the picker opens, showing the
         // loading state rather than the old failure while it does.
         .task {
-            if self.viewModel.modelChoices.isEmpty { await self.viewModel.retryModelCatalog() }
+            if self.viewModel.modelChoices.isEmpty {
+                await self.viewModel.retryModelCatalog()
+            } else {
+                // The cached or last list shows now; a fresh one replaces it quietly if it changed.
+                await self.viewModel.fetchModels()
+            }
         }
         // Closing the sheet ends a sign-in still running, as the old sign-in sheet's Close did.
         .onDisappear { Task { await self.accounts.close() } }

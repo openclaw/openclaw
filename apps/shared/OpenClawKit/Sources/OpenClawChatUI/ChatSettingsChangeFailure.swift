@@ -7,6 +7,12 @@ public struct ChatSettingsChangeFailure {
     public let retry: @MainActor () -> Void
 }
 
+struct OptimisticSettingsLane {
+    var latestFastModeRequestID: UInt64?
+    /// The model the server had when a run of picks began: a failed pick falls back to it.
+    var modelBaselineSelectionID: String?
+}
+
 /// Resumes a continuation once, whichever of two waits finishes first.
 @MainActor
 final class ChatResumeOnce {
@@ -61,15 +67,14 @@ extension OpenClawChatViewModel {
     /// The model the server had when a run of picks began; a failed pick falls back to it.
     func modelLaneBaseline(for target: ModelPatchTarget, current: String) -> String {
         if self.inFlightSettingsPatchCountsByTarget[target] == nil {
-            self.modelLaneBaselineSelectionIDsByTarget[target] = current
+            self.optimisticSettingsLanes[target, default: .init()].modelBaselineSelectionID = current
         }
-        return self.modelLaneBaselineSelectionIDsByTarget[target] ?? current
+        return self.optimisticSettingsLanes[target]?.modelBaselineSelectionID ?? current
     }
 
     func clearOptimisticSettingsLane(for target: ModelPatchTarget) {
         self.latestThinkingSelectionRequestIDsByTarget.removeValue(forKey: target)
-        self.latestFastModeRequestIDsByTarget.removeValue(forKey: target)
-        self.modelLaneBaselineSelectionIDsByTarget.removeValue(forKey: target)
+        self.optimisticSettingsLanes.removeValue(forKey: target)
     }
 
     func reportModelChangeFailure(_ error: Error, selectionID: String) {

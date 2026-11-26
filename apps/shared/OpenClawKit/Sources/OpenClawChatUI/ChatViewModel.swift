@@ -69,6 +69,7 @@ public final class OpenClawChatViewModel {
     public internal(set) var modelCatalogMessage: String?
     /// The last effort, speed or model change that could not be saved, for the app's toast.
     public internal(set) var settingsChangeFailure: ChatSettingsChangeFailure?
+    var modelCatalogCacheScopeOverride: String?
     var agentCatalog: OpenClawChatAgentsListResponse?
     var isLoadingAgents = false
     var agentsErrorText: String?
@@ -427,9 +428,8 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     private var settingsPatchTailsByTarget: [ModelPatchTarget: SettingsPatchTail] = [:]
     var latestThinkingSelectionRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
-    var latestFastModeRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
-    /// The model the server had when a run of picks began: a failure falls back to it.
-    var modelLaneBaselineSelectionIDsByTarget: [ModelPatchTarget: String] = [:]
+    /// The latest speed pick and the model a failed pick falls back to, per settings lane.
+    var optimisticSettingsLanes: [ModelPatchTarget: OptimisticSettingsLane] = [:]
     var confirmedThinkingPreference: PreferenceState
     var emittedThinkingPreference: PreferenceState
     var thinkingPreferenceRequests: [UInt64: PreferenceRequest] = [:]
