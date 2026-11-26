@@ -368,7 +368,7 @@ describe("ProjectsPage", () => {
   });
 
   it.each([SITE, DOCS])("closes only the removed project with $id open", async (selected) => {
-    const removal = createDeferred<void>();
+    const removal = createDeferred();
     const refreshed = createDeferred<{ projects: ProjectRecord[] }>();
     let lists = 0;
     const request = vi.fn(async (method: string) => {
