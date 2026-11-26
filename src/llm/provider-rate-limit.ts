@@ -6,6 +6,7 @@ import {
   hasOrganizationTpmRateLimitEvidence,
   resolveRetryAfterMs,
 } from "../agents/failover/retry-evidence.js";
+import { resolveProviderManagesOwnAvailability } from "../plugins/provider-availability-policy.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -296,11 +297,19 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
       }
     },
     // Observation can outlive consumption; never capture request options or its signal.
-    observe: key && !inherited ? observeProviderRateLimit.bind(undefined, scope, key) : undefined,
+    observe:
+      key && !inherited
+        ? observeProviderRateLimit.bind(undefined, model.provider, scope, key)
+        : undefined,
   };
 }
 
-function observeProviderRateLimit(scope: string, key: string, message: AssistantMessage): void {
+function observeProviderRateLimit(
+  provider: string,
+  scope: string,
+  key: string,
+  message: AssistantMessage,
+): void {
   if (message.stopReason !== "error" || message.retryAfterMs === null) {
     return;
   }
@@ -313,6 +322,10 @@ function observeProviderRateLimit(scope: string, key: string, message: Assistant
     resolveRetryAfterMs(message.errorMessage, Date.now(), message.errorBody) ??
     1_000;
   if (!Number.isFinite(delay) || (!sharedTpm && delay <= 60_000)) {
+    return;
+  }
+  // A provider that manages its own availability answers for itself once it recovers.
+  if (resolveProviderManagesOwnAvailability(provider)) {
     return;
   }
   const org = message.errorMessage?.match(/\bin organization\s+(\S+)\s+on tokens per min/i)?.[1];
