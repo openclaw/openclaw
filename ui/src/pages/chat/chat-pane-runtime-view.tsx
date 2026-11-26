@@ -8,7 +8,6 @@ import {
   onCleanup,
   onSettled,
   Show,
-  untrack,
 } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import { bootComposerElement, finishBootFrame } from "../../app/boot-composer.ts";
@@ -399,33 +398,22 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         runtime.presentationId,
         () => frame().layout?.primary.chat ?? null,
       );
-      // Cached snapshots/known targets keep synchronous construction. A cold target's first
-      // descriptor must select its header and composer before publishing either.
-      if (!splitColdBoot && !untrack(() => runtime.initialSessionPresentationPending())) {
-        return <MountedPane />;
-      }
-      const [constructed, setConstructed] = createSignal(false);
-      createEffect(
-        () => {
+      const [layoutReady, setLayoutReady] = createSignal(!splitColdBoot);
+      if (splitColdBoot) {
+        onSettled(() => {
           frame();
-          return !runtime.initialSessionPresentationPending();
-        },
-        (admitted) => {
-          if (!admitted || disposed || untrack(constructed) || pendingLayout) {
-            return;
-          }
-          if (!splitColdBoot) {
-            setConstructed(true);
-            return;
-          }
           pendingLayout = yieldChatTask().then(() => {
             pendingLayout = undefined;
-            if (!disposed && !runtime.initialSessionPresentationPending()) {
-              setConstructed(true);
-            }
+            if (!disposed) setLayoutReady(true);
           });
-        },
-      );
+        });
+      }
+      // Admit a cold target's header/composer from its canonical facts, then retain
+      // the mounted view across refreshes. Cached snapshots keep their immediate path.
+      const constructed = createMemo<boolean>((previous) => {
+        frame();
+        return previous || (layoutReady() && !runtime.initialSessionPresentationPending());
+      });
       return (
         <Show
           when={constructed()}
