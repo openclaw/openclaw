@@ -597,6 +597,58 @@ describe("candidate-owned publish consumer chain", () => {
     },
   );
 
+  // Fast-tracked betas publish from build-only or failed FRV evidence. Stable promotion
+  // must still find a passing stable-profile FRV for the beta it reuses.
+  it.each(["build-only", "failed", "beta-profile"] as const)(
+    "refuses beta-to-stable promotion from %s beta evidence",
+    async (fault) => {
+      const root = candidatePublicationFixture({
+        candidateVersion: "2026.8.28-beta.1",
+        releaseProfile: fault === "beta-profile" ? "beta" : "stable",
+        reuseEvidence: false,
+        ...(fault === "build-only" ? { rerunGroup: "build-only" as const } : {}),
+      });
+      const client =
+        fault === "failed"
+          ? {
+              ...root.client,
+              getRun: async (id: string) => ({
+                ...(await root.client.getRun(id)),
+                ...(id === root.runId ? { conclusion: "failure" } : {}),
+              }),
+              getRunView: async (id: string) => ({
+                ...(await root.client.getRunView(id)),
+                ...(id === root.runId ? { conclusion: "failure" } : {}),
+              }),
+            }
+          : root.client;
+      await expect(
+        validateReleaseRunEvidence(
+          {
+            ...verifier(root),
+            reuseRequest: {
+              targetSha: "d".repeat(40),
+              releaseProfile: "stable",
+              runReleaseSoak: "true",
+              validationInputs: {
+                ...root.manifest.validationInputs,
+                targetVersion: "2026.8.28",
+                coveragePolicy: "npm-stable-v1",
+              },
+            },
+          },
+          client,
+        ),
+      ).rejects.toThrow(
+        fault === "build-only"
+          ? "Build-only artifacts require a fast-track request"
+          : fault === "failed"
+            ? "parent run is not completed/success"
+            : "ineligible reuse candidate",
+      );
+    },
+  );
+
   it.each(["main-qualification", "diagnostic"] as const)(
     "never promotes authenticated %s evidence to publication",
     async (purpose) => {

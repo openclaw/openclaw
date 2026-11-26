@@ -96,6 +96,10 @@ async function createStaleLocalFixture() {
   const staleDir = path.join(stateDir, "old-checkout", "dist", "extensions", "discord");
   fs.mkdirSync(bundledDir, { recursive: true });
   fs.mkdirSync(staleDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(stateDir, "old-checkout", "package.json"),
+    JSON.stringify({ name: "openclaw" }),
+  );
   createCandidate(staleDir, "discord");
   await writePersistedInstalledPluginIndex(
     createCurrentIndexWithPathRecord({

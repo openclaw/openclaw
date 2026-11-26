@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createUniqueId, Errored, For, Loading, Show } from "solid-js";
+import { parseFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
@@ -78,6 +79,16 @@ export function Detail(props: {
   const versions = createMemo(
     () => snapshot().list.archived.find((entry) => entry.name === target().name)?.versions ?? [],
   );
+  // An older list can omit the open live skill. Restore belongs to a selected archived copy.
+  const canRestore = () => {
+    const { target: selected, result, current } = viewer();
+    return (
+      selected.versionId !== undefined &&
+      result !== undefined &&
+      current === undefined &&
+      versions().some((version) => version.id === selected.versionId)
+    );
+  };
   const history = createMemo(() =>
     snapshot().changes.filter((change) => change.skillName === target().name),
   );
@@ -89,12 +100,14 @@ export function Detail(props: {
   };
   const supportFiles = createMemo(() => files().filter((file) => file !== "SKILL.md"));
   const description = createMemo(() => {
+    const catalogDescription = target().versionId ? undefined : skill()?.description;
+    if (catalogDescription) {
+      return catalogDescription;
+    }
     const current = viewer();
-    const own =
-      current.result && current.target.filePath === "SKILL.md"
-        ? splitFrontmatter(current.result.content).description
-        : undefined;
-    return target().versionId ? own : skill()?.description || own;
+    return current.result && current.target.filePath === "SKILL.md"
+      ? parseFrontmatterBlock(current.result.content).description
+      : undefined;
   });
   const byline = () => {
     const created = history().findLast((entry) => entry.action === "create");
@@ -138,17 +151,19 @@ export function Detail(props: {
       summary={description()}
       byline={byline()}
       actions={
-        <MutationButton
-          view={props.view}
-          label={t(skill() ? "skillWorkshop.viewer.archive" : "skillWorkshop.viewer.restore")}
-          title={skill() ? t("skillWorkshop.viewer.archiveTitle") : undefined}
-          mutation={{
-            method: skill() ? "skills.workshop.archive" : "skills.workshop.restore",
-            name: target().name,
-          }}
-          actionKey={`${skill() ? "archive" : "restore"}:${target().name}`}
-          icon={skill() ? "archive" : "archiveRestore"}
-        />
+        <Show when={skill() || canRestore()}>
+          <MutationButton
+            view={props.view}
+            label={t(skill() ? "skillWorkshop.viewer.archive" : "skillWorkshop.viewer.restore")}
+            title={skill() ? t("skillWorkshop.viewer.archiveTitle") : undefined}
+            mutation={{
+              method: skill() ? "skills.workshop.archive" : "skills.workshop.restore",
+              name: target().name,
+            }}
+            actionKey={`${skill() ? "archive" : "restore"}:${target().name}`}
+            icon={skill() ? "archive" : "archiveRestore"}
+          />
+        </Show>
       }
       panel={
         <>
@@ -437,17 +452,19 @@ function FileContent(props: { reads: WorkshopReads }) {
     <Loading on={props.reads.viewerRequest()} fallback={<LoadState />}>
       <Errored fallback={(error) => <LoadState error={error()} />}>
         <Show when={props.reads.viewer()}>
-          {(viewer) =>
-            viewer().target.filePath.endsWith(".md") ? (
-              <MarkdownHtml
-                class="sw-markdown chat-text"
-                markdown={viewer().result.content}
-                options={{ mode: "document" }}
-              />
-            ) : (
-              <pre class="sw-file">{viewer().result.content}</pre>
-            )
-          }
+          {(viewer) => (
+            <>
+              {viewer().target.filePath.endsWith(".md") ? (
+                <MarkdownHtml
+                  class="sw-markdown chat-text"
+                  markdown={viewer().result.content}
+                  options={{ mode: "document" }}
+                />
+              ) : (
+                <pre class="sw-file">{viewer().result.content}</pre>
+              )}
+            </>
+          )}
         </Show>
       </Errored>
     </Loading>

@@ -465,6 +465,39 @@ findings continue to block ordinary qualification and merge. This command
 does not change the candidate, publish it, waive CI/security/review requirements,
 or authorize a merge.
 
+### Upgrade an ordinary READY preparation
+
+An already-published ordinary READY preparation can use the same command with
+`--ready-review`. Set `--expected-review` to the exact `.local/review.json` blob;
+the local, reviewed, preparation-source and hosted heads must be identical.
+Correction reviews, same-tree commit aliases, incoming-only reviews and
+`--for-proof` cannot be combined with this mode. The destination still must be
+freshly authenticated official main, with qualified source and dependencies.
+
+The owner validates the complete READY review and preparation identity, checks
+that the live PR is open without auto-merge or queue membership, and refuses
+missing authority fields. Existing merge captures, outcomes and pending dispatch
+remain with their reconciliation owners. This does not resolve a main-selection
+race or permit an arbitrary reviewed workflow revision.
+
+Before invalidating gates, the transition archives and verifies the full fixed
+READY inventory: preparation context, PR metadata, review mode, READY review,
+completed preparation and optional publication receipts. The snapshot also
+records required absence of correction, pending-proof and baseline authority.
+The version-3 binding retains that inventory and the exact predecessor,
+workflow, candidate, tree and review identities. Its evidence tree links every
+present authoritative blob so Git retains the bytes, not only their textual IDs.
+Both completed-preparation heads must equal the candidate. Older readers refuse version 3;
+version-1 and correction version-2 records keep their existing behavior.
+
+Source, local refs and the published branch stay unchanged. An interruption
+before the binding transaction retains the predecessor; an interruption after
+it may leave the successor despite a failed return. Once gates are invalidated,
+neither state restores them or authorizes automatic replay. Inspect retained
+identity and evidence, then run fresh ordinary `prepare-gates` through the
+admitted workflow. Successful succession is not CI proof or merge permission;
+all review, retention and branch-deletion protections still apply.
+
 ## Reconcile a completed CI review
 
 If native landing rejects an older Security Review publisher because its sources

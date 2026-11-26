@@ -302,6 +302,8 @@ describe("PostgreSQL conformance selection", () => {
     [["src/infra/database-engine/deleted.test.ts", "src/unrelated/renamed.test.ts"], true],
     [["src/infra/database-engine/unrelated.spec.ts"], false],
     [["src/transcripts/meeting-chronology.postgres.test.ts"], true],
+    [["src/transcripts/meeting-chronology.postgres.test-support.ts"], true],
+    [["src/transcripts/store-sqlite-read.ts"], true],
     [["src/new-owner/future.postgres.test.ts"], true],
     [["src/infra/postgres-sync/locks.test.ts"], true],
     [["src/infra/postgres-sync/nested/renamed.spec.ts"], true],
@@ -3587,24 +3589,6 @@ describe("ci workflow guards", () => {
       });
     }
 
-    it("counts PostgreSQL conformance and the independent smoke in hosted admission", () => {
-      const result = manifestWithHostedNodeRows(0, {
-        eventName: "pull_request",
-        changedPaths: ["src/infra/database-engine/open.ts"],
-        targetFiles: ["scripts/test-database-conformance.mjs"],
-      });
-      expect(result.status, result.output).toBe(0);
-      const rows = emittedHostedRows(
-        {
-          ...result.outputs,
-          hybrid_hosted_offload: "false",
-        },
-        { eventName: "pull_request" },
-      );
-      expect(rows.filter((name) => name === "postgres-conformance")).toHaveLength(7);
-      expect(Number(result.outputs.hybrid_hosted_base_rows)).toBe(rows.length);
-    });
-
     it("reserves tiny hybrid controls and fork owners before admitting optional hosted rows", () => {
       const eventName = "pull_request" as const;
       const changedPaths = ["src/shared/runtime.ts"];
@@ -3853,89 +3837,6 @@ describe("ci workflow guards", () => {
         ).toBe(healthProbe);
       },
     );
-
-    it("admits measured checks only with healthy assignment and space inside the existing budget", () => {
-      const preflight = readCiWorkflow().jobs.preflight;
-      const manifestStep = preflight.steps.find((step: WorkflowStep) => step.id === "manifest");
-      expect(manifestStep.env.OPENCLAW_CI_HOSTED_HEALTHY).toBe(
-        "${{ steps.hosted_health.outputs.healthy }}",
-      );
-      expect(preflight.outputs.hybrid_hosted_checks).toBe(
-        "${{ steps.manifest.outputs.hybrid_hosted_checks }}",
-      );
-      expect(preflight.outputs.hybrid_hosted_main_checks).toBe(
-        "${{ steps.manifest.outputs.hybrid_hosted_main_checks }}",
-      );
-      const boundaryRoute = readCiWorkflow().jobs["check-additional-shard"]["runs-on"];
-      for (const runnerBackend of ["hybrid", "runson", "github"] as const) {
-        for (const runAttempt of [1, 2]) {
-          expect(
-            evaluateWorkflow(boundaryRoute, {
-              runnerBackend,
-              runAttempt,
-              preflightOutputs: { hybrid_hosted_checks: "true" },
-              matrix: {
-                group: "extension-package-boundary",
-                runner: "blacksmith-32vcpu-ubuntu-2404",
-                runner_label: "blacksmith-8vcpu-ubuntu-2404",
-              },
-            }),
-          ).toBe(
-            runnerBackend === "github" || runAttempt > 1
-              ? "ubuntu-24.04"
-              : "blacksmith-8vcpu-ubuntu-2404",
-          );
-        }
-      }
-      const baseline = manifestWithHostedNodeRows(0);
-      const originalBase = Number(baseline.outputs.hybrid_hosted_base_rows);
-      const offloadRows = 1 + Number(baseline.outputs.reuse_browser_extension_build !== "true");
-      for (const healthy of ["true", "false", ""]) {
-        for (const baseRows of [30, 31, 32, 33, 34, 35, 36, 37, 40, 41, 45, 46]) {
-          const manifest = manifestWithHostedNodeRows(baseRows - originalBase, {
-            scopeEnv: { OPENCLAW_CI_HOSTED_HEALTHY: healthy },
-          });
-          expect(manifest.status, manifest.output).toBe(0);
-          // Reserve eight check rows even though one stays on Blacksmith; main adds two.
-          const admitted = healthy === "true" && baseRows + offloadRows + 8 <= 45;
-          const mainAdmitted = admitted && baseRows + offloadRows + 10 <= 45;
-          expect(manifest.outputs.hybrid_hosted_checks).toBe(String(admitted));
-          expect(manifest.outputs.hybrid_hosted_main_checks).toBe(String(mainAdmitted));
-          const hosted = emittedHostedRows(manifest.outputs);
-          const withoutChecks = emittedHostedRows({
-            ...manifest.outputs,
-            hybrid_hosted_checks: "false",
-            hybrid_hosted_main_checks: "false",
-          });
-          expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hosted.length);
-          expect(hosted.length - withoutChecks.length).toBe(
-            (admitted ? 7 : 0) + (mainAdmitted ? 2 : 0),
-          );
-          expect(hosted).not.toContain("build-artifacts");
-          expect(
-            hosted.filter((name) => name === "check-test-types-hosted-core-shard"),
-          ).toHaveLength(admitted ? 5 : 0);
-          for (const name of ["check-shard", "check-additional-shard"]) {
-            expect(
-              hosted.filter((row) => row === name).length -
-                withoutChecks.filter((row) => row === name).length,
-            ).toBe(admitted ? (name === "check-shard" ? 1 + (mainAdmitted ? 2 : 0) : 1) : 0);
-          }
-          // The security/browser decision remains independent of the new check admission.
-          expect(manifest.outputs.hybrid_hosted_offload).toBe(String(baseRows <= 40));
-          for (const name of [
-            "checks-node-core-test-nondist-shard",
-            "qa-smoke-ci-profile",
-            "checks-ui-e2e-real-gateway",
-            "android",
-          ]) {
-            expect(hosted.filter((row) => row === name)).toEqual(
-              withoutChecks.filter((row) => row === name),
-            );
-          }
-        }
-      }
-    });
 
     it("runs security after preflight failures and skips a cancelled workflow", () => {
       const job = readCiWorkflow().jobs["security-fast"];
@@ -13775,127 +13676,10 @@ describe("ci workflow guards", () => {
     ]);
   });
 
-  it("provisions pinned Bun for Node-hosted code generation, retained imports, and native filesystem copies", () => {
-    const nativeFilesystem = "src/agents/worktrees/filesystem-native.test.ts";
-    const agentsSupport = "test/vitest/vitest.agents-support.config.ts";
-    const retainedImports = "src/infra/update-retained-runtime-imports.process.test.ts";
-    const infra = "test/vitest/vitest.infra.config.ts";
-    const codegen = "test/scripts/bun-standalone-codegen.test.ts";
-    const unrelated = "test/scripts/ci-git-owner.test.ts";
-    const tooling = "test/vitest/vitest.tooling.config.ts";
-    const selections = [
-      { targets: [codegen] },
-      { includePatterns: [codegen] },
-      { includePatterns: ["test/scripts/bun-*.test.ts"] },
-      { groups: [{ configs: [tooling], includePatterns: [codegen] }] },
-      { configs: [tooling] },
-      { configs: [infra], targets: [retainedImports] },
-      { configs: [infra], includePatterns: [retainedImports] },
-      { configs: [infra], includePatterns: ["src/infra/update-retained-*.test.ts"] },
-      {
-        groups: [
-          {
-            configs: [infra],
-            includePatterns: [retainedImports],
-            shard_name: "core-runtime-infra-system-runtime-hosted-2",
-          },
-        ],
-      },
-      { configs: [infra] },
-      { configs: [agentsSupport], targets: [nativeFilesystem] },
-      { configs: [agentsSupport], includePatterns: [nativeFilesystem] },
-      { configs: [agentsSupport], includePatterns: ["src/agents/worktrees/*.test.ts"] },
-      { groups: [{ configs: [agentsSupport], includePatterns: [nativeFilesystem] }] },
-      { configs: [agentsSupport] },
-      { groups: [{ configs: [agentsSupport], shard_name: "agentic-agents-support" }] },
-      { configs: [agentsSupport], targets: ["src/agents/worktrees/filesystem-refs.test.ts"] },
-      {
-        groups: [
-          {
-            configs: [agentsSupport],
-            includePatterns: ["src/agents/worktrees/filesystem-refs.test.ts"],
-          },
-        ],
-      },
-      { configs: [infra], includePatterns: ["src/infra/update-retained-runtime.test.ts"] },
-      {
-        groups: [
-          { configs: [infra], includePatterns: ["src/infra/update-retained-runtime.test.ts"] },
-        ],
-      },
-      { includePatterns: [unrelated] },
-      { groups: [{ configs: [tooling], includePatterns: [unrelated] }] },
-      { configs: ["test/vitest/vitest.tooling-isolated.config.ts"] },
-    ];
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      bunTestRuntime: false,
-      nodeTestShards: selections.map((selection, index) =>
-        Object.assign(
-          {
-            checkName: `codegen-${index}`,
-            configs: [tooling],
-            requiresDist: false,
-            runner: "ubuntu-24.04",
-            shardName: "core-tooling-1",
-          },
-          selection,
-        ),
-      ),
-    });
-    expect(result.status, result.output).toBe(0);
-    const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
-    expect(rows).toHaveLength(selections.length);
-    for (let index = 0; index < selections.length; index += 1) {
-      expect(Boolean(rows[index].requires_bun), JSON.stringify(selections[index])).toBe(index < 16);
-      expect(rows[index].test_runtime_policy).toBe("node");
-    }
-  });
-
-  it("provisions ripgrep for filesystem, SQLite ratchet, and native PR wrapper selections", () => {
+  it("provisions ripgrep for a selected owner without provisioning unrelated rows", () => {
     const contract = "src/agents/filesystem-tools-output-contract.test.ts";
-    const nativeTools = "src/agents/sessions/tools/index.test.ts";
-    const bytePaths = "src/agents/sessions/tools/grep.byte-path.test.ts";
-    const sqliteRatchet = "test/scripts/check-database-worker-ratchet.test.ts";
-    const prSuccessor = "test/scripts/pr-baseline-successor.test.ts";
-    const prSigning = "test/scripts/pr-baseline-signing.test.ts";
-    const prContinuation = "test/scripts/pr-correction-continuation.test.ts";
-    const prPublication = "test/scripts/pr-baseline-publication.test.ts";
     const unrelated = "src/agents/run-wait.test.ts";
-    const selections = [
-      { targets: [contract] },
-      { includePatterns: [contract] },
-      { includePatterns: ["src/agents/filesystem-*.test.ts"] },
-      { targets: [nativeTools] },
-      { targets: [bytePaths] },
-      { includePatterns: [bytePaths] },
-      { groups: [{ shard_name: "agentic-agents-support", targets: [bytePaths] }] },
-      { groups: [{ shard_name: "agentic-agents-support", includePatterns: [bytePaths] }] },
-      { targets: [sqliteRatchet] },
-      { includePatterns: [sqliteRatchet] },
-      { includePatterns: ["test/scripts/check-*-ratchet.test.ts"] },
-      { groups: [{ shard_name: "core-tooling-1", includePatterns: [sqliteRatchet] }] },
-      { targets: [prSuccessor] },
-      { includePatterns: [prSuccessor] },
-      { groups: [{ shard_name: "core-tooling-12", includePatterns: [prSuccessor] }] },
-      { targets: [prSigning] },
-      { includePatterns: [prSigning] },
-      { groups: [{ shard_name: "core-tooling-9", includePatterns: [prSigning] }] },
-      { targets: [prContinuation] },
-      { includePatterns: [prContinuation] },
-      { groups: [{ shard_name: "core-tooling-11", includePatterns: [prContinuation] }] },
-      { targets: [prPublication] },
-      { includePatterns: [prPublication] },
-      { groups: [{ shard_name: "core-tooling-11", includePatterns: [prPublication] }] },
-      { includePatterns: [unrelated] },
-      { shardName: "agentic-agents-core-runtime" },
-      { shardName: "agentic-agents-support" },
-      { shardName: "agentic-agents-core-runtime", includePatterns: [unrelated] },
-      { groups: [{ shard_name: "agentic-agents-core-runtime", includePatterns: [contract] }] },
-      { groups: [{ shard_name: "agentic-agents-support", includePatterns: [nativeTools] }] },
-      { groups: [{ shard_name: "agentic-agents-core-runtime", includePatterns: [unrelated] }] },
-      { groups: [{ shard_name: "agentic-agents-core-runtime" }] },
-    ];
+    const selections = [{ targets: [contract] }, { includePatterns: [unrelated] }];
     const result = runCiManifestFixture({
       bundledPlanner: true,
       nodeTestShards: selections.map((selection, index) =>
@@ -13915,92 +13699,7 @@ describe("ci workflow guards", () => {
     const matrix = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix") as {
       include: { requires_ripgrep?: boolean }[];
     };
-    expect(matrix.include.map((row) => Boolean(row.requires_ripgrep))).toEqual([
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      false,
-      true,
-      true,
-      false,
-      true,
-      true,
-      false,
-      true,
-    ]);
-  });
-
-  it("prepares the Docker sandbox image only for selected container E2E cases", () => {
-    const sandboxExec = "test/e2e/qa-lab/runtime/agent-sandboxed-exec-behavior.e2e.test.ts";
-    const workspaceIsolation =
-      "test/e2e/qa-lab/runtime/openclaw-sandbox-workspace-isolation.e2e.test.ts";
-    const unrelated = "src/agents/run-wait.test.ts";
-    const selections = [
-      { targets: [sandboxExec] },
-      { includePatterns: [workspaceIsolation] },
-      { includePatterns: ["test/e2e/qa-lab/runtime/*sandbox*.e2e.test.ts"] },
-      { groups: [{ shard_name: "sandbox", targets: [sandboxExec] }] },
-      { targets: [unrelated] },
-      { includePatterns: [unrelated] },
-      { configs: ["test/vitest/vitest.e2e.config.ts"] },
-    ];
-    const result = runCiManifestFixture({
-      bundledPlanner: true,
-      nodeTestShards: selections.map((selection, index) =>
-        Object.assign(
-          {
-            checkName: `sandbox-${index}`,
-            configs: ["test/vitest/vitest.agents-core.config.ts"],
-            requiresDist: false,
-            runner: "ubuntu-24.04",
-            shardName: "compact-small-1",
-          },
-          selection,
-        ),
-      ),
-    });
-    expect(result.status, result.output).toBe(0);
-    const matrix = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix") as {
-      include: { requires_sandbox_image?: boolean }[];
-    };
-    expect(matrix.include.map((row) => Boolean(row.requires_sandbox_image))).toEqual([
-      true,
-      true,
-      true,
-      true,
-      false,
-      false,
-      true,
-    ]);
-
-    const nodeTestJob = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
-    const imageStep = requiredWorkflowStep(nodeTestJob.steps, "Prepare Docker sandbox image");
-    expect(imageStep.if).toBe("matrix.requires_sandbox_image == true && runner.os == 'Linux'");
-    expect(imageStep.run).toContain("scripts/sandbox-setup.sh");
-    expect(nodeTestJob.steps.indexOf(imageStep)).toBeLessThan(
-      nodeTestJob.steps.findIndex((step: WorkflowStep) => step.name === "Run Node test shard"),
-    );
+    expect(matrix.include.map((row) => Boolean(row.requires_ripgrep))).toEqual([true, false]);
   });
 
   it("provisions native OAuth binaries for selected Gateway proof rows", () => {

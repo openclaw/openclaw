@@ -47,6 +47,9 @@ speech without conversational input or commands. Normal conversation requires a
 fresh receive stream after the current stream ends; brief pauses within
 `voice.captureSilenceGraceMs` keep the current stream and its recording-only behavior.
 
+Discord identifies the account sending each audio stream. Two people using one
+microphone share that account's speaker attribution.
+
 Full recording coverage requires batch audio understanding. Recording uses one
 per-speaker audio stream and batch transcription, with the
 receiver's user ID, independently resolved display label, and audio-ingress time.

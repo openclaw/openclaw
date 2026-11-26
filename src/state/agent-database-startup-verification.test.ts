@@ -220,7 +220,11 @@ process.once("message", ({ pathname }) => {
   database.exec("BEGIN");
   database.prepare("PRAGMA schema_version").get();
   process.on("message", (message) => {
-    if (message.type === "test-probe") process.send({ type: "test-alive" });
+    if (message.type === "test-probe") {
+      // Retain the snapshot's database while the child waits for the next message.
+      database.prepare("PRAGMA schema_version").get();
+      process.send({ type: "test-alive" });
+    }
   });
   process.send({ type: "test-pinned" });
 });`,

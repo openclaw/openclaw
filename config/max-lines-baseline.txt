@@ -36,7 +36,6 @@ extensions/codex/src/conversation-binding.test.ts
 extensions/codex/src/migration/provider.test.ts
 extensions/codex/src/supervision-tools.ts
 extensions/copilot/harness.test.ts
-extensions/copilot/harness.ts
 extensions/copilot/src/attempt.test.ts
 extensions/crabbox/src/crabbox-worker-provider.test.ts
 extensions/diagnostics-otel/src/service.test.ts

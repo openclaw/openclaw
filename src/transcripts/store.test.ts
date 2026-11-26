@@ -81,7 +81,7 @@ async function expectSnapshot(target: TranscriptSessionDescriptor, texts: string
   const snapshot = await store.readSummarySnapshot(target, 20);
   expect(snapshot).toMatchObject({
     nextSequence: texts.length,
-    utterances: texts.map((text) => ({ text })),
+    turns: texts.map((text) => ({ text })),
   });
   return snapshot;
 }
