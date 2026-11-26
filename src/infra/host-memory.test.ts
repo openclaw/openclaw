@@ -365,6 +365,9 @@ it("keeps a delegated leaf and its controller files in the same cgroup view", ()
   expect(captureCgroupV2WorkingSetReader()?.()).toBe(500);
 
   const bind = `31 30 0:27 /pod/service ${leaf} rw - cgroup2 cgroup rw`;
+  const lowerMask = `29 30 0:28 / ${leaf}/memory.max ro - tmpfs tmpfs rw`;
+  files.set("/proc/self/mountinfo", `${base}\n${lowerMask}\n${bind}`);
+  expect(readCgroupV2MemoryLimits(["memory.max"])).toEqual({ "memory.max": 800 });
   files.set(
     "/proc/self/mountinfo",
     `${base}\n${bind}\n32 31 0:28 / ${leaf}/memory.current ro - tmpfs tmpfs rw`,

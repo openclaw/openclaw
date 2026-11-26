@@ -163,8 +163,16 @@ function readCgroupV2View() {
   // child mounts too; other binds can hide one controller file or a whole subtree.
   const visibleParents = [controller];
   for (const current of visibleParents) {
-    for (const child of views) {
-      if (child.parent !== current.id || child.id === current.id) {
+    const children = views.filter(({ parent, id }) => parent === current.id && id !== current.id);
+    const points = new Set(children.map(({ point }) => point));
+    for (const child of children) {
+      // A nonrecursive bind hides older submounts below it. Visible submounts
+      // attach to the new mount ID, not its parent in the lower view.
+      if (
+        directoriesToMount(child.point)
+          .slice(1)
+          .some((ancestor) => points.has(ancestor))
+      ) {
         continue;
       }
       const expected = path.join(controller.root, path.relative(CGROUP_V2_MOUNT, child.point));
