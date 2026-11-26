@@ -168,6 +168,12 @@ suite.define(() => {
             );
           const manage = account.getByRole("link", { name: "Manage connected apps" });
           expect(await manage.getAttribute("href")).toBe("https://acme.example/connections");
+          // Capture once the page may mutate, not while the actions are still disabled.
+          await expect
+            .poll(() =>
+              account.getByRole("button", { name: /^Disconnect Acme Account/ }).isEnabled(),
+            )
+            .toBe(true);
           await card.screenshot({
             path: path.join(artifactDir, `account-actions-${colorScheme}.png`),
           });
