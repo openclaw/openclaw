@@ -68,27 +68,42 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     return undefined;
   }
   const { runCliAgent } = await import("../cli-runner.runtime.js");
-  const { cliBackendAcceptsAuthProfileForwarding, resolveCliExecutionAuthProfileId } =
-    await import("../cli-execution-auth.js");
+  const {
+    CliExecutionAuthProfileError,
+    cliBackendAcceptsAuthProfileForwarding,
+    resolveCliExecutionAuthProfileId,
+  } = await import("../cli-execution-auth.js");
   // A fresh CLI session uses the account order new CLI sessions use, so an OpenClaw-held
   // subscription login reaches the CLI as it does for the session's own turns.
   const { config, agentDir } = params;
-  const authProfileId =
-    config &&
-    agentDir &&
+  const requiredProfile = params.authProfileBinding?.profileId ?? params.requiredAuthProfileId;
+  const canForwardProfile =
+    config !== undefined &&
+    agentDir !== undefined &&
     cliBackendAcceptsAuthProfileForwarding({
       provider: eligibility.provider,
       config,
       agentId: params.agentId,
-    })
-      ? await resolveCliExecutionAuthProfileId({
-          cliExecutionProvider: eligibility.provider,
-          authProfileProvider: params.provider ?? eligibility.provider,
-          config,
-          agentDir,
-          selected: { authProfileId: params.authProfileId },
-        })
-      : params.authProfileId;
+    });
+  if (requiredProfile && !canForwardProfile) {
+    throw new CliExecutionAuthProfileError(
+      `CLI backend "${eligibility.provider}" cannot honor the required auth profile "${requiredProfile}".`,
+    );
+  }
+  const authProfileId = canForwardProfile
+    ? await resolveCliExecutionAuthProfileId({
+        cliExecutionProvider: eligibility.provider,
+        authProfileProvider: params.provider ?? eligibility.provider,
+        config,
+        agentDir,
+        selected: { authProfileId: requiredProfile ?? params.authProfileId },
+      })
+    : params.authProfileId;
+  if (requiredProfile && authProfileId !== requiredProfile) {
+    throw new CliExecutionAuthProfileError(
+      `CLI backend "${eligibility.provider}" cannot honor the required auth profile "${requiredProfile}".`,
+    );
+  }
   const admittedRunContext = await resolvePreparedRunAdmission({
     runId: params.runId,
     runtimeKind: "embedded",

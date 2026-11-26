@@ -219,6 +219,33 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
     expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({ provider: "claude-cli" });
   });
 
+  it.each([false, true])(
+    "preserves a required account before an opaque CLI dispatch (required=%s)",
+    async (required) => {
+      resolveRuntimeCliBackends.mockReturnValue([
+        { id: "opaque-cli", config: { command: "opaque" }, subscriptionAuthDispatch: true },
+      ]);
+      resolveCliRuntimeExecutionProvider.mockReturnValue("opaque-cli");
+      ensureAuthProfileStore.mockReturnValue({
+        profiles: { "anthropic:delegated": { type: "oauth", provider: "anthropic" } },
+      });
+      const dispatch = runDispatch({
+        provider: "other-provider",
+        authProfileId: "anthropic:delegated",
+        ...(required ? { requiredAuthProfileId: "anthropic:delegated" } : {}),
+        config: {},
+        agentDir: "/agents/main",
+      });
+      if (required) {
+        await expect(dispatch).rejects.toThrow("cannot honor the required auth profile");
+        expect(runCliAgent).not.toHaveBeenCalled();
+      } else {
+        await expect(dispatch).resolves.toBeDefined();
+        expect(runCliAgent).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
   it("dispatches when no credential mode resolves for the passthrough", async () => {
     resolveModelAuthMode.mockReturnValue(undefined);
     expect(await runDispatch()).toBeDefined();
