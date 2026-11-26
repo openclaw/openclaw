@@ -476,6 +476,33 @@ For a foreground node, stop `openclaw node run` and start it again instead.
 Later releases report File Transfer commands as idle between invocations, so
 subsequent automatic node updates activate normally.
 
+## pnpm installs updated to 2026.11.10
+
+A pnpm global install that reached 2026.11.10 through `openclaw update` ends its
+next update to a release with the same database schema, such as 2026.11.11, with
+`update-recovery-pending`, although the new version is installed and serving.
+The installed 2026.11.10 runs that update, so the new release cannot prevent it.
+
+The `openclaw update` after that one, run by 2026.11.11 or later, settles the
+record itself and then continues. It does so only when the managed Gateway is
+running, ready, and serving exactly the version and build that update installed.
+It keeps that update's plugin and configuration changes and records the earlier
+run as succeeded. It leaves the recovery to `openclaw update repair` when:
+
+- the Gateway is stopped, not ready, or serving another build;
+- the update lease store was removed or replaced after that update started, for
+  example by a temporary-directory cleanup;
+- the previous version is installed again.
+
+In those cases, run as the same user that runs OpenClaw:
+
+```bash
+openclaw update repair
+openclaw update
+```
+
+See [the issue](https://github.com/openclaw/openclaw/issues/205167).
+
 ## Plugin repair warnings
 
 `post-update-plugins` / `plugin-convergence` with

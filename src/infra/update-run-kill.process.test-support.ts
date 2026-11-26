@@ -29,24 +29,28 @@ import {
 // commit: the child checks it out and installs its build before the cohort, as
 // the Git activation does, and records the activation fact unless `marker` is
 // `none` (an older updater) or names another build. `end` set to `killed` then
-// SIGKILLs the child; `stalled` reports and stays alive until its parent kills it.
+// SIGKILLs the child; `stalled` reports and stays alive until its parent kills it;
+// `released` returns through the executor's own unwind, which releases its lease, and
+// exits. `candidateBuildId` is the build ID of a package candidate the update records.
 // `root` is the install path the update ran from when it differs from the
 // installation key, as for pnpm, whose install path links to the package's own directory.
 const [installKey, authority, options] = process.argv.slice(2);
 assert(installKey && authority && options);
-const { end, candidate, installed, trigger, gateway, checkout, root } = JSON.parse(options) as {
-  end: "killed" | "stalled";
-  candidate: string;
-  installed: "previous" | "candidate";
-  trigger: "cli" | "api";
-  gateway: "untouched" | "stopped" | "restarted";
-  root?: string;
-  checkout?: {
-    sha: string;
-    buildId: string;
-    marker?: "none" | { buildId?: string; previousBuildId?: string };
+const { end, candidate, candidateBuildId, installed, trigger, gateway, checkout, root } =
+  JSON.parse(options) as {
+    end: "killed" | "stalled" | "released";
+    candidate: string;
+    candidateBuildId?: string;
+    installed: "previous" | "candidate";
+    trigger: "cli" | "api";
+    gateway: "untouched" | "stopped" | "restarted";
+    root?: string;
+    checkout?: {
+      sha: string;
+      buildId: string;
+      marker?: "none" | { buildId?: string; previousBuildId?: string };
+    };
   };
-};
 const manifest = path.join(installKey, "package.json");
 const { version, buildId = null } = await readPackageUpdateIdentity(installKey);
 assert(version);
@@ -58,7 +62,16 @@ await withUpdateCommandExecutor(
   runId,
   async (executor) => {
     const fence = await executor.enter(installKey);
-    createUpdateRun({ runId, trigger, origin: { driver: readUpdateRunDriver() } }, ledger);
+    createUpdateRun(
+      {
+        runId,
+        trigger,
+        origin: { driver: readUpdateRunDriver() },
+        // A package update that recorded its candidate's build names its target, as the updater does.
+        ...(candidateBuildId ? { target: { kind: "package", version: candidate } } : {}),
+      },
+      ledger,
+    );
     adoptUpdateRun(runId, ledger);
     recordUpdateRunPhase(runId, "activating", {}, ledger);
     if (checkout) {
@@ -83,7 +96,11 @@ await withUpdateCommandExecutor(
       ...cohort,
       fence,
       from: { ...runtime, version, buildId },
-      to: { ...runtime, version: candidate, buildId: checkout?.buildId ?? null },
+      to: {
+        ...runtime,
+        version: candidate,
+        buildId: checkout?.buildId ?? candidateBuildId ?? null,
+      },
     });
     if (gateway !== "untouched") {
       const stopped = { step: "service-stop", status: "completed", endedAtMs: Date.now() } as const;
@@ -100,11 +117,12 @@ await withUpdateCommandExecutor(
       fs.writeFileSync(manifest, JSON.stringify({ ...installedManifest, version: candidate }));
     }
     if (gateway === "restarted") {
+      const runningBuildId = checkout?.buildId ?? candidateBuildId;
       const serving = {
         serviceRunning: true,
         versionMatch: true,
         runningVersion: candidate,
-        ...(checkout ? { runningBuildId: checkout.buildId } : {}),
+        ...(runningBuildId ? { runningBuildId } : {}),
       };
       recordUpdateRunVerification(runId, { ...serving, settled: true }, ledger);
     }
@@ -112,8 +130,13 @@ await withUpdateCommandExecutor(
     if (end === "killed") {
       process.kill(process.pid, "SIGKILL");
     }
+    if (end === "released") {
+      return;
+    }
     // A stalled updater keeps its claim and its driver identity until it is killed.
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
   },
   { existingAuthority: JSON.parse(authority) },
 );
+// Only the released updater gets here: its executor has released the installation.
+process.exit(0);

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PLUGIN_COHORT_REPLACED_INSTALLATION_STEP } from "../../infra/update-run-codec.js";
 import {
   finishUpdateRun,
@@ -10,19 +10,23 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
+  beginRollback,
   candidate,
   config,
   ctx,
   fixtures,
   lease,
   linkedInstallation,
+  loseStore,
   mocks,
   nextUpdate,
   replacePackageDirectory,
   repair,
   reserved,
+  servingGateway,
   settled,
   unleased,
   updater,
@@ -41,6 +45,10 @@ const replacedWarning = (runId: string) =>
     ?.detail;
 // Update history records paths under the account home as `~`.
 const home = (file: string) => file.replace(ctx.root, "~");
+const notServingNow = new RegExp(
+  `released its lease.*the managed Gateway is not serving OpenClaw ${candidate}.*By hand: Run openclaw update repair`,
+  "u",
+);
 const runRepair = (slot: string) => {
   mocks.root.mockResolvedValue(slot);
   return updateRepairCommand({ json: true, yes: true });
@@ -75,34 +83,169 @@ describe.skipIf(process.platform === "win32")(
         expect(replacedWarning(killed.runId)).toContain(home(install.key));
       }));
 
-    it("is settled by repair after its driver released its lease, and the next update proceeds", () =>
+    // The driver unwound through its own executor, which releases its lease only once
+    // its children are settled: the update lease store that held it shows them gone.
+    const build = "build-candidate";
+    const released: Updater = { ...verified, end: "released", candidateBuildId: build };
+    const releasedUpdate = async (dead: Updater = {}) => {
+      const install = await linkedInstallation();
+      const killed = await updater(install.key, { ...released, ...dead, root: install.slot });
+      const successor = await replacePackageDirectory(install, { buildId: build });
+      return { install, killed, successor };
+    };
+
+    it("is settled by the next update after its driver released its lease, while the Gateway serves its candidate", () =>
       fixtures.lifetime.run(async () => {
-        const install = await linkedInstallation();
-        const killed = await updater(install.key, { ...verified, root: install.slot });
-        // The driver exited through its own unwind, which releases its lease.
-        await lease(install.key);
-        await replacePackageDirectory(install);
-        const before = reserved(killed.runId);
-
-        // Without that lease the update cannot show the driver's children gone; it names repair.
-        await expect(nextUpdate(install.slot)).rejects.toThrow(unleased);
-        expect(reserved(killed.runId)).toEqual(before);
-
-        await runRepair(install.slot);
-
-        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-        expect(config().gateway).toEqual({ mode: "local" });
-        expect(getUpdateRun(killed.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
-        expect(getUpdateRun(killed.runId)?.steps).toContainEqual(
-          expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
-        );
-        expect(replacedWarning(killed.runId)).toMatch(
-          /^Plugin recovery was settled from a replacing/u,
-        );
+        const { install, killed } = await releasedUpdate();
+        servingGateway(candidate, build);
 
         await nextUpdate(install.slot);
+
         expect(mocks.proceed).toHaveBeenCalledOnce();
-        expect(settled(ctx.admitted[0])).toBeUndefined();
+        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
+        expect(loadUpdateRecovery(killed.runId)).toBeUndefined();
+        expect(config().gateway).toEqual({ mode: "local" });
+        expect(settled(ctx.admitted[0])).toMatch(
+          new RegExp(
+            `^Settled interrupted update ${killed.runId}: .*kept, because its Gateway was verified on the version it installed.*its updater had released its lease, and the managed Gateway was found serving that version now`,
+            "u",
+          ),
+        );
+        // The admitted update's history reconciliation closes the run as the success it was.
+        await reconcileAbandonedUpdateRunsAsync({});
+        const run = getUpdateRun(killed.runId);
+        expect(run).toMatchObject({ status: "succeeded", after: { version: candidate } });
+        expect(run?.steps).toContainEqual(
+          expect.objectContaining({
+            step: "warning:reconcile:driver-lost-after-verification",
+            status: "completed",
+          }),
+        );
+      }));
+
+    // A fresh probe must find the candidate serving; otherwise repair finishes the update.
+    it.each([
+      { name: "is not ready", version: candidate, buildId: build, ready: false },
+      { name: "serves another build", version: candidate, buildId: "build-other", ready: true },
+      { name: "serves another version", version: "2026.11.3", buildId: build, ready: true },
+    ])(
+      "is left to repair after its driver released its lease when the Gateway $name",
+      ({ version, buildId, ready }) =>
+        fixtures.lifetime.run(async () => {
+          const { install, killed } = await releasedUpdate();
+          servingGateway(version, buildId, { ready });
+          const before = reserved(killed.runId);
+
+          await expect(nextUpdate(install.slot)).rejects.toThrow(notServingNow);
+          expect(reserved(killed.runId)).toEqual(before);
+          expect(mocks.proceed).not.toHaveBeenCalled();
+
+          await runRepair(install.slot);
+
+          expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
+          expect(config().gateway).toEqual({ mode: "local" });
+          expect(getUpdateRun(killed.runId)?.steps).toContainEqual(
+            expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+          );
+          expect(replacedWarning(killed.runId)).toMatch(
+            /^Plugin recovery was settled from a replacing/u,
+          );
+
+          await nextUpdate(install.slot);
+          expect(mocks.proceed).toHaveBeenCalledOnce();
+          expect(settled(ctx.admitted[0])).toBeUndefined();
+        }),
+    );
+
+    // Each control takes away one fact the released lease's proof stands on.
+    it.each<{ name: string; dead?: Updater; control?: (killed: Dead) => unknown; refusal: RegExp }>(
+      [
+        {
+          // A store created since the run recorded nothing of that updater's children.
+          name: "the update lease store was removed after it ran",
+          control: () => loseStore(),
+          refusal: unleased,
+        },
+        {
+          name: "a new update lease store replaced the one that held its lease",
+          control: async (killed) => {
+            await loseStore();
+            await lease(killed.slot);
+          },
+          refusal: unleased,
+        },
+        {
+          name: "it recorded no build for its candidate",
+          dead: { candidateBuildId: undefined },
+          refusal: unleased,
+        },
+        {
+          name: "it had begun rolling back",
+          control: (killed) => beginRollback(killed),
+          refusal: unleased,
+        },
+        {
+          name: "the Gateway started it",
+          dead: { trigger: "api" },
+          refusal: /not left by a killed openclaw update command/u,
+        },
+      ],
+    )(
+      "still refuses after its driver released its lease when $name",
+      ({ dead, control, refusal }) =>
+        fixtures.lifetime.run(async () => {
+          const { install, killed } = await releasedUpdate(dead);
+          await control?.(killed);
+          servingGateway(candidate, build);
+          const before = reserved(killed.runId);
+
+          await expect(nextUpdate(install.slot)).rejects.toThrow(refusal);
+
+          expect(mocks.proceed).not.toHaveBeenCalled();
+          expect(reserved(killed.runId)).toEqual(before);
+          expect(replacedWarning(killed.runId)).toBeUndefined();
+        }),
+    );
+
+    // A host that reports no creation time cannot show the store is the one that held the lease.
+    it("still refuses after its driver released its lease when the host reports no creation time for the update lease store", () =>
+      fixtures.lifetime.run(async () => {
+        const { install, killed } = await releasedUpdate();
+        servingGateway(candidate, build);
+        const { databasePath } = await lease(path.join(ctx.root, "unrelated"));
+        const statSync = fs.statSync;
+        const unborn = vi.spyOn(fs, "statSync").mockImplementation(((
+          file: fs.PathLike,
+          options?: fs.StatSyncOptions,
+        ) => {
+          const stat = statSync(file, options);
+          return stat && fs.realpathSync(file) === databasePath
+            ? Object.assign(stat, { birthtimeMs: 0 })
+            : stat;
+        }) as typeof fs.statSync);
+        const before = reserved(killed.runId);
+        try {
+          await expect(nextUpdate(install.slot)).rejects.toThrow(unleased);
+        } finally {
+          unborn.mockRestore();
+        }
+
+        expect(mocks.proceed).not.toHaveBeenCalled();
+        expect(reserved(killed.runId)).toEqual(before);
+      }));
+
+    it("still refuses after its driver released its lease when the version it replaced is installed again", () =>
+      fixtures.lifetime.run(async () => {
+        const install = await linkedInstallation();
+        const killed = await updater(install.key, { ...released, root: install.slot });
+        await replacePackageDirectory(install, { version: "2026.11.3" });
+        servingGateway(candidate, build);
+        const before = reserved(killed.runId);
+
+        await expect(nextUpdate(install.slot)).rejects.toThrow(unleased);
+
+        expect(mocks.proceed).not.toHaveBeenCalled();
+        expect(reserved(killed.runId)).toEqual(before);
       }));
 
     it("finishes a commit the dead update had begun after a later build replaced it", () =>
