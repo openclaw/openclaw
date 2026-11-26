@@ -43,20 +43,26 @@ const expectedApproval = (approvalId: string) => ({
 });
 
 describe("agent stream approval through the automation tool", () => {
-  it.each(["shape", "past schedule"] as const)(
-    "allows correction after a server %s rejection, then honors actual denial",
-    async (invalid) => {
+  it.each([
+    { invalid: "shape", schedule: undefined, message: /invalid cron.add params/ },
+    {
+      invalid: "past schedule",
+      schedule: { kind: "at", at: "2000-01-01T00:00:00.000Z" },
+      message: /That time is in the past \(2000-01-01T00:00:00\.000Z\)\. Choose a time after/,
+    },
+    {
+      invalid: "far-future schedule",
+      schedule: { kind: "at", at: "2100-01-01T00:00:00.000Z" },
+      message: /is more than 10 years away\. Choose an earlier date and time\./,
+    },
+  ] as const)(
+    "allows correction after a server $invalid rejection, then honors actual denial",
+    async ({ schedule, message }) => {
       await withStreamApprovalFixture(async ({ add, read, deliveries, takeApproval, decide }) => {
-        const job =
-          invalid === "shape"
-            ? { schedule: { kind: "stream", command: "tail -F example.log" }, task: "watch" }
-            : {
-                ...approvedStreamJob(),
-                schedule: { kind: "at", at: "2000-01-01T00:00:00.000Z" },
-              };
-        await expect(add(job)).rejects.toThrow(
-          invalid === "shape" ? /invalid cron.add params/ : /past/,
-        );
+        const job = schedule
+          ? { ...approvedStreamJob(), schedule }
+          : { schedule: { kind: "stream", command: "tail -F example.log" }, task: "watch" };
+        await expect(add(job)).rejects.toThrow(message);
         expect(deliveries).toEqual([]);
         expect(await read()).toEqual([]);
         const corrected = add();

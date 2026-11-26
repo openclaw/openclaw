@@ -8,6 +8,7 @@ import {
   makeTool,
 } from "../../../../packages/agent-core/src/agent-loop.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { applyCodeModeCatalog, createCodeModeTools } from "../../code-mode.js";
 import { createWriteTool } from "../../sessions/tools/write.js";
 import {
   applyToolSearchCatalog,
@@ -16,6 +17,7 @@ import {
   createToolSearchTools,
   restrictToolSearchCatalog,
 } from "../../tool-search.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import { createAttemptDeferredToolResolver } from "./attempt-deferred-tool-resolver.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -83,3 +85,54 @@ it("recovers a deferred structured call only through dispatch_action", async () 
   expect(execute).toHaveBeenCalledOnce();
   expect(await readFile(join(workspace, "result.txt"), "utf8")).toBe(input.content);
 });
+
+it.each(["tools", "code-mode"] as const)(
+  "loads an on-demand tool on its first direct call in %s and keeps its screenshot",
+  async (mode) => {
+    const screenshot = { type: "image" as const, data: "c2NyZWVu", mimeType: "image/png" };
+    const content = [{ type: "text" as const, text: "frame 1" }, screenshot];
+    const execute = vi.fn(async () => ({ content, details: {} }));
+    const target: AnyAgentTool = { ...makeTool("probe_screen"), catalogMode: "on-demand", execute };
+    const config = { tools: mode === "tools" ? { toolSearch: { mode } } : { codeMode: true } };
+    const catalogRef = { ...createToolSearchCatalogRef(), loadsOnDemandTools: true as const };
+    const ctx = { config, runtimeConfig: config, catalogRef };
+    onTestFinished(() => clearToolSearchCatalog(ctx));
+    const { tools } =
+      mode === "tools"
+        ? applyToolSearchCatalog({ ...ctx, tools: [...createToolSearchTools(ctx), target] })
+        : applyCodeModeCatalog({ ...ctx, tools: [...createCodeModeTools(ctx), target] });
+    const promoted: string[] = [];
+    const resolveDeferredTool = createAttemptDeferredToolResolver({
+      attempt: { config, sessionId: "session", runId: "run" },
+      clientTools: {
+        codeModeControlsEnabledForRun: mode === "code-mode",
+        deferredDirectoryToolsCallable: false,
+        toolSearchCatalogRef: catalogRef,
+        catalogToolHookContext: undefined,
+        onPromoteTool: (tool) => promoted.push(tool.name),
+      },
+      customTools: tools,
+      runAbortSignal: new AbortController().signal,
+      sessionAgentId: "main",
+    });
+    const call = (id: string) => [{ ...makeCall("probe_screen", id), arguments: {} }];
+    const firstRequestTools: string[] = [];
+    const { agent } = captureAgent(tools, {
+      resolveDeferredTool,
+      streamFn: createTurnSequenceStream(
+        [call("first"), call("second"), [{ type: "text", text: "done" }]],
+        [],
+        (context, turn) =>
+          turn === 1 && firstRequestTools.push(...context.tools!.map((t) => t.name)),
+      ),
+    });
+    await agent.prompt("look at the screen");
+    expect(firstRequestTools).not.toContain("probe_screen");
+    const results = agent.state.messages.filter((message) => message.role === "toolResult");
+    expect(results.map((result) => [result.isError, result.content])).toEqual([
+      [false, content],
+      [false, content],
+    ]);
+    expect(promoted).toEqual(["probe_screen"]);
+  },
+);

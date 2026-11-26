@@ -6,12 +6,14 @@ import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
 import {
+  GIT_RELEASE_LAUNCHER,
   resolveGitReleaseEntrypointForLauncher,
   resolveGitReleaseLauncherForEntrypoint,
   resolveGitReleasePrefix,
   servingGitReleaseSlot,
 } from "../infra/git-release-paths.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
+import { hasReleaseUpdateOwner } from "../update/store.js";
 import {
   buildGatewayDistEntrypointCandidates,
   buildGatewayInstallEntrypointCandidates,
@@ -29,8 +31,8 @@ type GatewayProgramArgs = {
 export const OPENCLAW_WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
 
 /**
- * A CLI entrypoint the service install publishes before the service starts. It is not on
- * disk while planning, so the argument builder uses it as given instead of probing.
+ * A same-version service entry, either a checked durable copy or one the install will
+ * publish. Use it without probing, while still allowing the resident launcher to own it.
  */
 export type PlannedCliEntrypoint = { planned: string };
 
@@ -275,13 +277,15 @@ async function resolveCliProgramArguments(params: {
         ? resolveGitReleaseEntrypointForLauncher(params.cliEntrypoint)
           ? params.cliEntrypoint
           : null
-        : resolveGitReleaseLauncherForEntrypoint(
-            path.join(
-              servingGitReleaseSlot(resolveGitReleasePrefix(params.env)),
-              "dist",
-              "index.js",
-            ),
-          );
+        : (await hasReleaseUpdateOwner(params.env))
+          ? path.join(resolveGitReleasePrefix(params.env), GIT_RELEASE_LAUNCHER)
+          : resolveGitReleaseLauncherForEntrypoint(
+              path.join(
+                servingGitReleaseSlot(resolveGitReleasePrefix(params.env)),
+                "dist",
+                "index.js",
+              ),
+            );
   const cliEntrypointPath =
     launcher && (await canAccessEntrypoint(launcher))
       ? launcher

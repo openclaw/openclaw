@@ -1,6 +1,7 @@
 // Simple completion runtime tests cover model resolution, provider auth, and
 // one-shot completion wiring before requests reach the shared LLM stream path.
 import { createApiRegistry } from "@openclaw/ai";
+import { assignTransportErrorDetails } from "@openclaw/ai/transports";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -836,6 +837,93 @@ describe("acquired simple completion profile failover", () => {
     expect(hoisted.markAuthProfileSuccessMock).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledTimes(bookkeepingFails ? 2 : 0);
   });
+
+  it("rotates past a connection dropped before any response without cooling the profile", async () => {
+    const fixture = await acquireProfiles();
+    await using prepared = fixture.prepared;
+    // Shape of an undici socket close before the response: TypeError("fetch failed") over SocketError.
+    const socketClosed = Object.assign(new Error("other side closed"), {
+      name: "SocketError",
+      code: "UND_ERR_SOCKET",
+    });
+    const failure = makeAssistantMessageFixture({ content: [], errorMessage: undefined });
+    assignTransportErrorDetails(failure, new TypeError("fetch failed", { cause: socketClosed }));
+    const success = makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [{ type: "text", text: "backup reply" }],
+    });
+    const complete = vi.fn<Parameters<typeof completeWithAuthProfileFailover>[0]["complete"]>(
+      async ({ auth }) => (auth.profileId === "openai:p1" ? failure : success),
+    );
+
+    const result = await completeWithAuthProfileFailover({
+      prepared,
+      cfg: fixture.cfg,
+      agentDir: prepared.selection.agentDir,
+      assertCurrent: () => {},
+      complete,
+      warn: vi.fn(),
+    });
+
+    expect(failure.diagnostics?.map((entry) => entry.type)).toContain("provider_transport_failure");
+    expect(result).toBe(success);
+    expect(complete.mock.calls.map(([{ auth }]) => auth.profileId)).toEqual([
+      "openai:p1",
+      "openai:p2",
+    ]);
+    expect(hoisted.markAuthProfileFailureMock).not.toHaveBeenCalled();
+    expect(hoisted.markAuthProfileSuccessMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ profileId: "openai:p2" }),
+    );
+  });
+
+  it.each([
+    { name: "after provider events", eventsEmitted: true, responseId: undefined },
+    { name: "after the response was created", eventsEmitted: false, responseId: "resp_fixture" },
+    {
+      name: "after a WebSocket leg fell back to SSE",
+      eventsEmitted: false,
+      responseId: undefined,
+      fallbackTransport: "sse",
+    },
+    { name: "after partial output", eventsEmitted: false, responseId: undefined, partial: true },
+  ])(
+    "still records a transport timeout $name",
+    async ({ eventsEmitted, responseId, fallbackTransport, partial }) => {
+      const fixture = await acquireProfiles(true);
+      await using prepared = fixture.prepared;
+      const failure = makeAssistantMessageFixture({
+        content: partial ? [{ type: "text", text: "partial" }] : [],
+        errorMessage: "fetch failed",
+        responseId,
+        diagnostics: [
+          {
+            type: "provider_transport_failure",
+            timestamp: 0,
+            details: {
+              eventsEmitted,
+              phase: eventsEmitted ? "after_message_stream_start" : "before_message_stream_start",
+              ...(fallbackTransport ? { fallbackTransport } : {}),
+            },
+          },
+        ],
+      });
+
+      await completeWithAuthProfileFailover({
+        prepared,
+        cfg: fixture.cfg,
+        agentDir: prepared.selection.agentDir,
+        assertCurrent: () => {},
+        complete: async () => failure,
+        warn: vi.fn(),
+      });
+
+      expect(hoisted.markAuthProfileFailureMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ profileId: "openai:p1", reason: "timeout" }),
+      );
+    },
+  );
 
   it("stops before preparing a backup when authority expires during bookkeeping", async () => {
     const fixture = await acquireProfiles();

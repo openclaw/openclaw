@@ -135,7 +135,6 @@ describe("cron creator authority grants", () => {
       undefined,
       undefined,
       undefined,
-      undefined,
       true,
     );
     const grant = mint(scope, undefined, undefined, undefined, "requester");

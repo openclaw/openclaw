@@ -448,6 +448,7 @@ export async function runAgentHarnessAttempt(
                 replyOperation: internalParams.replyOperation,
                 sessionPersistence: internalParams.sessionPersistence,
                 trigger: internalParams.trigger,
+                mcpRequesterProfileId: internalParams.mcpRequesterProfileId,
                 bindWatchdogAttempt: internalParams.bindWatchdogAttempt,
                 joinObservation: internalParams.joinObservation,
                 queueInputAdapter,

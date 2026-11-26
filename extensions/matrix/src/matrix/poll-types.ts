@@ -138,7 +138,7 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
       id: isRecord(answer) && typeof answer.id === "string" ? answer.id : "",
       text: getTextContent(answer),
     }))
-    .filter((answer) => answer.id.trim().length > 0 && answer.text.length > 0);
+    .filter((answer) => answer.id.length > 0 && answer.text.length > 0);
   if (answers.length === 0) {
     return null;
   }
@@ -181,17 +181,19 @@ export function resolvePollReferenceEventId(content: unknown): string | null {
   return eventId.length > 0 ? eventId : null;
 }
 
-function parsePollResponseAnswerIds(content: unknown): string[] | null {
-  if (!content || typeof content !== "object") {
-    return null;
+function parsePollResponseAnswerIds(
+  content: Record<string, unknown> | undefined,
+  answerIds: ReadonlySet<string>,
+): string[] {
+  const response = content?.[M_POLL_RESPONSE] ?? content?.[ORG_POLL_RESPONSE];
+  if (!isRecord(response) || !Array.isArray(response.answers)) {
+    return [];
   }
-  const response =
-    (content as Record<string, PollResponseSubtype | undefined>)[M_POLL_RESPONSE] ??
-    (content as Record<string, PollResponseSubtype | undefined>)[ORG_POLL_RESPONSE];
-  if (!response || !Array.isArray(response.answers)) {
-    return null;
-  }
-  return response.answers.filter((answer): answer is string => typeof answer === "string");
+  // An unknown ID spoils the whole response, even beyond the selection limit.
+  const answers: unknown[] = response.answers;
+  return answers.every((id): id is string => typeof id === "string" && answerIds.has(id))
+    ? answers
+    : [];
 }
 
 export function buildPollResultsSummary(params: {
@@ -254,10 +256,8 @@ export function buildPollResultsSummary(params: {
     if (eventTs > pollClosedAt) {
       continue;
     }
-    const rawAnswers = parsePollResponseAnswerIds(event.content) ?? [];
-    // Answer IDs reference the exact strings in the poll start event.
-    const validAnswers = rawAnswers.filter((answerId) => answerIds.has(answerId));
-    latestVoteBySender.set(senderId, [...new Set(validAnswers.slice(0, parsed.maxSelections))]);
+    const answers = parsePollResponseAnswerIds(event.content, answerIds);
+    latestVoteBySender.set(senderId, [...new Set(answers.slice(0, parsed.maxSelections))]);
   }
 
   const voteCounts = new Map<string, number>(

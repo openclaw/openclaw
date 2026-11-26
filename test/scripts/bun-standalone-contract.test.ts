@@ -52,6 +52,7 @@ describe("standalone build interface", () => {
       ["--aot", "--aot-allow-code-from-disk"],
       { supportOutputDirectory: "support", aotCompileOptions: { allowCodeFromDisk: true } },
     ],
+    [["--bytecode", "--plugins", "slack"], "bytecode", ["--bytecode"], { pluginIds: ["slack"] }],
   ])("parses standalone options %j", (flags, mode, compileFlags, extra) => {
     expect(parse(...flags)).toEqual({ outputDirectory: "out", mode, compileFlags, ...extra });
   });
@@ -61,6 +62,9 @@ describe("standalone build interface", () => {
     [["--plugins"], "--plugins"],
     [["--plugins", "codex,"], "--plugins"],
     [["--plugins", "codex", "--plugins", "slack"], "--plugins"],
+    [["--plugins", ""], "--plugins"],
+    [["--plugins", "--bytecode"], "--plugins"],
+    [["--unknown"], "at most one"],
     [["--support-output", "support"], "requires --compile-aot"],
     [["--aot-source", "--support-output", "support"], "requires --compile-aot"],
     [["--support-output", "support", "--aot-source"], "requires --compile-aot"],
@@ -71,28 +75,6 @@ describe("standalone build interface", () => {
   });
 
   it("requires an output directory", () => {
-    expect(() => parseStandaloneArguments([])).toThrow("Usage:");
-  });
-  it("defaults to JIT and selects exactly one explicit compilation mode", () => {
-    expect(parseStandaloneArguments(["out"])).toEqual({
-      outputDirectory: "out",
-      mode: "jit",
-      compileFlags: [],
-    });
-    for (const [flag, mode] of Object.entries({
-      "--bytecode": "bytecode",
-      "--compile-aot": "aot",
-    })) {
-      const parsed = parseStandaloneArguments(["out", flag]);
-      if (parsed.help) {
-        throw new Error("A build mode must not request help");
-      }
-      expect(parsed.mode).toBe(mode);
-    }
-    expect(() => parseStandaloneArguments(["out", "--bytecode", "--compile-aot"])).toThrow(
-      "at most one",
-    );
-    expect(() => parseStandaloneArguments(["out", "--unknown"])).toThrow("at most one");
     expect(() => parseStandaloneArguments([])).toThrow("Usage:");
   });
 
@@ -274,29 +256,6 @@ describe("standalone build interface", () => {
     ["--aot-disable", "--trim"],
   ])("rejects incomplete or repeated AOT options %j", (...flags) => {
     expect(() => parseStandaloneArguments(["out", "--compile-aot", ...flags])).toThrow();
-  });
-
-  it("accepts one plugin list independently of the compilation mode", () => {
-    for (const flags of [
-      ["--plugins", "codex, slack,codex", "--bytecode"],
-      ["--bytecode", "--plugins", "codex,slack"],
-    ]) {
-      expect(parseStandaloneArguments(["out", ...flags])).toEqual({
-        outputDirectory: "out",
-        mode: "bytecode",
-        compileFlags: ["--bytecode"],
-        pluginIds: ["codex", "slack"],
-      });
-    }
-    for (const flags of [
-      ["--plugins"],
-      ["--plugins", ""],
-      ["--plugins", "codex,"],
-      ["--plugins", "--bytecode"],
-      ["--plugins", "codex", "--plugins", "slack"],
-    ]) {
-      expect(() => parseStandaloneArguments(["out", ...flags])).toThrow("--plugins");
-    }
   });
 
   it("refuses experimental AOT on a compiler without that capability", () => {

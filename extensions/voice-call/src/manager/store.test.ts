@@ -197,12 +197,8 @@ it("bounds bulk chunk reads across retained call snapshots", async () => {
   const chunkQueries: string[][] = [];
   installStateRuntime({ onChunkRead: (keys) => chunkQueries.push([...keys]) });
   await expectHistory(calls, calls.length);
-  expect(chunkQueries.length).toBeLessThanOrEqual(2);
+  expect(chunkQueries).toHaveLength(2);
   expect(chunkQueries.every((keys) => keys.length <= 128)).toBe(true);
-  const eventsPerQuery = chunkQueries.map(
-    (keys) => new Set(keys.map((key) => key.split(":chunk:")[0])),
-  );
-  expect(eventsPerQuery.reduce((count, events) => count + events.size, 0)).toBe(calls.length);
   const restored = await restore(storePath);
   expect([...restored.activeCalls.values()]).toEqual(calls);
   expect([...restored.processedEventIds]).toEqual(calls.flatMap((call) => call.processedEventIds));

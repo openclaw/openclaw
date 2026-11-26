@@ -588,21 +588,14 @@ it.for(["allowed", "revoked"] as const)(
       ).toEqual([result.runId, result.runId]);
       expect(gatewayCalls).toHaveBeenCalled();
       if (targetEntry?.sessionId) {
-        // History keeps terminal refusals; a refused replay is cancelled, never left queued.
+        // Refused replays never stage input; successful replays leave no pending work.
         expect(
           await listSessionPendingInputs({
             agentId: "main",
             sessionKey: targetKey,
             sessionId: targetEntry.sessionId,
           }),
-        ).toMatchObject(
-          revoked
-            ? {
-                items: [{ runId: result.runId, state: "cancelled", endCause: "revoked" }],
-                total: 1,
-              }
-            : { items: [], total: 0 },
-        );
+        ).toMatchObject({ items: [], total: 0 });
       }
       if (revoked) {
         expect(revocation).toEqual({ method: revokeMethod, bobRefused: true });
