@@ -293,7 +293,7 @@ describe("buildContextReply", () => {
   });
 
   it("shows latest-run and whole-session cache and cost like the Control UI", () => {
-    const params = makeParams("/context", false);
+    const sessionEntry = expectDefined(makeParams("/context", false).sessionEntry, "session entry");
     const usage = (overrides: Partial<SessionCostSummary>): SessionCostSummary => ({
       input: 500,
       output: 0,
@@ -311,10 +311,10 @@ describe("buildContextReply", () => {
     });
     const lines = (sessionUsage: SessionCostSummary | null) =>
       formatContextBudget({
-        report: expectDefined(params.sessionEntry?.systemPromptReport),
+        report: expectDefined(sessionEntry.systemPromptReport, "system prompt report"),
         used: 4_000,
         limit: 8_192,
-        entry: { ...params.sessionEntry, cacheRead: 900, cacheWrite: 0, estimatedCostUsd: 0.306 },
+        entry: { ...sessionEntry, cacheRead: 900, cacheWrite: 0, estimatedCostUsd: 0.306 },
         sessionUsage,
       })
         .split("\n")
