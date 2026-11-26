@@ -1,25 +1,20 @@
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { resolveCompactionTimeoutMs } from "../../agents/embedded-agent-runner/compaction-safety-timeout.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
-import type { MemoryFlushResult } from "./agent-runner-memory.types.js";
 import { formatCompactionModelRef } from "./compaction-notice.js";
 
-type PreflightStage = "memory flush" | "compaction";
-
-/** A preflight maintenance model went quiet for the whole compaction progress window. */
+/** A required preflight compaction went quiet for its whole progress window. */
 export class PreflightStallError extends Error {
   override name = "PreflightStallError";
 
   constructor(
-    readonly stage: PreflightStage,
     readonly modelRef: string,
     readonly windowMs: number,
   ) {
     // The prefix keeps the existing preflight failure handling (kept input, failure reply).
     super(
-      `Preflight compaction required but failed: ${stage} timed out on ${modelRef} after ${Math.round(windowMs / 1000)}s without progress`,
+      `Preflight compaction required but failed: compaction timed out on ${modelRef} after ${Math.round(windowMs / 1000)}s without progress`,
     );
   }
 }
@@ -34,7 +29,6 @@ export function createCompactionStall(
     return undefined;
   }
   return new PreflightStallError(
-    "compaction",
     cfg.agents?.defaults?.compaction?.model?.trim() ||
       formatCompactionModelRef(run.provider, run.model),
     resolveCompactionTimeoutMs(cfg),
@@ -45,9 +39,8 @@ export function renderPreflightStallText(error: unknown): string | undefined {
   if (!(error instanceof PreflightStallError)) {
     return undefined;
   }
-  const what = error.stage === "memory flush" ? "Memory maintenance" : "Compaction";
   return (
-    `⚠️ ${what} before this reply stalled: ${error.modelRef} sent no output for ` +
+    `⚠️ Compaction before this reply stalled: ${error.modelRef} sent no output for ` +
     `${Math.round(error.windowMs / 1000)}s. Check that the model is running and responsive ` +
     "(for a slow local model, raise agents.defaults.compaction.timeoutSeconds), then try again."
   );
@@ -55,7 +48,8 @@ export function renderPreflightStallText(error: unknown): string | undefined {
 
 /**
  * Bounds a reply's private memory flush by the same progress window as compaction.
- * Output deltas reset it; expiry aborts the flush with a stall naming its model.
+ * Output deltas reset it. Expiry aborts only the optional flush, which then fails
+ * non-fatally like any other flush failure, so the reply continues.
  */
 export function startMemoryFlushStallGuard(
   { cfg, replyOperation }: { cfg: OpenClawConfig; replyOperation?: ReplyOperation },
@@ -69,9 +63,11 @@ export function startMemoryFlushStallGuard(
   const windowMs = resolveCompactionTimeoutMs(cfg);
   const controller = new AbortController();
   let modelRef = formatCompactionModelRef(model.provider, model.model);
-  let stall: PreflightStallError | undefined;
+  let stall: Error | undefined;
   const timer = setTimeout(() => {
-    stall = new PreflightStallError("memory flush", modelRef, windowMs);
+    stall = new Error(
+      `memory flush timed out on ${modelRef} after ${Math.round(windowMs / 1000)}s without output`,
+    );
     controller.abort(stall);
   }, windowMs);
   timer.unref();
@@ -89,10 +85,6 @@ export function startMemoryFlushStallGuard(
         replyOperation.watchdog.progress("semantic", "memory_flush:model_output");
         timer.refresh();
       }
-    },
-    /** A stalled flush is a failed flush whose stall the waiting preflight reports. */
-    failure(sessionEntry: SessionEntry | undefined): MemoryFlushResult | undefined {
-      return stall && { sessionEntry, outcome: "failed", stall };
     },
     stop() {
       clearTimeout(timer);

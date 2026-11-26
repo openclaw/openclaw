@@ -162,15 +162,12 @@ it(
   },
 );
 
-type StallCase = { stage: "memory flush" | "compaction"; modelRef?: string };
+type StallCase = { stage: "memory flush" | "compaction" };
 
-it.each([
-  { stage: "memory flush", modelRef: "mock-openai/preflight-stall-fixture" },
-  { stage: "compaction" },
-] satisfies StallCase[])(
-  "ends a Control UI turn promptly when its $stage stalls without output",
+it.each([{ stage: "memory flush" }, { stage: "compaction" }] satisfies StallCase[])(
+  "continues a Control UI turn promptly when its $stage stalls without output",
   { timeout: 180_000 },
-  async ({ stage, modelRef }) => {
+  async ({ stage }) => {
     const silenceSeconds = 5;
     const requests: string[] = [];
     const held: ServerResponse[] = [];
@@ -229,21 +226,14 @@ it.each([
       expect(failedAfterMs).toBeGreaterThanOrEqual(silenceSeconds * 1000 - 250);
       expect(failedAfterMs).toBeLessThan(silenceSeconds * 1000 + 15_000);
       expect(delivered).not.toContain("stopped making progress");
-      if (stage === "memory flush") {
-        // The reply's own model was silent, so the turn fails with what stalled and what to do.
-        expect(requests).toEqual(["flush"]);
-        expect(delivered).toContain(
-          "Memory maintenance before this reply stalled: " +
-            modelRef +
-            " sent no output for 5s. Check that the model is running",
-        );
-      } else {
-        // Compaction reports its own timeout before the reply watchdog's backstop, and a
-        // prompt that still fits continues to the reply instead of a generic stall.
-        expect(requests).toEqual(["summary", "reply"]);
-        expect(wait.status).toBe("ok");
-        expect(delivered).toContain("The foreground reply arrived.");
-      }
+      // A silent flush is abandoned as an ordinary flush failure; compaction then proceeds.
+      // A silent compaction reports its own timeout before the reply watchdog's backstop, and a
+      // prompt that still fits continues to the reply instead of a generic stall.
+      expect(requests).toEqual(
+        stage === "memory flush" ? ["flush", "summary", "reply"] : ["summary", "reply"],
+      );
+      expect(wait.status).toBe("ok");
+      expect(delivered).toContain("The foreground reply arrived.");
     } finally {
       for (const response of held) {
         response.destroy();

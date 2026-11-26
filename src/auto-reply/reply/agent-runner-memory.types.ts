@@ -11,8 +11,6 @@ export type MemoryFlushOutcome = "skipped" | "completed" | "failed" | "exhausted
 export type MemoryFlushResult = {
   sessionEntry?: SessionEntry;
   outcome: MemoryFlushOutcome;
-  /** The flush went quiet for the compaction progress window; a waiting preflight fails on it. */
-  stall?: Error;
 };
 
 export type MemoryFlushRunParams = {

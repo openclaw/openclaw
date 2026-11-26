@@ -578,10 +578,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
                 turn.memoryFlushAttempted ||= flushed.outcome !== "skipped";
                 session.publish(flushed.sessionEntry);
                 operation.abortSignal.throwIfAborted();
-                if (flushed.stall) {
-                  // The reply's own model was silent for a whole compaction window; fail now.
-                  throw flushed.stall;
-                }
                 if (flushed.outcome === "exhausted") {
                   await preparation.onCompactionNotice?.("memory_flush_degraded");
                 }

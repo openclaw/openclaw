@@ -49,8 +49,10 @@ it("aborts a silent flush after the compaction window, measured from its last ou
   vi.advanceTimersByTime(1);
   expect(guard.signal.aborted).toBe(true);
   expect(guard.signal.reason).toBe(guard.stall);
-  expect(renderPreflightStallText(guard.stall)).toContain(
-    "Memory maintenance before this reply stalled: ollama/qwen-local sent no output for 5s.",
+  expect(guard.stall?.message).toBe(
+    "memory flush timed out on ollama/qwen-local after 5s without output",
   );
+  // The flush's stall is an ordinary flush failure, never the reply's failure text.
+  expect(renderPreflightStallText(guard.stall)).toBeUndefined();
   guard.stop();
 });

@@ -853,7 +853,8 @@ export async function runMemoryFlushIfNeeded(
       memoryFlushLog.debug(error.message);
       return { sessionEntry: entry, outcome: "skipped" };
     }
-    return stallGuard?.failure(entry) ?? (await recordFailure(error));
+    // A stalled flush is an ordinary, counted flush failure; the reply continues without it.
+    return await recordFailure(stallGuard?.stall ?? error);
   } finally {
     stallGuard?.stop();
     stopHeartbeat?.();
