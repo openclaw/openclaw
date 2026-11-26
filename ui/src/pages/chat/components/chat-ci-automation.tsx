@@ -4,7 +4,7 @@ import type { CronJob } from "../../../api/types.ts";
 import { Checkbox } from "../../../components/solid/checkbox.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuControls } from "../../../components/solid/menu.tsx";
-import { SettingsToggle } from "../../../components/solid/settings-ui.tsx";
+import { Switch } from "../../../components/solid/switch.tsx";
 import { registerChatCiEnglish } from "../../../i18n/locales/en-chat-ci.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type {
@@ -122,7 +122,7 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
                           {t(MENU_OPTIONS[entry[0]].descriptionKey)}
                         </span>
                       </span>
-                      <SettingsToggle
+                      <Switch
                         inputRef={binding.ref}
                         ariaLabel={t(
                           entry[0] === "autoArchive"
