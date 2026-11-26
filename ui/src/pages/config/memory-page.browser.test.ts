@@ -42,7 +42,10 @@ const expectFixed = (before: number, after: number) =>
   expect(Math.abs(after - before)).toBeLessThanOrEqual(layoutTolerancePx);
 
 describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
-  it("keeps the header and every tab panel on one column", () => {
+  it("keeps the header and every tab panel on one desktop column", async () => {
+    const { page } = await import("vitest/browser");
+    // A 1152px-wide fixture alone does not opt out of mobile media queries.
+    await page.viewport(1200, 800);
     const find = mountMemory(true);
     const edges = (element: HTMLElement) => {
       const box = element.getBoundingClientRect();
