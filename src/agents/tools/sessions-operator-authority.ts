@@ -77,10 +77,17 @@ export function prepareSandboxSessionTools(params: {
   senderIsOwner?: boolean;
   /** Captured policy owner; null explicitly projects a run without an operator. */
   authority?: AdmittedRunOperatorAuthority | null;
+  /** Project the session's durable sandbox catalog without widening Pass 1 execution. */
+  stableCatalog?: boolean;
 }): { policy?: SandboxToolPolicy; renameOnly: boolean } {
   const policy = params.policy;
   const defaultAllow = policy?.[SANDBOX_DEFAULT_TOOL_ALLOW];
-  if (params.senderIsOwner !== false || !policy || !defaultAllow || defaultAllow !== policy.allow) {
+  if (
+    !policy ||
+    !defaultAllow ||
+    defaultAllow !== policy.allow ||
+    (!params.stableCatalog && params.senderIsOwner !== false)
+  ) {
     return { policy, renameOnly: false };
   }
   // Catalog projection belongs to the captured run, not the request asking to
@@ -91,9 +98,11 @@ export function prepareSandboxSessionTools(params: {
     authority.assertCurrent();
   }
   const canWrite =
-    authority === undefined
-      ? hasSessionWriteAuthority()
-      : authority !== null && operatorScopeSatisfied("operator.sessions.write", authority.scopes);
+    params.stableCatalog === true
+      ? true
+      : authority === undefined
+        ? hasSessionWriteAuthority()
+        : authority !== null && operatorScopeSatisfied("operator.sessions.write", authority.scopes);
   if (!canWrite) {
     return { policy, renameOnly: false };
   }

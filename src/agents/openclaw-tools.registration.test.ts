@@ -288,6 +288,65 @@ describe("openclaw-tools progress_card gating", () => {
     expect(withSink).toEqual(expect.arrayContaining(["suggest_task", "dismiss_task"]));
   });
 
+  it("lists task suggestions via listingClientCaps while gating execution without a gateway sink", async () => {
+    const { isAgentToolExecutionAvailable } = await import("./agent-tool-availability.js");
+    const gatewayCall = vi.spyOn(inProcessGateway, "callInProcessGatewayTool");
+    const connected = createTestOpenClawTools({
+      agentSessionKey: "agent:main:task-cap",
+      cwd: "/repo",
+      disableMessageTool: true,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+      clientCaps: ["task-suggestions"],
+      listingClientCaps: ["task-suggestions"],
+      taskSuggestionDeliveryMode: "gateway",
+    });
+    const internalWake = createTestOpenClawTools({
+      agentSessionKey: "agent:main:task-cap",
+      cwd: "/repo",
+      disableMessageTool: true,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+      clientCaps: [],
+      listingClientCaps: ["task-suggestions"],
+    });
+    for (const name of ["suggest_task", "dismiss_task"] as const) {
+      const connectedTool = expectToolNamed(connected, name);
+      const wakeTool = expectToolNamed(internalWake, name);
+      expect(wakeTool.description).toBe(connectedTool.description);
+      expect(wakeTool.parameters).toEqual(connectedTool.parameters);
+      expect(isAgentToolExecutionAvailable(connectedTool)).toBe(true);
+      expect(isAgentToolExecutionAvailable(wakeTool)).toBe(false);
+    }
+    const suggestResult = await expectToolNamed(internalWake, "suggest_task").execute(
+      "gated-suggest",
+      {
+        title: "Investigate flaky test",
+        prompt: "Check src/example.ts for the race condition.",
+        tldr: "Avoid intermittent CI failures.",
+      },
+    );
+    expect(suggestResult.details).toMatchObject({ gated: true });
+    expect(JSON.stringify(suggestResult.content)).toContain("task-suggestions");
+    const dismissResult = await expectToolNamed(internalWake, "dismiss_task").execute(
+      "gated-dismiss",
+      { task_id: "task_1" },
+    );
+    expect(dismissResult.details).toMatchObject({ gated: true });
+    expect(JSON.stringify(dismissResult.content)).toContain("task-suggestions");
+    expect(gatewayCall).not.toHaveBeenCalled();
+
+    // Scheduled runs must not borrow remembered client caps for task suggestions.
+    const scheduled = createFastToolNames({
+      agentSessionKey: "agent:main:task-cap",
+      cwd: "/repo",
+      listingClientCaps: ["task-suggestions"],
+      gatewayCallerScheduled: true,
+    });
+    expect(scheduled).not.toContain("suggest_task");
+    expect(scheduled).not.toContain("dismiss_task");
+  });
+
   it("keeps explicitly allowed message tool in embedded completions", () => {
     setEmbeddedMode(true);
     const fromRuntimeAllowlist = createTestOpenClawTools({

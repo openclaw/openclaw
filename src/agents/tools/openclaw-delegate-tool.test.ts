@@ -464,6 +464,36 @@ it("names the sandbox policy changed since this run was admitted", async () => {
   }
 });
 
+it("keeps description and schema stable across channels under stableCatalog while preserving execution gates", async () => {
+  const telegram = delegate({ agentChannel: "telegram", stableCatalog: true });
+  const webchat = delegate({
+    agentChannel: "webchat",
+    senderIsOwner: false,
+    currentChatType: "direct",
+    isTurnTainted: () => false,
+    stableCatalog: true,
+  });
+  expect(webchat.description).toBe(telegram.description);
+  expect(webchat.parameters).toEqual(telegram.parameters);
+
+  callGateway.mockResolvedValue({ reply: "Checked." });
+  const result = await webchat.execute("stable-connect", {
+    message: "Connect Linear.",
+    connectMcpServer: "linear",
+  });
+  expect(result.details).toMatchObject({
+    reply: expect.stringContaining("MCP sign-in was not started."),
+  });
+  expect(startOperatorLink).not.toHaveBeenCalled();
+  expect(callGateway).toHaveBeenCalledWith(
+    "openclaw.chat",
+    expect.objectContaining({
+      delegation: expect.objectContaining({ turnSourceChannel: "webchat" }),
+    }),
+    expect.anything(),
+  );
+});
+
 it.each(["hook", "trusted"] as const)(
   "rechecks applicable %s execution policy without blocking unrelated hooks",
   async (kind) => {

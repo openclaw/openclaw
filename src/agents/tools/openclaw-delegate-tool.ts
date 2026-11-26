@@ -79,6 +79,7 @@ type DelegateToolOptions = Pick<
   | "assertInvocationCurrent"
   | "abortSignal"
   | "senderIsOwner"
+  | "stableCatalog"
   | "currentChatType"
   | "isTurnTainted"
   | "preparedModelRuntime"
@@ -212,13 +213,14 @@ export function createOpenClawDelegateToolsForRun(
   const turnSourceTo =
     options.currentMessagingTarget ?? options.currentChannelId ?? options.agentTo;
   const turnSourceThreadId = options.currentThreadTs ?? options.agentThreadId;
-  // Only messaging channels receive approval prompts; Webchat and terminal runs
-  // decide in the Control UI or the OpenClaw apps.
-  const approvalLocation = isDeliverableMessageChannel(
-    normalizeMessageChannel(options.agentChannel) ?? "",
-  )
-    ? "in this chat (approval buttons or `/approve`)"
-    : "in the Control UI or OpenClaw apps";
+  // Only messaging channels receive approval prompts, while Webchat and terminal runs
+  // decide in the Control UI or the OpenClaw apps. Durable catalogs stay channel-neutral
+  // so internal/inter-session turns do not drift the tool description.
+  const approvalLocation = options.stableCatalog
+    ? "in this chat or in the Control UI / OpenClaw apps"
+    : isDeliverableMessageChannel(normalizeMessageChannel(options.agentChannel) ?? "")
+      ? "in this chat (approval buttons or `/approve`)"
+      : "in the Control UI or OpenClaw apps";
   const tool: AnyAgentTool = {
     name: "openclaw",
     label: "OpenClaw",

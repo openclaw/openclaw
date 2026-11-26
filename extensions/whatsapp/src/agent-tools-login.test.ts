@@ -56,6 +56,26 @@ describe("createWhatsAppLoginTool", () => {
     expect(resolveRegisteredLoginTool({ senderIsOwner })).toBeNull();
   });
 
+  it.each([false, undefined])(
+    "keeps identical schema under stableCatalog when owner status is %s while failing closed in execute()",
+    async (senderIsOwner) => {
+      const ownerTool = createOwnerLoginTool({ senderIsOwner: true });
+      const catalogTool = resolveRegisteredLoginTool({ senderIsOwner, stableCatalog: true });
+      expect(catalogTool).not.toBeNull();
+      expect(catalogTool?.description).toBe(ownerTool.description);
+      expect(catalogTool?.parameters).toBe(ownerTool.parameters);
+
+      await expect(
+        catalogTool!.execute("non-owner-start", { action: "start" }, new AbortController().signal),
+      ).rejects.toThrow("WhatsApp login requires owner authority.");
+      await expect(
+        catalogTool!.execute("non-owner-wait", { action: "wait" }, new AbortController().signal),
+      ).rejects.toThrow("WhatsApp login requires owner authority.");
+      expect(startWebLoginWithQrMock).not.toHaveBeenCalled();
+      expect(waitForWebLoginMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects credential persistence after the owning tool execution closes", async () => {
     const tool = createOwnerLoginTool();
     const next = createOwnerLoginTool();

@@ -38,7 +38,7 @@ class WhatsAppToolInputError extends Error {
 export function createWhatsAppLoginTool(
   context: OpenClawPluginToolContext,
 ): ChannelAgentTool | null {
-  if (context.senderIsOwner !== true) {
+  if (context.senderIsOwner !== true && context.stableCatalog !== true) {
     return null;
   }
   return {
@@ -47,6 +47,9 @@ export function createWhatsAppLoginTool(
     description: "Generate a WhatsApp QR code for linking, or wait for the scan to complete.",
     parameters: WhatsAppLoginParameters,
     execute: async (_toolCallId, args, signal) => {
+      if (context.senderIsOwner !== true) {
+        throw new Error("WhatsApp login requires owner authority.");
+      }
       const beforeCredentialPersistence = async () => {
         context.assertInvocationCurrent?.();
         if (!signal || signal.aborted) {

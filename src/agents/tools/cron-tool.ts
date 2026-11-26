@@ -19,7 +19,7 @@ import {
 } from "../../gateway/cron-creator-authority-grant.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals-core.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { isCronSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { isRecord } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import {
@@ -46,6 +46,7 @@ import {
 import {
   buildReminderContextLines,
   REMINDER_CONTEXT_MARKER,
+  resolveCronToolCatalogShape,
   stripExistingContext,
 } from "./cron-tool-context.js";
 import {
@@ -153,32 +154,30 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const { activeRun, nextCheckEnabled, assertCurrent: assertCurrentRun } = automation;
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
-  // Conversation continuations keep their catalog; the execution guard still scopes each call.
-  const selfRemoveOnly =
-    Boolean(readCronSelfRemoveOnlyJobId(opts)) &&
-    (!opts?.agentSessionKey?.trim() || isCronSessionKey(opts.agentSessionKey));
+  // Conversation continuations keep their catalog while the execution guard scopes each call.
+  const catalog = resolveCronToolCatalogShape({
+    opts,
+    config,
+    managementAuthority,
+    activeRun,
+    nextCheckEnabled,
+  });
   const tool: AnyAgentTool = {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: buildCronToolDescription({
+      ...catalog,
       triggersEnabled,
       callerScoped: !isCronModelManagementAllowed(config),
-      selfRemoveOnly,
-      activeRun,
-      nextCheckEnabled,
-      managementOnly: managementAuthority?.managementOnly,
       allowCommandJobs,
     }),
     outputSchema: CronToolOutputSchema,
     parameters: createCronToolSchema({
+      ...catalog,
       allowCommandJobs,
       agentSessionKey: opts?.agentSessionKey,
       triggersEnabled,
-      selfRemoveOnly,
-      activeRun,
-      nextCheckEnabled,
-      management: managementAuthority && (managementAuthority.managementOnly ? "only" : "also"),
     }),
     prepareArguments: prepareCronToolArguments,
     execute: async (_toolCallId, args, operationSignal) => {

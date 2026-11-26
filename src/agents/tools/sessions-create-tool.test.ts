@@ -215,4 +215,61 @@ describe("prepareSandboxSessionTools", () => {
       });
     }
   });
+
+  it("keeps default sandbox session-tool projection stable under stableCatalog without widening explicit policies", () => {
+    const defaultAllow = ["read"];
+    const inherited: SandboxToolPolicy = {
+      allow: defaultAllow,
+      deny: [],
+      [SANDBOX_DEFAULT_TOOL_ALLOW]: defaultAllow,
+    };
+    const explicit: SandboxToolPolicy = { allow: ["read"], deny: [] };
+    const denied: SandboxToolPolicy = {
+      allow: defaultAllow,
+      deny: ["sessions", "sessions_create"],
+      [SANDBOX_DEFAULT_TOOL_ALLOW]: defaultAllow,
+    };
+    const guestAuthority = issueAuthority().authority;
+
+    const ownerCatalog = prepareSandboxSessionTools({
+      policy: inherited,
+      senderIsOwner: true,
+      authority: null,
+      stableCatalog: true,
+    });
+    const guestCatalog = prepareSandboxSessionTools({
+      policy: inherited,
+      senderIsOwner: false,
+      authority: guestAuthority,
+      stableCatalog: true,
+    });
+    const internalCatalog = prepareSandboxSessionTools({
+      policy: inherited,
+      senderIsOwner: false,
+      authority: null,
+      stableCatalog: true,
+    });
+    expect(ownerCatalog).toEqual(guestCatalog);
+    expect(internalCatalog).toEqual(guestCatalog);
+    expect(ownerCatalog.policy?.allow).toEqual(["read", "sessions", "sessions_create"]);
+    expect(ownerCatalog.renameOnly).toBe(true);
+
+    // Explicit allowlists and explicit denies are never widened even in stableCatalog mode.
+    expect(
+      prepareSandboxSessionTools({
+        policy: explicit,
+        senderIsOwner: false,
+        authority: null,
+        stableCatalog: true,
+      }),
+    ).toEqual({ policy: explicit, renameOnly: false });
+    expect(
+      prepareSandboxSessionTools({
+        policy: denied,
+        senderIsOwner: false,
+        authority: null,
+        stableCatalog: true,
+      }),
+    ).toEqual({ policy: denied, renameOnly: false });
+  });
 });

@@ -93,6 +93,7 @@ export type ConversationCapabilityProfileParams = {
   senderUsername?: string | null;
   senderE164?: string | null;
   senderIsOwner?: boolean;
+  stableCatalog?: boolean;
   modelProvider?: string;
   modelId?: string;
   workspaceDir?: string;
@@ -140,6 +141,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
       }),
       senderIsOwner,
       authority: params.operatorAuthority,
+      stableCatalog: params.stableCatalog,
     });
   const trustedGroup = resolveTrustedGroupId(params);
   // Group channel/space labels have no session-bound counterpart to verify
