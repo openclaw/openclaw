@@ -14,12 +14,10 @@ import type { OpenClawPluginConfigSchema } from "../plugins/plugin-config-schema
 import type { OpenClawPluginNodeInvokePolicy } from "../plugins/plugin-registration.types.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import type { MeetingPluginConfig as SharedMeetingPluginConfig } from "./plugin-config.js";
+import { registerMeetingPluginRuntime } from "./plugin-registration.js";
 import type { MeetingPluginJoinRequest } from "./session-types.js";
 import { callMeetingToolGateway } from "./tool-gateway.js";
-import {
-  createMeetingTranscriptSourceProvider,
-  type MeetingTranscriptSourceRuntime,
-} from "./transcripts-bridge.js";
+import type { MeetingTranscriptSourceRuntime } from "./transcripts-bridge.js";
 
 type MeetingToolAction = "join" | "leave" | "status" | "transcript" | "speak";
 type MeetingMode = "agent" | "bidi" | "transcribe";
@@ -176,44 +174,7 @@ export function createMeetingPluginEntryOptions<
     configSchema: options.configSchema,
     register(api: OpenClawPluginApi) {
       const config = options.configSchema.parse(api.pluginConfig) as Config;
-      let transcriptsEnabled = api.config.transcripts?.enabled !== false;
-      let runtime: Runtime | undefined;
-      const ensureRuntime = async () => {
-        if (!config.enabled) {
-          throw new Error(options.disabledMessage);
-        }
-        if (!runtime) {
-          runtime = options.createRuntime({ api, config });
-          await runtime.reconcileTranscriptPolicy?.(transcriptsEnabled);
-        }
-        return runtime;
-      };
-      if (options.transcriptSource) {
-        api.registerService({
-          id: `${options.id}-transcripts`,
-          reload: { configPrefixes: ["transcripts.enabled"] },
-          start: ({ config: current }) => {
-            transcriptsEnabled = current.transcripts?.enabled !== false;
-            return runtime?.reconcileTranscriptPolicy?.(transcriptsEnabled);
-          },
-          stop: () => {
-            transcriptsEnabled = false;
-            return runtime?.reconcileTranscriptPolicy?.(false);
-          },
-        });
-        api.registerTranscriptSourceProvider(
-          createMeetingTranscriptSourceProvider({
-            ...options.transcriptSource,
-            runtime: async () => {
-              const resolved = await ensureRuntime();
-              if (!resolved.startTranscriptSource || !resolved.stopTranscriptSource) {
-                throw new Error(`${options.name} transcript source runtime is unavailable`);
-              }
-              return resolved as MeetingTranscriptSourceRuntime;
-            },
-          }),
-        );
-      }
+      const ensureRuntime = registerMeetingPluginRuntime(api, config, options);
       const registerGatewayMethod = (
         method: string,
         run: (request: GatewayRequestHandlerOptions) => Promise<unknown>,

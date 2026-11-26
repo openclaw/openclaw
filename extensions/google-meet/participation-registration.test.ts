@@ -6,12 +6,16 @@ import { setupParticipationHarness } from "./src/test-support/participation-harn
 import { invokeGoogleMeetGatewayMethodForTest } from "./src/test-support/plugin-harness.js";
 
 const runtime = vi.hoisted(() => ({
+  constructed: vi.fn(),
   reconcileTranscriptPolicy: vi.fn<GoogleMeetRuntime["reconcileTranscriptPolicy"]>(),
   participate: vi.fn(),
 }));
 
 vi.mock("./src/runtime.js", () => ({
   GoogleMeetRuntime: class {
+    constructor() {
+      runtime.constructed();
+    }
     reconcileTranscriptPolicy = runtime.reconcileTranscriptPolicy;
     participate = runtime.participate;
   },
@@ -30,11 +34,27 @@ type GatewayHandler = (ctx: {
 
 let harness: ReturnType<typeof setupParticipationHarness>;
 beforeEach(() => {
+  runtime.constructed.mockClear();
   runtime.reconcileTranscriptPolicy.mockReset().mockResolvedValue(undefined);
   runtime.participate.mockReset();
   harness = setupParticipationHarness(plugin);
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("retries initial transcript policy on the original runtime after a gateway error", async () => {
+  runtime.reconcileTranscriptPolicy.mockRejectedValueOnce(
+    new Error("Transcript policy unavailable"),
+  );
+  const result = { requestId: request.requestId, status: "unsupported" };
+  runtime.participate.mockResolvedValue(result);
+  const participate = () =>
+    invokeGoogleMeetGatewayMethodForTest(harness.methods, "googlemeet.participate", request);
+  await expect(participate()).rejects.toThrow("Transcript policy unavailable");
+  await expect(participate()).resolves.toEqual(result);
+  expect(runtime.constructed).toHaveBeenCalledOnce();
+  expect(runtime.reconcileTranscriptPolicy).toHaveBeenCalledTimes(2);
+  expect(runtime.participate).toHaveBeenCalledOnce();
+});
 
 it("returns structured gateway errors for missing session ids", async () => {
   for (const action of ["leave", "speak", "participationContext", "participate"]) {
