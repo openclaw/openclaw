@@ -87,6 +87,48 @@ it("uses one request for an in-process tool approval without reviewer scope", as
   expect(mockCallGateway.mock.calls[0]?.[3]).toEqual({ expectFinal: true });
 });
 
+it.each([
+  {
+    label: "expired with the plugin timeout reason",
+    response: { terminalReason: "timeout", deliveryRoute: "approval-client" },
+    timeoutReason: "Nobody approved in time",
+    expected: { kind: "veto", disposition: "timed_out", reason: "Nobody approved in time" },
+    resolution: "timeout",
+  },
+  {
+    label: "expired without a plugin timeout reason",
+    response: { terminalReason: "timeout", deliveryRoute: "approval-client" },
+    timeoutReason: undefined,
+    expected: { kind: "failure", disposition: "timed_out", reason: "Approval timed out" },
+    resolution: "timeout",
+  },
+  {
+    label: "had no approval route",
+    response: { terminalReason: "no-route", deliveryRoute: "none" },
+    timeoutReason: "Nobody approved in time",
+    expected: { kind: "failure", reason: "Plugin approval unavailable (no approval route)" },
+    resolution: "cancelled",
+  },
+])(
+  "reports an in-process approval that $label",
+  async ({ response, timeoutReason, expected, resolution }) => {
+    const onResolution = vi.fn();
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: { title: "Review", description: "Review call", timeoutReason, onResolution },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "plugin:unanswered", decision: null, ...response });
+
+    const result = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "main", gatewayContextResolver: () => ({}) as never },
+      () => runBeforeToolCallHook({ toolName: "diffs", params: {}, ctx: { agentId: "main" } }),
+    );
+
+    expect(result).toMatchObject({ blocked: true, ...expected });
+    expect(onResolution.mock.calls).toEqual([[resolution]]);
+    expect(mockCallGateway).toHaveBeenCalledTimes(1);
+  },
+);
+
 it.each(["wrapped", "adapted"] as const)(
   "binds a %s tool approval to its registered owner rather than the approval hook owner",
   async (path) => {

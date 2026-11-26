@@ -114,7 +114,11 @@ async function expectAccepted(fixture: DeliveryFixture) {
 
 function expectExpired({ expire, record, respond, timing }: DeliveryFixture) {
   expect(expire).toHaveBeenCalledExactlyOnceWith(record.id, "no-approval-route");
-  expect(respond).toHaveBeenCalledExactlyOnceWith(true, { ...timing, decision: null }, undefined);
+  expect(respond).toHaveBeenCalledExactlyOnceWith(
+    true,
+    { ...timing, decision: null, deliveryRoute: "none" },
+    undefined,
+  );
 }
 
 function expectErrors(fixture: DeliveryFixture, ...messages: string[]) {

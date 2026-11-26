@@ -400,8 +400,37 @@ describe("createPluginApprovalHandlers", () => {
           context: createApprovalContext(hasExecApprovalClients),
         },
       );
-      expect(expectResponseOk(respond).decision).toBeNull();
+      expect(expectResponseOk(respond)).toMatchObject({
+        decision: null,
+        terminalReason: "no-route",
+        deliveryRoute: "none",
+      });
       expect(hasExecApprovalClients).toHaveBeenCalledWith(client?.connId);
+    });
+
+    it("reports a delivered single-phase request that expired as a timeout", async () => {
+      const requested = createDeferred();
+      const context = createApprovalContext();
+      vi.mocked(context.broadcast).mockImplementation(() => requested.resolve());
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        { title: "Sensitive action", description: "Desc" },
+        { context },
+      );
+      const pending = invokeHandler(handlers, opts);
+      await requested.promise;
+      const id = broadcastCall(opts).payload.id;
+      if (typeof id !== "string") {
+        throw new Error("Expected requested approval id");
+      }
+      expect(opts.respond).not.toHaveBeenCalled();
+      await manager.expire(id, "timeout");
+      await pending;
+      expect(expectResponseOk(opts.respond)).toMatchObject({
+        decision: null,
+        terminalReason: "timeout",
+        deliveryRoute: "approval-client",
+      });
     });
 
     it("keeps plugin approvals pending when the originating chat can handle /approve directly", async () => {

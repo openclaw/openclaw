@@ -312,6 +312,7 @@ export async function handlePendingApprovalRequest<
 }): Promise<void> {
   const deliveryReady = createDeferredCore<boolean>();
   let noRouteWon = false;
+  let deliveryRoute: ApprovalRequestDeliveryRoute | undefined;
   const handoff = params.manager.registerDecisionHandoff(params.record.id, async (decision) => {
     if (!(await deliveryReady.promise)) {
       return;
@@ -332,6 +333,10 @@ export async function handlePendingApprovalRequest<
       {
         id: params.record.id,
         decision: projectedDecision,
+        // A null decision is ambiguous on its own; these tell a single-phase
+        // caller whether a delivered prompt expired or no route existed.
+        terminalReason: params.record.terminalReason,
+        deliveryRoute,
         createdAtMs: params.record.createdAtMs,
         expiresAtMs: params.record.expiresAtMs,
       },
@@ -422,7 +427,7 @@ export async function handlePendingApprovalRequest<
       await handoff.observation;
       return;
     }
-    const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
+    deliveryRoute = delivered
       ? "forwarder"
       : hasApprovalClients
         ? "approval-client"
