@@ -1,8 +1,12 @@
 import { expect, it, vi } from "vitest";
 import { cleanupTempDirs } from "../../../test/helpers/temp-dir.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { materializeStaticMcpToolsForHarnessRunCore } from "../agent-bundle-mcp-harness.js";
-import { disposeAllSessionMcpRuntimes } from "../agent-bundle-mcp-manager-api.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  setSessionMcpRuntimeScheduler,
+} from "../agent-bundle-mcp-manager-api.js";
 import { createMcpProbeFixture } from "../agent-bundle-mcp-probe.test-support.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
@@ -77,6 +81,8 @@ it("admits a distinct child after foreground teardown only through its own live 
 
 it("calls a projected stdio MCP tool through a child-owned host after the parent closes", async () => {
   const dirs: string[] = [];
+  const scheduler = createTestGatewayScheduler();
+  await setSessionMcpRuntimeScheduler(scheduler);
   const fixture = await createMcpProbeFixture(dirs);
   const config = fixture.config();
   const owner = await createAdmittedHostCapabilityTestFixture(
@@ -143,6 +149,7 @@ it("calls a projected stdio MCP tool through a child-owned host after the parent
   } finally {
     source.release();
     await disposeAllSessionMcpRuntimes();
-    await cleanupTempDirs(dirs);
+    await scheduler.stop();
+    cleanupTempDirs(dirs);
   }
 });

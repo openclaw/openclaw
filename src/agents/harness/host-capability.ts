@@ -82,7 +82,7 @@ import {
   retainHarnessSource,
 } from "./host-source-authority.js";
 import { bindHarnessTrajectory } from "./host-trajectory.js";
-import { registerNativeChildToolHostIssuer } from "./native-child-tool-host.js";
+import { bindChildHostIssuer } from "./native-child-tool-host.js";
 import { formatHarnessApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
@@ -642,9 +642,8 @@ export function createAgentHarnessHostCapabilities(params: AgentHarnessHostCapab
       };
     },
   });
-  if (!sourceCaller?.workerTurnClaim) {
-    registerNativeChildToolHostIssuer(capabilities, params, () => toolPolicyScope);
-  }
+  const readScope = () => toolPolicyScope;
+  bindChildHostIssuer(capabilities, params, createAgentHarnessHostCapabilities, readScope);
   registerAgentHarnessScheduledToolProjectionCapability({
     hostCapabilities: capabilities,
     ownerPluginId: params.pluginId,

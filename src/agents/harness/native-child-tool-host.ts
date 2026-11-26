@@ -25,6 +25,7 @@ import type {
 } from "./host-capability-internal.types.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import { captureHostToolPolicyConfigReader } from "./host-capability-workspace.js";
+import type { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import {
   bindNativeChildToolSource,
   registerNativeChildToolIssuer,
@@ -33,6 +34,7 @@ import {
 
 /** Bind only actual host-issued sources. Model admission or a copied handle is not a tool grant. */
 function registerNativeChildToolHost(params: {
+  createHost: typeof createAgentHarnessHostCapabilities;
   parent: AgentHarnessHostCapabilities;
   attempt: AgentHarnessHostAttempt;
   source: NativeChildToolSource;
@@ -129,8 +131,7 @@ function registerNativeChildToolHost(params: {
             resolveGatewayContext,
           },
           async () => {
-            const { createAgentHarnessHostCapabilities } = await import("./host-capability.js");
-            const host = createAgentHarnessHostCapabilities({
+            const host = params.createHost({
               attempt: {
                 ...owner,
                 config,
@@ -187,15 +188,17 @@ function registerNativeChildToolHost(params: {
   });
 }
 
-export function registerNativeChildToolHostIssuer(
+export function bindChildHostIssuer(
   parent: AgentHarnessHostCapabilities,
   params: AgentHarnessHostCapabilityParams,
+  createHost: typeof createAgentHarnessHostCapabilities,
   readScope: () => "turn" | "conversation" | undefined,
 ) {
   if (
     params.pluginId !== "codex" ||
     params.toolCalls === "deny" ||
-    params.attempt.scheduledToolPolicy
+    params.attempt.scheduledToolPolicy ||
+    getGatewayToolCallerIdentity()?.workerTurnClaim
   ) {
     return;
   }
@@ -210,6 +213,7 @@ export function registerNativeChildToolHostIssuer(
     getPluginRegistryState()?.activeVersion === registryAtAdmission;
   registerNativeChildToolIssuer(parent, (source) =>
     registerNativeChildToolHost({
+      createHost,
       parent,
       source,
       attempt: params.attempt,
