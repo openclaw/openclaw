@@ -48,7 +48,6 @@ type RootFiles = {
   controller: AbortController;
   cacheEnabled: boolean;
   pending: Map<string, Promise<ControlUiRootAsset | null>>;
-  generation: number;
   reading: Map<string, Promise<PreparedRepresentation | null>>;
   cached: LruCache<PreparedRepresentation>;
   assetNames?: Promise<Map<string, fs.Dirent> | null>;
@@ -81,7 +80,6 @@ function rootFiles(runtime: FileRuntime, root: ControlUiRootState): RootFiles {
       controller: new AbortController(),
       cacheEnabled: true,
       pending: new Map(),
-      generation: 0,
       reading: new Map(),
       cached: new LruCache(MAX_PREPARED_ENTRIES, {
         maxBytes: MAX_PREPARED_BYTES,
@@ -113,7 +111,6 @@ export function readControlUiRootAsset(
     isControlUiCompressibleAsset(fileRel)
       ? encodings
       : (["identity"] as const);
-  const generation = owner.generation;
   const representationKey = (encoding: HttpRepresentationEncoding) => `${encoding}:${fileRel}`;
   const sourceKey = representationKey("identity");
   const knownSource = owner.cached.peek(sourceKey);
@@ -129,7 +126,7 @@ export function readControlUiRootAsset(
   if (cached && (!preferred || !readBody || cached.selected.body)) {
     return Promise.resolve(cached.asset);
   }
-  const identity = `${generation}:${preferences.join(",")}:${fileRel}`;
+  const identity = `${preferences.join(",")}:${fileRel}`;
   const key = `${readBody ? "body" : "metadata"}:${identity}`;
   const pending =
     owner.pending.get(key) ?? (!readBody ? owner.pending.get(`body:${identity}`) : undefined);
@@ -152,7 +149,7 @@ export function readControlUiRootAsset(
     retain = true,
   ): PreparedRepresentation => {
     const cacheKey = representationKey(encoding);
-    const previous = owner.generation === generation ? owner.cached.peek(cacheKey) : undefined;
+    const previous = owner.cached.peek(cacheKey);
     const unchanged =
       previous && sameFile(previous.selected, selected) && sameFile(previous.asset.file, source);
     if (unchanged && (previous.selected === selected || !selected.body)) {
@@ -169,7 +166,6 @@ export function readControlUiRootAsset(
       retain &&
       root.kind === "bundled" &&
       owner.cacheEnabled &&
-      owner.generation === generation &&
       (selected.body?.byteLength ?? 0) <= MAX_PREPARED_BYTES
     ) {
       owner.cached.set(cacheKey, entry);
@@ -183,7 +179,7 @@ export function readControlUiRootAsset(
     source?: ControlUiPreparedFile,
   ): Promise<PreparedRepresentation | null> => {
     const cacheKey = representationKey(encoding);
-    const cached = owner.generation === generation ? owner.cached.get(cacheKey) : undefined;
+    const cached = source && owner.cached.get(cacheKey);
     if (
       source &&
       cached &&
@@ -193,7 +189,7 @@ export function readControlUiRootAsset(
       return Promise.resolve(cached);
     }
     // Only identical physical reads share work. A metadata read cannot hold up a GET or a different encoding.
-    const work = `${generation}:${cacheKey}:${input.filePath}`;
+    const work = `${cacheKey}:${input.filePath}`;
     const bodyKey = `body:${work}`;
     return (
       (!includeBody && owner.reading.get(bodyKey)) ||
@@ -506,7 +502,6 @@ export function createGatewayControlUiRootLifecycle(
       // Stop still joins every outstanding read.
       const files = rootFiles(fileRuntime(), state);
       files.cacheEnabled = enabled;
-      files.generation += 1;
       files.cached.clear();
       files.assetNames = undefined;
       if (enabled) {

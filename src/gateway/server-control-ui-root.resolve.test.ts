@@ -210,6 +210,48 @@ describe("createGatewayControlUiRootLifecycle", () => {
     expect(await readControlUiRootAsset(root, "icon.png", true)).toBe(refreshed);
   });
 
+  test("shares in-flight reads across toggles of the same root while a sibling reads independently", async () => {
+    const { lifecycle, root } = preparedLifecycle("bundled");
+    const sibling = preparedLifecycle("bundled").root;
+    const blocked = createDeferred<ControlUiFileSnapshot | null>();
+    let attempts = 0;
+    const file = "assets/toggle.js";
+    const snapshot = (body: string) => ({
+      path: path.join(root.path, file + ".br"),
+      size: body.length,
+      mtimeMs: 1,
+      body: Buffer.from(body),
+    });
+    vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (input) => {
+      const { filePath } = input as ControlUiFileRead;
+      if (filePath.endsWith(".br")) {
+        return ++attempts === 1 ? blocked.promise : snapshot("sibling");
+      }
+      return { path: filePath, size: 2, mtimeMs: 1 };
+    });
+    const get = (target: typeof root) =>
+      readControlUiRootAsset(target, file, true, ["br", "gzip", "identity"]);
+    const initial = get(root);
+    try {
+      await vi.waitFor(() => expect(attempts).toBe(1));
+      lifecycle.setEnabled(false);
+      await enable(lifecycle);
+      expect(get(root)).toBe(initial);
+      const mixed = readControlUiRootAsset(root, file, true, ["br", "identity"]);
+      const independent = await get(sibling);
+      expect(independent?.br).toMatchObject({ body: Buffer.from("sibling") });
+      blocked.resolve(snapshot("original"));
+      const admitted = await initial;
+      expect((await mixed)?.br).toBe(admitted?.br);
+      expect(await get(root)).toBe(admitted);
+      expect(await get(sibling)).toBe(independent);
+      expect(attempts).toBe(2);
+    } finally {
+      blocked.resolve(snapshot("original"));
+      await initial;
+    }
+  });
+
   test.each(["resolved", "bundled"] as const)(
     "admits a GET while a %s root's HEAD is pending",
     async (kind) => {
