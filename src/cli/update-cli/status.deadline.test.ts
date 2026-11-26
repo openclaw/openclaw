@@ -1,10 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { validateChannelsStatusParams } from "../../../packages/gateway-protocol/src/index.js";
 const mocks = {
   check: vi.fn(),
   run: vi.fn(),
   list: vi.fn(async () => []),
   migrations: vi.fn(async () => []),
   sessionWarnings: vi.fn(() => [] as string[]),
+  callGateway: vi.fn(async () => ({})),
   writeJson: vi.fn(),
   log: vi.fn(),
 };
@@ -44,7 +46,7 @@ const overrides = {
   "../../commands/doctor-session-sqlite-warnings.js": {
     readSessionSqliteMigrationWarnings: mocks.sessionWarnings,
   },
-  "../../gateway/call.js": { callGateway: async () => ({}) },
+  "../../gateway/call.js": { callGateway: mocks.callGateway },
   "../../infra/device-identity-async.js": { loadDeviceIdentityIfPresentAsync: async () => null },
   "../../infra/device-identity.js": { loadDeviceIdentityIfPresent: () => null },
   "../../infra/channels-status-issues.js": { collectChannelStatusIssues: () => [] },
@@ -63,6 +65,8 @@ afterEach(() => {
   mocks.list.mockResolvedValue([]);
   mocks.migrations.mockResolvedValue([]);
   mocks.sessionWarnings.mockReturnValue([]);
+  mocks.callGateway.mockResolvedValue({});
+  vi.restoreAllMocks();
 });
 const lastRun = { runId: "completed-run", status: "succeeded" };
 const delayed = <T>(value: T, ms: number) =>
@@ -178,3 +182,23 @@ it.each(["installation", "update history"])(
     await pending;
   },
 );
+
+it("passes integer timeoutMs to channels.status when --timeout >= 30s with fractional elapsed time", async () => {
+  mocks.check.mockResolvedValue({ installKind: "unknown" });
+  mocks.run.mockResolvedValue({ lastRun });
+  let nowCalls = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => {
+    nowCalls += 1;
+    return nowCalls === 1 ? 1_000.25 : 1_012.75;
+  });
+
+  await updateStatusCommand({ json: true, timeout: "40" });
+
+  const channelsCall = mocks.callGateway.mock.calls
+    .map((call) => call[0] as { method?: string; params?: { probe?: boolean; timeoutMs?: number } })
+    .find((arg) => arg?.method === "channels.status");
+  expect(channelsCall).toBeDefined();
+  expect(Number.isInteger(channelsCall?.params?.timeoutMs)).toBe(true);
+  expect(channelsCall?.params?.timeoutMs).toBe(39_988);
+  expect(validateChannelsStatusParams(channelsCall?.params)).toBe(true);
+});

@@ -130,7 +130,8 @@ async function inspectUpdateStatus(
     return retainedRunStatus;
   };
   const deadline = performance.now() + timeoutMs;
-  const remainingMs = () => Math.max(1, deadline - performance.now());
+  // RPC timeout fields require integer milliseconds.
+  const remainingMs = () => Math.max(1, Math.ceil(deadline - performance.now()));
   const inspect = async <T>(
     section: string,
     operation: () => T | Promise<T>,
