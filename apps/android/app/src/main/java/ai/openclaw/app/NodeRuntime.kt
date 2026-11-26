@@ -7602,16 +7602,8 @@ class NodeRuntime internal constructor(
         _nodesDevicesRefreshing.value = true
         _nodesDevicesErrorText.value = null
         _nodesDevicesNoticeText.value = null
-        _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
-        val pendingFallback = _nodeCapabilityApproval.value.withoutExactRequestId()
-        if (pendingFallback != null) {
-          _nodeCapabilityApproval.value = pendingFallback
-        } else if (
-          _nodeCapabilityApproval.value !is GatewayNodeCapabilityApproval.PendingApproval &&
-          _nodeCapabilityApproval.value !is GatewayNodeCapabilityApproval.PendingReapproval
-        ) {
-          _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Loading
-        }
+        // Keep the last snapshot visible while fetching its replacement; failures and
+        // connection invalidation retire exact request IDs below.
       }
     if (!refreshStarted) return
     if (!operatorConnected) {
@@ -7670,6 +7662,13 @@ class NodeRuntime internal constructor(
     } catch (_: Throwable) {
       nodeApprovalRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
         _nodesDevicesErrorText.value = nativeText("Could not load nodes and devices.")
+        _nodeCapabilityApproval.value =
+          when (val approval = _nodeCapabilityApproval.value) {
+            is GatewayNodeCapabilityApproval.PendingApproval -> approval.copy(requestId = null)
+            is GatewayNodeCapabilityApproval.PendingReapproval -> approval.copy(requestId = null)
+            else -> GatewayNodeCapabilityApproval.Loading
+          }
+        _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
       }
     } finally {
       nodeApprovalRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
@@ -7686,15 +7685,15 @@ class NodeRuntime internal constructor(
     val fallback = approval.withoutExactRequestId() ?: return
     scope.launch {
       delay(NODE_APPROVAL_COMMAND_FRESH_MS)
-      // Pairing request IDs expire on the Gateway. Age out cached commands before rechecking so
-      // recovery never leaves an old exact ID visible when a refresh fails or races disconnect.
-      val approvalPublished =
+      val current = nodeApprovalRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {}
+      if (!current) return@launch
+      if (operatorConnected) {
+        refreshNodesDevicesFromGateway()
+      } else {
         nodeApprovalRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
           _nodeCapabilityApproval.value = fallback
           _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
         }
-      if (approvalPublished && operatorConnected) {
-        refreshNodesDevicesFromGateway()
       }
     }
   }

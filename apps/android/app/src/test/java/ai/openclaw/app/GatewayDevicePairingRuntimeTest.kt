@@ -1,8 +1,10 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
@@ -17,6 +19,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.lang.reflect.Field
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -37,6 +40,64 @@ class GatewayDevicePairingRuntimeTest {
       .clear()
       .commit()
   }
+
+  @Test
+  fun nodeRefreshKeepsIdsDuringReadsAndRecoversAfterRepeatedFailures() =
+    runBlocking {
+      val runtime = createTestRuntime()
+      val release = CompletableDeferred<Unit>()
+      try {
+        seedConnectedRuntime(runtime)
+        val selfNodeId = readField<DeviceIdentityStore>(runtime, "identityStore").loadOrCreate().deviceId
+        val approval = readField<MutableStateFlow<GatewayNodeCapabilityApproval>>(runtime, "_nodeCapabilityApproval")
+        approval.value = GatewayNodeCapabilityApproval.PendingApproval("request-1")
+        val started = CompletableDeferred<Unit>()
+        val reads = AtomicInteger()
+        var fail = false
+        var approved = false
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "node.list" -> {
+              reads.incrementAndGet()
+              started.complete(Unit)
+              release.await()
+              if (fail) error("temporary read failure")
+              val state = if (approved) "approved" else "pending-approval"
+              """{"nodes":[{"nodeId":"$selfNodeId","connected":true,"approvalState":"$state","pendingRequestId":"request-1"}]}"""
+            }
+
+            "device.pair.list" -> {
+              """{"pending":[],"paired":[]}"""
+            }
+
+            else -> {
+              error("unexpected method $method")
+            }
+          }
+        }
+
+        runtime.refreshNodesDevices()
+        withTimeout(10_000) { started.await() }
+        assertEquals(GatewayNodeCapabilityApproval.PendingApproval("request-1"), approval.value)
+        release.complete(Unit)
+        waitUntil { !runtime.nodesDevicesRefreshing.value }
+
+        fail = true
+        repeat(2) {
+          val expectedReads = reads.get() + 1
+          runtime.refreshNodesDevices()
+          waitUntil { reads.get() >= expectedReads && !runtime.nodesDevicesRefreshing.value }
+          assertEquals(GatewayNodeCapabilityApproval.PendingApproval(null), approval.value)
+        }
+        fail = false
+        approved = true
+        runtime.refreshNodesDevices()
+        waitUntil { approval.value == GatewayNodeCapabilityApproval.Approved && !runtime.nodesDevicesRefreshing.value }
+      } finally {
+        release.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
 
   @Test
   fun approveRefetchesListAndPublishesOnlyVerifiedSuccess() =

@@ -41,12 +41,14 @@ internal data class GatewayNodeApprovalSurface(
       other.permissions.all { (key, allowed) -> !allowed || permissions[key] == true }
 
   // A promptable SMS search alone is not an enabled onboarding capability.
-  // Other commands may be withheld by Gateway policy or its protocol version.
+  // Gateway policy and protocol negotiation own the admitted command set; camera capture,
+  // for example, may be withheld even after the camera capability is approved.
+  // Explicit in-app approval still verifies the entire pending surface separately.
   fun onboardingSurface(): GatewayNodeApprovalSurface {
     val enabledCapabilities = capabilities.intersect(setOf("camera", "location", "sms"))
     return copy(
       capabilities = enabledCapabilities,
-      commands = commands.filterTo(mutableSetOf()) { it.substringBefore('.') in enabledCapabilities },
+      commands = emptySet(),
     )
   }
 }

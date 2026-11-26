@@ -646,8 +646,9 @@ class InitialOnboardingLayoutTest {
   }
 
   @Test
-  fun nativeNodeApprovalWaitsForEffectiveCameraBeforeAdvancing() =
+  fun nativeNodeApprovalWaitsForCameraButNotPolicyBlockedCaptureCommands() =
     withApprovalGateway(nativeApproval = true) { runtime, viewModel, gateway ->
+      gateway.cameraCommandsFiltered = true
       composeRule.onNodeWithText("Continue").performClick()
       composeRule.onNodeWithText("Set up manually").performClick()
       composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("127.0.0.1")
@@ -677,6 +678,15 @@ class InitialOnboardingLayoutTest {
       }
       composeRule.mainClock.advanceTimeByFrame()
       composeRule.onNodeWithText("openclaw nodes pending").performScrollTo().assertIsDisplayed()
+
+      gateway.holdNodeLists()
+      runtime.refreshNodesDevices()
+      drainWithMainLooper { withTimeout(10_000) { gateway.heldNodeListReceived.await() } }
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.onNodeWithText("openclaw nodes approve self-request").performScrollTo().assertIsDisplayed()
+      gateway.releaseNodeLists()
+      drainWithMainLooper { withTimeout(10_000) { viewModel.nodesDevicesRefreshing.first { !it } } }
+      composeRule.mainClock.advanceTimeByFrame()
 
       gateway.holdNodeLists(afterApproval = true)
       composeRule.onNodeWithText("Approve access and continue").assertIsEnabled().performClick()
@@ -1092,11 +1102,15 @@ private class OnboardingApprovalGateway(
   private val server = MockWebServer()
   val nodeConnectReceived = CompletableDeferred<Unit>()
   val approvedRequest = CompletableDeferred<String>()
-  val heldNodeListReceived = CompletableDeferred<Unit>()
+
+  @Volatile var heldNodeListReceived = CompletableDeferred<Unit>()
+    private set
 
   @Volatile private var nodeSurface: JsonObject = buildJsonObject {}
 
   @Volatile var cameraEffective = false
+
+  @Volatile var cameraCommandsFiltered = false
 
   @Volatile var rejectNextApproval = false
   private val nodeListLock = Any()
@@ -1122,6 +1136,7 @@ private class OnboardingApprovalGateway(
   fun holdNodeLists(afterApproval: Boolean = false) {
     synchronized(nodeListLock) {
       check(!holdNodeListResponses && heldNodeLists.isEmpty())
+      heldNodeListReceived = CompletableDeferred()
       holdNodeListResponses = true
       holdNodeListsAfterApproval = afterApproval
     }
@@ -1159,13 +1174,24 @@ private class OnboardingApprovalGateway(
               if (nativeApproval && !approvedRequest.isCompleted) put("pendingRequestId", "self-request")
               if (nativeApproval) {
                 nodeSurface.forEach { (key, value) ->
-                  put(key, if (!cameraEffective && value is JsonArray) JsonArray(value.filterNot { it.jsonPrimitive.content.substringBefore('.') == "camera" }) else value)
+                  val admitted = admittedSurfaceValue(key, value)
+                  put(key, if (!cameraEffective && admitted is JsonArray) JsonArray(admitted.filterNot { it.jsonPrimitive.content.substringBefore('.') == "camera" }) else admitted)
                 }
               }
             },
           )
         },
       )
+    }
+
+  private fun admittedSurfaceValue(
+    key: String,
+    value: JsonElement,
+  ): JsonElement =
+    if (cameraCommandsFiltered && key == "commands" && value is JsonArray) {
+      JsonArray(value.filterNot { it.jsonPrimitive.content in setOf("camera.snap", "camera.clip") })
+    } else {
+      value
     }
 
   private fun listener() =
@@ -1245,7 +1271,7 @@ private class OnboardingApprovalGateway(
                           buildJsonObject {
                             put("nodeId", nodeId)
                             put("requestId", requestId)
-                            nodeSurface.forEach { (key, value) -> put(key, value) }
+                            nodeSurface.forEach { (key, value) -> put(key, admittedSurfaceValue(key, value)) }
                           },
                         )
                       }

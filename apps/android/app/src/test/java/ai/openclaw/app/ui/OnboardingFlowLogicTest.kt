@@ -427,8 +427,8 @@ class OnboardingFlowLogicTest {
   fun recoveryNodeApprovalCommandUsesRequestIdWhenAvailable() {
     assertEqualsCases(
       "openclaw nodes approve request-1" to recoveryNodeApprovalCommand(" request-1 "),
-      "openclaw nodes approve REQUEST_ID" to recoveryNodeApprovalCommand(null),
-      "openclaw nodes approve REQUEST_ID" to recoveryNodeApprovalCommand(" "),
+      null to recoveryNodeApprovalCommand(null),
+      null to recoveryNodeApprovalCommand(" "),
     )
   }
 
@@ -538,17 +538,14 @@ class OnboardingFlowLogicTest {
   @Test
   fun nodeApprovalCheckContinuesWhenRequestedCheckFindsGatewayReady() {
     listOf(
-      ApprovalContinueCase(expected = false, refreshStarted = false, refreshing = false, ready = true),
-      ApprovalContinueCase(expected = false, refreshStarted = false, refreshing = true, ready = true),
-      ApprovalContinueCase(expected = false, refreshStarted = true, refreshing = true, ready = true),
-      ApprovalContinueCase(expected = false, refreshStarted = true, refreshing = false, ready = false),
-      ApprovalContinueCase(expected = true, refreshStarted = true, refreshing = false, ready = true),
+      ApprovalContinueCase(expected = true, refreshing = false, ready = true),
+      ApprovalContinueCase(expected = false, refreshing = true, ready = true),
+      ApprovalContinueCase(expected = false, refreshing = false, ready = false),
     ).forEach { case ->
       assertBoolean(
         case.expected,
         nodeApprovalCheckCanContinue(
           checkRequested = true,
-          refreshStarted = case.refreshStarted,
           nodesDevicesRefreshing = case.refreshing,
           ready = case.ready,
         ),
@@ -872,7 +869,6 @@ class OnboardingFlowLogicTest {
 
   private data class ApprovalContinueCase(
     val expected: Boolean,
-    val refreshStarted: Boolean,
     val refreshing: Boolean,
     val ready: Boolean,
   )
