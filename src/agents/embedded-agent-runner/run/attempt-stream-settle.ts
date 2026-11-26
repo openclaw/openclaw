@@ -11,7 +11,6 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";
 import { createOpenAIServiceTierObservationWrapper } from "../../../llm/providers/stream-wrappers/openai-service-tier-observation.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
-import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
@@ -68,9 +67,8 @@ import {
   waitForCompactionRetryWithAggregateTimeout,
 } from "./compaction-retry-aggregate-timeout.js";
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
-import { materializeProviderContext } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
-import { promptImageSessionKey } from "./prompt-image-decisions.js";
+import { createProviderContextMaterializer } from "./provider-context-materializer.js";
 import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -493,32 +491,15 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const boundaryStreamFn = wrapStreamFnWithMessageTransform(
     streamFn,
     (messages) => messages,
-    async ({ context, ...provider }) => {
-      assertRunCurrent?.();
-      let localRoots: readonly string[] | undefined;
-      const prepared = await materializeProviderContext({
-        ...provider,
-        context,
-        imageSessionKey: promptImageSessionKey(attempt),
-        workspaceDir: input.workspaceDir,
-        agentWorkspaceDir: attempt.workspaceDir,
-        workspaceOnly: input.workspaceOnly,
-        localRoots: input.workspaceOnly
-          ? undefined
-          : () =>
-              (localRoots ??= getAgentScopedMediaLocalRoots(
-                attempt.config ?? {},
-                input.sessionAgentId,
-              )),
-        onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
-        sandbox:
-          input.sandbox?.enabled && input.sandbox.fsBridge
-            ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
-            : undefined,
-      });
-      assertRunCurrent?.();
-      return prepared;
-    },
+    createProviderContextMaterializer({
+      attempt,
+      workspaceDir: input.workspaceDir,
+      workspaceOnly: input.workspaceOnly,
+      sessionAgentId: input.sessionAgentId,
+      onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
+      sandbox: input.sandbox,
+      assertRunCurrent,
+    }),
   );
   const providerInput = configuredModelSupportsNativeVideo({
     cfg: attempt.config,

@@ -10,7 +10,7 @@ type MessageTransform = (
   messages: AgentMessage[],
   model: Parameters<StreamFn>[0],
 ) => AgentMessage[];
-type ProviderContextMaterializer = (input: {
+export type ProviderContextMaterializer = (input: {
   context: Parameters<StreamFn>[1];
   signal?: AbortSignal;
 }) => Promise<ProviderContext>;

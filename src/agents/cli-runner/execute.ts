@@ -27,6 +27,7 @@ import {
 } from "../embedded-agent-runner/run/images.js";
 import { prepareAgentExecScratch } from "../exec-scratch.js";
 import { resolveFastModeForElapsed } from "../fast-mode.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import { runCliCleanup } from "./cleanup.js";
@@ -207,6 +208,7 @@ export async function executePreparedCliRun(
         imageOrder: params.imageOrder,
         mediaImageLayout: params.mediaImageLayout,
         media: params.media,
+        maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
         preparedImages: options?.promptImages,
         ...(imageTurnEntryId ? { imageTurnKey: hashCliImageTurnEntryId(imageTurnEntryId) } : {}),
       });

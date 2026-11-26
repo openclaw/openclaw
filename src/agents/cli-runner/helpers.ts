@@ -319,6 +319,7 @@ type CliPromptImageInput = {
   imageOrder?: PromptImageOrderEntry[];
   mediaImageLayout?: MediaImageLayout;
   media?: MediaFact[];
+  maxDimensionPx?: number;
 };
 
 export async function loadCliPromptImages(params: CliPromptImageInput): Promise<ImageContent[]> {
@@ -338,6 +339,7 @@ export async function loadCliPromptImages(params: CliPromptImageInput): Promise<
         imageOrder: params.imageOrder,
         mediaImageLayout: params.mediaImageLayout,
         maxBytes: MAX_IMAGE_BYTES,
+        maxDimensionPx: params.maxDimensionPx,
         localRoots: params.localRoots,
       })
     : undefined;

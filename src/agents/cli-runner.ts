@@ -71,6 +71,7 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
+import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { isRequiredReplyExpectation, resolveReplyExpectation } from "./reply-completion.js";
 import { isAgentRunDirectAbortReason } from "./run-termination.js";
 import {
@@ -685,6 +686,7 @@ async function runPreparedCliAgentOwned(
         imageOrder: params.imageOrder,
         mediaImageLayout: params.mediaImageLayout,
         media: params.media,
+        maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
       });
       params.abortSignal?.throwIfAborted();
       params.assertCurrent?.();
