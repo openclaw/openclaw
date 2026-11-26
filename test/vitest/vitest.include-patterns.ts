@@ -193,6 +193,10 @@ function patternIsFullyUnderDirectory(pattern: string, root: string): boolean {
   return isAtOrUnder(literalPrefix, root);
 }
 
+function recursiveTestPatternTemplate(value: string): string | null {
+  return value.match(/^((?:.*\/)?\*\*\/[^/]+\.test\.)(?:tsx?|\{ts,tsx\})$/u)?.[1] ?? null;
+}
+
 function intersectDirectoryTestPattern(
   includePatterns: string[],
   candidatePattern: string,
@@ -201,25 +205,26 @@ function intersectDirectoryTestPattern(
 ): string[] | null {
   const candidateRoot = directoryTestPatternRoot(candidatePattern);
   if (candidateRoot === null) {
-    const containingPatterns = includePatterns.filter((pattern) => {
+    const template = recursiveTestPatternTemplate(candidatePattern);
+    const result: string[] = [];
+    let hasAmbiguousOverlap = false;
+    for (const pattern of includePatterns) {
       const includeRoot = directoryTestPatternRoot(pattern);
-      return includeRoot !== null && patternIsFullyUnderDirectory(candidatePattern, includeRoot);
-    });
-    return containingPatterns.length === 0
-      ? includePatterns.some((pattern) =>
-          patternsCouldOverlap(candidatePattern, pattern, matchesGlob),
-        )
-        ? null
-        : []
-      : [
-          ...new Set(
-            containingPatterns.flatMap((pattern) =>
-              intersectTestExtensions(candidatePattern, pattern).flatMap((value) =>
-                emit(value, pattern),
-              ),
-            ),
-          ),
-        ];
+      // Equal complete templates differ only in their terminal test extensions.
+      // A partial match cannot hide another owner's unresolved overlap.
+      if (
+        (template !== null && template === recursiveTestPatternTemplate(pattern)) ||
+        (includeRoot !== null && patternIsFullyUnderDirectory(candidatePattern, includeRoot))
+      ) {
+        const intersection = intersectTestExtensions(candidatePattern, pattern);
+        const emitted = intersection.flatMap((value) => emit(value, pattern));
+        if (intersection.includes(candidatePattern)) return emitted;
+        result.push(...emitted);
+      } else if (patternsCouldOverlap(candidatePattern, pattern, matchesGlob)) {
+        hasAmbiguousOverlap = true;
+      }
+    }
+    return hasAmbiguousOverlap ? null : [...new Set(result)];
   }
 
   const result: string[] = [];
@@ -317,7 +322,7 @@ function intersectCandidatePattern(
       return emit(candidate, candidate);
     }
     // Watch directory targets retain their glob so newly added tests appear.
-    // Only generated directory globs have a provable ownership intersection.
+    // Narrow only structurally provable directory or recursive-basename intersections.
     const intersection = intersectDirectoryTestPattern(
       includePatterns,
       candidate,

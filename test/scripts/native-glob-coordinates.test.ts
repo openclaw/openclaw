@@ -419,17 +419,33 @@ it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
         await wait(`ready:${recreate}:generation 2`);
         const final = records();
         const modules = final.filter((record) => record.kind === "module");
-        expect(modules).toHaveLength(7);
-        for (const [file, owner] of [[seed, "tooling"], ...additions]) {
-          const expectedCount = file === seed || file === recreate ? 2 : 1;
-          const matches = modules.filter((record) => record.file === file);
-          expect(matches).toHaveLength(expectedCount);
-          for (const record of matches) {
-            expect(record.owner).toBe(owner);
-            expect(record.state).toBe("passed");
-            expect(record.tests).toHaveLength(1);
-            expect(record.tests?.[0]?.state).toBe("passed");
-          }
+        const expectedModules = [
+          [seed, "tooling", "generation 1"],
+          [seed, "tooling", "generation 2"],
+          ...additions.map(([file, owner]) => [file, owner, "generation 1"]),
+          [recreate, "tooling-isolated", "generation 2"],
+        ];
+        if (discoveryDir !== ".") {
+          // Relative fallback exclusions follow dir; absolute selections still
+          // admit these outside-dir files to the ordinary tooling owner.
+          expectedModules.push(
+            [recreate, "tooling", "generation 1"],
+            [recreate, "tooling", "generation 2"],
+            [additions[2][0], "tooling", "generation 1"],
+          );
+        }
+        const moduleTuples = modules.map((record) => [
+          record.file,
+          record.owner,
+          record.tests?.[0]?.name,
+        ]);
+        expect(moduleTuples.toSorted(), JSON.stringify(moduleTuples)).toEqual(
+          expectedModules.toSorted(),
+        );
+        for (const record of modules) {
+          expect(record.state).toBe("passed");
+          expect(record.tests).toHaveLength(1);
+          expect(record.tests?.[0]?.state).toBe("passed");
         }
         expect(
           final.filter((record) => record.kind === "run").every((record) => record.errors === 0),

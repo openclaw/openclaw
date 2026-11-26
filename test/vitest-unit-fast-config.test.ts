@@ -298,6 +298,7 @@ describe("unit-fast vitest lane", () => {
       `
         import assert from "node:assert/strict";
         import { resolveConfig } from "vitest/node";
+        import { convertPathToPattern } from "tinyglobby";
         import { spawnSync } from "node:child_process";
         import fs from "node:fs";
         import path from "node:path";
@@ -332,7 +333,7 @@ describe("unit-fast vitest lane", () => {
           const runs = [];
           for (const spec of specs) {
             writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
-            const resolved = await resolveConfig({ config: false, root: process.cwd() }, factories[spec.config](spec.env));
+            const resolved = await resolveConfig({ config: false, root: process.cwd(), dir: process.cwd() }, factories[spec.config](spec.env));
             runs.push({ config: spec.config, include: resolved.test.include });
           }
           assert.deepEqual(paths.getUnitFastTestFiles(), [...otherRoots, e2eMockHelper, harness, mockHelper, pure, quoted, stateful].toSorted());
@@ -341,9 +342,9 @@ describe("unit-fast vitest lane", () => {
             { config: "test/vitest/vitest.unit-fast.config.ts", include: [pure] },
             { config: "test/vitest/vitest.unit-fast-isolated.config.ts", include: [e2eMockHelper, harness, mockHelper, stateful] },
           ]);
-          assert.deepEqual((await resolveConfig({ config: false, root: process.cwd() },
+          assert.deepEqual((await resolveConfig({ config: false, root: process.cwd(), dir: process.cwd() },
             createScopedVitestConfig(["src/hooks/**/*.test.ts"], { env: {} }))).test.exclude
-            .filter((file) => file.startsWith("src/hooks/")), [e2eMockHelper, harness, mockHelper, pure, quoted, stateful]);
+            .filter((file) => file.startsWith("src/hooks/")), [e2eMockHelper, harness, mockHelper, pure, quoted, stateful].map(convertPathToPattern));
           assert.equal(paths.resolveUnitFastTestIncludePattern(ignored), null);
           assert.equal(paths.isUnitFastTestFile(quoted), true);
         } finally {
