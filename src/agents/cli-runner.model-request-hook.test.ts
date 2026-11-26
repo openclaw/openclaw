@@ -83,7 +83,9 @@ describe("before_model_request on CLI runtimes", () => {
         ]),
       );
       const hookRunner = getGlobalHookRunner();
-      if (!hookRunner) throw new Error("Missing hook runner");
+      if (!hookRunner) {
+        throw new Error("Missing hook runner");
+      }
       const gate = createCliModelRequestGate({
         hookRunner,
         hookContext: {},
@@ -92,9 +94,11 @@ describe("before_model_request on CLI runtimes", () => {
         messages: async () => [],
       });
       const request = gate({ prompt: "original", ...(kind === "text-only" ? {} : { images: [] }) });
-      if (kind === "inline")
+      if (kind === "inline") {
         await expect(request).resolves.toEqual({ prompt: "safe", images: [image] });
-      else await expect(request).rejects.toThrow("before_model_request");
+      } else {
+        await expect(request).rejects.toThrow("before_model_request");
+      }
     },
   );
 

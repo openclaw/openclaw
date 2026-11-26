@@ -87,7 +87,9 @@ describe("runBtwSideQuestion", () => {
       },
     });
     expect(btw.streamSimpleMock).not.toHaveBeenCalled();
-    if (prepared?.kind !== "completion") throw new Error("Missing isolated completion");
+    if (prepared?.kind !== "completion") {
+      throw new Error("Missing isolated completion");
+    }
     const completion = prepared;
     expect(() => completion.params.assertCurrent?.()).toThrow();
   });
@@ -107,7 +109,9 @@ describe("runBtwSideQuestion", () => {
       async runSideQuestion(params: AgentHarnessSideQuestionParamsV2) {
         const prepared = await params.prepareIsolatedSideQuestion!();
         await params.prepareIsolatedSideQuestion!();
-        if (prepared.kind !== "handled") throw new Error("Expected session fork result");
+        if (prepared.kind !== "handled") {
+          throw new Error("Expected session fork result");
+        }
         return prepared.result;
       },
     } satisfies AgentHarnessV2);

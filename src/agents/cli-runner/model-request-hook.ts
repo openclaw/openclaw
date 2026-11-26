@@ -75,22 +75,27 @@ function readCliModelRequestPayload(value: unknown, allowImages: boolean): CliMo
   }
   const requestImages: CliModelRequestPayload["images"] = [];
   if (images !== undefined) {
-    if (!allowImages || !Array.isArray(images)) throw invalid();
+    if (!allowImages || !Array.isArray(images)) {
+      throw invalid();
+    }
     const values: unknown[] = images;
     for (const image of values) {
-      if (typeof image !== "object" || image === null || Array.isArray(image)) throw invalid();
-      const record = image as Record<string, unknown>;
-      const { type, data, mimeType, displayName } = record;
+      if (typeof image !== "object" || image === null || Array.isArray(image)) {
+        throw invalid();
+      }
+      const imageRecord = image as Record<string, unknown>;
+      const { type, data, mimeType, displayName } = imageRecord;
       if (
         type !== "image" ||
         typeof data !== "string" ||
         typeof mimeType !== "string" ||
         (displayName !== undefined && typeof displayName !== "string") ||
-        Object.keys(record).some(
+        Object.keys(imageRecord).some(
           (key) => !["type", "data", "mimeType", "displayName"].includes(key),
         )
-      )
+      ) {
         throw invalid();
+      }
       requestImages.push({
         type,
         data,

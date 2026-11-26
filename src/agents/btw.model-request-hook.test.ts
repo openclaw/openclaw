@@ -71,7 +71,9 @@ describe("before_model_request on side questions", () => {
       runAttempt: vi.fn(),
       async runSideQuestion(params: AgentHarnessSideQuestionParamsV2) {
         const prepared = await params.prepareIsolatedSideQuestion!();
-        if (prepared.kind === "handled") return prepared.result;
+        if (prepared.kind === "handled") {
+          return prepared.result;
+        }
         const request = await prepared.prepareRequest({
           prompt: `${JSON.stringify(prepared.messages)}\n${prepared.params.prompt}`,
           images: [],

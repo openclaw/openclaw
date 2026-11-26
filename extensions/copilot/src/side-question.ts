@@ -25,8 +25,12 @@ function buildSideQuestionMessage(
         ? message.content
         : message.content
             .flatMap((part) => {
-              if (part.type === "text") return part.text;
-              if (part.type === "image") return attach(part);
+              if (part.type === "text") {
+                return part.text;
+              }
+              if (part.type === "image") {
+                return attach(part);
+              }
               return [];
             })
             .join("\n");

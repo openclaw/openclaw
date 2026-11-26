@@ -138,7 +138,9 @@ it.each([false, true])(
           messages: [{ role: "user", content: "private-marker", timestamp: 1 }],
           images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
           prepareRequest: async (request) => {
-            if (block) throw new Error("withheld by policy");
+            if (block) {
+              throw new Error("withheld by policy");
+            }
             return {
               ...request,
               prompt: request.prompt.replaceAll("private-marker", "redacted"),
