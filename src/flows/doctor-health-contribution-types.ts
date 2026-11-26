@@ -1,5 +1,6 @@
 import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-legacy-oauth.js";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
+import type { DoctorMaintenancePendingCheck } from "../commands/doctor-maintenance-pending.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { DoctorConfigReferenceSource } from "../commands/doctor/shared/config-flow-steps.js";
 import type { ProviderRename } from "../commands/doctor/shared/provider-rename.js";
@@ -124,6 +125,8 @@ export type DoctorHealthContribution = {
   updateWork?: DoctorUpdateWork;
   healthChecks: readonly DoctorHealthCheck[];
   healthCheckIds: readonly string[];
+  /** Read-only work check traced under Gateway maintenance; without one the contribution has work. */
+  pending?: DoctorMaintenancePendingCheck;
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
