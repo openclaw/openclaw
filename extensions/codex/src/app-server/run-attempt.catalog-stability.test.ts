@@ -8,7 +8,7 @@ import {
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createCronAuthorityCapabilityFixture } from "./codex-app-server.test-fixtures.js";
 import { flattenSpecsWithNamespace } from "./dynamic-tools.test-support.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
@@ -20,6 +20,7 @@ import type {
 import {
   createCodexRuntimePlanFixture,
   createParams,
+  createRuntimeDynamicTool,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   setCodexTestModelSupportsTools,
@@ -28,6 +29,7 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 type RequestParams = {
   "thread/start": CodexThreadStartParams;
@@ -478,5 +480,171 @@ describe("runCodexAppServerAttempt durable catalog stability", () => {
       "task-suggest-thread-1",
       "task-suggest-thread-1",
     ]);
+  });
+
+  it.each([
+    { kind: "inter_session" as const, sourceTool: "sessions_send" },
+    { kind: "internal_system" as const, sourceTool: "heartbeat" },
+  ])(
+    "isolates unexpected $kind dynamic-tool drift in a transient thread and preserves the warm owner binding",
+    async ({ kind, sourceTool }) => {
+      const { sessionFile, workspaceDir } = createRunPaths();
+      const config = { tools: { web: { search: { enabled: false } } } };
+      setRuntimeConfigSnapshot(config);
+
+      let threadStarts = 0;
+      let turnStarts = 0;
+      const harness = createStartedThreadHarness(
+        async (method, request) => {
+          if (method === "thread/start") {
+            return threadStartResult(`drift-${kind}-thread-${++threadStarts}`);
+          }
+          if (method === "thread/resume") {
+            return threadStartResult((request as CodexThreadResumeParams).threadId);
+          }
+          if (method === "turn/start") {
+            return turnStartResult(`drift-${kind}-turn-${++turnStarts}`);
+          }
+          return undefined;
+        },
+        { persistedThreads: [] },
+      );
+
+      const thirdPartyExecute = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "owner-only third-party result" }],
+        details: {},
+      }));
+      const baseTool = createRuntimeDynamicTool("stable_core_tool");
+      const thirdPartyOwnerTool = {
+        ...createRuntimeDynamicTool("third_party_owner_tool"),
+        execute: thirdPartyExecute,
+      };
+      const threadIds: string[] = [];
+      const persistedAfterTurn: Array<string | undefined> = [];
+      const turns = [
+        { name: "owner-1", internal: false },
+        { name: "internal-drift", internal: true },
+        { name: "owner-2", internal: false },
+      ] as const;
+
+      for (const [index, { name, internal }] of turns.entries()) {
+        const params = createParams(sessionFile, workspaceDir, {
+          runId: `drift-${kind}-${name}`,
+        });
+        Object.assign(params, {
+          config,
+          senderIsOwner: !internal,
+          pluginHarnessToolPolicyScope: "conversation",
+          pluginHarnessToolPolicyRestricted: false,
+          ...(internal
+            ? {
+                inputProvenance: {
+                  kind,
+                  sourceChannel: "internal",
+                  sourceTool,
+                },
+              }
+            : {}),
+        });
+        enableRuntimeTools(params);
+        // Simulate a third-party plugin that ignores stableCatalog and omits its
+        // owner-only tool whenever senderIsOwner === false.
+        setCodexTestToolFactory(params, (options) =>
+          options?.senderIsOwner === false ? [baseTool] : [baseTool, thirdPartyOwnerTool],
+        );
+
+        const requestOffset = harness.requests.length;
+        const run = runCodexAppServerAttempt(params);
+        await run.waitForTurnAccepted();
+        const requests = harness.requests.slice(requestOffset);
+        const { threadId } = getRequestParams(requests, "turn/start")!;
+        const turnId = `drift-${kind}-turn-${index + 1}`;
+        threadIds.push(threadId);
+
+        if (internal) {
+          const deniedResponse = await harness.handleServerRequest({
+            id: `rpc-denied-${kind}`,
+            method: "item/tool/call",
+            params: {
+              threadId,
+              turnId,
+              callId: `call-denied-${kind}`,
+              namespace: null,
+              tool: "third_party_owner_tool",
+              arguments: {},
+            },
+          });
+          expect(deniedResponse).toMatchObject({ success: false });
+        }
+
+        await harness.completeTurn({ threadId, turnId });
+        await run;
+        persistedAfterTurn.push((await readCodexAppServerBinding(sessionFile))?.threadId);
+      }
+
+      // Turn 2 runs on a transient thread (thread-2) without destroying thread-1,
+      // so Turn 3 reuses thread-1 directly (2 thread/start calls, never 3).
+      expect(threadStarts).toBe(2);
+      expect(threadIds).toEqual([
+        `drift-${kind}-thread-1`,
+        `drift-${kind}-thread-2`,
+        `drift-${kind}-thread-1`,
+      ]);
+      expect(persistedAfterTurn).toEqual([
+        `drift-${kind}-thread-1`,
+        `drift-${kind}-thread-1`,
+        `drift-${kind}-thread-1`,
+      ]);
+      expect(thirdPartyExecute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still rotates the persisted binding when an ordinary user turn changes the dynamic tool catalog", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const config = { tools: { web: { search: { enabled: false } } } };
+    setRuntimeConfigSnapshot(config);
+
+    let threadStarts = 0;
+    let turnStarts = 0;
+    const harness = createStartedThreadHarness(
+      async (method, request) => {
+        if (method === "thread/start") {
+          return threadStartResult(`user-rotate-thread-${++threadStarts}`);
+        }
+        if (method === "thread/resume") {
+          return threadStartResult((request as CodexThreadResumeParams).threadId);
+        }
+        if (method === "turn/start") {
+          return turnStartResult(`user-rotate-turn-${++turnStarts}`);
+        }
+        return undefined;
+      },
+      { persistedThreads: [] },
+    );
+
+    const baseTool = createRuntimeDynamicTool("stable_core_tool");
+    const addedTool = createRuntimeDynamicTool("newly_enabled_tool");
+    const threadIds: string[] = [];
+    for (const [index, includeAdded] of [false, true].entries()) {
+      const params = createParams(sessionFile, workspaceDir, {
+        runId: `user-rotate-${index + 1}`,
+      });
+      Object.assign(params, { config, senderIsOwner: true });
+      enableRuntimeTools(params);
+      setCodexTestToolFactory(params, () => (includeAdded ? [baseTool, addedTool] : [baseTool]));
+
+      const requestOffset = harness.requests.length;
+      const run = runCodexAppServerAttempt(params);
+      await run.waitForTurnAccepted();
+      const requests = harness.requests.slice(requestOffset);
+      const { threadId } = getRequestParams(requests, "turn/start")!;
+      threadIds.push(threadId);
+      await harness.completeTurn({ threadId, turnId: `user-rotate-turn-${index + 1}` });
+      await run;
+    }
+
+    expect(threadStarts).toBe(2);
+    expect(threadIds).toEqual(["user-rotate-thread-1", "user-rotate-thread-2"]);
+    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("user-rotate-thread-2");
   });
 });

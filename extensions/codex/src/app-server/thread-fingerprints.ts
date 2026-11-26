@@ -246,3 +246,43 @@ export function shouldStartTransientNoToolThread(params: {
     !params.nextHasDynamicTools,
   );
 }
+
+export function resolveTransientCodexDynamicToolDriftMessage(
+  previous: string | undefined,
+  params: {
+    dynamicTools: readonly unknown[];
+    nativeCodeModeEnabled?: boolean;
+    params: {
+      inputProvenance?: { kind?: string };
+      pluginHarnessToolPolicyScope?: string;
+      pluginHarnessToolPolicyRestricted?: boolean;
+    };
+  },
+  driftKind: "catalog" | "loading",
+): string | undefined {
+  if (
+    driftKind === "catalog" &&
+    params.params.pluginHarnessToolPolicyScope !== "conversation" &&
+    params.nativeCodeModeEnabled !== false &&
+    shouldStartTransientNoToolThread({
+      previous,
+      nextHasDynamicTools: params.dynamicTools.length > 0,
+    })
+  ) {
+    return "codex app-server dynamic tools unavailable for turn; starting transient thread";
+  }
+  const provenanceKind = params.params.inputProvenance?.kind;
+  const restrictedConversationPolicy =
+    params.params.pluginHarnessToolPolicyScope === "conversation" &&
+    params.params.pluginHarnessToolPolicyRestricted === true;
+  if (
+    previous &&
+    !restrictedConversationPolicy &&
+    (provenanceKind === "inter_session" || provenanceKind === "internal_system")
+  ) {
+    return driftKind === "loading"
+      ? "codex app-server dynamic tool loading drifted on internal turn, starting transient thread"
+      : "codex app-server dynamic tool catalog drifted on internal turn, starting transient thread";
+  }
+  return undefined;
+}

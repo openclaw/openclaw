@@ -30,7 +30,7 @@ import { isContextEngineBindingCompatible } from "./thread-context-engine.js";
 import {
   areCodexDynamicToolFingerprintsCompatible,
   areUserMcpServersFingerprintsCompatible,
-  shouldStartTransientNoToolThread,
+  resolveTransientCodexDynamicToolDriftMessage,
 } from "./thread-fingerprints.js";
 import {
   resumePendingCodexThread,
@@ -543,7 +543,19 @@ export async function startOrResumeThread(
         binding.dynamicToolsContainDeferred !== dynamicToolsContainDeferred &&
         (binding.dynamicToolsContainDeferred !== undefined || !dynamicToolsContainDeferred)
       ) {
-        rotateStaleBinding(binding, "dynamic tool loading");
+        const transientMessage = resolveTransientCodexDynamicToolDriftMessage(
+          binding.dynamicToolsFingerprint,
+          params,
+          "loading",
+        );
+        if (transientMessage) {
+          assertReplacementAllowed("changing dynamic tool loading");
+          preserveExistingBinding = true;
+          embeddedAgentLog.debug(transientMessage, { threadId: binding.threadId });
+          binding = undefined;
+        } else {
+          rotateStaleBinding(binding, "dynamic tool loading");
+        }
       }
     }
     if (binding?.threadId && (binding.contextEngine || contextEngineBinding)) {
@@ -587,20 +599,14 @@ export async function startOrResumeThread(
         })
       ) {
         assertReplacementAllowed("changing the dynamic tool catalog");
-        preserveExistingBinding =
-          params.params.pluginHarnessToolPolicyScope !== "conversation" &&
-          params.nativeCodeModeEnabled !== false &&
-          shouldStartTransientNoToolThread({
-            previous: binding.dynamicToolsFingerprint,
-            nextHasDynamicTools: params.dynamicTools.length > 0,
-          });
-        if (preserveExistingBinding) {
-          embeddedAgentLog.debug(
-            "codex app-server dynamic tools unavailable for turn; starting transient thread",
-            {
-              threadId: binding.threadId,
-            },
-          );
+        const transientMessage = resolveTransientCodexDynamicToolDriftMessage(
+          binding.dynamicToolsFingerprint,
+          params,
+          "catalog",
+        );
+        preserveExistingBinding = transientMessage !== undefined;
+        if (transientMessage) {
+          embeddedAgentLog.debug(transientMessage, { threadId: binding.threadId });
         } else {
           rotateStaleBinding(binding, "dynamic tool catalog");
         }
