@@ -1807,13 +1807,7 @@ private fun ChatMessageList(
       sessionKey = sessionKey,
       indicatorVisible = indicatorVisible,
       row = session,
-      transcript =
-        TurnRecapTranscriptState(
-          sessionKey = transcriptAnchor?.sessionKey,
-          newestItemId = transcriptAnchor?.newestItemId,
-          completedEndedAt = transcriptAnchor?.completedEndedAt,
-          completedNewestItemId = transcriptAnchor?.completedNewestItemId,
-        ),
+      transcript = transcriptAnchor,
     )
   val toolBridge = remember(sessionKey) { LiveToolActivityBridge() }
   val presentedTools = remember(toolBridge, history.toolScope, pendingToolCalls) { toolBridge.update(history.toolScope, pendingToolCalls) }
