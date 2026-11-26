@@ -273,6 +273,17 @@ If a single message is too large, shorten it or load the model with a larger con
 earlier history cannot shrink that message. Server-side truncation without an overflow error
 does not trigger this recovery.
 
+### Long notes are missing from memory search
+
+Set the embedding model's `contextTokens` in `models.providers.lmstudio.models` to fit
+your host. After a successful preload, OpenClaw uses the prepared context to split long
+documents before embedding them. Queries are sent intact, so choose a context that also
+fits your queries and any custom input prefix. LM Studio can truncate oversized inputs
+and still return a vector.
+
+If an earlier index was built with truncated inputs, rebuild it with
+`openclaw memory index --force`, then search for a phrase near the end of a long note.
+
 ### Model discovery failures
 
 When a configured server cannot list models, OpenClaw reports an unavailable catalog or a

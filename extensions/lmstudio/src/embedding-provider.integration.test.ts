@@ -77,6 +77,7 @@ it.each([
       },
     );
 
+    expect(provider.maxInputTokens).toBeUndefined();
     const result = provider.embed("hello", { inputType: "query" });
     await expect(result).resolves.toEqual([0.25, 0.5, 0.75]);
     expect(acquireLocalService).not.toHaveBeenCalled();
@@ -98,6 +99,44 @@ it.each([
   });
 });
 
+it.each([true, false])(
+  "leaves the input limit unset after a failed native preload (JIT success: %s)",
+  async (jitSucceeds) => {
+    const requests: string[] = [];
+    const handler: RequestListener = (request, response) => {
+      request.resume();
+      request.once("end", () => {
+        requests.push(request.url ?? "");
+        if (request.url === "/api/v1/models") {
+          json(response, {
+            models: [{ ...serverModel, max_context_length: 32768, loaded_instances: [] }],
+          });
+        } else if (request.url === "/api/v1/models/load") {
+          json(response, { error: "fixture load refused" }, 503);
+        } else if (request.url === "/v1/embeddings" && jitSucceeds) {
+          json(response, { data: [{ index: 0, embedding: [1, 0] }] });
+        } else {
+          json(response, { error: "Model is unloaded" }, 400);
+        }
+      });
+    };
+    await withServer(handler, async (origin) => {
+      const { provider } = await createProvider(
+        { baseUrl: `${origin}/v1`, models: [] },
+        { remote: { apiKey: "fixture" } },
+      );
+      expect(provider.maxInputTokens).toBeUndefined();
+      const result = provider.embedBatch(["synthetic note"]);
+      if (jitSucceeds) {
+        await expect(result).resolves.toEqual([[1, 0]]);
+      } else {
+        await expect(result).rejects.toThrow(/400.*Model is unloaded/s);
+      }
+      expect(requests.slice(-2)).toEqual(["/api/v1/models/load", "/v1/embeddings"]);
+    });
+  },
+);
+
 it.each(["documents", "queries", "cancelled"] as const)(
   "routes %s embeddings to sufficient-context instances across eviction while holding the service lease",
   async (kind) => {
@@ -107,6 +146,7 @@ it.each(["documents", "queries", "cancelled"] as const)(
     let instanceNumber = 2;
     let leases = 0;
     const requests: string[] = [];
+    const embeddingInputs: unknown[] = [];
     const handler: RequestListener = (request, response) => {
       let text = "";
       request.setEncoding("utf8").on("data", (chunk: string) => {
@@ -133,6 +173,7 @@ it.each(["documents", "queries", "cancelled"] as const)(
           if (!("model" in body) || !Array.isArray(body.input)) {
             throw new Error("Invalid embedding request");
           }
+          embeddingInputs.push(...body.input);
           const embedding = body.model === `${MODEL}:${instanceNumber}` ? [1, 0] : [0, 1];
           json(response, { data: body.input.map((_, index) => ({ index, embedding })) });
         } else {
@@ -153,7 +194,7 @@ it.each(["documents", "queries", "cancelled"] as const)(
               input: ["text"],
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               maxTokens: 0,
-              contextTokens: 2048,
+              contextTokens: 4096,
             },
           ],
         },
@@ -170,7 +211,10 @@ it.each(["documents", "queries", "cancelled"] as const)(
         },
       );
       expect(leases).toBe(0);
-      await expect(provider.embed("first")).resolves.toEqual([1, 0]);
+      expect(provider.maxInputTokens).toBe(2044);
+      const query = "a".repeat(2044) + " query suffix";
+      await expect(provider.embed(query, { inputType: "query" })).resolves.toEqual([1, 0]);
+      expect(embeddingInputs).toEqual([query]);
       expect(requests).not.toContain("/api/v1/models/load");
       loaded = false;
       requests.length = 0;
