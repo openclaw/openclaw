@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import * as runtimeProcess from "../infra/runtime-process-url.js";
+import * as commandIdentity from "../process/command-process-identity.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
@@ -14,9 +15,13 @@ import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-suppor
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each([false, true])(
-  "reaps cancelled hosted Doctor work (ignores SIGTERM: %s)",
-  async (ignore) => {
+it.each([
+  { ignore: false, pendingIdentity: false },
+  { ignore: true, pendingIdentity: false },
+  ...(process.platform === "linux" ? [{ ignore: false, pendingIdentity: true }] : []),
+])(
+  "reaps cancelled hosted Doctor work (ignores SIGTERM: $ignore, pending identity: $pendingIdentity)",
+  async ({ ignore, pendingIdentity }) => {
     const fixture = path.join(tempDirs.make("hosted-doctor-cancel-"), "doctor.mjs");
     const receipt = `${fixture}.signal`;
     fs.writeFileSync(
@@ -37,6 +42,17 @@ process.stdout.write("ready:" + process.pid + "\\n");
     const { runtime } = createSystemAgentTestRuntime();
     let pid: number | undefined;
     const log = runtime.log;
+    const identityReady = Promise.withResolvers<void>();
+    const readIdentity = commandIdentity.readCommandProcessStartTime;
+    const identity = pendingIdentity
+      ? vi
+          .spyOn(commandIdentity, "readCommandProcessStartTime")
+          .mockImplementationOnce(async (...args) => {
+            const observed = await readIdentity(...args);
+            await identityReady.promise;
+            return observed;
+          })
+      : undefined;
     try {
       await expect(
         withCommandProcessScope(async (stop) => {
@@ -45,6 +61,7 @@ process.stdout.write("ready:" + process.pid + "\\n");
             if (typeof line === "string" && line.startsWith("ready:")) {
               pid = Number(line.slice(6));
               stop();
+              identityReady.resolve();
             }
           };
           await execute({ kind: "doctor" }, runtime);
@@ -54,6 +71,8 @@ process.stdout.write("ready:" + process.pid + "\\n");
       expect(pid).toBeGreaterThan(0);
       expect(() => process.kill(pid!, 0)).toThrow();
     } finally {
+      identityReady.resolve();
+      identity?.mockRestore();
       doctor.mockRestore();
       if (pid) {
         try {

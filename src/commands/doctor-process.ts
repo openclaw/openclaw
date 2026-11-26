@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
-import { CommandProcessCleanupError } from "../process/exec-result.js";
+import { CommandProcessCleanupError, readCommandProcessCleanup } from "../process/exec-result.js";
 import {
   resolveCommandProcessSignal,
   retainCommandProcessCleanup,
@@ -49,8 +49,8 @@ export async function runDoctorProcess(runtime: RuntimeEnv): Promise<void> {
     }
   };
   // Hosted diagnosis is read-only. Bound its lifetime, then join process-tree cleanup.
-  const worker = trackAsyncWork(() =>
-    runOutsideCommandProcessScope(() =>
+  const worker = trackAsyncWork(async () => {
+    const result = await runOutsideCommandProcessScope(() =>
       runUtf8CommandWithTimeout([process.execPath, ...resolveRuntimeWorkerArgv(workerUrl)], {
         input: "",
         timeoutMs: 120_000,
@@ -70,13 +70,21 @@ export async function runDoctorProcess(runtime: RuntimeEnv): Promise<void> {
           append(stream, output[stream].decoder.write(accepted));
         },
       }),
-    ),
-  );
-  const settlement = worker.then((result) => {
-    if (result.cleanup === "uncertain") {
+    );
+    // Output can arrive before process identity preparation finishes. An abort in
+    // that interval returns a provisional outcome with the existing cleanup owner.
+    const pendingCleanup = readCommandProcessCleanup(result);
+    const cleanup = pendingCleanup
+      ? await pendingCleanup.catch((cause: unknown) => {
+          throw new CommandProcessCleanupError({ cause });
+        })
+      : result.cleanup;
+    if (cleanup === "uncertain") {
       throw new CommandProcessCleanupError();
     }
+    return result;
   });
+  const settlement = worker.then(() => undefined);
   void settlement.catch(() => {});
   retainCommandProcessCleanup(settlement);
   const releaseExitGate = registerSignalExitGate(settlement, () => cancellation.abort());
@@ -89,9 +97,6 @@ export async function runDoctorProcess(runtime: RuntimeEnv): Promise<void> {
       if (output[stream].pending) {
         write(stream, output[stream].pending);
       }
-    }
-    if (result.cleanup === "uncertain") {
-      throw new CommandProcessCleanupError();
     }
     if (outputFailure) {
       throw outputFailure.error;
