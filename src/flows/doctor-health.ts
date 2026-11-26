@@ -9,6 +9,7 @@ import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { formatDoctorProgressPhase } from "../infra/doctor-progress.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { withSqliteSnapshotFailureScope } from "../infra/sqlite-error-diagnostics.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
@@ -221,6 +222,17 @@ async function runDoctorHealthFlowWithResult(
           preflightOptions,
         ),
       );
+    }
+    if (repairMode.shouldRepair) {
+      const { cleanupRetainedUpdateRuntimesBeforeMaintenance } =
+        await import("../commands/doctor-retained-runtime.js");
+      try {
+        await measure("doctor.retained-runtimes", () =>
+          cleanupRetainedUpdateRuntimesBeforeMaintenance(process.env),
+        );
+      } catch (error) {
+        effectiveRuntime.error(formatErrorMessage(error));
+      }
     }
     const [{ beginDoctorMaintenance }, { createDoctorOriginalCaptureHook }] = await Promise.all([
       import("../commands/doctor-maintenance.js"),
@@ -526,9 +538,6 @@ async function runDoctorHealthFlowWithResult(
             activeMaintenance.enableSqliteReclamation(agents),
           );
         }
-        await measure("doctor.retained-runtimes", () =>
-          activeMaintenance.cleanupRetainedRuntimes(),
-        );
       }
     } catch (error) {
       failure = error;
