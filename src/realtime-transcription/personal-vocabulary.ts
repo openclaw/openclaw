@@ -31,7 +31,8 @@ type HintMeasurement = Readonly<{ bytes: number; tokens: number }>;
 
 /** No adapter is registered by these preparation helpers. Measure the exact field encoding. */
 export type PersonalVocabularyHintCapability =
-  | Readonly<{ kind: "unavailable" | "pronunciation" }>
+  | Readonly<{ kind: "unavailable" }>
+  | Readonly<{ kind: "pronunciation" }>
   | (HintLimits &
       Readonly<{ kind: "term-list"; measure(terms: readonly string[]): HintMeasurement }>)
   | (HintLimits & Readonly<{ kind: "prompt"; measure(prompt: string): HintMeasurement }>);

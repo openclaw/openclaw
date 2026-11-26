@@ -8,7 +8,6 @@ export const VOCABULARY_LIMITS = Object.freeze({
   aliases: 16,
   termBytes: 1_024,
   labelBytes: 256,
-  auditEvents: 32,
 });
 
 export type VocabularyErrorCode =
@@ -44,7 +43,6 @@ export type VocabularyCollectionDraft = Readonly<{
 }>;
 
 export type VocabularyCollectionRef = Readonly<{ scopeId: string; collectionId: string }>;
-export type VocabularyOperation = "read" | "edit" | "manage" | "export" | "disclose";
 export type VocabularyAuditEvent = Readonly<{
   actorId: string;
   operation: "create" | "replace" | "import" | "delete";
@@ -72,16 +70,6 @@ export type VocabularyGrant = Readonly<{
   assertCurrent(): void;
   revalidate(): Promise<void>;
   onInvalidated(listener: () => void): () => void;
-}>;
-
-/** The host must map these operations to its accepted scope policy before enabling sharing. */
-export type VocabularyAuthority = Readonly<{
-  authorize(request: {
-    scopeId: string;
-    collectionId?: string;
-    operation: VocabularyOperation;
-    providerId?: string;
-  }): Promise<VocabularyGrant>;
 }>;
 
 export type AuthorizedVocabularyCollection = Readonly<{

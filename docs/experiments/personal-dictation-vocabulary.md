@@ -17,14 +17,14 @@ It doesn't add a usable dictionary, persist entries, or send vocabulary to a pro
 The selected lifecycle issue is [#205856](https://github.com/openclaw/openclaw/issues/205856).
 It must remain open while any required criterion is unmet.
 
-| Item                             | Recorded identity                                                                                                                   |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Original implementation base     | `openclaw/openclaw`, `main`, `1c3de7eb68481e5d7656e21ec96d43855789fbb0`                                                             |
-| Task branch                      | `CompleteDotTech/openclaw`, `feat/personal-dictation-dictionary`                                                                    |
-| Measured pure preparation commit | `46c74099c7360a4f8ecbfc556df9ba5cfa936903`. The PR records the final published head and subsequent checks.                          |
-| Transport request                | [#191109](https://github.com/openclaw/openclaw/issues/191109)                                                                       |
+| Item                             | Recorded identity                                                                                                                 |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Original implementation base     | `openclaw/openclaw`, `main`, `1c3de7eb68481e5d7656e21ec96d43855789fbb0`                                                           |
+| Task branch                      | `CompleteDotTech/openclaw`, `feat/personal-dictation-dictionary`                                                                  |
+| Measured pure preparation commit | `46c74099c7360a4f8ecbfc556df9ba5cfa936903`. The PR records the final published head and subsequent checks.                        |
+| Transport request                | [#191109](https://github.com/openclaw/openclaw/issues/191109)                                                                     |
 | Shared vocabulary context        | [M06 #205820](https://github.com/openclaw/openclaw/pull/205820) and [#205633](https://github.com/openclaw/openclaw/issues/205633) |
-| Refinement context               | [M11 #205845](https://github.com/openclaw/openclaw/issues/205845)                                                                   |
+| Refinement context               | [M11 #205845](https://github.com/openclaw/openclaw/issues/205845)                                                                 |
 
 The owner proposal below was checked against main `cab8e5aca1c26f0a7b2fec0270ae5aa4153d48a2`.
 This is a source-analysis pin, not a rebase or a tested product head.
@@ -32,8 +32,8 @@ The [P03 PR review](https://github.com/openclaw/openclaw/pull/205880#issuecommen
 reviewed `9b8bba978eabe63170081bd5161c3f08b59d62cf` and found no actionable source defect.
 It still requires a maintainer decision on the minimum flow and real behavior proof after acceptance.
 That review does not qualify this later documentation revision.
-M06 remains an open, unmerged draft at `56aef23a43aea74de1f20ed6e1cf81cc3c1756a5`;
-its newer proposal is context, not the source revision reused below.
+M06 was last verified as an open draft at `baab314d1b5486644e0a5e145f08dd2021cb2db1`.
+Its current proposal is context, not the source revision reused below.
 
 No accepted transport PR is asserted as a parent. The task branch started from the original implementation base.
 An issue has no Git head to stack on.
@@ -43,8 +43,9 @@ Neither sibling's proposal establishes an accepted production contract for P03.
 
 The candidate reuses three files from M06 commit `4780aeb034e72a6557f12a54ed506d5e4c690d98`:
 `vocabulary-types.ts`, `vocabulary-terms.ts`, and `vocabulary-terms.test.ts`, under `src/realtime-transcription/`.
-The types are unchanged. The term module exposes its comparison key and locale normalizer,
-and extracts bounded raw JSON parsing for the personal import consumer.
+The personal draft omits the unused shared authority interface, its operation type, and its audit
+limit. M06 still owns those policy decisions. The term module exposes its comparison key and locale
+normalizer, and extracts bounded raw JSON parsing for the personal import consumer.
 It also resolves canonical precedence before alias conflicts, with a regression in the shared term tests.
 The inherited bug let a shadowed shared entry's alias suppress an unrelated shared term after a personal override.
 The personal import proposal also checks that a chosen replacement target matches the previewed conflict.
@@ -84,14 +85,14 @@ a browser-supplied workspace string or session key is not authority.
 The preference namespace, envelope version, workspace mapping, and retention semantics are **NEEDS MAINTAINER**.
 If that scope cannot be represented safely through the existing owner, keep hints transient pending a new decision.
 
-| Boundary | Minimum proposal and existing constraint |
-| --- | --- |
-| Serialized value | At most 4,096 UTF-8 bytes for `JSON.stringify(value)`, including every workspace partition, IDs, revisions, locale, and schema metadata together. |
-| Generic quotas | Keep the existing 32 entries per mutation and 128 generic keys per profile. Neither supplies extra capacity inside the dictionary value. |
-| Concurrency | Use existing `expectedEntries` comparisons and atomic writes. A conflict or size rejection preserves the previous durable value and the editor's unsaved text. |
-| Durable identity | `no_durable_identity` yields an unavailable, non-saving editor state. It does not create a browser-local durable substitute. |
-| Profile merge | Existing target-key-wins behavior keeps the target's entire value when both profiles have the key. A source-only key transfers only if the target has capacity; source rows are then deleted, including skipped values. Accept this inherited behavior explicitly; do not promise term or partition union. |
-| Recovery | Retain a minimal export/recovery path for the selected personal scope. Bulk catalog management is deferred, not recovery itself. |
+| Boundary         | Minimum proposal and existing constraint                                                                                                                                                                                                                                                                   |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Serialized value | At most 4,096 UTF-8 bytes for `JSON.stringify(value)`, including every workspace partition, IDs, revisions, locale, and schema metadata together.                                                                                                                                                          |
+| Generic quotas   | Keep the existing 32 entries per mutation and 128 generic keys per profile. Neither supplies extra capacity inside the dictionary value.                                                                                                                                                                   |
+| Concurrency      | Use existing `expectedEntries` comparisons and atomic writes. A conflict or size rejection preserves the previous durable value and the editor's unsaved text.                                                                                                                                             |
+| Durable identity | `no_durable_identity` yields an unavailable, non-saving editor state. It does not create a browser-local durable substitute.                                                                                                                                                                               |
+| Profile merge    | Existing target-key-wins behavior keeps the target's entire value when both profiles have the key. A source-only key transfers only if the target has capacity; source rows are then deleted, including skipped values. Accept this inherited behavior explicitly; do not promise term or partition union. |
+| Recovery         | Retain a minimal export/recovery path for the selected personal scope. Bulk catalog management is deferred, not recovery itself.                                                                                                                                                                           |
 
 These constraints come from the pinned
 [preference constants](https://github.com/openclaw/openclaw/blob/cab8e5aca1c26f0a7b2fec0270ae5aa4153d48a2/packages/gateway-protocol/src/schema/user-profile-constants.ts),
@@ -142,15 +143,15 @@ P03 owns the personal lifecycle. M06 owns authorized workspace overlays and must
 Both feed one effective vocabulary at admission, using one shared validator/resolver and one combined provider budget.
 The following is a proposed internal contract, not an accepted public SDK or final persisted schema:
 
-| Concern | Proposed common rule |
-| --- | --- |
-| Text | Preserve canonical raw strings exactly. Use NFC only for comparison, with case-sensitive identity; do not fold accents, compatibility characters, or transliterations. |
-| Identity | Keep stable IDs, source revisions, provenance, locale, and authenticated scope/source identity locally. Only canonical strings enter the selected provider hint field. |
-| Precedence | Make personal-over-shared precedence explicit and conflicts visible. Resolve canonical precedence before any future alias collision index. |
-| Selection | Filter enabled entries by accepted scope and locale, resolve precedence, apply deterministic ordering, then enforce aggregate provider term, byte, and token limits. |
-| Budget | Personal and shared terms share the same budget. Existing configured prompt text and serialization overhead also count toward the actual endpoint limit; neither source gets a full independent quota. |
-| Omission | Explain disabled, out-of-scope, locale-ineligible, unsupported, and over-budget terms without logging private text. Do not infer relevance from usage profiling. |
-| Deferred fields | Aliases and pronunciation hints are omitted from this slice. Future aliases remain recognition candidates, never unconditional transcript replacements. |
+| Concern         | Proposed common rule                                                                                                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Text            | Preserve canonical raw strings exactly. Use NFC only for comparison, with case-sensitive identity; do not fold accents, compatibility characters, or transliterations.                                 |
+| Identity        | Keep stable IDs, source revisions, provenance, locale, and authenticated scope/source identity locally. Only canonical strings enter the selected provider hint field.                                 |
+| Precedence      | Make personal-over-shared precedence explicit and conflicts visible. Resolve canonical precedence before any future alias collision index.                                                             |
+| Selection       | Filter enabled entries by accepted scope and locale, resolve precedence, apply deterministic ordering, then enforce aggregate provider term, byte, and token limits.                                   |
+| Budget          | Personal and shared terms share the same budget. Existing configured prompt text and serialization overhead also count toward the actual endpoint limit; neither source gets a full independent quota. |
+| Omission        | Explain disabled, out-of-scope, locale-ineligible, unsupported, and over-budget terms without logging private text. Do not infer relevance from usage profiling.                                       |
+| Deferred fields | Aliases and pronunciation hints are omitted from this slice. Future aliases remain recognition candidates, never unconditional transcript replacements.                                                |
 
 M06's independent draft does not establish an accepted store, permission model, or mid-utterance revocation rule.
 Reconcile the common contract before production wiring. Keep P02 application context optional and separate;
@@ -241,20 +242,20 @@ This is a scope proposal for maintainer review, not a revision of the issue's ac
 not that it has passed. Narrowed and deferred work remains outstanding unless maintainers accept the change.
 The proposed allocation is five retained, six narrowed, and one deferred.
 
-| Criterion | Proposed disposition | First-slice obligation and remaining scope |
-| --- | --- | --- |
-| AC01 | Narrowed | One manual Control UI editor with exact-text, stable-ID, atomic create/edit/disable/delete; broader client surfaces remain later work. |
-| AC02 | Deferred | Defer the correction-to-entry UI. Retain the mandatory no-silent-learning rule now; any future learning requires explicit confirmation. |
-| AC03 | Narrowed | Prove authenticated current-workspace and selected-locale isolation, deterministic selection, and bounded immutable snapshots on the chosen route. |
-| AC04 | Narrowed | Qualify one actual provider/model/endpoint and every applicable disclosure path; broader provider capability support remains later work. |
-| AC05 | Retained | Prove no unconditional replacement or unrelated insertion. Use misleading canonical hints in this slice; alias features and their evaluation remain deferred. |
-| AC06 | Retained | Prove canonical strings remain inert through real dispatch, with no route or tool effects. Recheck refinement if M11 is later integrated. |
-| AC07 | Narrowed | Prove manual atomic saves and two-window conflict choices. Bulk import/preview remains deferred; recovery still needs a supported path. |
-| AC08 | Retained | Prove disable/delete excludes future admissions while preserving the snapshot of the same already admitted request. |
-| AC09 | Retained | Distinguish internal resumption from a new admission; show any changed revision on user retry/reprocess. |
-| AC10 | Narrowed | Prove no disallowed disclosure on the accepted P04 route and applicable retry paths. No universal local-only claim or M11 coverage is implied. |
-| AC11 | Retained | Inspect default diagnostics for terms, correction pairs, and guessable hashes, including failure paths. |
-| AC12 | Narrowed | Prove actual upgrade, disable, unknown-version preservation, and selected-scope recovery. Bulk catalog import/export and universal downgrade claims are deferred. |
+| Criterion | Proposed disposition | First-slice obligation and remaining scope                                                                                                                        |
+| --------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AC01      | Narrowed             | One manual Control UI editor with exact-text, stable-ID, atomic create/edit/disable/delete; broader client surfaces remain later work.                            |
+| AC02      | Deferred             | Defer the correction-to-entry UI. Retain the mandatory no-silent-learning rule now; any future learning requires explicit confirmation.                           |
+| AC03      | Narrowed             | Prove authenticated current-workspace and selected-locale isolation, deterministic selection, and bounded immutable snapshots on the chosen route.                |
+| AC04      | Narrowed             | Qualify one actual provider/model/endpoint and every applicable disclosure path; broader provider capability support remains later work.                          |
+| AC05      | Retained             | Prove no unconditional replacement or unrelated insertion. Use misleading canonical hints in this slice; alias features and their evaluation remain deferred.     |
+| AC06      | Retained             | Prove canonical strings remain inert through real dispatch, with no route or tool effects. Recheck refinement if M11 is later integrated.                         |
+| AC07      | Narrowed             | Prove manual atomic saves and two-window conflict choices. Bulk import/preview remains deferred; recovery still needs a supported path.                           |
+| AC08      | Retained             | Prove disable/delete excludes future admissions while preserving the snapshot of the same already admitted request.                                               |
+| AC09      | Retained             | Distinguish internal resumption from a new admission; show any changed revision on user retry/reprocess.                                                          |
+| AC10      | Narrowed             | Prove no disallowed disclosure on the accepted P04 route and applicable retry paths. No universal local-only claim or M11 coverage is implied.                    |
+| AC11      | Retained             | Inspect default diagnostics for terms, correction pairs, and guessable hashes, including failure paths.                                                           |
+| AC12      | Narrowed             | Prove actual upgrade, disable, unknown-version preservation, and selected-scope recovery. Bulk catalog import/export and universal downgrade claims are deferred. |
 
 ## Evidence and recovery record
 
@@ -276,7 +277,7 @@ this draft cannot land as a complete P03 implementation. Net test growth is 1,07
 678-line allocation beyond the existing 400-line allowance. The record covers distinct validation,
 import, Unicode, scope, revision, ambiguity, and quota failures; it doesn't relax a threshold.
 
-### Observed checks and setup limits
+### Historical checks and setup limits
 
 The original canonical test startup exited 137 before reporting any test cases.
 After recovery, a separate frozen development-dependency installation using pinned pnpm 12.15.0,
@@ -364,6 +365,82 @@ Rollback should stop new hint injection without deleting entries or changing unr
 Qualify an actual stable-to-candidate upgrade and the supported disable/recovery path.
 Do not imply universal downgrade compatibility from a version field or the pure import/export helpers.
 Those behaviors need implementation and evidence before AC12 can pass.
+
+## Local proof handoff
+
+Run this in Bash from an existing repository checkout on an isolated runner. It uses two fresh
+detached worktrees and no live profile, provider credentials, or pre-existing Gateway. The three
+new canonical files do not exist on the pinned main baseline. Verify their absence, not an
+artificial red result due to missing modules. The existing dictation flows should pass on
+**both** revisions. These are compatibility checks, not personal-vocabulary production proof.
+
+```bash
+set -euo pipefail
+base=47027a257c728b267390eaac72147eaea55f0283
+git fetch --no-tags https://github.com/openclaw/openclaw.git "$base"
+git fetch --no-tags https://github.com/openclaw/openclaw.git refs/pull/205880/head
+head=$(git rev-parse FETCH_HEAD)
+git merge-base --is-ancestor "$base" "$head"
+proof=$(mktemp -d "${TMPDIR:-/tmp}/ct-205880-proof.XXXXXX")
+git worktree add --detach "$proof/base" "$base"
+git worktree add --detach "$proof/head" "$head"
+
+unit=(src/realtime-transcription/{personal-vocabulary-import,personal-vocabulary,vocabulary-terms}.test.ts)
+gateway=(src/gateway/{server.auth.guest-dictation,server.auth.guest-dictation-transport,server-broadcast.dictation}.test.ts)
+browser=ui/src/e2e/browser-dictation-status.e2e.test.ts
+for file in "${unit[@]}"; do
+  test ! -e "$proof/base/$file" && test -f "$proof/head/$file" || exit 1
+  printf "New test file (absent on base): %s\n" "$file"
+done | tee "$proof/base-test-inventory.log"
+
+setup() (
+  cd "$proof/$1"
+  git show -s --format='commit=%H tree=%T parents=%P' HEAD
+  node --version
+  corepack pnpm --version
+  corepack pnpm install --frozen-lockfile
+)
+
+setup head 2>&1 | tee "$proof/head-setup.log"
+(
+  cd "$proof/head"
+  node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-src.config.ts \
+    --maxWorkers=1 "${unit[@]}"
+) 2>&1 | tee "$proof/head-unit-src.log"
+
+setup base 2>&1 | tee "$proof/base-setup.log"
+for side in base head; do
+  (
+    cd "$proof/$side"
+    node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts \
+      --maxWorkers=1 "${gateway[@]}"
+  ) 2>&1 | tee "$proof/$side-gateway.log"
+  (
+    cd "$proof/$side"
+    OPENCLAW_UI_E2E_ARTIFACT_DIR="$proof/$side-browser" \
+      corepack pnpm test:ui:e2e "$browser" --maxWorkers=1
+  ) 2>&1 | tee "$proof/$side-browser.log"
+done
+(
+  cd "$proof/head"
+  corepack pnpm tsgo:core
+) 2>&1 | tee "$proof/head-typecheck.log"
+printf "Evidence directory: %s\n" "$proof"
+```
+
+Send the commit/tree IDs and Node/pnpm versions from both setup logs, the canonical test file
+and case counts (including any skips or failures), the head core typecheck result, and the Gateway
+and browser summaries for each revision. For the browser comparison, send the clean `guest-dictation-ready.png` and
+`guest-dictation-transcript.png` frames from both runs. The suite captures them from the
+existing composer with mocked microphone/Gateway input. Redact tokens, IPs, private endpoints,
+and personal data. If anything stops early, send the failing command and first error, and list
+the lanes and captures that did not run.
+
+After scope acceptance and implementation, capture a separate clean before/after comparison
+for the accepted editor and dictated draft. Pair it with redacted isolated-Gateway and actual
+provider-boundary evidence that the selected term reached only the authorized destination.
+Include a relevant error or conflict state if the accepted slice introduces one. This draft has
+no editor or dispatch path to capture, so that proof cannot be produced for the proposal now.
 
 ## Remaining review risks
 
