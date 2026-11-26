@@ -1,4 +1,4 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import {
   GatewayClientRequestError,
   GatewayClientRequestTimeoutError,
@@ -132,14 +132,14 @@ export class GatewayChatRequests {
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     const history = await this.requestHistory(opts);
-    const sessionId = asOptionalRecord(history)?.sessionId;
+    const sessionId = readStringField(asOptionalRecord(history), "sessionId");
     return await loadFullTextForCappedHistory(
       history,
       async (messageId) =>
         await this.client.request("chat.message.get", {
           sessionKey: opts.sessionKey,
           ...(opts.agentId ? { agentId: opts.agentId } : {}),
-          ...(typeof sessionId === "string" && sessionId ? { sessionId } : {}),
+          ...(sessionId ? { sessionId } : {}),
           messageId,
         }),
       this.signal,
