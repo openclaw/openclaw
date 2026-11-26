@@ -311,6 +311,7 @@ export function createPersistentModelCatalogAccess(
             provider,
             {
               source,
+              // Record satisfied generation inputs; worker auth below owns account retention.
               credentials: preparedProviderCatalogCredentials(
                 params.agentFacts,
                 provider,
