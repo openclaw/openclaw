@@ -2,9 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
-import { resolveSandboxScope } from "../agents/sandbox/config.js";
+import { resolveSandboxConfigForAgent, resolveSandboxScope } from "../agents/sandbox/config.js";
 import {
-  DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
   SANDBOX_BROWSER_REGISTRY_PATH,
@@ -17,7 +16,9 @@ import {
   isDockerDaemonUnavailable,
   PODMAN_SANDBOX_ENGINE,
   validateSandboxContainerEngineTarget,
+  type SandboxContainerEngine,
 } from "../agents/sandbox/docker.js";
+import type { SandboxConfig } from "../agents/sandbox/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
@@ -116,17 +117,13 @@ async function runCodexBwrapNamespaceProbe(args: string[]): Promise<CodexBwrapNa
   }
 }
 
-function codexBwrapNeedsNetworkNamespaceProbe(cfg: OpenClawConfig): boolean {
-  const network = cfg.agents?.defaults?.sandbox?.docker?.network?.trim().toLowerCase();
-  return network === undefined || network === "" || network === "none";
-}
-
 async function probeCodexBwrapNamespaces(
   cfg: OpenClawConfig,
   options: SandboxHealthOptions,
+  needsNetworkProbe: boolean,
 ): Promise<CodexBwrapNamespaceProbe> {
   const userProbe = await runCodexBwrapNamespaceProbe(["--user", "--map-root-user", "true"]);
-  if (!userProbe.ok || !codexBwrapNeedsNetworkNamespaceProbe(cfg)) {
+  if (!userProbe.ok || !needsNetworkProbe) {
     return userProbe;
   }
   try {
@@ -169,46 +166,154 @@ async function probeCodexBwrapNamespaces(
   }
 }
 
-/**
- * Resolves the enabled sandbox backend and its local container engine, when it has one.
- * A role that requires a sandbox enables it for that role's sessions even when mode is off.
- */
-function resolveEnabledSandboxBackend(cfg: OpenClawConfig) {
-  const sandbox = cfg.agents?.defaults?.sandbox ?? {};
-  const mode = sandbox.mode ?? "off";
-  const roleRequired = Object.values(cfg.gateway?.roles?.definitions ?? {}).some(
+type EnabledSandboxSource = {
+  /** Config path shown in doctor messages. */
+  configPath: string;
+  /** Agent id for agent-entry sources; undefined for agents.defaults.sandbox. */
+  agentId?: string;
+  /** Config path accepted by `openclaw config set` to disable this source. */
+  disableConfigPath?: string;
+  /** True when sandbox mode is off but a gateway role requires a sandbox. */
+  roleRequired?: boolean;
+  mode: string;
+  backend: string;
+  containerEngine: SandboxContainerEngine | undefined;
+  dockerImage: string;
+  /** True when the resolved sandbox network egress is disabled ("none" or empty). */
+  networkEgressDisabled: boolean;
+  browser: { enabled: boolean; image: string };
+};
+
+function resolveSandboxContainerEngine(backend: string): SandboxContainerEngine | undefined {
+  if (backend === "podman") {
+    return PODMAN_SANDBOX_ENGINE;
+  }
+  if (backend === "docker") {
+    return DOCKER_SANDBOX_ENGINE;
+  }
+  return undefined;
+}
+
+function toEnabledSandboxSource(
+  resolved: SandboxConfig,
+  labels: Pick<EnabledSandboxSource, "configPath" | "agentId" | "disableConfigPath">,
+): EnabledSandboxSource {
+  const network = resolved.docker.network.trim().toLowerCase();
+  return {
+    ...labels,
+    mode: resolved.mode,
+    backend: resolved.backend,
+    containerEngine: resolveSandboxContainerEngine(resolved.backend),
+    dockerImage: resolved.docker.image,
+    networkEgressDisabled: network === "" || network === "none",
+    browser: { enabled: resolved.browser.enabled, image: resolved.browser.image },
+  };
+}
+
+/** A role that requires a sandbox enables it for that role's sessions even when mode is off. */
+function gatewayRoleRequiresSandbox(cfg: OpenClawConfig): boolean {
+  return Object.values(cfg.gateway?.roles?.definitions ?? {}).some(
     (role) => role.sandbox === "required",
   );
-  if (mode === "off" && !roleRequired) {
-    return undefined;
+}
+
+/**
+ * Enumerates every sandbox source doctor must treat as enabled: agents.defaults.sandbox (also
+ * when a gateway role requires a sandbox while mode is off) plus each agent entry with its own
+ * sandbox config whose resolved mode is not "off". Mode, backend, images, and network come from
+ * resolveSandboxConfigForAgent — the same owner the sandbox runtime resolves through — so doctor
+ * inspects exactly what sandboxed turns would use, including the "shared" scope's exclusion of
+ * agent docker/browser overrides and the runtime's nullish image selection.
+ */
+function resolveEnabledSandboxSources(cfg: OpenClawConfig): EnabledSandboxSource[] {
+  const sources: EnabledSandboxSource[] = [];
+  const resolvedDefault = resolveSandboxConfigForAgent(cfg);
+  const defaultLabels = {
+    configPath: "agents.defaults.sandbox",
+    disableConfigPath: "agents.defaults.sandbox.mode",
+  };
+  if (resolvedDefault.mode !== "off") {
+    sources.push(toEnabledSandboxSource(resolvedDefault, defaultLabels));
+  } else if (gatewayRoleRequiresSandbox(cfg)) {
+    sources.push({
+      ...toEnabledSandboxSource(resolvedDefault, defaultLabels),
+      roleRequired: true,
+    });
   }
-  const backend = (sandbox.backend?.trim() || "docker").toLowerCase();
-  const containerEngine =
-    backend === "podman"
-      ? PODMAN_SANDBOX_ENGINE
-      : backend === "docker"
-        ? DOCKER_SANDBOX_ENGINE
-        : undefined;
-  return { sandbox, mode, backend, containerEngine };
+  for (const { entry, source } of listAgentEntriesWithSource(cfg)) {
+    if (!entry.sandbox) {
+      continue;
+    }
+    const resolved = resolveSandboxConfigForAgent(cfg, entry.id);
+    if (resolved.mode === "off") {
+      continue;
+    }
+    sources.push(
+      toEnabledSandboxSource(resolved, {
+        configPath:
+          source.kind === "entries"
+            ? `agents.entries.${source.key}.sandbox`
+            : `agents.list (id "${entry.id}")`,
+        agentId: entry.id,
+        disableConfigPath:
+          source.kind === "entries" ? `agents.entries.${source.key}.sandbox.mode` : undefined,
+      }),
+    );
+  }
+  return sources;
 }
 
 export async function noteCodexBwrapNamespaceWarnings(
   cfg: OpenClawConfig,
   options: SandboxHealthOptions = {},
 ): Promise<void> {
-  const enabled = resolveEnabledSandboxBackend(cfg);
-  const containerEngine = enabled?.mode === "off" ? undefined : enabled?.containerEngine;
-  if (process.platform !== "linux" || !containerEngine) {
+  if (process.platform !== "linux") {
     return;
   }
-  if (!(await isContainerEngineAvailable(containerEngine.command))) {
-    return;
+  const engineAvailable = new Map<string, boolean>();
+  const probed = new Map<
+    string,
+    {
+      engine: SandboxContainerEngine;
+      needsNetworkProbe: boolean;
+      probe: CodexBwrapNamespaceProbe;
+    }
+  >();
+  for (const source of resolveEnabledSandboxSources(cfg)) {
+    // Codex's host namespace check follows sandbox mode, not gateway role requirements.
+    const engine = source.roleRequired ? undefined : source.containerEngine;
+    if (!engine) {
+      continue;
+    }
+    if (!engineAvailable.has(engine.command)) {
+      engineAvailable.set(engine.command, await isContainerEngineAvailable(engine.command));
+    }
+    if (!engineAvailable.get(engine.command)) {
+      continue;
+    }
+    const signature = `${engine.command}:${String(source.networkEgressDisabled)}`;
+    if (probed.has(signature)) {
+      continue;
+    }
+    probed.set(signature, {
+      engine,
+      needsNetworkProbe: source.networkEgressDisabled,
+      probe: await probeCodexBwrapNamespaces(cfg, options, source.networkEgressDisabled),
+    });
   }
-  const engineName = containerEngine.displayName;
-  const probe = await probeCodexBwrapNamespaces(cfg, options);
-  if (probe.ok) {
-    return;
+  for (const { engine, needsNetworkProbe, probe } of probed.values()) {
+    if (!probe.ok) {
+      noteCodexBwrapNamespaceFailure(engine, needsNetworkProbe, probe);
+    }
   }
+}
+
+function noteCodexBwrapNamespaceFailure(
+  engine: SandboxContainerEngine,
+  needsNetworkProbe: boolean,
+  probe: Exclude<CodexBwrapNamespaceProbe, { ok: true }>,
+): void {
+  const engineName = engine.displayName;
   if (probe.kind === "unverified") {
     note(
       [
@@ -225,7 +330,7 @@ export async function noteCodexBwrapNamespaceWarnings(
     probe.kind === "user"
       ? "  bwrap: setting up uid map: Permission denied"
       : "  bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted";
-  const networkSentence = codexBwrapNeedsNetworkNamespaceProbe(cfg)
+  const networkSentence = needsNetworkProbe
     ? `With ${engineName} sandbox network egress disabled, it also needs an unprivileged network namespace.`
     : `${engineName} sandbox network egress is enabled, so doctor only checked the user namespace.`;
   const lines = [
@@ -269,11 +374,19 @@ async function handleMissingSandboxImage(
     engineCommand: "docker" | "podman";
     kind: string;
     image: string;
+    configPath: string;
     buildScript?: string;
   },
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
+  if (params.image.trim() === "") {
+    // The runtime's nullish image selection preserves an explicitly empty configured value and
+    // passes it through to container creation; building the default image cannot repair it.
+    const warning = `Sandbox ${params.kind} image resolves to an empty string (${params.configPath}). Sandboxed turns will fail until a valid image is configured.`;
+    note(warning, "Sandbox");
+    return warning;
+  }
   if (await containerImageExists(params.engineCommand, params.image)) {
     return undefined;
   }
@@ -299,93 +412,135 @@ async function handleMissingSandboxImage(
   return warning;
 }
 
+function unavailableContainerEngineWarning(
+  source: EnabledSandboxSource,
+  engine: SandboxContainerEngine,
+): string[] {
+  const name = engine.displayName;
+  const firstLine = source.roleRequired
+    ? `A gateway role requires a sandbox but ${name} is not available.`
+    : source.agentId
+      ? `Sandbox mode is enabled for agent "${source.agentId}" (${source.configPath}, mode: "${source.mode}") but ${name} is not available.`
+      : `Sandbox mode is enabled (mode: "${source.mode}") but ${name} is not available.`;
+  return [
+    firstLine,
+    engine.id === "docker"
+      ? "Docker is required for sandbox mode to function."
+      : `${name} is required by the selected sandbox backend.`,
+    `Isolated sessions (automations, sub-agents) will fail without ${name}.`,
+    "",
+    "Options:",
+    `- Install ${name} and restart the gateway`,
+    source.roleRequired
+      ? "- Stop requiring a sandbox: set gateway.roles.definitions.<role>.sandbox to inherit"
+      : source.disableConfigPath
+        ? `- Disable sandbox mode: openclaw config set ${source.disableConfigPath} off`
+        : `- Disable sandbox mode for this agent (${source.configPath})`,
+  ];
+}
+
 /**
  * Checks configured sandbox images and optionally runs bundled build scripts for missing defaults.
  *
- * Non-container backends skip image checks.
+ * Treats sandboxing as enabled for agents.defaults.sandbox (including gateway-role-required
+ * sandboxes while mode is off) and for every agent entry whose resolved sandbox mode is not
+ * "off". Non-container backends skip image checks.
  */
 export async function maybeRepairSandboxImages(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ): Promise<string[]> {
-  const enabled = resolveEnabledSandboxBackend(cfg);
-  if (!enabled) {
+  const sources = resolveEnabledSandboxSources(cfg);
+  if (sources.length === 0) {
     return [];
   }
-  const { sandbox, mode, backend, containerEngine } = enabled;
-  if (!containerEngine) {
-    if (sandbox.browser?.enabled) {
+  const warnings: string[] = [];
+  const engineAvailable = new Map<string, boolean>();
+  const validatedEngines = new Set<string>();
+  const checkedImages = new Set<string>();
+  const notedNonContainerBackends = new Set<string>();
+  const notedNonDockerBrowserEngines = new Set<string>();
+
+  for (const source of sources) {
+    const engine = source.containerEngine;
+    if (!engine) {
+      if (source.browser.enabled && !notedNonContainerBackends.has(source.backend)) {
+        notedNonContainerBackends.add(source.backend);
+        note(
+          `Sandbox backend "${source.backend}" selected. Docker browser health checks are skipped; browser sandbox currently requires the docker backend.`,
+          "Sandbox",
+        );
+      }
+      continue;
+    }
+
+    if (!engineAvailable.has(engine.command)) {
+      engineAvailable.set(engine.command, await isContainerEngineAvailable(engine.command));
+    }
+    if (!engineAvailable.get(engine.command)) {
+      const lines = unavailableContainerEngineWarning(source, engine);
+      note(lines.join("\n"), "Sandbox");
+      warnings.push(lines.join("\n"));
+      continue;
+    }
+    if (!validatedEngines.has(engine.command)) {
+      validatedEngines.add(engine.command);
+      await validateSandboxContainerEngineTarget(engine);
+    }
+
+    const baseImageKey = `${engine.command}:base:${source.dockerImage}`;
+    if (!checkedImages.has(baseImageKey)) {
+      checkedImages.add(baseImageKey);
+      const baseWarning = await handleMissingSandboxImage(
+        {
+          engineCommand: engine.command,
+          kind: "base",
+          image: source.dockerImage,
+          configPath: source.configPath,
+          buildScript:
+            engine.id !== "docker"
+              ? undefined
+              : source.dockerImage === DEFAULT_SANDBOX_COMMON_IMAGE
+                ? "scripts/sandbox-common-setup.sh"
+                : source.dockerImage === DEFAULT_SANDBOX_IMAGE
+                  ? "scripts/sandbox-image-build.sh"
+                  : undefined,
+        },
+        runtime,
+        prompter,
+      );
+      if (baseWarning) {
+        warnings.push(baseWarning);
+      }
+    }
+
+    if (source.browser.enabled && engine.id === "docker") {
+      const browserImageKey = `${engine.command}:browser:${source.browser.image}`;
+      if (!checkedImages.has(browserImageKey)) {
+        checkedImages.add(browserImageKey);
+        const browserWarning = await handleMissingSandboxImage(
+          {
+            engineCommand: engine.command,
+            kind: "browser",
+            image: source.browser.image,
+            configPath: source.configPath,
+            buildScript: "scripts/sandbox-browser-setup.sh",
+          },
+          runtime,
+          prompter,
+        );
+        if (browserWarning) {
+          warnings.push(browserWarning);
+        }
+      }
+    } else if (source.browser.enabled && !notedNonDockerBrowserEngines.has(engine.command)) {
+      notedNonDockerBrowserEngines.add(engine.command);
       note(
-        `Sandbox backend "${backend}" selected. Docker browser health checks are skipped; browser sandbox currently requires the docker backend.`,
+        "Podman sandbox selected. Browser sandbox health checks are skipped because browser sandboxing requires the Docker engine.",
         "Sandbox",
       );
     }
-    return [];
-  }
-
-  const engineAvailable = await isContainerEngineAvailable(containerEngine.command);
-  if (!engineAvailable) {
-    const name = containerEngine.displayName;
-    const lines = [
-      mode === "off"
-        ? `A gateway role requires a sandbox but ${name} is not available.`
-        : `Sandbox mode is enabled (mode: "${mode}") but ${name} is not available.`,
-      containerEngine.id === "docker"
-        ? "Docker is required for sandbox mode to function."
-        : "Podman is required by the selected sandbox backend.",
-      `Isolated sessions (automations, sub-agents) will fail without ${name}.`,
-      "",
-      "Options:",
-      `- Install ${name} and restart the gateway`,
-      mode === "off"
-        ? "- Stop requiring a sandbox: set gateway.roles.definitions.<role>.sandbox to inherit"
-        : "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
-    ];
-    note(lines.join("\n"), "Sandbox");
-    return [lines.join("\n")];
-  }
-  await validateSandboxContainerEngineTarget(containerEngine);
-
-  const dockerImage = sandbox.docker?.image?.trim() || DEFAULT_SANDBOX_IMAGE;
-  const baseWarning = await handleMissingSandboxImage(
-    {
-      engineCommand: containerEngine.command,
-      kind: "base",
-      image: dockerImage,
-      buildScript:
-        containerEngine.id !== "docker"
-          ? undefined
-          : dockerImage === DEFAULT_SANDBOX_COMMON_IMAGE
-            ? "scripts/sandbox-common-setup.sh"
-            : dockerImage === DEFAULT_SANDBOX_IMAGE
-              ? "scripts/sandbox-image-build.sh"
-              : undefined,
-    },
-    runtime,
-    prompter,
-  );
-  const warnings = baseWarning ? [baseWarning] : [];
-
-  if (sandbox.browser?.enabled && containerEngine.id === "docker") {
-    const browserWarning = await handleMissingSandboxImage(
-      {
-        engineCommand: containerEngine.command,
-        kind: "browser",
-        image: sandbox.browser.image?.trim() || DEFAULT_SANDBOX_BROWSER_IMAGE,
-        buildScript: "scripts/sandbox-browser-setup.sh",
-      },
-      runtime,
-      prompter,
-    );
-    if (browserWarning) {
-      warnings.push(browserWarning);
-    }
-  } else if (sandbox.browser?.enabled) {
-    note(
-      "Podman sandbox selected. Browser sandbox health checks are skipped because browser sandboxing requires the Docker engine.",
-      "Sandbox",
-    );
   }
   return warnings;
 }
