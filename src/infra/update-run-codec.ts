@@ -205,8 +205,8 @@ export function omitUpdateRunStep(steps: RunSteps, index: number): void {
 function compactStepDetail(item: RunStep): RunStep {
   // Recovery details are durable receipts, not expendable diagnostic output.
   if (
-    isActionableStep(item) ||
     item.step === UPDATE_RUN_TRUNCATED_STEP ||
+    isUpdateOwedStepRow(item.step) ||
     item.termination === "signal" ||
     item.step === "task-delivery-recovery" ||
     item.step === "diagnostic:database snapshot" ||
@@ -220,8 +220,8 @@ function compactStepDetail(item: RunStep): RunStep {
   }
   return {
     ...item,
-    detail: undefined,
-    failureFacts: undefined,
+    ...(isActionableStep(item) ? {} : { detail: undefined, failureFacts: undefined }),
+    // Keep the refusal but bound its key inventory, including on a failed Doctor row.
     configWriteRefusal: compactConfigWriteRefusal(item.configWriteRefusal),
   };
 }
