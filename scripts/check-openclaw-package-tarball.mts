@@ -224,6 +224,9 @@ const NPM_PACK_DIAGNOSTIC_PATH_LIMIT = 20;
 const NPM_PACK_VERSION_VARIANT_PATHS = ["npm-shrinkwrap.json"] as const;
 function runPhase<Result>(label: string, action: () => Result): Result {
   const startedAt = performance.now();
+  if (phaseTimingsEnabled) {
+    console.error(`package-probe: phase start ${label}`);
+  }
   try {
     return action();
   } finally {
@@ -678,6 +681,9 @@ if (
 if (!entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
   errors.push(`missing ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`);
 }
+if (phaseTimingsEnabled) {
+  console.error("package-probe: content inventory start");
+}
 if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
   try {
     const inventory = JSON.parse(readTarEntry(PACKAGE_DIST_INVENTORY_RELATIVE_PATH));
@@ -725,9 +731,20 @@ if (entrySet.has(PACKAGE_DIST_INVENTORY_RELATIVE_PATH)) {
   }
 }
 
+if (phaseTimingsEnabled) {
+  console.error("package-probe: content inventory end");
+}
 errors.push(
   ...runPhase("dist import graph", () =>
-    collectPackageDistImportErrors({ files: normalized, readText: readTarEntry }),
+    collectPackageDistImportErrors({
+      files: normalized,
+      readText: (entry) => {
+        if (phaseTimingsEnabled) {
+          console.error(`package-probe: import source ${JSON.stringify(entry)}`);
+        }
+        return readTarEntry(entry);
+      },
+    }),
   ),
 );
 
