@@ -29,10 +29,19 @@ async function remove(target: string): Promise<boolean> {
     return true;
   }
   if (stat.isDirectory()) {
-    // Go module caches and similar tools leave owned read-only directories; like
-    // `go clean -modcache`, restore owner access before unlinking their entries.
-    if ((stat.mode & 0o700) !== 0o700) {
-      fs.chmodSync(target, stat.mode | 0o700);
+    // Go module caches and pnpm stores leave read-only directories. Restore write access
+    // only on directories this user owns, never on files (pnpm hardlinks them to its store).
+    if ((stat.mode & 0o200) === 0 && stat.uid === process.getuid?.()) {
+      // Pin the directory so a replaced leaf cannot chmod a symlink target.
+      const fd = fs.openSync(
+        target,
+        fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW,
+      );
+      try {
+        fs.fchmodSync(fd, stat.mode | 0o200);
+      } finally {
+        fs.closeSync(fd);
+      }
     }
     const handle = fs.opendirSync(target);
     try {
