@@ -30,9 +30,7 @@ struct ChatActivitySheetView: View {
                 }
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        ChatComposerSheetCloseButton(identifier: "chat-activity-sheet-close") { self.dismiss() }
-                    }
+                    OpenClawSheetCloseItem(identifier: "chat-activity-sheet-close") { self.dismiss() }
                 }
                 .navigationDestination(for: String.self) { key in
                     ChatActivityChildPage(viewModel: self.viewModel, childKey: key, onOpenChat: self.openChat)
