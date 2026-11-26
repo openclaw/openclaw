@@ -16,6 +16,7 @@ import { applySessionEntryExactReplacements } from "../config/sessions/session-a
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -47,6 +48,28 @@ function withRegistryState(run: () => Promise<void>) {
     run,
   );
 }
+
+it("joins a disposed projection after its database scope closes", async () => {
+  await withRegistryState(async () => {
+    setRuntimeConfigSnapshot(cfg);
+    clearSubagentRunsReadCacheForTest();
+    const maintenance = createOpenClawDatabaseMaintenanceScope();
+    try {
+      using projection = await maintenance.run(async () => {
+        const value = await createTestProjection({ cfg, modelCatalog: [] });
+        await value.ensureMaterialized();
+        expect(value.needsMaterialization).toBe(false);
+        return value;
+      });
+      await maintenance.close();
+      projection.dispose();
+      await projection.ensureMaterialized();
+      expect(projection.needsMaterialization).toBe(false);
+    } finally {
+      await maintenance.close();
+    }
+  });
+});
 
 it("settles a registry revision after persisting an already absent run", async () => {
   await withRegistryState(async () => {
