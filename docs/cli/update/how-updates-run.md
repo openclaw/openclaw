@@ -1902,8 +1902,7 @@ when nothing needs an operator:
   have ended, and any command that claimed the installation since then proved the
   same. This is how 2026.11.10 ends an update after it loses its plugin lifecycle
   lease: the new version is installed and serving, but the run stays recorded as
-  running with its recovery reserved. The update keeps that update's plugin and
-  configuration changes; it never rolls them back from this state.
+  running with its recovery reserved.
 
 It settles the plugin and configuration changes the way repair does. When the
 version from before that update is still installed they are rolled back, and
@@ -1963,8 +1962,8 @@ repair can settle the recovery, the message adds the reason and the command:
 - **The update lease store no longer holds the killed update's lease**, and
   the store itself is missing or the version and build that update verified
   serving is not the one installed. The store was removed or replaced, or
-  another command already claimed the installation. That includes an earlier `openclaw update` that claimed it and
-  then refused for one of the reasons above, so a second attempt reports this
+  another command already claimed the installation. That includes an earlier
+  `openclaw update` that claimed it and then refused for one of the reasons above, so a second attempt reports this
   reason. After a restart the update also refuses this way when the boot record
   cannot show the killed update's processes gone: the killed update ran an
   older version that did not record its boot, the machine has no stable

@@ -93,7 +93,7 @@ describe.skipIf(process.platform === "win32")(
         expect(getUpdateRun(killed.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
       }));
 
-    it("leaves a released lease to repair when that update had begun rolling back", () =>
+    it("finishes a released update that had begun rolling back, as repair would", () =>
       fixtures.lifetime.run(async () => {
         const install = await linkedInstallation();
         const killed = await updater(install.key, { ...verified, root: install.slot });
@@ -104,13 +104,11 @@ describe.skipIf(process.platform === "win32")(
         });
         await lease(install.key);
         await replacePackageDirectory(install);
-        const before = reserved(killed.runId);
 
-        await expect(nextUpdate(install.slot)).rejects.toThrow(
-          /would roll back the version it verified/u,
-        );
-        expect(reserved(killed.runId)).toEqual(before);
-        expect(mocks.release).not.toHaveBeenCalled();
+        await nextUpdate(install.slot);
+
+        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
+        expect(mocks.release).toHaveBeenCalledOnce();
       }));
 
     it("leaves a released lease to repair once its verified candidate is no longer installed", () =>

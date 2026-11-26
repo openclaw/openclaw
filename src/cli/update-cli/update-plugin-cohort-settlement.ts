@@ -614,7 +614,7 @@ export async function inspectInterruptedUpdateRecovery(
     // confirmed their cleanup, and a later claim succeeds only once they are gone, so a lease
     // missing from a store that still exists shows that update's processes ended (2026.11.10
     // unwinds this way after losing its plugin lifecycle lease, #205167). Settle that only
-    // forward, onto the candidate it verified serving that is still installed.
+    // while the candidate it verified serving is still installed.
     // Accepted edge: a store deleted and recreated in this boot while a killed driver's
     // children still run looks the same.
     const released =
@@ -631,7 +631,6 @@ export async function inspectInterruptedUpdateRecovery(
       databasePath,
       store,
       rebooted,
-      released,
       refused:
         recorded || rebooted || released
           ? undefined
@@ -648,7 +647,6 @@ export async function inspectInterruptedUpdateRecovery(
   const { pair, refuse, inspectHistory, refuseOtherRecovery, refused, databasePath, store } =
     inspected;
   const rebooted = inspected.rebooted === true;
-  const released = inspected.released === true;
   return async (resolveAdmissionEnv) => {
     // Admission can follow a managed service to another state directory: not this recovery.
     const admitted = resolveOpenClawStateSqlitePath(await resolveAdmissionEnv(invocationCwd));
@@ -698,9 +696,6 @@ export async function inspectInterruptedUpdateRecovery(
         if (rebooted && !ranBeforeRestart(history)) {
           throw refuse("The update's recorded processes changed while this update was starting.");
         }
-        if (released && !(await isVerifiedCandidateInstalled(history, pair, root))) {
-          throw refuse("The installed version changed while this update was starting.");
-        }
         const installation = inspectPluginCohortInstallation(pair, installKey, history);
         // What repair's finalization finishes and an already-current update would not.
         const gatewayStopped = findUpdateGatewayStop([history])?.started === false;
@@ -720,12 +715,6 @@ export async function inspectInterruptedUpdateRecovery(
             }
           },
           admit: ({ action: outcome, originalCore, rollbackStarted }) => {
-            // The cohort owner finishes a recorded rollback even after selecting commit.
-            if (released && (outcome !== "commit" || rollbackStarted)) {
-              throw (blocked = refuse(
-                "That update released its lease without finishing, and settling it would roll back the version it verified.",
-              ));
-            }
             // A rollback over the installed candidate leaves it half updated, including
             // a commit the cohort owner turns back into a rollback.
             if (outcome === "rollback" && !originalCore) {
