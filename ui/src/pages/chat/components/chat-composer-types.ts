@@ -9,6 +9,7 @@ import type {
 } from "../../../api/types.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
+import type { DictationCorrectionsPreference } from "../../../app/settings-contract.ts";
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
 import type { SessionProgressCardRefreshAction } from "../../../components/session-progress-card.ts";
 import type {
@@ -210,6 +211,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   chatMessageMaxWidth?: string | null;
   onComposerWidthChange?: (value: string | undefined) => void;
   composerHoldToRecord?: boolean;
+  composerCorrections?: DictationCorrectionsPreference;
+  dictationContextKey?: string;
+  captureDictationDraft?: () => () => boolean;
+  onComposerCorrectionsChange?: (mode: "off" | "explicit") => void;
   realtimeTalkInputDeviceId?: string;
   onComposerHoldToRecordChange?: (enabled: boolean) => void;
   onOpenTalkSettings?: () => void;

@@ -16,10 +16,19 @@ export type ComposerDraftSource = {
 /** Publishes completed owner mutations without keeping a second draft. */
 export function createComposerDraftSource(read: ComposerDraftSource["read"]) {
   const listeners = createChangeListeners();
+  let revision = 0;
   return {
     read,
     subscribe: listeners.subscribe,
-    publish: listeners.publish,
+    /** Fence completed owner mutations, including equal-text replacement intents. */
+    captureRevision() {
+      const captured = revision;
+      return () => revision === captured;
+    },
+    publish() {
+      revision += 1;
+      listeners.publish();
+    },
   };
 }
 

@@ -10,19 +10,23 @@ export function ChatLazyBoundary(props: {
   children: Element;
   fallback?: Element;
   onClose?: () => void;
+  recovery?: Element;
 }) {
   return (
     <Errored
       fallback={(error, reset) => (
-        <LazyViewError
-          error={error()}
-          stale={isStaleChunkImportError(error())}
-          onRetry={() =>
-            isStaleChunkImportError(error()) ? void retryStaleChunkReloadWhenReachable() : reset()
-          }
-          onClose={props.onClose}
-          inline
-        />
+        <>
+          <LazyViewError
+            error={error()}
+            stale={isStaleChunkImportError(error())}
+            onRetry={() =>
+              isStaleChunkImportError(error()) ? void retryStaleChunkReloadWhenReachable() : reset()
+            }
+            onClose={props.onClose}
+            inline
+          />
+          {props.recovery}
+        </>
       )}
     >
       <Loading fallback={props.fallback}>{props.children}</Loading>

@@ -268,7 +268,11 @@ export function ComposerDictationSendAction(props: {
     if (dictation.finalizing) {
       return;
     }
-    await dictation.finishActive();
+    const correctionCommitRequired = dictation.correctionCommitRequired;
+    const committed = await dictation.finishActive();
+    if (correctionCommitRequired && !committed) {
+      return;
+    }
     // Keep the initiating input action when asynchronous dictation finishes.
     send(event);
   };

@@ -31,6 +31,7 @@ import { synchronizeChatPanePublication } from "./chat-pane-publication.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import { createChatPaneResourceProps } from "./chat-pane-resource-presentation.ts";
 import {
+  createChatPaneDictationProps,
   createChatPaneQueuedEditProps,
   createChatPaneSessionActionCallbacks,
   createChatPanePendingInputControls,
@@ -509,11 +510,12 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       connected: state.connected,
       offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
-      composerHoldToRecord: state.settings.composerHoldToRecord,
-      realtimeTalkInputDeviceId: state.settings.realtimeTalkInputDeviceId,
-      onComposerHoldToRecordChange: (enabled) => {
-        state.settings = patchSettings({ composerHoldToRecord: enabled });
-      },
+      ...createChatPaneDictationProps(
+        state,
+        this.chatState.composerDraft,
+        () => this.state === state,
+        selfProfileId,
+      ),
       onOpenTalkSettings: () => this.context.navigate("talk"),
       onOpenDictationSettings: () => this.context.navigate("talk"),
       suggestionComposer: suggestionViewer,

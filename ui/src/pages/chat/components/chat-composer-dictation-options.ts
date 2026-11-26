@@ -16,13 +16,20 @@ export function createComposerDictationOptions(
     client: props.gatewayClient ?? null,
     sessionKey: props.sessionKey,
     draftKey: composerDraftKey(props),
+    contextKey: JSON.stringify([props.dictationContextKey, props.currentSessionId]),
+    corrections: props.composerCorrections ?? { mode: "off" as const, locale: "en-US" },
+    getDraftRevision: () => state.editRevision,
+    captureDraftGuard: props.captureDictationDraft ?? (() => () => false),
     connected: props.connected,
-    enabled: props.composerHoldToRecord !== false,
+    enabled: props.composerHoldToRecord !== false && (props.canCompose ?? props.canSend),
     dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
-    onCommit: (transcript: string, late?: true, preservePreview?: true) => {
+    onCommit: (transcript: string, late?: true, preservePreview?: true, ownedOnly?: true) => {
       const target = state.composerTextarea;
-      const captured = state.dictationSelection;
+      const selection = state.dictationSelection;
+      // Correction ranges own only this recording. Even a retained targetless
+      // command cannot delete a selection that predates the recording.
+      const captured = ownedOnly && selection ? { ...selection, start: selection.end } : selection;
       // A newer recording may be painting a partial over its captured draft.
       const liveValue = preservePreview
         ? (captured?.value ?? props.getDraft?.() ?? props.draft)
@@ -31,7 +38,7 @@ export function createComposerDictationOptions(
         transcript,
         captured,
         {
-          start: target?.selectionStart ?? liveValue.length,
+          start: (ownedOnly ? target?.selectionEnd : target?.selectionStart) ?? liveValue.length,
           end: target?.selectionEnd ?? liveValue.length,
           value: liveValue,
         },

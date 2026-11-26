@@ -1,7 +1,9 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import type { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import {
   readSessionMethodAccess,
@@ -61,6 +63,44 @@ type PermissionSelection = {
 };
 
 const permissionSelections = new WeakMap<ChatPageHost, Map<string, PermissionSelection>>();
+
+export function createChatPaneDictationProps(
+  state: ChatPageHost,
+  draft: Pick<ReturnType<typeof createComposerDraftSource>, "captureRevision">,
+  isPaneCurrent: () => boolean,
+  profileId: string | null,
+): Pick<
+  ChatProps,
+  | "composerHoldToRecord"
+  | "composerCorrections"
+  | "dictationContextKey"
+  | "captureDictationDraft"
+  | "onComposerCorrectionsChange"
+  | "realtimeTalkInputDeviceId"
+  | "onComposerHoldToRecordChange"
+> {
+  return {
+    composerHoldToRecord: state.settings.composerHoldToRecord,
+    composerCorrections: state.settings.composerCorrections,
+    dictationContextKey: JSON.stringify([state.connectionEpoch, profileId]),
+    captureDictationDraft: () => {
+      const isDraftCurrent = draft.captureRevision();
+      const physicalSessionId = state.currentSessionId;
+      return () =>
+        isPaneCurrent() && state.currentSessionId === physicalSessionId && isDraftCurrent();
+    },
+    onComposerCorrectionsChange: (mode) => {
+      state.settings = patchSettings({
+        composerCorrections:
+          mode === "explicit" ? { version: 1, mode, locale: "en-US" } : undefined,
+      });
+    },
+    realtimeTalkInputDeviceId: state.settings.realtimeTalkInputDeviceId,
+    onComposerHoldToRecordChange: (enabled) => {
+      state.settings = patchSettings({ composerHoldToRecord: enabled });
+    },
+  };
+}
 
 export function createChatPaneQueuedEditProps(
   state: ChatPageHost,

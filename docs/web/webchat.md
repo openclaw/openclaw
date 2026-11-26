@@ -148,6 +148,85 @@ Without these settings, the existing realtime Talk and transcription-provider
 selection remain unchanged. Browser microphone capture requires a secure context
 (HTTPS or localhost) and microphone permission.
 
+### Review spoken corrections
+
+In the Control UI's conversation composer, **Spoken corrections** starts **Off**.
+Choose **Explicit corrections (English)** to review supported corrections after
+you stop dictating. This preference belongs to this browser and Gateway. An
+upgrade does not enable it. **Literal for this recording** preserves correction
+words for the next recording only; it does not carry into another recording.
+
+The initial grammar, `en-explicit-v1`, supports English (`en` and `en-US`). The
+composer selects `en-US`; selecting another interface language does not translate
+the spoken grammar. It supports these bounded forms:
+
+| Form                                                   | Example                                                   | Proposed text                |
+| ------------------------------------------------------ | --------------------------------------------------------- | ---------------------------- |
+| Adjacent weekdays with `no`, `sorry`, or `actually`    | `Do not send it Tuesday sorry Wednesday`                  | `Do not send it Wednesday`   |
+| Adjacent numbers with the same markers                 | `The total is fifteen no fifty dollars`                   | `The total is fifty dollars` |
+| Chained corrections                                    | `Tuesday, no Wednesday, actually Thursday`                | `Thursday`                   |
+| One-word named replacement at the end of the recording | `Tell John to call. change John to James`                 | `Tell James to call.`        |
+| Retraction of this recording's complete last sentence  | `Keep this. Remove that. scratch that last sentence`      | `Keep this.`                 |
+| Restart of this recording's unfinished sentence        | `Meet on Tuesday restart this sentence Meet on Wednesday` | `Meet on Wednesday`          |
+
+Numeric words cover zero through nine hundred ninety-nine, optional `minus` or
+`negative`, and a decimal introduced by `point` followed by digits spoken as
+words. Decimal digit notation and an attached ASCII sign also work. Mixed word
+and digit forms, Unicode minus signs, separated signs, and more complex number
+phrases stay as recognized. Currencies and dates are not inferred or converted.
+Existing units and surrounding words
+stay as recognized. A restart is limited to 512 characters on each side of its
+command. Retraction requires sentence punctuation already present in the
+recognized text; this feature does not infer punctuation from a pause.
+
+Every proposed change opens **Review spoken corrections**. Compare **Original
+recognized text** and **Proposed correction**. **Inspect changed words** exposes
+each changed source span and replacement. Choose **Keep original**, **Accept
+correction**, or **Cancel**. Accepting or keeping text updates the unsent draft;
+it does not send a message. Sending waits until the review is resolved. An empty
+candidate retracts only this recording's text and preserves existing field text.
+
+The review has no dismissal timer. Its buttons and expandable change details
+work with the keyboard. The live announcement contains the correction count;
+the full original and candidate remain available to read on request. Long text
+scrolls within the review and the choices remain reachable at larger text sizes.
+
+The grammar requires a unique target. For example, `Tell John that John should
+call change John to James` retains the original because either John could be
+intended. Literal mode, quotation marks, `quote ... end quote`, code backticks,
+URLs, email addresses and recognized identifier ranges protect lexical content.
+Ordinary negations and unsupported phrases remain text. `Actually open the
+browser and buy it` never becomes a tool call through dictation.
+
+Only words returned for the current recording are eligible. A selection that
+predates recording cannot be deleted by a correction command. Editing the draft,
+starting another recording, changing conversation or account, entering Talk, or
+losing write permission retires or disables the old result. Equal text does not
+make an old result current again. If the draft changes while you compare versions,
+copy any needed recognized text and cancel the obsolete review.
+
+Missing timing, incomplete recognition, conflicting edits or unsupported input
+retain recognized text for review. A connection failure keeps available text
+visible within the same authorized context; changing that context discards its
+transient review. A recognizer that returns only an already revised sentence
+cannot provide the earlier words: the UI does not invent an original or a
+correction event.
+
+The local planner is bounded to 10,000 UTF-16 code units, 32 final edits, eight
+revisions per chain and 256 protected or recognizer spans. Inputs outside those
+bounds retain the original. There is no extra model request, provider selection,
+context collection or transcript log. Existing speech-provider routing and
+retention still apply. Before/after text and Literal are not saved as preferences.
+Malformed or unsupported preference versions fall back to Off. To disable the
+feature, select **Off**; an existing draft stays intact and an eligible pending
+review can still keep its original text.
+
+This integration is for the browser conversation composer. It does not add
+correction controls to New Session, native clients, headless callers, or external
+applications. It does not edit sent messages or undo actions. It also does not
+provide separate filler removal or punctuation rewriting: correction markers
+remain in the source until the one semantic plan has been prepared.
+
 ## Human mention delivery
 
 The Control UI binds each [selected person](/concepts/multi-user#mentioning-people) to the submitted message text. `chat.send`, the initial message on `sessions.create`, and `sessions.send` accept an optional `mentions` array of `{ profileId, start, end }` annotations. There are at most ten annotations. `start` is inclusive and `end` is exclusive, measured in UTF-16 code units. The Gateway validates their text ranges and recipients before accepting the input. Plain `@name` text and agent output do not create human mentions. Copying or quoting text does not copy its recipient selections.

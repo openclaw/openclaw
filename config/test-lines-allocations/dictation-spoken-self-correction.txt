@@ -1,0 +1,4 @@
+# M03 requires independent semantic/range properties, real capture/draft-owner race schedules,
+# preference migration/disable coverage, and accessible review/composer browser cases.
+# Exact net growth: 1,449 test lines; the first 400 use the ordinary allowance.
+1049

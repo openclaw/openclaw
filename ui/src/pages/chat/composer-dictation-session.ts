@@ -6,6 +6,7 @@ import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictati
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import type { DictationSourceSegment } from "./dictation-refinement.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -76,7 +77,7 @@ export class ComposerDictationCommits {
   /** Delivers once earlier recordings settle; a retired recording resolves false. */
   add(
     session: ComposerDictationSession,
-    deliver: (transcript: string) => boolean,
+    deliver: (transcript: string) => boolean | Promise<boolean>,
   ): Promise<boolean> {
     const previous = this.tail;
     this.sessions.add(session);
@@ -184,7 +185,11 @@ export class ComposerDictationSession {
   private unsubscribe: (() => void) | null = null;
   private sessionId: string | null = null;
   private transcriptionSessionId: string | null = null;
-  private readonly finalTranscripts: string[] = [];
+  private readonly finalTranscripts: {
+    text: string;
+    metadata: Omit<DictationSourceSegment, "range">;
+  }[] = [];
+  private transcriptRevision = 0;
   private currentPartial = "";
   private startPromise: Promise<void> | null = null;
   private appendChain: Promise<void> = Promise.resolve();
@@ -265,9 +270,9 @@ export class ComposerDictationSession {
         const text = payload.text.trim();
         if (payload.type === "partial" || payload.final !== true) {
           this.currentPartial = text;
+          this.transcriptRevision += 1;
         } else if (text) {
-          this.finalTranscripts.push(text);
-          this.currentPartial = "";
+          this.appendFinalTranscript(text, payload);
         }
         this.callbacks.onTranscriptChange();
         return;
@@ -309,7 +314,50 @@ export class ComposerDictationSession {
   }
 
   transcriptSnapshot(): string {
-    return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
+    return [...this.finalTranscripts.map((part) => part.text), this.currentPartial]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+  }
+
+  /** Source metadata stays with the existing transcript owner, including its late-final drain. */
+  refinementSnapshot(text: string): {
+    revision: number;
+    isFinal: boolean;
+    segments?: DictationSourceSegment[];
+  } {
+    if (
+      text !== this.transcriptSnapshot() ||
+      this.currentPartial ||
+      !this.finalTranscripts.length
+    ) {
+      return { revision: this.transcriptRevision, isFinal: false };
+    }
+    let offset = 0;
+    // The validator's 256-span limit rejects excessive metadata; do not copy an unbounded list.
+    const segments = this.finalTranscripts.slice(0, 257).map((part) => {
+      const range = { start: offset, end: offset + part.text.length };
+      offset = range.end + 1;
+      return Object.assign({ range }, part.metadata);
+    });
+    return { revision: this.transcriptRevision, isFinal: true, segments };
+  }
+
+  private appendFinalTranscript(text: string, payload: Record<string, unknown>): void {
+    const event = asOptionalObjectRecord(payload.talkEvent);
+    this.finalTranscripts.push({
+      text,
+      metadata: {
+        ...(typeof event?.itemId === "string" ? { id: event.itemId } : {}),
+        ...(typeof event?.id === "string" ? { eventId: event.id } : {}),
+        ...(typeof event?.seq === "number" ? { sequence: event.seq } : {}),
+        ...(typeof event?.captureId === "string" ? { captureId: event.captureId } : {}),
+        // TalkEvent.timestamp is event time, not acoustic timing. The current relay
+        // supplies neither acoustic timestamps nor a speaker identity.
+      },
+    });
+    this.currentPartial = "";
+    this.transcriptRevision += 1;
   }
 
   async finish(requireTranscript?: true): Promise<string> {
@@ -448,8 +496,8 @@ export class ComposerDictationSession {
   private waitForLateFinal(): Promise<string> {
     return new Promise((resolve) => {
       const initialTranscript = this.transcriptSnapshot();
-      const transcripts: string[] = [...this.finalTranscripts];
-      let partial = this.currentPartial;
+      const initialFinalCount = this.finalTranscripts.length;
+      const initialPartial = this.currentPartial;
       let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
       let unsubscribe = () => {};
       const finish = (text: string) => {
@@ -460,7 +508,7 @@ export class ComposerDictationSession {
         this.resumeFinalDrain = null;
         resolve(text);
       };
-      const transcript = () => [...transcripts, partial].filter(Boolean).join(" ").trim();
+      const transcript = () => this.transcriptSnapshot();
       this.pauseFinalDrain = () => globalThis.clearTimeout(timer);
       this.resumeFinalDrain = () => {
         timer = globalThis.setTimeout(() => finish(transcript()), FINAL_TRANSCRIPT_MAX_WAIT_MS);
@@ -477,8 +525,7 @@ export class ComposerDictationSession {
           typeof payload.text === "string" &&
           payload.text.trim()
         ) {
-          transcripts.push(payload.text.trim());
-          partial = "";
+          this.appendFinalTranscript(payload.text.trim(), payload);
         } else if (payload.type === "error" || payload.type === "close") {
           if (payload.type === "error" || payload.reason === "error") {
             this.reportFailure(
@@ -493,8 +540,16 @@ export class ComposerDictationSession {
         }
       });
       // Failed finalization retains the preview, not its provisional result.
-      this.settleLateFinalDrain = (discard) =>
+      this.settleLateFinalDrain = (discard) => {
+        if (this.failed) {
+          // Metadata and recovery notices must describe the retained preview,
+          // not provisional final text from a provider that failed its drain.
+          this.finalTranscripts.splice(initialFinalCount);
+          this.currentPartial = initialPartial;
+          this.transcriptRevision += 1;
+        }
         finish(discard ? "" : this.failed ? initialTranscript : transcript());
+      };
     });
   }
 }

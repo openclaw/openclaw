@@ -26,6 +26,7 @@ import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx"
 import { ComposerContent } from "./chat-composer-content.tsx";
 import { ContextNotice } from "./chat-composer-context.tsx";
 import { renderChatPrimaryActionsSolid as ChatPrimaryActions } from "./chat-composer-controls.tsx";
+import { ChatComposerCorrections } from "./chat-composer-corrections.tsx";
 import "../../../styles/chat/emoji-menu.css";
 import "../../../styles/chat/mention-menu.css";
 import { ChatComposerDisabledBanner } from "./chat-composer-disabled-banner.tsx";
@@ -663,6 +664,10 @@ export function renderChatComposerView(
               </div>
             </div>
           </div>
+          <ChatComposerCorrections
+            context={context()}
+            showControls={Boolean(context().dictation)}
+          />
           <ComposerWidthEdge options={() => props} shell={() => shell} />
         </regions.ComposerInputScope>
       ) : memberWelcome.active() ? (

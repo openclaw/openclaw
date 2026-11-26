@@ -5,6 +5,7 @@ import {
   type ChatFollowUpMode,
 } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatCorrectionsEnglish } from "../../../i18n/locales/en-chat-corrections.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import "../../../components/tooltip.ts";
@@ -31,6 +32,7 @@ import type {
   ComposerMicrophoneOwner,
   MicrophonePickerProps,
 } from "../composer-microphone-picker.ts";
+import { createComposerCorrectionBindings } from "./chat-composer-correction-bindings.ts";
 import { createComposerDictationOptions } from "./chat-composer-dictation-options.ts";
 import {
   adjustTextareaHeight,
@@ -60,6 +62,7 @@ import type { ChatComposerProps } from "./chat-composer-types.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
 
 registerChatGoalsEnglish();
+registerChatCorrectionsEnglish();
 
 type ComposerInteraction = {
   composition: () => { key: string; value: string } | null;
@@ -259,6 +262,7 @@ export function createChatComposerContext(
   // an exact-run intent and revalidates authority after reconnect.
   const canSubmitDraft = (draft: string) =>
     props.canSend &&
+    !voice.dictation.correctionCommitRequired &&
     (!props.modelRequiredReason ||
       (!goalComposer.active &&
         (props.getAttachments?.() ?? props.attachments ?? []).length === 0 &&
@@ -606,7 +610,9 @@ export function createChatComposerContext(
   const runControlsProps = {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(visibleDraft),
-    submitDisabledReason: props.submitDisabledReason,
+    submitDisabledReason: voice.dictation.correctionReview
+      ? t("chat.corrections.reviewBeforeSend")
+      : props.submitDisabledReason,
     submitPending: props.submitPending,
     connected: props.connected,
     draft: visibleDraft,
@@ -702,6 +708,7 @@ export function createChatComposerContext(
     handleBlur,
     dictation,
     dictationOptions,
+    ...createComposerCorrectionBindings(props, state, voice.dictation, dictationOptions),
     runControlsProps,
     menus,
     mentionMenuHost,

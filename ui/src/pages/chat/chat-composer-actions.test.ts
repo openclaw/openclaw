@@ -185,7 +185,12 @@ describe("renderChatComposer controls", () => {
   function renderDictatingComposer({
     submitDisabledReason,
     finalizing = false,
-  }: { submitDisabledReason?: string; finalizing?: boolean } = {}) {
+    correctionCapture = false,
+  }: {
+    submitDisabledReason?: string;
+    finalizing?: boolean;
+    correctionCapture?: boolean;
+  } = {}) {
     let draft = "Typed beginning";
     const onSend = vi.fn();
     const { container, props } = renderComposer({
@@ -204,6 +209,9 @@ describe("renderChatComposer controls", () => {
     }
     const active = vi.spyOn(dictation, "active", "get").mockReturnValue(true);
     const locked = vi.spyOn(dictation, "locksComposer", "get").mockReturnValue(true);
+    const correctionCommitRequired = vi
+      .spyOn(dictation, "correctionCommitRequired", "get")
+      .mockReturnValue(correctionCapture);
     vi.spyOn(dictation, "finalizing", "get").mockReturnValue(finalizing);
     const finishActive = vi.spyOn(dictation, "finishActive").mockResolvedValue(true);
     // Commits arrive only after the capture module, which places transcripts, has loaded.
@@ -214,7 +222,7 @@ describe("renderChatComposer controls", () => {
     if (!commit) {
       throw new Error("expected the composer transcript callback");
     }
-    return { container, active, locked, finishActive, onSend, commit };
+    return { container, active, locked, correctionCommitRequired, finishActive, onSend, commit };
   }
 
   it("finishes locked dictation before submitting the complete draft with history held", async () => {
@@ -256,6 +264,62 @@ describe("renderChatComposer controls", () => {
       expect(action?.disabled).toBe(false);
       expect(action?.getAttribute("aria-disabled")).toBe("true");
     }
+  });
+
+  it.each([false, true])(
+    "preserves Off empty Send and blocks uncommitted correction captures (correction=%s)",
+    async (correctionCapture) => {
+      const { container, active, locked, correctionCommitRequired, finishActive, onSend } =
+        renderDictatingComposer({ correctionCapture });
+      const finish = createDeferred<boolean>();
+      finishActive.mockReturnValue(finish.promise);
+      primaryButton(container).click();
+      active.mockReturnValue(false);
+      locked.mockReturnValue(false);
+      correctionCommitRequired.mockReturnValue(false);
+      finish.resolve(false);
+      await finish.promise;
+
+      expect(finishActive).toHaveBeenCalledOnce();
+      expect(textarea(container).value).toBe("Typed beginning");
+      expect(onSend).toHaveBeenCalledTimes(correctionCapture ? 0 : 1);
+    },
+  );
+
+  it("holds keyboard and pointer Send while an inactive recording awaits review", async () => {
+    const { container, props, onSend } = renderComposer({
+      draft: "Typed beginning",
+      onToggleRealtimeTalk: vi.fn(),
+    });
+    const dictation = getChatComposerState(props.paneId).dictation;
+    if (!dictation) {
+      throw new Error("expected the composer dictation owner");
+    }
+    const original = "Tell John that John should call change John to James";
+    vi.spyOn(dictation, "correctionCommitRequired", "get").mockReturnValue(true);
+    vi.spyOn(dictation, "correctionReview", "get").mockReturnValue({
+      result: {
+        status: "needs-review",
+        original,
+        candidate: original,
+        plan: null,
+        reasons: ["ambiguous-target"],
+      },
+      canAccept: false,
+      canKeepOriginal: true,
+      invalidated: false,
+    });
+    renderComposerInto(container, props);
+    await waitForSolid(() =>
+      expect(container.querySelector(".composer-correction-review")).not.toBeNull(),
+    );
+    const send = primaryButton(container);
+    expect(send.disabled).toBe(true);
+    expect(send.getAttribute("aria-label")).toBe(t("chat.corrections.reviewBeforeSend"));
+    send.click();
+    pressComposerEnter(container);
+    expect(textarea(container).value).toBe("Typed beginning");
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("keeps dictation available while Talk is held during an active turn", () => {
