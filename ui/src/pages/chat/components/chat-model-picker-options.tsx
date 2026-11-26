@@ -208,7 +208,9 @@ function ModelOptionButton(
     props.entry.isDefault ? t("chat.modelControls.default") : "",
   );
   const key = createMemo(() => props.rowKey ?? modelPickerOptionKey(props.entry));
-  const modelName = createMemo(() => props.presentation.modelLabel.toLocaleLowerCase());
+  const modelName = createMemo(() =>
+    formatModelLabel(props.entry.label, props.groupLabel).toLocaleLowerCase(),
+  );
   // Query changes should reach only rows whose displayed search facts changed.
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
