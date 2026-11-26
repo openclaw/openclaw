@@ -60,6 +60,7 @@ export class MeetingSessionRuntime<
   TSpeechBlockedReason extends string,
 > {
   readonly #sessions = new Map<string, TSession>();
+  readonly #requesterSessionKeys = new WeakMap<TSession, string>();
   readonly #participation?: MeetingParticipation<TSession>;
   readonly #sessionCleanup = new MeetingSessionCleanupTracker();
   readonly #meetingLock = new KeyedAsyncQueue();
@@ -240,6 +241,13 @@ export class MeetingSessionRuntime<
     );
   }
 
+  protected forgetMeetingRequesterSessionKey(sessionId: string): void {
+    const session = this.#sessions.get(sessionId);
+    if (session) {
+      this.#requesterSessionKeys.delete(session);
+    }
+  }
+
   async join(request: TRequest): Promise<{ session: TSession; spoken?: boolean }> {
     const resolved = this.options.resolveJoin(request);
     // Session publication follows async transport setup. Serialize every transport so
@@ -292,7 +300,10 @@ export class MeetingSessionRuntime<
       if (session.state !== "active") {
         return;
       }
-      const handles = await this.options.ensureRealtimeBridge(session);
+      const handles = await this.options.ensureRealtimeBridge(
+        session,
+        this.#requesterSessionKeys.get(session),
+      );
       if (handles) {
         this.#attachRuntimeHandles(session, handles);
       }
@@ -419,7 +430,7 @@ export class MeetingSessionRuntime<
     this.#participation?.close(session.id);
     session.state = "ended";
     session.updatedAt = nowIso();
-    this.#dropRuntimeHandles(session.id);
+    this.#dropRuntimeHandles(session);
     this.#noteSession(session, reason);
   }
 
@@ -520,6 +531,12 @@ export class MeetingSessionRuntime<
     }
 
     const session = this.options.createSession({ request, resolved, createdAt: nowIso() });
+    // Bind only newly created sessions. A different room can fail while this one
+    // is still unpublished, and a reused meeting keeps its original requester.
+    const requester = this.options.getRequesterSessionKey?.(request);
+    if (requester) {
+      this.#requesterSessionKeys.set(session, requester);
+    }
     let delegatedSpoken: boolean;
     try {
       const result = await this.options.joinTransport({
@@ -587,6 +604,7 @@ export class MeetingSessionRuntime<
       !this.#sessionCleanup.isPending(sessionId) &&
       !this.#sessionCleanup.hasRuntime(sessionId)
     ) {
+      this.#requesterSessionKeys.delete(session);
       return {
         found: true,
         session,
@@ -605,7 +623,7 @@ export class MeetingSessionRuntime<
     // Ending fences new live reads; the capture queue drains already admitted reads.
     session.state = "ended";
     session.updatedAt = nowIso();
-    this.#dropRuntimeHandles(session.id);
+    this.#dropRuntimeHandles(session);
     let transcriptStopped = false;
     try {
       transcriptStopped = await this.#durableTranscripts.stop(session, {
@@ -631,7 +649,7 @@ export class MeetingSessionRuntime<
         } as THealth);
       }
       if (cleanup.complete) {
-        this.#dropRuntimeHandles(session.id);
+        this.#dropRuntimeHandles(session);
         if (cleanup.unpublished) {
           this.#sessions.delete(session.id);
         }
@@ -668,9 +686,10 @@ export class MeetingSessionRuntime<
     }
   }
 
-  #dropRuntimeHandles(sessionId: string): void {
-    this.#sessionSpeakers.delete(sessionId);
-    this.#sessionHealth.delete(sessionId);
+  #dropRuntimeHandles(session: TSession): void {
+    this.#requesterSessionKeys.delete(session);
+    this.#sessionSpeakers.delete(session.id);
+    this.#sessionHealth.delete(session.id);
   }
 
   #isManagedBrowserSession(session: TSession): boolean {
