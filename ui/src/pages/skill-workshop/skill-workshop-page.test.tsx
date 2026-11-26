@@ -480,6 +480,22 @@ it("opens an archived skill from a chat link", async () => {
   await waitForSolid(() => expect(page.querySelector(".sw-sort")).toBeNull());
 });
 
+it.each([
+  ["padded opening delimiter", "--- \n"],
+  ["leading BOM", "\uFEFF---\n"],
+  ["key starting with dashes", "---\nname: orchard\n---style: ripe\n"],
+])("shows only the Instructions body for a %s", async (_label, opening) => {
+  const content = `${opening}description: Saved summary\n---\n    example line\n\n# Procedure`;
+  const page = await mount(gateway({ read: { ...skillRead, content } }), {
+    search: `?skill=${SKILL}`,
+  });
+  await waitText(page, "Procedure");
+  const body = page.querySelector(".sw-detail__body .sw-markdown");
+  expect(body?.querySelector("pre code")?.textContent).toBe("example line\n");
+  expect(body?.querySelector("h1")?.textContent).toBe("Procedure");
+  expect(body?.textContent).not.toContain("Saved summary");
+});
+
 it("compares saved metadata against today's", async () => {
   const read = ({ versionId }: RequestParams) => ({
     ...skillRead,
