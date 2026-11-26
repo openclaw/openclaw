@@ -36,7 +36,10 @@ import {
   observedSystemdManagerUid,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
-import { assertManagedGatewayArtifactPublication } from "./update-command-service-revalidation.js";
+import {
+  assertManagedGatewayArtifactPublication,
+  publicationFailureFacts,
+} from "./update-command-service-revalidation.js";
 
 export async function isManagedGatewayServiceOffline(state: GatewayServiceState): Promise<boolean> {
   // Loaded LaunchAgents can respawn even while disabled. Windows needs the live
@@ -83,7 +86,10 @@ export async function withGatewayRuntimeArtifactPublication<T>(
       throw new UpdatePreMutationError(
         "runtime-artifact-publication",
         `${inspectionDetail}Runtime artifacts must be republished (this update changed them or they were already stale), but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop --force", params.env)}\`, and retry the original command.`,
-        { cause },
+        {
+          cause,
+          ...publicationFailureFacts("runtime-artifact-gateway-unverified", inspectionDetail),
+        },
       );
     };
     const inspectionFailed = (error: unknown): never => {

@@ -105,6 +105,12 @@ export const UPDATE_PREFLIGHT_DETAILS = {
     "Gateway service management is unavailable for this supervisor or installation identity. Run openclaw gateway status --deep and retry through the service owner's update workflow.",
   "service-process-changed":
     "The Gateway process changed during maintenance drain. Run openclaw gateway status --deep to inspect its current service, then retry openclaw update.",
+  "git-runtime-gateway-running":
+    "Git runtime artifacts cannot be replaced while their Gateway is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun openclaw update without --no-restart. The serving runtime was left unchanged.",
+  "installation-shared-by-gateway":
+    "Another managed Gateway (Scheduled Task, Startup entry, launchd job, or systemd unit) is still using this installation. Stop that Gateway through its own service manager or Startup process, then retry the update. Its files and service were left unchanged.",
+  "runtime-artifact-gateway-unverified":
+    "Runtime artifacts must be republished, but the affected Gateway is running or its offline state could not be verified. Run openclaw gateway status --deep, stop the affected Gateway with openclaw gateway stop --force, and retry the original command.",
   "task-ownership-unverified":
     "Scheduled Task ownership could not be verified. Inspect the task's autostart state through its service owner, then retry openclaw update.",
 } as const;

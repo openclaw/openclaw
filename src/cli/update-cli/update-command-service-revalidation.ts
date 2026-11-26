@@ -29,7 +29,10 @@ import {
 import { classifyOpenClawArgv } from "../../infra/gateway-process-argv.js";
 import { createUpdatePreflightDiagnostics } from "../../infra/update-failure-facts.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
-import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
+import {
+  createUpdatePreflightFailure,
+  UPDATE_PREFLIGHT_DETAILS,
+} from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { formatCliCommand } from "../command-format.js";
 import { UpdatePreMutationError } from "./shared.js";
@@ -83,6 +86,18 @@ function matchesStoppedService(
       refreshDefinition ||
       ("fingerprint" in inspection && inspection.fingerprint === verdict.fingerprint)),
   );
+}
+
+/** Local messages name paths; public reports carry only the fixed check, code and description. */
+export function publicationFailureFacts(
+  code:
+    | "git-runtime-gateway-running"
+    | "installation-shared-by-gateway"
+    | "runtime-artifact-gateway-unverified",
+  localDetail = "",
+) {
+  const message = `${localDetail}${UPDATE_PREFLIGHT_DETAILS[code]}`;
+  return { failureFacts: [{ check: "runtime-artifact-publication", code, message }] };
 }
 
 /** Unavailable package inspection still requires an offline owner; Git reports a restart warning. */
@@ -170,6 +185,7 @@ export async function assertManagedGatewayArtifactPublication(params: {
     throw new UpdatePreMutationError(
       "runtime-artifact-publication",
       `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
+      publicationFailureFacts("git-runtime-gateway-running"),
     );
   }
   // A release replaces no root (it builds beside the serving one), so no live Gateway is at risk.
@@ -237,6 +253,16 @@ export async function assertManagedGatewayArtifactPublication(params: {
     }
     const startupEntry = binding.windowsStartupEntry;
     if (startupEntry !== undefined) {
+      // A leftover Startup entry can observe the selected Task's own process; the
+      // Task stop ends that listener. PID reuse since inspection is an accepted edge case.
+      if (
+        before.servicePid !== undefined &&
+        state.runtime?.pid === before.servicePid &&
+        resolveGatewayProfileSuffix(state.env.OPENCLAW_PROFILE) ===
+          resolveGatewayProfileSuffix(before.serviceEnv.OPENCLAW_PROFILE)
+      ) {
+        return true;
+      }
       // Only the selected Task's proven absence can select its Startup fallback.
       selectedState ??= await readBinding({
         env: before.serviceEnv,
@@ -297,6 +323,7 @@ export async function assertManagedGatewayArtifactPublication(params: {
       throw new UpdatePreMutationError(
         "runtime-artifact-publication",
         `Cannot replace ${root}: another managed Gateway (${owner}) is still using this installation. Stop that Gateway through its own service manager or Startup process, then retry the update. Its files and service were left unchanged.`,
+        publicationFailureFacts("installation-shared-by-gateway"),
       );
     }
   }

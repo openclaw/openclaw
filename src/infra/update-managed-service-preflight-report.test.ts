@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { createUpdatePreflightFailure } from "./update-preflight-details.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
@@ -51,5 +52,41 @@ it.each([
     }
     const local = renderUpdateRunReport(updateRunReportInputFromResult(result, recordedRun));
     expect(local.lines.join("\n")).toContain(`Failing check managed-service-preflight (${code})`);
+  }
+});
+
+it.each([
+  ["git-runtime-gateway-running", "Git runtime artifacts cannot be replaced"],
+  ["installation-shared-by-gateway", "Another managed Gateway (Scheduled Task, Startup entry"],
+  ["runtime-artifact-gateway-unverified", "Runtime artifacts must be republished"],
+] as const)("names the runtime publication refusal %s without paths", async (code, guidance) => {
+  const result: UpdateRunResult = {
+    mode: "npm",
+    status: "error",
+    reason: "runtime-artifact-publication",
+    steps: [
+      {
+        name: "runtime-artifact-publication",
+        command: "openclaw update",
+        cwd: "C:\\Users\\Fixture Person\\AppData\\Roaming\\npm\\node_modules\\openclaw",
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail:
+          'Cannot replace C:\\Users\\Fixture Person\\AppData\\Roaming\\npm\\node_modules\\openclaw: another managed Gateway (Startup entry "C:\\Users\\Fixture Person\\Startup\\OpenClaw Gateway.cmd") is still using this installation.',
+        failureFacts: createUpdatePreflightFailure(code, undefined, "runtime-artifact-publication")
+          .failureFacts,
+      },
+    ],
+    durationMs: 0,
+  };
+  const report = await prepareUpdateFailureReport(
+    { attemptId: "runtime-publication", result },
+    { env: {}, stateDir: "/report-test-state" },
+  );
+  expect(report.body).toContain(
+    `Failing check runtime-artifact-publication (${code}): ${guidance}`,
+  );
+  for (const privateText of ["Fixture Person", "node_modules", "OpenClaw Gateway.cmd"]) {
+    expect(report.body).not.toContain(privateText);
   }
 });

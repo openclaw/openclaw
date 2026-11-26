@@ -38,6 +38,7 @@ const NATIVE_CHECKS = new Set<string>([
   "managed-service-runtime",
   "managed-service-ownership",
   "managed-service-preflight",
+  "runtime-artifact-publication",
   "package-install",
   "package-swap",
   "package-runtime",
