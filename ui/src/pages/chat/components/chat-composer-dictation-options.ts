@@ -20,6 +20,8 @@ export function createComposerDictationOptions(
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
+    captureReview: () => state.developerSyntax?.capture(),
+    reviewPending: () => state.developerSyntax?.blocksSend ?? false,
     onCommit: (transcript: string, late?: true, preservePreview?: true) => {
       const target = state.composerTextarea;
       const captured = state.dictationSelection;

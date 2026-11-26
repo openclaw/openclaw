@@ -45,6 +45,7 @@ import { ComposerWidthEdge, prepareComposerWidthEdge } from "./chat-composer-wid
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
 import { ChatVoiceStatus, ComposerDictationStatus } from "./chat-voice-activity.tsx";
+import { DeveloperSyntaxPanel } from "./developer-syntax-panel.tsx";
 
 type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
 
@@ -596,6 +597,9 @@ export function renderChatComposerView(
               </div>
             </div>
 
+            <Show when={context().dictation}>
+              <DeveloperSyntaxPanel readOwner={() => context().developerSyntax} />
+            </Show>
             <div class="agent-chat__composer-footer">
               <div class="agent-chat__composer-lead agent-chat__composer-meta">
                 <ChatComposerPlusMenu

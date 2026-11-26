@@ -33,6 +33,7 @@ import type { ChatPaneModelControl } from "../chat-pane-model-control.tsx";
 import type { ChatRealtimeView } from "../chat-realtime.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
 import type { ChatSessionStateSnapshot } from "../chat-session-state-snapshot.ts";
+import type { ComposerDeveloperSyntax } from "../composer-developer-syntax.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
@@ -305,6 +306,7 @@ export type ChatComposerState = {
   // The mounted composer's send, as Enter; false when it cannot send now.
   sendDraft: (() => boolean) | null;
   dictation: ComposerDictationOwner | null;
+  developerSyntax: ComposerDeveloperSyntax | null;
   composerDraftScope: { key: string } | null;
   dictationSelection: { start: number; end: number; value: string } | null;
   /** Plugin composer tasks and proposals; null until the first plugin composer action loads it. */

@@ -268,7 +268,11 @@ export function ComposerDictationSendAction(props: {
     if (dictation.finalizing) {
       return;
     }
+    const requiresReview = dictation.requiresReview;
     await dictation.finishActive();
+    if (requiresReview) {
+      return;
+    }
     // Keep the initiating input action when asynchronous dictation finishes.
     send(event);
   };

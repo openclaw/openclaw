@@ -185,6 +185,8 @@ export class ComposerDictationSession {
   private sessionId: string | null = null;
   private transcriptionSessionId: string | null = null;
   private readonly finalTranscripts: string[] = [];
+  private lastTranscriptSequence = 0;
+  private readonly preserveTranscriptWhitespace: boolean;
   private currentPartial = "";
   private startPromise: Promise<void> | null = null;
   private appendChain: Promise<void> = Promise.resolve();
@@ -206,8 +208,11 @@ export class ComposerDictationSession {
       sessionKey?: string;
       inputDeviceId?: string;
       silenceTimeoutMs?: number;
+      preserveTranscriptWhitespace?: boolean;
     },
-  ) {}
+  ) {
+    this.preserveTranscriptWhitespace = options?.preserveTranscriptWhitespace === true;
+  }
 
   start(): Promise<void> {
     this.startPromise ??= this.startInternal();
@@ -262,7 +267,10 @@ export class ComposerDictationSession {
         (payload.type === "transcript" || payload.type === "partial") &&
         typeof payload.text === "string"
       ) {
-        const text = payload.text.trim();
+        if (!this.admitTranscriptEvent(payload)) {
+          return;
+        }
+        const text = this.readTranscriptText(payload.text);
         if (payload.type === "partial" || payload.final !== true) {
           this.currentPartial = text;
         } else if (text) {
@@ -309,7 +317,30 @@ export class ComposerDictationSession {
   }
 
   transcriptSnapshot(): string {
-    return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
+    return this.joinTranscripts([...this.finalTranscripts, this.currentPartial]);
+  }
+
+  private readTranscriptText(text: string): string {
+    return this.preserveTranscriptWhitespace ? text : text.trim();
+  }
+
+  private joinTranscripts(parts: readonly string[]): string {
+    if (!this.preserveTranscriptWhitespace) {
+      return parts.filter(Boolean).join(" ").trim();
+    }
+    // Keep provider chunk bytes. Supply a single word separator only when neither
+    // chunk boundary contains whitespace; never trim or replace supplied whitespace.
+    let joined = "";
+    for (const part of parts) {
+      if (!part) {
+        continue;
+      }
+      if (joined && !/\s/u.test(joined.at(-1)!) && !/\s/u.test(part[0]!)) {
+        joined += " ";
+      }
+      joined += part;
+    }
+    return joined;
   }
 
   async finish(requireTranscript?: true): Promise<string> {
@@ -460,7 +491,7 @@ export class ComposerDictationSession {
         this.resumeFinalDrain = null;
         resolve(text);
       };
-      const transcript = () => [...transcripts, partial].filter(Boolean).join(" ").trim();
+      const transcript = () => this.joinTranscripts([...transcripts, partial]);
       this.pauseFinalDrain = () => globalThis.clearTimeout(timer);
       this.resumeFinalDrain = () => {
         timer = globalThis.setTimeout(() => finish(transcript()), FINAL_TRANSCRIPT_MAX_WAIT_MS);
@@ -475,10 +506,13 @@ export class ComposerDictationSession {
           payload.type === "transcript" &&
           payload.final === true &&
           typeof payload.text === "string" &&
-          payload.text.trim()
+          this.admitTranscriptEvent(payload)
         ) {
-          transcripts.push(payload.text.trim());
-          partial = "";
+          const text = this.readTranscriptText(payload.text);
+          if (text) {
+            transcripts.push(text);
+            partial = "";
+          }
         } else if (payload.type === "error" || payload.type === "close") {
           if (payload.type === "error" || payload.reason === "error") {
             this.reportFailure(
@@ -496,5 +530,28 @@ export class ComposerDictationSession {
       this.settleLateFinalDrain = (discard) =>
         finish(discard ? "" : this.failed ? initialTranscript : transcript());
     });
+  }
+
+  private admitTranscriptEvent(payload: Record<string, unknown>): boolean {
+    if (!this.preserveTranscriptWhitespace) {
+      // New replay protection is confined to the opted-in reviewed capture path.
+      return true;
+    }
+    const event = asOptionalObjectRecord(payload.talkEvent);
+    const sequence = event?.seq;
+    if (
+      event?.sessionId !== this.transcriptionSessionId ||
+      typeof sequence !== "number" ||
+      !Number.isSafeInteger(sequence) ||
+      sequence <= 0
+    ) {
+      // Older relays have no replay identity. Repeated text can be deliberate.
+      return true;
+    }
+    if (sequence <= this.lastTranscriptSequence) {
+      return false;
+    }
+    this.lastTranscriptSequence = sequence;
+    return true;
   }
 }

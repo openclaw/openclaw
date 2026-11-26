@@ -9,6 +9,8 @@ export type ComposerDraftSource = {
     pendingAttachmentReads: number;
     attachmentReadRevision?: number;
     goalDraftMode?: ChatGoalDraftMode | null;
+    /** Every owner publication advances, including equal-text replacements. */
+    draftPublicationRevision?: number;
   };
   subscribe(listener: () => void): () => void;
 };
@@ -16,10 +18,14 @@ export type ComposerDraftSource = {
 /** Publishes completed owner mutations without keeping a second draft. */
 export function createComposerDraftSource(read: ComposerDraftSource["read"]) {
   const listeners = createChangeListeners();
+  let revision = 0;
   return {
-    read,
+    read: () => ({ ...read(), draftPublicationRevision: revision }),
     subscribe: listeners.subscribe,
-    publish: listeners.publish,
+    publish: () => {
+      revision += 1;
+      listeners.publish();
+    },
   };
 }
 

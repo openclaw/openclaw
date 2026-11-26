@@ -20,6 +20,12 @@ type ComposerDictationFailure = {
   preservesText: boolean;
 };
 
+/** Optional capture preparation consumes finals before they can enter an unsent draft. */
+export type ComposerDictationReviewCapture = {
+  finish(rawTranscript: string): void;
+  cancel(): void;
+};
+
 type ComposerDictationOwnerOptions = {
   client: GatewayBrowserClient | null;
   sessionKey?: string;
@@ -33,6 +39,8 @@ type ComposerDictationOwnerOptions = {
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onTap?: () => void;
   onDictationUnavailable?: () => void;
+  captureReview?: () => ComposerDictationReviewCapture | undefined;
+  reviewPending?: () => boolean;
 };
 
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
@@ -53,6 +61,8 @@ export class ComposerDictationOwner extends EventTarget {
   // Created with the lazy capture module, before the first transcript exists.
   private commits: ComposerDictationCommits | undefined;
   private disposed = false;
+  private reviewCapture: ComposerDictationReviewCapture | undefined;
+  private readonly pendingReviews = new Set<ComposerDictationReviewCapture>();
 
   constructor(private options: ComposerDictationOwnerOptions) {
     super();
@@ -99,7 +109,11 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   get transcript(): string {
-    return this.session?.transcriptSnapshot() ?? "";
+    return this.reviewCapture ? "" : (this.session?.transcriptSnapshot() ?? "");
+  }
+
+  get requiresReview(): boolean {
+    return this.reviewCapture !== undefined || this.pendingReviews.size > 0;
   }
 
   // Returns the stop promise so the confirming control can remain tied to the
@@ -109,7 +123,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   startDirect(): boolean {
-    if (this.phase !== "idle" || !this.canHold()) {
+    if (this.phase !== "idle" || !this.canHold() || this.options.reviewPending?.()) {
       return false;
     }
     // Surfaces without Talk do not need the hold discriminator. Enter the same
@@ -149,7 +163,12 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   handlePointerDown(event: PointerEvent): boolean {
-    if (event.button !== 0 || this.phase !== "idle" || !this.canHold()) {
+    if (
+      event.button !== 0 ||
+      this.phase !== "idle" ||
+      !this.canHold() ||
+      this.options.reviewPending?.()
+    ) {
       return false;
     }
     event.preventDefault();
@@ -213,6 +232,12 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   cancel(): void {
+    this.reviewCapture?.cancel();
+    this.reviewCapture = undefined;
+    for (const review of this.pendingReviews) {
+      review.cancel();
+    }
+    this.pendingReviews.clear();
     this.clearClickSuppression();
     this.playback.stop();
     if (this.commits?.size) {
@@ -318,6 +343,7 @@ export class ComposerDictationOwner extends EventTarget {
     this.clearPointerGesture();
     const captureStart = {};
     this.captureStart = captureStart;
+    this.reviewCapture = this.options.captureReview?.();
     this.setPhase("connecting");
     if (this.captureStart !== captureStart) {
       return;
@@ -368,7 +394,7 @@ export class ComposerDictationOwner extends EventTarget {
             }
           },
         },
-        { sessionKey },
+        { sessionKey, preserveTranscriptWhitespace: this.reviewCapture !== undefined },
       );
       this.session = session;
       await session.start();
@@ -390,7 +416,10 @@ export class ComposerDictationOwner extends EventTarget {
     const wasActive = this.active;
     this.clearPointerGesture();
     const session = this.session;
+    const review = this.reviewCapture;
+    this.reviewCapture = undefined;
     if (!session) {
+      review?.cancel();
       this.setPhase("idle");
       this.releasePlayback();
       return Promise.resolve(false);
@@ -399,13 +428,20 @@ export class ComposerDictationOwner extends EventTarget {
     this.session = null;
     this.setPhase("idle");
     if (!options.commit) {
+      review?.cancel();
       this.releasePlayback();
       void session.cancel().catch(() => undefined);
       return Promise.resolve(false);
     }
     // Capture and typing unlock immediately. Stopped recordings retain ownership
     // and commit in capture order, even when a later provider finishes first.
+    if (review) {
+      this.pendingReviews.add(review);
+    }
     const committed = this.commits!.add(session, (lateTranscript) => {
+      if (review) {
+        this.pendingReviews.delete(review);
+      }
       this.releasePlayback();
       this.pendingCommitsChanged();
       if (
@@ -415,6 +451,12 @@ export class ComposerDictationOwner extends EventTarget {
         !this.options.enabled ||
         this.options.realtimeTalkActive
       ) {
+        review?.cancel();
+        return false;
+      }
+      if (review) {
+        review.finish(lateTranscript);
+        this.dispatchEvent(new Event("change"));
         return false;
       }
       if (this.active) {

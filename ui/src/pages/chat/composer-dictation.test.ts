@@ -1,277 +1,296 @@
 // @vitest-environment jsdom
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import { createComponent } from "solid-js";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { renderComposerVoiceButtonSolid } from "./components/chat-composer-controls.tsx";
+import {
+  createComposerContainer,
+  createComposerProps,
+  renderComposerInto,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { ComposerDictationSession, placeComposerDictation } from "./composer-dictation-session.ts";
-import { ComposerDictationOwner } from "./composer-dictation.ts";
-import { MockDictationAudioContext, type MockAudioProcessor } from "./talk/input.test-support.ts";
+import { setupComposerDictationTestHarness } from "./composer-dictation.test-support.ts";
 
-type GatewayListener = (event: GatewayEventFrame) => void;
-const listeners = new Set<GatewayListener>();
-const controllers: ComposerDictationOwner[] = [];
-const processors: MockAudioProcessor[] = [];
-const audios: MockAudio[] = [];
-let speechStarted = createDeferred();
-let request: ReturnType<
-  typeof vi.fn<(method: string, params: Record<string, unknown>) => Promise<unknown>>
->;
-let getUserMedia: ReturnType<typeof vi.fn<() => Promise<ReturnType<typeof microphone>>>>;
-
-class MockAudio extends EventTarget {
-  readonly pause = vi.fn();
-  readonly load = vi.fn();
-  readonly removeAttribute = vi.fn();
-  readonly play = vi.fn(async () => {
-    if (this.src.startsWith("blob:")) {
-      speechStarted.resolve();
-    }
-  });
-
-  constructor(public src: string) {
-    super();
-    audios.push(this);
-  }
-}
-
-const microphone = (stop = vi.fn()) => ({
-  getTracks: () => [Object.assign(new EventTarget(), { stop })],
-});
-class MockAudioContext extends MockDictationAudioContext {
-  override createScriptProcessor() {
-    const processor = super.createScriptProcessor();
-    processors.push(processor);
-    return processor;
-  }
-}
-
-function createClient(): GatewayBrowserClient {
-  return {
-    addEventListener: vi.fn((listener: GatewayListener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    }),
-    request,
-  } as unknown as GatewayBrowserClient;
-}
-
-function emit(payload: Record<string, unknown>): void {
-  for (const listener of listeners) {
-    listener({
-      event: "talk.event",
-      payload: { transcriptionSessionId: "dictation-1", ...payload },
-    } as GatewayEventFrame);
-  }
-}
-
-function transcript(text: string, transcriptionSessionId = "dictation-1") {
-  emit({ transcriptionSessionId, type: "transcript", text, final: true });
-}
-
-function sessionResult(sessionId = "dictation-1") {
-  return {
-    sessionId,
-    transcriptionSessionId: sessionId,
-    audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
-  };
-}
-
-function recordRequests(create = async () => sessionResult()) {
-  const order: string[] = [];
-  request.mockImplementation(async (method, params) => {
-    order.push(method);
-    return method === "talk.session.create" ? create() : params;
-  });
-  return order;
-}
-
-function expectAppended(sessionId = "dictation-1") {
-  expect(request).toHaveBeenCalledWith("talk.session.appendAudio", {
-    sessionId,
-    audioBase64: "/4AA",
-  });
-}
-
-function expectClosed(sessionId = "dictation-1", discard = false) {
-  expect(request).toHaveBeenCalledWith(
-    "talk.session.close",
-    { sessionId, ...(discard ? { discard: true } : {}) },
-    { timeoutMs: null },
-  );
-}
-
-function captureAudio() {
-  const processor = processors.at(-1);
-  assert.isDefined(processor);
-  processor.onaudioprocess?.({
-    inputBuffer: { getChannelData: () => new Float32Array([0, 1, -1]) },
-  });
-}
-
-function click(target: HTMLElement) {
-  target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-}
-
-function pointer(type: string): Event {
-  const event = new MouseEvent(type, {
-    bubbles: true,
-    cancelable: true,
-    clientX: 50,
-    clientY: 50,
-    button: 0,
-  });
-  Object.defineProperty(event, "pointerId", { value: 7 });
-  return event;
-}
-
-type ControllerOptions = ConstructorParameters<typeof ComposerDictationOwner>[0];
-function controllerFixture(overrides: Omit<Partial<ControllerOptions>, "client"> = {}) {
-  const callbacks = { onCommit: vi.fn(), onError: vi.fn(), onTap: vi.fn() };
-  const options = {
-    client: createClient(),
-    connected: true,
-    enabled: true,
-    realtimeTalkActive: false,
-    ...callbacks,
-    ...overrides,
-  };
-  const controller = new ComposerDictationOwner(options);
-  controllers.push(controller);
-  return { controller, options, ...callbacks };
-}
-function pointerTarget(target: HTMLElement) {
-  target.getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 100 }) as DOMRect;
-  target.setPointerCapture = vi.fn();
-  target.releasePointerCapture = vi.fn();
-  return target;
-}
-function createHarness(overrides: Omit<Partial<ControllerOptions>, "client"> = {}) {
-  const harness = controllerFixture(overrides);
-  const target = pointerTarget(document.createElement("button"));
-  target.addEventListener("pointerdown", (event) =>
-    harness.controller.handlePointerDown(event as PointerEvent),
-  );
-  target.addEventListener("click", (event) => harness.controller.handleClick(event));
-  document.body.append(target);
-  return { ...harness, target };
-}
-
-// Drives the shipped microphone button, whose click routing differs from the
-// controller-only harness above once dictation is active.
-function createButtonHarness() {
-  const container = document.createElement("div");
-  document.body.append(container);
-  const harness = controllerFixture();
-  const { controller } = harness;
-  mountSolid(
-    () => {
-      const owner = projectOwner(controller, (value) => value);
-      return createComponent(renderComposerVoiceButtonSolid, {
-        connected: true,
-        readDictation: owner.read,
-        onDictationPointerDown: (event) => controller.handlePointerDown(event),
-        onToggleVoice: vi.fn(),
-      });
-    },
-    { container },
-  );
-  const target = container.querySelector("button");
-  assert.isNotNull(target);
-  return { ...harness, target: pointerTarget(target) };
-}
-
-async function startDirect(controller: ComposerDictationOwner) {
-  const start = vi.spyOn(ComposerDictationSession.prototype, "start");
-  expect(controller.startDirect()).toBe(true);
-  await vi.dynamicImportSettled();
-  const started = start.mock.results[0];
-  assert.isDefined(started);
-  await started.value;
-}
-async function startHold(target: HTMLElement): Promise<void> {
-  target.dispatchEvent(pointer("pointerdown"));
-  await vi.advanceTimersByTimeAsync(500);
-  await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything()),
-  );
-}
-
-async function releaseLatched(target: HTMLElement): Promise<void> {
-  document.dispatchEvent(pointer("pointerup"));
-  click(target);
-  await vi.advanceTimersByTimeAsync(0);
-}
-
-function captureStop() {
-  const stop = vi.fn();
-  getUserMedia.mockResolvedValue(microphone(stop));
-  return stop;
-}
-function expectCommit(onCommit: ReturnType<typeof vi.fn>, preview: string) {
-  if (preview) {
-    expect(onCommit).toHaveBeenCalledExactlyOnceWith(preview, true);
-  } else {
-    expect(onCommit).not.toHaveBeenCalled();
-  }
-}
-function latestAudio() {
-  const audio = audios.at(-1);
-  assert.isDefined(audio);
-  return audio;
-}
-
-beforeEach(() => {
-  vi.useFakeTimers();
-  listeners.clear();
-  processors.length = 0;
-  audios.length = 0;
-  speechStarted = createDeferred();
-  request = vi.fn(async (method: string) => {
-    if (method === "tts.speak") {
-      return { audioBase64: "UklGRg==", mimeType: "audio/wav", provider: "openai" };
-    }
-    if (method === "talk.session.create") {
-      return sessionResult();
-    }
-    return { ok: true };
-  });
-  getUserMedia = vi.fn(async () => microphone());
-  Object.defineProperty(globalThis.navigator, "mediaDevices", {
-    configurable: true,
-    value: { getUserMedia },
-  });
-  vi.stubGlobal("AudioContext", MockAudioContext);
-  vi.stubGlobal("Audio", MockAudio);
-  vi.stubGlobal(
-    "URL",
-    class extends URL {
-      static override createObjectURL = vi.fn(() => "blob:synthetic-speech");
-      static override revokeObjectURL = vi.fn();
-    },
-  );
-});
-
-afterEach(() => {
-  for (const controller of controllers.splice(0)) {
-    controller.dispose();
-  }
-  cleanupSolid();
-  document.body.replaceChildren();
-  listeners.clear();
-  processors.length = 0;
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-});
+const dictationTest = setupComposerDictationTestHarness();
+const {
+  audios,
+  captureAudio,
+  captureStop,
+  click,
+  controllerFixture,
+  createButtonHarness,
+  createClient,
+  createHarness,
+  emit,
+  expectAppended,
+  expectClosed,
+  expectCommit,
+  getUserMedia,
+  latestAudio,
+  listeners,
+  microphone,
+  pointer,
+  pointerTarget,
+  processors,
+  recordRequests,
+  releaseLatched,
+  request,
+  sessionResult,
+  startDirect,
+  startHold,
+  transcript,
+} = dictationTest;
 
 describe("ComposerDictationOwner", () => {
+  it.each([
+    {
+      name: "syntax with boundary whitespace",
+      early: [" \tsnake case customer ID end identifier\n "],
+      late: [],
+      raw: " \tsnake case customer ID end identifier\n ",
+      expected: " \tcustomer_id\n ",
+    },
+    {
+      name: "supplied chunk boundaries",
+      early: [" \tfirst\n"],
+      late: ["\tsecond \n"],
+      raw: " \tfirst\n\tsecond \n",
+      expected: " \tfirst\n\tsecond \n",
+    },
+    {
+      name: "whitespace-only live final",
+      early: [" \t\n "],
+      late: [],
+      raw: " \t\n ",
+      expected: " \t\n ",
+    },
+    {
+      name: "whitespace-only late final",
+      early: [],
+      late: [" \t\n "],
+      raw: " \t\n ",
+      expected: " \t\n ",
+    },
+    {
+      name: "CR and CRLF copy-only output",
+      early: ["\tA\r\n"],
+      late: ["B\rC "],
+      raw: "\tA\r\nB\rC ",
+      expected: "\tA\r\nB\rC ",
+    },
+    {
+      name: "explicit separator between non-whitespace boundaries",
+      early: ["first"],
+      late: ["second"],
+      raw: "first second",
+      expected: "first second",
+    },
+    {
+      name: "disabled baseline revision notifications",
+      early: ["first"],
+      late: [],
+      raw: "first",
+      expected: "first",
+      review: false,
+    },
+  ])("delivers mounted microphone capture through Stop and review: $name", async (scenario) => {
+    const { early, late, raw, expected } = scenario;
+    const reviewing = !("review" in scenario && scenario.review === false);
+    request.mockImplementation(async (method) => {
+      if (method === "talk.catalog") {
+        return {
+          transcription: { ready: true, providers: [] },
+          realtime: { ready: false, providers: [] },
+        };
+      }
+      if (method === "talk.config") {
+        return { config: {} };
+      }
+      return method === "talk.session.create" ? sessionResult() : { ok: true };
+    });
+    patchSettings({
+      developerDictation: {
+        schemaVersion: 1,
+        enabled: reviewing,
+        mode: "developer",
+        locale: "en-US",
+        profileId: "en-us-plain-code",
+        profiles: [],
+      },
+    });
+    let draft = "Existing ";
+    const props = createComposerProps({
+      draft,
+      getDraft: () => draft,
+      gatewayClient: createClient(),
+      onToggleRealtimeTalk: vi.fn(),
+      onDraftChange: vi.fn((next) => {
+        draft = next;
+      }),
+    });
+    const container = document.body.appendChild(createComposerContainer());
+    renderComposerInto(container, props);
+    const state = getChatComposerState(props.paneId);
+    const input = state.composerTextarea!;
+    input.setSelectionRange(draft.length, draft.length);
+    const controller = state.dictation!;
+    try {
+      await waitForFast(() => expect(state.microphonePicker?.dictationStatus).toBe("ready"));
+      flush();
+      const microphoneButton = pointerTarget(
+        container.querySelector<HTMLButtonElement>(".chat-talk-control button")!,
+      );
+      await startHold(microphoneButton);
+      await waitForFast(() => expect(controller.connecting).toBe(false));
+      await releaseLatched(microphoneButton);
+      const revisionBeforePartial = state.editRevision;
+      emit({ type: "partial", text: "snake case customer ID end identifier" });
+      flush();
+      if (reviewing) {
+        expect(input.value).toBe("Existing ");
+        expect(state.editRevision).toBe(revisionBeforePartial);
+      } else {
+        expect(state.editRevision).toBeGreaterThan(revisionBeforePartial);
+      }
+      expect(state.developerSyntax?.blocksSend).toBe(reviewing);
+      for (const chunk of early) {
+        transcript(chunk);
+      }
+      const finish = vi.spyOn(controller, "finishActive");
+      microphoneButton.click();
+      const finished = finish.mock.results[0]?.value;
+      expect(finished).toBeDefined();
+      for (const chunk of late) {
+        transcript(chunk);
+      }
+      emit({ type: "close", reason: "completed" });
+      expect(await finished).toBe(!reviewing);
+      flush();
+      if (!reviewing) {
+        expect(state.developerSyntax?.review).toBeNull();
+        expect(draft).toBe(`Existing ${expected}`);
+        expect(props.onDraftChange).toHaveBeenCalledOnce();
+        expect(props.onSend).not.toHaveBeenCalled();
+        return;
+      }
+      expect(state.developerSyntax?.review?.raw).toBe(raw);
+      expect(state.developerSyntax?.review?.text).toBe(expected);
+      expect(draft).toBe("Existing ");
+      const insert = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Insert into draft",
+      )!;
+      expect(insert).toBeDefined();
+      if (expected.includes("\r")) {
+        expect(insert.disabled).toBe(true);
+        expect(state.developerSyntax?.accept()).toBe(false);
+        expect(state.developerSyntax?.review?.text).toBe(expected);
+        expect(props.onDraftChange).not.toHaveBeenCalled();
+      } else {
+        insert.click();
+        flush();
+        expect(draft).toBe(`Existing ${expected}`);
+        expect(props.onDraftChange).toHaveBeenCalledOnce();
+      }
+      expect(props.onSend).not.toHaveBeenCalled();
+    } finally {
+      await resetComposerFixture();
+    }
+  });
+
+  it("keeps established whitespace and replay behavior when syntax review is off", async () => {
+    const { controller, onCommit } = controllerFixture();
+    await startDirect(controller);
+    const first = {
+      type: "transcript",
+      text: " \tfirst\n ",
+      final: true,
+      talkEvent: { sessionId: "dictation-1", seq: 1 },
+    };
+    emit(first);
+    emit(first);
+    expect(controller.transcript).toBe("first first");
+    const finished = controller.finishActive();
+    transcript("\tsecond \n");
+    emit({ type: "close", reason: "completed" });
+    expect(await finished).toBe(true);
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("first first second", true);
+  });
+
+  it("captures review authority before provider startup and routes FIFO finals only to review", async () => {
+    const review = { finish: vi.fn(), cancel: vi.fn() };
+    const captureReview = vi.fn(() => review);
+    const { controller, onCommit } = controllerFixture({
+      captureReview,
+      reviewPending: () => false,
+    });
+    expect(controller.startDirect()).toBe(true);
+    expect(captureReview).toHaveBeenCalledOnce();
+    expect(getUserMedia).not.toHaveBeenCalled();
+    await vi.dynamicImportSettled();
+    await waitForFast(() => expect(controller.active && !controller.connecting).toBe(true));
+    emit({ type: "partial", text: "do not paint raw commands" });
+    transcript("snake case customer ID end identifier");
+    expect(controller.transcript).toBe("");
+    expect(controller.requiresReview).toBe(true);
+    const finished = controller.finishActive();
+    expect(controller.active).toBe(false);
+    expect(controller.requiresReview).toBe(true);
+    emit({ type: "close", reason: "completed" });
+    expect(await finished).toBe(false);
+    expect(review.finish).toHaveBeenCalledExactlyOnceWith("snake case customer ID end identifier");
+    expect(review.cancel).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("cancels a waiting reviewed recording on account handoff without a raw-text fallback", async () => {
+    const review = { finish: vi.fn(), cancel: vi.fn() };
+    const { controller, options, onCommit } = controllerFixture({ captureReview: () => review });
+    await startDirect(controller);
+    const finished = controller.finishActive();
+    controller.update({ ...options, client: createClient() });
+    transcript("late commands from retired account");
+    emit({ type: "close", reason: "completed" });
+    expect(await finished).toBe(false);
+    expect(review.cancel).toHaveBeenCalledOnce();
+    expect(review.finish).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("refuses another capture while the delivered review awaits a user action", () => {
+    const { controller } = controllerFixture({ reviewPending: () => true });
+    expect(controller.startDirect()).toBe(false);
+    expect(controller.active).toBe(false);
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it("rejects canonical replayed finals across Stop while retaining deliberate repeated text", async () => {
+    const review = { finish: vi.fn(), cancel: vi.fn() };
+    const { controller, onCommit } = controllerFixture({ captureReview: () => review });
+    await startDirect(controller);
+    const final = (seq: number) =>
+      emit({
+        type: "transcript",
+        text: "word",
+        final: true,
+        talkEvent: { sessionId: "dictation-1", seq },
+      });
+    final(1);
+    final(1);
+    const finished = controller.finishActive();
+    final(1);
+    final(2);
+    final(2);
+    emit({ type: "close", reason: "completed" });
+    expect(await finished).toBe(false);
+    expect(review.finish).toHaveBeenCalledExactlyOnceWith("word word");
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
   it.each(["cancel", "restart", "draft switch"])(
     "does not revive a retired lazy capture after %s",
     async (transition) => {
@@ -339,18 +358,18 @@ describe("ComposerDictationOwner", () => {
     const next = new GatewaySpeechPlayback();
     const reading = previous.speak(options.client, "First message");
     try {
-      await speechStarted.promise;
+      await dictationTest.speechStarted.promise;
       const firstAudio = latestAudio();
       await startDirect(controller);
       expect(firstAudio.pause).toHaveBeenCalledTimes(2);
       await reading;
       expect(controller.active).toBe(true);
       const finished = finalizing ? controller.finishActive() : null;
-      speechStarted = createDeferred();
+      dictationTest.resetSpeechStarted();
       const replacement = next.speak(options.client, "Second message");
       expect(controller.active).toBe(false);
       expect(stopTrack).toHaveBeenCalledOnce();
-      await speechStarted.promise;
+      await dictationTest.speechStarted.promise;
       await waitForFast(() => expectClosed("dictation-1", true));
       transcript("discard");
       emit({ type: "close", reason: "completed" });
@@ -446,7 +465,7 @@ describe("ComposerDictationOwner", () => {
     async (transition) => {
       const { promise: close, resolve: resolveClose } = createDeferred();
       let sessionsCreated = 0;
-      request = vi.fn(async (method: string) => {
+      request.mockImplementation(async (method: string) => {
         if (method === "talk.session.create") {
           const sessionId = `dictation-${++sessionsCreated}`;
           return sessionResult(sessionId);
@@ -868,7 +887,7 @@ describe("ComposerDictationOwner", () => {
 
   it("closes late session creation after the bounded Stop wait", async () => {
     const created = createDeferred<ReturnType<typeof sessionResult>>();
-    request = vi.fn(async (method: string) =>
+    request.mockImplementation(async (method: string) =>
       method === "talk.session.create" ? created.promise : { ok: true },
     );
     const { controller, target } = createHarness();

@@ -1,0 +1,85 @@
+.developer-syntax {
+  min-width: 0;
+  padding: 8px 12px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.developer-syntax summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.developer-syntax fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.developer-syntax label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.developer-syntax textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-family: monospace;
+  font-variant-ligatures: none;
+  resize: vertical;
+}
+
+.developer-syntax__review {
+  padding-block: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.developer-syntax__review h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.developer-syntax__review label {
+  margin-block: 8px;
+}
+
+.developer-syntax code,
+.developer-syntax pre {
+  overflow-wrap: anywhere;
+  font-variant-ligatures: none;
+  white-space: pre-wrap;
+  unicode-bidi: isolate;
+}
+
+.developer-syntax button,
+.developer-syntax select {
+  max-width: 100%;
+  padding: 5px 8px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font: inherit;
+}
+
+.developer-syntax__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}

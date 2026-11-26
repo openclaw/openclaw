@@ -47,6 +47,7 @@ function createChatComposerState(): ChatComposerState {
     stopRunFromEscape: null,
     sendDraft: null,
     dictation: null,
+    developerSyntax: null,
     composerDraftScope: null,
     dictationSelection: null,
     tasks,
@@ -168,6 +169,7 @@ function disposeChatComposerState(state: ChatComposerState) {
   state.mentionMenu.dispose();
   state.composerDraftScope = null;
   state.dictation?.dispose();
+  state.developerSyntax?.dispose();
   state.microphonePicker?.dispose();
   if (state.composerInput) {
     disconnectComposerPopoverAnchorObserver(state.composerInput);
