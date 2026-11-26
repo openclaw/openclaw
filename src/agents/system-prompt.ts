@@ -733,14 +733,13 @@ export function buildAgentSystemPrompt(params: {
       : "",
     // TRANSITIONAL(marker-retirement): bracket directives remain for automatic replies.
     !isMinimal &&
-      (!sourceMessageToolOnly || messageToolAvailable) &&
+      messageToolAvailable &&
       buildAssistantOutputDirectivesSection({
         sourceMessageToolOnly,
         messageToolAvailable,
         runtimeChannel,
       }),
-    !isMinimal &&
-      silentReplyPromptMode !== "none" && [
+    !isMinimal && [
         "## Silent Replies",
         `Nothing to say: entire reply exactly uppercase ${SILENT_REPLY_TOKEN}, without Markdown, punctuation, quotes, or other text.`,
         `Only that whole reply is silent. A literal leading ${SILENT_REPLY_TOKEN} followed by a newline removes just that line; all remaining text is visible. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`,
@@ -770,7 +769,7 @@ export function buildAgentSystemPrompt(params: {
       }),
     !isMinimal &&
       runtimeChannel === "webchat" &&
-      (!sourceMessageToolOnly || messageToolAvailable) && [
+      messageToolAvailable && [
         "## Control UI Embed",
         "`[embed ...]` renders inline bubbles on Control UI/webchat only (use regular links elsewhere; quote attributes; hosted Canvas refs/URLs or YouTube URLs only—never local/file:// or arbitrary URLs).",
         sourceMessageToolOnly

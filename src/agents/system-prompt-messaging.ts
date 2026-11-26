@@ -99,9 +99,9 @@ export function buildMessagingSection(params: {
   const groupMessageToolOnly =
     messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
   const suppressSilentTokenGuidance = messageToolOnly || params.silentReplyPromptMode === "none";
-  const completionEventGuidance = suppressSilentTokenGuidance
-    ? "- Completion events requesting an update: rewrite in normal voice and send; never forward raw metadata or a silent placeholder."
-    : `- Completion events requesting an update: rewrite in normal voice and send; never forward raw metadata or default to ${SILENT_REPLY_TOKEN}.`;
+  // Always use the same completion-event guidance wording to keep the suffix
+  // digest stable across normal and announce/yield turns.
+  const completionEventGuidance = `- Completion event requesting update: rewrite in normal voice; send. Never forward raw metadata or default to ${SILENT_REPLY_TOKEN}.`;
   return [
     "## Messaging",
     visibleReplyInstruction,
