@@ -34,22 +34,39 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-it("applies a draft over the live skill as an undoable change and deletes the draft", async () => {
+it("records one undoable change when two clients apply the same draft", async () => {
   const id = await saveWorkshopDraft({}, "main", {
     name: "deploy",
     content: skillFile("deploy", "Run make ship."),
     reason: "target was renamed",
   });
 
-  const changes = await applyWorkshopDraft(ctx, id);
-
-  expect(changes).toEqual([
+  const results = await Promise.allSettled([
+    applyWorkshopDraft(ctx, id),
+    applyWorkshopDraft(ctx, id),
+  ]);
+  const writes = (await listWorkshopChanges("main", {})).filter(
+    (change) => change.action === "write_file",
+  );
+  expect(writes).toEqual([
     expect.objectContaining({ action: "write_file", actor: "user", summary: "target was renamed" }),
   ]);
+  expect(results).toEqual(
+    expect.arrayContaining([
+      { status: "fulfilled", value: writes },
+      {
+        status: "rejected",
+        reason: expect.objectContaining({ message: expect.stringContaining(`No draft "${id}".`) }),
+      },
+    ]),
+  );
   expect((await viewWorkshopSkill({}, "main", "deploy")).content).toContain("make ship");
   expect(await listWorkshopDrafts({}, "main")).toEqual([]);
-  await restoreWorkshopSkill(ctx, { name: "deploy" });
-  expect((await viewWorkshopSkill({}, "main", "deploy")).content).toContain("make deploy");
+  expect(writes[0].versionId).toBeTruthy();
+  await restoreWorkshopSkill(ctx, { name: "deploy", versionId: writes[0].versionId });
+  expect((await viewWorkshopSkill({}, "main", "deploy")).content).toBe(
+    skillFile("deploy", "Run make deploy."),
+  );
 });
 
 it("applies a multi-file draft as one change that a single undo reverts", async () => {
@@ -135,6 +152,11 @@ it("keeps the live skill whole when a later draft file cannot be written", async
   expect(live.content).toContain("make deploy");
   expect(live.files).toEqual(["SKILL.md", "references/notes.md"]);
   expect(await listWorkshopChanges("main", {})).toHaveLength(2);
+
+  await fs.unlink(path.join(draftDir, "references", "notes.md", "x.md"));
+  const [change] = await applyWorkshopDraft(ctx, "deploy-proposal-3");
+  expect(change.action).toBe("write_file");
+  expect((await viewWorkshopSkill({}, "main", "deploy")).content).toContain("make ship");
 });
 
 it("creates a new skill from a draft and leaves the inbox when a draft changes nothing", async () => {
