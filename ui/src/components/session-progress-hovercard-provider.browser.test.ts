@@ -1,5 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { afterEach, expect, it, vi } from "vitest";
+import { page } from "vitest/browser";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createHovercard } from "./session-progress-hovercard.test-support.ts";
 
@@ -46,6 +47,9 @@ afterEach(async () => {
 });
 
 it("preserves child connections and follows only the current provider through replacement and reconnect", async () => {
+  // The shared Chromium page can leave its mouse over the next test's row.
+  // Keep pointer admission out of this keyboard/provider lifecycle test.
+  await page.elementLocator(document.documentElement).hover({ position: { x: 1, y: 1 } });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   let connections = 0;
   let disconnections = 0;
