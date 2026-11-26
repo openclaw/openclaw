@@ -2,6 +2,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
+import "../../../styles/base.css";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { makeMenu } from "./chat-composer-menu.test-support.ts";
@@ -37,7 +38,9 @@ it("closes an entering composer menu before activating its retained file input",
   await expect
     .poll(() => view.container.querySelector('[role="menuitem"][data-value="file"]'))
     .not.toBeNull();
-  expect(surface.getAnimations().some((animation) => animation.playState === "running")).toBe(true);
+  await expect
+    .poll(() => surface.getAnimations().some((animation) => animation.playState === "running"))
+    .toBe(true);
   const file = view.container.querySelector<HTMLElement>('[role="menuitem"][data-value="file"]')!;
   let enteringAtPointerDown = false;
   file.addEventListener("pointerdown", () => {
