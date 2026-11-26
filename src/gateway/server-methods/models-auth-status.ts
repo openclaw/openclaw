@@ -27,8 +27,12 @@ import type { RuntimeAuthProfileStore } from "../../agents/auth-profiles/types.j
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { signInNeedsApiKeyForVoice } from "../../agents/voice-sign-in-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { ProviderAuthMethod } from "../../plugins/provider-authentication.types.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunsForProvider } from "../chat-abort.js";
@@ -57,6 +61,43 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("models-auth-status");
+const PROVIDER_REVOKE_TIMEOUT_MS = 30_000;
+
+/**
+ * The auth method that declares account actions for a provider's saved OAuth sign-ins,
+ * read from the loaded plugin registry; a status read never loads a plugin.
+ */
+function findOAuthAccountMethod(provider: string): ProviderAuthMethod | undefined {
+  const registry =
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
+  const providerId = normalizeProviderId(provider);
+  return registry?.providers
+    .find((entry) => normalizeProviderId(entry.provider.id) === providerId)
+    ?.provider.auth.find((method) => method.revoke || method.accountManagementUrl);
+}
+
+function projectOAuthAccountActions(
+  provider: string,
+): ModelAuthStatusProvider["oauthAccountActions"] {
+  const method = findOAuthAccountMethod(provider);
+  if (!method) {
+    return undefined;
+  }
+  const disconnectLabel = method.disconnectLabel?.trim();
+  const manageLabel = method.accountManagementLabel?.trim();
+  const manageUrl =
+    method.accountManagementUrl && URL.parse(method.accountManagementUrl)?.protocol === "https:"
+      ? method.accountManagementUrl
+      : undefined;
+  const actions: NonNullable<ModelAuthStatusProvider["oauthAccountActions"]> = {
+    ...(method.revoke ? { disconnect: disconnectLabel ? { label: disconnectLabel } : {} } : {}),
+    ...(manageUrl
+      ? { manage: { url: manageUrl, ...(manageLabel ? { label: manageLabel } : {}) } }
+      : {}),
+  };
+  return actions.disconnect || actions.manage ? actions : undefined;
+}
+
 function resolveAuthRefreshScope(cfg: OpenClawConfig): {
   providerIds: string[];
   profileIds?: string[];
@@ -279,6 +320,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const revoke = params.revoke !== undefined;
+    if (revoke && (params.revoke !== true || selection.profileIds?.length !== 1)) {
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "revoke requires exactly one profileId");
+      return;
+    }
     const apiKeyOnly = params.credentialType === "api_key";
     await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
@@ -307,6 +353,36 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           "profileIds contain unavailable auth profiles",
         );
         return;
+      }
+      if (revoke) {
+        const profileId = removedProfiles[0]!;
+        const credential = store.profiles[profileId];
+        const method = findOAuthAccountMethod(provider);
+        if (credential?.type !== "oauth" || !method?.revoke) {
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "This sign-in cannot be disconnected at its provider. Sign out on this device instead.",
+          );
+          return;
+        }
+        // The saved sign-in stays until the provider confirms the grant is gone.
+        try {
+          await method.revoke({
+            profileId,
+            credential,
+            config: cfg,
+            signal: AbortSignal.timeout(PROVIDER_REVOKE_TIMEOUT_MS),
+          });
+        } catch (error) {
+          log.warn(`provider revoke failed for ${provider}: ${formatForLog(error)}`);
+          respondError(
+            respond,
+            ErrorCodes.UNAVAILABLE,
+            `${formatErrorMessage(error)} The sign-in is still saved on this device.`,
+          );
+          return;
+        }
       }
       const { removeModelAuthCredentials } = await import("../../commands/models/auth-logout.js");
       const configWarning = await removeModelAuthCredentials({
@@ -521,6 +597,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               ? { profileOrderLocked: "auth-config" as const }
               : {}),
           ...(apiKey ? { apiKey } : {}),
+          oauthAccountActions: hasRefreshableProfile
+            ? projectOAuthAccountActions(prov.provider)
+            : undefined,
           ...(!apiKey &&
           !prov.profiles.some((profile) => profile.type === "api_key") &&
           signInNeedsApiKeyForVoice(store, prov.provider)
