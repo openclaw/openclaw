@@ -359,7 +359,8 @@ async function precacheOfflineShell(signal) {
     .replaceAll('href="./', () => `href="${escapedPath}`)
     .replace(
       "<html",
-      () => `<html data-openclaw-control-ui-base-path="${escapedPath.slice(0, -1)}"`,
+      () =>
+        `<html data-openclaw-control-ui-base-path="${escapedPath.slice(0, -1)}" data-openclaw-terminal-enabled="false"`,
     );
   let csp = OFFLINE_BOOT.csp;
   const importMap = /(<script\b[^>]*\btype="importmap"[^>]*>)([\s\S]*?)(<\/script>)/u.exec(html);
