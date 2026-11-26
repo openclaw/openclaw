@@ -35,7 +35,10 @@ import {
 } from "./session-accessor.sqlite-replacement-worker.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import { readSessionActorEntryFacts } from "./session-actor-replica.js";
-import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
+import {
+  projectSessionEntryPatch,
+  type SessionEntryPatchWriteIntent,
+} from "./session-entry-patch-operation.js";
 import type {
   SessionEntryPatchCommit,
   SessionEntryPatchCommitted,
@@ -268,12 +271,17 @@ export async function patchSessionEntryInWorker(params: {
         !params.onCommitted &&
         !params.onCommittedSource
       ) {
+        const writeIntent: SessionEntryPatchWriteIntent = {};
         const next = projectSessionEntryPatch({
           ...prepared,
+          writeIntent,
           existing: retainedEntry,
           writeBase: retainedEntry,
         });
-        if (!next || sqliteSessionEntriesEqual(next, retainedEntry)) {
+        if (
+          !writeIntent.invalidateArchiveUndo &&
+          (!next || sqliteSessionEntriesEqual(next, retainedEntry))
+        ) {
           params.assertCurrent();
           params.assertCommitAllowed?.();
           params.guard?.assertCurrent?.();

@@ -441,11 +441,11 @@ it.for(ROWS.flatMap((row) => COLUMNS.map((column) => ({ row, column }))))(
         );
         expect
           .soft(assignment.ok, `${row}: catalog-only users.setRole`)
-          .toBe(row.startsWith("member"));
-        if (!row.startsWith("member") && row !== "local" && row !== "token") {
-          expect
-            .soft(assignment.ok ? "accepted" : assignment.error)
-            .toContain("gateway.roles.default");
+          .toBe(row !== "local" && row !== "token");
+        if (assignment.ok) {
+          expect.soft(assignment.value).toMatchObject({
+            profile: { id: f.ownProfileId, role: "reader" },
+          });
         }
       }
       const connection = await settled(f.connect());

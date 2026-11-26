@@ -186,7 +186,7 @@ describe("explicit Gateway lock recovery", () => {
           pid: payload.pid,
           host: "stopped-foreign-container",
           startedAt: payload.startTime ?? null,
-          processNamespace: payload.processNamespace,
+          // Pre-namespace releases persisted the owner without processNamespace.
         },
         port: 18789,
         mode: "foreground",

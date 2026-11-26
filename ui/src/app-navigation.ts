@@ -272,6 +272,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
       "automation",
     ],
   },
+  { labelKey: "nav.settingsGroupTeam", routes: ["roles"] },
   {
     labelKey: "nav.settingsGroupSecurity",
     routes: ["security", "secrets", "approvals"],
@@ -394,6 +395,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   apps: navigationPresentation("layoutGrid", "apps"),
   portals: navigationPresentation("portals", "portals"),
   approvals: navigationPresentation("badgeCheck", "approvals"),
+  roles: navigationPresentation("users", "roles"),
   workboard: navigationPresentation("workboard", "workboard"),
   worktrees: navigationPresentation("folder", "worktrees"),
   projects: navigationPresentation("folders", "projects"),

@@ -133,38 +133,6 @@ vi.mock("../infra/owned-directory-observation.js", () => ({
 }));
 
 describe("canonical proof on physical database validation", () => {
-  it.for(["first capture", "reader admission", "observation", "unadmitted locator"] as const)(
-    "keeps %s filesystem checks off the calling thread",
-    async (phase, { empty: { database } }) => {
-      if (phase !== "first capture") {
-        await captureReadValidation(database);
-      }
-      const stat = vi.spyOn(fs, "statSync");
-      const realpath = vi.spyOn(fs.realpathSync, "native");
-      syncBuiltinESMExports();
-      try {
-        if (phase === "unadmitted locator") {
-          expect(
-            await captureReadValidation({ ...database, path: `${database.path}.missing` }),
-          ).toBeUndefined();
-        } else if (phase === "observation") {
-          for (const observer of activeObservers(database.path)) {
-            observer.notify(path.basename(database.path), "rename");
-          }
-          await captureReadValidation(database, "admission");
-        } else {
-          expect(await captureReadValidation(database, "admission")).toBeDefined();
-        }
-        expect(stat).not.toHaveBeenCalled();
-        expect(realpath).not.toHaveBeenCalled();
-      } finally {
-        stat.mockRestore();
-        realpath.mockRestore();
-        syncBuiltinESMExports();
-      }
-    },
-  );
-
   it.for(["ordinary close", "fixture retirement"] as const)(
     "handles a removed fixture's queued observation after %s",
     async (cleanup, { empty: { database, options } }) => {

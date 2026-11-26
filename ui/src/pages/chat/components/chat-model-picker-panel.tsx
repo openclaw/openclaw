@@ -82,6 +82,9 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       ?.presentation;
   const providerDisplayLabel = (provider: string) =>
     defaultProviderLabel(provider, providerPresentation(provider));
+  // Favorites mixes providers under one heading, so its rows name their provider in full.
+  const rowHeading = (provider: string) =>
+    provider === FAVORITES_GROUP ? undefined : providerDisplayLabel(provider);
   const modelTargetGroups = createMemo(() => panel.params.targetGroups);
   const selectedModelValue = createMemo(() => panel.params.selectedModelValue);
   const selectedAgentRuntime = createMemo(() => panel.params.selectedAgentRuntime);
@@ -175,28 +178,20 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       rows: [
         ...providerGroups
           .filter(([provider]) => provider !== FAVORITES_GROUP || !search?.query().trim())
-          .flatMap(([provider, group]) =>
-            group.lead
-              .map((entry) =>
-                Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }, defaultLabel), {
-                  key: modelRowKey(entry, provider),
-                  provider,
-                  list: provider,
-                }),
-              )
-              .concat(
-                group.more.map((entry) =>
-                  Object.assign(
-                    modelOptionSearchRow({ ...modelSearchProps, entry }, defaultLabel),
-                    {
-                      provider,
-                      more: true,
-                      list: `${provider}:more`,
-                    },
-                  ),
+          .flatMap(([provider, group]) => {
+            const row = (entry: ModelPickerOption, list: string) =>
+              Object.assign(
+                modelOptionSearchRow(
+                  { ...modelSearchProps, entry, groupLabel: rowHeading(provider) },
+                  defaultLabel,
                 ),
-              ),
-          ),
+                { key: modelRowKey(entry, provider), provider, list },
+              );
+            const more = group.more.map((entry) => row(entry, `${provider}:more`));
+            return group.lead
+              .map((entry) => row(entry, provider))
+              .concat(more.map((entry) => Object.assign(entry, { more: true })));
+          }),
         ...targetGroups.flatMap((group) =>
           group.options.map((entry) => ({
             key: `target:${group.id}:${entry.value}`,
@@ -376,6 +371,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             disabled={disabled()}
             entry={props.entry}
             rowKey={key()}
+            groupLabel={rowHeading(props.provider)}
             favorite={
               favorites.available()
                 ? {
