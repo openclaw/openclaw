@@ -466,6 +466,7 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     }
     type SharedFact = { fact: Partial<T>; rows: number | number[] };
     const candidates = new Map<string, Fact>();
+    // oxlint-disable-next-line unicorn/no-new-array -- Fill one slot per input without growing the page vector.
     const rows = new Array<GatewaySessionRow>(sessions.length);
     const fieldCounts = new Uint32Array(sessions.length);
     const fields: Fact[][] = [];
@@ -503,6 +504,7 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         retained = { facts, bytes, rawBytes };
         prepared.set(row, retained);
       }
+      // oxlint-disable-next-line typescript/prefer-for-of -- Avoid per-row iterator allocation while packing the page.
       for (let factIndex = 0; factIndex < facts.length; factIndex++) {
         const fact = facts[factIndex]!;
         const candidate = candidates.get(fact.encoded);
