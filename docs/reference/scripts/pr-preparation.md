@@ -195,7 +195,7 @@ workflow identity only when it remains an ancestor of fresh authenticated main
 and its complete wrapper inventory is byte-identical, including paths and modes.
 The fresh main checkpoint remains separate from the review's workflow identity.
 Other current-workflow admission and recovery commands still require the exact
-current-main workflow.
+current-main workflow at locked qualification.
 
 The source review must be a fresh independent exact-source correction review with
 that same typed pending-proof authorization, incoming review, workflow source,

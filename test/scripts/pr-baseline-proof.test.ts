@@ -316,9 +316,33 @@ const boundFixture = reuseBaselineFixture((root) => {
   };
 });
 
-function advanceQualification(f: ReturnType<typeof boundFixture>, advanced: string) {
+function advanceQualification(
+  f: ReturnType<typeof boundFixture>,
+  advanced: string,
+  advanceTracking = false,
+) {
   const workflow = f.sourceReview.correction.proofPublication.workflowSource;
   const marker = f.local("qualification-advanced");
+  const selectionMarker = f.local("selection-advanced");
+  if (advanceTracking) {
+    // Advance shared tracking at the descriptor handoff; locked qualification
+    // below independently fetches the remote main and authenticates its closure.
+    writeFileSync(
+      join(f.root, "bin/node"),
+      `#!/bin/sh
+set -e
+case " $* " in
+  *' workflow-context-read '*)
+    if [ ! -f '${selectionMarker}' ]; then
+      git -C '${f.repo}' update-ref refs/remotes/origin/main '${advanced}' '${workflow}'
+      printf '%s' '${advanced}' > '${selectionMarker}'
+    fi ;;
+esac
+exec '${process.execPath}' "$@"
+`,
+      { mode: 0o700 },
+    );
+  }
   const proxy = f.local("advance-main-git.cjs");
   writeFileSync(
     proxy,
@@ -336,7 +360,7 @@ else process.exit(result.status ?? 1);
 `,
     { mode: 0o755 },
   );
-  return { marker, extra: { OPENCLAW_PR_GIT: proxy } };
+  return { marker, selectionMarker, extra: { OPENCLAW_PR_GIT: proxy } };
 }
 
 function workflowAdmission(
@@ -380,36 +404,36 @@ fi
 }
 
 describePosix("proof workflow selection across main advancement", () => {
-  it.each(["write", "read", "admit"])(
-    "authenticates the complete immutable closure during %s",
-    (phase) => {
-      for (const changed of [false, true]) {
-        const f = boundFixture();
-        if (changed) {
-          const path = join(f.repo, "scripts/lib/record-shared.mjs");
-          writeFileSync(path, readFileSync(path, "utf8") + "\n");
-          f.git(f.repo, "add", "scripts/lib/record-shared.mjs");
-        }
-        const main = f.git(
-          f.repo,
-          "commit-tree",
-          "-S",
-          f.git(f.repo, "write-tree"),
-          "-p",
-          f.baseline,
-          "-m",
-          "test: advanced workflow checkpoint",
-        );
-        f.git(f.repo, "reset", "--hard", f.baseline);
-        const result = workflowAdmission(f, phase, main);
-        expect(result.status, result.stdout + result.stderr).toBe(changed ? 1 : 0);
-        if (changed) {
-          expect(result.stderr).toContain("Proof baseline workflow differs");
-        }
-        expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42")).toBe(f.binding);
+  it.each(["write", "read", "admit"])("authenticates the selected workflow during %s", (phase) => {
+    for (const changed of [false, true]) {
+      const f = boundFixture();
+      if (changed) {
+        const path = join(f.repo, "scripts/lib/record-shared.mjs");
+        writeFileSync(path, readFileSync(path, "utf8") + "\n");
+        f.git(f.repo, "add", "scripts/lib/record-shared.mjs");
       }
-    },
-  );
+      const main = f.git(
+        f.repo,
+        "commit-tree",
+        "-S",
+        f.git(f.repo, "write-tree"),
+        "-p",
+        f.baseline,
+        "-m",
+        "test: advanced workflow checkpoint",
+      );
+      f.git(f.repo, "reset", "--hard", f.baseline);
+      const result = workflowAdmission(f, phase, main);
+      // Reads authenticate the held selection; the fresh locked checkpoint
+      // owns closure comparison. Shared tracking can advance between them.
+      const rejectsDrift = changed && phase !== "read";
+      expect(result.status, result.stdout + result.stderr).toBe(rejectsDrift ? 1 : 0);
+      if (rejectsDrift) {
+        expect(result.stderr).toContain("Proof baseline workflow differs");
+      }
+      expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42")).toBe(f.binding);
+    }
+  });
 
   it.each(["1", "review-recovery"])(
     "keeps %s admission exact-current even when the wrapper closure is identical",
@@ -480,15 +504,16 @@ describePosix("proof workflow selection across main advancement", () => {
 });
 
 describePosix("proof baseline with retained predecessor authority", () => {
-  it("retains the reviewed workflow when qualification main advances with identical wrapper bytes", () => {
+  it("retains the reviewed workflow when main advances during handoff and qualification", () => {
     const f = boundFixture();
     const workflow = f.sourceReview.correction.proofPublication.workflowSource;
     const advanced = f.advanceMain("unrelated qualification update");
     f.git(f.repo, "reset", "--hard", workflow);
-    const { marker, extra } = advanceQualification(f, advanced);
+    const { marker, selectionMarker, extra } = advanceQualification(f, advanced, true);
     const before = nativeState(f);
     const result = f.run(command, f.args, extra);
     nativeTrace(f, "allowed-equivalent-new-main", before, result, 0);
+    expect(readFileSync(selectionMarker, "utf8")).toBe(advanced);
     expect(existsSync(marker), result.stdout + result.stderr).toBe(true);
     expect(readFileSync(marker, "utf8")).toBe(advanced);
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -540,9 +565,16 @@ describePosix("proof baseline with retained predecessor authority", () => {
         "test: qualification drift",
       );
       f.git(f.repo, "reset", "--hard", workflow);
-      const { marker, extra } = advanceQualification(f, advanced);
+      const { marker, selectionMarker, extra } = advanceQualification(
+        f,
+        advanced,
+        fault === "content",
+      );
       const before = nativeState(f);
       const result = f.run(command, f.args, extra);
+      if (fault === "content") {
+        expect(readFileSync(selectionMarker, "utf8")).toBe(advanced);
+      }
       expect(existsSync(marker), result.stdout + result.stderr).toBe(true);
       expect(readFileSync(marker, "utf8")).toBe(advanced);
       expect(result.status, result.stdout + result.stderr).not.toBe(0);
