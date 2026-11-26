@@ -47,6 +47,19 @@ During `openclaw --profile rescue onboard`:
 
 Prompts are otherwise identical to normal onboarding.
 
+### Updating with a rescue bot
+
+Both profiles run from the same installation. If an update stops with `runtime-artifact-publication` and says another Gateway service uses this installation, the rescue bot's Gateway is still running from the files the update replaces. The updater does not stop another profile's Gateway for you, and both Gateways keep serving the old version. Stop the rescue bot, update, then start it again:
+
+```bash
+openclaw --profile rescue gateway stop --force
+openclaw update
+openclaw --profile rescue gateway start
+openclaw --profile rescue gateway status
+```
+
+`--force` is needed when the shell is not interactive, for example over SSH without a terminal.
+
 ## General multi-gateway setup
 
 The same isolation pattern works for any pair or group of Gateways on one host. Give each extra Gateway its own named profile and base port.

@@ -1,7 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { isReportableUpdateRun } from "../shared/update-outcome-classification.js";
 import { expectText } from "../test-utils/text-assertions.js";
+import { createUpdateFailureFact, normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import {
+  createUpdatePreflightFailure,
+  UPDATE_PREFLIGHT_DETAILS,
+} from "./update-preflight-details.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import * as reportHealth from "./update-run-report-health.js";
 import {
@@ -883,3 +888,43 @@ it.each<[UpdateRunRecord["status"], string | null, string, Step[]?]>([
     expect(report.headline).toBe(headline);
   },
 );
+
+it("keeps the shared-installation cause and next step that path redaction used to drop", async () => {
+  const root = "/home/operator/.npm-global/lib/node_modules/openclaw";
+  const local = `Cannot replace ${root}: another managed Gateway (systemd user unit "openclaw-gateway-rescue.service") is still using this installation. Stop that Gateway through its own service manager or Startup process, then retry the update. Its files and service were left unchanged.`;
+  const env = { HOME: "/home/operator" };
+  // A fact built from the local message keeps nothing after the installation root.
+  expect(
+    createUpdateFailureFact(
+      {
+        check: "runtime-artifact-publication",
+        code: "runtime-artifact-publication",
+        message: local,
+      },
+      env,
+    ).message,
+  ).toBe("Cannot replace [redacted-path]");
+  const facts = normalizeUpdateFailureFacts(
+    createUpdatePreflightFailure(
+      "shared-installation-gateway-running",
+      undefined,
+      "runtime-artifact-publication",
+    ).failureFacts,
+    env,
+  );
+  const detail = UPDATE_PREFLIGHT_DETAILS["shared-installation-gateway-running"];
+  const record = failed({
+    reason: "runtime-artifact-publication",
+    steps: [failedStep("activating", { exitCode: 1, failureFacts: facts })],
+  });
+  const report = renderRecord(record);
+  expect(report.lines).toContain(
+    `Failing check runtime-artifact-publication (shared-installation-gateway-running): ${detail}`,
+  );
+  const shared = await failureReport(record);
+  expect(shared.body).toContain(detail);
+  for (const text of [report.markdown, shared.body]) {
+    expect(text).not.toContain("operator");
+    expect(text).not.toContain("openclaw-gateway-rescue");
+  }
+});
