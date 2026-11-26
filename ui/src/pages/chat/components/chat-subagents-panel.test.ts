@@ -199,6 +199,47 @@ const openSelector = (mobile?: boolean) =>
       ? ".subagents-desktop__open"
       : ".chat-subagents__open";
 
+it.each([false, true])(
+  "shows each child's model in the %s roster without guessing",
+  async (mobile) => {
+    const rows = [
+      {
+        ...child("named"),
+        model: "model-a",
+        modelProvider: "fixture",
+        activeModel: "model-a",
+        activeModelProvider: "fixture",
+        modelDisplayName: "Model A",
+        runtimeMs: 18_000,
+      },
+      {
+        ...child("fallback"),
+        model: "model-b",
+        modelDisplayName: "Model B",
+        activeModel: "model-c",
+      },
+      {
+        ...child("done"),
+        model: "model-d",
+        status: "done" as const,
+        hasActiveRun: false,
+        activeRunIds: [],
+      },
+      child("unknown"),
+    ];
+    const f = mountRows(() => rows, mobile);
+    await f.waitForCount(openSelector(mobile), rows.length);
+    const text = (row: GatewaySessionRow) =>
+      f.panel.querySelector('[data-session-key="' + row.key + '"] ' + openSelector(mobile))
+        ?.textContent;
+    expect(text(rows[0])).toMatch(/Working for.*18s.*·.*Model A/);
+    expect(text(rows[1])).toContain("model-c");
+    expect(text(rows[1])).not.toContain("Model B");
+    expect(text(rows[2])).toContain("model-d");
+    expect(text(rows[3])).not.toContain("·");
+  },
+);
+
 it.each([undefined, false, true])(
   "retains the %s list through an observed refresh and recovers a failed read",
   async (mobile) => {

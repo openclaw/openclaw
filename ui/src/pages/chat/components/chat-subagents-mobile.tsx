@@ -15,6 +15,7 @@ registerEnglishCatalog(registerChatSessionOptionalEnglish);
 export type ChatSubagentMobileItem = {
   key: string;
   title: string;
+  modelLabel?: string;
   status: "running" | "waiting" | "queued" | "finished" | "failed" | "stopped";
   statusLabel: string;
   /** The native elapsed-time element or formatted duration; no presenter timer. */
@@ -90,12 +91,22 @@ function MobileRow(props: {
           <strong>
             <SubagentListName name={props.item.title} />
           </strong>
-          {!finished() && props.item.elapsed && (
+          {((!finished() && props.item.elapsed) || props.item.modelLabel) && (
             <span class="chat-subagents-mobile__stats">
-              {props.item.status === "running" && (
-                <span>{t("chat.subagentsPanel.workingFor")}</span>
+              {!finished() && props.item.elapsed && (
+                <span>
+                  {props.item.status === "running" && `${t("chat.subagentsPanel.workingFor")} `}
+                  {props.item.elapsed}
+                </span>
               )}
-              {props.item.elapsed}
+              {props.item.modelLabel && (
+                <>
+                  {!finished() && props.item.elapsed && <span aria-hidden="true">·</span>}
+                  <span class="chat-subagents__model" title={props.item.modelLabel}>
+                    {props.item.modelLabel}
+                  </span>
+                </>
+              )}
             </span>
           )}
         </span>

@@ -41,6 +41,7 @@ const MAX_RETAINED_CALLS = 1024;
 
 export type SubagentsPanelRow = {
   session: GatewaySessionRow;
+  modelLabel?: string;
   depth?: number;
   callCount?: { count: number; exact: boolean };
   activity?: string;
@@ -551,6 +552,12 @@ export class SubagentsPanelData {
       }).abort;
       return {
         session,
+        modelLabel:
+          session.activeModel &&
+          (session.activeModel !== session.model ||
+            session.activeModelProvider !== session.modelProvider)
+            ? session.activeModel
+            : session.modelDisplayName || session.model,
         depth: this.depths.get(session.key) ?? 0,
         callCount: metrics ? subagentToolCallCount(metrics) : undefined,
         activity:
