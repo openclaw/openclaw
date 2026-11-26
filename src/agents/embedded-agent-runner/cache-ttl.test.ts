@@ -67,6 +67,19 @@ describe("isCacheTtlEligibleProvider", () => {
   it("allows custom anthropic-messages providers", () => {
     expect(isEligible("litellm", "claude-sonnet-4-6", "anthropic-messages")).toBe(true);
   });
+
+  it("excludes Vertex and legacy Vertex google-generative-ai from cache-ttl pruning", () => {
+    const g = "google-generative-ai";
+    const ok = (p: string, a: string, baseUrl?: string, id = "gemini-3.1-pro-preview") =>
+      isEligible(p, id, a, baseUrl ? { baseUrl } : undefined);
+    expect(ok("google", g)).toBe(true);
+    expect(ok("google-vertex", "google-vertex")).toBe(false);
+    expect(ok("google-vertex", g)).toBe(false);
+    expect(ok("google", g, "https://us-central1-aiplatform.googleapis.com/v1")).toBe(false);
+    expect(ok("google", g, "https://aiplatform.eu.rep.googleapis.com/v1", "gemini-2.5-flash")).toBe(
+      false,
+    );
+  });
 });
 
 describe("readLastCacheTtlTimestamp", () => {

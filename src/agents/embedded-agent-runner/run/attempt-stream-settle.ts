@@ -658,6 +658,8 @@ export async function prepareEmbeddedAttemptTransport(input: {
     attempt.provider,
     attempt.model.api,
     attempt.modelId,
+    undefined,
+    attempt.model.baseUrl,
   );
   const agentTransportOverride = resolveAgentTransportOverride({
     settingsManager: input.settingsManager,
