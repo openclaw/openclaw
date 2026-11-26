@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { isClientToolNameConflictError } from "../agents/embedded-agent-runner/tool-name-allowlist.js";
@@ -12,11 +13,11 @@ import { isAbortError } from "../infra/abort-signal.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantResultText } from "./agent-event-assistant-text.js";
+import { usesSharedSecretGatewayMethod } from "./http-auth-user-profile.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { resolveOpenAiCompatError, type OpenAiCompatError } from "./openai-compat-errors.js";
-import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
-import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayHttpOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
@@ -114,7 +115,6 @@ export async function runOpenAiCompatibleAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
-  senderIsOwner: boolean;
   requestAuth: AuthorizedGatewayHttpRequest;
   operatorScopes: readonly string[];
   abortSignal?: AbortSignal;
@@ -141,16 +141,15 @@ export async function runOpenAiCompatibleAgentCommand(params: {
     openclawIdPrincipal: params.requestAuth.openclawIdPrincipal,
     scopes: [...params.operatorScopes],
   });
-  // Tunnel owners also retain their authenticated device, not just owner-profile attribution.
-  const requiresOperatorContext =
-    params.requestAuth.openclawIdPrincipal !== undefined ||
-    resolveGatewayOperatorRoleActor(client)?.kind === "operator";
+  const requiresOperatorContext = Boolean(
+    params.requestAuth.authenticatedUserProfile || params.requestAuth.openclawIdPrincipal,
+  );
   const gatewayContext = requiresOperatorContext ? params.resolveGatewayContext?.() : undefined;
   if (requiresOperatorContext && !gatewayContext) {
     throw new Error("OpenAI-compatible operator execution requires a current Gateway context.");
   }
   const captured = gatewayContext
-    ? await prepareGatewayOperatorRunAuthority({
+    ? await prepareGatewayHttpOperatorRunAuthority({
         client,
         context: {
           getRuntimeConfig: gatewayContext.getRuntimeConfig,
@@ -169,6 +168,12 @@ export async function runOpenAiCompatibleAgentCommand(params: {
         ? AbortSignal.any([params.abortSignal, sourceSignal])
         : (params.abortSignal ?? sourceSignal);
     abortSignal?.throwIfAborted();
+    // A shared-secret owner is not an authenticated personal MCP requester.
+    const mcpRequesterProfileId =
+      normalizeOptionalString(params.requestAuth.user) &&
+      !usesSharedSecretGatewayMethod(params.requestAuth.authMethod)
+        ? normalizeOptionalString(params.requestAuth.authenticatedUserProfile?.profileId)
+        : undefined;
     const result = await agentCommandFromGatewayIngress(
       {
         message: params.message,
@@ -181,7 +186,8 @@ export async function runOpenAiCompatibleAgentCommand(params: {
         runId: params.runId,
         deliver: false,
         messageChannel: params.messageChannel,
-        senderIsOwner: params.senderIsOwner,
+        runContext: mcpRequesterProfileId ? { mcpRequesterProfileId } : undefined,
+        senderIsOwner: captured?.authority.grant.owner,
         bestEffortDeliver: false,
         allowModelOverride: params.modelOverride !== undefined,
         abortSignal,

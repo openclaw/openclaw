@@ -169,13 +169,15 @@ export async function readBundledPluginAssetHooks(options: AssetOptions = {}) {
 
 /**
  * Runs bundled plugin asset hook commands for the selected phase/plugins.
+ * Release packagers print machine-readable results on stdout, so hook progress
+ * goes to stderr.
  */
 export async function runBundledPluginAssetHooks(options: AssetOptions = {}) {
   const phase = options.phase;
   const hooks = await readBundledPluginAssetHooks(options);
   if (hooks.length === 0) {
     const scope = options.plugins?.length ? ` for ${options.plugins.join(", ")}` : "";
-    console.log(`No bundled plugin asset ${phase} hooks${scope}; skipping.`);
+    console.error(`No bundled plugin asset ${phase} hooks${scope}; skipping.`);
     return;
   }
   if (phase === "copy" || phase === "package") {
@@ -188,7 +190,7 @@ export async function runBundledPluginAssetHooks(options: AssetOptions = {}) {
   let failure = 0;
   const worker = async () => {
     for (let hook = queue.shift(); hook && !failure; hook = queue.shift()) {
-      console.log(`[${hook.pluginId}] ${phase}: ${hook.command}`);
+      console.error(`[${hook.pluginId}] ${phase}: ${hook.command}`);
       const status = await runPluginAssetCommand({
         command: hook.command,
         cwd: hook.pluginDir,

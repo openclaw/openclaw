@@ -1,3 +1,4 @@
+import { resolveAgentHarnessRouteRejection } from "openclaw/plugin-sdk/agent-harness-registration";
 import type {
   AgentHarnessV2,
   AgentHarnessCompactParams,
@@ -78,7 +79,7 @@ const loadSessionBinding = createLazyRuntimeModule(
 
 // `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
 // New runtime identity uses the `openai` provider.
-const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
+const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = ["codex", "openai"];
 
 /** Keep the shipped callback loadable on older hosts without inventing source authority. */
 function requireCodexCompactionCapabilities<T extends AgentHarnessCompactParams>(
@@ -139,11 +140,40 @@ export function createCodexAppServerAgentHarness(
 ): AgentHarnessV2 {
   const harnessRuntimeId = options?.id ?? "codex";
   const normalizedHarnessRuntimeId = harnessRuntimeId.trim().toLowerCase();
-  const providerIds = new Set(
-    [...(options?.providerIds ?? DEFAULT_CODEX_HARNESS_PROVIDER_IDS)].map((id) =>
-      id.trim().toLowerCase(),
+  const providerIds = [
+    ...new Set(
+      [...(options.providerIds ?? DEFAULT_CODEX_HARNESS_PROVIDER_IDS)].map((id) =>
+        id.trim().toLowerCase(),
+      ),
     ),
-  );
+  ];
+  // The replacement generation's config takes precedence over the published config.
+  const registrationAppServer = readWorkerPluginConfig(
+    options.pluginConfig ?? options.resolvePluginConfig?.(),
+  ).appServer;
+  const availability =
+    (registrationAppServer?.transport ?? "stdio") !== "stdio" ||
+    // Worker placement owns its binary; selection has no admitted placement yet.
+    registrationAppServer?.workerHostedCloud === true ||
+    Boolean(
+      registrationAppServer?.command?.trim() || process.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim(),
+    ) ||
+    hasManagedCodexAppServerBinary()
+      ? { supported: true as const, priority: 100 }
+      : {
+          supported: false as const,
+          reason:
+            "no native Codex app-server binary is available; install Codex or configure appServer.command for a native build",
+        };
+  const routeSupport = {
+    runtimeId: normalizedHarnessRuntimeId,
+    runtimeName: "Codex",
+    providerIds,
+    routeOptionalProviderIds: ["codex"],
+    unobservedModelProvider: normalizedHarnessRuntimeId === "codex" ? "openai" : undefined,
+    acceptsNativeCommand: options.providerIds === undefined,
+    availability,
+  };
   const sessionCatalogControlFactory = options.sessionCatalogControlFactory;
   const sessionRuntime = options.runtime;
   let modelCatalog:
@@ -180,12 +210,13 @@ export function createCodexAppServerAgentHarness(
   const harness: AgentHarnessV2 = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
-    autoSelection: { providerIds: [...providerIds] },
+    autoSelection: { providerIds },
+    routeSupport,
     cloudPlacement: {
       mode: "remote-exec",
       devicePlacement: {
         requiredNodeCommands: [
-          readWorkerPluginConfig(options.pluginConfig).appServer?.workerHostedCloud === true
+          registrationAppServer?.workerHostedCloud === true
             ? resolveCodexWorkerAppServerCommand(process.env, true)
             : "codex.exec-server.stdio.v1",
         ],
@@ -327,56 +358,11 @@ export function createCodexAppServerAgentHarness(
     },
     supports: (ctx) => {
       const unsupported = (reason: string) => ({ supported: false as const, reason });
-      const provider = ctx.provider.trim().toLowerCase();
+      const rejected = resolveAgentHarnessRouteRejection(ctx, routeSupport);
+      if (rejected) {
+        return rejected;
+      }
       const preparedAuth = ctx.modelProvider?.preparedAuth;
-      const customNativeCommandRoute =
-        options.providerIds === undefined &&
-        ctx.requestedRuntime === normalizedHarnessRuntimeId &&
-        ctx.modelProvider?.nativeCommandAuth?.runtimeId === normalizedHarnessRuntimeId &&
-        ctx.modelProvider.requestTransportOverrides === "none" &&
-        (preparedAuth === undefined ||
-          (preparedAuth.source === "harness" &&
-            (preparedAuth.mode === undefined || preparedAuth.mode === "native-command") &&
-            preparedAuth.requirement === undefined));
-      if (!providerIds.has(provider) && !customNativeCommandRoute) {
-        return unsupported(`provider is not one of: ${[...providerIds].toSorted().join(", ")}`);
-      }
-      if (ctx.modelProvider?.requestTransportOverrides === "present") {
-        return {
-          supported: false,
-          reason: "Codex cannot reproduce authored request transport overrides",
-          fallbackRuntime: "openclaw",
-        };
-      }
-      const runtimePolicy = ctx.modelProvider?.runtimePolicy;
-      // Codex owns discovery and auth for new first-party models. Only trust that
-      // native account when no authored transport or host credential is involved.
-      const nativeAccountOwnsUnobservedModel =
-        provider === "openai" &&
-        ctx.requestedRuntime === "codex" &&
-        Boolean(ctx.modelId?.trim()) &&
-        (preparedAuth === undefined || preparedAuth.source === "harness") &&
-        preparedAuth?.mode === undefined &&
-        preparedAuth?.requirement === undefined &&
-        ctx.modelProvider?.api === undefined &&
-        ctx.modelProvider?.baseUrl === undefined &&
-        ctx.modelProvider?.azureApiVersion === undefined &&
-        ctx.modelProvider?.request === undefined;
-      if (runtimePolicy) {
-        const compatible = runtimePolicy.compatibleIds.some(
-          (id) => id.trim().toLowerCase() === normalizedHarnessRuntimeId,
-        );
-        if (!compatible) {
-          return unsupported("Codex cannot reproduce the prepared provider route");
-        }
-      } else if (
-        ctx.modelProvider &&
-        provider !== "codex" &&
-        !nativeAccountOwnsUnobservedModel &&
-        !customNativeCommandRoute
-      ) {
-        return unsupported("provider route compatibility with Codex is not declared");
-      }
       if (preparedAuth?.requirement === "subscription") {
         const reproducibleSubscription =
           preparedAuth.source === "profile" &&
@@ -393,23 +379,7 @@ export function createCodexAppServerAgentHarness(
           return unsupported("Codex Platform auth requires a prepared API key");
         }
       }
-      const appServer = readWorkerPluginConfig(
-        options.resolvePluginConfig?.() ?? options.pluginConfig,
-      ).appServer;
-      if (
-        (appServer?.transport ?? "stdio") === "stdio" &&
-        // Worker placement owns its binary; selection has no admitted placement yet.
-        appServer?.workerHostedCloud !== true &&
-        !appServer?.command?.trim() &&
-        !process.env.OPENCLAW_CODEX_APP_SERVER_BIN?.trim() &&
-        !hasManagedCodexAppServerBinary()
-      ) {
-        // Missing binaries cannot preserve an explicit native session's ownership.
-        return unsupported(
-          "no native Codex app-server binary is available; install Codex or configure appServer.command for a native build",
-        );
-      }
-      return { supported: true, priority: 100 };
+      return availability;
     },
     runAttempt: async (params) => {
       // Keep app-server runtime code behind lazy imports so plugin discovery and

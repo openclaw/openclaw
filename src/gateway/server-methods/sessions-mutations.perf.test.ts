@@ -255,7 +255,7 @@ function isWholeSessionStoreProjection(normalizedSql: string): boolean {
   );
 }
 
-test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
+test.each([{ color: "purple" }, { label: "Renamed" }, { label: " Taken " }])(
   "sessions.patch %j avoids transcript-worker startup, unrelated hydration, and host ACP reads",
   async (patch) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -328,11 +328,11 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
         expect(respond.mock.calls[0]?.[1]).toMatchObject({
           resolved: { runtimeSelectionLocked: true, agentRuntime: { id: "acpx" } },
         });
-        expect(target).toHaveProperty("label" in patch ? "label" : "pinnedAt");
+        expect(target).toHaveProperty("label" in patch ? "label" : "color");
       }
       expect(
         loadSessionEntry(sessionScope("agent:main:single-patch-unrelated-0")),
-      ).not.toHaveProperty("pinnedAt");
+      ).not.toHaveProperty("color");
     });
   },
 );

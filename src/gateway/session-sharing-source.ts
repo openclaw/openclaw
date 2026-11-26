@@ -25,7 +25,10 @@ import {
 import { captureSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
 import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
-import type { createSessionSharingConsumption } from "./session-sharing-read.js";
+import type {
+  createSessionSharingConsumption,
+  PreparedSessionSharingTargetFacts,
+} from "./session-sharing-read.js";
 import { captureSessionSharingStore } from "./session-sharing-source-store.js";
 import type {
   SessionMutationTarget,
@@ -74,6 +77,9 @@ export async function prepareSessionSharingSource(
       get members() {
         return [...read.readCurrent().membership];
       },
+      get memberAccess() {
+        return read.readCurrent().memberAccess;
+      },
       assertCurrent,
       async release() {
         active = false;
@@ -108,13 +114,13 @@ export async function prepareSessionSharingSource(
       throw new Error("Session sharing source changed");
     }
     const entry = result.entries.find(({ sessionKey }) => sessionKey === target.storeKey)?.entry;
+    const membership = result.sharing?.members.find((row) => row.sessionKey === target.storeKey);
     return {
       actorSource: false as const,
       source,
       target: entry ? { ...target, readSource: source, storeKeys: [target.storeKey], entry } : null,
-      members:
-        result.sharing?.members.find((row) => row.sessionKey === target.storeKey)?.identityIds ??
-        [],
+      members: membership?.identityIds ?? [],
+      memberAccess: membership?.memberAccess,
       assertCurrent,
       release: retained.release,
     };
@@ -138,7 +144,7 @@ export function withPreparedSessionSharingSource(params: {
     expected: AuthorizedSessionMutationTarget | undefined,
     cfg: OpenClawConfig,
     ensuredSessionId?: string,
-    prepared?: { target: SessionSharingTarget | null; members: readonly string[] },
+    prepared?: PreparedSessionSharingTargetFacts,
     currentTalkTarget?: PreparedTalkSessionTarget,
     bindSessionIdentity?: boolean,
   ) => void;
@@ -162,6 +168,7 @@ export function withPreparedSessionSharingSource(params: {
         bound && {
           target: bound.target,
           members: [...bound.membership],
+          memberAccess: bound.memberAccess,
         },
         currentTalkTarget,
       );
@@ -226,6 +233,7 @@ export function withPreparedSessionSharingSource(params: {
               : null
             : read.target,
           members: facts?.members ?? read.members,
+          memberAccess: facts ? undefined : read.memberAccess,
         });
       };
       const assertPreparedCurrent = () => {
@@ -286,6 +294,7 @@ export function withPreparedSessionSharingSource(params: {
 
 /** Accepted input follows only its own committed lifecycle and keeps that effect's custody. */
 export function createAdmittedSessionSharingAuthority(params: {
+  onIncarnationTransition?: (previous: string | null, current: string) => void;
   target: AuthorizedSessionMutationTarget | undefined;
   request: SessionMutationAuthorizationParams;
   consumeSharing: ReturnType<typeof createSessionSharingConsumption>["consume"];
@@ -321,6 +330,7 @@ export function createAdmittedSessionSharingAuthority(params: {
           (current.sessionId !== previous.sessionId ||
             current.lifecycleRevision !== previous.lifecycleRevision)
         ) {
+          params.onIncarnationTransition?.(admittedTarget.sessionId, current.sessionId);
           admittedTarget = {
             ...admittedTarget,
             sessionId: current.sessionId,

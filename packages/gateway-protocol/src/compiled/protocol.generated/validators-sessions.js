@@ -35,6 +35,7 @@ export {
   isSessionPublicShareSetParams,
   isSessionMembersListParams,
   isSessionMemberAddParams,
+  isSessionMemberSetAccessParams,
   isSessionMemberRemoveParams,
   isSessionSuggestionsAddParams,
   isSessionSuggestionsListParams,

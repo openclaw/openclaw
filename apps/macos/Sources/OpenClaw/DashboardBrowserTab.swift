@@ -4,7 +4,7 @@ import QuartzCore
 import WebKit
 
 @MainActor
-final class DashboardBrowserTab {
+final class DashboardBrowserTab: NSView, @MainActor NSTextFinderBarContainer {
     /// WebKit preserves one WKNavigation identity across a redirect chain.
     /// A different identity means the opened-link alias is no longer current.
     private enum RequestAliasPhase {
@@ -19,7 +19,9 @@ final class DashboardBrowserTab {
     static let automaticReloadLimit = 2
 
     let webView: WKWebView
-    let presentationView = DashboardBrowserPresentationView()
+    private let finder = NSTextFinder()
+    private let visibilityMask = CAShapeLayer()
+    private var holes: CGPath?
     let requestedURL: URL
     var representedURL: URL?
     var title: String?
@@ -48,8 +50,97 @@ final class DashboardBrowserTab {
         self.webView.setValue(true, forKey: "drawsBackground")
         self.requestedURL = requestedURL
         self.representedURL = requestedURL
-        self.presentationView.wantsLayer = true
-        self.presentationView.addSubview(self.webView)
+        super.init(frame: .zero)
+        self.wantsLayer = true
+        self.webView.autoresizingMask = [.width, .height]
+        self.addSubview(self.webView)
+        self.finder.client = self.webView
+        self.finder.findBarContainer = self
+        self.finder.isIncrementalSearchingEnabled = true
+        self.finder.incrementalSearchingShouldDimContentView = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    var findBarView: NSView?
+    var isFindBarVisible = false {
+        didSet {
+            guard oldValue != self.isFindBarVisible, let bar = self.findBarView else { return }
+            if self.isFindBarVisible {
+                bar.autoresizingMask = [.width, .minYMargin]
+                self.addSubview(bar)
+            } else {
+                bar.removeFromSuperview()
+                if !self.isHiddenOrHasHiddenAncestor { self.window?.makeFirstResponder(self.webView) }
+            }
+            self.findBarViewDidChangeHeight()
+        }
+    }
+
+    func findBarViewDidChangeHeight() {
+        // Keep even a match on the first line visible: the bar is a sibling, not a page overlay.
+        let bar = self.isFindBarVisible ? self.findBarView : nil
+        let height = bar?.frame.height ?? 0
+        let width = self.bounds.width
+        let pageHeight = max(0, self.bounds.height - height)
+        bar?.frame = NSRect(x: 0, y: pageHeight, width: width, height: height)
+        self.webView.frame = NSRect(x: 0, y: 0, width: width, height: pageHeight)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        let key = modifiers == .command ? event.characters : event.charactersIgnoringModifiers
+        guard event.type == .keyDown, modifiers == .command || modifiers == .control, key?.lowercased() == "f",
+              self.failureView == nil, !self.isHiddenOrHasHiddenAncestor,
+              let responder = self.window?.firstResponder as? NSView,
+              responder.isDescendant(of: self)
+        else { return super.performKeyEquivalent(with: event) }
+        self.finder.performAction(.showFindInterface)
+        return true
+    }
+
+    /// Paint and hit-test the same holes so toast actions go to the dashboard, not the webpage.
+    func applyCutouts(_ cutouts: [DashboardBrowserCutout], dashboardFrame: CGRect) {
+        let holes = CGMutablePath()
+        for cutout in cutouts {
+            let rect = cutout.rect
+            let local = CGRect(
+                x: dashboardFrame.minX + rect.x - self.frame.minX,
+                y: dashboardFrame.maxY - rect.y - rect.height - self.frame.minY,
+                width: rect.width,
+                height: rect.height)
+            guard local.intersects(self.bounds) else { continue }
+            if cutout.radius == 0 {
+                holes.addRect(local)
+            } else {
+                holes.addRoundedRect(in: local, cornerWidth: cutout.radius, cornerHeight: cutout.radius)
+            }
+        }
+        if holes.isEmpty {
+            self.holes = nil
+            self.layer?.mask = nil
+            return
+        }
+        self.holes = holes
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        self.visibilityMask.frame = self.bounds
+        // Subtract the union: overlapping toast cards still form one hole.
+        self.visibilityMask.path = CGPath(rect: self.bounds, transform: nil).subtracting(holes)
+        self.layer?.mask = self.visibilityMask
+        CATransaction.commit()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if self.holes?.contains(self.convert(point, from: self.superview)) == true {
+            return nil
+        }
+        // This wrapper must never claim clicks itself, including on a hidden tab.
+        let hit = super.hitTest(point)
+        return hit === self ? nil : hit
     }
 
     var requestedURLAlias: URL? {
@@ -130,6 +221,7 @@ final class DashboardBrowserTab {
 
     /// Covers the blank or previous page with native text that page script cannot reach.
     func showFailure(at url: URL, title: String, message: String, reload: @escaping @MainActor () -> Void) {
+        if self.isFindBarVisible { self.finder.performAction(.hideFindInterface) }
         self.failureView?.removeFromSuperview()
         let view = DashboardBrowserFailureView(title: title, message: message, reload: reload)
         view.frame = self.webView.bounds
@@ -191,56 +283,11 @@ final class DashboardBrowserTab {
         self.clearFailure()
         self.webView.navigationDelegate = nil
         self.webView.uiDelegate = nil
+        self.finder.client = nil
+        self.finder.findBarContainer = nil
         self.webView.stopLoading()
         self.webView.removeFromSuperview()
-        self.presentationView.removeFromSuperview()
-    }
-}
-
-/// Paint and hit-test the same holes so toast actions go to the dashboard, not the webpage.
-@MainActor
-final class DashboardBrowserPresentationView: NSView {
-    private let visibilityMask = CAShapeLayer()
-    private var holes: CGPath?
-
-    func applyCutouts(_ cutouts: [DashboardBrowserCutout], dashboardFrame: CGRect) {
-        let holes = CGMutablePath()
-        for cutout in cutouts {
-            let rect = cutout.rect
-            let local = CGRect(
-                x: dashboardFrame.minX + rect.x - self.frame.minX,
-                y: dashboardFrame.maxY - rect.y - rect.height - self.frame.minY,
-                width: rect.width,
-                height: rect.height)
-            guard local.intersects(self.bounds) else { continue }
-            if cutout.radius == 0 {
-                holes.addRect(local)
-            } else {
-                holes.addRoundedRect(in: local, cornerWidth: cutout.radius, cornerHeight: cutout.radius)
-            }
-        }
-        if holes.isEmpty {
-            self.holes = nil
-            self.layer?.mask = nil
-            return
-        }
-        self.holes = holes
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        self.visibilityMask.frame = self.bounds
-        // Subtract the union: overlapping toast cards still form one hole.
-        self.visibilityMask.path = CGPath(rect: self.bounds, transform: nil).subtracting(holes)
-        self.layer?.mask = self.visibilityMask
-        CATransaction.commit()
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        if self.holes?.contains(self.convert(point, from: self.superview)) == true {
-            return nil
-        }
-        // This wrapper must never claim clicks itself, including on a hidden tab.
-        let hit = super.hitTest(point)
-        return hit === self ? nil : hit
+        self.removeFromSuperview()
     }
 }
 

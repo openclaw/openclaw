@@ -30,6 +30,7 @@ import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "
 import { getMessageDerivations, readMessageDerivations } from "./message-derivations.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import {
+  normalizeSenderIdentity,
   resolveMessageSender,
   resolveMessageSenderLabel,
   type SenderIdentity,
@@ -603,6 +604,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const senderLabel = resolveMessageSenderLabel(m, metaSender);
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
   const sourceClients = role === "user" ? readMessageClientSources(m) : [];
+  const suggestedBy =
+    role === "user" ? normalizeSenderIdentity(asOptionalRecord(openClawMeta?.suggestedBy)) : null;
 
   content = stripMessageDisplayMetadata(content, role);
   const senderSession = readMessageSenderSession(m.senderSession);
@@ -615,6 +618,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     senderLabel,
     ...(senderSession ? { senderSession } : {}),
     ...(sender ? { sender } : {}),
+    ...(suggestedBy ? { suggestedBy } : {}),
     ...(sourceClients.length ? { sourceClients } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyPreviewText || replyPreviewSender

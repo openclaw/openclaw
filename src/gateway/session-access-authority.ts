@@ -10,6 +10,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import type { GatewayMethodOwner, GatewayMethodSessionAccess } from "./methods/descriptor.js";
+import { operatorRefusalText } from "./operator-refusal.js";
 import {
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
@@ -325,13 +326,16 @@ export async function prepareGatewaySessionAccessAuthority(request: {
           currentToolPolicy?.sandboxRequired !== toolPolicy?.sandboxRequired ||
           currentToolPolicy?.sandboxed !== toolPolicy?.sandboxed
         ) {
-          denied("The session's current tool policy does not allow this operation.");
+          denied(operatorRefusalText("tool-policy-denies", "run this operation"));
         }
         const sharing = prepareSessionSharing(
           { cfg: params.context.getRuntimeConfig(), client: policyClient },
           {
             aliases: new Set(profile?.aliases ?? []),
             sessionCap: role?.sessions.others,
+            policy: role,
+            memberAccess: (row, identity) =>
+              projection.memberAccess(row.storePath, row.storeKey, identity),
             isMember: (row, identity) =>
               projection.hasMembership(row.storePath, row.storeKey, identity),
           },
@@ -344,7 +348,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
               expectedProfileId: profileId,
               isCreator: sharing.isCreator,
             })) ||
-          sharing.authorizeTarget(current)
+          sharing.authorizeTarget(current, undefined, false)
         ) {
           denied();
         }

@@ -120,6 +120,27 @@ export function resolveBootstrapModelCatalogTarget(
   return undefined;
 }
 
+/** Leave same-document links, Gateway handoffs and released session roots to the browser. */
+export function navigateApplicationLink(
+  context: Pick<ApplicationContext, "basePath" | "navigate">,
+  url: URL,
+): boolean {
+  if (
+    url.origin !== location.origin ||
+    (url.pathname === location.pathname && url.search === location.search) ||
+    url.hash.includes("=") ||
+    ["gatewayUrl", "token", "password"].some((key) => url.searchParams.has(key)) ||
+    releasedSessionQuery(url, context.basePath)
+  ) {
+    return false;
+  }
+  const route = routeIdFromPath(url.pathname, context.basePath);
+  if (route) {
+    context.navigate(route, url);
+  }
+  return route !== null;
+}
+
 /** Explicit location parts replace a route's default; Workboard keeps its active board path. */
 export function applicationRouteLocation(
   router: Pick<ApplicationRouter, "getState">,

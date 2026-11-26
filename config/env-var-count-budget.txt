@@ -26,4 +26,6 @@
 # OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE is an opaque supervisor-chosen token that ends restart resume at the supervisor's boundary.
 # OPENCLAW_LAUNCHER_IPC marks a Gateway started by the release launcher; OPENCLAW_RELEASE_LAUNCHER_FORWARDED stops a converted install's entry from forwarding twice.
 # OPENCLAW_NATIVE_APP_ROOT and OPENCLAW_NATIVE_STAGED_ROOT (#197437) are the Windows packaging launcher's native-redirect roots, pinned from Gateway startup for the managed GitHub credential child.
-466
+# OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS declares the operator-selected trusted ancestors.
+# OPENCLAW_INTERNAL_WORKER_TMPDIR directs the confined worker to its private temporary directory.
+468

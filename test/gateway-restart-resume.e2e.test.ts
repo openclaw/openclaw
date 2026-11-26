@@ -95,6 +95,7 @@ async function providerFixture(signal: AbortSignal) {
   const calls: Array<{
     cycle: number;
     name: Case | "child";
+    input: string;
     current: string;
     resumeInput: boolean;
     ordinal: number;
@@ -103,6 +104,7 @@ async function providerFixture(signal: AbortSignal) {
   const issued = new Set<string>();
   const heldResumes = new Map<number, { response: ServerResponse; ordinal: number }>();
   const releasedResumes = new Set<number>();
+  const callbacks = new Map<string, number>();
   let finalizer: ServerResponse | undefined;
   let finalizerAdmission: unknown;
   let ordinal = 0;
@@ -131,6 +133,7 @@ async function providerFixture(signal: AbortSignal) {
           }
           if (request.url?.startsWith("/tool/") || request.url === "/timer") {
             gate(request.url).resolve();
+            callbacks.set(request.url, (callbacks.get(request.url) ?? 0) + 1);
             response.writeHead(204).end();
             return;
           }
@@ -153,7 +156,9 @@ async function providerFixture(signal: AbortSignal) {
             }
           };
           const tools = restartToolNames(body);
-          if (JSON.stringify(body).includes("You are a context summarization assistant.")) {
+          // A warm summary reuses the turn's own prompt and history and appends the checkpoint
+          // instruction; the cold summarizer sends the same instruction with its own prompt.
+          if (JSON.stringify(body).includes("Create a structured context checkpoint summary")) {
             const match = /RESTART_CASE_(\d+)_(\w+)/.exec(input);
             const name = CASES.find((candidate) => candidate === match?.[2]);
             assert(name, `Unexpected synthetic summary input: ${input}`);
@@ -182,6 +187,7 @@ async function providerFixture(signal: AbortSignal) {
           calls.push({
             cycle,
             name,
+            input,
             current,
             resumeInput: hasNewResumeInput(body),
             ordinal: requestOrdinal,
@@ -325,6 +331,7 @@ async function providerFixture(signal: AbortSignal) {
     },
     calls,
     summaries,
+    callbacks: (url: string) => callbacks.get(url) ?? 0,
     failed: failed.promise,
     wait: (name: string) => withinTest(Promise.race([gate(name).promise, failed.promise]), signal),
     restart: () => {
@@ -823,7 +830,7 @@ it.skipIf(process.platform === "win32")(
         );
         expect(instance.logs()).toContain(key(0, "stream"));
         expect(instance.logs()).toContain(
-          "Your operator role no longer allows sending messages; ask an administrator to restore access.",
+          "I did not run your queued request. Your role on this Gateway does not allow it. Ask a Gateway admin to do it, or to add the permission to your role.",
         );
         assert(deniedRunId);
         expect(instance.logs()).toContain(deniedRunId);
@@ -978,6 +985,207 @@ it.skipIf(process.platform === "win32")(
         expect(instance.logs()).not.toContain("no current run authority");
       },
       () => client?.close(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
+
+// An input the Gateway acknowledged is owed a turn when a graceful restart follows its ack. A
+// follow-up either queues behind the running turn, or, when the previous turn has just ended,
+// becomes its own turn and is still being admitted at SIGTERM.
+it.skipIf(process.platform === "win32").for([
+  { state: "queued behind a running turn", delayMs: 60, predecessorEnded: false },
+  { state: "admitted as its own turn", delayMs: 0, predecessorEnded: true },
+])(
+  "keeps an acknowledged follow-up $state across a graceful restart",
+  { timeout: 180_000 },
+  async ({ delayMs, predecessorEnded }, { signal, onTestFailed }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-acked-followup-restart",
+      signal,
+      gracefulShutdownTimeoutMs: 60_000,
+      config: restartResumeConfig(model),
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    onTestFailed(() => {
+      process.stderr.write(`${instance.logs()}\n`);
+    });
+    const sessionKey = key(3, "stream");
+    const followupKey = randomUUID();
+    let client: GatewayClient | undefined;
+    const history = () =>
+      client!.request<{ messages: unknown[]; sessionInfo: { hasActiveRun: boolean } }>(
+        "chat.history",
+        { sessionKey, limit: 100 },
+      );
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        const first = await client.request<{ runId: string }>(
+          "chat.send",
+          { sessionKey, message: marker(3, "stream"), idempotencyKey: randomUUID() },
+          { expectFinal: false },
+        );
+        await provider.wait("ready:3:stream");
+        if (predecessorEnded) {
+          await client.request("chat.abort", { sessionKey, runId: first.runId });
+          await vi.waitFor(
+            async () => expect((await history()).sessionInfo.hasActiveRun).toBe(false),
+            { timeout: 15_000 },
+          );
+        }
+        await client.request(
+          "chat.send",
+          {
+            sessionKey,
+            message: queued(3, 1),
+            idempotencyKey: followupKey,
+            ...(predecessorEnded ? {} : { queueMode: "followup" }),
+          },
+          { expectFinal: false },
+        );
+        await delay(delayMs);
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const closed = once(child, "close");
+        provider.restart();
+        expect(child.kill("SIGTERM")).toBe(true);
+        expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        // Accepted rows key the request's idempotency key with a ':user' suffix.
+        const cancelled = () => {
+          using database = new DatabaseSync(
+            resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+            { readOnly: true },
+          );
+          return database
+            .prepare(
+              "SELECT idempotency_key, consumed_event_id FROM session_pending_inputs WHERE idempotency_key LIKE ? AND state = 'cancelled' AND end_cause = 'restart-unrecoverable'",
+            )
+            .all(`${followupKey}%`);
+        };
+        const callsBeforeRestart = provider.calls.length;
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        // An interrupted turn resumes; its held resume request is released when it arrives.
+        void provider
+          .wait("resume:3:stream")
+          .then(() => provider.release(3))
+          .catch(() => {});
+        await vi.waitFor(
+          async () => {
+            expect(
+              provider.calls
+                .slice(callsBeforeRestart)
+                .some((call) => call.input.includes(queued(3, 1))),
+              JSON.stringify(cancelled()),
+            ).toBe(true);
+            expect((await history()).sessionInfo.hasActiveRun).toBe(false);
+          },
+          { timeout: 30_000 },
+        );
+        expect(cancelled()).toEqual([]);
+      },
+      () => client?.stopAndWait(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
+
+// A turn that started before SIGTERM has its user entry in the transcript. Restart resume
+// continues that turn; the accepted input is not replayed and its tool does not run again.
+it.skipIf(process.platform === "win32")(
+  "continues a turn stopped mid-tool-call without replaying its input",
+  { timeout: 180_000 },
+  async ({ signal, onTestFailed }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-mid-tool-restart",
+      signal,
+      gracefulShutdownTimeoutMs: 60_000,
+      config: restartResumeConfig(model),
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    onTestFailed(() => {
+      process.stderr.write(`${instance.logs()}\n`);
+    });
+    const sessionKey = key(3, "tool");
+    const inputKey = randomUUID();
+    let client: GatewayClient | undefined;
+    const history = () =>
+      client!.request<{ messages: unknown[]; sessionInfo: { hasActiveRun: boolean } }>(
+        "chat.history",
+        { sessionKey, limit: 100 },
+      );
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await client.request(
+          "chat.send",
+          { sessionKey, message: marker(3, "tool"), idempotencyKey: inputKey },
+          { expectFinal: false },
+        );
+        await provider.wait("/tool/3/tool");
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const closed = once(child, "close");
+        provider.restart();
+        expect(child.kill("SIGTERM")).toBe(true);
+        expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await provider.wait("resume:3:tool");
+        await vi.waitFor(
+          async () => {
+            const { messages, sessionInfo } = await history();
+            expect(JSON.stringify(messages)).toContain("RESUMED_3_tool");
+            expect(sessionInfo.hasActiveRun).toBe(false);
+          },
+          { timeout: 30_000 },
+        );
+        const { messages } = await history();
+        const userEntries = messages.filter(
+          (message) =>
+            isRecord(message) &&
+            message.role === "user" &&
+            JSON.stringify(message).includes(marker(3, "tool")),
+        );
+        expect(userEntries).toHaveLength(1);
+        // A replayed input would reach the model as a new turn and be answered with HANDLED_*.
+        expect(JSON.stringify(messages)).not.toContain("HANDLED_");
+        expect(provider.callbacks("/tool/3/tool")).toBe(1);
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        using database = new DatabaseSync(
+          resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+          { readOnly: true },
+        );
+        expect(
+          database
+            .prepare(
+              "SELECT state, end_cause FROM session_pending_inputs WHERE idempotency_key LIKE ?",
+            )
+            .all(`${inputKey}%`),
+        ).toEqual([]);
+      },
+      () => client?.stopAndWait(),
       () => instance.cleanup(),
       provider.close,
     );

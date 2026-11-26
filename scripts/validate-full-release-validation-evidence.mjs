@@ -308,7 +308,7 @@ function validatePublicationEvidence(options, evidence) {
  * @param {Omit<FullReleaseValidationEvidenceOptions, "manifest"> & {
  *   manifest?: FullReleaseValidationManifest,
  *   manifestPath?: string,
- *   fastTrackApproval?: unknown,
+ *   fastTrackRequest?: unknown,
  *   fastTrackPublication?: import("./lib/release-fast-track-publication.mts").FastTrackPublication,
  *   verifierSourceSha?: string,
  *   verifierSourceContent?: string | Uint8Array,
@@ -322,7 +322,7 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
   const evidence = await validateReleaseRunEvidence(
     {
       repository: options.expectedRepository,
-      fastTrackApproval: options.fastTrackApproval ?? process.env.FAST_TRACK_APPROVAL_JSON,
+      fastTrackRequest: options.fastTrackRequest ?? process.env.FAST_TRACK_REQUEST_JSON,
       fastTrackPublication: options.fastTrackPublication,
       runId: String(options.expectedRunId),
       manifestPath: options.manifestPath,
@@ -493,7 +493,7 @@ export async function authenticateCandidateOwnedArtifact({
   publisherSha,
   publisherFullRef = "refs/heads/main",
   client,
-  fastTrackApproval = process.env.FAST_TRACK_APPROVAL_JSON,
+  fastTrackRequest = process.env.FAST_TRACK_REQUEST_JSON,
 }) {
   const recovery = manifest?.receiptRecovery;
   if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
@@ -506,7 +506,7 @@ export async function authenticateCandidateOwnedArtifact({
   const evidence = await validateReleaseRunEvidence(
     {
       repository,
-      fastTrackApproval,
+      fastTrackRequest,
       runId: String(producer.runId),
       trustedWorkflowFullRef: publisherFullRef,
       trustedWorkflowRef: publisherFullRef.replace(/^refs\/(?:heads|tags)\//u, ""),

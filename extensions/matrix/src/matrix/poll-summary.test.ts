@@ -2,19 +2,38 @@ import { describe, expect, it, vi } from "vitest";
 import { fetchMatrixPollSnapshot } from "./poll-summary.js";
 import type { MatrixClient, MatrixRawEvent } from "./sdk.js";
 
-function createPollStartEvent(): MatrixRawEvent {
+function createPollStartEvent(namespace = "m.poll", secondId = "a "): MatrixRawEvent {
+  const type = `${namespace}.start`;
   return {
     event_id: "$poll",
     sender: "@alice:example.org",
-    type: "m.poll.start",
+    type,
     origin_server_ts: 1,
     content: {
-      "m.poll.start": {
+      [type]: {
         question: { "m.text": "Lunch?" },
-        answers: [{ id: "pizza", "m.text": "Pizza" }],
+        max_selections: 2,
+        answers: [
+          { id: "a", "m.text": "Pizza" },
+          { id: secondId, "m.text": "Sushi" },
+        ],
       },
     },
   } as MatrixRawEvent;
+}
+
+function vote(namespace: string, sender: string, timestamp: number, answers: string[]) {
+  const type = `${namespace}.response`;
+  return {
+    event_id: `$vote${timestamp}`,
+    sender,
+    type,
+    origin_server_ts: timestamp,
+    content: {
+      [type]: { answers },
+      "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
+    },
+  };
 }
 
 describe("Matrix poll snapshot pagination", () => {
@@ -41,22 +60,15 @@ describe("Matrix poll snapshot pagination", () => {
     expect(getRelations).toHaveBeenCalledTimes(cursors.length);
   });
 
-  it("follows valid empty pages before collecting later poll votes", async () => {
+  it.each(["m.poll", "org.matrix.msc3381.poll"])("drops spoiled %s revotes", async (namespace) => {
     const getRelations = vi
       .fn()
       .mockResolvedValueOnce({ events: [], nextBatch: "next-page", prevBatch: null })
       .mockResolvedValueOnce({
         events: [
-          {
-            event_id: "$vote",
-            sender: "@bob:example.org",
-            type: "m.poll.response",
-            origin_server_ts: 2,
-            content: {
-              "m.poll.response": { answers: ["pizza"] },
-              "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-            },
-          },
+          vote(namespace, "@carol:example.org", 4, ["a", "missing"]),
+          vote(namespace, "@bob:example.org", 2, ["a "]),
+          vote(namespace, "@carol:example.org", 3, ["a "]),
         ],
         nextBatch: null,
         prevBatch: null,
@@ -65,7 +77,7 @@ describe("Matrix poll snapshot pagination", () => {
     const snapshot = await fetchMatrixPollSnapshot(
       { getRelations } as unknown as MatrixClient,
       "!room:example.org",
-      createPollStartEvent(),
+      createPollStartEvent(namespace),
     );
 
     expect(getRelations).toHaveBeenNthCalledWith(
@@ -76,6 +88,26 @@ describe("Matrix poll snapshot pagination", () => {
       undefined,
       { from: "next-page" },
     );
-    expect(snapshot?.text).toContain("1. Pizza (1 vote)");
+    expect(snapshot?.text).toContain("1. Pizza (0 votes)\n2. Sushi (1 vote)");
+    expect(snapshot?.text).toContain("Total voters: 1");
   });
+
+  it.each(["m.poll", "org.matrix.msc3381.poll"])(
+    "counts a literal space in %s",
+    async (namespace) => {
+      const getRelations = vi.fn().mockResolvedValue({
+        events: [vote(namespace, "@bob:example.org", 2, ["a", " "])],
+        nextBatch: null,
+        prevBatch: null,
+      });
+      const snapshot = await fetchMatrixPollSnapshot(
+        { getRelations } as unknown as MatrixClient,
+        "!room:example.org",
+        createPollStartEvent(namespace, " "),
+      );
+
+      expect(snapshot?.text).toContain("1. Pizza (1 vote)\n2. Sushi (1 vote)");
+      expect(snapshot?.text).toContain("Total voters: 1");
+    },
+  );
 });

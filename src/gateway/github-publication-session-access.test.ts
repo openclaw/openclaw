@@ -657,7 +657,7 @@ describe("local checkout publication", () => {
       expect(await invoke(source.cwd, true, "guest-follow-up")).toMatchObject([
         false,
         undefined,
-        { message: expect.stringContaining("requester is no longer authorized") },
+        { message: expect.stringContaining("requester is not authorized to publish") },
       ]);
       expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(taskHead);
       expect(source.effects).toEqual(["push", "pull_request"]);

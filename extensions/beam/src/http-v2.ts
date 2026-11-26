@@ -22,6 +22,12 @@ import { handleBeamSendRequest } from "./http-v2-conversation.js";
 import { createBeamIngressLimits } from "./http.js";
 import { packetDigest, snapshotBytes } from "./packet-state.js";
 import { BEAM_V2_API, parsePublicationId, publicationHead } from "./publication.js";
+import {
+  MAX_SCREENSHOT_BYTES,
+  readScreenshotEnvelope,
+  SCREENSHOT_MEDIA_TYPE,
+  type BeamScreenshot,
+} from "./screenshot.js";
 import type { BeamPublication } from "./store.js";
 import { BEAM_MAX_BODY_BYTES, type BeamHandoff } from "./types.js";
 
@@ -73,6 +79,7 @@ function publisherFor(auth: ReadAuthority): BeamPublisher | undefined {
 export function createBeamV2Handler(options: {
   limits?: ReturnType<typeof createBeamIngressLimits>;
   continuation?: BeamContinueService;
+  getScreenshot?: (beamId: string, digest: string) => Promise<BeamScreenshot | undefined>;
   readPublication: (beamId: string) => Promise<BeamPublication>;
   putSnapshot: (
     input: BeamPublishInput,
@@ -277,8 +284,11 @@ export function createBeamV2Handler(options: {
           );
           return true;
         }
-        if (!isJsonContentType(req.headers["content-type"])) {
-          fail(res, 415, "unsupported_media", "Submit a JSON packet.");
+        const rich =
+          req.headers["content-type"]?.split(";")[0]?.trim().toLowerCase() ===
+          SCREENSHOT_MEDIA_TYPE;
+        if (rich ? !options.getScreenshot : !isJsonContentType(req.headers["content-type"])) {
+          fail(res, 415, "unsupported_media", "Submit a supported snapshot representation.");
           return true;
         }
         const ip = authority.clientIp ?? req.socket.remoteAddress ?? "unknown";
@@ -292,7 +302,9 @@ export function createBeamV2Handler(options: {
           // strictly in the packet validator before converting accepted bytes to text.
           const raw = Buffer.from(
             await readRequestBodyWithLimit(req, {
-              maxBytes: BEAM_MAX_BODY_BYTES,
+              maxBytes: rich
+                ? Math.ceil(MAX_SCREENSHOT_BYTES / 3) * 4 + 6 * BEAM_MAX_BODY_BYTES + 2048
+                : BEAM_MAX_BODY_BYTES,
               timeoutMs: 10_000,
               encoding: "latin1",
               destroyOnLimit: false,
@@ -300,8 +312,15 @@ export function createBeamV2Handler(options: {
             "latin1",
           );
           let packet;
+          let image: BeamScreenshot | undefined;
+          let packetBytes: Buffer = raw;
           try {
-            packet = parseBeamPacket(raw);
+            if (rich) {
+              const envelope = readScreenshotEnvelope(raw);
+              packetBytes = envelope.packet;
+              image = envelope.image;
+            }
+            packet = parseBeamPacket(packetBytes);
             if (packet.beamId !== path[1]) {
               throw new Error("Beam ID mismatch");
             }
@@ -310,12 +329,14 @@ export function createBeamV2Handler(options: {
               res,
               400,
               "invalid_packet",
-              "Preview a valid v2 packet with the same Beam ID as the URL.",
+              rich
+                ? "Submit one bounded PNG with its display filename and a valid v2 packet for this Beam ID."
+                : "Preview a valid v2 packet with the same Beam ID as the URL.",
             );
             return true;
           }
           await authority.revalidate();
-          const packetText = raw.toString("utf8");
+          const packetText = packetBytes.toString("utf8");
           const result = await options.putSnapshot(
             {
               upload: { ...packet, version: 1 },
@@ -325,6 +346,7 @@ export function createBeamV2Handler(options: {
               ifMatch: ifMatch ?? null,
               digest: packetDigest(packetText),
               packetText,
+              ...(image ? { image } : {}),
             },
             () => authority.assertCurrent(),
           );
@@ -388,17 +410,22 @@ export function createBeamV2Handler(options: {
           operations: [
             ...(allowed ? ["read", "resolve"] : []),
             ...(publisher ? ["publish"] : []),
+            ...(publisher && options.getScreenshot ? ["publishScreenshot"] : []),
             ...(publisher?.profileId ? ["release"] : []),
             ...(publisher && options.continuation ? ["continue"] : []),
           ],
           maxBodyBytes: BEAM_MAX_BODY_BYTES,
+          ...(publisher && options.getScreenshot
+            ? { maxScreenshotBytes: MAX_SCREENSHOT_BYTES }
+            : {}),
           sendReceiptRetentionSeconds: options.continuation ? BEAM_SEND_RETENTION_SECONDS : 0,
         });
         return true;
       }
       const [kind, id = "", operation] = path;
       const publication =
-        kind === "publications" && (operation === "snapshot" || operation === "destination")
+        kind === "publications" &&
+        (operation === "snapshot" || operation === "destination" || operation === "image")
           ? selected
           : undefined;
       const beamId =
@@ -449,6 +476,23 @@ export function createBeamV2Handler(options: {
       }
       if (!snapshot) {
         fail(res, 410, "expired", "The snapshot is no longer retained.");
+        return true;
+      }
+      if (operation === "image") {
+        const image =
+          snapshot.presentationDigest &&
+          (await options.getScreenshot?.(beamId, snapshot.presentationDigest));
+        authority.assertCurrent(grant);
+        if (!image) {
+          unavailable();
+          return true;
+        }
+        res.writeHead(200, {
+          "Content-Type": "image/png",
+          "Cache-Control": "private, no-store",
+          "X-Content-Type-Options": "nosniff",
+        });
+        res.end(Buffer.from(image.png, "base64"));
         return true;
       }
       const entity = snapshotBytes(snapshot);

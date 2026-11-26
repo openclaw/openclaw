@@ -52,11 +52,11 @@ Behavior:
 - Raw exec completion notices stay in the agent's transcript but are hidden from the Control UI's chat history and live message updates. The agent's user-facing reply remains visible.
 - A host command started in a chat conversation completes through ordinary execution in that conversation: the completion turn runs with its session history, and any reply goes back to the captured account, chat, and topic. It waits behind existing work in that session, independently of heartbeat cadence, active hours, and delivery settings. A command started in an automatically silent run keeps that restriction for its completion. Current session permissions and tool restrictions can tighten the captured permissions before execution.
 - Completions that arrive while an earlier completion turn in the same conversation is still queued or running wait for it, plus about one second for close stragglers, then share one turn: the agent gets every waiting result (each with its process ID, status, exit code, duration and output tail) in one message instead of one turn per command. One shared turn carries at most about 8,000 characters of results; later results start the next turn. Only completions of commands started by the same request and the same agent run share a turn: a request Stop retires the whole shared turn, and the turn's input provenance names one launching run. A completion with no earlier completion turn in flight starts at once, as before. A waiting completion can start after a human message queued in `followup` or `collect` mode.
-- Before a Gateway restart, when a channel owner started the command, its completion turn keeps that owner's owner-only tools, such as `openclaw` and `gateway`, so the agent can finish the task without a new message. OpenClaw rechecks owner status against the current config each time; if the sender is no longer an owner, the tools stay unavailable. Commands started by other senders do not inherit those owner-only tools. After restart, durable outcomes use the owning session principal's current authority as described below.
+- Before a Gateway restart, when a channel owner started the command, its completion turn keeps that owner's owner-only tools, such as `openclaw` and `gateway`, so the agent can finish the task without a new message. OpenClaw rechecks owner status against the current config each time; if the sender is no longer an owner, the tools stay unavailable. Commands started by other senders do not inherit those owner-only tools. After restart, durable outcomes run as the requester who started the command, as described below.
 - Isolated cron exec completions stay on the originating run's session, including jobs with `delivery.mode: "announce"`. They never wake the agent main session. A completion accepted while that run is active waits for it to finish before starting a follow-up turn. Completions not yet accepted when the originating run ends cannot start another turn; retained output remains available through `process poll` or `process log`. Jobs with `delivery.mode: "none"` keep automatic completion wakes disabled. The cron job's normal announcement delivery is unchanged.
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
 - Ordinary Gateway-hosted background processes still end with the Gateway, and their in-memory handles and requester continuations are not restored after restart. A command whose exit would wake its conversation is reported after the restart instead; see [lost background commands](#lost-background-commands). Use `durable: true` on a supported Linux or macOS Gateway when the physical process must survive. A surviving durable process is not reported as lost. Check saved output and side effects before repeating work whose outcome is unknown.
-- A completion that wakes its conversation is saved in that conversation when the command exits, before its turn starts. The turn appends it to the transcript once. If the Gateway restarts first, the completion turn runs after the restart, with the session principal's current authority. If the completion turn cannot start, OpenClaw tries one more time from the saved completion; if that also fails, the saved completion shows as not run with its cause. An active Goal waits for a saved completion: the completion turn runs first, then the Goal continues.
+- A completion that wakes its conversation is saved in that conversation when the command exits, before its turn starts, together with the requester who started the command. The turn appends it to the transcript once. If the Gateway restarts first, the completion turn runs after the restart as that requester, admitted again against current access: a requester who lost session write access gets the saved completion shown as not run, with its cause. A configured channel owner is admitted again against the current `commands.ownerAllowFrom`; a sender no longer listed gets the saved completion shown as not run. A completion saved by an older version runs with the session principal's current authority. If the completion turn cannot start, OpenClaw tries one more time from the saved completion; if that also fails, the saved completion shows as not run with its cause. An active Goal waits for a saved completion: the completion turn runs first, then the Goal continues.
 - Timeouts also wake the session when the command produced no output. The completion includes retry-safety guidance: verify any external side effects before retrying.
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
 - Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
@@ -91,8 +91,8 @@ When the Gateway restarts while an ordinary background command is still running 
 exit would wake the conversation, the next Gateway start sends that conversation a
 notice for each such command, which starts a turn. The notice names the command's process handle and start time, so
 the agent can find the command in its transcript and decide whether to run it again.
-This covers crashes too, not only graceful restarts. The notice is new system input under
-the session's current authority. Reset, archived, hidden subagent and ended cron sessions
+This covers crashes too, not only graceful restarts. The notice runs as the requester who
+started the command, admitted again against current access, like a durable completion. Reset, archived, hidden subagent and ended cron sessions
 get no notice, incognito sessions are never recorded, and disabling
 `tools.exec.notifyOnExit` suppresses the notice.
 A command whose exit would not wake the conversation, such as a service started with
@@ -159,23 +159,34 @@ ends the GUI session and its durable jobs. A host reboot or user
 manager shutdown still ends transient services; this is not a saved automation or
 an automatic command-restart policy.
 
-The existing background-process registry remains the owner. On Linux it launches a transient
-`openclaw-proc-<opaque id>` user service outside the Gateway's cgroup. The unit uses
-`ExitType=cgroup`: descendants keep the service running after its initial shell
-exits, and completion waits until the cgroup is empty. `KillMode=control-group`
-lets `process kill` stop the entire tree through `systemctl --user stop`.
+The existing background-process registry remains the owner. A durable command completes
+when its root command exits, the same as ordinary exec: the registry records the exit
+status at that moment and wakes the owning session. Completion does not stop processes
+the command left running (`cmd &`, `nohup`). Each one becomes an ordinary background
+session: the completion names its process ID and session ID, `process list` shows it,
+and `process kill`, session reset and Gateway stop end it. These processes do not
+survive a Gateway restart; only the root command does. `process kill` on a running
+durable command and `timeoutSeconds` still stop the entire tree.
+
+On Linux the registry launches a transient `openclaw-proc-<opaque id>` user service
+outside the Gateway's cgroup. When the root command exits, the unit stays loaded
+(`RemainAfterExit=yes`) with the real exit status, whatever that status is, so processes
+the command left running keep running in the unit's cgroup. `KillMode=control-group`
+lets `process kill` stop the entire tree through `systemctl --user stop` while the root
+runs. The registry releases the unit once its cgroup is empty; if those processes outlive
+the completed record, the empty unit stays loaded until the user manager restarts.
 On macOS, each durable command is a transient `ai.openclaw.durable-proc.<opaque id>` launchd job
 in the user's `gui/<uid>` domain, loaded from a plist under `$OPENCLAW_STATE_DIR/processes/`
 rather than `~/Library/LaunchAgents`, so it is never reloaded at login. launchd starts a
 small OpenClaw wrapper that runs the command in its own process group, records that
-group, waits until the group is empty, enforces `timeoutSeconds`, and records the exit
-status in a status file the returning Gateway reads. The registry reads job state from
+group, enforces `timeoutSeconds`, and records the exit status in a status file the
+returning Gateway reads when the command exits. The registry reads job state from
 `launchctl list`; a failed or unreadable listing is retried, never treated as a finished
 or missing job. `process kill` signals the wrapper, which stops the group (SIGTERM, then
 SIGKILL after 10 seconds). macOS has no cgroups: a descendant that leaves the process
 group (for example `setsid`, `tmux new -d`, or a self-daemonizing program) is neither
-waited for nor stopped. If the wrapper itself is killed, the registry checks the recorded
-group and reports the outcome as unknown once it is empty; `process kill` can no longer
+tracked nor stopped. If the wrapper itself is killed, the registry checks the recorded
+command and reports the outcome as unknown once it has exited; `process kill` can no longer
 stop that group and reports the stop as unconfirmed. The job runs as its own
 process for macOS privacy permissions, so access the Gateway or app was granted (for
 example Full Disk Access) may not apply to a durable command.
@@ -184,10 +195,11 @@ Durable commands have no interactive input: `pty: true`
 and `awaitResults: true` are refused, as are `process write`, `send-keys`, `submit`,
 and `paste`. Exec security policy, approvals, managed environment preparation, cwd
 restrictions, and process timeouts remain in effect. On Linux, `timeoutSeconds` maps to
-`RuntimeMaxSec`; on macOS the wrapper enforces it. `timeoutSeconds: 0` disables that lifetime bound. On Linux, durable work shares the automatic
+`RuntimeMaxSec`; on macOS the wrapper enforces it. Like an ordinary timeout, it ends when
+the root command exits. `timeoutSeconds: 0` disables that lifetime bound. On Linux, durable work shares the automatic
 [host-exec memory budget](/tools/exec#host-memory-protection) with ordinary commands.
-The shared sampler accounts their cgroup usage, including descendants after the
-initial shell exits. Each new unit also has hard RAM and swap bounds equal to the
+The shared sampler accounts the unit's cgroup usage, including descendants, while the
+root command runs. Each new unit also has hard RAM and swap bounds equal to the
 full shared allowance. Durable processes do not block safe Gateway
 restart or cooperative suspension. Ordinary background processes retain their
 existing restart and suspension behavior.
@@ -206,7 +218,8 @@ Stdout and stderr append to a per-process log under
 `$OPENCLAW_STATE_DIR/processes/`. A small ownership row in the
 [shared state database](/reference/database-schemas/layout#durable-background-processes)
 records the process, owning agent and session generation, unit identity, cwd, log
-path, start time, notification policy, and terminal outcome. It contains no
+path, start time, notification policy, terminal outcome, and the requester's saved
+source (the same record a queued message keeps; never a grant). It contains no
 environment values, credentials, command arguments, or output. After restart, the
 displayed command is a generic summary rather than the original command text.
 Logs are named local artifacts and can contain whatever the command prints. The
@@ -222,9 +235,11 @@ the registry records it and cleans up the unit. A missing unit is recorded as a
 lost process with an unknown outcome; check saved output and side effects before
 repeating work. Adoption never re-executes the command.
 
-An adopted completion or lost-process outcome is new system input to the owning
-session under that session principal's current authority. OpenClaw does not
-restore the original requester or operator continuation. Reset or archived
+An adopted completion or lost-process outcome wakes the owning session as the
+requester who started the command, admitted again against current access. If that
+requester lost access, the saved outcome stays in the conversation, shown as not run
+with its cause. A record written by an older version has no saved requester and
+wakes under the session principal's current authority. Reset or archived
 sessions, incognito sessions, subagents, ended cron runs, and disabled completion
 notifications receive no restart wake. Empty successful outcomes follow the
 captured `notifyOnExitEmptySuccess` policy. The registry checks these conditions
@@ -430,7 +445,7 @@ Notes:
 - A live ordinary background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit. Durable processes do not block either operation.
 - `process remove` can hide a running session immediately after requesting termination; ordinary processes keep suspension and restart blocked until exit confirmation.
 - Process output enters chat history only when a `process poll`/`log` result is recorded. Durable commands also retain their local log artifact until the process record is retired.
-- `process` sees its own session’s processes and processes started by ancestor sessions belonging to the same agent. It cannot access sibling sessions, unrelated session trees, or another agent’s processes. Visibility follows the recorded session tree; handles do not need to be copied.
+- `process` sees its own session’s processes and processes started by ancestor sessions belonging to the same agent. It cannot access sibling sessions, unrelated session trees, or another agent’s processes. Visibility follows the recorded session tree; handles do not need to be copied. Participating turns are limited to listing, polling, and reading logs for the invited session itself; an invite does not grant access to ancestor processes.
 - After an explicit `kill` or task cancellation, `list`, `poll`, `log`, and a repeated `kill` report a confirmed requested stop as a completed observation, retaining the process's signal and cancellation reason. Unexpected termination, timeouts, and cleanup failures remain errors; `finalizationFailed: true` identifies cleanup failure.
 - A repeated `kill` of a retained finished session returns its terminal facts without sending another signal or consuming output. An unknown or cleared session ID does not confirm termination.
 - Process context shown at turn start is a snapshot. Later `process` results supersede it; the snapshot is not refreshed during the turn.

@@ -79,26 +79,20 @@ the same fix or adaptation before this release finishes. If access is
 unavailable, keep each pending update in local evidence and sync later. This is
 recommended bookkeeping, not another release gate.
 
-## Fast-track approval is human-only
+## Fast-track publication uses GitHub approval
 
-**NEVER approve a fast-track request, whether you or another agent prepared it.
-NEVER use an available maintainer token to impersonate human approval.** Obtain
-explicit approval from a human member of the normal release-managers group,
-which may be the release manager who requested it, for the
-exact request/digest, candidate, artifacts, publication scope, run/attempt,
-expiry and explicit skip/incomplete-validation action. Preparation authority,
-generic publish authority, silence and previous approvals do not qualify.
-If approval is missing, rejected, expired or ambiguous, stop the fast-track path
-and ask that human. Changed contents require a new request and approval.
+Use only the normal GitHub Actions `npm-release` environment approval by an
+eligible npm release manager. No separate chat approval, group conversation,
+Firebase service, approval URL or manually supplied decision is required.
+Agents may prepare the request and artifacts within task authority, but must
+never approve the environment using a release manager's token.
 
-Preserve the human decision's permalink, identity and timestamp with the exact
-request and original FRV results. Keep the normal `npm-release` environment
-approval and existing release receipt. Shared tokens make this a procedural
-rule, not a technical guarantee of human independence. See
-[fast-track approval](references/fast-track.md).
-For an approved exception, pass `--fast-track-approval <packet.json>` to
-`pnpm release:publish-preflight`; it forwards `fast_track_approval` through the
-existing publication path. Keep the original FRV run/attempt and sealed bytes.
+Pass `--fast-track-request <packet.json>` to `pnpm release:publish-preflight`;
+it forwards `fast_track_request` through the existing publication path. The
+packet describes the validation exception and has no `approval` object. The
+existing release receipt verifies GitHub approval and binds the exact packet.
+Keep the original FRV run/attempt and sealed bytes. See
+[fast-track publication](references/fast-track.md).
 Use the bounded policy only within 20 commits AND 15,000 added/deleted lines
 (package manifests and enumerated lockfiles excluded from LOC only), or the
 separate partial-FRV policy with its complete outstanding-check snapshot.
@@ -108,7 +102,7 @@ approval-job start timestamp; expiry never authorizes a new publication.
 
 ## Shared release boundaries
 
-Absent an explicit [approved fast-track](#fast-track-approval-is-human-only),
+Absent an explicit [approved fast-track](#fast-track-publication-uses-github-approval),
 FRV must conclude **success** with trusted P evaluating pinned Q’s
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 Record the approved release version, child role, and short reason. Include a
@@ -120,6 +114,11 @@ Record the exception separately from a pass, keeping raw outcomes unchanged.
 See [#204382](https://github.com/openclaw/openclaw/pull/204382): cancellation in
 [Performance 45327586533](https://github.com/openclaw/openclaw/actions/runs/45327586533)
 blocked [FRV 45326913251](https://github.com/openclaw/openclaw/actions/runs/45326913251).
+Before committing a grant, stage the ledger in Q. From that checkout, run
+`node "$REVIEWED_TOOLING/scripts/lib/release-validation-waivers.mjs" --check-staged`,
+where `REVIEWED_TOOLING` is the absolute path to a reviewed checkout with the current
+waiver checker. Require `Staged release waiver selectors are supported.` Older
+copies can exit silently. Check the approved scope against the observed failure separately.
 For grant-only edits, reuse the policy tests; add cases only for new matching or
 validation behavior. Keep new reasons to one sentence and authorization details
 in the release handoff, not public Q data or published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).
@@ -325,4 +324,4 @@ Selected Windows Node, Linux/Windows/macOS Gateway, and native-app CI failures
 block release validation. Platform publishers retain their own artifact
 and updater contracts; report pending platforms and proof gaps accurately.
 
-For public-safe approval evidence, follow [public approval packets](references/fast-track.md#public-approval-packets).
+For public-safe approval evidence, follow [public request packets](references/fast-track.md#public-request-packets).

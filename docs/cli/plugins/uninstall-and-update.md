@@ -196,6 +196,10 @@ resolves package siblings together. The request supports up to 64 distinct IDs.
 If the Gateway is offline, the command reports that it must be started before
 reloading a plugin and exits with code 1 without changing configuration.
 
+If startup quarantined an installed plugin, repair its files first, then reload
+it. Reload checks the repaired installation even when its path hasn't changed.
+A plugin that still fails verification stays unloaded.
+
 Bundled plugins share the running Gateway's code. Reload refreshes their
 registrations and returns `restartRequired: true`, even if their files have not
 changed. Restart the Gateway to load updated bundled code; rebuild first for

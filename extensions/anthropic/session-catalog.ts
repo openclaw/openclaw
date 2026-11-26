@@ -201,6 +201,7 @@ export function createClaudeSessionCatalogRuntime(
         allowPartialResults: _allowPartialResults,
         agentId: _agentId,
         listNodes,
+        exportSource,
         onHost,
         waitUntil,
         signal,
@@ -212,6 +213,7 @@ export function createClaudeSessionCatalogRuntime(
       const result = await listClaudeSessionCatalog({
         runtime: api.runtime,
         query: gatewayQuery,
+        exportSource,
         allowProcessHomeFallback,
         listNodes,
         waitUntil,

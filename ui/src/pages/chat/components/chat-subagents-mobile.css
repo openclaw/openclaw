@@ -127,15 +127,9 @@
 
 .chat-subagents-mobile__copy strong {
   display: block;
-  overflow: hidden;
-  white-space: nowrap;
   font-size: var(--control-ui-text-md);
   font-weight: 500;
-  line-height: 20px;
-}
-
-.chat-subagents-mobile__copy strong[data-scrollable="true"] {
-  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+  line-height: calc(20px * var(--control-ui-text-scale));
 }
 
 .chat-subagents-mobile__stats,
@@ -235,18 +229,19 @@
   height: 16px;
 }
 
-.chat-subagents-mobile__title {
+.chat-subagents-mobile__title,
+.subagents-desktop__child-name {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  font-size: var(--mobile-panel-rail-title-size, 14px);
+  max-height: min(6lh, 20dvh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
   font-weight: 500;
-  line-height: 20px;
-  white-space: nowrap;
 }
-
-.chat-subagents-mobile__title[data-scrollable="true"] {
-  mask-image: linear-gradient(to right, var(--text) calc(100% - 16px), transparent);
+.chat-subagents-mobile__title {
+  font-size: var(--control-ui-text-md);
+  line-height: calc(20px * var(--control-ui-text-scale));
 }
 
 .chat-subagents-mobile__header .chat-subagents-mobile__stop {

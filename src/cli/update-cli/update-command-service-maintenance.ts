@@ -346,6 +346,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     revalidateManagedGatewayServiceAfterUpdate({
       root: params.root,
       state: serviceState,
+      updateInstallKind: params.updateInstallKind,
       preManagedServiceStop: params.expectedService,
       allowInstallRootChange:
         params.allowInstallRootChange ?? params.updateInstallKind === "package",
@@ -490,6 +491,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       const verdict = await revalidateManagedGatewayServiceAfterUpdate({
         state,
         root: params.root,
+        updateInstallKind: params.updateInstallKind,
         preManagedServiceStop: inspected,
         allowInstallRootChange: params.allowInstallRootChange,
       });

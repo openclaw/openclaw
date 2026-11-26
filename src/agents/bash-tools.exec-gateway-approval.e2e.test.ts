@@ -473,12 +473,12 @@ describe("gateway-hosted exec approvals", () => {
         resolveOutcome(outcome);
         return undefined;
       });
-      const queue = async (id: string, command = "env") => {
+      const queue = async (id: string) => {
         const outcome = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
           resolveOutcome = resolve;
         });
         const pending = await tool.execute(id, {
-          command,
+          command: "env",
           workdir: workspaceDir,
           timeoutSeconds: 5,
         });
@@ -507,8 +507,7 @@ describe("gateway-hosted exec approvals", () => {
       expect(await approve(await queue("hook-token-startup"))).toEqual([newName]);
 
       // An approval still pending when hooks.token is reloaded to another env name.
-      const markerPath = path.join(workspaceDir, "queued-across-reload");
-      const queued = await queue("hook-token-queued", `touch ${JSON.stringify(markerPath)}`);
+      const queued = await queue("hook-token-queued");
       const before = await operator.request<{ hash: string }>("config.get", {});
       await operator.request("config.patch", {
         baseHash: before.hash,
@@ -518,14 +517,15 @@ describe("gateway-hosted exec approvals", () => {
         timeout: 15_000,
         interval: 500,
       });
-      await allowOnce(queued.approvalId);
+      // The started exec still launches. Its env was prepared at startup without the old
+      // name, and launch drops the newly referenced one. Awaiting it keeps its follow-up
+      // from settling the next probe's outcome.
+      expect(await approve(queued)).toEqual([]);
 
       // After reload: ingress follows the new name and only that name is withheld.
       expect(await approve(await queue("hook-token-after-reload"))).toEqual([oldName]);
       expect(await wake(newValue)).toBe(400);
       expect(await wake(oldValue)).toBe(401);
-      // The reload fenced the pending approval wait, so the queued command never launched.
-      await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
     },
     EXEC_APPROVAL_E2E_TIMEOUT_MS,
   );
