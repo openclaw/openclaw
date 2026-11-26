@@ -165,6 +165,19 @@ describe("vocabulary at the existing Talk transcription relay boundary", () => {
     },
   );
 
+  it("requires a new vocabulary admission after provider creation fails", async () => {
+    const { vocabulary } = await vocabularyFixture();
+    const fixture = relayFixture();
+    vi.mocked(fixture.provider.createSession).mockImplementationOnce(() => {
+      throw new Error(confidential);
+    });
+    const create = () => createTalkTranscriptionRelaySession({ ...fixture.params, vocabulary });
+    expect(create).toThrow("Vocabulary unavailable");
+    expect(create).toThrow("Vocabulary unavailable");
+    expect(fixture.provider.createSession).toHaveBeenCalledOnce();
+    expect(fixture.events).toEqual([]);
+  });
+
   it("drops newly arriving hinted results after revocation without replay or undoing accepted events", async () => {
     const selected = await vocabularyFixture();
     const fixture = relayFixture();

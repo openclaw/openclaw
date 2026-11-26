@@ -198,6 +198,19 @@ describe("effective vocabulary", () => {
     expect(explicit.entries.map((entry) => entry.term.canonical)).toEqual(["Beta"]);
   });
 
+  it("ignores aliases from shared terms shadowed by a personal canonical override", () => {
+    const effective = resolveEffectiveVocabulary({
+      collections: [
+        collection("first", [term("shared-alpha", "Alpha", ["beta"])]),
+        collection("second", [term("shared-beta", "beta")]),
+      ],
+      personalRevision: 1,
+      personalTerms: [term("personal-alpha", "Alpha")],
+    });
+    expect(effective.entries.map((entry) => entry.term.canonical)).toEqual(["Alpha", "beta"]);
+    expect(effective.conflicts).toEqual([]);
+  });
+
   it("compares NFC aliases without destructive case, accent, or compatibility folding", () => {
     const names = collection("names", [
       term("one", "Résumé"),

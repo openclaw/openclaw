@@ -249,7 +249,7 @@ export function createTalkTranscriptionRelaySession(
     if (params.vocabulary.providerId !== providerId || params.vocabulary.lineage.stage !== "stt") {
       throw new VocabularyError("unavailable");
     }
-    params.vocabulary.assertCurrent();
+    params.vocabulary.claimDispatch();
   }
   const transcriptionSessionId = randomUUID();
   const expiresAtMs = Date.now() + TRANSCRIPTION_SESSION_TTL_MS;

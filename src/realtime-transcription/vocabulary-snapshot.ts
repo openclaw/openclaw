@@ -29,6 +29,7 @@ export type VocabularyEgress = Readonly<{
   providerId: string;
   hints: VocabularyHints;
   lineage: VocabularyLineage;
+  claimDispatch(): void;
   assertCurrent(): void;
   assertCanPublish(): void;
   onInvalidated(listener: () => void): () => void;
@@ -284,6 +285,7 @@ export async function createVocabularySnapshot(params: {
         });
         lineage.add(source);
         dispatched.add(stage);
+        let claimed = false;
         return Object.freeze({
           providerId,
           get hints() {
@@ -294,6 +296,13 @@ export async function createVocabularySnapshot(params: {
             return hints;
           },
           lineage: source,
+          claimDispatch: () => {
+            assertCurrent();
+            if (claimed) {
+              throw new VocabularyError("unavailable");
+            }
+            claimed = true;
+          },
           assertCurrent,
           assertCanPublish: () => {
             assertCurrent();

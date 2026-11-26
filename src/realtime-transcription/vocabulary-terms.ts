@@ -250,8 +250,8 @@ export function resolveEffectiveVocabulary(params: {
     throw new VocabularyError("limit-exceeded");
   }
   let bytes = 2 + Math.max(0, count - 1);
-  const candidates: Candidate[] = [];
-  const aliases = new Map<string, Candidate[]>();
+  const admitted: Candidate[] = [];
+  const canonicalPriority = new Map<string, number>();
   for (const group of groups) {
     for (const term of group.terms) {
       bytes += Buffer.byteLength(JSON.stringify(term));
@@ -272,14 +272,25 @@ export function resolveEffectiveVocabulary(params: {
         priority: group.priority,
         key: comparisonKey(term.canonical),
       };
-      candidates.push(candidate);
-      for (const alias of new Set([candidate.key, ...term.aliases.map(comparisonKey)])) {
-        const matching = aliases.get(alias);
-        if (matching) {
-          matching.push(candidate);
-        } else {
-          aliases.set(alias, [candidate]);
-        }
+      admitted.push(candidate);
+      canonicalPriority.set(
+        candidate.key,
+        Math.min(candidate.priority, canonicalPriority.get(candidate.key) ?? candidate.priority),
+      );
+    }
+  }
+  // A shadowed canonical term must not suppress an unrelated hint through its aliases.
+  const candidates = admitted.filter(
+    (candidate) => candidate.priority === canonicalPriority.get(candidate.key),
+  );
+  const aliases = new Map<string, Candidate[]>();
+  for (const candidate of candidates) {
+    for (const alias of new Set([candidate.key, ...candidate.term.aliases.map(comparisonKey)])) {
+      const matching = aliases.get(alias);
+      if (matching) {
+        matching.push(candidate);
+      } else {
+        aliases.set(alias, [candidate]);
       }
     }
   }
