@@ -481,17 +481,6 @@ function collectDeprecatedTestAliasImports(): string[] {
   return leaks.map((entry) => `${entry.file}: ${entry.specifier}`).toSorted();
 }
 
-function collectWorkspaceCodeFiles(): string[] {
-  const files: string[] = [];
-  for (const root of ["src", "test", "extensions", "packages", "scripts"]) {
-    const dir = resolve(REPO_ROOT, root);
-    if (fs.existsSync(dir)) {
-      files.push(...collectCodeFiles(dir));
-    }
-  }
-  return files;
-}
-
 function hasWildcardReexport(entrypoint: string): boolean {
   const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk", `${entrypoint}.ts`), "utf8");
   return /^\s*export\s+(?:type\s+)?\*\s+from\s+["'][^"']+["']/mu.test(source);
