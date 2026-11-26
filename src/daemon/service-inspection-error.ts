@@ -34,7 +34,7 @@ export type ServiceInspectionReason = keyof typeof SERVICE_INSPECTION_MESSAGES;
 export type ServiceInspectionDiagnostic =
   | { kind: "timeout"; timeoutMs: number }
   | { kind: "spawn"; errno?: number }
-  | { kind: "invalid-response" }
+  | { kind: "invalid-response"; stage?: "json" | "access-facts" | "task-snapshot" }
   | { kind: "native"; exitCode: number | null; hresult?: number };
 
 export function isServiceInspectionReason(value: string): value is ServiceInspectionReason {
@@ -62,7 +62,16 @@ function formatServiceInspectionDiagnostic(
     case "spawn":
       return `Task Scheduler check could not start${Number.isSafeInteger(diagnostic.errno) ? ` (errno ${diagnostic.errno})` : ""}.`;
     case "invalid-response":
-      return "Task Scheduler check returned an invalid response.";
+      switch (diagnostic.stage) {
+        case "json":
+          return "Task Scheduler check returned invalid JSON.";
+        case "access-facts":
+          return "Task Scheduler check returned invalid access facts.";
+        case "task-snapshot":
+          return "Task Scheduler check returned an invalid task snapshot.";
+        default:
+          return "Task Scheduler check returned an invalid response.";
+      }
     case "native": {
       const facts: string[] = [];
       if (Number.isSafeInteger(diagnostic.exitCode)) {

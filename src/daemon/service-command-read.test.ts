@@ -414,8 +414,8 @@ describe("native service command inspection", () => {
     ],
     [
       { status: 0, stdout: "native-secret-canary" },
-      { kind: "invalid-response" },
-      "Task Scheduler check returned an invalid response",
+      { kind: "invalid-response", stage: "json" },
+      "Task Scheduler check returned invalid JSON",
     ],
   ] satisfies Array<[object, ServiceInspectionDiagnostic, string, boolean?]>)(
     "preserves safe Scheduler diagnostics: %j",

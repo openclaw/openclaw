@@ -36,7 +36,10 @@ const probeSchema = z.object({
     .discriminatedUnion("kind", [
       z.object({ kind: z.literal("timeout"), timeoutMs: z.number() }),
       z.object({ kind: z.literal("spawn"), errno: z.number().optional() }),
-      z.object({ kind: z.literal("invalid-response") }),
+      z.object({
+        kind: z.literal("invalid-response"),
+        stage: z.enum(["json", "access-facts", "task-snapshot"]).optional(),
+      }),
       z.object({
         kind: z.literal("native"),
         exitCode: z.number().nullable(),
