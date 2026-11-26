@@ -4,6 +4,7 @@ import {
   pluginRuntimeProcessManifest,
   runtimeProcessScriptEntrypoints,
 } from "../../src/infra/runtime-process-manifest.ts";
+import { groupBy } from "./group-by.mts";
 import { managedMemoryEntrypoint } from "./managed-memory-entrypoint.mts";
 import { managedWindowsJobEntrypoint } from "./managed-windows-job-entrypoint.mts";
 
@@ -158,7 +159,7 @@ export function standaloneRuntimeProcessBuildGroups(entries: Record<string, stri
     Object.hasOwn(standaloneRuntimeProcessBuildEntries, name),
   );
   return Array.from(
-    Map.groupBy(standalone, ([name]) => sharedBuildGroup(name) ?? name).values(),
+    groupBy(standalone, ([name]) => sharedBuildGroup(name) ?? name).values(),
     (group) => Object.fromEntries(group),
   );
 }
