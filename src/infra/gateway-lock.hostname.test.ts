@@ -104,7 +104,12 @@ it.each(
       if (row.legacy) {
         expect(acquire).toThrow();
       } else {
-        expect(acquire).toThrow("cannot verify Gateway ownership from this process");
+        // An unparseable record keeps its ownership as ordinary contention.
+        expect(acquire).toThrow(
+          row.kind === "malformed owner machine"
+            ? "Stop the holder before retrying"
+            : "cannot verify Gateway ownership from this process",
+        );
       }
       expect(fs.readFileSync(ownerPath, "utf8")).toBe(recorded);
     } else {

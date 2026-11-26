@@ -444,7 +444,6 @@ export async function acquireGatewayLock(
     0,
   );
   const deadlineMs = Math.min(opts.lifecycleDeadlineMs ?? Infinity, startedAt + timeoutMs);
-  const pollIntervalMs = resolvePositiveTimerTimeoutMs(opts.pollIntervalMs, 250);
   const startTime = readGatewayLockProcessStartTime(
     process.pid,
     opts.platform ?? process.platform,
@@ -491,10 +490,8 @@ export async function acquireGatewayLock(
     stateOwner =
       borrowedOwner ??
       (await acquireWithWait({
-        // Only an explicit caller deadline ends a wait on a renewing foreign Gateway.
-        deadlineMs:
-          opts.timeoutMs === undefined ? (opts.lifecycleDeadlineMs ?? Infinity) : deadlineMs,
-        pollIntervalMs,
+        deadlineMs,
+        pollIntervalMs: resolvePositiveTimerTimeoutMs(opts.pollIntervalMs, 250),
         now,
         sleep: opts.sleep,
         acquire: async () => {
@@ -559,9 +556,10 @@ export async function acquireGatewayLock(
             error instanceof GatewayLockNamespaceError &&
             (role === "gateway" || role === "sqlite-maintenance")
           ) {
+            // A readable foreign heartbeat goes stale within the role's ordinary deadline.
             const age = error.heartbeatAgeMs;
             const remaining =
-              age === undefined ? Math.min(deadlineMs, heartbeatDeadlineMs) - now() : Infinity;
+              (age === undefined ? Math.min(deadlineMs, heartbeatDeadlineMs) : deadlineMs) - now();
             if (remaining <= 0) {
               return false;
             }
@@ -575,9 +573,7 @@ export async function acquireGatewayLock(
             waited = true;
             return { delayMs: Math.min(5_000, remaining) };
           }
-          const remaining = deadlineMs - now();
           if (
-            remaining <= 0 ||
             role === "sqlite-maintenance" ||
             !(error instanceof GatewayStateOwnerContentionError)
           ) {
@@ -589,7 +585,7 @@ export async function acquireGatewayLock(
             );
           }
           waited = true;
-          return { delayMs: Math.min(pollIntervalMs, remaining) };
+          return true;
         },
       }));
   } catch (error) {

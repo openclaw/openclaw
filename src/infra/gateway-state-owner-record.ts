@@ -251,9 +251,6 @@ export function acquireGatewayStateOwnerFile(
   const observed: { holder: LockPayload | null } = { holder: null };
   const stale = ({ payload: value }: { payload: unknown }) => {
     observed.holder = LockPayloadSchema.safeParse(value).data ?? null;
-    if (!observed.holder && isRecord(value)) {
-      throw new GatewayLockNamespaceError({}, pathname);
-    }
     return isGatewayStateOwnerDefinitelyStale(observed.holder, pathname);
   };
   if (busyTimeoutMs > 0) {

@@ -473,7 +473,9 @@ describe("gateway lock namespaces", () => {
       const expired = new Date(Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1000);
       await fs.utimes(paths.ownerLockPath, expired, expired);
       await expect(acquireForTest(env)).rejects.toThrow(
-        "cannot verify Gateway ownership from this process",
+        kind === "malformed"
+          ? "Stop the holder before retrying"
+          : "cannot verify Gateway ownership from this process",
       );
       await expect(fs.readFile(paths.ownerLockPath, "utf8")).resolves.toBe(record);
     },
@@ -667,10 +669,11 @@ describe("gateway lock namespaces", () => {
         expect(completed).toBe(false);
         expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).toBe(payload);
         if (kind === "renewing") {
-          await vi.advanceTimersByTimeAsync(225_000);
+          // Past the 95 s base limit, within the ordinary five-minute startup wait.
+          await vi.advanceTimersByTimeAsync(95_000);
           expect(completed).toBe(false);
           clearInterval(renew);
-          await vi.advanceTimersByTimeAsync(90_000);
+          await vi.advanceTimersByTimeAsync(100_000);
         } else {
           await vi.advanceTimersByTimeAsync(10_000);
         }
@@ -775,28 +778,16 @@ describe("gateway lock namespaces", () => {
           await vi.advanceTimersByTimeAsync(
             kind === "deadline" || kind === "revoked" || kind === "clock-skew" ? 5_000 : 95_000,
           );
-          if (kind === "renewing") {
-            expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).toBe(record);
-            clearInterval(renew);
-            await vi.advanceTimersByTimeAsync(90_000);
-          }
         }
         const result = await admission;
-        if (
-          kind === "local-exited" ||
-          kind === "stale" ||
-          kind === "exited" ||
-          kind === "renewing"
-        ) {
+        if (kind === "local-exited" || kind === "stale" || kind === "exited") {
           if (!("lock" in result)) {
             throw result.error;
           }
           owner = result.lock;
           owner.assertCurrent();
           expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).not.toBe(record);
-          expect(Date.now() - began).toBe(
-            kind === "renewing" ? 185_000 : kind === "exited" ? 95_000 : 0,
-          );
+          expect(Date.now() - began).toBe(kind === "exited" ? 95_000 : 0);
         } else {
           expect(result).toEqual({ error: expect.any(Error) });
           if (!("error" in result)) {
@@ -817,7 +808,9 @@ describe("gateway lock namespaces", () => {
               expect(message).toContain("cannot verify Gateway ownership from this process");
             }
           }
-          expect(Date.now() - began).toBe(kind === "live" ? 0 : 5_000);
+          expect(Date.now() - began).toBe(
+            kind === "live" ? 0 : kind === "renewing" ? 95_000 : 5_000,
+          );
           expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).toBe(record);
         }
       } finally {

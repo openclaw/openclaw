@@ -85,9 +85,8 @@ export async function acquireDoctorGatewayMaintenanceOwner(
   const updateRepair = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options, env));
   const waitForMaintenance = updateRepair || params.waitForMaintenance === true;
   const assertCurrent =
-    params.assertCurrent || params.assertAdmission || params.signal
+    params.assertCurrent || params.assertAdmission
       ? () => {
-          params.signal?.throwIfAborted();
           params.assertCurrent?.();
           params.assertAdmission?.();
         }
