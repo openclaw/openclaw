@@ -59,7 +59,7 @@ import {
   resolveSlackCommandIngress,
   resolveSlackEffectiveAllowFrom,
 } from "../auth.js";
-import { resolveSlackChannelConfig } from "../channel-config.js";
+import { resolveAllowBots, resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import {
   buildSlackAssistantThreadMetadata,
@@ -94,13 +94,13 @@ import {
   collectSlackMentionIds,
   isSlackSubteamMentionForBot,
   normalizeSlackId,
+  SLACK_USER_MENTION_RE,
 } from "./subteam-mentions.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage, SlackMessageSourceOptions } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
 const SLACK_ANY_MENTION_RE = /<@[^>]+>|<!subteam\^[^>]+>/;
-const SLACK_USER_MENTION_RE = /<@([^>|]+)(?:\|[^>]+)?>/g;
 const SLACK_SUBTEAM_MENTION_RE = /<!subteam\^([^>|]+)(?:\|[^>]+)?>/g;
 const SLACK_SUBTEAM_MENTION_MARKER = "<!subteam^";
 const SLACK_CHANNEL_ACCESS_DOCS_URL =
@@ -272,8 +272,7 @@ export async function prepareSlackMessage(params: {
         allowNameMatching: ctx.allowNameMatching,
       })
     : null;
-  const allowBotsSetting =
-    channelConfig?.allowBots ?? account.config?.allowBots ?? cfg.channels?.slack?.allowBots ?? true;
+  const allowBotsSetting = resolveAllowBots(channelConfig, account.config, cfg.channels?.slack);
   const allowBotsMode: "off" | "all" | "mentions" =
     allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting ? "all" : "off";
 

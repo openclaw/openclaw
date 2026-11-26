@@ -441,6 +441,234 @@ describe("registerSlackMessageEvents", () => {
     },
   );
 
+  function createBotAdmissionHandlers(params?: {
+    channelAllowBots?: boolean | "mentions";
+    accountAllowBots?: boolean | "mentions";
+    directMessage?: boolean;
+  }) {
+    const harness = createSlackSystemEventTestHarness({
+      channelType: params?.directMessage ? "im" : "channel",
+    });
+    harness.ctx.cfg = {
+      channels: {
+        slack: {
+          enabled: true,
+          ...(params?.accountAllowBots !== undefined ? { allowBots: params.accountAllowBots } : {}),
+        },
+      },
+    };
+    harness.ctx.channelsConfig =
+      !params?.directMessage && params?.channelAllowBots !== undefined
+        ? { C123: { allowBots: params.channelAllowBots } }
+        : undefined;
+    harness.ctx.channelsConfigKeys = Object.keys(harness.ctx.channelsConfig ?? {});
+    const handleSlackMessage = vi.fn<SlackMessageHandler>(async () => {});
+    registerSlackMessageEvents({ ctx: harness.ctx, handleSlackMessage });
+    return {
+      handler: requireMessageHandler(harness.getHandler("message") as MessageHandler | null),
+      handleSlackMessage,
+    };
+  }
+
+  function botEdit(text: string, channel = "C123", channelType = "channel") {
+    return {
+      type: "message",
+      subtype: "message_changed",
+      channel,
+      channel_type: channelType,
+      message: { ts: "2.000", thread_ts: "1.000", bot_id: "B_OTHER", text },
+      previous_message: { ts: "2.000", thread_ts: "1.000", bot_id: "B_OTHER", text },
+      event_ts: "2.100",
+    };
+  }
+
+  function humanEdit(text: string) {
+    return {
+      type: "message",
+      subtype: "message_changed",
+      channel: "C123",
+      channel_type: "channel",
+      message: { ts: "2.000", thread_ts: "1.000", user: "U123", text },
+      previous_message: { ts: "2.000", thread_ts: "1.000", user: "U123", text },
+      event_ts: "2.100",
+    };
+  }
+
+  it("drops an unmentioned bot edit and admits a human edit under allowBots=mentions", async () => {
+    const { handler, handleSlackMessage } = createBotAdmissionHandlers({
+      channelAllowBots: "mentions",
+    });
+
+    await handler({ event: botEdit("bot edit without a mention"), body: { event_id: "Ev-bot" } });
+    expect(messageQueueMock).not.toHaveBeenCalled();
+
+    await handler({ event: humanEdit("human edit"), body: { event_id: "Ev-human" } });
+    expect(messageQueueMock).toHaveBeenCalledExactlyOnceWith(
+      "Slack message edited in #general.",
+      expect.objectContaining({ sessionKey: "agent:main:main" }),
+    );
+    expect(handleSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it("admits a bot edit that mentions the agent under allowBots=mentions", async () => {
+    const { handler } = createBotAdmissionHandlers({ channelAllowBots: "mentions" });
+
+    await handler({
+      event: botEdit("hey <@U_BOT> take a look"),
+      body: { event_id: "Ev-bot-mentioned" },
+    });
+
+    expect(messageQueueMock).toHaveBeenCalledExactlyOnceWith(
+      "Slack message edited in #general.",
+      expect.objectContaining({ sessionKey: "agent:main:main" }),
+    );
+  });
+
+  it("applies mentions mode to the edited text of a top-level bot message", async () => {
+    const { handler } = createBotAdmissionHandlers({ channelAllowBots: "mentions" });
+
+    await handler({
+      event: {
+        type: "message",
+        subtype: "message_changed",
+        channel: "C123",
+        channel_type: "channel",
+        message: { ts: "2.000", bot_id: "B_OTHER", text: "no mention after edit" },
+        previous_message: { ts: "2.000", bot_id: "B_OTHER", text: "old <@U_BOT> mention" },
+        event_ts: "2.100",
+      },
+      body: { event_id: "Ev-top-level-drop" },
+    });
+    expect(messageQueueMock).not.toHaveBeenCalled();
+
+    await handler({
+      event: {
+        type: "message",
+        subtype: "message_changed",
+        channel: "C123",
+        channel_type: "channel",
+        message: { ts: "3.000", bot_id: "B_OTHER", text: "new <@U_BOT> mention" },
+        previous_message: { ts: "3.000", bot_id: "B_OTHER", text: "no mention before edit" },
+        event_ts: "3.100",
+      },
+      body: { event_id: "Ev-top-level-allow" },
+    });
+    expect(messageQueueMock).toHaveBeenCalledOnce();
+  });
+
+  function tombstone(previous: Record<string, unknown>) {
+    return {
+      type: "message",
+      subtype: "message_changed",
+      channel: "C123",
+      channel_type: "channel",
+      message: {
+        ts: "2.000",
+        thread_ts: "2.000",
+        subtype: "tombstone",
+        user: "USLACKBOT",
+        text: "This message was deleted.",
+      },
+      previous_message: { ts: "2.000", ...previous },
+      event_ts: "2.100",
+    };
+  }
+
+  it("gates a bot thread-root deletion delivered as a Slackbot tombstone", async () => {
+    const { handler } = createBotAdmissionHandlers({ channelAllowBots: false });
+
+    await handler({
+      event: tombstone({ bot_id: "B_OTHER", text: "deleted bot card" }),
+      body: { event_id: "Ev-bot-tombstone" },
+    });
+    expect(messageQueueMock).not.toHaveBeenCalled();
+
+    await handler({
+      event: tombstone({ user: "U123", text: "deleted human message" }),
+      body: { event_id: "Ev-human-tombstone" },
+    });
+    expect(messageQueueMock).toHaveBeenCalledOnce();
+  });
+
+  it("checks the deleted text of a bot tombstone under allowBots=mentions", async () => {
+    const { handler } = createBotAdmissionHandlers({ channelAllowBots: "mentions" });
+
+    await handler({
+      event: tombstone({ bot_id: "B_OTHER", text: "deleted without a mention" }),
+      body: { event_id: "Ev-tombstone-unmentioned" },
+    });
+    expect(messageQueueMock).not.toHaveBeenCalled();
+
+    await handler({
+      event: tombstone({ bot_id: "B_OTHER", text: "deleted <@U_BOT> card" }),
+      body: { event_id: "Ev-tombstone-mentioned" },
+    });
+    expect(messageQueueMock).toHaveBeenCalledOnce();
+  });
+
+  it("admits an unmentioned bot edit in a DM under allowBots=mentions", async () => {
+    const { handler } = createBotAdmissionHandlers({
+      accountAllowBots: "mentions",
+      directMessage: true,
+    });
+
+    await handler({
+      event: botEdit("bot edit without a mention", "D123", "im"),
+      body: { event_id: "Ev-dm-bot" },
+    });
+
+    expect(messageQueueMock).toHaveBeenCalledOnce();
+  });
+
+  it("drops a bot delete under allowBots=false but still admits a human delete", async () => {
+    const { handler } = createBotAdmissionHandlers({ channelAllowBots: false });
+    const botDelete = {
+      type: "message",
+      subtype: "message_deleted",
+      channel: "C123",
+      channel_type: "channel",
+      deleted_ts: "2.000",
+      previous_message: { ts: "2.000", bot_id: "B_OTHER", text: "bye" },
+      event_ts: "2.100",
+    };
+    const humanDelete = {
+      ...botDelete,
+      previous_message: { ts: "2.000", user: "U123", text: "bye" },
+    };
+
+    await handler({ event: botDelete, body: { event_id: "Ev-bot-deleted" } });
+    expect(messageQueueMock).not.toHaveBeenCalled();
+
+    await handler({ event: humanDelete, body: { event_id: "Ev-human-deleted" } });
+    expect(messageQueueMock).toHaveBeenCalledExactlyOnceWith(
+      "Slack message deleted in #general.",
+      expect.objectContaining({ sessionKey: "agent:main:main" }),
+    );
+  });
+
+  it("falls back to account allowBots for bot edits without a channel entry", async () => {
+    const { handler } = createBotAdmissionHandlers({ accountAllowBots: "mentions" });
+
+    await handler({ event: botEdit("no mention"), body: { event_id: "Ev-account-off" } });
+    expect(messageQueueMock).not.toHaveBeenCalled();
+
+    await handler({
+      event: botEdit("<@U_BOT> mentioned"),
+      body: { event_id: "Ev-account-on" },
+    });
+    expect(messageQueueMock).toHaveBeenCalledOnce();
+  });
+
+  it("gives the channel allowBots setting precedence over the account setting", async () => {
+    const { handler } = createBotAdmissionHandlers({
+      channelAllowBots: true,
+      accountAllowBots: false,
+    });
+
+    await handler({ event: botEdit("no mention"), body: { event_id: "Ev-channel-override" } });
+    expect(messageQueueMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps bot edit and delete events on a remembered C-prefix mpDM session", async () => {
     const handlers: Record<string, MessageHandler> = {};
     const conversationsInfo = vi.fn().mockRejectedValue(new Error("missing_scope"));

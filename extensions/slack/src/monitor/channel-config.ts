@@ -23,6 +23,19 @@ export type SlackChannelConfigResolved = Omit<
 
 export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
 
+/**
+ * Resolves the bot admission policy shared by the ordinary message pipeline and
+ * subtype system events: channel entry, then account, then the global Slack
+ * setting. Bot messages are admitted when nothing is configured.
+ */
+export function resolveAllowBots(
+  channel: Pick<SlackChannelConfig, "allowBots"> | null | undefined,
+  account: Pick<SlackChannelConfig, "allowBots">,
+  global: Pick<SlackChannelConfig, "allowBots"> | undefined,
+): boolean | "mentions" {
+  return channel?.allowBots ?? account.allowBots ?? global?.allowBots ?? true;
+}
+
 export function resolveSlackChannelLabel(params: { channelId?: string; channelName?: string }) {
   const channelName = params.channelName?.trim();
   if (channelName) {

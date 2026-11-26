@@ -6,6 +6,9 @@ import { getOrCreateWeakOwnerMap } from "../lru-map-cache.js";
 const SUBTEAM_MENTION_RE = /<!subteam\^([A-Z0-9]+)(?:\|[^>]*)?>/gi;
 const SUBTEAM_MEMBER_CACHE_TTL_MS = 5 * 60 * 1000;
 
+/** Explicit Slack user mention: `<@U123>` or `<@U123|display-name>`. */
+export const SLACK_USER_MENTION_RE = /<@([^>|]+)(?:\|[^>]+)?>/g;
+
 type CacheEntry = {
   expiresAt: number;
   users: ReadonlySet<string>;

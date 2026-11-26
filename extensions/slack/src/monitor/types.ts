@@ -77,7 +77,7 @@ export type SlackPinEvent = LooseSlackEvent<PinAddedEvent | PinRemovedEvent>;
 
 type SlackMessageSubtypeMessage = Pick<
   SlackMessageEvent,
-  "ts" | "thread_ts" | "parent_user_id" | "user" | "bot_id"
+  "ts" | "thread_ts" | "parent_user_id" | "user" | "bot_id" | "text" | "subtype"
 >;
 
 export type SlackMessageChangedEvent = Omit<
