@@ -8,6 +8,8 @@ import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { preparePluginStateRead } from "../plugin-sdk/plugin-state-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readGlobalSingleton } from "../shared/global-singleton.js";
+import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { useState } from "./plugin-state-fixtures.test-support.js";
 import type { PluginStateOperationInput } from "./plugin-state-operation-contract.js";
@@ -17,6 +19,7 @@ import type { FixtureOperations } from "./plugin-state-operation.test-support.js
 import {
   createCorePluginStateKeyedStore,
   createPluginStateKeyedStore,
+  createPluginStateRuntimeStores,
   createPluginStateSyncKeyedStore,
   replaceCorePluginStateEntry,
 } from "./plugin-state-store.js";
@@ -90,6 +93,36 @@ const afterExecute = (
       return result;
     });
 };
+
+it("releases completed conversation namespaces while their plugin store rows stay readable", async () => {
+  const env = { ...state().env, OPENCLAW_STATE_DIR: state().path("conversation-epochs") };
+  const runtime = createPluginStateRuntimeStores("conversation-retention", () => {});
+  const namespaces = Array.from({ length: 8 }, (_, session) =>
+    ["jobs", "steps", "cancellations"].map((kind) => `research-${kind}-v1-${session}`),
+  ).flat();
+  for (const namespace of namespaces) {
+    const store = runtime.openKeyedStoreV2<string>(options(namespace, env));
+    expect(await store.registerIfAbsent("job", namespace)).toBe(true);
+  }
+  for (const namespace of namespaces) {
+    expect(await runtime.openKeyedStoreV2<string>(options(namespace, env)).lookup("job")).toBe(
+      namespace,
+    );
+  }
+  const sources = readGlobalSingleton(Symbol.for("openclaw.pluginStateOperationEpochs")) as Map<
+    string,
+    Map<string, unknown>
+  >;
+  const { coordinationKey } = captureOpenClawStateDatabaseReadAdmission(
+    resolveOpenClawStateSqlitePath(env),
+  );
+  expect(sources.get(coordinationKey)?.size ?? 0).toBe(0);
+  expect(sources.has(coordinationKey)).toBe(false);
+  expect(
+    await runtime.openKeyedStoreV2<string>(options("never-written", env)).lookup("job"),
+  ).toBeUndefined();
+  expect(sources.has(coordinationKey)).toBe(false);
+});
 
 it("moves rows across namespaces in one worker command and rolls back undeclared writes", async () => {
   const { first, second, operation } = await pair("move");
@@ -300,6 +333,7 @@ it("invalidates receipts at async admission and sync commit through a directory 
   const native = createPluginStateSyncKeyedStore<string>("operation-test", options(namespace, env));
   const invalidation = PluginStateOperationInvalidatedError;
   let current = await read(operation);
+  const original = current.assertCurrent;
   current.assertCurrent();
   native.register("key", "sync successor");
   expect(current.assertCurrent).toThrow(invalidation);
@@ -316,6 +350,7 @@ it("invalidates receipts at async admission and sync commit through a directory 
   native.delete("key");
   expect(current.assertCurrent).toThrow(invalidation);
   expect((await read(operation)).value.value).toBeUndefined();
+  expect(original).toThrow(invalidation);
 });
 
 it("keeps scalar and receipt reads behind earlier unfinished mutations", async () => {
@@ -334,8 +369,9 @@ it("keeps scalar and receipt reads behind earlier unfinished mutations", async (
   const scalarRead = second.lookup("key");
   const reading = read(operation, 1);
   release.resolve();
-  await write;
+  const overtaken = await write;
   await followingWrite;
+  expect(overtaken.assertCurrent).toThrow(PluginStateOperationInvalidatedError);
   expect(await scalarRead).toBe("following");
   const receipt = await reading;
   expect(receipt.value.value).toBe("following");
