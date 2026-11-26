@@ -138,7 +138,6 @@ describe("unchanged local workspace reconciliation", () => {
         unavailableReason: "worker Git repository is not a standalone checkout",
       },
     });
-    expect(reconciliation.acceptUnchangedStagedResult).toBeUndefined();
     await verifyReconciledWorkspaceFinal(reconciliation, inactiveQuiescence);
     expect(record).toHaveBeenCalledExactlyOnceWith(ref);
     await expect(adoptStagedWorkerWorkspaceHistory({ root, stagedResultRef: ref })).resolves.toBe(

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import {
   readGitHubRepositoryPublicationBlob,
   readGitHubRepositoryPublicationMetadata,
@@ -17,6 +16,7 @@ import {
   NodeWorkerPublicationConflictError,
 } from "../worker/node-workspace-transfer-protocol.js";
 import type { WorkspaceTransferOperation } from "./node-worker-transfer-contract.js";
+import { withNodeWorkerTempWorkspace } from "./node-worker-workspace-admission.js";
 
 /** Accepted blobs/history and explicit repository fetches are the only object sources. */
 async function mergeNodeRepositoryPublication(params: {
@@ -36,7 +36,7 @@ async function mergeNodeRepositoryPublication(params: {
     params.inputRoot,
     params.inputDigest,
   );
-  await withTempWorkspace(
+  await withNodeWorkerTempWorkspace(
     { rootDir: path.dirname(params.outputRoot), prefix: "publication-git-" },
     async ({ dir }) => {
       const env: NodeJS.ProcessEnv = { ...(params.baseEnv ?? process.env) };
@@ -268,7 +268,7 @@ export async function transferNodeRepositoryPublication(
   },
 ): Promise<string> {
   const transfer = params.transfer;
-  return await withTempWorkspace(
+  return await withNodeWorkerTempWorkspace(
     {
       rootDir: path.join(params.manifestHome, ".openclaw-worker", "publication"),
       prefix: "publication-merge-",

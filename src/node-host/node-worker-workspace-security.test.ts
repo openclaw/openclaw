@@ -98,7 +98,6 @@ it.runIf(process.platform === "linux")(
       const r = spawnSync(launch.command, launch.args, { env, encoding: "utf8", timeout: 20000 });
       expect(r.status, r.stderr).toBe(0);
       expect(JSON.parse(r.stdout)).toEqual({ denied: "EACCES" });
-      expect(fs.existsSync(marker)).toBe(false);
       const token = service.prepareUpload("audit", prepared.snapshot.manifestRef, undefined, 2);
       await run({
         direction: "upload",

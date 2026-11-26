@@ -57,7 +57,12 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-async function runAdmissionProcess(policy: string | undefined, body = "", beforeAdmission = "") {
+async function runAdmissionProcess(
+  policy: string | undefined,
+  body = "",
+  beforeAdmission = "",
+  timeoutMs = 10_000,
+) {
   const env = { ...process.env };
   delete env.OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS;
   if (policy !== undefined) {
@@ -78,7 +83,7 @@ async function runAdmissionProcess(policy: string | undefined, body = "", before
          await import(${JSON.stringify(new URL("./node-worker-workspace-admission.ts", import.meta.url).href)});
        ${body}`,
     ],
-    { env, timeout: 10_000 },
+    { env, timeout: timeoutMs },
   );
 }
 
@@ -125,6 +130,71 @@ it.skipIf(process.platform === "win32")(
       expect((await fs.stat(ancestor)).mode & 0o777).toBe(0o770);
     } finally {
       await fs.chmod(nested, 0o700);
+      await fs.chmod(ancestor, 0o700);
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "publishes through the real transfer owner beneath an explicitly trusted writable ancestor",
+  async () => {
+    const root = tempDirs.make("node-publication-policy-");
+    const ancestor = path.join(root, "sandbox");
+    const manifestHome = path.join(ancestor, "node-home");
+    await fs.mkdir(manifestHome, { recursive: true, mode: 0o700 });
+    await fs.chmod(ancestor, 0o770);
+    const moduleUrl = (relative: string) => JSON.stringify(new URL(relative, import.meta.url).href);
+    try {
+      await runAdmissionProcess(
+        JSON.stringify([await fs.realpath(ancestor)]),
+        `
+        const path = await import("node:path");
+        const { pathToFileURL } = await import("node:url");
+        const { createHash } = await import("node:crypto");
+        const { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } = await import(${moduleUrl("../gateway/github-repository-publication-snapshot.ts")});
+        const { prepareNodeWorkerPublicationIntegration } = await import(${moduleUrl("../gateway/worker-environments/node-worker-publication-transfer.ts")});
+        const { createNodeWorkspaceTransferCommand } = await import(${moduleUrl("../gateway/worker-environments/node-workspace-transfer-command.ts")});
+        const { createNodeWorkspaceTransferService } = await import(${moduleUrl("../gateway/worker-environments/node-workspace-transfer-service.ts")});
+        const { startNodeWorkspaceTransferTestServer, transferOwner } = await import(${moduleUrl("../gateway/worker-environments/node-workspace-transfer.test-support.ts")});
+        const { runNodeWorkerWorkspaceTransfer } = await import(${moduleUrl("./node-worker-transfer-client.ts")});
+        const { NODE_WORKSPACE_EMPTY_MANIFEST_REF } = await import(${moduleUrl("../worker/node-workspace-transfer-protocol.ts")});
+        const root = ${JSON.stringify(root)};
+        const manifestHome = ${JSON.stringify(manifestHome)};
+        const source = path.join(root, "source");
+        const inputRoot = path.join(root, "input");
+        await fs.mkdir(source, { mode: 0o700 });
+        const env = { ...process.env, GIT_AUTHOR_NAME:"Fixture", GIT_AUTHOR_EMAIL:"fixture@example.test", GIT_COMMITTER_NAME:"Fixture", GIT_COMMITTER_EMAIL:"fixture@example.test", GIT_CONFIG_GLOBAL:"/dev/null", GIT_CONFIG_SYSTEM:"/dev/null" };
+        const git = (...args) => execFileSync("git", args, { cwd:source, env, encoding:"utf8" }).trim();
+        git("init", "--quiet", "--initial-branch=main");
+        await fs.writeFile(path.join(source, "result.txt"), "base");
+        git("add", "."); git("commit", "--quiet", "-m", "base");
+        const baseCommit = git("rev-parse", "HEAD");
+        await fs.writeFile(path.join(source, "result.txt"), "accepted");
+        execFileSync(process.execPath, ["-e", REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS, source, baseCommit, inputRoot], {env});
+        const snapshotDigest = "sha256:" + createHash("sha256").update(await fs.readFile(path.join(inputRoot,"snapshot.json"))).digest("hex");
+        const service = createNodeWorkspaceTransferService({temporaryRoot:path.join(root,"transfers"),getOwner:()=>transferOwner("session")});
+        await service.prepareRepository({environmentId:"environment",ownerEpoch:1,sessionId:"session",baseCommit,baseManifestRef:NODE_WORKSPACE_EMPTY_MANIFEST_REF,isAuthorized:()=>true});
+        const server = await startNodeWorkspaceTransferTestServer(service);
+        const signal = new AbortController().signal;
+        const transfer = createNodeWorkspaceTransferCommand(async (command) => {
+          assert(command.transfer);
+          const stdout = await runNodeWorkerWorkspaceTransfer({gatewayUrl:server.gatewayUrl,environmentId:"environment",workspaceDir:source,manifestHome,baseEnv:env,transfer:command.transfer,signal});
+          return {code:0,termination:"exit",signal:null,killed:false,stdout,stderr:"",workspaceDir:source};
+        });
+        try {
+          const result = await prepareNodeWorkerPublicationIntegration({environmentId:"environment",signal,workspaceTransfer:service,supportsIntegration:async()=>true,transfer}, {snapshotRoot:inputRoot,snapshotDigest,sourceUrl:pathToFileURL(source).href,targetUrl:pathToFileURL(source).href,targetCommit:baseCommit,token:"synthetic-token",assertCurrent:()=>{}});
+          try {
+            assert.equal(result.snapshot.baseCommit, baseCommit);
+            assert.equal(await fs.readFile(path.join(result.snapshotRoot,"blobs",result.snapshot.entries[0].sha),"utf8"),"accepted");
+          } finally { await result.release(); }
+        } finally { await server.close(); await service.closeAll(); }
+        assert.deepEqual(await fs.readdir(path.join(manifestHome,".openclaw-worker","publication")), []);
+        `,
+        "",
+        30_000,
+      );
+      expect((await fs.stat(ancestor)).mode & 0o777).toBe(0o770);
+    } finally {
       await fs.chmod(ancestor, 0o700);
     }
   },
