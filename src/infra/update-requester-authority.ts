@@ -164,7 +164,11 @@ async function captureManagedUpdateRequester(
         import("../plugins/loader-shared.js"),
       ]);
       const doctor = options.projectDoctorConfig
-        ? await import("../commands/doctor/legacy-config-repair.js")
+        ? await Promise.all([
+            import("../commands/doctor/legacy-config-repair.js"),
+            import("../plugins/doctor-contract-registry.js"),
+            import("../plugins/plugin-setup-module.js"),
+          ])
         : undefined;
       const readCurrentConfig = () =>
         readCurrentConfigForPolicyCheck({
@@ -175,8 +179,28 @@ async function captureManagedUpdateRequester(
                 if (!isRecord(snapshot.parsed)) {
                   return undefined;
                 }
-                const plan = doctor.planLegacyConfigForUpdateChannel(snapshot);
-                return plan?.changes.length ? plan.config : undefined;
+                const [repair, registry, setup] = doctor;
+                // Doctor defers repairs of plugins whose source is unavailable, such as during a
+                // pending state migration. Plan the same way: owners are core config.
+                const deferred: string[] = [];
+                for (;;) {
+                  try {
+                    const plan = deferred.length
+                      ? registry.withDeferredPluginDoctorMigrations(deferred, () =>
+                          repair.planLegacyConfigForUpdateChannel(snapshot),
+                        )
+                      : repair.planLegacyConfigForUpdateChannel(snapshot);
+                    return plan?.changes.length ? plan.config : undefined;
+                  } catch (error) {
+                    if (
+                      !(error instanceof setup.PluginSetupPreparationRequiredError) ||
+                      deferred.includes(error.record.id)
+                    ) {
+                      throw error;
+                    }
+                    deferred.push(error.record.id);
+                  }
+                }
               }
             : undefined,
         });
