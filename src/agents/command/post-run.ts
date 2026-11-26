@@ -189,8 +189,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
         compactionAccounting: compactionFact,
         touchInteraction:
           params.opts.bootstrapContextRunKind !== "cron" && !params.opts.internalEvents?.length,
-        // Cron output counts as unread-worthy activity; internal events do not.
-        touchActivity: !params.opts.internalEvents?.length,
         preserveRuntimeModel:
           result.meta.providerStarted === false ||
           fallbackExhausted ||

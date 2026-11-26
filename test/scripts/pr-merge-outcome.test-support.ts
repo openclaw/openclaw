@@ -331,6 +331,13 @@ export function createMergeOutcomeFixtureHarness() {
       },
       review: true,
       ready: true,
+      retentionSourceRepository: null as Record<string, unknown> | null,
+      retentionForkAutoDelete: true,
+      retentionAutoDelete: false,
+      retentionProtected: false,
+      retentionBypass: false,
+      retentionRuleset: false,
+      retentionUnknownBypass: false,
       cleanup: "",
       cleanupHead: "",
       operator: "fixture-operator",
@@ -526,6 +533,7 @@ if(securityResponse()) {
 else if(args[0]==="browse") out(s.repo.url);
 else if(args[0]==="repo") out(args.includes("--jq")?s.repo.nameWithOwner:s.repo);
 else if(args[0]==="api"&&args.includes("rate_limit")) out({resources:{graphql:{remaining:0,limit:5000,reset:1900000000},core:{remaining:4999,limit:5000,reset:1900000000}}});
+else if(args[0]==="api"&&args.includes("repos/fork/repo")) out({...s.retentionSourceRepository,delete_branch_on_merge:s.retentionForkAutoDelete});
 else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(arg))) {
   if(!args.includes("Cache-Control: max-age=0")) fail("missing live repository header");
   if(!args.includes("--hostname")) fail("missing repository hostname");
@@ -541,7 +549,7 @@ else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(a
       }
     }
   }
-  out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(s.repoAuthority):s.repoAuthority);
+  out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify({...s.repoAuthority,delete_branch_on_merge:s.retentionAutoDelete}):{...s.repoAuthority,delete_branch_on_merge:s.retentionAutoDelete});
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/rulesets/41")) {
   if(!args.includes("--include")||!args.includes("Cache-Control: max-age=0")) fail("ruleset authority must use the live writer");
@@ -626,7 +634,7 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
     state:s.pr.state==="OPEN"?"open":"closed",merged:s.pr.state==="MERGED",merged_at:s.pr.state==="MERGED"?"2026-09-20T00:00:00Z":null,
     merge_commit_sha:s.pr.mergeCommit?.oid??null,draft:s.pr.isDraft,stack:s.stack,
     auto_merge:s.pr.autoMergeRequest?{merge_method:s.pr.autoMergeRequest.mergeMethod.toLowerCase()}:null,
-    head:{sha:s.pr.headRefOid,ref:s.pr.headRefName,repo:s.priorCi.enabled?{...s.repoAuthority,...s.priorCi.sourceRepository}:s.repoAuthority},base:{ref:s.pr.baseRefName,sha:main(),repo:s.repoAuthority},
+    head:{sha:s.pr.headRefOid,ref:s.pr.headRefName,repo:s.retentionSourceRepository??(s.priorCi.enabled?{...s.repoAuthority,...s.priorCi.sourceRepository}:s.repoAuthority)},base:{ref:s.pr.baseRefName,sha:main(),repo:s.repoAuthority},
     user:{id:1001,login:s.pr.author.login,type:s.pr.author.__typename},created_at:"2026-09-20T00:00:00Z",changed_files:securityFiles().length,
     mergeable:pendingDispatchProjection?null:s.pr.mergeable==="UNKNOWN"?null:s.pr.mergeable==="MERGEABLE",
     mergeable_state:pendingDispatchProjection?"unknown":s.pooledMergeBlocked&&!args.includes("--include")?"blocked":s.pr.mergeStateStatus.toLowerCase()};
@@ -661,6 +669,18 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main"))
   out(reference);
   if(s.restObservation?.afterRestMainReads===s.restMainReads) applyRestObservation();
   if(s.pr.state==="MERGED"&&s.restAdvanceMain) {s.restAdvanceMain=false;advanceMain();}
+}
+else if(args[0]==="api"&&args.some(arg=>["repos/fixture/repo/branches/topic","repos/fork/repo/branches/topic"].includes(arg))) {
+  out({name:"topic",commit:{sha:git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse","topic"])},protected:s.retentionProtected});
+}
+else if(args[0]==="api"&&args.includes("repos/fixture/repo/rules/branches/topic?per_page=100")) out([s.retentionRuleset?[{type:"deletion",ruleset_source_type:"Repository",ruleset_source:"fixture/repo",ruleset_id:42}]:[]]);
+else if(args[0]==="api"&&args.includes("repos/fixture/repo/rulesets/42")&&s.retentionRuleset) {
+  out({id:42,source:"fixture/repo",source_type:"Repository",target:"branch",enforcement:"active",
+    current_user_can_bypass:s.retentionUnknownBypass?undefined:s.retentionBypass?"always":"never",
+    bypass_actors:s.retentionBypass?[{actor_type:"RepositoryRole",actor_id:5}]:[],rules:[{type:"deletion"}]});
+}
+else if(args[0]==="api"&&args.includes("repos/fixture/repo/branches/topic/protection")) {
+  out({allow_deletions:{enabled:false},enforce_admins:{enabled:!s.retentionBypass}});
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/branches/main/protection")) {
   if(s.restPolicy==="classic") out('HTTP/2.0 200 OK\\n\\n{}');
@@ -996,6 +1016,10 @@ pr_git() {
   command git "$@"
 }
 export FIXTURE_LEADER="$$"
+case "\${FIXTURE_MAINTENANCE:-}" in
+  gc) gc_pr_worktrees false 123; exit $? ;;
+  finalized) gc_finalized_task true 123 "$FIXTURE_REPO/.worktrees/pr-123" "$FIXTURE_HEAD" fixture "" 0; exit $? ;;
+esac
 acquire_pr_operation_lock 123
 begin_pr_operation_validation_phase
 if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
@@ -1027,7 +1051,9 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
     script_parent_dir="$original_scripts"
   fi
 fi
-if [ -n "\${FIXTURE_DISPATCH_BODY:-}" ]; then
+if [ "\${FIXTURE_MAINTENANCE:-}" = stale ]; then
+  enter_worktree 123
+elif [ -n "\${FIXTURE_DISPATCH_BODY:-}" ]; then
   MERGE_REPO=$(jq -c .repo "$FIXTURE_STATE")
   MERGE_REPO_HOST=github.com
   MERGE_OUTCOME_REF=refs/openclaw/pr-merge-outcomes/123
@@ -1042,7 +1068,7 @@ elif [ "\${9:-}" = verify ]; then
 elif [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
-  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}" "\${12:-}" "\${13:-}"
+  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}" "\${10:-}" "\${11:-false}" "\${12:-}" "\${13:-}" "\${FIXTURE_RETAIN_RESOURCES:-false}"
 fi
 `,
       true,
@@ -1074,6 +1100,9 @@ fi
       FIXTURE_GH_BIN: join(bin, "gh"),
       FIXTURE_NODE: nodeExecutable,
       FIXTURE_BASE: base,
+      FIXTURE_HEAD: head,
+      FIXTURE_MAINTENANCE: "",
+      FIXTURE_RETAIN_RESOURCES: "false",
       FIXTURE_WORKFLOW_BINDING: "false",
       FIXTURE_DISPATCH_BODY: "",
       OPENCLAW_PR_MERGE_METHOD: "squash",
@@ -1229,6 +1258,22 @@ fi
       state,
       save,
       run,
+      retain: (...args: Parameters<typeof run>) => {
+        env.FIXTURE_RETAIN_RESOURCES = "true";
+        try {
+          return run(...args);
+        } finally {
+          env.FIXTURE_RETAIN_RESOURCES = "false";
+        }
+      },
+      maintenance: (kind: "gc" | "finalized" | "stale") => {
+        env.FIXTURE_MAINTENANCE = kind;
+        try {
+          return run();
+        } finally {
+          env.FIXTURE_MAINTENANCE = "";
+        }
+      },
       dispatchAsync: (bodyPath: string) => {
         env.FIXTURE_DISPATCH_BODY = bodyPath;
         try {

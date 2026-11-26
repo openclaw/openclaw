@@ -741,15 +741,18 @@ extension OpenClawChatViewModel {
 
     static func dedupeKey(for message: OpenClawChatMessage) -> String? {
         if let key = correlatedMessageIdentityKey(for: message, role: message.role) { return key }
+        // Retained history can have only a sequence. Scope the content key to its source
+        // so equal rows survive and results projected from one carrier stay distinct.
+        let sourcePrefix = Self.historySourceIdentity(for: message).map { "\($0)|" } ?? ""
         if message.isToolResult, ChatPayloadDecoding.trimmedNonEmptyString(message.toolCallId) != nil {
             // Parallel calls can return identical output at the carrier's timestamp.
-            return Self.messageIdentityKey(for: message).map { "\($0)|\(message.workRunID ?? "")" }
+            return Self.messageIdentityKey(for: message).map { "\(sourcePrefix)\($0)|\(message.workRunID ?? "")" }
         }
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
-        return "\(message.role)|\(timestamp)|\(text)"
+        return "\(sourcePrefix)\(message.role)|\(timestamp)|\(text)"
     }
 }
 

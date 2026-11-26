@@ -20,6 +20,7 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import { retainCreatedComposer } from "../new-session/creation-composer-registry.ts";
 import { CreationComposer } from "../new-session/creation-composer.ts";
+import { templateArtworkAvatar } from "./template-artwork.tsx";
 import {
   applyTemplateAdd,
   type TemplateCatalogEntry,
@@ -93,6 +94,8 @@ export async function addTemplateAgent(
   const copy = templateAgentCopyNumber(template.agentId, agentId);
   const baseName = template.agentName ?? template.entry.displayName;
   const name = copy > 1 ? `${baseName} ${copy}` : baseName;
+  // The image the user just clicked is the agent they are waiting for.
+  const avatarUrl = templateArtworkAvatar(template.entry.iconUrl);
   const pending = context.agents.beginCreation({ id: agentId, name });
   if (!pending) {
     return;
@@ -135,6 +138,7 @@ export async function addTemplateAgent(
     creation,
     composer,
     displayName: name,
+    ...(avatarUrl ? { avatarUrl } : {}),
     message: null,
     canDisplay: () =>
       ownsScope() && context.router.getState().location.pathname === displayPathname,

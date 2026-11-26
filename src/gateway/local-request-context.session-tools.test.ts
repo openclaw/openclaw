@@ -244,11 +244,6 @@ describe("built-in session tool role authority", () => {
           rawPrincipalRef: alice.profileId,
         });
 
-        turn.revoke(bob.profileId);
-        await expect(read(PARTICIPANT_SHARED, bob.profileId)).rejects.toThrow(
-          /Bob's access changed/,
-        );
-        await expectDraft(alice.profileId);
         await turn.complete();
         await expect(read(PARTICIPANT_DRAFT, alice.profileId)).rejects.toThrow(/turn has ended/);
       },

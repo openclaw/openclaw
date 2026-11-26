@@ -727,13 +727,11 @@ it("retains one requester until pre-admission cancellation", async ({ signal, st
   const guest = createTestOperatorAuthority({
     profileId: "guest",
     scopes: ["operator.write"],
-    assertCurrent() {},
     retain,
   });
   const admin = createTestOperatorAuthority({
     profileId: "admin",
     scopes: ["operator.admin"],
-    assertCurrent() {},
   });
   const target = await captureTarget("main", sessionKey, {
     env,

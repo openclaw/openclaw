@@ -159,13 +159,12 @@ describe("CLI model-routing receipt authority", () => {
     },
   );
 
-  it("checks the logical model initially and preserves admitted dispatch across policy changes", async () => {
+  it("checks the logical model before dispatch", async () => {
     const config = { agents: { defaults: { model: "fixture/allowed" } } };
-    let policy = prepareOperatorModelPolicy({ cfg: config, policy: {}, manifestPlugins: [] });
+    const policy = prepareOperatorModelPolicy({ cfg: config, policy: {}, manifestPlugins: [] });
     const source = createTestOperatorAuthority({
       profileId: "fixture-person",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
       get modelPolicy() {
         return policy;
       },
@@ -203,12 +202,6 @@ describe("CLI model-routing receipt authority", () => {
       });
       expect(prepareExecution).toHaveBeenCalledOnce();
       expect(context.params.assertCurrent).toBeTypeOf("function");
-      expect(context.params.assertCurrent).not.toThrow();
-      policy = prepareOperatorModelPolicy({
-        cfg: config,
-        policy: { allow: [] },
-        manifestPlugins: [],
-      });
       expect(context.params.assertCurrent).not.toThrow();
     } finally {
       admission.close();

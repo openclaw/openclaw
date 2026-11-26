@@ -76,6 +76,7 @@ function sessionRowMaterializationMatches(
     equal(source.configuredAgentIds, input.configuredAgentIds) &&
     equal(source.selectedModel, input.selectedModel) &&
     equal(source.rowModelIdentity, input.rowModelIdentity) &&
+    row.modelDisplayName === thinking.catalogEntry?.name &&
     equal(source.thinkingProjection.acpMeta, thinking.acpMeta) &&
     equal(source.thinkingProjection.agentRuntime, thinking.agentRuntime) &&
     row.thinkingLevel === thinking.thinkingLevel &&
@@ -100,9 +101,7 @@ function sessionRowMaterializationMatches(
     row.derivedTitle === input.derivedTitle &&
     row.hasMessages === input.hasMessages &&
     row.lastMessagePreview === input.lastMessagePreview &&
-    source.lastMessagePreview === input.lastMessagePreview &&
     equal(row.lastAssistantMessage, input.lastAssistantMessage) &&
-    equal(source.lastAssistantMessage, input.lastAssistantMessage) &&
     equal(
       row.pluginExtensions,
       input.pluginExtensions.length ? input.pluginExtensions : undefined,

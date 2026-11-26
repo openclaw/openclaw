@@ -6,7 +6,6 @@ import type {
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
-import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
 import type { ReplyMessageInjectionOutcome } from "../auto-reply/reply/message-injection-authority.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
@@ -638,7 +637,8 @@ export type SessionControllerSourceAdapter = {
   /** Original personal ingress, bound at admission; identity evidence, not an execution grant. */
   initiatingPersonalOperator?: AdmittedRunOperatorAuthority;
   readonly scope?: string;
-  readonly authority?: { assertCurrent(): void; signal?: AbortSignal };
+  /** Stop signal and the producer's own data fence; an operator authority carries only Stop. */
+  readonly authority?: { assertCurrent?(): void; signal?: AbortSignal };
   readonly signal?: AbortSignal;
   readonly requester?: Readonly<{ deviceId?: string; connectionId?: string; clientId?: string }>;
   /** Known routing identity before a physical target exists; never execution authority. */
@@ -729,7 +729,6 @@ export type ReplyOperationRunState = {
   /** The Gateway accepted this question answer or rejected its values before commitment. */
   questionInputHandled?: true;
   messageInjectionAborted?: true;
-  agentTurn?: ReturnType<typeof resolveAgentTurnExecutionStatus>;
   agentTurnOwner?: ReplyOperation;
   messagingToolSentTargets?: MessagingToolSend[];
   backgroundWorkStarted?: boolean;
@@ -830,6 +829,8 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
   assertRegistrationActive: () => void;
   assertActive: () => void;
   personalToolParticipants?: ReplyTurnParticipants;
+  /** Host-admitted execution ceiling, never reconstructed from an approval request. */
+  readonly operatorAuthority?: AdmittedRunOperatorAuthority;
 };
 
 export type EmbeddedRunRegistration = {

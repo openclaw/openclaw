@@ -100,6 +100,27 @@ it.each([
   await coordinator.release(later);
   expectWire(request, "unsubscribe");
 });
+it.each([false, true])(
+  "returns fresh initial history to the viewer upgrading sidebar narration (approvals: %s)",
+  async (includeApprovals) => {
+    const fresh = { ok: true, payload: { messages: ["saved answer"] } };
+    const query = { limit: 20 };
+    const { coordinator, request } = createClient(async (_method, params) => ({
+      key: params.key,
+      ...(params.initialHistory ? { initialHistory: fresh } : {}),
+    }));
+    const sidebar = await coordinator.acquire("main", { mode: "narration" });
+    const viewer = coordinator.acquire("main", { includeApprovals, initialHistory: query });
+    const peer = coordinator.acquire("main", { mode: "narration", includeApprovals });
+    expect((await viewer).initialHistory).toEqual(fresh);
+    expect(await peer).not.toHaveProperty("initialHistory");
+    expect(sidebar).not.toHaveProperty("initialHistory");
+    expectWireCalls(request, "subscribe", [
+      { mode: "narration" },
+      { initialHistory: query, ...(includeApprovals ? { includeApprovals: true } : {}) },
+    ]);
+  },
+);
 it("coalesces configured main aliases before the first canonical acknowledgment", async () => {
   const requestedKey = "agent:ops:main";
   const canonicalKey = "agent:ops:work";

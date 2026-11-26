@@ -361,6 +361,7 @@ it.each([
               replacement,
               completion,
               createOperationalRunInstanceRef("source-run"),
+              { runId: "source-run" },
             );
             subagentRuns.recordRequesterCompletion(sourceKey, "main", "source-run");
             child = replacement;
@@ -889,15 +890,13 @@ it.each([false, true])(
         );
         expect(handoffs).toHaveBeenCalledOnce();
         invalidateGatewayDeviceRevocation(context, "bob", "operator");
-        expect(() => bob.source.authority.assertCurrent()).not.toThrow();
         await expect(
           prepareGatewayOperatorRunAuthority({
             client: bob.client,
             context,
             hasCurrentClientAuthority: bob.device.isCurrent,
           }),
-        ).rejects.toThrow("Gateway caller authority is no longer active.");
-        expect(() => alice.source.authority.assertCurrent()).not.toThrow();
+        ).rejects.toThrow("Gateway request could not start. Reconnect and try again.");
         release();
         consumer.release();
         settled.resolve({ kind: "applied", committed: true, unavailablePluginIds: [] });

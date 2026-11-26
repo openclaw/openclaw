@@ -58,15 +58,9 @@ import { createReplyTurnParticipants } from "./session-controller.tool-authority
 afterEach(() => testing.resetSessionControllerForTest());
 
 it("copies private turn participants and freezes only their shared command target", () => {
-  let current = true;
   const authority = createTestOperatorAuthority({
     profileId: "participant",
     scopes: ["operator.read"],
-    assertCurrent() {
-      if (!current) {
-        throw new Error("revoked");
-      }
-    },
   });
   const freeze = vi.spyOn(Object, "freeze");
   const participants = createReplyTurnParticipants({
@@ -83,8 +77,8 @@ it("copies private turn participants and freezes only their shared command targe
       senderId: "original",
       gatewayUiCommandTarget: { connId: "original", profileId: "participant" },
     });
-    current = false;
-    expect(() => exposed.assertCurrent()).toThrow("access changed");
+    participants.close();
+    expect(() => exposed.assertCurrent()).toThrow("This turn has ended");
   } finally {
     freeze.mockRestore();
     participants.close();
@@ -102,8 +96,7 @@ type JoinCase = {
   after?:
     | "settings"
     | "activity"
-    | "revoke"
-    | "caller-revoke"
+    | "stop"
     | "backend"
     | "delivery"
     | "link-revoke"
@@ -123,7 +116,7 @@ type JoinCase = {
   };
   sessionOnly?: true;
 };
-type Outcome = "accepted" | "deferred" | "rejected" | "revoked" | "failed";
+type Outcome = "accepted" | "deferred" | "rejected" | "stopped" | "failed";
 const uiTarget = (connId: string, profileId = "join-owner") => ({ connId, profileId });
 
 it.each<[string, Outcome, JoinCase?]>([
@@ -154,8 +147,7 @@ it.each<[string, Outcome, JoinCase?]>([
   ["workspace", "deferred", { mismatch: "workspace" }],
   ["saved working directory", "deferred", { mismatch: "cwd" }],
   ["narrowed scopes", "accepted", { mismatch: "scopes" }],
-  ["revoked after preparation", "revoked", { after: "revoke" }],
-  ["incoming authority revoked independently", "rejected", { after: "caller-revoke" }],
+  ["stopped after preparation", "stopped", { after: "stop" }],
   ["replaced backend", "rejected", { after: "backend" }],
   ["saved settings after preparation", "rejected", { after: "settings" }],
   ["activity after preparation", "accepted", { after: "activity" }],
@@ -309,7 +301,6 @@ it.each<[string, Outcome, JoinCase?]>([
         scopes: ["operator.admin"],
         gatewayAccessGrant: null,
         modelPolicy: prepareOperatorModelPolicy({ cfg, policy: {} }),
-        assertCurrent: assertSource,
       });
       const sharedRevocation = new AbortController();
       let sharedCapture: PreparedGatewayOperatorRunAuthority | undefined;
@@ -484,14 +475,6 @@ it.each<[string, Outcome, JoinCase?]>([
           if (c.sharedOwner.differentSession) {
             incoming.run.sessionKey = "agent:main:another-session";
           }
-        }
-        const incomingRevocation = new AbortController();
-        if (c.after === "caller-revoke") {
-          incoming.operatorAuthority = createTestOperatorAuthority({
-            ...operatorAuthority,
-            source: {},
-            assertCurrent: () => incomingRevocation.signal.throwIfAborted(),
-          });
         }
         if (c.caps) {
           incoming.run.clientCaps = c.caps === "narrow" ? [] : ["ui-commands", "usage-refreshing"];
@@ -668,8 +651,8 @@ it.each<[string, Outcome, JoinCase?]>([
         if (c.sharedOwner) {
           expect(joined.allowPendingUserInputAnswer).toBe(false);
         }
-        if (c.after === "revoke") {
-          sourceRevocation.abort(new Error("Caller revoked"));
+        if (c.after === "stop") {
+          sourceRevocation.abort(new Error("Caller stopped"));
         }
         if (c.after === "link-revoke") {
           incomingIdentityCurrent = false;
@@ -698,23 +681,14 @@ it.each<[string, Outcome, JoinCase?]>([
           operation.attachBackend({ ...backend, queueMessage: replacement });
         }
         try {
-          if (c.after === "caller-revoke") {
-            incomingRevocation.abort(new Error("Incoming caller revoked"));
-            assertSource();
-            operatorAuthority.assertCurrent();
-            await expect(joined.prepareCurrent()).rejects.toThrow("Incoming caller revoked");
-            expect(delivered).not.toHaveBeenCalled();
-            assertFrozen();
-            return;
-          }
-          if (outcome === "revoked") {
+          if (outcome === "stopped") {
             const refused = await beginReplyMessageInjectionTarget(target, incoming.prompt, {
               assertCurrent: assertSource,
             });
             expect(await refused.acceptance).toBe(false);
             expect(await refused.outcome).toMatchObject({
               status: "failed",
-              error: expect.objectContaining({ message: "Caller revoked" }),
+              error: expect.objectContaining({ message: "Caller stopped" }),
             });
             expect(delivered).not.toHaveBeenCalled();
             expect(replacement).not.toHaveBeenCalled();

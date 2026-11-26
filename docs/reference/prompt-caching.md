@@ -119,6 +119,13 @@ channel, scheduled, heartbeat, and senderless wake turns retain the same
 Gateway checks current identity, target access, and full operator write authority
 for privileged PR actions when called. Listing an action does not grant it.
 
+With Tool Search or Code Mode active, `computer` and the yielding
+`github_publish` listing are [on-demand](/tools/tool-search#on-demand-tools):
+they stay out of the provider tool list until the model first looks one up or
+calls it. Loading appends that definition, so the tool list changes once, on
+the next request, and the session pin keeps it fixed for the rest of the
+series.
+
 The `message` description and schema use the session's channel, bound account,
 and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
 announcement turns in the same conversation keep identical definitions,
@@ -223,6 +230,60 @@ compaction belongs to a context engine, a registered compaction provider, or a
 separate `agents.defaults.compaction.model`. Manual `/compact` and overflow
 recovery keep their existing paths. See
 [Compaction](/concepts/compaction#warm-request-compaction).
+
+<a id="idle-keep-warm" />
+
+## Idle keep-warm
+
+When an interactive session goes idle with a large cached prompt, the Gateway
+sends one read-only prewarm request shortly before the provider's cache lifetime
+ends. The prewarm is the session's own next request (pinned system prompt and
+tool definitions, history, cache markers, cache key, thinking settings and
+`tool_choice`) with one trailing placeholder item that is never cached or
+answered, sent so that the provider generates no output:
+
+- Anthropic Messages (direct API, setup-token, compatible proxies, GitHub
+  Copilot Claude): `max_tokens: 0` without streaming. The reply is empty and
+  bills no output tokens.
+- OpenAI Responses: `prompt_cache_options.prewarm: true`, with the lifetime the
+  session already sends.
+
+The prewarm reads the cached prefix and so restarts its lifetime. Nothing is
+written to the transcript. Each prewarm records its usage as an internal
+`model.usage` diagnostic of a background session fork, like other forks.
+
+A session gets prewarms only when all of these hold:
+
+- The route has a known cache lifetime of at most one hour. Anthropic-style
+  routes use the cache-write tier the session's own responses reported (5 minutes
+  or 1 hour, so a proxy that forces 1 hour is handled). OpenAI Responses routes
+  use the documented 30-minute lifetime on the native API (GPT-5.6 and later).
+  Routes with an undocumented or no lifetime (ChatGPT sign-in, xAI, Gemini, Chat
+  Completions, local models) get none. A 12-hour lifetime gets none: a read
+  does not restart it.
+- The last reply settled on the session's current route, with no compaction,
+  reset or model change after it, and its prompt was at least 50,000 tokens.
+- A person used the session within one cache lifetime of its last request.
+  Automation runs, subagents and ACP sessions get none.
+- The request does not use Anthropic budget thinking, a forced tool or
+  structured output, which cannot be prewarmed without changing the cached
+  prefix.
+
+Prewarms stop when the user sends a message (the next turn re-anchors the
+schedule), after a miss (the prewarm read less than half the prompt or wrote
+more than it read), after an error (the provider pauses for 15 minutes), after
+12 hours, and after a budget that keeps all prewarms below half the cost of
+one cache rewrite: `(write − read) / (2 × read)` prices relative to input, at
+most 24, or 3 when the route has no prices. A wake that arrives after the cache
+may have expired sends nothing.
+
+The schedule comes from stored facts: the transcript's last reply and the
+session row's `promptCacheKeepWarm` record of the last prewarm (its time, route,
+the reply it warmed and the prewarm count since the last human turn). A Gateway
+restart therefore resumes a series where it stopped. Cache-TTL pruning reads the
+same record as a cache touch, so a prewarmed cache is not pruned as expired.
+
+Set `agents.defaults.promptCacheKeepWarm: false` to turn it off.
 
 ## Primary knobs
 
@@ -709,7 +770,10 @@ inter-session input, subagent completions) go out as appended deltas: an
 in-history system message where the route supports one (direct Anthropic API
 keys on prefix-binding Claude models, native OpenAI Responses), otherwise a
 user-role note. Tools change only at a rebuild point or a tool configuration
-change.
+change. Reordering existing `##` sections also appends an update, even when their
+text is unchanged. That update includes the complete current prompt in its new
+order; ordinary text edits still send only the changed sections. The pinned
+prefix and earlier messages remain unchanged.
 
 The session prompt rebuilds only at these points:
 

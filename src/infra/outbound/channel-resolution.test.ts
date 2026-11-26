@@ -100,13 +100,6 @@ describe("outbound channel resolution", () => {
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
   });
 
-  it.each([
-    { input: " Alpha ", expected: "alpha" },
-    { input: "unknown", expected: undefined },
-  ])("normalizes deliverable outbound channel for %j", async ({ input, expected }) => {
-    expect(channelResolution.normalizeDeliverableOutboundChannel(input)).toBe(expected);
-  });
-
   it.each(["loaded"] as const)(
     "does not borrow a %s message adapter from a scoped outbound-only registration",
     async (fallback) => {

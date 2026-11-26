@@ -23,7 +23,6 @@ const authority = (profileId: string, scopes = ["operator.write"], signal?: Abor
     profileId,
     scopes,
     signal,
-    assertCurrent: () => {},
   });
 const patchRequest = (key: string, params: Record<string, unknown>) => ({
   method: "sessions.patch",
@@ -189,6 +188,20 @@ describe("sessions tool self-archive", () => {
       expect(callGateway).toHaveBeenCalledExactlyOnceWith(archiveRequest);
       expect(load()).toHaveProperty("archivedAt");
     });
+  });
+
+  it("rejects a mixed self-archive before unpinning or scheduling any deferred mutation", async () => {
+    const session = await createArchiveSession("mixed-personal-pin");
+    const call = vi.fn();
+    using continuation = vi.spyOn(inProcessGateway, "runWithGatewayToolContinuationContext");
+    await withAdmission(await session.beginAdmission(), async () => {
+      await expect(archive(session.createTool(call), "mixed", { pinned: false })).rejects.toThrow(
+        /pinned separately/,
+      );
+    });
+    expect(continuation).not.toHaveBeenCalled();
+    expect(call).not.toHaveBeenCalled();
+    expect(session.load()).not.toHaveProperty("archivedAt");
   });
 
   it("applies other self-patch settings before the deferred archive", async () => {

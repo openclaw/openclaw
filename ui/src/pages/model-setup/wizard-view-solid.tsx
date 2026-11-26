@@ -1,23 +1,41 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  For,
+  lazy,
+  Loading,
+  Match,
+  onSettled,
+  Show,
+  Switch,
+} from "solid-js";
 import {
   isProviderAuthFailureReason,
   resolveProviderAuthRecovery,
 } from "../../../../src/plugins/provider-auth-failure.js";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import "../../components/modal-dialog.tsx";
-import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 import { WIZARD_COPY } from "./wizard-copy.ts";
 
 registerModelSetupEnglish();
+
+const WizardStepControls = lazy(() => import("../../components/wizard-step-controls.tsx"), {
+  export: "WizardStepControls",
+});
 
 export type WizardViewProps = {
   onDialogRef?: (element: import("../../components/modal-dialog.tsx").OpenClawModalDialog) => void;
@@ -44,8 +62,10 @@ export type WizardViewProps = {
 
 export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   let focusTargets = new Set<HTMLElement>();
+  const [focusRevision, setFocusRevision] = createSignal(0);
   const autofocusRef = (element: HTMLElement) => {
     focusTargets.add(element);
+    setFocusRevision((revision) => revision + 1);
   };
   const initialFocus = () =>
     [...focusTargets]
@@ -57,12 +77,15 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
     props.admissionPending && props.state.phase === "idle" ? "starting" : props.state.phase;
   // Focus the committed wizard step after its identity or completion actions change.
   createPendingFocus(
-    () =>
+    () => [
       props.state.phase === "step"
         ? `${props.state.step.id}:${props.busy || props.state.busy ? "busy" : "ready"}:${props.state.validationError ?? ""}`
         : `${displayPhase()}:${Boolean(props.doneAction)}`,
+      focusRevision(),
+    ],
     {
       requested: () => true,
+      ready: () => initialFocus() !== null,
       focus: () => {
         focusTargets = new Set([...focusTargets].filter((element) => element.isConnected));
         initialFocus()?.focus({ preventScroll: true });
@@ -254,37 +277,87 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                               {fieldError()}
                             </InlineAlert>
                           </Show>
-                          <WizardStepControls
-                            presentation="model-setup"
-                            step={state().step}
-                            externalAuthInput={state().externalAuthInput}
-                            signInIcon={props.signInIcon}
-                            brandId={props.state.authBrandId}
-                            providerLabel={props.state.authLabel}
-                            value={props.value}
-                            busy={props.busy || state().busy}
-                            inputId="model-setup-wizard-text-input"
-                            validationErrorId={
-                              fieldError() ? "model-setup-wizard-validation-error" : undefined
-                            }
-                            validationError={fieldError()}
-                            confirmAffirmativeLabel={
-                              props.mode === "prepare" && state().step.type === "confirm"
-                                ? t("modelSetup.wizard.continue")
-                                : undefined
-                            }
-                            leadingAction={
-                              (signInStep() && !state().externalAuthInput) ||
-                              !stepHasPrimary() ? undefined : (
-                                <button type="button" class="btn" onClick={() => props.onCancel()}>
-                                  {t("common.cancel")}
-                                </button>
-                              )
-                            }
-                            onValueChange={(value) => props.onValueChange(value)}
-                            onAnswer={(value) => props.onAnswer(value)}
-                            onAutofocusRef={autofocusRef}
-                          />
+                          <Errored
+                            fallback={(error, retry) => {
+                              let active = true;
+                              onSettled(() => () => {
+                                active = false;
+                              });
+                              return (
+                                <InlineAlert
+                                  tone="danger"
+                                  role="alert"
+                                  action={
+                                    <button
+                                      type="button"
+                                      class="btn"
+                                      onClick={() =>
+                                        isStaleChunkImportError(error())
+                                          ? void retryStaleChunkReloadWhenReachable({
+                                              canReload: () => active,
+                                            })
+                                          : retry()
+                                      }
+                                    >
+                                      {t(
+                                        isStaleChunkImportError(error())
+                                          ? "common.reload"
+                                          : "common.retry",
+                                      )}
+                                    </button>
+                                  }
+                                >
+                                  {isStaleChunkImportError(error())
+                                    ? t("modelSetup.wizard.controlsLoadFailed")
+                                    : formatUiError(error())}
+                                </InlineAlert>
+                              );
+                            }}
+                          >
+                            <Loading
+                              fallback={
+                                <div role="status" aria-busy="true">
+                                  {t("common.loading")}
+                                </div>
+                              }
+                            >
+                              <WizardStepControls
+                                presentation="model-setup"
+                                step={state().step}
+                                externalAuthInput={state().externalAuthInput}
+                                signInIcon={props.signInIcon}
+                                brandId={props.state.authBrandId}
+                                providerLabel={props.state.authLabel}
+                                value={props.value}
+                                busy={props.busy || state().busy}
+                                inputId="model-setup-wizard-text-input"
+                                validationErrorId={
+                                  fieldError() ? "model-setup-wizard-validation-error" : undefined
+                                }
+                                validationError={fieldError()}
+                                confirmAffirmativeLabel={
+                                  props.mode === "prepare" && state().step.type === "confirm"
+                                    ? t("modelSetup.wizard.continue")
+                                    : undefined
+                                }
+                                leadingAction={
+                                  (signInStep() && !state().externalAuthInput) ||
+                                  !stepHasPrimary() ? undefined : (
+                                    <button
+                                      type="button"
+                                      class="btn"
+                                      onClick={() => props.onCancel()}
+                                    >
+                                      {t("common.cancel")}
+                                    </button>
+                                  )
+                                }
+                                onValueChange={(value) => props.onValueChange(value)}
+                                onAnswer={(value) => props.onAnswer(value)}
+                                onAutofocusRef={autofocusRef}
+                              />
+                            </Loading>
+                          </Errored>
                           <Show
                             when={
                               (props.busy || state().busy) &&

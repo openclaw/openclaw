@@ -194,7 +194,6 @@ describe("production lint suppressions", () => {
         "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|5",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
         // Aggregate logs strip only SGR color and reject other control bytes that could hide errors.
-        "scripts/lib/release-validation-waivers.mjs|no-control-regex|2",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
         "scripts/lib/usage-bench-observer.mjs|typescript/unbound-method|1",
         // The frame census retains native methods and supplies their original receivers through .call.
@@ -335,7 +334,6 @@ describe("production lint suppressions", () => {
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
         // Reflect.apply forwards the intercepted native database receiver in the worker probe.
         "src/config/sessions/session-model-context-compacted.test-support.ts|typescript/unbound-method|1",
-        "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
         "src/config/sessions/transcript-json-normalize.ts|unicorn/prefer-structured-clone|1",

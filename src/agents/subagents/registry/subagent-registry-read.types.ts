@@ -23,13 +23,8 @@ export type PendingFinalDeliveryPayload = {
   terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
-type SubagentDeliveryDisposition =
-  | "delivered"
-  | "session_queued"
-  | "intentional_non_delivery"
-  | "retryable"
-  | "ambiguous"
-  | "permanent_failure";
+// Rows written by older builds may still carry retired values; nothing reads them.
+type SubagentDeliveryDisposition = "delivered" | "session_queued";
 
 export type SubagentCompletionDeliveryState = {
   status:

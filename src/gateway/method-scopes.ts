@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SessionPermissionNarrowingPatchFields } from "../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import {
   isAdminOnlyNodeInvokeCommand,
   isBrowserProxyNodeInvokeCommand,
@@ -33,6 +34,7 @@ import {
   isOperatorScope,
   type OperatorScope,
 } from "./operator-scopes.js";
+import { isParticipantPublicationMethod } from "./session-method-policy.js";
 
 export {
   ADMIN_SCOPE,
@@ -150,6 +152,7 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   if (method === "sessions.github.action") {
     return [
       record?.action === "create_issue" ||
+      record?.action === "create_comment" ||
       record?.action === "inspect_pr" ||
       record?.action === "prepare_pr" ||
       record?.action === "refresh_base" ||
@@ -368,6 +371,34 @@ export function authorizeOperatorScopesForRequiredScope(
     return { allowed: true, sessionScope };
   }
   return { allowed: false, missingScope: requiredScope };
+}
+
+/** Pending target-bound requirement, never an operator scope or an implicit creation grant. */
+export function requiresSessionParticipation(
+  method: string,
+  scopes: readonly string[],
+  params: unknown,
+): boolean {
+  if (!operatorScopeSatisfied("operator.sessions.read", scopes)) {
+    return false;
+  }
+  if (
+    isParticipantPublicationMethod(method, params) ||
+    ["chat.send", "chat.abort", "session.typing", "session.suggestions.add"].includes(method)
+  ) {
+    return true;
+  }
+  const patch = asOptionalRecord(params);
+  return (
+    method === "sessions.patch" &&
+    Boolean(
+      patch &&
+      ["read-only", "guarded", "workspace"].includes(String(patch.permissionMode)) &&
+      Object.keys(patch).every((key) =>
+        SessionPermissionNarrowingPatchFields.some((field) => field === key),
+      ),
+    )
+  );
 }
 
 export function isGatewayMethodClassified(method: string): boolean {

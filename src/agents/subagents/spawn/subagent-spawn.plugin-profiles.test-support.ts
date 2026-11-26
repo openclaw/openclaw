@@ -65,7 +65,7 @@ export function registerNativePluginProfileCases(options: NativePluginSpawnTestO
           const makeNative = (pluginId: string) =>
             createRequestNativeSubagentRuntime(nativeRequestSource(bound, source), {
               pluginId,
-              assertCurrent: source.authority.assertCurrent,
+              assertCurrent: () => bound.parent.controller.signal.throwIfAborted(),
             });
           const native = makeNative(record.id);
           const request = {

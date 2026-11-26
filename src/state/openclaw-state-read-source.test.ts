@@ -121,15 +121,63 @@ it.each(["gateway", "cli-oneshot", undefined] as const)(
         });
         await transport.startClose();
         expect(task.close).toHaveBeenCalledExactlyOnceWith(
-          awaitedOnly && role !== "gateway" ? { retire: true } : undefined,
+          role === "cli-oneshot" || (awaitedOnly && role !== "gateway")
+            ? { retire: true }
+            : undefined,
         );
       }
-      expect(mock.create).toHaveBeenCalledTimes(role === "gateway" ? 1 : 2);
+      expect(mock.create).toHaveBeenCalledTimes(role === undefined ? 2 : 1);
     } finally {
       roleSpy.mockRestore();
     }
   },
 );
+
+it("joins successful CLI reader exit for ordinary and later awaited reads", async () => {
+  const roleSpy = vi.spyOn(processRole, "getDatabaseProcessRole").mockReturnValue("cli-oneshot");
+  const { location, authority } = readFixture();
+  try {
+    for (const awaitedOnly of [false, true, false, true]) {
+      const transport = captureOpenClawStateReadSource().createTransport(
+        backupRead,
+        undefined,
+        undefined,
+        awaitedOnly,
+      );
+      // Admission must finish without retiring the worker needed by the actual query.
+      const admission = readyTask();
+      await transport.startValidateFresh(location.context, authority);
+      expect(admission.close).toHaveBeenCalledExactlyOnceWith(undefined);
+      const task = queueTask();
+      const stopping = createDeferredCore<"stopping">();
+      const stopped = createDeferredCore();
+      task.close.mockImplementationOnce(() => {
+        stopping.resolve("stopping");
+        return stopped.promise;
+      });
+      const result = transport.startRead(location, authority);
+      let settled = false;
+      void result.then(() => {
+        settled = true;
+      });
+      try {
+        await task.captured;
+        task.result.resolve(emptyReply);
+        const first = await Promise.race([stopping.promise, result.then(() => "returned")]);
+        expect(first).toBe("stopping");
+        expect(task.close).toHaveBeenCalledExactlyOnceWith({ retire: true });
+        expect(settled).toBe(false);
+      } finally {
+        stopped.resolve();
+        await expect(result).resolves.toEqual({ value: emptyReply });
+        await transport.startClose();
+      }
+    }
+    expect(mock.create).toHaveBeenCalledOnce();
+  } finally {
+    roleSpy.mockRestore();
+  }
+});
 
 it("shares read setup methods while each read retains independent task custody", async () => {
   const { location, authority } = readFixture();

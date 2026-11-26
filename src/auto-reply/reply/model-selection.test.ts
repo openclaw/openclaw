@@ -463,7 +463,6 @@ it.each(["pin", "source", "provider", "session"] as const)(
       profileId: "operator",
       scopes: ["operator.write"],
       modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { sourceAgent: "main" } }),
-      assertCurrent: () => {},
     });
     authMocks.prepareAuthProfileProvider.mockImplementationOnce(async () => {
       await Promise.resolve();
