@@ -2,6 +2,7 @@ import {
   formatInboundEnvelope,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelGroups } from "openclaw/plugin-sdk/channel-policy";
 import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import {
   resolveChannelContextVisibilityMode,
@@ -9,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
+import type { SignalAccountConfig } from "../account-types.js";
 import { formatSignalSenderId, isSignalSenderAllowed, type SignalSender } from "../identity.js";
 import { formatSignalMediaText } from "../media-text.js";
 import type { SignalInboundEntry } from "./event-handler.control-lane.js";
@@ -21,6 +23,15 @@ import type {
 // Bound fetches as well as model inputs, matching the shared recent-history image budget.
 const MAX_HISTORY_IMAGES = 4;
 const HISTORY_IMAGE_MAX_AGE_MS = 30 * 60_000;
+
+function isSameSignalSender(left: SignalSender, right: SignalSender): boolean {
+  const leftUuid = left.kind === "uuid" ? left.raw : left.aliases?.uuid;
+  const rightUuid = right.kind === "uuid" ? right.raw : right.aliases?.uuid;
+  if (leftUuid && rightUuid) {
+    return leftUuid.toLowerCase() === rightUuid.toLowerCase();
+  }
+  return left.kind === "phone" && right.kind === "phone" && left.e164 === right.e164;
+}
 
 export async function resolveSignalGroupHistoryContext(params: {
   deps: SignalEventHandlerDeps;
@@ -80,16 +91,31 @@ async function fetchSignalHistoryImages(
     channel: "signal",
     accountId: deps.accountId,
   });
+  // The generic group map describes shared policy fields. This is a Signal-only setting.
+  const groups: SignalAccountConfig["groups"] = resolveChannelGroups(
+    turn.cfg,
+    "signal",
+    deps.accountId,
+  );
+  const includeOtherMembers =
+    groupId !== "*" && groups?.[groupId]?.includeOtherMembersHistoryImages === true;
   const candidates = entries.flatMap((entry) => {
     const source = entry.imageSource;
+    if (!source || entry.timestamp === undefined || entry.timestamp > timestamp) {
+      return [];
+    }
+    const quoted =
+      turn.historyImageQuotes?.some(
+        (quote) =>
+          quote.messageId === entry.messageId && isSameSignalSender(source.sender, quote.sender),
+      ) === true;
     if (
-      !source ||
-      entry.timestamp === undefined ||
-      entry.timestamp > timestamp ||
-      timestamp - entry.timestamp > HISTORY_IMAGE_MAX_AGE_MS ||
+      (!quoted &&
+        (timestamp - entry.timestamp > HISTORY_IMAGE_MAX_AGE_MS ||
+          (!includeOtherMembers && !isSameSignalSender(source.sender, turn.sender)))) ||
       !shouldIncludeSupplementalContext({
         mode,
-        kind: "history",
+        kind: quoted ? "quote" : "history",
         senderAllowed:
           effectiveGroupAllow.length === 0 ||
           isSignalSenderAllowed(source.sender, effectiveGroupAllow),
@@ -97,8 +123,14 @@ async function fetchSignalHistoryImages(
     ) {
       return [];
     }
-    return source.attachments.map((attachment) => ({ attachment, messageId: entry.messageId }));
+    return source.attachments.map((attachment) => ({
+      attachment,
+      messageId: entry.messageId,
+      quoted,
+    }));
   });
+  // Reserve space for the explicit reply target before taking the newest ambient photos.
+  candidates.sort((left, right) => Number(left.quoted) - Number(right.quoted));
   const fetchedImages = await Promise.all(
     candidates.slice(-MAX_HISTORY_IMAGES).map(async ({ attachment, messageId }) => {
       try {

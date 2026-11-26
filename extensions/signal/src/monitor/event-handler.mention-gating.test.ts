@@ -183,13 +183,16 @@ it("records a structured fact for skipped attachment-only group messages", async
   });
 });
 
-it("passes an unquoted image from another group member into the next mentioned turn", async () => {
+it("passes an unquoted image from another group member in an opted-in group", async () => {
   const fetchAttachment = vi.fn(async () => ({ path: "/tmp/group-image.jpg" }));
-  const handler = createMentionHandler({
-    historyLimit: 2,
-    ignoreAttachments: false,
-    fetchAttachment,
-  });
+  const handler = createMentionHandler(
+    { historyLimit: 2, ignoreAttachments: false, fetchAttachment },
+    ["@bot"],
+    {
+      "*": { requireMention: true },
+      g1: { requireMention: true, includeOtherMembersHistoryImages: true },
+    },
+  );
   const sendPhoto = (id: string, timestamp: number, groupId = "g1") =>
     handler(
       groupEvent(
@@ -246,6 +249,85 @@ it("passes an unquoted image from another group member into the next mentioned t
       messageId: "1700000000002",
     }),
   ]);
+});
+
+it.each([
+  { name: "own photos", quote: undefined, expected: ["own"], groupId: "g1" },
+  {
+    name: "a reply to another member's photo",
+    quote: { id: 1700000000001, authorUuid: "alice-uuid" },
+    expected: ["own", "other"],
+    groupId: "g1",
+  },
+  {
+    name: "a reply to an older photo still in the pending window",
+    quote: { id: 1700000000001, authorUuid: "alice-uuid" },
+    expected: ["other"],
+    groupId: "g1",
+    ageMs: 31 * 60_000,
+  },
+  {
+    name: "a quote with a mismatched author",
+    quote: { id: 1700000000001, authorNumber: "+15550003333" },
+    expected: ["own"],
+    groupId: "g1",
+  },
+  {
+    name: "a group with only wildcard configuration",
+    quote: undefined,
+    expected: ["own"],
+    groupId: "g2",
+  },
+])("limits group history images for $name", async ({ quote, expected, groupId, ageMs = 0 }) => {
+  const fetchAttachment = vi.fn<SignalEventHandlerDeps["fetchAttachment"]>(
+    async ({ attachment }) => ({ path: `/tmp/${attachment.id}.jpg` }),
+  );
+  const handler = createMentionHandler(
+    { historyLimit: 5, ignoreAttachments: false, fetchAttachment },
+    ["@bot"],
+    {
+      "*": { requireMention: true, includeOtherMembersHistoryImages: true },
+      g1: { requireMention: true },
+    },
+  );
+  const groupInfo = { groupId };
+  const bob = { sourceUuid: "bob-uuid", sourceNumber: null };
+  await handler(
+    groupEvent(
+      "",
+      { groupInfo, attachments: [{ id: "own", contentType: "image/jpeg" }] },
+      { ...bob, sourceNumber: "+15550002222" },
+    ),
+  );
+  await handler(
+    groupEvent(
+      "",
+      { groupInfo, attachments: [{ id: "other", contentType: "image/jpeg" }] },
+      { sourceUuid: "alice-uuid", timestamp: 1700000000001 },
+    ),
+  );
+  await handler(
+    groupEvent(
+      "",
+      { groupInfo, attachments: [{ id: "unrelated", contentType: "image/jpeg" }] },
+      { sourceNumber: "+15550003333", timestamp: 1700000000002 },
+    ),
+  );
+  expect(fetchAttachment).not.toHaveBeenCalled();
+  expect(capturedCtx).toBeUndefined();
+
+  await handler(
+    groupEvent(
+      "@bot what are the photos?",
+      { groupInfo, quote },
+      { ...bob, timestamp: 1700000000003 + ageMs },
+    ),
+  );
+
+  expect(fetchAttachment.mock.calls.map(([{ attachment }]) => attachment.id)).toEqual(expected);
+  expect(getCapturedCtx().media?.map(({ path }) => path)).toEqual(
+    expected.map((id) => `/tmp/${id}.jpg`),
+  );
 });
 
 it("keeps deleted, disappearing, view-once, and missing images out of model inputs", async () => {
@@ -317,7 +399,7 @@ it("filters history senders and bounds Signal image fetches before reading bytes
           contextVisibility: "allowlist",
           groupPolicy: "allowlist",
           groupAllowFrom,
-          groups: { g1: { requireMention: true } },
+          groups: { g1: { requireMention: true, includeOtherMembersHistoryImages: true } },
         },
       },
     },

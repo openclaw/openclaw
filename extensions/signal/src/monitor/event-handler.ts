@@ -95,7 +95,11 @@ import {
   rememberSignalHistoryImages,
   resolveSignalGroupHistoryContext,
 } from "./history-images.js";
-import { resolveSignalInboundRoute, resolveSignalQuoteContext } from "./inbound-context.js";
+import {
+  mergeSignalInboundBatch,
+  resolveSignalInboundRoute,
+  resolveSignalQuoteContext,
+} from "./inbound-context.js";
 import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
 import {
   buildSignalReactionSystemEventText,
@@ -565,28 +569,10 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
       await settle();
       return;
     }
-    let inbound = last;
-    if (entries.length > 1) {
-      const combinedText = entries
-        .map((entry) => entry.bodyText)
-        .filter(Boolean)
-        .join("\n");
-      const combinedCommandBody = entries
-        .map((entry) => entry.commandBody)
-        .filter(Boolean)
-        .join("\n");
-      if (!combinedText.trim()) {
-        await settle();
-        return;
-      }
-      inbound = {
-        ...last,
-        bodyText: combinedText,
-        commandBody: combinedCommandBody,
-        isBatched: true,
-        nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
-        media: entries.flatMap((entry) => entry.media ?? []),
-      };
+    const inbound = mergeSignalInboundBatch(entries, last);
+    if (!inbound) {
+      await settle();
+      return;
     }
     await handleSignalInboundMessage({
       ...inbound,
@@ -1131,7 +1117,6 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
       }
     }
 
-    const senderName = envelope.sourceName ?? senderDisplay;
     await registerSignalReplyContext({
       accountId: deps.accountId,
       to: signalTo,
@@ -1143,7 +1128,8 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
     });
     const entry: SignalInboundEntry = {
       cfg,
-      senderName,
+      sender,
+      senderName: envelope.sourceName ?? senderDisplay,
       senderDisplay,
       senderRecipient,
       senderPeerId,
@@ -1163,6 +1149,10 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
+      historyImageQuotes:
+        wasMentioned && quoteContext.quoteSender && typeof dataMessage.quote?.id === "number"
+          ? [{ messageId: String(dataMessage.quote.id), sender: quoteContext.quoteSender }]
+          : undefined,
       turnAdoptionLifecycle,
       resolveChannelIngress,
     };

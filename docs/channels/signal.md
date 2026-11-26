@@ -358,9 +358,11 @@ Mention-gated group with bounded context:
 }
 ```
 
-Allowed group messages that do not mention the bot stay silent and are kept in the bounded pending history window. When a later native @mention or fallback text mention triggers the bot, OpenClaw can include up to four images from that window that were sent in the preceding 30 minutes. The mention can be a new message without a native quote.
+Allowed group messages that do not mention the bot stay silent and are kept in the bounded pending history window. When a later native @mention or fallback text mention triggers the bot, OpenClaw can include recent photos sent by the person who tagged the bot. If the mention is a native reply, it can also include the original photo from another member if it is still available in the same window.
 
-OpenClaw reads eligible images from the Signal transport when it handles the mention. It applies the account's [context visibility policy](/channels/groups#context-visibility-and-allowlists), `ignoreAttachments`, and the media size limit. View-once and disappearing images are excluded. Attachments that cannot be retrieved remain as media placeholders.
+To include other members' photos in an unquoted mention, set `includeOtherMembersHistoryImages: true` on that specific group. For example, set `channels.signal.groups["<signal-group-id>"]` to `{ requireMention: true, includeOtherMembersHistoryImages: true }` for a mention-gated group. Named accounts can configure this under `channels.signal.accounts.<id>.groups`. The setting defaults to off and only exact group entries can enable it.
+
+OpenClaw reads up to four photos when it handles the mention. It prioritizes the photo being replied to and looks back up to 30 minutes for unquoted photos. It applies the account's [context visibility policy](/channels/groups#context-visibility-and-allowlists), `ignoreAttachments`, and the media size limit. View-once and disappearing images are excluded. Attachments that cannot be retrieved remain as media placeholders.
 
 ## How it works (behavior)
 

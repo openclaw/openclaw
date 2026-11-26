@@ -155,6 +155,7 @@ const DirectGroupReplyToModeByChatTypeSchema = z
 const SignalGroupEntrySchema = buildGroupEntrySchema(
   {
     ingest: z.boolean().optional(),
+    includeOtherMembersHistoryImages: z.boolean().optional(),
   },
   { omit: ["skills", "enabled", "allowFrom", "systemPrompt"] },
 );
