@@ -131,16 +131,84 @@ function checkpointOriginal(file: string): void {
   }
 }
 
-/** Publish the final raised-floor set before any live schema step. */
+function writeRestoreManifest(restore: StateUpgradeRestore, manifest: RestoreManifest): void {
+  const temporary = `${restore.file}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(manifest), { mode: 0o600 });
+  fsyncPath(temporary);
+  fs.renameSync(temporary, restore.file);
+  fsyncPath(path.dirname(restore.file), true);
+  restore.existing = manifest;
+}
+
+function writeLegacyAdditions(restore: StateUpgradeRestore, files: readonly RestoreFile[]): void {
+  const ops: Array<{ kind: "add"; live: string }> = [];
+  for (const file of files) {
+    if (file.preimage === null) {
+      ops.push({ kind: "add", live: file.live });
+    }
+  }
+  const applied = path.join(restore.stateDir, `.upgraded-${restore.generation}.json`);
+  const temporary = `${applied}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify({ appVersion: restore.generation, ops }), {
+    mode: 0o600,
+  });
+  fsyncPath(temporary);
+  fs.renameSync(temporary, applied);
+  fsyncPath(restore.stateDir, true);
+}
+
+function completeProspectiveFiles(
+  restore: StateUpgradeRestore,
+  manifest: RestoreManifest,
+  prospective: ReadonlyMap<string, readonly string[]>,
+): (() => void) | undefined {
+  if (prospective.size === 0) {
+    return undefined;
+  }
+  return () => {
+    const unused = new Set<string>();
+    for (const family of prospective.values()) {
+      if (!family.some((file) => fs.existsSync(file))) {
+        for (const file of family) {
+          unused.add(file);
+        }
+      }
+    }
+    if (unused.size === 0) {
+      return;
+    }
+    const narrowed = {
+      ...manifest,
+      files: manifest.files.filter((file) => !unused.has(file.live)),
+    };
+    // Complete while boot still owns custody. Later runtime creations are not trial additions.
+    writeLegacyAdditions(restore, narrowed.files);
+    writeRestoreManifest(restore, narrowed);
+  };
+}
+
+/** Publish before mutation; complete before normal runtime can create prospective stores. */
 export async function publishStateUpgradeRestore(
   restore: StateUpgradeRestore | undefined,
   plan: {
     targets: readonly { path: string; engine: DatabaseTarget["engine"] | "file" }[];
     config: OpenClawConfig;
   },
-): Promise<void> {
+): Promise<(() => void) | undefined> {
   if (!restore) {
-    return;
+    return undefined;
+  }
+  const prospective = new Map<string, readonly string[]>();
+  for (const target of plan.targets) {
+    if (!fs.existsSync(target.path)) {
+      const family = [target.path];
+      if (target.engine !== "file") {
+        for (const suffix of COMPANIONS) {
+          family.push(`${target.path}${suffix}`);
+        }
+      }
+      prospective.set(target.path, family);
+    }
   }
   if (restore.existing) {
     const files = new Map(restore.existing.files.map((entry) => [entry.live, entry]));
@@ -153,31 +221,39 @@ export async function publishStateUpgradeRestore(
         );
       }
     }
-    if (
-      plan.targets.some(
-        ({ path: live, engine }) =>
-          !files.has(live) ||
-          (engine !== "file" &&
-            COMPANIONS.some((suffix) => files.get(`${live}${suffix}`)?.preimage !== null)),
-      )
-    ) {
-      throw new Error(
-        "The update's immutable restore manifest does not cover this migration plan. Run openclaw triage before retrying.",
-      );
+    for (const target of plan.targets) {
+      const family = prospective.get(target.path);
+      if (!files.has(target.path) && family) {
+        // A successful boot narrowed unused additions; refresh only still-absent families.
+        for (const live of family) {
+          files.set(live, { live, preimage: null });
+        }
+      }
+      if (
+        !files.has(target.path) ||
+        (target.engine !== "file" &&
+          COMPANIONS.some((suffix) => files.get(`${target.path}${suffix}`)?.preimage !== null))
+      ) {
+        throw new Error(
+          "The update's immutable restore manifest does not cover this migration plan. Run openclaw triage before retrying.",
+        );
+      }
     }
-    // A resumed boot may already see current versions. Never replace its full
-    // original receipt with an empty plan or image the migrated live database.
-    return;
+    if (files.size !== restore.existing.files.length) {
+      const refreshed = { ...restore.existing, files: [...files.values()] };
+      writeLegacyAdditions(restore, refreshed.files);
+      writeRestoreManifest(restore, refreshed);
+    }
+    // Images stay immutable. An interrupted import retains its conservative original receipt.
+    return completeProspectiveFiles(restore, restore.existing, prospective);
   }
   const files: RestoreFile[] = [];
-  const additions: Array<{ kind: "add"; live: string }> = [];
   for (const target of plan.targets) {
     const live = target.path;
-    if (!fs.existsSync(live)) {
-      for (const suffix of target.engine === "file" ? [""] : ["", ...COMPANIONS]) {
-        const entry = { live: `${live}${suffix}`, preimage: null };
-        files.push(entry);
-        additions.push({ kind: "add", live: entry.live });
+    const family = prospective.get(live);
+    if (family) {
+      for (const file of family) {
+        files.push({ live: file, preimage: null });
       }
       continue;
     }
@@ -219,24 +295,11 @@ export async function publishStateUpgradeRestore(
     }
   }
   const manifest: RestoreManifest = { v: 1, runId: restore.runId, files };
-  // Frozen launchers consume this shipped receipt to remove stores the trial
-  // creates. No copied paths, replacements or forward swap operations remain.
-  if (additions.length > 0) {
-    const applied = path.join(restore.stateDir, `.upgraded-${restore.generation}.json`);
-    const pending = `${applied}.tmp`;
-    fs.writeFileSync(pending, JSON.stringify({ appVersion: restore.generation, ops: additions }), {
-      mode: 0o600,
-    });
-    fsyncPath(pending);
-    fs.renameSync(pending, applied);
-    fsyncPath(restore.stateDir, true);
+  if (prospective.size > 0) {
+    writeLegacyAdditions(restore, files);
   }
-  const temporary = `${restore.file}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(manifest), { mode: 0o600 });
-  fsyncPath(temporary);
-  fs.renameSync(temporary, restore.file);
-  fsyncPath(path.dirname(restore.file), true);
-  restore.existing = manifest;
+  writeRestoreManifest(restore, manifest);
+  return completeProspectiveFiles(restore, manifest, prospective);
 }
 
 function fsyncPath(pathname: string, directory = false): void {

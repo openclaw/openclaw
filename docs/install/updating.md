@@ -228,13 +228,26 @@ that database. There is no pre-stop clone probe or copy-time budget. If the requ
 image cannot be made, boot refuses with exit 78 before the schema step and the
 resident launcher restores the previous release.
 
-The existing launcher's `.pre-<build-generation>` scan still bounds automatic
-recovery coverage for floor-raising migrations. `check-release` refuses those
-migrations if an affected database is outside that boundary: external paths,
-symlinked or separately mounted stores, paths more than four directories deep,
-and stores below `git-install`, `npm`, `node_modules`, `tmp` or `logs`. The refusal
-names the database and where to move it. Compatible steps do not require scan
-coverage and do not refuse an external database merely because it is external.
+Launcher format 4 reads the selected target release's `.restore` record. It
+removes the recorded null-preimage files before renaming the recorded images,
+then switches back. It does not scan the state tree or read build-global applied
+receipts on this path. A malformed manifest fails visibly rather than falling
+back to a different recovery plan. Interrupted image renames replay from the
+same record.
+
+Targets without `.restore`, including shipped 2026.11.10 releases, retain the
+legacy `.pre-<generation>` and receipt interpreter. The new reader restricts
+those legacy artifacts to the current trial's existing freshness window. Keep
+this compatibility path until the supported rollback floor passes the last
+published release without a restore manifest.
+
+A resident launched before the upgrade keeps its existing recovery code until
+its service next starts. Admission therefore still retains the old scan's
+coverage bounds for floor-raising migrations: external, symlinked or separately
+mounted stores, paths more than four directories deep, and stores below
+`git-install`, `npm`, `node_modules`, `tmp` or `logs` refuse with a move/retry
+instruction. Compatible steps take no image and do not refuse an external
+database merely because it is external.
 
 The same canonical in-place migration owners run on ordinary starts and release
 trials, under existing custody. New upgrades use no private tree, Doctor subprocess
@@ -251,21 +264,29 @@ before removing that config. These imports are not a copied-state Doctor process
 Direct upgrades from 2026.7.x
 retain their session history.
 
-The launcher's selected target owns the prepared release directory and its
-`.restore` receipt, so a retry from an older preparer cannot reuse another
-release's receipt. The complete manifest and independent images are durable
-before live mutation. Retries reuse their immutable originals rather than
-re-imaging changed state. A trial with no floor-raising step records an empty
-database restore plan.
-Stores that do not exist before boot have null preimages. The existing
-`.upgraded-<build-generation>.json` receipt retains only their `kind: add` entries,
-so installed launchers remove those stores and their companions on rollback.
-It no longer records copied paths or replacement operations.
+The selected target owns its prepared release directory and `.restore` record,
+so a retry from an older preparer cannot reuse another release's receipt.
+Images and the initial complete manifest are durable before live mutation.
+Retries reuse original images rather than re-imaging changed state. A trial
+with no floor-raising step records an empty database restore plan.
 
-The `.restore` receipt stays with its prepared release. Independent
+Legacy imports initially declare prospective new stores with null preimages.
+After successful import and native close, before normal runtime starts, boot
+narrows the same v1 record to families it actually created. A later runtime
+creation at an unused prospective path, including its WAL, is not a rollback
+deletion. Null companions of imaged databases remain recorded even when absent,
+so a later WAL cannot be replayed over a restored image. A retry may refresh
+still-absent prospective families before mutation, but never replaces an
+original image. An interrupted import retains the conservative broad record;
+that rare case remains accepted.
+
+The existing `.upgraded-<build-generation>.json` add receipt mirrors the removal
+set for installed legacy readers. It contains no copied paths or replacement
+operations. Manifest-capable recovery does not consume it.
+
+The `.restore` record stays with its prepared release. Independent
 `.pre-<build-generation>` images remain under the existing `pruneGenerations`
-retention, now owned by the restore module. Committing a trial does not trigger
-captured-image cleanup; in-place migration adds no post-commit cleanup hook.
+retention, owned by the restore module. Committing a trial adds no cleanup hook.
 
 ### Uncovered database paths
 
