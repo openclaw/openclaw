@@ -1028,7 +1028,6 @@ struct RootTabsPresentationTests {
             updatedatms: 1,
             schedule: AnyCodable(["kind": AnyCodable("every")]),
             sessiontarget: AnyCodable("isolated"),
-            wakemode: AnyCodable("now"),
             payload: AnyCodable(["kind": AnyCodable("agentTurn")]),
             state: [:],
             lastrunstatus: AnyCodable(status))

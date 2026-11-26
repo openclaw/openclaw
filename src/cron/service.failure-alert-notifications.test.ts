@@ -41,10 +41,7 @@ it.for([
   ["owner-targeted session", "isolated", target, true, true],
 ] as const)(
   "routes a rejected failure alert to %s with scheduling disabled",
-  async (
-    [_name, sessionTarget, creationSessionKey, carriesOrigin, ownerTarget],
-    { signal },
-  ) => {
+  async ([_name, sessionTarget, creationSessionKey, carriesOrigin, ownerTarget], { signal }) => {
     await withOpenClawTestState(
       { label: "cron-failure-notification", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {

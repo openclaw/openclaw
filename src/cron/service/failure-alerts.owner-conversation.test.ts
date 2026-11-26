@@ -82,7 +82,6 @@ it("notifies the owning conversation when a conversation-bound job's trigger fai
         sessionKey,
         owner: { agentId: "main", sessionKey },
         agentId: "main",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: "check" },
         delivery: { mode: "announce" },
       });
@@ -115,7 +114,6 @@ it("keeps an explicit failure recipient owed when no channel can be selected", a
           sessionTarget: "current",
           sessionKey,
           owner: { agentId: "main", sessionKey },
-          wakeMode: "now",
           state: {},
         },
         routing: {},

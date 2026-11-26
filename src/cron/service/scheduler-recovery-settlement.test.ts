@@ -95,7 +95,6 @@ it.for(["replacement-loss", "stop-during-launch"] as const)(
         deleteAfterRun: true,
         schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
         sessionTarget: "main",
-        wakeMode: "now",
         payload: { kind: "systemEvent", text: "synthetic held startup run" },
       });
       expect(workers).toHaveLength(1);
