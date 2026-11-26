@@ -52,6 +52,88 @@ const SOURCE_REPLY_ONLY_ARG_NAMES = new Set([
   "final",
 ]);
 
+/** Message-tool booleans whose unset default is false; a false value is a no-op. */
+const SOURCE_REPLY_INERT_FALSE_ARG_NAMES = new Set([
+  "dryRun",
+  "silent",
+  "asVoice",
+  "audioAsVoice",
+  "asVideoNote",
+  "forceDocument",
+  "asDocument",
+  "gifPlayback",
+  "disabled",
+  "reusable",
+  "remove",
+  "trackToolCalls",
+  "track_tool_calls",
+  "fromMe",
+  "includeArchived",
+  "includeMembers",
+  "members",
+]);
+
+/** Message-tool booleans whose unset default is true; a true value is a no-op. */
+const SOURCE_REPLY_INERT_TRUE_ARG_NAMES = new Set(["bestEffort"]);
+
+/** Bound model-supplied nesting so a deep value cannot exhaust the call stack. */
+const SOURCE_REPLY_INERT_MAX_DEPTH = 16;
+
+/**
+ * True when an argument value carries no content or behavior a source reply
+ * could act on: `undefined`, `null`, `""`, `false`, an empty array, or a plain
+ * object whose own enumerable values are all inert (recursively). Numbers stay
+ * non-inert because a zero can be a meaningful control (for example a timeout).
+ *
+ * A completion send is already pinned to `action: "send"` and the authoritative
+ * current conversation, so these values do not select a destination or change
+ * delivery intent. Strict-schema models emit the full optional parameter set
+ * (`targets: []`, `channelIds: []`, `dryRun: false`,
+ * `presentation: { title: "", blocks: [] }`); rejecting those provably inert
+ * values made the model retry the identical call until the turn died as
+ * `repeated_tool_error`. The enforcement below removes accepted inert keys from
+ * the dispatch copy because some consumers treat presence as intent. Content-
+ * bearing values remain non-inert and fail closed.
+ */
+export function isInertSourceReplyArgumentValue(value: unknown, depth = 0): boolean {
+  if (depth > SOURCE_REPLY_INERT_MAX_DEPTH) {
+    // Fail closed: an unexpectedly deep value is not proven inert.
+    return false;
+  }
+  if (value === undefined || value === null || value === false || value === "") {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.length === 0;
+  }
+  if (typeof value !== "object") {
+    // `true`, non-empty strings, functions, symbols, and bigints.
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    // Class instances (Date, Map, Error, ...) may carry behavior or hidden state.
+    return false;
+  }
+  return Object.values(value).every((entry) => isInertSourceReplyArgumentValue(entry, depth + 1));
+}
+
+/**
+ * Name-aware inertness. A bare `false` is only a no-op for flags that default to
+ * false; `bestEffort: false` is a meaningful durable-delivery request, while
+ * `bestEffort: true` is the default. Unknown flags with a non-default value stay
+ * meaningful and fail closed.
+ */
+export function isInertSourceReplyArgument(name: string, value: unknown): boolean {
+  if (value === true) {
+    return SOURCE_REPLY_INERT_TRUE_ARG_NAMES.has(name);
+  }
+  if (value === false) {
+    return SOURCE_REPLY_INERT_FALSE_ARG_NAMES.has(name);
+  }
+  return isInertSourceReplyArgumentValue(value);
+}
+
 export function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknown>): void {
   // Preserve Markdown indentation when checking sanitizer-assembled reply/audio directives.
   const text = readToolStringParam(args, "message", { trim: false });
@@ -106,6 +188,13 @@ export function enforceTrustedTurnExplicitAccount(params: {
   }
 }
 
+/**
+ * Enforces the source-reply contract and normalizes the dispatch arguments.
+ *
+ * `params.args` must be the tool's shallow dispatch copy: accepted inert
+ * non-allowlisted keys are deleted from it so presence alone cannot change
+ * downstream behavior. Never pass the model event arguments by reference.
+ */
 export function enforceSourceReplyOnlyMessageAction(params: {
   action: string;
   args: Record<string, unknown>;
@@ -123,9 +212,17 @@ export function enforceSourceReplyOnlyMessageAction(params: {
     );
   }
   for (const name of Object.keys(params.args)) {
-    if (!SOURCE_REPLY_ONLY_ARG_NAMES.has(name)) {
+    if (SOURCE_REPLY_ONLY_ARG_NAMES.has(name)) {
+      continue;
+    }
+    if (!isInertSourceReplyArgument(name, params.args[name])) {
       throw sourceReplyPolicyError(`Completion source replies cannot use the "${name}" argument.`);
     }
+    // `params.args` is the tool's shallow dispatch copy, not the model event.
+    // Drop the inert key instead of only tolerating it: downstream consumers
+    // treat presence as intent (an own `targets: []` suppresses implicit
+    // current-conversation routing and fails the send).
+    delete params.args[name];
   }
   enforceSourceReplyOnlyTextDirectives(params.args);
 

@@ -233,6 +233,38 @@ describe("completion source-reply authority", () => {
     );
   });
 
+  it("drops inert optional arguments before dispatch so an empty target list cannot disable routing", async () => {
+    const send = vi.mocked(messageActionRunner.runMessageAction).mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "workspace",
+      to: "SOURCE",
+      handledBy: "plugin",
+      payload: {},
+      dryRun: true,
+    });
+    const { tool } = createFixture();
+
+    await tool.execute("inert-args", {
+      action: "send",
+      message: "completion",
+      targets: [],
+      channelIds: [],
+      dryRun: false,
+      bestEffort: true,
+      presentation: { title: "", blocks: [] },
+    });
+
+    expect(send).toHaveBeenCalledOnce();
+    const params = send.mock.calls[0]![0].params;
+    for (const name of ["targets", "channelIds", "dryRun", "bestEffort"]) {
+      expect(params).not.toHaveProperty(name);
+    }
+    // Visible-content sanitization recreates this key as undefined; the inert
+    // empty object itself never reaches the dispatcher.
+    expect(params.presentation).toBeUndefined();
+  });
+
   it("fails closed when the authoritative source target is missing", async () => {
     const { tool } = createFixture({ currentChannelId: undefined });
 
