@@ -79,8 +79,6 @@ export function fixture(world: {
         return { files: [{ name: "MEMORY.md", missing: false, size: 8192 }] };
       case "cron.run":
         return { ok: true, enqueued: true, runId: "run-1" };
-      case "users.self":
-        return { profile: { id: "p-owner" } };
       // A declarative add answers `{ created, job }`; an update answers the job.
       case "cron.add":
         return { created: true, job: { id: "job-new", enabled: true, ...params, state: {} } };

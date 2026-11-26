@@ -39,8 +39,6 @@ export type ScribeJob = {
   id: string;
   declarationKey?: string;
   agentId?: string;
-  /** The person the automation runs for; its model account follows theirs. */
-  ownerProfileId?: string;
   enabled: boolean;
   configRevision?: string;
   sessionTarget?: string;

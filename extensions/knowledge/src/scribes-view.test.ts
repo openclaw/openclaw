@@ -426,12 +426,11 @@ const earlierReview = () =>
     )
     .replace("; Timelines retired and left; pages reviewed, changed and left unchanged", "");
 
-it("replaces an automation an agent turn created with an administrator's, keeping its options", async () => {
+it("upgrades an automation an agent turn created only when the administrator chooses to", async () => {
   // Set up by an earlier Knowledge through a turn: account authority, an outdated message,
   // options saved on it, and paused.
   const turnCreated = {
     ...reviewJob,
-    ownerProfileId: "p-owner",
     enabled: false,
     sessionKey: "s-review",
     sessionTarget: "current",
@@ -452,13 +451,25 @@ it("replaces an automation an agent turn created with an administrator's, keepin
     sessionKey: "s-elsewhere",
     payload: { kind: "agentTurn", message: "x", toolsAllow: ["*"], toolsAllowIsDefault: true },
   };
-  const { render, calls, ui } = fixture({
+  const { render, calls, ui, page } = fixture({
     sessions: reviewSession,
     jobs: [turnCreated, generatedTools],
   });
-  await render();
   const writes = () =>
     calls.filter(([method]) => ["cron.add", "cron.update", "cron.remove"].includes(method));
+  // Loading never replaces it: the replacement can't keep the model account recorded on it.
+  expect((await render()).querySelector(".scribe-row")?.textContent).toContain("Upgrade available");
+  expect(writes()).toEqual([]);
+  ui.s.scribe = "claim-consolidation";
+  const view = await render();
+  expect(view.querySelector(".scribe-update")?.textContent).toContain(
+    "Its scheduled runs can't read channel plugins such as Slack.",
+  );
+  buttonNamed(view, "Upgrade automation…").click();
+  const confirm = page.querySelector("dialog")!;
+  expect(confirm.textContent).toContain("Runs then use your model account");
+  buttonNamed(confirm, "Upgrade").click();
+  await vi.waitFor(() => expect(confirm.open).toBe(false));
   // Removed first: a same-key automation would take the new declaration with its old authority.
   expect(writes()).toEqual([
     ["cron.remove", { id: "job-review", expectedConfigRevision: "rev-7" }],
@@ -486,49 +497,46 @@ it("replaces an automation an agent turn created with an administrator's, keepin
     ],
   ]);
   expect(calls.some(([method]) => method === "chat.send")).toBe(false);
-  expect(ui.announce).toHaveBeenCalledWith(
-    "Knowledge Consolidation: updated for this version of Knowledge.",
-  );
-  // A failed update is tried once per automation revision, not on every reload.
-  const offline = fixture({ sessions: reviewSession, jobs: [turnCreated] });
-  const answer = offline.request.getMockImplementation()!;
-  offline.request.mockImplementation(async (method, params) => {
-    if (method === "cron.remove") {
-      offline.calls.push([method, params]);
-      throw new Error("offline");
-    }
-    return answer(method, params);
-  });
-  await offline.render();
-  await offline.render();
-  expect(offline.ui.announce).toHaveBeenCalledWith(
-    "Knowledge Consolidation: the update failed. Error: offline If its automation is gone, set it up again from Scribes.",
-  );
-  expect(offline.calls.filter(([method]) => method === "cron.remove")).toHaveLength(1);
+  expect(ui.announce).toHaveBeenCalledWith("Knowledge Consolidation: automation upgraded.");
 });
 
-it.each([
-  ["a custom schedule", { schedule: { kind: "every", everyMs: 3_600_000 } }],
-  // The replacement can't carry the creator's recorded model account to another person.
-  ["another person's automation", { ownerProfileId: "p-other" }],
-  ["an unknown owner", { ownerProfileId: undefined }],
+it("never updates an automation changed to another payload kind", async () => {
   // An update would replace the owner's script with the scribe's agent turn.
-  ["another payload kind", { payload: { kind: "script", script: "return { notify: 'checked' }" } }],
-])("leaves a turn-created automation with %s for Repair", async (_name, change) => {
-  const custom = {
+  const script = {
     ...reviewJob,
-    ownerProfileId: "p-owner",
     sessionKey: "s-review",
-    sessionTarget: "current",
-    scheduledToolPolicy: { mode: "account" },
-    payload: { kind: "agentTurn", message: earlierReview() },
-    ...change,
+    sessionTarget: "session:s-review",
+    payload: { kind: "script", script: "return { notify: 'checked' }" },
   };
-  const { render, calls } = fixture({ sessions: reviewSession, jobs: [custom] });
+  const { render, calls } = fixture({ sessions: reviewSession, jobs: [script] });
   await render();
   expect(
     calls.some(([method]) => ["cron.add", "cron.update", "cron.remove"].includes(method)),
   ).toBe(false);
+});
+
+it("tries a failed update once per automation revision", async () => {
+  const earlier = {
+    ...reviewJob,
+    sessionKey: "s-review",
+    sessionTarget: "session:s-review",
+    payload: { kind: "agentTurn", message: earlierReview() },
+  };
+  const { render, calls, request, ui } = fixture({ sessions: reviewSession, jobs: [earlier] });
+  const answer = request.getMockImplementation()!;
+  request.mockImplementation(async (method, params) => {
+    if (method === "cron.update") {
+      calls.push([method, params]);
+      throw new Error("offline");
+    }
+    return answer(method, params);
+  });
+  await render();
+  await render();
+  expect(ui.announce).toHaveBeenCalledWith(
+    "Knowledge Consolidation: the update failed. Error: offline If its automation is gone, set it up again from Scribes.",
+  );
+  expect(calls.filter(([method]) => method === "cron.update")).toHaveLength(1);
 });
 
 it("updates an administrator's earlier automation in place", async () => {

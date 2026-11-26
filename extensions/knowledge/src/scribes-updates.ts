@@ -1,4 +1,4 @@
-/** Bringing scribe automations up to date: the update on load, and Replace with new. */
+/** Bringing scribe automations up to date: the update on load, Upgrade, and Replace with new. */
 import type { Page } from "./page-context.js";
 import { button, el } from "./page-dom.js";
 import { changedLines, openConfirmDialog } from "./scribe-dialog.js";
@@ -18,19 +18,13 @@ const tried = new Map<string, Set<string>>();
  * an earlier version replaced. The Scribes page owns this because it is where an administrator
  * manages scribe automations. Answers whether it wrote anything.
  */
-export async function update(
-  ui: Page,
-  snapshot: ScribeSnapshot,
-  agentId: string,
-  /** The viewing administrator's profile id, when the Gateway reports it. */
-  viewer: string | undefined,
-) {
+export async function update(ui: Page, snapshot: ScribeSnapshot, agentId: string) {
   const { job } = snapshot;
   const gateway = ui.s.context.host.basePath;
   const revisions = tried.get(gateway) ?? new Set<string>();
   tried.set(gateway, revisions);
   const revision = job && `${job.id}:${job.configRevision ?? ""}`;
-  if (!job || !revision || revisions.has(revision) || !needsUpdate(snapshot, viewer)) {
+  if (!job || !revision || revisions.has(revision) || !needsUpdate(snapshot)) {
     return false;
   }
   revisions.add(revision);
@@ -44,6 +38,40 @@ export async function update(
     );
     return false;
   }
+}
+
+/**
+ * The notice for a scribe still on an automation an agent turn created, with Upgrade: its
+ * scheduled runs can't read channel plugins such as Slack until an administrator replaces it.
+ */
+export function upgradeNotice(ui: Page, snapshot: ScribeSnapshot, job: ScribeJob, agentId: string) {
+  const { scribe } = snapshot;
+  const notice = el("div", undefined, "knowledge-notice scribe-update");
+  notice.append(
+    el(
+      "span",
+      `${scribe.title} runs on an automation an earlier version of Knowledge set up in a chat turn. Its scheduled runs can't read channel plugins such as Slack. Upgrading replaces it with one you own.`,
+    ),
+  );
+  const upgrade = button(
+    "Upgrade automation…",
+    () => {
+      openConfirmDialog(
+        `Upgrade the automation for ${scribe.title}?`,
+        `Its automation is replaced with one you own, in the same conversation, keeping its schedule, run message, options and on or off state. Runs then use your model account, and Recent runs starts over.`,
+        "Upgrade",
+        async () => {
+          await updateScribe(ui.s.context.host, snapshot, job, agentId);
+          ui.announce(`${scribe.title}: automation upgraded.`);
+          void ui.load();
+        },
+      );
+    },
+    "knowledge-button knowledge-small",
+  );
+  upgrade.disabled = !ui.s.context.host.connection.canAdmin;
+  notice.append(upgrade);
+  return notice;
 }
 
 /**

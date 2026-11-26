@@ -10,6 +10,7 @@ import {
 } from "./scribe-dialog.js";
 import { openScheduleDialog } from "./scribe-schedule-dialog.js";
 import {
+  needsUpgrade,
   repairScribe,
   runScribeNow,
   setScribePaused,
@@ -30,7 +31,7 @@ import {
   type ScribeSnapshot,
   type ScribeStatus,
 } from "./scribes-state.js";
-import { update, updateNotice } from "./scribes-updates.js";
+import { update, updateNotice, upgradeNotice } from "./scribes-updates.js";
 import { storeLabel, storeOf } from "./stores-view.js";
 import { icon } from "./ui-icons.js";
 
@@ -211,13 +212,7 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
   let snapshots = loaded;
   // An administrator's load brings earlier automations up to date, then reads the result.
   if (host.connection.canAdmin) {
-    const viewer = await host
-      .request<{ profile?: { id?: string } }>("users.self", {})
-      .then((self) => self?.profile?.id)
-      .catch(() => undefined);
-    const wrote = await Promise.all(
-      snapshots.map((snapshot) => update(ui, snapshot, agentId, viewer)),
-    );
+    const wrote = await Promise.all(snapshots.map((snapshot) => update(ui, snapshot, agentId)));
     if (wrote.some(Boolean)) {
       snapshots = await loadScribes(host, agentId);
     }
@@ -351,7 +346,9 @@ function activeRow(ui: Page, snapshot: ScribeSnapshot) {
   );
   chevron.setAttribute("aria-label", `Open ${scribe.title}`);
   chevron.append(icon("chevronRight", 16));
-  if (snapshot.runMessage?.state === "differs") {
+  if (needsUpgrade(snapshot)) {
+    actions.append(chip("Upgrade available"));
+  } else if (snapshot.runMessage?.state === "differs") {
     actions.append(chip("New run instructions"));
   }
   actions.append(statusChip(snapshot.status), chevron);
@@ -718,7 +715,9 @@ function detail(
   }
   history.append(rows);
   root.append(crumb, head, feedback);
-  if (job && snapshot.runMessage?.state === "differs") {
+  if (job && needsUpgrade(snapshot)) {
+    root.append(upgradeNotice(ui, snapshot, job, agentId));
+  } else if (job && snapshot.runMessage?.state === "differs") {
     root.append(updateNotice(ui, snapshot, job, agentId, snapshot.runMessage.current));
   }
   root.append(grid, history);

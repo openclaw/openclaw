@@ -203,35 +203,43 @@ page.
 A newer Knowledge can generate a different run message. Earlier versions also
 had the scribe's conversation create its automation in an agent turn; such an
 automation runs with that turn's account authority, which cannot read channel
-plugins such as Slack on a schedule. When an administrator opens the Scribes
-tab, the page brings each ongoing scribe that is behind up to date:
+plugins such as Slack on a schedule.
 
-- An automation an agent turn created is removed and created again as the
-  administrator's, in the same conversation. The new automation has a new ID,
-  so **Recent runs** starts over; the earlier runs stay on the Automations
-  page until they age out. Only an agent-turn automation with a plain cron
-  schedule and no trigger, as setup created it, is replaced on its own, and
-  only when the administrator viewing the tab is the person it was created
-  for, since its runs then keep using that person's model account. Any other
-  keeps running until an administrator chooses **Repair**, which shows an
-  error if the replacement is rejected; after Repair, runs use that
-  administrator's model account.
+### Upgrade an earlier automation
+
+A scribe still on an automation an agent turn created shows **Upgrade
+available**, and its detail explains why and offers **Upgrade automation…**.
+The page never upgrades one on its own: the replacement can't carry over the
+model account recorded on the old automation, so after an upgrade, runs use the
+model account of the administrator who upgraded it. Confirming removes the old
+automation and creates one you own in the same conversation, keeping its
+schedule, run message (an unchanged earlier message becomes the new one), on or
+off state and saved options: a model or thinking override, an explicit tool
+list, active hours, pacing, idle-only, a trigger, delivery and the failure
+alert. The new automation has a new ID, so **Recent runs** starts over; the
+earlier runs stay on the Automations page until they age out. If the
+replacement is rejected, the page shows the error and the scribe can be set up
+again. **Repair** on such a scribe upgrades it the same way and turns it on.
+
+### Updates the page makes on its own
+
+When an administrator opens the Scribes tab, the page brings each ongoing scribe
+that already runs on an administrator's automation up to date, in place:
+
 - More than one automation of this agent with the scribe's declaration key is
   reduced to one.
 - An automation that runs in its conversation's own session moves to the
   `current` session target, so later runs start fresh.
 - A run message that an earlier Knowledge generated, unchanged, is replaced
   with the new one for the same settings.
-- The schedule is kept, and a disabled automation stays disabled. Options
-  saved on a replaced automation are carried over: a model or thinking
-  override, an explicit tool list, active hours, pacing, idle-only, a trigger,
-  delivery and the failure alert.
-- Only this agent's automations are touched.
+- The schedule is kept, and a disabled automation stays disabled.
+- Only this agent's automations are touched, and an automation changed to
+  another payload kind, such as a script, is left as it is.
 
 Each update is tried once per automation revision: if one fails, the tab says
 so and doesn't repeat it on every refresh. A scribe that is running or whose
 conversation is not found is updated on a later load. Without an administrator,
-the page changes nothing, and a scribe keeps running its earlier automation.
+the page changes nothing.
 
 A saved run message that differs from what this version generates is never
 replaced on its own; the page can't tell who changed it. When it still carries
