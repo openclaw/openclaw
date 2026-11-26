@@ -13,7 +13,7 @@ type BrowserTabOptions<TSession, TTab extends MeetingBrowserTab> = {
 
 export type MeetingBrowserTabRelease<TTab> = {
   messages: { noTrackedTab: string; sharedTab: string; leaveFailed(error: string): string };
-  leave(tab: TTab): Promise<{ left: boolean; note: string }>;
+  leave: (tab: TTab) => Promise<{ left: boolean; note: string }>;
 };
 
 export const releasedMeetingBrowserHealth = {

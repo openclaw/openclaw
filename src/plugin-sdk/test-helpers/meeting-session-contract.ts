@@ -93,8 +93,8 @@ export function defineMeetingSessionFlowTests(options: {
 
   it("keeps ended status when a pending browser read fails after leave", async () => {
     const { harness, runtime, session, id } = await joinedFixture();
-    const started = createDeferredCore<void>();
-    const resume = createDeferredCore<void>();
+    const started = createDeferredCore();
+    const resume = createDeferredCore();
     harness.gatewayRequest.mockImplementationOnce(async () => {
       started.resolve();
       await resume.promise;
