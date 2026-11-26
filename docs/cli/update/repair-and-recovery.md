@@ -1259,8 +1259,8 @@ before repair or activation. To keep a downgrade path, create a
 [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup) before
 updating. Identity checks are unchanged. Unfinished runs, pending
 recovery, unresolved failed or rolled-back captures, orphaned/unmanifested copies,
-and blocked artifacts remain. Standalone Doctor captures keep their existing
-newest-three/30-day policy, always retaining the newest sealed capture. Historical
+and blocked artifacts remain. Standalone Doctor captures follow the Doctor rule:
+the newest sealed capture stays and older eligible ones are retired. Historical
 originals requiring additional import verification are left for manual cleanup.
 When that verification is deferred, migration originals are retained together:
 a historical index may reference an original in another manifest. Independently
