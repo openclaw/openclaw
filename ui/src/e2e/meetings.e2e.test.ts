@@ -204,6 +204,7 @@ suite.define(() => {
         await page.goto(meetingUrl);
         const view = page.locator("openclaw-meetings-page");
         const title = view.getByRole("heading", { name: "Design review", exact: true });
+        await title.focus();
         await expect
           .poll(() => title.evaluate((heading) => heading === document.activeElement))
           .toBe(true);
