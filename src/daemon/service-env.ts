@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
+import {
+  OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS,
+  resolveNodeStartupTlsEnvironment,
+} from "../bootstrap/node-startup-env.js";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { omitSecretEgressProxyEnvironment } from "../secrets/egress-proxy/environment.js";
 import {
@@ -319,6 +322,12 @@ function buildCommonServiceEnvironment(
     HOME: env.HOME,
     TMPDIR: tmpDir,
     NODE_EXTRA_CA_CERTS: startupTlsEnv.NODE_EXTRA_CA_CERTS,
+    // Persist the provenance of the automatic CA so downstream consumers can
+    // drop OpenClaw's version-manager default without discarding an operator's
+    // explicit NODE_EXTRA_CA_CERTS.
+    [OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]: env.NODE_EXTRA_CA_CERTS?.trim()
+      ? undefined
+      : startupTlsEnv.NODE_EXTRA_CA_CERTS,
     NODE_USE_SYSTEM_CA: startupTlsEnv.NODE_USE_SYSTEM_CA,
     OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR,
     OPENCLAW_CONFIG_PATH: env.OPENCLAW_CONFIG_PATH,

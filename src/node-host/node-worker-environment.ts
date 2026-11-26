@@ -1,4 +1,5 @@
 import path from "node:path";
+import { OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS } from "../bootstrap/node-startup-env.js";
 import { NODE_SERVICE_KIND, resolveNodeLaunchAgentLabel } from "../daemon/constants.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -105,6 +106,7 @@ export function snapshotNodeWorkerEnv(
   homeDir?: string,
 ): NodeJS.ProcessEnv {
   const windows = process.platform === "win32";
+  const autoNodeExtraCaCerts = source[OPENCLAW_AUTO_NODE_EXTRA_CA_CERTS]?.trim();
   const snapshot: NodeJS.ProcessEnv = {};
   const retainedWindowsKeys = new Map<string, string>();
   for (const [key, value] of Object.entries(source)) {
@@ -116,6 +118,17 @@ export function snapshotNodeWorkerEnv(
       (windows ? WINDOWS_WORKER_ENV_KEYS : POSIX_WORKER_ENV_KEYS).has(normalized) ||
       normalized.startsWith("LC_");
     if (!allowed) {
+      continue;
+    }
+    // The host CLI may add the OS trust bundle solely because its Node binary
+    // comes from a version manager. Container images have their own trust store;
+    // leaking this host-only path would fail the worker's mount confinement.
+    // Explicit custom CAs remain inherited and keep the existing path gate.
+    if (
+      normalized === "NODE_EXTRA_CA_CERTS" &&
+      autoNodeExtraCaCerts !== undefined &&
+      value === autoNodeExtraCaCerts
+    ) {
       continue;
     }
     if (windows) {
