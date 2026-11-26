@@ -72,13 +72,12 @@ export function Diff(props: {
   );
 }
 /** SKILL.md frontmatter is shown as the header; the body renders as markdown. */
-export function splitFrontmatter(content: string): { description?: string; body: string } {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content);
+export function splitFrontmatter(content: string): { body: string } {
+  const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(content);
   if (!match) {
     return { body: content };
   }
-  const description = /^description:\s*(.*)$/m.exec(match[1] ?? "")?.[1]?.trim();
-  return { description, body: content.slice(match[0].length).replace(/^\s*\n/, "") };
+  return { body: content.slice(match[0].length).replace(/^\s*\n/, "") };
 }
 
 type DiffLine = { kind: "same" | "add" | "remove"; text: string };

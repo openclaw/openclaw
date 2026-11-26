@@ -470,12 +470,13 @@ it("opens an archived skill from a chat link", async () => {
     list: { ...list, archived: [...list.archived, archived("release-notes", versionId, false)] },
     read: ({ agentId, name, filePath, versionId: id }) => ({
       ...skillRead,
-      content: `${agentId}:${name}/${filePath}@${id}`,
+      content: `---\ndescription: >\n  Archived release\n  notes\n---\n${agentId}:${name}/${filePath}@${id}`,
     }),
     changes: { changes: [] },
   });
   const page = await mount(request, { search: "?skill=release-notes" });
   await waitText(page, `research:release-notes/SKILL.md@${versionId}`);
+  expect(summary(page)).toBe("Archived release notes");
   await waitForSolid(() => expect(page.querySelector(".sw-sort")).toBeNull());
 });
 
