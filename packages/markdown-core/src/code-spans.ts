@@ -8,6 +8,8 @@ export type InlineCodeState = {
   ticks: number;
   /** Whether the previous chunk ended in prose with an unpaired backslash. */
   escaped?: boolean;
+  /** Inline cursor before the unfinished delimiter line, if it needs to be reclassified. */
+  beforePendingFence?: Pick<InlineCodeState, "open" | "ticks" | "escaped">;
 };
 
 /** Creates the carry-forward state used when scanning inline code across chunks. */
@@ -19,12 +21,26 @@ type CodeSpan = Pick<FenceSpan, "start" | "end">;
 
 /** Builds a lookup for fenced and inline code spans while preserving scanner state. */
 export function buildCodeSpanIndex(
-  text: string,
+  buffer: string,
   inlineState?: InlineCodeState,
   fenceState?: FenceScanState,
 ) {
-  const { spans: fenceSpans, state: nextFenceState } = scanFenceSpans(text, fenceState);
-  const initialState = inlineState ?? createInlineCodeState();
+  // A carried marker may switch between inline and fenced code. Replay both
+  // scanners from the same line boundary before classifying this buffer.
+  const carried = fenceState?.pendingLine;
+  const text = carried ? carried.text + buffer : buffer;
+  const offset = carried?.text.length ?? 0;
+  const { spans: fenceSpans, state: nextFenceState } = scanFenceSpans(
+    text,
+    carried ? { atLineStart: true, open: carried.open } : fenceState,
+  );
+  const initialState =
+    (carried ? (inlineState?.beforePendingFence ?? inlineState) : inlineState) ??
+    createInlineCodeState();
+  const pendingStart = nextFenceState.pendingLine
+    ? text.length - nextFenceState.pendingLine.text.length
+    : -1;
+  let beforePendingFence: InlineCodeState["beforePendingFence"];
   const inlineSpans: CodeSpan[] = [];
   let open = initialState.open;
   let ticks = initialState.ticks;
@@ -37,6 +53,9 @@ export function buildCodeSpanIndex(
   // Retire each fence once instead of searching all prior fences at every character.
   let fenceIndex = 0;
   while (i < text.length) {
+    if (pendingStart >= 0 && i >= pendingStart && !beforePendingFence) {
+      beforePendingFence = { open, ticks, escaped };
+    }
     const fence = fenceSpans[fenceIndex];
     if (fence && i >= fence.start) {
       i = fence.end;
@@ -90,12 +109,21 @@ export function buildCodeSpanIndex(
   }
 
   return {
-    inlineState: { open, ticks, ...(escaped ? { escaped } : {}) },
+    inlineState: {
+      open,
+      ticks,
+      ...(escaped ? { escaped } : {}),
+      ...(pendingStart >= 0
+        ? { beforePendingFence: beforePendingFence ?? { open, ticks, escaped } }
+        : {}),
+    },
     fenceState: nextFenceState,
     // Each scanner emits ordered, disjoint spans; inline spans can enclose fences.
     // Search separately so overlap between the lists cannot hide a containing span.
     isInside: (index: number) =>
-      isInsideSpan(index, fenceSpans) || isInsideSpan(index, inlineSpans),
+      index >= 0 &&
+      index < buffer.length &&
+      (isInsideSpan(offset + index, fenceSpans) || isInsideSpan(offset + index, inlineSpans)),
   };
 }
 

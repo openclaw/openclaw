@@ -4091,7 +4091,7 @@ describe("requester settle wake trigger", () => {
       const capability = createCronCreatorAuthorityCapability(
         requesterTurnRunId,
         { kind: "unknown" },
-        { source: "control-ui-admin" },
+        { source: "operator" },
       )!;
       try {
         await runWithCronCreatorAuthorityCapability(capability, () =>

@@ -36,6 +36,7 @@ import {
 import type { RunCliAgentParams } from "../../src/agents/cli-runner/types.js";
 import type { ReplyToolAuthorityInput } from "../../src/auto-reply/reply/reply-tool-authority.types.js";
 import { captureRuntimeConfig } from "../../src/config/runtime-source-projection.js";
+import { decideTurnGrant } from "../../src/gateway/operator-admission.js";
 
 const { values } = parseArgs({
   options: {
@@ -87,6 +88,7 @@ const authority = createAdmittedRunOperatorAuthority({
   canonicalIdentity: null,
   profileId: "synthetic-operator",
   scopes: ["operator.read", "operator.write", "operator.admin"],
+  grant: decideTurnGrant(["operator.read", "operator.write", "operator.admin"]),
 });
 const config = captureRuntimeConfig({
   plugins: {

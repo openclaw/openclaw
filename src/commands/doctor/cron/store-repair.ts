@@ -30,7 +30,6 @@ import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
 import type { PluginDoctorRepairAuthority } from "../../../infra/state-migrations.types.js";
-import { isPrivateDoctorPostgresStore } from "../../../infra/update-doctor-private-store.js";
 import type {
   PluginDoctorCronChange,
   PluginDoctorCronInventory,
@@ -387,9 +386,6 @@ export async function backupCronStoreForDoctor(
       }
     };
     assertSource();
-    if (isPrivateDoctorPostgresStore(sourcePath)) {
-      return { warnings: [] };
-    }
     const backupPath = `${sourcePath}.doctor-cron-${Date.now()}-${randomUUID()}.bak`;
     const config = { database: { engine: "postgres" as const, postgres: input } };
     const before = await fingerprintPostgresBackup(sourcePath, config);

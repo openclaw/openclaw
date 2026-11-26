@@ -620,6 +620,7 @@ it("consumes the original qualified package in another run without a source inst
   expect(result.producerRunAttempt).toBe(producer.runAttempt);
   const registry = npmRegistryPackument(entry.packageName, version, readFileSync(tarballPath));
   let verificationAttempt = 0;
+  let firstPackumentRead: (() => void) | undefined;
   const deferral = { packageName: entry.packageName, version, sourceSha };
   const verify = (requirePublished: boolean, corePluginDeferrals: (typeof deferral)[] = []) =>
     selectUnpublishedPreparedNpmPackages({
@@ -629,20 +630,38 @@ it("consumes the original qualified package in another run without a source inst
       packages: [consumeParams.package],
       requirePublished,
       corePluginDeferrals,
-      fetchImpl: (url: string) =>
-        url.startsWith("https://registry.npmjs.org/")
-          ? Promise.resolve(
-              url.endsWith(".tgz")
-                ? new Response(new Uint8Array(readFileSync(tarballPath)))
-                : Response.json(registry),
-            )
-          : consumeParams.fetchImpl(url),
+      fetchImpl: async (url: string) => {
+        if (!url.startsWith("https://registry.npmjs.org/")) {
+          return consumeParams.fetchImpl(url);
+        }
+        if (url.endsWith(".tgz")) {
+          return new Response(new Uint8Array(readFileSync(tarballPath)));
+        }
+        if (firstPackumentRead) {
+          firstPackumentRead();
+          firstPackumentRead = undefined;
+          return Response.json({ ...registry, versions: {} });
+        }
+        return Response.json(registry);
+      },
     });
-  expect(await verify(true)).toEqual([]);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const firstRead = Promise.withResolvers<void>();
+  firstPackumentRead = firstRead.resolve;
+  const finalRoster = verify(true).catch((error: unknown) => error);
+  // Let real artifact I/O finish before advancing the registry polling timer.
+  await firstRead.promise;
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(await finalRoster).toEqual([]);
+  vi.useRealTimers();
   const published = registry.versions[version]!;
   delete registry.versions[version];
   expect(await verify(false)).toEqual([consumeParams.package]);
-  await expect(verify(true)).rejects.toThrow("complete original plugin roster");
+  vi.stubEnv("OPENCLAW_NPM_READBACK_TIMEOUT_MS", "25");
+  await expect(verify(true)).rejects.toThrow(
+    `Plugin npm child completed; final roster readback for @openclaw/demo@${version}: ` +
+      `@openclaw/demo@${version}: exact version is not visible at https://registry.npmjs.org/%40openclaw%2Fdemo; verification pending. Retry readback, not publication.`,
+  );
   expect(await verify(true, [deferral])).toEqual([]);
   await expect(
     verify(true, [{ ...deferral, packageName: "@openclaw/unselected" }]),

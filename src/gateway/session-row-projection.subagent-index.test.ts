@@ -353,7 +353,7 @@ it.each([
       }
       keys.forEach((key) => snapshot(key));
       if (publication.startsWith("keyed")) {
-        expect(childLinks).toHaveBeenCalledTimes(swarmOnly ? 1 : 2);
+        expect(childLinks).toHaveBeenCalledTimes(swarmOnly ? 0 : 2);
       }
     });
   },

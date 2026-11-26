@@ -63,6 +63,7 @@ import { resolveNodeRunner } from "./shared.js";
 import type {
   ManagedGatewayUpdateVerdict,
   ManagedServicePackageUpdatePlan,
+  ManagedServiceStopParams,
 } from "./update-command-service-context-types.js";
 import { resolveUpdateServiceHeapEnv } from "./update-command-service-env.js";
 
@@ -224,6 +225,7 @@ export function observedSystemdManagerUid(state: GatewayServiceState): number | 
 export async function inspectManagedGatewayServiceBeforeUpdate(params: {
   root?: string;
   state: GatewayServiceState;
+  updateInstallKind?: ManagedServiceStopParams["updateInstallKind"];
   retainedCommand?: boolean;
   allowIncompleteInspection?: boolean;
   allowInstallRootChange?: boolean;
@@ -325,12 +327,13 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
         kind: "owned",
         root,
         fingerprint,
-        // A unit that names the Git release launcher, or a converted checkout entry that
-        // forwards to it, is written once; switches never change it.
+        // Git releases switch behind a stable launcher; leaving Git for a package
+        // instead requires rebinding the same owned definition.
         refreshDefinition:
           (state.definitionMutationCapability?.kind ?? "writable") === "writable" &&
-          !command.programArguments.some((arg) => path.basename(arg) === GIT_RELEASE_LAUNCHER) &&
-          !isForwardedServiceEntrypoint(command),
+          (params.updateInstallKind === "package" ||
+            (!command.programArguments.some((arg) => path.basename(arg) === GIT_RELEASE_LAUNCHER) &&
+              !isForwardedServiceEntrypoint(command))),
       }
     : { kind: "unresolved", root, fingerprint };
 }

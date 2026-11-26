@@ -322,7 +322,9 @@ describe("typed in-process agent continuation authorization", () => {
               });
             const continuation = runWithGatewayToolContinuationContext(dispatch);
             if (scopedUnknown) {
-              await expect(continuation).rejects.toThrow(/not found|cannot create|identity/i);
+              await expect(continuation).rejects.toThrow(
+                /Your role on this Gateway does not include this agent/,
+              );
               expect(startTurn).not.toHaveBeenCalled();
             } else {
               await expect(continuation).resolves.toEqual(result);

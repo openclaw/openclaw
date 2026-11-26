@@ -7,7 +7,7 @@
 // --materialize --sessions 700 --reads 20 --passes 30 adds materialization and
 // transcript-fact publication once per 20 reads. --snapshots acquires freshly decoded
 // equivalents. --base-dir overlays saved src/gateway owners without swapping files.
-// --corpus records identical rows and change decisions for reparent/archive/compaction.
+// --corpus records rows and change decisions for reparent/archive/compaction.
 // This measures in-memory owners only, not Gateway RPCs, database size, or production share.
 // --refresh resolves live inputs in 64-row slices and publishes changing transcript previews.
 import assert from "node:assert/strict";
@@ -20,7 +20,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import type { InternalSessionEntry } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import type { Row } from "../../src/gateway/session-row-projection-record.js";
+import type { RelatedRows, Row } from "../../src/gateway/session-row-projection-record.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -306,12 +306,13 @@ try {
           }
           const previous = row;
           const publishedBefore = publications;
-          const related: boolean[] = [];
+          // Older source overlays report a boolean for child invalidation.
+          const related: (boolean | RelatedRows)[] = [];
           row = records.acquireSessionRowEntry({
             ...owner,
             row,
             storedEntry,
-            markRelated: (_, children) => related.push(children),
+            markRelated: (_, relations) => related.push(relations),
           })!;
           const input = values.materialize ? { ...inputs[index]!, entry: row.entry } : undefined;
           const priorMaterialized = row.materialized;

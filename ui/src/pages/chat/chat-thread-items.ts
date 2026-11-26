@@ -424,6 +424,7 @@ function chatItemTimestamp(item: ChatItem): number | null {
     case "message":
       return rawMessageTimestamp(item.message);
     case "divider":
+    case "compaction":
     case "notice":
       return item.timestamp;
     case "stream":
@@ -436,16 +437,14 @@ function chatItemTimestamp(item: ChatItem): number | null {
 }
 
 export function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: number): number {
-  const latestTimestamp = items.reduce<number | null>((latest, item) => {
-    const timestamp = chatItemTimestamp(item);
-    if (timestamp == null) {
-      return latest;
+  let next = desiredTimestamp;
+  for (const item of items) {
+    const time = chatItemTimestamp(item);
+    if (time != null && time >= desiredTimestamp) {
+      next = Math.max(next, time + 1);
     }
-    return latest == null || timestamp > latest ? timestamp : latest;
-  }, null);
-  return latestTimestamp != null && desiredTimestamp <= latestTimestamp
-    ? latestTimestamp + 1
-    : desiredTimestamp;
+  }
+  return next;
 }
 
 // Insert live tool/stream items into an already-ordered list of stable chat rows
@@ -484,91 +483,63 @@ export function appendActiveRunItem(
 ): void {
   // Queued custody is a ceiling for the whole live response, not just its text.
   // Moving its working indicator past that ceiling splits and remeasures the run.
-  if (bounds) {
-    const { maximum } = insertionIndexesForBounds(items, bounds);
-    items.splice(maximum, 0, item);
-  } else {
-    items.push(item);
-  }
+  items.splice(insertionIndexesForBounds(items, bounds).maximum, 0, item);
 }
 
 export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProjection[]): void {
-  const timestampsByKey = new Map<string, number>();
-  const placementsByKey = new Map<string, Pick<ChatProjection, "bounds" | "predecessorKey">>();
-  for (const { item, bounds, predecessorKey } of inserts) {
+  // Repeated logical keys share the last supplied fact for each field. Keep each
+  // occurrence's own time, but never erase another occurrence's causal constraint.
+  type Placement = Pick<ChatProjection, "bounds" | "predecessorKey"> & { timestamp?: number };
+  const placements = new Map<string, Placement>();
+  const ordered = inserts.map(({ item, bounds, predecessorKey }) => {
+    const placement = placements.get(item.key) ?? {};
     const timestamp = chatItemTimestamp(item);
     if (timestamp != null) {
-      timestampsByKey.set(item.key, timestamp);
+      placement.timestamp = timestamp;
     }
-    // Repeated logical keys share the last supplied fact for each field;
-    // an unbounded projection must not erase an earlier causal constraint.
-    const placement = placementsByKey.get(item.key) ?? {};
     if (bounds) {
       placement.bounds = bounds;
     }
     if (predecessorKey) {
       placement.predecessorKey = predecessorKey;
     }
-    placementsByKey.set(item.key, placement);
-  }
-  // Sort inserts among themselves by timestamp, preserving the original index
-  // order for ties and honoring predecessor relationships so a stream segment
-  // stays before the tool card it introduced.
-  const sortedInserts = inserts
-    .map(({ item }, index) => {
-      const rawTimestamp = chatItemTimestamp(item);
-      const predecessorKey = placementsByKey.get(item.key)?.predecessorKey;
-      const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
-      return {
-        item,
-        index,
-        predecessorKey,
-        effectiveTimestamp:
-          rawTimestamp != null && predecessorTimestamp != null
-            ? Math.max(rawTimestamp, predecessorTimestamp)
-            : rawTimestamp,
-      };
-    })
-    .toSorted((a, b) => {
-      if (a.effectiveTimestamp == null) {
-        return b.effectiveTimestamp == null ? a.index - b.index : 1;
-      }
-      if (b.effectiveTimestamp == null) {
-        return -1;
-      }
-      if (a.effectiveTimestamp !== b.effectiveTimestamp) {
-        return a.effectiveTimestamp - b.effectiveTimestamp;
-      }
-      if (a.predecessorKey === b.item.key) {
-        return 1;
-      }
-      if (b.predecessorKey === a.item.key) {
-        return -1;
-      }
-      return a.index - b.index;
-    });
-
-  for (const { item, effectiveTimestamp } of sortedInserts) {
-    const { minimum, maximum } = insertionIndexesForBounds(
-      items,
-      placementsByKey.get(item.key)?.bounds,
-    );
-    if (effectiveTimestamp == null) {
-      items.splice(maximum, 0, item);
-      continue;
+    placements.set(item.key, placement);
+    return { item, placement, timestamp };
+  });
+  for (const entry of ordered) {
+    const key = entry.placement.predecessorKey;
+    const predecessor = key ? placements.get(key)?.timestamp : undefined;
+    if (entry.timestamp != null && predecessor != null) {
+      entry.timestamp = Math.max(entry.timestamp, predecessor);
     }
-    const insertionIndex = items.findIndex((existing, index) => {
-      if (index < minimum || index >= maximum) {
-        return false;
+  }
+  // Array.sort is stable: only exact ties linked by a witnessed predecessor move.
+  ordered.sort((a, b) => {
+    if (a.timestamp == null || b.timestamp == null) {
+      return Number(a.timestamp == null) - Number(b.timestamp == null);
+    }
+    return (
+      a.timestamp - b.timestamp ||
+      (a.placement.predecessorKey === b.item.key
+        ? 1
+        : b.placement.predecessorKey === a.item.key
+          ? -1
+          : 0)
+    );
+  });
+  for (const { item, placement, timestamp } of ordered) {
+    const { minimum, maximum } = insertionIndexesForBounds(items, placement.bounds);
+    let index = maximum;
+    if (timestamp != null) {
+      for (let i = minimum; i < maximum; i++) {
+        const existing = items[i];
+        const existingTime = existing && chatItemTimestamp(existing);
+        if (existingTime == null || existingTime > timestamp) {
+          index = i;
+          break;
+        }
       }
-      const existingTimestamp = chatItemTimestamp(existing);
-      // Timestamped inserts render before stable items that lack a timestamp.
-      if (existingTimestamp == null) {
-        return true;
-      }
-      return existingTimestamp > effectiveTimestamp;
-    });
-
-    items.splice(insertionIndex === -1 ? maximum : insertionIndex, 0, item);
+    }
+    items.splice(index, 0, item);
   }
 }

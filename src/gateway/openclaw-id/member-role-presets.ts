@@ -5,6 +5,7 @@ import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.j
 import type { OpenClawConfig } from "../../config/types.js";
 import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
 import {
+  ADMIN_SCOPE,
   APPROVALS_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
@@ -16,26 +17,36 @@ import {
 import { openClawIdAccessWarning } from "./access-plugin.js";
 import type { OpenClawIdStatus } from "./service-status.js";
 
-/** Ordinary editable definitions installed when OpenClaw ID is activated. */
-const MEMBER_ROLE_PRESETS: Record<"operator" | "viewer" | "guest", GatewayOperatorRoleDefinition> =
-  {
-    operator: {
-      sessions: { others: "write" },
-      agents: "*",
-      scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE, QUESTIONS_SCOPE, TALK_SCOPE],
-    },
-    guest: {
-      sessions: { others: "view" },
-      agents: "*",
-      scopes: [SESSION_WRITE_SCOPE],
-      sandbox: "required",
-    },
-    viewer: {
-      sessions: { others: "view" },
-      agents: "*",
-      scopes: [SESSION_READ_SCOPE],
-    },
-  };
+/**
+ * Ordinary editable definitions installed when OpenClaw ID is activated. `admin` gives the
+ * Roles page a role to hand administrators before a default role puts everyone under roles.
+ */
+const MEMBER_ROLE_PRESETS: Record<
+  "admin" | "operator" | "viewer" | "guest",
+  GatewayOperatorRoleDefinition
+> = {
+  admin: {
+    sessions: { others: "write" },
+    agents: "*",
+    scopes: [ADMIN_SCOPE],
+  },
+  operator: {
+    sessions: { others: "write" },
+    agents: "*",
+    scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE, QUESTIONS_SCOPE, TALK_SCOPE],
+  },
+  guest: {
+    sessions: { others: "invited", maxInvitedAccess: "send" },
+    agents: "*",
+    scopes: [SESSION_READ_SCOPE, SESSION_WRITE_SCOPE],
+    sandbox: "required",
+  },
+  viewer: {
+    sessions: { others: "view" },
+    agents: "*",
+    scopes: [SESSION_READ_SCOPE],
+  },
+};
 
 function missingMemberRolePresets(config: OpenClawConfig) {
   return Object.entries(MEMBER_ROLE_PRESETS).filter(

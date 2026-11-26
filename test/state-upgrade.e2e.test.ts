@@ -1,6 +1,5 @@
-// Start this build's Gateway on real prior-release state and prove the
-// copy-and-swap upgrade: it starts, user data survives, and the old files keep
-// their exact bytes under `.pre-<buildId>`.
+// Start this build's Gateway on real prior-release state and prove that
+// in-place migration preserves user data.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,16 +7,12 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.js";
-import { UPGRADE_SET_ASIDE_SCOPE } from "../src/state/sqlite-copy-swap.js";
-import { createDoctorChain } from "../src/state/state-upgrade-doctor.js";
-import { ChainStepError } from "../src/state/state-upgrade-validate.js";
-import { upgradeStateDirectory } from "../src/state/state-upgrade.js";
-import { resolveRuntimeServiceBuildId, VERSION } from "../src/version.js";
+import { readHistoricalStateCorpusManifest } from "../src/state/openclaw-historical-imports.test-support.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 const corpusDir = fileURLToPath(new URL("./fixtures/state-corpus-populated/", import.meta.url));
 
-// Values the shipped chain itself retires; the in-place Doctor drops them too.
+// Values retired by the existing migration and startup owners.
 const CHAIN_RETIRED_VALUES = new Set([
   // Native CLI-shaped OAuth profiles are read from the CLI, not stored.
   "anthropic:claude-cli",
@@ -25,7 +20,7 @@ const CHAIN_RETIRED_VALUES = new Set([
   // Pending pairing requests expire; delivery rows leave `queued` once the Gateway drains them.
   "corpus-device-1",
   "queued ",
-  // The running Gateway consumes its one-shot restart sentinel; the swap keeps it.
+  // The running Gateway consumes its one-shot restart sentinel.
   "Synthetic restart",
 ]);
 
@@ -65,10 +60,7 @@ function sqliteFiles(root: string): string[] {
 
 const sha256 = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
-/**
- * Every text value in the upgraded tree, excluding preserved generations, logs and
- * diagnostics (set-aside rows are not readable user data).
- */
+/** Every text value in the upgraded tree, excluding preserved generations, logs and diagnostics. */
 function upgradedText(stateDir: string): string {
   const parts: string[] = [];
   for (const { dirent, relativePath } of listDirectoryTreeStrictSync(stateDir)) {
@@ -113,16 +105,12 @@ function upgradedText(stateDir: string): string {
 }
 
 const cases = [
-  { release: "2026.7.1", failStep: undefined },
-  { release: "2026.7.1-blob", failStep: undefined },
-  { release: "2026.7.35", failStep: undefined },
-  { release: "2026.8.35", failStep: undefined },
-  { release: "2026.9.37", failStep: undefined },
-  { release: "2026.10.10", failStep: undefined },
-  // The generic fallback cannot import 7.x session JSON files (a Doctor file import),
-  // so forced-fallback cases use releases whose sessions already live in SQLite.
-  { release: "2026.8.35", failStep: "injected-step" },
-  { release: "2026.10.10", failStep: "injected-step" },
+  { release: "2026.7.1" },
+  { release: "2026.7.1-blob" },
+  { release: "2026.7.35" },
+  { release: "2026.8.35" },
+  { release: "2026.9.37" },
+  { release: "2026.10.10" },
 ];
 
 type Instance = Awaited<ReturnType<typeof createOpenClawTestInstance>>;
@@ -154,8 +142,8 @@ function installCorpus(instance: Instance, release: string, gatewayOverride = {}
   );
 }
 
-describe("Gateway start upgrades prior-release state by copy and swap", () => {
-  it("a start refused for invalid config publishes nothing", async () => {
+describe("Gateway start upgrades prior-release state in place", () => {
+  it("a start refused for invalid config preserves state", async () => {
     const instance = await createOpenClawTestInstance({
       name: "upgrade-refused",
       startTimeoutMs: 300_000,
@@ -178,30 +166,14 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
   }, 600_000);
 
   it.each(cases)(
-    "$release (forced chain failure: $failStep)",
-    async ({ release, failStep }) => {
+    "$release",
+    async ({ release }) => {
       const instance = await createOpenClawTestInstance({
         name: `upgrade-${release}`,
         startTimeoutMs: 300_000,
       });
       try {
         installCorpus(instance, release);
-        const before = new Map(sqliteFiles(instance.stateDir).map((file) => [file, sha256(file)]));
-
-        if (failStep) {
-          // Run this build's Doctor on the private copy, then fail, so the generic
-          // fallback rebuilds the databases; the Gateway then starts on the result.
-          const [entry] = await instance.entrypoint();
-          const doctor = createDoctorChain(path.resolve(entry ?? ""), []);
-          await upgradeStateDirectory({
-            env: instance.env,
-            log: { info: () => {}, warn: () => {} },
-            runChain: async (chain) => {
-              await doctor(chain);
-              throw new ChainStepError(failStep, `Injected failure in ${failStep}`);
-            },
-          });
-        }
         await instance.startGateway();
         // Canonical readers serve the upgraded data through the Gateway.
         const call = async (method: string, params: object = {}): Promise<string> => {
@@ -216,9 +188,7 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
           expect(result.code, `${method}: ${result.stderr}`).toBe(0);
           return result.stdout;
         };
-        const manifest: Manifest = JSON.parse(
-          fs.readFileSync(path.join(corpusDir, release, "manifest.json"), "utf8"),
-        );
+        const manifest: Manifest = JSON.parse(readHistoricalStateCorpusManifest(release));
         const values = (surface: string) =>
           (manifest.verification[surface] ?? []).map((entry) => entry.value);
         expect(await call("agents.list")).toContain('"ops"');
@@ -239,37 +209,6 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
         }
         await instance.stopGateway();
 
-        // The old bytes survive under the build that upgraded them: this process, or the Gateway's dist.
-        const builtBy = failStep
-          ? resolveRuntimeServiceBuildId()
-          : JSON.parse(fs.readFileSync(new URL("../dist/build-info.json", import.meta.url), "utf8"))
-              .buildId;
-        for (const [file, digest] of before) {
-          expect(sha256(`${file}.pre-${builtBy ?? VERSION}`), file).toBe(digest);
-        }
-        const state = new DatabaseSync(path.join(instance.stateDir, "state", "openclaw.sqlite"), {
-          readOnly: true,
-        });
-        try {
-          const report = JSON.parse(
-            (
-              state
-                .prepare("SELECT payload_json FROM diagnostic_events WHERE scope = ?")
-                .get("upgrade.report") as { payload_json: string }
-            ).payload_json,
-          );
-          expect(report).toMatchObject(
-            failStep
-              ? { mode: "fallback", failedStep: failStep, pinned: true }
-              : { mode: "chain", conservationMismatches: [] },
-          );
-          const setAside = state
-            .prepare("SELECT count(*) AS n FROM diagnostic_events WHERE scope = ?")
-            .get(UPGRADE_SET_ASIDE_SCOPE) as { n: number };
-          expect(setAside.n).toBe(report.setAside);
-        } finally {
-          state.close();
-        }
         // Every value the release wrote is still stored outside diagnostics after the upgrade.
         const text = upgradedText(instance.stateDir);
         const missing = Object.values(manifest.verification)

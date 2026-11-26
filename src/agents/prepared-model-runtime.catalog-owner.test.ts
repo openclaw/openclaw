@@ -9,6 +9,10 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRemoteCatalogUrl } from "../model-catalog/remote-config.js";
+import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.types.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
@@ -681,21 +685,64 @@ describe("legacy provider catalog retention", () => {
     });
     mocks.configuredAgentIds = ["pro"];
     const config: OpenClawConfig = { agents: { entries: { pro: {} } } };
-    const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
-      catalogMode: "static",
-    });
-    const catalog = await owner.loadFullModelCatalog!({
-      refresh: true,
-      providerIds: ["anthropic"],
-    });
-    expect(catalog.entries).toContainEqual(
-      expect.objectContaining({ ...native, provider: "anthropic" }),
+    // Only the hosted catalog describes the listed ID; no bundled, static or account row does.
+    const anthropic = { baseUrl: "https://api.anthropic.com", api: "anthropic-messages" } as const;
+    const plugins: PluginManifestRecord[] = mocks.pluginMetadataSnapshot.plugins;
+    plugins.push(
+      createPluginManifestRecordFixture({
+        id: "anthropic",
+        providers: ["anthropic"],
+        modelCatalog: {
+          providers: { anthropic: { ...anthropic, models: [] } },
+          discovery: { anthropic: "refreshable" },
+        },
+      }),
     );
-    expect(catalog.providerOutcomes).toContainEqual({
-      provider: "claude-cli",
-      status: "ready",
-      listedModelIds: [native.id],
-    });
+    try {
+      const owner = await publishPreparedModelRuntimeSnapshot(fixture.agentInput("pro", config), {
+        catalogMode: "static",
+      });
+      const load = () => owner.loadFullModelCatalog!({ refresh: true, providerIds: ["anthropic"] });
+      // A first start reads the catalog before the hosted download arrives.
+      const beforeHosted = await load();
+      expect(beforeHosted.entries).toContainEqual(
+        expect.objectContaining({ ...native, provider: "anthropic" }),
+      );
+      expect(
+        beforeHosted.entries.find(({ id }) => id === native.id)?.contextWindow,
+      ).toBeUndefined();
+      const catalog = await withRemoteModelCatalogSnapshot(
+        {
+          sourceUrl: resolveRemoteCatalogUrl({}),
+          generatedAt: 1,
+          revision: "fixture",
+          recommendations: {},
+          providers: {
+            anthropic: {
+              ...anthropic,
+              models: [
+                { id: native.id, contextWindow: 1_000_000, maxTokens: 128_000 },
+                { id: "claude-unlisted", contextWindow: 200_000, maxTokens: 64_000 },
+              ],
+            },
+          },
+          pricing: {},
+          upstreamPricing: {},
+        },
+        load,
+      );
+      expect(catalog.entries).toContainEqual(
+        expect.objectContaining({ ...native, provider: "anthropic", contextWindow: 1_000_000 }),
+      );
+      expect(catalog.entries.map(({ id }) => id)).not.toContain("claude-unlisted");
+      expect(catalog.providerOutcomes).toContainEqual({
+        provider: "claude-cli",
+        status: "ready",
+        listedModelIds: [native.id],
+      });
+    } finally {
+      plugins.pop();
+    }
   });
 
   it("reacquires discovered providers that a config rebuild cannot retain", async () => {

@@ -58,7 +58,7 @@ const INPUTS = new Set([
   "publish_docker_only",
   "release_profile",
   "release_evidence_mode",
-  "fast_track_approval",
+  "fast_track_request",
 ]);
 
 function requireValue(condition, message) {
@@ -115,7 +115,7 @@ export function validateReleaseButtonInputs(value) {
   );
   const inputs = Object.fromEntries(
     Object.entries(value).map(([key, entry]) => {
-      if (key === "fast_track_approval" && typeof entry === "string" && entry) {
+      if (key === "fast_track_request" && typeof entry === "string" && entry) {
         return [key, JSON.stringify(JSON.parse(entry))];
       }
       requireValue(
@@ -279,8 +279,14 @@ function artifactFor(run, workflow, tooling, name) {
   };
 }
 
-async function waitForRun(runId, attempt, workflow, tooling, { allowFailure = false } = {}) {
-  const deadline = Date.now() + 110 * 60_000;
+async function waitForRun(
+  runId,
+  attempt,
+  workflow,
+  tooling,
+  { allowFailure = false, timeoutMinutes = 110 } = {},
+) {
+  const deadline = Date.now() + timeoutMinutes * 60_000;
   while (Date.now() < deadline) {
     const run = api(`actions/runs/${runId}`);
     producer(run, workflow, tooling);
@@ -402,7 +408,7 @@ function authenticateReadyNpm({
     selectionMode: "all-publishable",
     plugins: "",
     npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
-    fastTrackApproval: inputs.fast_track_approval,
+    fastTrackRequest: inputs.fast_track_request,
     fastTrackPublication,
     fullReleaseValidationRunId: inputs.full_release_validation_run_id,
     fullReleaseValidationRunAttempt: inputs.full_release_validation_run_attempt,
@@ -593,16 +599,13 @@ async function readReady(descriptor, directory, tooling, token, fastTrackPublica
   };
 }
 
-function publicationInputs(ready, resumeRunId, fastTrackApproval = "") {
-  requireValue(typeof fastTrackApproval === "string", "fast_track_approval must be JSON text.");
+function publicationInputs(ready, resumeRunId, fastTrackRequest = "") {
+  requireValue(typeof fastTrackRequest === "string", "fast_track_request must be JSON text.");
   requireValue(
-    !fastTrackApproval ||
-      !ready.inputs.fast_track_approval ||
-      isDeepStrictEqual(
-        JSON.parse(fastTrackApproval),
-        JSON.parse(ready.inputs.fast_track_approval),
-      ),
-    "Publication must retain the approval bound to release preparation.",
+    !fastTrackRequest ||
+      !ready.inputs.fast_track_request ||
+      isDeepStrictEqual(JSON.parse(fastTrackRequest), JSON.parse(ready.inputs.fast_track_request)),
+    "Publication must retain the exception request bound to release preparation.",
   );
   const effectiveResumeRunId = resumeRunId || ready.inputs.openclaw_npm_resume_run_id || "";
   requireValue(
@@ -614,7 +617,7 @@ function publicationInputs(ready, resumeRunId, fastTrackApproval = "") {
   return {
     ...ready.inputs,
     ...(resumeRunId ? { openclaw_npm_resume_run_id: resumeRunId } : {}),
-    ...(fastTrackApproval ? { fast_track_approval: fastTrackApproval } : {}),
+    ...(fastTrackRequest ? { fast_track_request: fastTrackRequest } : {}),
     prepared_plugins: JSON.stringify(ready.plugins),
   };
 }
@@ -657,7 +660,7 @@ async function readPublicationRequest(path, directory, tooling, token) {
   const inputs = publicationInputs(
     ready,
     request.openclawNpmResumeRunId ?? "",
-    request.inputs?.fast_track_approval ?? "",
+    request.inputs?.fast_track_request ?? "",
   );
   requireValue(
     ready.sourceSha === request.sourceSha &&
@@ -723,7 +726,7 @@ async function main() {
       sourceSha,
       workflowSha: tooling.sha,
       workflowFullRef: tooling.fullRef,
-      fastTrackApproval: inputs.fast_track_approval,
+      fastTrackRequest: inputs.fast_track_request,
       fullReleaseValidationRunId: inputs.full_release_validation_run_id,
       fullReleaseValidationRunAttempt: inputs.full_release_validation_run_attempt,
       releaseTag: inputs.tag,
@@ -884,11 +887,7 @@ async function main() {
     const { ready, revalidateAuthority } = await readReady(descriptor, directory, tooling, token);
     // Recovery changes only the existing owner's resume selector. The parent
     // verifies its authority and canonical core bytes before starting writers.
-    const inputs = publicationInputs(
-      ready,
-      resumeRunId,
-      process.env.FAST_TRACK_APPROVAL_JSON ?? "",
-    );
+    const inputs = publicationInputs(ready, resumeRunId, process.env.FAST_TRACK_REQUEST_JSON ?? "");
     const request = {
       schema: "openclaw.release-dispatch/v1",
       repository: REPOSITORY,
@@ -972,7 +971,8 @@ async function main() {
       request.releaseRunAttempt,
       PUBLISH_WORKFLOW,
       tooling,
-      { allowFailure: true },
+      // The publish job alone may run 270 minutes with hour-long npm readbacks.
+      { allowFailure: true, timeoutMinutes: 330 },
     );
     await verifyPublicationOutcome(run, request, tooling, token, directory);
     output("verified", "true");

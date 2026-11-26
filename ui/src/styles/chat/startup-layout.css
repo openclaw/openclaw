@@ -1050,6 +1050,8 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-region {
+  --sidebar-divider-size: 12px;
+
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1092,7 +1094,7 @@ openclaw-chat-sidebar-region,
 .sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
   /* Fit saved heights to short task panes without consuming the main content row. */
   --side-panel-max-height: calc(
-    (100% - 2 * var(--rail-header-height) - var(--resize-handle-size, 6px)) * 0.6
+    (100% - 2 * var(--rail-header-height) - var(--sidebar-divider-size)) * 0.6
   );
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto auto minmax(
@@ -1132,35 +1134,18 @@ openclaw-chat-sidebar-region,
 }
 
 .sidebar-column__divider {
+  --resize-handle-size: var(--sidebar-divider-size);
   --resize-handle-line-size: var(--shell-divider-size);
   --resize-handle-active-line-size: calc(var(--shell-divider-size) * 2);
 
+  z-index: 2;
   grid-area: divider;
 }
 
-/* Paint the complete line inside the gutter, clear of the overlapping panel. */
-.sidebar-column__divider::after {
-  z-index: 2;
-  inset-inline-start: auto;
-  inset-inline-end: 0;
-  transform: none;
-}
-
-.sidebar-column__divider[orientation="horizontal"]::after {
-  top: auto;
-  bottom: 0;
-}
-
-/* The line ends the gutter, so the pointer target reaches as far past the line
-   as the gutter leads up to it. Only the target rises above the desktop side
-   panel: the line stays below, hidden while the gutter animates in behind it. */
-.sidebar-column__divider::before {
-  z-index: 4;
-  inset-inline: 0 calc(var(--shell-divider-size) - var(--resize-handle-size, 6px));
-}
-
+/* Keep the centered grab area inside its own gutter, below the moving panel. */
+.sidebar-column__divider::before,
 .sidebar-column__divider[orientation="horizontal"]::before {
-  inset-block: 0 calc(var(--shell-divider-size) - var(--resize-handle-size, 6px));
+  inset: 0;
 }
 
 .sidebar-region--narrow.sidebar-region--open:not(.sidebar-region--expanded) {
@@ -1333,7 +1318,7 @@ openclaw-chat-sidebar-region,
     .sidebar-region--expanded-side
   ) {
   --desktop-side-reserve: var(--side-panel-width);
-  --desktop-divider-reserve: var(--resize-handle-size, 6px);
+  --desktop-divider-reserve: var(--sidebar-divider-size);
   --desktop-header-reserve: var(--desktop-header-height);
   --desktop-panel-start: calc(100% - var(--desktop-panel-width));
   grid-template-columns: minmax(0, 1fr) var(--desktop-divider-reserve) minmax(
@@ -1365,7 +1350,7 @@ openclaw-chat-sidebar-region,
 
 .sidebar-region--desktop.sidebar-region--bottom {
   --side-panel-max-height: calc(
-    (100% - 2 * var(--desktop-header-height) - var(--resize-handle-size, 6px)) * 0.6
+    (100% - 2 * var(--desktop-header-height) - var(--sidebar-divider-size)) * 0.6
   );
   --desktop-panel-width: 100%;
   --desktop-panel-height: min(var(--side-panel-height), var(--side-panel-max-height));

@@ -19,12 +19,11 @@ export type BeamCleanCandidate = {
 const MAX_CANDIDATE_BYTES = 4 * 1024 * 1024;
 
 export async function cleanBeamCandidate(
-  candidate: BeamCleanCandidate,
+  input: string,
   signal: AbortSignal,
   resolveExecutable: () => Promise<string>,
 ): Promise<{ packet: BeamCleanPacketV2; raw: Buffer }> {
   signal.throwIfAborted();
-  const input = JSON.stringify(candidate);
   if (Buffer.byteLength(input) > MAX_CANDIDATE_BYTES) {
     throw new Error("Beam cleaner input exceeds 4 MiB");
   }

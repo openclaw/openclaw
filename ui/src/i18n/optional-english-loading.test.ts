@@ -86,6 +86,28 @@ beforeEach(() => {
 });
 afterEach(() => restoreElementRegistration?.());
 
+it.each([false, true])(
+  "loads invitation copy only with its controls and retains composer copy (invites first=%s)",
+  async (invitesFirst) => {
+    const { en, manager } = await loadI18n({ chat: { composer: { inviteSend: "Darf senden" } } });
+    await manager.setLocale("de");
+    const { registerChatComposerEnglish } = await import("./locales/en-chat-composer.ts");
+    if (!invitesFirst) {
+      registerChatComposerEnglish();
+      expect(manager.t("chat.composer.inviteAs")).toBe("chat.composer.inviteAs");
+    }
+    await import("../pages/chat/components/chat-invite-access.tsx");
+    const composer = en.chat.composer;
+    registerChatComposerEnglish();
+    expect(manager.t("chat.composer.inviteAs", { name: "Pat" })).toBe("Invite Pat");
+    expect(manager.t("chat.composer.inviteRead")).toBe("Can read");
+    expect(manager.t("chat.composer.inviteSend")).toBe("Darf senden");
+    expect(manager.t("chat.composer.composerInput")).toBe("Chat composer");
+    expect(en.chat.composer).toBe(composer);
+    expect(manager.getLocale()).toBe("de");
+  },
+);
+
 it("loads picker auth copy without loading Settings and preserves later Settings copy", async () => {
   const { manager } = await loadI18n({
     channels: { hub: { setUp: "Einrichten" } },
@@ -143,7 +165,44 @@ it.each([false, true])(
   },
 );
 
+it("keeps roster copy deferred until the sharing presentation loads", async () => {
+  const { manager } = await loadI18n();
+  await import("../pages/chat/components/chat-session-sharing.solid.tsx");
+  await import("../pages/chat/components/chat-session-sharing-options.tsx");
+  expect(manager.t("chat.sessionSharing.publicIndicator")).toBe("Public");
+  expect(manager.t("chat.sessionSharing.canRead")).toBe("chat.sessionSharing.canRead");
+  expect(manager.t("sessionsView.noPeopleMatch")).toBe("sessionsView.noPeopleMatch");
+  await import("../pages/chat/components/chat-session-sharing-mobile-adapter.ts");
+  expect(manager.t("chat.sessionSharing.canRead")).toBe("Can read");
+  expect(manager.t("sessionsView.noPeopleMatch")).toBe("No people or agents match your search.");
+});
+
 it.each([
+  [
+    "chat.sessionSuggestions.state.accepted",
+    "Accepted",
+    () => import("../pages/chat/components/chat-session-suggestions.solid.tsx"),
+  ],
+  [
+    "chat.sessionSuggestions.pausedDraftState",
+    "Draft",
+    () => import("../pages/chat/components/chat-typing-indicator.tsx"),
+  ],
+  [
+    "chat.sessionSharing.sharedDescription",
+    "Everyone with access can send",
+    () => import("../pages/chat/components/chat-session-sharing-content.tsx"),
+  ],
+  [
+    "chat.sessionSharing.searchPeople",
+    "Search people…",
+    () => import("../pages/chat/components/chat-session-sharing-menu.tsx"),
+  ],
+  [
+    "chat.sessionSharing.canRead",
+    "Can read",
+    () => import("../pages/chat/components/chat-session-sharing-mobile.tsx"),
+  ],
   [
     "chat.sessionSharing.copyPublicLink",
     "Copy public link",
@@ -203,7 +262,7 @@ it.each([
   await load();
 
   expect(manager.t(key)).toBe(copy);
-  if (key.startsWith("chat.sessionSharing.")) {
+  if (key.startsWith("chat.sessionSharing.") || key.startsWith("chat.sessionSuggestions.")) {
     expect(manager.t("chat.sessionDetails.contextProject")).toBe(
       "chat.sessionDetails.contextProject",
     );

@@ -1915,7 +1915,7 @@ export async function verifyBetaRelease(
     const allowedReleaseWorkflowHeadBranches = args.workflowRef
       ? ["main", args.workflowRef]
       : ["main"];
-    if (process.env.FAST_TRACK_APPROVAL_JSON && args.workflowRuns.fullReleaseValidation) {
+    if (process.env.FAST_TRACK_REQUEST_JSON && args.workflowRuns.fullReleaseValidation) {
       const stage = diagnostic.workflowStage("fullReleaseValidation");
       diagnostic.start(stage);
       const id = args.workflowRuns.fullReleaseValidation;
@@ -2033,7 +2033,7 @@ export async function verifyBetaRelease(
     }));
     for (const run of workflowRuns) {
       const outcome =
-        run.label === "Full Release Validation" && process.env.FAST_TRACK_APPROVAL_JSON
+        run.label === "Full Release Validation" && process.env.FAST_TRACK_REQUEST_JSON
           ? `validation skipped by approved fast-track (original result: ${run.conclusion})`
           : "OK";
       lines.push(

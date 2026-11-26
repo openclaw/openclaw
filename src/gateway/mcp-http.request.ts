@@ -19,6 +19,7 @@ import {
   type McpLoopbackRequestContext,
 } from "./mcp-grant-store.js";
 import { isLoopbackAddress } from "./net.js";
+import { LOCAL_HOST } from "./operator-admission.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
 const DEFAULT_MCP_BODY_TIMEOUT_MS = 30_000;
@@ -100,13 +101,11 @@ function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
 function resolveMcpSender(params: {
   req: IncomingMessage;
   ownerToken: string;
-  nonOwnerToken: string;
 }): McpLoopbackRequestAuth | undefined {
   const authHeader = getHeader(params.req, "authorization") ?? "";
-  const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
-  const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-  if (ownerTokenMatched || nonOwnerTokenMatched) {
-    return { senderIsOwner: ownerTokenMatched };
+  if (safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`)) {
+    // The raw owner token never leaves this process: it names the local host.
+    return { senderIsOwner: LOCAL_HOST.grant.owner };
   }
   const grantToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
   const captureKey = normalizeOptionalString(getHeader(params.req, "x-openclaw-cli-capture-key"));
@@ -140,7 +139,6 @@ export function validateMcpLoopbackRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
   ownerToken: string;
-  nonOwnerToken: string;
   onSseResponse?: (res: ServerResponse) => void;
 }): McpLoopbackRequestAuth | null {
   const reply = (status: number, body: unknown): null => {

@@ -163,7 +163,11 @@ export function ModelProviders(props: ModelProvidersViewProps) {
     const saved = props.defaultModels;
     return (
       Boolean(
-        saved.primary || saved.fallbacks.length || saved.utilityModel || saved.decisionModel,
+        saved.primary ||
+        saved.fallbacks.length ||
+        saved.utilityModel ||
+        saved.decisionModel ||
+        saved.subagentModel,
       ) ||
       props.thinkingOverridden ||
       props.fastModeOverridden

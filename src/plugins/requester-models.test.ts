@@ -3,6 +3,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import { preparePluginToolExecutionCapabilities } from "../agents/plugin-tool-execution.js";
 import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
+import { decideTurnGrant } from "../gateway/operator-admission.js";
 import * as catalogReader from "../gateway/server-methods/requester-model-catalog.js";
 import { registerPluginCommandInRegistry } from "./command-registration.js";
 import { createPluginRecord } from "./loader-records.js";
@@ -80,7 +81,12 @@ it("omits model authority when requester or exact session authority is missing a
   expect(() =>
     createPluginRequesterModels({
       ...requester(),
-      authority: { canonicalIdentity: null, profileId: "forged", scopes: [] },
+      authority: {
+        canonicalIdentity: null,
+        profileId: "forged",
+        scopes: [],
+        grant: decideTurnGrant([]),
+      },
     }),
   ).toThrow("must be issued by the host");
 });

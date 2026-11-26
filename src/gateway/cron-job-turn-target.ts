@@ -32,7 +32,7 @@ export async function captureCronJobTurnTarget(params: {
         throw new Error("Automation requester changed.");
       }
     };
-    return await capture({ requesterOwner: { requester }, assertCurrent });
+    return await capture({ scheduledRequester: requester, assertCurrent });
   }
   const { source } = requester;
   if (
