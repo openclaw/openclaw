@@ -23,6 +23,28 @@ const SUPPORTED_IMAGE_MODELS = new Set([
   "openai/gpt-image-2.5-sunburst",
   "openai/gpt-image-2.5-sunburst-2026-09-08",
 ]);
+// Qualified by ClawRouter 17cb1a0: providers/google-gemini.provider.yaml and
+// worker/native-google-images.ts. Names alone never establish an entitled route.
+export const CLAWROUTER_GOOGLE_IMAGE_MODELS = [
+  "google/gemini-3.1-flash-image",
+  "google/gemini-3-pro-image",
+];
+const CLAWROUTER_GOOGLE_IMAGE_CAPABILITIES: ImageGenerationProvider["capabilities"] = {
+  generate: {
+    maxCount: 4,
+    supportsSize: false,
+    supportsAspectRatio: false,
+    supportsResolution: false,
+  },
+  edit: {
+    enabled: true,
+    maxInputImages: 5,
+    maxCount: 4,
+    supportsSize: false,
+    supportsAspectRatio: false,
+    supportsResolution: false,
+  },
+};
 export const CLAWROUTER_IMAGE_CAPABILITIES: ImageGenerationProvider["capabilities"] = {
   generate: {
     maxCount: 10,
@@ -55,9 +77,8 @@ type ImageLimits = {
   maxEdge: number;
   maxAspectRatio: number;
 };
-type ImageCatalogEntry = UnifiedModelCatalogEntry<ImageGenerationProvider["capabilities"]> & {
-  limits: ImageLimits;
-};
+type ImageCatalogEntry = UnifiedModelCatalogEntry<ImageGenerationProvider["capabilities"]> &
+  ({ format: "openai"; limits: ImageLimits } | { format: "google"; url: string });
 
 function parseImageLimits(value: unknown): ImageLimits | undefined {
   const pricing = asOptionalRecord(value);
@@ -132,7 +153,7 @@ export function assertClawRouterImageLimits(
 }
 
 export function isSupportedClawRouterImageModel(model: string): boolean {
-  return SUPPORTED_IMAGE_MODELS.has(model);
+  return SUPPORTED_IMAGE_MODELS.has(model) || CLAWROUTER_GOOGLE_IMAGE_MODELS.includes(model);
 }
 
 export function resolveClawRouterImageHttpContext(
@@ -165,6 +186,34 @@ export async function fetchClawRouterImageModels(params: {
   for (const offer of offers) {
     const model = offer.model;
     const id = normalizeOptionalString(model?.id);
+    if (!model || !id || !Array.isArray(model.capabilities)) {
+      continue;
+    }
+    if (
+      offer.providerId === "google-gemini" &&
+      offer.endpoint === "image_generate" &&
+      offer.routeKind === "native" &&
+      offer.path === "/v1beta/models/${model}:generateContent" &&
+      offer.requestFormat === "google.image_generate" &&
+      offer.responseFormat === "google.image" &&
+      offer.methods.includes("POST") &&
+      CLAWROUTER_GOOGLE_IMAGE_MODELS.includes(id) &&
+      model.upstream === id.slice("google/".length) &&
+      model.capabilities.includes("image.generate")
+    ) {
+      result.set(id, {
+        kind: "image_generation",
+        provider: "clawrouter",
+        model: id,
+        label: normalizeOptionalString(model.displayName) ?? id,
+        source: "live",
+        modes: ["generate", "edit"],
+        capabilities: CLAWROUTER_GOOGLE_IMAGE_CAPABILITIES,
+        format: "google",
+        url: offer.url,
+      });
+      continue;
+    }
     const mode = offer.endpoint === "images_edits" ? "edit" : "generate";
     if (
       offer.providerId !== "openai" ||
@@ -173,9 +222,7 @@ export async function fetchClawRouterImageModels(params: {
       offer.requestFormat !== `openai.${offer.endpoint}` ||
       offer.responseFormat !== "openai.images_generations" ||
       !offer.methods.includes("POST") ||
-      !id ||
-      !isSupportedClawRouterImageModel(id) ||
-      !Array.isArray(model?.capabilities) ||
+      !SUPPORTED_IMAGE_MODELS.has(id) ||
       !model.capabilities.includes(mode === "edit" ? "image.edit" : "image.generation")
     ) {
       continue;
@@ -200,6 +247,7 @@ export async function fetchClawRouterImageModels(params: {
           ? { ...CLAWROUTER_IMAGE_CAPABILITIES.edit, maxCount: limits.maxImages }
           : { enabled: false },
       },
+      format: "openai",
       limits,
     });
   }
