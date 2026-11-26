@@ -33,7 +33,6 @@ import {
   updateRegistryWorktree,
 } from "./registry.js";
 import {
-  findLiveRegistryWorktreeByOwner,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
   listRegistryWorktrees,
