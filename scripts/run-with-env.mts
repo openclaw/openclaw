@@ -9,9 +9,6 @@ const USAGE =
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 type ForwardedSignal = "SIGHUP" | "SIGINT" | "SIGTERM";
 
-/**
- * Detects help requests before the command separator.
- */
 export function isRunWithEnvHelpRequest(argv: readonly string[]) {
   for (const arg of argv) {
     if (arg === "--") {
@@ -24,9 +21,6 @@ export function isRunWithEnvHelpRequest(argv: readonly string[]) {
   return false;
 }
 
-/**
- * Parses KEY=value assignments and the command following --.
- */
 export function parseRunWithEnvArgs(argv: string[]) {
   const separatorIndex = argv.indexOf("--");
   if (separatorIndex <= 0 || separatorIndex === argv.length - 1) {

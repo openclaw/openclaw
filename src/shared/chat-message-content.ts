@@ -3,6 +3,10 @@ import {
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../agents/delivery-evidence-values.js";
+import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { hasPersistedMedia } from "../sessions/user-turn-media.js";
 
 /** Returns inline string content or the first array text block without scanning later blocks. */
 export function extractFirstTextBlock(message: unknown): string | undefined {
@@ -17,7 +21,8 @@ export function extractFirstTextBlock(message: unknown): string | undefined {
 }
 
 export type AssistantPhase = "commentary" | "final_answer";
-type AssistantTextBlock = Record<string, unknown> & { type: string; text: string };
+type AssistantTextBlock = AssistantTextSignatureBlock &
+  Record<string, unknown> & { type: string; text: string };
 
 type AssistantTextSignature = { id?: string; phase?: AssistantPhase } | null;
 type AssistantTextSignatureBlock = { textSignature?: unknown };
@@ -29,7 +34,7 @@ const assistantTextSignatureCache = new WeakMap<
   { text: unknown; result: AssistantTextSignature }
 >();
 
-function isAssistantTextContentBlockType(value: unknown): boolean {
+export function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
 
@@ -55,13 +60,12 @@ export function parseAssistantTextSignature(
   } else {
     try {
       const parsed = JSON.parse(value) as { id?: unknown; phase?: unknown; v?: unknown };
+      const phase = normalizeAssistantPhase(parsed.phase);
       result =
         parsed.v === 1
           ? {
               ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-              ...(normalizeAssistantPhase(parsed.phase)
-                ? { phase: normalizeAssistantPhase(parsed.phase) }
-                : {}),
+              ...(phase ? { phase } : {}),
             }
           : null;
     } catch {
@@ -152,11 +156,7 @@ export function readAssistantTextBlocksForPhase(
 /** Extracts assistant text for a requested phase without mixing legacy and explicitly phased text. */
 export function extractAssistantTextForPhase(
   message: unknown,
-  options?: {
-    phase?: AssistantPhase;
-    sanitizeText?: (text: string) => string;
-    joinWith?: string;
-  },
+  options?: { phase?: AssistantPhase },
 ): string | undefined {
   const entry = asOptionalObjectRecord(message);
   if (!entry) {
@@ -164,23 +164,19 @@ export function extractAssistantTextForPhase(
   }
   const messagePhase = normalizeAssistantPhase(entry.phase);
   const phase = options?.phase;
-  const sanitizeText = options?.sanitizeText;
-  const joinWith = options?.joinWith ?? "\n";
-  const sanitizeBlockText = (text: string) => (sanitizeText ? sanitizeText(text) : text);
   const inlineText = typeof entry.text === "string" ? entry.text : entry.content;
   if (typeof inlineText === "string") {
-    const text = messagePhase === phase ? sanitizeBlockText(inlineText) : undefined;
+    const text = messagePhase === phase ? inlineText : undefined;
     return text?.trim() ? text : undefined;
   }
 
   const parts: string[] = [];
   for (const block of readAssistantTextBlocksForPhase(message, phase)) {
-    const sanitized = sanitizeBlockText(block.text);
-    if (sanitized.trim()) {
-      parts.push(sanitized);
+    if (block.text.trim()) {
+      parts.push(block.text);
     }
   }
-  return parts.length ? parts.join(joinWith) : undefined;
+  return parts.length ? parts.join("\n") : undefined;
 }
 
 /** Returns user-visible assistant text, preferring final answers over legacy unphased text. */
@@ -196,4 +192,128 @@ export function extractAssistantTranscriptSourceText(message: unknown): string |
   const commentary = extractAssistantTextForPhase(message, { phase: "commentary" });
   const reply = extractAssistantPhaseText(message);
   return commentary && reply ? `${commentary}\n${reply}` : (commentary ?? reply);
+}
+
+export function readTerminalSourceReplyDeliveryMirror(
+  message: unknown,
+): { sourceTurnId: string; toolCallId?: string } | undefined {
+  const delivery = asOptionalObjectRecord(asOptionalObjectRecord(message)?.openclawDeliveryMirror);
+  if (!delivery) {
+    return undefined;
+  }
+  const sourceTurnId =
+    typeof delivery.sourceTurnId === "string" ? delivery.sourceTurnId.trim() : "";
+  if (delivery.kind !== "message-tool-source-reply" || delivery.final !== true || !sourceTurnId) {
+    return undefined;
+  }
+  const toolCallId = typeof delivery.toolCallId === "string" ? delivery.toolCallId.trim() : "";
+  return { sourceTurnId, ...(toolCallId ? { toolCallId } : {}) };
+}
+
+export type AssistantSilenceBlockFact = {
+  ignored: boolean;
+  text?: string | null;
+  phase?: AssistantPhase;
+  explicitPhase: boolean;
+};
+
+/** Only a bounded control-token fragment survives; arbitrary reply text does not. */
+export function collectAssistantSilenceBlockFact(value: unknown): AssistantSilenceBlockFact {
+  const block = asOptionalRecord(value);
+  const textType = isAssistantTextContentBlockType(block?.type);
+  const phase = textType && block ? parseAssistantTextSignature(block)?.phase : undefined;
+  const text = textType && typeof block?.text === "string" ? block.text : undefined;
+  const trimmed = text?.trim().toUpperCase();
+  return {
+    ignored:
+      block?.type === "thinking" ||
+      block?.type === "reasoning" ||
+      block?.type === "redacted_thinking",
+    text:
+      text === undefined
+        ? undefined
+        : !SILENT_REPLY_TOKEN.includes(trimmed!)
+          ? null
+          : `${text.trimStart() === text ? "" : " "}${trimmed}${text.trimEnd() === text ? "" : " "}`,
+    phase,
+    explicitPhase: Boolean(phase),
+  };
+}
+
+export function assistantSilenceOverride(message: unknown): boolean | undefined {
+  const record = asOptionalObjectRecord(message);
+  if (record?.role !== "assistant") {
+    return false;
+  }
+  if (record.display === false) {
+    return true;
+  }
+  if (
+    record.display === true ||
+    readTerminalSourceReplyDeliveryMirror(message) ||
+    hasPersistedMedia(message) ||
+    hasNonEmptyStringArray(asOptionalRecord(record.openclawDelivery)?.mediaUrls)
+  ) {
+    return false;
+  }
+  const inline = typeof record.text === "string" ? record.text : record.content;
+  return typeof inline === "string" ? isSilentReplyText(inline) : undefined;
+}
+
+export function isSilentAssistantFromFacts(
+  override: boolean | undefined,
+  blocks: readonly AssistantSilenceBlockFact[] | undefined,
+  phase?: AssistantPhase,
+): boolean {
+  if (override !== undefined) {
+    return override;
+  }
+  if (!blocks) {
+    return false;
+  }
+  if (blocks.some((block) => !block.ignored && block.text === undefined)) {
+    return false;
+  }
+  const explicit = blocks.some((block) => block.explicitPhase);
+  const final = blocks.filter(
+    (block) =>
+      block.text !== undefined &&
+      (block.phase ?? (explicit ? undefined : phase)) === "final_answer",
+  );
+  const selected = final.length > 0 ? final : blocks.filter((block) => !block.ignored);
+  return (
+    !selected.some((block) => block.text === null) &&
+    isSilentReplyText(selected.map((block) => block.text).join(""))
+  );
+}
+
+/** Classifies raw assistant rows after their persisted visibility facts. */
+export function isSilentAssistantTranscriptMessage(message: unknown): boolean {
+  const record = asOptionalObjectRecord(message);
+  return isSilentAssistantFromFacts(
+    assistantSilenceOverride(message),
+    Array.isArray(record?.content)
+      ? record.content.map(collectAssistantSilenceBlockFact)
+      : undefined,
+    normalizeAssistantPhase(record?.phase),
+  );
+}
+
+/** Applies raw stored-row visibility before preparing one leading silence line. */
+export function prepareAssistantTranscriptText(
+  message: unknown,
+  text: string | undefined,
+): string | undefined {
+  const record = asOptionalObjectRecord(message);
+  if (record?.role !== "assistant") {
+    return text;
+  }
+  if (isSilentAssistantTranscriptMessage(message)) {
+    return undefined;
+  }
+  return record.display !== true &&
+    !readTerminalSourceReplyDeliveryMirror(message) &&
+    text !== undefined
+    ? (stripMixedSilentReplyTokens(text) ?? text)
+    : text;
 }

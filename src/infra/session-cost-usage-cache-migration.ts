@@ -6,18 +6,17 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   encodeUsageCostRollup,
   USAGE_COST_ROLLUP_SCOPE,
-  USAGE_COST_ROLLUP_VERSION,
   type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 
 const PREVIOUS_SCOPE = "session-cost-usage-rollup-v2";
 
-/** Migration-only reader for the retired complete-JSON representation. */
+/** Migration-only reader for the version-6 complete-JSON representation. */
 function decodePreviousRollup(valueJson: string | null): UsageCostRollupEntry | undefined {
   const value = safeParseJsonRecord(valueJson ?? "");
   if (
     !value ||
-    value.version !== USAGE_COST_ROLLUP_VERSION ||
+    value.version !== 6 ||
     typeof value.pricingFingerprint !== "string" ||
     !isRecord(value.checkpoint) ||
     (value.checkpoint.kind !== "jsonl" && value.checkpoint.kind !== "sqlite") ||

@@ -26,9 +26,6 @@ function loadModule(modulePath: string): unknown {
   })(modulePath);
 }
 
-/**
- * Resolves a plugin-relative module specifier to an existing candidate path.
- */
 export function resolveExistingPluginModulePath(rootDir: string, specifier: string): string {
   const artifacts = getPluginCacheRoot(rootDir).artifacts;
   const key = `channel-specifier:${specifier}`;

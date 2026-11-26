@@ -7,7 +7,7 @@ import {
 import type {
   OpenBlobStoreOptions,
   PluginBlobOverflowPolicy,
-  PluginBlobStore,
+  PluginBlobStoreWithReceipts,
   PluginBlobStoreOperation,
 } from "./plugin-blob-store.types.js";
 import { PluginBlobStoreError } from "./plugin-blob-store.types.js";
@@ -34,15 +34,13 @@ export type {
   OpenBlobStoreOptions,
   PluginBlobEntry,
   PluginBlobEntryInfo,
+  PluginBlobRegistrationReceipt,
   PluginBlobStore,
+  PluginBlobStoreWithReceipts,
 } from "./plugin-blob-store.types.js";
 
-type BlobStoreOptionSignature = {
-  maxEntries: number;
-  maxBytesPerEntry: number;
-  maxBytesPerNamespace: number;
+type BlobStoreOptionSignature = Omit<OpenBlobStoreOptions, "namespace" | "overflowPolicy"> & {
   overflowPolicy: PluginBlobOverflowPolicy;
-  defaultTtlMs?: number;
 };
 
 function invalidInput(
@@ -110,7 +108,7 @@ function createPluginBlobStoreInternal<TMetadata>(
   pluginId: string,
   options: OpenBlobStoreOptions,
   env?: NodeJS.ProcessEnv,
-): PluginBlobStore<TMetadata> {
+): PluginBlobStoreWithReceipts<TMetadata> {
   if (pluginId.startsWith("core:")) {
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
@@ -181,6 +179,12 @@ function createPluginBlobStoreInternal<TMetadata>(
       await registerPluginBlobInWorker(prepareWrite(key, bytes, metadata, opts));
     },
     async registerIfAbsent(key, bytes, metadata, opts) {
+      return (
+        (await registerPluginBlobIfAbsentInWorker(prepareWrite(key, bytes, metadata, opts))) !==
+        undefined
+      );
+    },
+    async registerIfAbsentWithReceipt(key, bytes, metadata, opts) {
       return registerPluginBlobIfAbsentInWorker(prepareWrite(key, bytes, metadata, opts));
     },
     async lookup(key) {
@@ -217,7 +221,7 @@ function createPluginBlobStoreInternal<TMetadata>(
 export function createPluginBlobStore<TMetadata>(
   pluginId: string,
   options: OpenBlobStoreOptions,
-): PluginBlobStore<TMetadata> {
+): PluginBlobStoreWithReceipts<TMetadata> {
   return createPluginBlobStoreInternal<TMetadata>(pluginId, options);
 }
 
@@ -226,7 +230,7 @@ export function createPluginBlobStoreForTests<TMetadata>(
   pluginId: string,
   options: OpenBlobStoreOptions,
   env: NodeJS.ProcessEnv,
-): PluginBlobStore<TMetadata> {
+): PluginBlobStoreWithReceipts<TMetadata> {
   return createPluginBlobStoreInternal<TMetadata>(pluginId, options, env);
 }
 

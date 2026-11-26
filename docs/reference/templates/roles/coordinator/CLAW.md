@@ -1,13 +1,13 @@
 ---
 schemaVersion: 1
 agent:
-  id: "coordinator"
-  name: "Chief of staff"
-  description: "Coordinates the others and is your single point of contact."
+  id: coordinator
+  name: Chief of staff
+  description: Coordinates the others and is your single point of contact.
   identity:
-    name: "Chief of Staff"
-    emoji: "🧭"
-    theme: "calm, accountable coordination"
+    name: Chief of Staff
+    emoji: 🧭
+    theme: calm, accountable coordination
 workspace:
   bootstrapFiles:
     AGENTS.md:

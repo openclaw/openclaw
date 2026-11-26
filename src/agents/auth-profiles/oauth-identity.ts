@@ -1,8 +1,3 @@
-/**
- * OAuth identity comparison and mirroring decisions.
- * Guards cross-agent credential copy/adoption so refreshed credentials cannot
- * overwrite a different account's local auth state.
- */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
@@ -18,7 +13,6 @@ type GithubCopilotOAuthSurface = {
   normalizeGithubCopilotOAuthScope: (raw: string | undefined) => string | undefined;
 };
 
-/** Returns whether OAuth credentials target the same provider-owned tenant. */
 export function isSafeToCopyOAuthRoutingScope(
   existing: Pick<OAuthCredential, "provider" | "enterpriseUrl">,
   incoming: Pick<OAuthCredential, "provider" | "enterpriseUrl">,
@@ -115,49 +109,36 @@ export function isSafeToCopyOAuthIdentity(
   return true;
 }
 
-type OAuthMirrorDecisionReason =
-  | "no-existing-credential"
-  | "incoming-fresher"
-  | "non-oauth-existing-credential"
-  | "provider-mismatch"
+type OAuthMirrorDecision =
+  | "mirror"
+  | "keep"
   | "identity-mismatch-or-regression"
   | "incoming-not-fresher";
 
-type OAuthMirrorDecision =
-  | {
-      shouldMirror: true;
-      reason: Extract<OAuthMirrorDecisionReason, "no-existing-credential" | "incoming-fresher">;
-    }
-  | {
-      shouldMirror: false;
-      reason: Exclude<OAuthMirrorDecisionReason, "no-existing-credential" | "incoming-fresher">;
-    };
-
-/** Decide whether a refreshed OAuth credential should mirror into another store. */
-export function shouldMirrorRefreshedOAuthCredential(params: {
+export function resolveOAuthMirrorDecision(params: {
   existing: AuthProfileCredential | undefined;
   refreshed: OAuthCredential;
 }): OAuthMirrorDecision {
   const { existing, refreshed } = params;
   if (!existing) {
-    return { shouldMirror: true, reason: "no-existing-credential" };
+    return "mirror";
   }
   if (existing.type !== "oauth") {
-    return { shouldMirror: false, reason: "non-oauth-existing-credential" };
+    return "keep";
   }
   if (existing.provider !== refreshed.provider) {
-    return { shouldMirror: false, reason: "provider-mismatch" };
+    return "keep";
   }
   if (!isSafeToCopyOAuthIdentity(existing, refreshed)) {
-    return { shouldMirror: false, reason: "identity-mismatch-or-regression" };
+    return "identity-mismatch-or-regression";
   }
   const refreshedExpires = asDateTimestampMs(refreshed.expires);
   if (refreshedExpires === undefined) {
-    return { shouldMirror: false, reason: "incoming-not-fresher" };
+    return "incoming-not-fresher";
   }
   const existingExpires = asDateTimestampMs(existing.expires);
   if (existingExpires !== undefined && existingExpires >= refreshedExpires) {
-    return { shouldMirror: false, reason: "incoming-not-fresher" };
+    return "incoming-not-fresher";
   }
-  return { shouldMirror: true, reason: "incoming-fresher" };
+  return "mirror";
 }

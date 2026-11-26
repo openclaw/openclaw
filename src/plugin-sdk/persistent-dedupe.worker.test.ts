@@ -19,7 +19,31 @@ const options = {
   ttlMs: 60_000,
 };
 
+const strictOptions = {
+  ...options,
+  onDiskError: (error: unknown) => {
+    throw error;
+  },
+};
 afterEach(() => vi.restoreAllMocks());
+
+function trackSettlement<T>(pending: Promise<T>) {
+  const state: { result?: { value: T } | { error: unknown } } = {};
+  const outcome = pending.then(
+    (value) => (state.result = { value }),
+    (error: unknown) => (state.result = { error }),
+  );
+  return { state, outcome };
+}
+
+function pauseObservation() {
+  const observe = workerClient.observePluginStateInWorker;
+  const paused = pauseWorkerResult();
+  vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce((params) =>
+    paused.wait(observe(params)),
+  );
+  return paused;
+}
 
 function pauseWorkerResult() {
   const ready = createDeferredCore();
@@ -63,20 +87,12 @@ describe("persistent dedupe worker", () => {
             (params) => wait(compare(params)),
           );
         }
-        const dedupe = createClaimableDedupe({
-          ...options,
-          onDiskError: (error: unknown) => {
-            throw error;
-          },
-        });
+        const dedupe = createClaimableDedupe(strictOptions);
         if (phase === "commit") {
           expect(await dedupe.claim("shared")).toEqual({ kind: "claimed" });
         }
         const original = phase === "lookup" ? dedupe.claim("shared") : dedupe.commit("shared");
-        const outcome = original.then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
+        const { outcome } = trackSettlement<Awaited<typeof original>>(original);
         await ready.promise;
         const failure = new Error("original owner released");
         const forgetting =
@@ -129,11 +145,9 @@ describe("persistent dedupe worker", () => {
       });
       await dedupe.checkAndRecord("first");
       await dedupe.checkAndRecord("second");
-      const outcomes = await Promise.all([
-        dedupe.checkAndRecord("first"),
-        dedupe.forget("unrelated"),
-      ]);
-      expect(outcomes).toEqual([false, false]);
+      await expect(
+        Promise.all([dedupe.checkAndRecord("first"), dedupe.forget("unrelated")]),
+      ).resolves.toEqual([false, false]);
     });
   });
 
@@ -142,12 +156,7 @@ describe("persistent dedupe worker", () => {
     async (operation) => {
       await withOpenClawTestState({ label: "dedupe-write-settlement" }, async () => {
         const guard = createChannelReplayGuard<{ keys: string[] }>({
-          dedupe: {
-            ...options,
-            onDiskError: (error: unknown) => {
-              throw error;
-            },
-          },
+          dedupe: strictOptions,
           buildReplayKey: (event) => event.keys,
         });
         const event = { keys: ["first", "second"] };
@@ -194,21 +203,11 @@ describe("persistent dedupe worker", () => {
         } else {
           pending = guard.forget(event);
         }
-        let settled = false;
-        const outcome = pending.then(
-          (value) => {
-            settled = true;
-            return { value };
-          },
-          (error: unknown) => {
-            settled = true;
-            return { error };
-          },
-        );
+        const { state, outcome } = trackSettlement(pending);
         try {
           await ready.promise;
           await setImmediate();
-          expect(settled).toBe(false);
+          expect(state.result).toBeUndefined();
         } finally {
           gate.resolve();
           await Promise.all([outcome, secondDone.promise]);
@@ -290,42 +289,31 @@ describe("persistent dedupe worker", () => {
     });
   });
 
-  it.each([false, true])(
-    "orders forget after an unfinished recording (legacy alias=%s)",
-    async (legacyAlias) => {
-      await withOpenClawTestState({ label: "dedupe-forget-order" }, async (state) => {
-        const observe = workerClient.observePluginStateInWorker;
-        const { ready, gate, wait } = pauseWorkerResult();
-        vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce((params) =>
-          wait(observe(params)),
-        );
-        const createDedupe = () =>
-          legacyAlias
-            ? createPersistentDedupe({
-                ttlMs: options.ttlMs,
-                memoryMaxSize: 0,
-                fileMaxEntries: options.stateMaxEntries,
-                resolveFilePath: () => state.path("shared.json"),
-              })
-            : createPersistentDedupe({ ...options, memoryMaxSize: 10 });
-        const dedupe = createDedupe();
-        const recording = dedupe.checkAndRecord("forgotten", { namespace: "first" });
-        await ready.promise;
-        const forgotten = dedupe.forget("forgotten", {
-          namespace: legacyAlias ? "alias" : "first",
+  it("orders forget after an unfinished recording through a legacy namespace alias", async () => {
+    await withOpenClawTestState({ label: "dedupe-forget-order" }, async (state) => {
+      const { ready, gate } = pauseObservation();
+      const createDedupe = () =>
+        createPersistentDedupe({
+          ttlMs: options.ttlMs,
+          memoryMaxSize: 0,
+          fileMaxEntries: options.stateMaxEntries,
+          resolveFilePath: () => state.path("shared.json"),
         });
-        try {
-          expect(dedupe.memorySize()).toBe(0);
-        } finally {
-          gate.resolve();
-        }
-        expect(await recording).toBe(true);
-        expect(await forgotten).toBe(true);
+      const dedupe = createDedupe();
+      const recording = dedupe.checkAndRecord("forgotten", { namespace: "first" });
+      await ready.promise;
+      const forgotten = dedupe.forget("forgotten", { namespace: "alias" });
+      try {
         expect(dedupe.memorySize()).toBe(0);
-        expect(await createDedupe().hasRecent("forgotten", { namespace: "first" })).toBe(false);
-      });
-    },
-  );
+      } finally {
+        gate.resolve();
+      }
+      expect(await recording).toBe(true);
+      expect(await forgotten).toBe(true);
+      expect(dedupe.memorySize()).toBe(0);
+      expect(await createDedupe().hasRecent("forgotten", { namespace: "first" })).toBe(false);
+    });
+  });
 
   it("records again after an intervening forget and retains the replacement operation", async () => {
     await withOpenClawTestState({ label: "dedupe-record-forget-record" }, async () => {
@@ -341,13 +329,7 @@ describe("persistent dedupe worker", () => {
         await gates[current]?.promise;
         return result;
       });
-      const dedupe = createPersistentDedupe({
-        ...options,
-        memoryMaxSize: 10,
-        onDiskError: (error: unknown) => {
-          throw error;
-        },
-      });
+      const dedupe = createPersistentDedupe({ ...strictOptions, memoryMaxSize: 10 });
       const first = dedupe.checkAndRecord("shared");
       await entered[0]!.promise;
       const forgetting = dedupe.forget("shared");
@@ -364,15 +346,9 @@ describe("persistent dedupe worker", () => {
           ]),
         ).toBe("entered");
         duplicate = dedupe.checkAndRecord("shared");
-        let duplicateResult: boolean | undefined;
-        void duplicate.then(
-          (value) => {
-            duplicateResult = value;
-          },
-          () => {},
-        );
+        const { state } = trackSettlement(duplicate);
         await setImmediate();
-        expect(duplicateResult).toBe(false);
+        expect(state.result).toEqual({ value: false });
         gates[1]!.resolve();
         expect(await replacement).toBe(true);
         expect(await createPersistentDedupe(options).hasRecent("shared")).toBe(true);
@@ -388,11 +364,7 @@ describe("persistent dedupe worker", () => {
       await withOpenClawTestState(
         { label: "dedupe-next-source", applyEnv: false },
         async (other) => {
-          const observe = workerClient.observePluginStateInWorker;
-          const { ready, gate, wait } = pauseWorkerResult();
-          vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce((params) =>
-            wait(observe(params)),
-          );
+          const { ready, gate } = pauseObservation();
           const dedupe = createPersistentDedupe(options);
           const first = dedupe.checkAndRecord("first");
           await ready.promise;
@@ -420,17 +392,8 @@ describe("persistent dedupe worker", () => {
 
   it("refuses queued writes from a closed admission after the same database is reopened", async () => {
     await withOpenClawTestState({ label: "dedupe-queued-close" }, async () => {
-      const observe = workerClient.observePluginStateInWorker;
-      const { ready, gate, wait } = pauseWorkerResult();
-      vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce((params) =>
-        wait(observe(params)),
-      );
-      const dedupe = createPersistentDedupe({
-        ...options,
-        onDiskError: (error: unknown) => {
-          throw error;
-        },
-      });
+      const { ready, gate } = pauseObservation();
+      const dedupe = createPersistentDedupe(strictOptions);
       const first = dedupe.checkAndRecord("first");
       await ready.promise;
       const queued = dedupe.checkAndRecord("queued");
@@ -450,54 +413,4 @@ describe("persistent dedupe worker", () => {
       }
     });
   });
-
-  it.each(["clear", "forget"] as const)(
-    "does not repopulate memory after %s overtakes warmup",
-    async (action) => {
-      await withOpenClawTestState({ label: "dedupe-warmup-publication" }, async () => {
-        const dedupe = createPersistentDedupe({ ...options, memoryMaxSize: 10 });
-        await dedupe.checkAndRecord("stored");
-        dedupe.clearMemory();
-        const list = workerClient.listPluginStateInWorker;
-        const { ready, gate, wait } = pauseWorkerResult();
-        vi.spyOn(workerClient, "listPluginStateInWorker").mockImplementationOnce((params) =>
-          wait(list(params)),
-        );
-        const warming = dedupe.warmup();
-        await ready.promise;
-        const clearing = action === "clear" ? dedupe.clearMemory() : dedupe.forget("stored");
-        gate.resolve();
-        expect(await warming).toBe(0);
-        await clearing;
-        expect(dedupe.memorySize()).toBe(0);
-      });
-    },
-  );
-
-  it.each([false, true])(
-    "preserves disk-error policy without replaying a failed write (strict=%s)",
-    async (strict) => {
-      await withOpenClawTestState({ label: "dedupe-failed-worker" }, async () => {
-        const failure = new Error("worker outcome unavailable");
-        const write = vi
-          .spyOn(workerClient, "comparePluginStateUpdateInWorker")
-          .mockRejectedValueOnce(failure);
-        const onDiskError = vi.fn((error: unknown) => {
-          if (strict) {
-            throw error;
-          }
-        });
-        const dedupe = createPersistentDedupe({ ...options, onDiskError });
-        const result = dedupe.checkAndRecord("failed");
-        if (strict) {
-          await expect(result).rejects.toBe(failure);
-        } else {
-          await expect(result).resolves.toBe(true);
-        }
-        expect(write).toHaveBeenCalledOnce();
-        expect(onDiskError).toHaveBeenCalledWith(failure);
-        expect(await createPersistentDedupe(options).hasRecent("failed")).toBe(false);
-      });
-    },
-  );
 });

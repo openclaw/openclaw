@@ -1,11 +1,16 @@
-type RetainedPluginCleanupLogger = {
-  info: (message: string) => void;
-  warn: (message: string) => void;
-};
+import path from "node:path";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { visitConfigValueTree } from "../config/value-tree.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 
 export async function cleanupGatewayRetiredPluginArtifacts(params: {
-  log: RetainedPluginCleanupLogger;
+  log: {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+  };
   startupInstallPaths: Iterable<string>;
+  startupConfig: OpenClawConfig;
   signal: AbortSignal;
   assertCurrent: () => void;
 }): Promise<void> {
@@ -15,49 +20,99 @@ export async function cleanupGatewayRetiredPluginArtifacts(params: {
   };
   assertCurrent();
   try {
-    const { withPluginArtifactCleanupLease } = await import("../plugins/plugin-lifecycle-lease.js");
+    const [
+      { hasRetainedManagedNpmInstallCandidates, cleanupRetainedManagedNpmInstallGenerations },
+      captures,
+      { hasPluginNativeCaptureCleanupCandidates },
+      paths,
+    ] = await Promise.all([
+      import("../plugins/managed-npm-retention.js"),
+      import("../plugins/plugin-source-capture-report.js"),
+      import("../plugins/plugin-source-capture-directory.js"),
+      import("../config/paths.js"),
+    ]);
+    assertCurrent();
+    const stateDir = paths.resolveStateDir();
+    const candidates = await Promise.all([
+      hasRetainedManagedNpmInstallCandidates(),
+      hasPluginNativeCaptureCleanupCandidates(stateDir),
+    ]);
+    assertCurrent();
+    if (!candidates.some(Boolean)) {
+      return;
+    }
+    const [
+      { withPluginArtifactCleanupLease },
+      { createPluginCache, withPluginCache },
+      { preparePersistedInstalledPluginIndexCacheEntry },
+      recordsModule,
+    ] = await Promise.all([
+      import("../plugins/plugin-lifecycle-lease.js"),
+      import("../plugins/plugin-cache.js"),
+      import("../plugins/installed-plugin-index-record-state.js"),
+      import("../plugins/installed-plugin-index-records.js"),
+    ]);
+    assertCurrent();
     await withPluginArtifactCleanupLease(
       { signal: params.signal, assertCurrent },
       async (assertOwned) => {
-        const [recordsModule, retention, captures, paths] = await Promise.all([
-          import("../plugins/installed-plugin-index-records.js"),
-          import("../plugins/managed-npm-retention.js"),
-          import("../plugins/plugin-source-capture-report.js"),
-          import("../config/paths.js"),
-        ]);
-        await assertOwned();
-        // External installs may have advanced the ledger during the idle delay.
-        recordsModule.clearLoadInstalledPluginIndexInstallRecordsCache();
-        const records = await recordsModule.loadInstalledPluginIndexInstallRecords();
-        const reclaimed = await captures.pruneUnreferencedPluginNativeCaptures(
-          paths.resolveStateDir(),
-          assertOwned,
-          process.env,
-          { startup: true },
-        );
-        for (const warning of reclaimed.warnings) {
-          params.log.warn(warning);
-        }
-        await assertOwned();
-        const removedGenerations = await retention.cleanupRetainedManagedNpmInstallGenerations({
-          assertCurrent: assertOwned,
-          activeInstallPaths: [
-            ...params.startupInstallPaths,
-            ...Object.values(records).flatMap((record) =>
-              record.installPath ? [record.installPath] : [],
-            ),
-          ],
-          onError: (error, projectRoot) =>
-            params.log.warn(
-              `failed to clean retained npm generation ${projectRoot}: ${String(error)}`,
-            ),
+        await using cache = createPluginCache();
+        await withPluginCache(cache, async () => {
+          const installedIndex = await preparePersistedInstalledPluginIndexCacheEntry({ stateDir });
+          const assertInventoryCurrent = async () => {
+            await assertOwned();
+            installedIndex.assertCurrent();
+          };
+          await assertInventoryCurrent();
+          const records = await recordsModule.loadInstalledPluginIndexInstallRecords({ stateDir });
+          const reclaimed = await captures.pruneUnreferencedPluginNativeCaptures(
+            stateDir,
+            assertInventoryCurrent,
+            process.env,
+            { startup: true, installedIndex },
+          );
+          for (const warning of reclaimed.warnings) {
+            params.log.warn(warning);
+          }
+          await assertInventoryCurrent();
+          const configuredPaths: string[] = [];
+          // Config can deliberately pin executables/assets from an older generation.
+          // Keep both boot-time users and current references; an incidental path
+          // may retain extra files, which is preferable to breaking a configured tool.
+          visitConfigValueTree([params.startupConfig, getRuntimeConfigSnapshot()], (value) => {
+            if (typeof value === "string") {
+              const trimmed = value.trim();
+              if (
+                path.isAbsolute(trimmed) ||
+                trimmed.startsWith("~/") ||
+                trimmed.startsWith("~\\")
+              ) {
+                configuredPaths.push(resolveUserPath(trimmed));
+              }
+            }
+            return true;
+          });
+          const removedGenerations = await cleanupRetainedManagedNpmInstallGenerations({
+            assertCurrent: assertInventoryCurrent,
+            activeInstallPaths: [
+              ...params.startupInstallPaths,
+              ...configuredPaths,
+              ...Object.values(records).flatMap((record) =>
+                record.installPath ? [record.installPath] : [],
+              ),
+            ],
+            onError: (error, projectRoot) =>
+              params.log.warn(
+                `failed to clean retained npm generation ${projectRoot}: ${String(error)}`,
+              ),
+          });
+          if (removedGenerations > 0) {
+            params.log.info(`cleaned ${removedGenerations} retained npm plugin generation(s)`);
+          }
+          if (reclaimed.removed.length > 0) {
+            params.log.info(`cleaned ${reclaimed.removed.length} retired native plugin capture(s)`);
+          }
         });
-        if (removedGenerations > 0) {
-          params.log.info(`cleaned ${removedGenerations} retained npm plugin generation(s)`);
-        }
-        if (reclaimed.removed.length > 0) {
-          params.log.info(`cleaned ${reclaimed.removed.length} retired native plugin capture(s)`);
-        }
       },
     );
   } catch (error) {

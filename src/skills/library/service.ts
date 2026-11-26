@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   validateSkillsLibrarySaveParams,
   type SkillsLibraryListParams,
@@ -10,11 +12,11 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { evaluateSkillInstallPolicy } from "../../plugins/install-security-scan.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
-import { SkillLibraryError } from "../skill-library-error.js";
 import {
-  assertProposalContainsNoLiteralSecrets,
-  scanProposalBundle,
-} from "../workshop/proposal-scan.js";
+  assertSkillBundleHasNoLiteralSecrets,
+  scanSkillBundle,
+} from "../security/skill-bundle-scan.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import {
   decodeSkillLibraryFile,
   prepareSkillLibraryBundle,
@@ -39,7 +41,7 @@ export async function listSkillLibrary(
   params: SkillsLibraryListParams = {},
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<SkillsLibraryListResult> {
-  return (await captureSkillLibraryAccess(authority, options).read("list", params)).value;
+  return (await captureSkillLibraryAccess(authority, options).read("list", { ...params })).value;
 }
 
 export async function readSkillLibrary(
@@ -103,18 +105,25 @@ export async function saveSkillLibrary(
     ...(params.files ?? []),
   ]);
   const skillId = params.skillId ?? uploadId ?? randomUUID();
-  const scan = scanProposalBundle(
+  // Refuse a taken name before writing files; the publish write repeats the check for races.
+  if (
+    !previous &&
+    (await access.read("list", { scope: "mine" })).value.entries.some(
+      (entry) => entry.slug === params.slug && entry.skillId !== skillId,
+    )
+  ) {
+    throw new SkillLibraryError(
+      "NAME_CONFLICT",
+      `A skill named "${params.slug}" already exists in this library. Choose a different slug; existing skills were preserved.`,
+    );
+  }
+  const scan = scanSkillBundle(
     params.content,
     bundle.files
       .filter((file) => file.path !== "SKILL.md")
-      .map((file) => ({
-        path: file.path,
-        content: file.bytes.toString("utf8"),
-        sizeBytes: file.sizeBytes,
-        hash: file.sha256,
-      })),
+      .map((file) => ({ path: file.path, content: file.bytes.toString("utf8") })),
   );
-  assertProposalContainsNoLiteralSecrets(scan);
+  assertSkillBundleHasNoLiteralSecrets(scan);
   if (scan.critical > 0) {
     throw new SkillLibraryError(
       "POLICY_BLOCKED",
@@ -157,6 +166,13 @@ export async function saveSkillLibrary(
         filesJson: JSON.stringify(bundle.files.map(({ bytes: _bytes, ...file }) => file)),
       },
     });
+  } catch (error) {
+    // A refused new skill has no entry, so nothing else refers to its directory.
+    if (!previous && error instanceof SkillLibraryError && error.code === "NAME_CONFLICT") {
+      const revisionDir = skillLibraryRevisionDir(skillId, bundle.revision, access.options.env);
+      await fs.rm(path.dirname(path.dirname(revisionDir)), { recursive: true, force: true });
+    }
+    throw error;
   } finally {
     await staged.cleanup();
   }

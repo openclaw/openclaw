@@ -1,8 +1,8 @@
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveUserPath } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { safeStat } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -50,11 +50,7 @@ export const collectLegacyReefStateBackupResources: NonNullable<
 ];
 
 export async function legacyReefFileExists(filePath: string): Promise<boolean> {
-  try {
-    return (await fs.stat(filePath)).isFile();
-  } catch {
-    return false;
-  }
+  return (await safeStat(filePath))?.isFile() === true;
 }
 
 export async function listLegacyReefFiles(

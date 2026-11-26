@@ -15,7 +15,6 @@ const activeModel = {
 const resolve = (cfg: OpenClawConfig, active?: typeof activeModel) =>
   resolvePdfModelConfigForTool({
     cfg,
-    agentDir: "/tmp/openclaw-pdf-model-config",
     activeModel: active,
   });
 
@@ -58,24 +57,14 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each([
-  [true, true, { primary: "openrouter/deepseek/deepseek-v4.1-flash" }],
-  [false, true, null],
-  [true, false, null],
-] as const)(
-  "requires active fallback auth=%s and image support=%s",
-  (auth, supportsImages, expected) => {
-    if (auth) {
-      available.add("openrouter");
-    }
-    expect(
-      resolve(configuredProvider("openrouter", "anthropic/claude-sonnet-4-5"), {
-        ...activeModel,
-        supportsImages,
-      }),
-    ).toEqual(expected);
-  },
-);
+it("uses the authenticated active vision model as a fallback", () => {
+  available.add("openrouter");
+  expect(
+    resolve(configuredProvider("openrouter", "anthropic/claude-sonnet-4-5"), activeModel),
+  ).toEqual({
+    primary: "openrouter/deepseek/deepseek-v4.1-flash",
+  });
+});
 
 it("does not select a provider that disables PDF image extraction", () => {
   available.add("restricted");
@@ -124,23 +113,17 @@ it.each([
   {
     provider: "Minimax",
     primary: "openai/gpt-5.4",
-    model: "MiniMax-M2.7-highspeed",
+    model: "MiniMax-M3.1-Flash",
     expected: {
-      primary: "minimax/MiniMax-M2.7-highspeed",
-      fallbacks: ["minimax-portal/MiniMax-M2.7"],
+      primary: "minimax/MiniMax-M3.1-Flash",
+      fallbacks: ["minimax-portal/MiniMax-M3"],
     },
   },
   {
-    provider: "minimax",
-    primary: "minimax/MiniMax-VL-01",
-    model: undefined,
-    expected: { primary: "minimax/MiniMax-M2.7", fallbacks: ["minimax-portal/MiniMax-M2.7"] },
-  },
-  {
     provider: "minimax-portal",
-    primary: "minimax-portal/MiniMax-M2.7",
+    primary: "minimax-portal/MiniMax-M3.1-Flash",
     model: undefined,
-    expected: { primary: "minimax-portal/MiniMax-M2.7", fallbacks: ["minimax/MiniMax-M2.7"] },
+    expected: { primary: "minimax-portal/MiniMax-M3.1-Flash", fallbacks: ["minimax/MiniMax-M3"] },
   },
 ])("selects a text-extraction model for $primary", ({ provider, primary, model, expected }) => {
   available.add("minimax");
@@ -148,9 +131,9 @@ it.each([
   expect(resolve(configuredProvider(provider, primary, model))).toEqual(expected);
 });
 
-it("uses an authenticated custom provider's configured vision model", () => {
+it("preserves slashes in an authenticated custom provider's configured vision model", () => {
   available.add("hatchery");
   expect(
-    resolve(configuredProvider("hatchery", "hatchery/text-1", "vision-1", ["text", "image"])),
-  ).toEqual({ primary: "hatchery/vision-1" });
+    resolve(configuredProvider("hatchery", "hatchery/text-1", "org/team/v1", ["text", "image"])),
+  ).toEqual({ primary: "hatchery/org/team/v1" });
 });

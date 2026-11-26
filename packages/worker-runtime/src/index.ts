@@ -1,4 +1,6 @@
-export { WorkerTaskPoolCore, WorkerTaskError } from "./worker-task-pool-core.js";
+export { WorkerTaskPoolCore } from "./worker-task-pool-core.js";
+export { createWorkerIdleTimers, isWorkerIdleForPressure } from "./worker-task-pool-retirement.js";
+export { WorkerTaskError } from "./worker-task-error.js";
 export {
   createWorkerComputeCapacity,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -10,6 +12,7 @@ export type {
   WorkerTaskHost,
   WorkerRetirementReason,
   ResourceOwningPool,
+  WorkerPoolMemoryBudget,
 } from "./worker-task-host.js";
 export type {
   WorkerTaskInput,

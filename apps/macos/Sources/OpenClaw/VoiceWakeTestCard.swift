@@ -58,7 +58,7 @@ struct VoiceWakeTestCard: View {
         case .idle:
             AnyView(Image(systemName: "waveform").foregroundStyle(.secondary))
 
-        case .requesting:
+        case .requesting, .finalizing:
             AnyView(ProgressView().controlSize(.small))
 
         case .listening, .hearing:
@@ -66,9 +66,6 @@ struct VoiceWakeTestCard: View {
                 Image(systemName: "ear.and.waveform")
                     .symbolEffect(.pulse)
                     .foregroundStyle(Color.accentColor))
-
-        case .finalizing:
-            AnyView(ProgressView().controlSize(.small))
 
         case .detected:
             AnyView(Image(systemName: "checkmark.circle.fill").foregroundStyle(.green))

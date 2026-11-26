@@ -13,6 +13,8 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import * as definitionHash from "../definition-hash.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { CronService } from "../service.js";
 import {
@@ -24,26 +26,24 @@ import {
 import { cronStoreKey } from "../store/key.js";
 import { readCronRunReceiptCurrentFactsInDatabase } from "../store/run-receipt-read.js";
 import {
-  assertCronRunReceiptCurrentFacts,
-  CronRunReceiptRevisionError,
+  claimCronRunReceiptInDatabaseForTest,
   finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.js";
-import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
+} from "../store/run-receipt-store.test-support.js";
 import { mutateCronRuntimeRowsInDatabase } from "../store/runtime-rows.kernel.js";
 import type { CronStoredJob } from "../types.js";
-import { stop } from "./ops-lifecycle.js";
+import { remove, update } from "./ops-mutations.js";
 import {
   applyCronRuntimeRowsToState,
   publishDurableNextRunChanges,
 } from "./runtime-publication.js";
-import { armTimer } from "./timer.js";
+import { ensureLoaded } from "./store.js";
 
 const runtimeStoreFixtures = setupCronRegressionFixtures({ prefix: "cron-runtime-store-" });
 
 function trackCronRowReads() {
   return trackSqliteStatementExecutions(
-    openOpenClawStateDatabase().db,
+    requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
     ["jobs", "authorities"] as const,
     (sql) => {
       if (sql.includes('from "cron_jobs"')) {
@@ -56,6 +56,60 @@ function trackCronRowReads() {
 
 describe("cron runtime row publication", () => {
   afterEach(() => vi.useRealTimers());
+
+  it("reloads unchanged definitions without main-thread hashing and publishes edits and removals once", async () => {
+    const { storePath } = runtimeStoreFixtures.makeStorePath();
+    const now = Date.now();
+    const jobs = Array.from({ length: 200 }, (_, index) =>
+      createDueIsolatedJob({ id: `definition-${index}`, nowMs: now, nextRunAtMs: now + 60_000 }),
+    );
+    await saveCronStore(storePath, { version: 1, jobs });
+    const onDefinitionChange = vi.fn();
+    const state = createCronRegressionState({
+      storePath,
+      runIsolatedAgentJob: vi.fn(),
+      onDefinitionChange,
+    });
+    await ensureLoaded(state);
+    const revision = vi.spyOn(definitionHash, "hashCronJobDefinition");
+    await ensureLoaded(state, { forceReload: true });
+    expect(onDefinitionChange).not.toHaveBeenCalled();
+    expect(revision.mock.calls.length).toBe(0);
+
+    const changed = { ...jobs[0]!, name: "edited definition" };
+    await saveCronStore(storePath, { version: 1, jobs: [changed, ...jobs.slice(2)] });
+    await ensureLoaded(state, { forceReload: true });
+    await ensureLoaded(state, { forceReload: true });
+
+    const current = state.store!.jobs[0]!;
+    const publishedJobs = state.store!.jobs;
+    const publishedRevisions = state.jobConfigRevisions;
+    applyCronRuntimeRowsToState(state, []);
+    expect(state.store!.jobs).toBe(publishedJobs);
+    expect(state.jobConfigRevisions).toBe(publishedRevisions);
+    const untouched = state.store!.jobs[1]!;
+    const untouchedId = untouched.id;
+    const readUntouchedId = vi.fn(() => untouchedId);
+    Object.defineProperty(untouched, "id", { get: readUntouchedId, configurable: true });
+    applyCronRuntimeRowsToState(state, [{ ...current, state: { lastRunAtMs: now } }], [], {
+      publish: false,
+    });
+    expect(readUntouchedId).toHaveBeenCalledTimes(1);
+    Object.defineProperty(untouched, "id", { value: untouchedId, configurable: true });
+    expect(onDefinitionChange).toHaveBeenCalledTimes(2);
+    applyCronRuntimeRowsToState(state, [{ ...current, enabled: false }]);
+    await ensureLoaded(state, { forceReload: true });
+    await update(state, current.id, { name: "CRUD edit" });
+    await remove(state, current.id);
+    expect(onDefinitionChange.mock.calls).toMatchObject([
+      [{ id: current.id }, { name: "edited definition", enabled: true }],
+      [{ id: "definition-1" }, undefined],
+      [{ id: current.id }, { name: "edited definition", enabled: false }],
+      [{ id: current.id }, { name: "edited definition", enabled: true }],
+      [{ id: current.id }, { name: "CRUD edit", enabled: true }],
+      [{ id: current.id }, undefined],
+    ]);
+  });
 
   it("publishes committed wake transitions once while tracking topology and suppressed slots", () => {
     const now = Date.now();
@@ -265,7 +319,7 @@ describe("cron runtime row publication", () => {
     }
   });
 
-  it("bounds the receipt snapshot kernel to its exact job and rejects a malformed target", async () => {
+  it("bounds receipt reads to the exact job and omits a malformed target", async () => {
     const { storePath } = runtimeStoreFixtures.makeStorePath();
     const now = Date.now();
     const jobs = Array.from({ length: 128 }, (_, index) =>
@@ -274,7 +328,6 @@ describe("cron runtime row publication", () => {
     await saveCronStore(storePath, { version: 1, jobs });
     const job = jobs[64]!;
     const prepared = prepareCronRunReceiptClaim({
-      observed: undefined,
       storePath,
       job,
       agentId: "main",
@@ -285,27 +338,22 @@ describe("cron runtime row publication", () => {
       claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
-        resolveAgentId: (current) => current.agentId ?? "main",
       }),
     );
     try {
-      const assertCurrent = () =>
-        assertCronRunReceiptCurrentFacts({
+      const readFacts = () =>
+        readCronRunReceiptCurrentFactsInDatabase(openOpenClawStateDatabase().db, {
+          type: "cron.currentReceipt",
           handle,
-          resolveAgentId: (current) => current.agentId ?? "main",
-          facts: readCronRunReceiptCurrentFactsInDatabase(openOpenClawStateDatabase().db, {
-            type: "cron.currentReceipt",
-            handle,
-            includeJob: true,
-            includeAvailability: true,
-          }),
+          includeJob: true,
+          includeAvailability: true,
         });
-      assertCurrent();
+      expect(readFacts().receipt?.receiptId).toBe(handle.receiptId);
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(2);
       openOpenClawStateDatabase()
         .db.prepare("UPDATE cron_jobs SET job_json = '{}' WHERE store_key = ? AND job_id = ?")
         .run(handle.storeKey, job.id);
-      expect(assertCurrent).toThrow(CronRunReceiptRevisionError);
+      expect(readFacts().job).toBeUndefined();
       expect(reads.rowCounts.jobs).toBeLessThanOrEqual(3);
     } finally {
       reads.restore();
@@ -341,7 +389,6 @@ describe("cron runtime row publication", () => {
       log: noopLogger,
       nowMs: () => dueAt,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       onEvent,
     });
@@ -376,7 +423,7 @@ describe("cron runtime row publication", () => {
     }
   });
 
-  it("adds a sibling-imported row to memory before arming its timer", () => {
+  it("publishes a sibling-imported row and its durable deadline", () => {
     vi.useFakeTimers();
     const now = Date.parse("2026-08-13T18:00:00.000Z");
     vi.setSystemTime(now);
@@ -391,7 +438,9 @@ describe("cron runtime row publication", () => {
       nowMs: now,
       nextRunAtMs: now + 60_000,
     });
+    const onDefinitionChange = vi.fn();
     const state = createCronRegressionState({
+      onDefinitionChange,
       storePath: "/tmp/runtime-store-import.json",
       nowMs: () => now,
       runIsolatedAgentJob: vi.fn(),
@@ -399,10 +448,13 @@ describe("cron runtime row publication", () => {
     state.store = { version: 1, jobs: [resident] };
 
     applyCronRuntimeRowsToState(state, [imported]);
-    armTimer(state);
 
     expect(state.store.jobs.map((job) => job.id)).toEqual([resident.id, imported.id]);
-    expect(state.timer).not.toBeNull();
-    stop(state);
+    expect(state.durableNextRunAtMsByJobId.get(imported.id)).toBe(now + 60_000);
+    expect(onDefinitionChange).toHaveBeenCalledExactlyOnceWith(undefined, imported);
+    applyCronRuntimeRowsToState(state, [], [imported.id]);
+    expect(state.store.jobs).toEqual([resident]);
+    expect(onDefinitionChange).toHaveBeenCalledTimes(2);
+    expect(onDefinitionChange).toHaveBeenLastCalledWith(imported, undefined);
   });
 });

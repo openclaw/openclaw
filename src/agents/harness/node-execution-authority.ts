@@ -1,4 +1,11 @@
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { SessionRowProjectionBinding } from "../../gateway/session-row-projection-binding.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -21,16 +28,17 @@ type SessionNodeGrantAuthority = NonNullable<
 type SessionNodeAuthorities = {
   invokeWithSessionNodeAuthority?: SessionNodeInvocation;
   nodePlacementGrantAuthority?: SessionNodeGrantAuthority;
+  release?: () => void;
 };
 
 /** Full is admitted host authority, narrowed to one placement claim, never a request flag. */
-export function createSessionNodeAuthorities(
+export async function createSessionNodeAuthorities(
   attempt: HostAttempt,
   pluginId: string,
   requiredNodeCommands: ReadonlySet<string>,
   assertActive: () => void,
   signal: AbortSignal,
-): SessionNodeAuthorities {
+): Promise<SessionNodeAuthorities> {
   const admittedFull = attempt.permissionMode === "full";
   const resolveContext = getGatewayContextResolver(attempt.admittedRunContext);
   const context = resolveContext?.();
@@ -60,16 +68,60 @@ export function createSessionNodeAuthorities(
     sessionKey: attempt.sessionKey,
     storePath: target.storePath,
   };
-  const assertRequestCurrent = (request: SessionNodeRequest) => {
-    if (
-      request.source === "session-full" &&
-      (!admittedFull || !requiredNodeCommands.has(request.command))
-    ) {
-      throw new Error("admitted node execution authority does not cover this command");
+  const source = captureSessionActorStorageOwner(session, {
+    assertCurrent: assertActive,
+    authorize() {},
+  });
+  const readProjected = () => {
+    const owner = context.sessionRowProjectionOwner;
+    return owner instanceof SessionRowProjectionBinding
+      ? owner.readCommittedEntry({
+          agentId: session.agentId,
+          storePath: session.storePath,
+          key: session.sessionKey,
+        })
+      : undefined;
+  };
+  const projected = source ? undefined : readProjected();
+  let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
+  let sessionAllowed = false;
+  if (!source && !projected) {
+    try {
+      await withSessionEntryReadOnlyInWorker(session, assertActive, async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        const entry = read.value;
+        sessionAllowed = entry?.sessionId === attempt.sessionId;
+        if (owner.source) {
+          const predicate = {
+            databaseIdentity: `file:${owner.source.databaseIdentity}`,
+            sessionKey: resolveSqliteSessionKey(session.sessionKey, session.agentId),
+            entry,
+          };
+          retained = retainPreparedSessionEntryPredicate({
+            ...predicate,
+            matches: (before, after) => before?.sessionId === after?.sessionId,
+          });
+        }
+      });
+    } catch (error) {
+      retained?.release();
+      throw error;
     }
+  }
+  const assertRequestCurrent = (request: SessionNodeRequest) => {
     assertActive();
-    // This read can only revoke the admitted permission. It cannot create Full authority.
-    const entry = loadSessionEntryReadOnly(session);
+    // Full is the attempt's admitted mode; only the session occurrence is re-read here.
+    const entry = source
+      ? readCapturedSessionActorEntry(source, session.sessionKey)
+      : projected
+        ? readProjected()?.entry
+        : undefined;
+    const currentSessionAllowed =
+      source || projected
+        ? entry !== undefined && entry.sessionId === attempt.sessionId
+        : sessionAllowed && retained?.isCurrent();
     if (
       signal.aborted ||
       getActivePluginRegistry() !== gatewayRegistry ||
@@ -78,13 +130,11 @@ export function createSessionNodeAuthorities(
         (attempt.permissionMode !== "full" || !requiredNodeCommands.has(request.command))) ||
       (resolveContext && resolveContext() !== context) ||
       request.pluginId !== pluginId ||
-      !entry ||
-      entry.sessionId !== attempt.sessionId ||
-      (request.source === "session-full" && entry.permissionMode !== "full") ||
+      !currentSessionAllowed ||
       request.workspace.sessionKey !== attempt.sessionKey ||
       request.workspace.sessionId !== attempt.sessionId
     ) {
-      throw new Error("admitted node execution authority is no longer current");
+      throw new Error("The run or its session ended. Start a new turn to retry.");
     }
     assertPlacementCurrent({ ...request, runId: attempt.runId, agentId: session.agentId });
   };
@@ -102,6 +152,9 @@ export function createSessionNodeAuthorities(
     return result;
   };
   return {
+    release: () => {
+      retained?.release();
+    },
     invokeWithSessionNodeAuthority,
     nodePlacementGrantAuthority: {
       agentId: session.agentId,

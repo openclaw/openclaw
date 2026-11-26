@@ -14,10 +14,29 @@ How the Codex model catalog is discovered, and what happens when discovery fails
 
 By default, the Codex plugin asks the app-server for available models. Model
 availability is owned by Codex app-server, so the list can change when
-OpenClaw upgrades the bundled `@openai/codex` version or when a deployment
-points `appServer.command` at a different Codex binary. Availability can also
-be account-scoped. Use `/codex models` on a running gateway to see the live
-catalog for that harness and account.
+OpenClaw upgrades the bundled `@openai/codex` version, when OpenClaw selects a
+[newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex),
+or when a deployment points `appServer.command` at a different Codex binary.
+Availability can also be account-scoped. Use `/codex models` on a running
+gateway to see the live catalog for that harness and account.
+
+The OpenAI provider's ChatGPT subscription list is separate. It sends the same
+OpenClaw version used by Responses requests as `client_version`. If that version
+is unavailable or is not a calendar version with a four-digit year of 2026 or
+later, it sends `99.0.0` instead.
+Only the numeric release is sent: `2026.11.5-beta.1` lists as `2026.11.5`. Labels
+such as `dev`, `beta`, and `unknown`, and `0.0.0`, use the fallback. Listing does
+not query npm or depend on the bundled or installed Codex version. An empty list
+from ChatGPT counts as a failed listing, so the last listed models stay.
+
+New OpenAI models can require a newer Codex version than the binary your
+Codex harness runs. For example, GPT-6.2 requires Codex `0.166.0`. A Codex-harness
+turn on such a model fails and tells you to update your global Codex with
+`npm i -g @openai/codex` and restart the Gateway; OpenClaw then
+[selects the newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
+In Control UI, **Start a new session** on that failure opens a session on the
+OpenClaw harness that asks the agent to run the update. The OpenClaw harness
+runs these models without a Codex update.
 
 Automatic discovery and hosted-search model selection use visible picker entries.
 Bounded turns with an explicit model selection, including image understanding,
@@ -26,12 +45,32 @@ look up hidden entries returned by `model/list`. The model must still be listed
 and support the required input modalities. Listing does not prove account
 entitlement.
 
-Native discovery reads `model/list` and `account/read` from the same scoped
+Native discovery is demand-driven. Gateway startup publishes configured model
+hints without starting an app-server for each agent. The default agent keeps its
+background catalog warmup when it has a configured primary model, an explicit
+runtime policy, or a prepared credential for its default provider. An empty
+installation's built-in fallback model does not trigger that warmup. Opening an
+agent's model picker or catalog, creating a Codex session, running a turn, or
+requesting native auth/status information starts that agent's client when needed.
+Before discovery, native account readiness is unknown; configured hints are not
+proof of sign-in.
+First use of an idle agent can take a few seconds for the cold start.
+
+Discovery reads `model/list` and `account/read` from the same scoped
 app-server client. An API-key account remains API-key authentication; model
 listing does not imply a ChatGPT transport or endpoint. Picker readiness is
 valid only while that native owner and its account/config observation remain
 current. A missing account, failed refresh, account/config mutation, or retired
-client leaves native models unavailable until discovery succeeds again.
+client leaves native models unavailable until discovery succeeds again. The next
+picker/catalog request or native execution reacquires retired observations.
+
+A client with no owned work retires after five idle minutes. Periodic discovery
+and background turns reuse the same client within that window. Background turns
+release their own thread and MCP resources without retiring the shared process;
+strict one-shot CLI runs still close their unclaimed client. Active requests, turns, retained or releasing threads, native
+children, background terminals, and ephemeral history retain their client until
+their owners release it. The existing warm-session executor and thread-retention
+policies remain in effect. Clients and accounts stay isolated by agent home.
 
 Use the Models page **Refresh** action (`models.list` with `view: "all"` and
 `refresh: true`) to publish the full catalog for the selected agent. Prepared-only
@@ -101,33 +140,17 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.160.0`. A `model/list`
-probe against that app-server in an isolated, unauthenticated Codex home returned
-these visible bundled catalog entries on October 2, 2026:
-
-| Model id        | Input modalities | Reasoning efforts                    | Default effort |
-| --------------- | ---------------- | ------------------------------------ | -------------- |
-| `gpt-6.1-sol`   | text, image      | low, medium, high, xhigh, max, ultra | low            |
-| `gpt-6-astra`   | text, image      | low, medium, high, xhigh, max, ultra | low            |
-| `gpt-6-sol`     | text, image      | low, medium, high, xhigh, max, ultra | medium         |
-| `gpt-6-luna`    | text, image      | low, medium, high, xhigh, max        | medium         |
-| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra | low            |
-| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra | medium         |
-| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        | medium         |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh             | medium         |
-
-The `gpt-6.1-sol` entry also advertises the `priority` service tier as Fast. This bundled
-snapshot does not establish account access: authenticated catalogs can differ,
-and native discovery still requires a current account. Run `/codex models`
-after starting or upgrading the gateway to inspect the actual public picker
-for your account. Existing configured model selections remain unchanged.
+The bundled harness is `@openai/codex` `0.172.0`, which exceeds the reported
+GPT-6.2 minimum version. On November 25, 2026, an unauthenticated `model/list`
+check with this version returned 11 visible entries and one default. Authenticated
+catalogs can differ. Run `/codex models` after starting or upgrading the Gateway
+to see the picker for your account. OpenClaw does not change existing configured
+model selections on upgrade.
+</Note>
 
 OpenClaw reasoning controls preserve supported native levels, including `ultra`.
 Codex owns Ultra's proactive delegation and model-specific inference effort;
 Platform API effort metadata does not downgrade the selected runtime mode.
-Hidden models can also appear in the app-server catalog for internal or
-specialized flows without being normal model-picker choices.
-</Note>
 
 Tune discovery under `plugins.entries.codex.config.discovery`:
 
@@ -154,8 +177,7 @@ fallback and leave native models unavailable until discovery succeeds.
 }
 ```
 
-Disable discovery when you want startup to avoid probing Codex and use only
-the fallback catalog:
+Disable discovery to avoid native model/account catalog checks even on demand:
 
 ```json5
 {

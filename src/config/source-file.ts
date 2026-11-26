@@ -7,10 +7,14 @@ import {
   type WatchScope,
   type WatchSubscription,
 } from "@openclaw/fs-safe/watch";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import {
+  FS_RECONCILE_MS,
   resolveFsObservationMode,
   resolveFsObservationIntervalMs,
 } from "../infra/fs-observation-mode.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
+import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { resolveIncludeRoots } from "./paths.js";
 import {
   admitConfigObservationRoots,
@@ -27,12 +31,12 @@ type Source = {
   scopes: WatchScope[];
   ready: boolean;
   subscription: WatchSubscription;
+  events: Map<string, ReturnType<typeof observeOwnedDirectory>>;
 };
 
 export function createConfigFileAdapter(opts: {
   path: string;
   includedPaths?: readonly string[];
-  includeRoots?: readonly string[];
   onChange: () => void;
   onReady?: (isCurrent: () => boolean) => void;
   log: { warn: (message: string) => void; error: (message: string) => void };
@@ -56,7 +60,6 @@ export function createConfigFileAdapter(opts: {
     new Set([opts.path, ...paths].map((entry) => nodePath.resolve(entry)));
   let watchedPaths = normalizePaths(acceptedPaths);
   let primaryTarget: string | undefined;
-  let selectionRevision = 0;
   let roots: ReturnType<typeof admitConfigObservationRoots> | undefined;
   const admittedRoots = {
     roots: new Map<string, Promise<Root>>(),
@@ -85,12 +88,63 @@ export function createConfigFileAdapter(opts: {
     return closing;
   };
 
+  const refreshEvents = (next: Watcher, source: Source) => {
+    const directories = new Set(
+      next.mode === "poll"
+        ? []
+        : source.scopes.map((scope) =>
+            nodePath.dirname(nodePath.resolve(source.root.rootDir, scope.path)),
+          ),
+    );
+    for (const [directory, events] of source.events) {
+      if (!directories.has(directory)) {
+        events.close();
+        source.events.delete(directory);
+      }
+    }
+    for (const directory of directories) {
+      if (source.events.has(directory)) {
+        continue;
+      }
+      // Transport stays beside each file; the wider pinned Root only supplies
+      // guarded reconciliation and detects replaced directories and aliases.
+      source.events.set(
+        directory,
+        observeOwnedDirectory(
+          directory,
+          () => {
+            if (isCurrent(next) && source.events.has(directory)) {
+              if (!source.events.get(directory)!.isWatching()) {
+                handleWatcherError(
+                  next,
+                  new Error("Config directory notifications unavailable"),
+                  true,
+                );
+                return;
+              }
+              void source.subscription.reconcile().catch((error: unknown) => {
+                if (source.events.has(directory)) {
+                  handleWatcherError(next, error);
+                }
+              });
+            }
+          },
+          { recursive: false, reconcileIntervalMs: FS_RECONCILE_MS },
+        ),
+      );
+      if (!source.events.get(directory)!.isWatching()) {
+        handleWatcherError(next, new Error("Config directory notifications unavailable"), true);
+        return;
+      }
+    }
+  };
+
   const refresh = async (next: Watcher) => {
     const desiredPaths = watchedPaths;
     if (!roots) {
       roots = admitConfigObservationRoots(
         opts.path,
-        opts.includeRoots ?? resolveIncludeRoots(),
+        resolveIncludeRoots(),
         admittedRoots,
         primaryTarget,
         desiredPaths,
@@ -142,6 +196,10 @@ export function createConfigFileAdapter(opts: {
     const updates: Promise<void>[] = [];
     for (const [key, source] of next.sources) {
       if (!plans.has(key)) {
+        for (const events of source.events.values()) {
+          events.close();
+        }
+        source.events.clear();
         updates.push(
           source.subscription.close().then(() => {
             next.sources.delete(key);
@@ -154,6 +212,7 @@ export function createConfigFileAdapter(opts: {
       if (existing) {
         const changed = JSON.stringify(existing.scopes) !== JSON.stringify(plan.scopes);
         Object.assign(existing, plan);
+        refreshEvents(next, existing);
         if (changed) {
           existing.ready = false;
           updates.push(
@@ -166,57 +225,58 @@ export function createConfigFileAdapter(opts: {
       }
       const source: Source = {
         ...plan,
+        events: new Map(),
         ready: false,
         subscription: watch(plan.root, {
           scopes: plan.scopes,
-          mode: next.mode,
-          pollIntervalMs: resolveFsObservationIntervalMs(),
+          mode: "poll",
+          intervalMs: FS_RECONCILE_MS,
+          pollIntervalMs: next.mode === "poll" ? resolveFsObservationIntervalMs() : FS_RECONCILE_MS,
           signal: next.lifetime.signal,
-          onInvalidate: (hint) => {
-            // Each new baseline has its own read-gap check below.
-            if (!source.ready && hint.reason === "reconcile" && !hint.changes?.length) {
-              return;
-            }
-            const indirect = source.scopes.filter(
-              (scope) => !source.entries.has(nodePath.normalize(scope.path)),
-            );
-            if (
-              source.ready &&
-              indirect.length &&
-              (!hint.changes ||
-                hint.changes.some(
-                  (change) =>
-                    change.type === "structural" &&
-                    indirect.some(
-                      (scope) => nodePath.normalize(scope.path) === nodePath.normalize(change.path),
-                    ),
-                ))
-            ) {
-              opts.onChange();
-              void reconcilePaths([...watchedPaths], true).catch((error: unknown) =>
-                handleWatcherError(next, error),
+          onInvalidate: (hint) =>
+            runWithMainThreadTask("fs-watch:config", () => {
+              // Each new baseline has its own read-gap check below.
+              if (!source.ready && hint.reason === "reconcile" && !hint.changes?.length) {
+                return;
+              }
+              const indirect = source.scopes.filter(
+                (scope) => !source.entries.has(nodePath.normalize(scope.path)),
               );
-              return;
-            }
-            if (hint.changes?.length) {
-              retries = 0;
-            }
-            next.stability.dirty(
-              [...source.entries.keys()].map((relative) => ({ root: source.root, relative })),
-            );
-          },
+              if (
+                source.ready &&
+                indirect.length &&
+                (!hint.changes ||
+                  hint.changes.some(
+                    (change) =>
+                      change.type === "structural" &&
+                      indirect.some(
+                        (scope) =>
+                          nodePath.normalize(scope.path) === nodePath.normalize(change.path),
+                      ),
+                  ))
+              ) {
+                opts.onChange();
+                void reconcilePaths([...watchedPaths], true).catch((error: unknown) =>
+                  handleWatcherError(next, error),
+                );
+                return;
+              }
+              if (hint.changes?.length) {
+                retries = 0;
+              }
+              next.stability.dirty(
+                [...source.entries.keys()].map((relative) => ({ root: source.root, relative })),
+              );
+            }),
           onHealth: (health) => {
             if (health.state === "unavailable") {
-              handleWatcherError(
-                next,
-                health.failure!.error,
-                health.mode === "events" && health.failure?.operation === "watch",
-              );
+              handleWatcherError(next, health.failure!.error);
             }
           },
         }),
       };
       next.sources.set(key, source);
+      refreshEvents(next, source);
       updates.push(
         source.subscription.ready.then(() => {
           source.ready = true;
@@ -259,17 +319,18 @@ export function createConfigFileAdapter(opts: {
       close() {
         if (!closing) {
           lifetime.abort();
+          for (const source of next.sources.values()) {
+            for (const events of source.events.values()) {
+              events.close();
+            }
+            source.events.clear();
+          }
           closing = Promise.allSettled([
             next.work,
             next.stability.close(),
             ...[...next.sources.values()].map((source) => source.subscription.close()),
           ]).then(([, ...results]) => {
-            const errors = results.flatMap((result) =>
-              result.status === "rejected" ? [result.reason] : [],
-            );
-            if (errors.length) {
-              throw new AggregateError(errors, "Config observation retirement failed");
-            }
+            throwSettledAggregate(results, "Config observation retirement failed");
           });
         }
         return closing;
@@ -277,7 +338,7 @@ export function createConfigFileAdapter(opts: {
     };
     watcher = next;
     status = "active";
-    void enqueueRefresh(next);
+    return enqueueRefresh(next);
   };
 
   const handleWatcherError = (source: Watcher, error: unknown, eventWatchFailed = false) => {
@@ -286,19 +347,20 @@ export function createConfigFileAdapter(opts: {
     }
     watcher = undefined;
     const retirement = retire(source);
-    opts.onChange();
-    void retirement.catch((failure: unknown) => {
-      status = "disabled";
-      clearTimeout(retryTimer);
-      opts.log.error(`config watcher close failed; hot-reload disabled: ${String(failure)}`);
-    });
-    if (stopped) {
-      return;
-    }
+    void retirement
+      .catch((failure: unknown) => {
+        status = "disabled";
+        clearTimeout(retryTimer);
+        opts.log.error(`config watcher close failed; hot-reload disabled: ${String(failure)}`);
+      })
+      .then(() => {
+        // Recovery notifies from its initial scan; terminal failure gets one final read.
+        if (!stopped && status === "disabled") {
+          opts.onChange();
+        }
+      });
     let backoff = WATCHER_RECREATE_BACKOFF_MS[retries];
     if (backoff === undefined) {
-      // Explicit legacy overrides retain their bounded retry policy, while
-      // fs-safe still selects the available backend at subscription creation.
       if (eventWatchFailed && source.mode === "auto" && source.allowPollingRecovery) {
         degradedToPolling = true;
         retries = 0;
@@ -309,7 +371,7 @@ export function createConfigFileAdapter(opts: {
       } else {
         status = "disabled";
         opts.log.error(
-          `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_BACKOFF_MS.length} re-create attempts in ${source.mode === "poll" ? "polling" : "native"} mode: ${String(error)}`,
+          `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_BACKOFF_MS.length} re-create attempts: ${String(error)}`,
         );
         return;
       }
@@ -324,7 +386,7 @@ export function createConfigFileAdapter(opts: {
       void retirement.then(
         () => {
           if (!stopped && !watcher) {
-            createWatcher(true);
+            void createWatcher(true);
           }
         },
         () => {},
@@ -333,10 +395,9 @@ export function createConfigFileAdapter(opts: {
   };
 
   const reconcilePaths = async (paths: readonly string[], changedScope = false) => {
-    const revision = ++selectionRevision;
     const nextPaths = normalizePaths(paths);
     const nextPrimary = await canonicalPathFromExistingAncestor(opts.path);
-    if (stopped || revision !== selectionRevision) {
+    if (stopped) {
       return;
     }
     const changedPrimary = nextPrimary !== primaryTarget;
@@ -357,12 +418,13 @@ export function createConfigFileAdapter(opts: {
   };
 
   return {
-    start: () => {
+    start: async () => {
       if (!started && !stopped) {
         started = true;
-        createWatcher(false);
+        await createWatcher(false);
       }
     },
+    whenSettled: () => watcher?.stability.whenSettled() ?? Promise.resolve(),
     observePaths: (paths: readonly string[]) => reconcilePaths([...acceptedPaths, ...paths]),
     acceptPaths: (paths: readonly string[]) => {
       acceptedPaths = [...paths];
@@ -376,12 +438,7 @@ export function createConfigFileAdapter(opts: {
       if (previous) {
         void retire(previous).catch(() => {});
       }
-      const errors = (await Promise.allSettled(retiring)).flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Config watcher shutdown failed");
-      }
+      throwSettledAggregate(await Promise.allSettled(retiring), "Config watcher shutdown failed");
     },
     status: () => status,
   };

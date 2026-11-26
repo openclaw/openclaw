@@ -1,0 +1,4 @@
+# Real held-SQLite verifier child plus ordinary native scheduled-tick/reply proof,
+# and receiver custody/identity controls. Covers only regression growth above 400 lines;
+# no production sleeps, test-only callbacks, or simulated integrity verdicts.
+80

@@ -54,8 +54,12 @@ private final class RenewalConnectionFixture: @unchecked Sendable {
     let primaryRevision: UInt64?
     let requests = LockIsolated<[String]>([])
     let failures = LockIsolated<[GatewayTLSValidationFailure]>([])
+    let handshakes = LockIsolated<[(fingerprint: String?, accepted: Bool)]>([])
+    let handshakeRecorded = AsyncTestSignal()
+    let sockets = LockIsolated<[GatewayTestWebSocketTask]>([])
     let beforeTrust: (@Sendable () async -> Void)?
     let certificate: Data
+    let presentedCertificate: LockIsolated<Data>
     let root: Data
     let trusted: Bool
     let expired: Bool
@@ -78,6 +82,7 @@ private final class RenewalConnectionFixture: @unchecked Sendable {
         self.primaryRevision = primaryRevision
         self.configuredFingerprint = configuredFingerprint
         self.certificate = certificate
+        self.presentedCertificate = LockIsolated(certificate)
         self.root = root
         self.trusted = trusted
         self.expired = expired
@@ -111,7 +116,7 @@ private final class RenewalConnectionFixture: @unchecked Sendable {
     func sessionBox(route: GatewayTLSRoute) -> WebSocketSessionBox {
         let pinning = GatewayTLSPinningSession(params: route.params)
         let session = GatewayTestWebSocketSession(taskFactory: {
-            GatewayTestWebSocketTask(sendHook: { socket, message, index in
+            let socket = GatewayTestWebSocketTask(sendHook: { socket, message, index in
                 guard index > 0,
                       let method = GatewayWebSocketTestSupport.requestMethod(from: message),
                       let id = GatewayWebSocketTestSupport.requestID(from: message)
@@ -122,10 +127,13 @@ private final class RenewalConnectionFixture: @unchecked Sendable {
                 if index == 0 {
                     await self.beforeTrust?()
                     let trust = try RenewalCertificates.trust(
-                        certificate: self.certificate, root: self.root,
+                        certificate: self.presentedCertificate.value, root: self.root,
                         trusted: self.trusted, expired: self.expired,
                         verificationDate: self.verificationDate)
-                    guard pinning.validateServerTrust(trust, for: self.url) else {
+                    let accepted = pinning.validateServerTrust(trust, for: self.url)
+                    self.handshakes.withValue { $0.append((route.params.expectedFingerprint, accepted)) }
+                    self.handshakeRecorded.notify()
+                    guard accepted else {
                         let failure = try #require(pinning.consumeLastTLSFailure())
                         self.failures.withValue { $0.append(failure) }
                         throw GatewayTLSValidationError(failure: failure, context: "renewal fixture")
@@ -135,6 +143,8 @@ private final class RenewalConnectionFixture: @unchecked Sendable {
                 return .data(GatewayWebSocketTestSupport.connectOkData(
                     id: socket.snapshotConnectRequestID() ?? "connect"))
             })
+            self.sockets.withValue { $0.append(socket) }
+            return socket
         })
         return WebSocketSessionBox(session: session)
     }
@@ -457,6 +467,133 @@ struct GatewayCertificateRenewalTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func `automatic reconnect renews a learned pin but never a configured pin`(configured: Bool) async throws {
+        try await withRenewalIdentity {
+            let old = RenewalCertificates.fingerprint(RenewalCertificates.old)
+            let renewed = RenewalCertificates.fingerprint(RenewalCertificates.renewed)
+            let fixture = try RenewalConnectionFixture(
+                url: #require(URL(string: "wss://gateway.example.com")),
+                configuredFingerprint: configured ? old : nil,
+                certificate: RenewalCertificates.old)
+            try fixture.learnOriginalCertificate()
+            let connection = fixture.connection()
+            let pushes = await connection.subscribe()
+            let result: Result<Void, Error>
+            do {
+                _ = try await connection.acquireServerLease()
+                #expect(fixture.requests.value == ["health"])
+                fixture.presentedCertificate.withValue { $0 = RenewalCertificates.renewed }
+                try #require(fixture.sockets.value.last).emitReceiveFailure()
+                if configured {
+                    try await fixture.handshakeRecorded.wait("configured pin reconnect refusals") {
+                        fixture.handshakes.value.filter { !$0.accepted }.count >= 2
+                    }
+                    #expect(GatewayTLSStore.loadFingerprint(stableID: fixture.storeKey) == old)
+                    #expect(!fixture.handshakes.value.dropFirst().contains { $0.accepted })
+                    #expect(fixture.requests.value == ["health"])
+                } else {
+                    try await fixture.handshakeRecorded.wait("learned pin automatic renewal") {
+                        let handshakes = fixture.handshakes.value
+                        return handshakes.contains { $0.accepted && $0.fingerprint == renewed } ||
+                            handshakes.filter { !$0.accepted }.count >= 3
+                    }
+                    try #require(fixture.handshakes.value.contains { $0.accepted && $0.fingerprint == renewed })
+                    #expect(GatewayTLSStore.loadFingerprint(stableID: fixture.storeKey) == renewed)
+                    #expect(fixture.requests.value == ["health"])
+                    var renewedSnapshot = false
+                    for await delivery in pushes {
+                        if case .push(.snapshot) = delivery.event,
+                           delivery.serverLease.route.tls?.params.expectedFingerprint == renewed
+                        {
+                            renewedSnapshot = true
+                            break
+                        }
+                    }
+                    #expect(renewedSnapshot)
+                }
+                result = .success(())
+            } catch { result = .failure(error) }
+            await connection.shutdown()
+            try result.get()
+        }
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor
+    func `late node route validation after stop cannot prepare another native transport`(
+        cancelled: Bool) async throws
+    {
+        struct UnusedIdentityStore: OpenClawIDNodeIdentityStore {
+            func loadOrCreateSeed() async throws -> Data {
+                Issue.record("Stopped route attempted to load a node identity")
+                throw CancellationError()
+            }
+        }
+        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
+            .appendingPathComponent("node-route-stop-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let databaseURL = root.appendingPathComponent("node-enrollment.sqlite")
+        let suite = "NodeRouteStopTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let endpoint = try GatewayConnection.EndpointSnapshot(
+            config: (#require(URL(string: "wss://claw.example.invalid/")), nil, nil), routeAuthority: nil)
+        let coordinator = MacNodeModeCoordinator(
+            session: GatewayNodeSession(),
+            runtime: MacNodeRuntime(),
+            endpointProvider: { Issue.record("Native target fell back to operator endpoint")
+                return endpoint
+            },
+            presenceReporter: MacNodePresenceReporter(reportingEnabled: false),
+            desktopAvailability: MacDesktopAvailabilityCoordinator(defaults: defaults),
+            channelStatus: MacNodeChannelStatusStore(),
+            notificationCenter: NotificationCenter(),
+            initialPaused: false,
+            initialComputerControlEnabled: false,
+            initialComputerControlProvider: .peekaboo)
+        coordinator.selectOpenClawIDTarget(MacNodeOpenClawIDTarget(
+            hostname: "claw.example.invalid",
+            enrollmentID: UUID(),
+            databaseURL: databaseURL,
+            identityStore: UnusedIdentityStore()))
+        await coordinator.awaitStableRouteInvalidationDrain()
+        let generations = coordinator.generationsForTesting()
+        let attempt = ConnectionAttempt(
+            endpointGeneration: generations.endpointAttempt,
+            routeAuthorityGeneration: generations.routeAuthority,
+            workerUnavailable: nil,
+            endpoint: endpoint,
+            options: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-macos",
+                clientMode: "node",
+                clientDisplayName: "Stop Test",
+                includeDeviceIdentity: false),
+            sessionBox: nil,
+            workerTransportURL: "ws+unix:/tmp/retired/gateway.sock:/",
+            fallbackMainSessionKey: "main")
+        let callback = AsyncTestGate()
+        let validation = Task {
+            await callback.wait()
+            return try await coordinator.validatePostConnect(attempt)
+        }
+        await coordinator.stopAndWait()
+        if cancelled { validation.cancel() }
+        callback.open()
+        do {
+            #expect(try await validation.value == false)
+        } catch {
+            Issue.record("Stopped validation attempted preparation instead of returning false")
+        }
+        #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+    }
+
     @Test(arguments: [
         "current", "revoked", "refreshed", "credentials", "revoked-after-failure",
         "cancel-after-failure", "same-renewal-after-failure", "other-pin-after-failure",
@@ -467,9 +604,11 @@ struct GatewayCertificateRenewalTests {
         let release = AsyncTestGate()
         let endpointRead = AsyncTestGate()
         let endpointRelease = AsyncTestGate()
-        let fixture = RenewalConnectionFixture(
-            url: try #require(URL(string: "wss://gateway.example.com")),
-            beforeTrust: { entered.open(); await release.wait() })
+        let fixture = try RenewalConnectionFixture(
+            url: #require(URL(string: "wss://gateway.example.com")),
+            beforeTrust: { entered.open()
+                await release.wait()
+            })
         try fixture.learnOriginalCertificate()
         let endpoint = fixture.endpoint()
         let tls = try #require(endpoint.tls)
@@ -495,14 +634,31 @@ struct GatewayCertificateRenewalTests {
             initialComputerControlEnabled: false,
             initialComputerControlProvider: .peekaboo)
         let attempt = Task {
-            try await coordinator.connectForTesting(
+            let generations = coordinator.generationsForTesting()
+            return try await coordinator.connectWithTLSRepair(ConnectionAttempt(
+                endpointGeneration: generations.endpointAttempt,
+                routeAuthorityGeneration: generations.routeAuthority,
+                workerUnavailable: nil,
                 endpoint: endpoint,
-                sessionBox: fixture.sessionBox(route: tls))
+                options: GatewayConnectOptions(
+                    role: "node",
+                    scopes: [],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-macos",
+                    clientMode: "node",
+                    clientDisplayName: "Renewal Test",
+                    includeDeviceIdentity: false),
+                sessionBox: fixture.sessionBox(route: tls),
+                workerTransportURL: nil,
+                fallbackMainSessionKey: "main"))
         }
         await entered.wait()
         switch scenario {
-        case "revoked": coordinator.enqueueRouteInvalidationForTesting()
-        case "refreshed": coordinator.refreshForTesting(isPaused: false, computerControlEnabled: false)
+        case "revoked": coordinator.enqueueRouteInvalidation(mode: .ordinaryDisconnect)
+        case "refreshed":
+            coordinator.refresh(isPaused: false, computerControlEnabled: false, computerControlProvider: .peekaboo)
         case "credentials": fixture.token.withValue { $0 = "superseding-node-token" }
         default: break
         }
@@ -516,7 +672,7 @@ struct GatewayCertificateRenewalTests {
                     RenewalCertificates.fingerprint(RenewalCertificates.renewed), stableID: fixture.storeKey)
             case "other-pin-after-failure":
                 GatewayTLSStore.saveFingerprint("newer-node-pin", stableID: fixture.storeKey)
-            default: coordinator.enqueueRouteInvalidationForTesting()
+            default: coordinator.enqueueRouteInvalidation(mode: .ordinaryDisconnect)
             }
             endpointRelease.open()
         }

@@ -1,5 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { hydrateOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type {
@@ -11,7 +12,6 @@ import type {
 import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
-  type SqliteWorkerEphemeralTarget,
   type SqliteWorkerStore,
 } from "./sqlite-worker-contract.js";
 import {
@@ -70,11 +70,27 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
   );
 }
 
+const loadStateDatabaseCache = createLazyRuntimeModule(
+  () => import("../state/openclaw-state-db-cache.js"),
+);
+
+/** Gateway startup loads broker close's state owner before an update can replace its chunk. */
+export function prepareSqliteWorkerBrokerClose(): Promise<unknown> {
+  return loadStateDatabaseCache();
+}
+
 function resolveSqliteWorkerBroker() {
   return resolveGlobalSingleton(
     Symbol.for("openclaw.sqliteWorkerBroker"),
     () => new SqliteWorkerBroker(),
-    (broker) => withCallerErrors(broker.close()),
+    (broker) =>
+      withCallerErrors(
+        broker.close(async () => {
+          const { closeOpenClawStateDatabaseAsync } = await loadStateDatabaseCache();
+          await closeOpenClawStateDatabaseAsync();
+        }),
+      ),
+    "shared-state",
   );
 }
 
@@ -90,7 +106,7 @@ export function reserveSqliteWorkerInputPreparation(
 
 /**
  * Retain an admitted writer through native settlement. Backends request authority
- * after BEGIN and again immediately before COMMIT; the host never joins a native
+ * before BEGIN and again immediately before COMMIT; the host never joins a native
  * writer lock. A successful commit grant linearizes against subsequent revocation.
  */
 export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperations, T>(
@@ -112,26 +128,34 @@ export function createSqliteWorkerWriteAdmission(
   assertCurrent: (request: SqliteWorkerAdmissionRequest) => void,
   nativeLocations: readonly string[],
   attachment?: unknown,
+  prepare?: (request: SqliteWorkerAdmissionRequest) => Promise<void>,
 ): SqliteWorkerAdmissionFactory {
   return () => {
     let phase: "waiting" | "transaction" | "commit" = "waiting";
     return {
       nativeLocations,
-      admission: createSqliteWorkerOperationAdmission((request, grant) => {
-        if (
-          !(
-            (phase === "waiting" && request.stage === "transaction") ||
-            (phase === "transaction" && request.stage === "commit")
-          )
-        ) {
-          throw new Error("SQLite worker write authority requested out of order");
-        }
-        assertCurrent(request);
-        if (!grant()) {
-          throw new Error("SQLite worker write authority expired");
-        }
-        phase = phase === "waiting" ? "transaction" : "commit";
-      }, attachment),
+      admission: createSqliteWorkerOperationAdmission(
+        (request, grant) => {
+          if (
+            !(
+              ((phase === "waiting" || phase === "transaction") &&
+                request.stage === "transaction") ||
+              (phase === "transaction" && request.stage === "commit")
+            )
+          ) {
+            throw new Error("SQLite worker write authority requested out of order");
+          }
+          assertCurrent(request);
+          if (!grant()) {
+            throw new Error("SQLite worker write authority expired");
+          }
+          // A rolled-back attempt can reacquire its initial grant. A successful
+          // commit grant remains terminal for this command's admission owner.
+          phase = request.stage === "transaction" ? "transaction" : "commit";
+        },
+        attachment,
+        prepare,
+      ),
     };
   };
 }
@@ -163,25 +187,17 @@ export function closeUnclaimedSharedStateSqliteWorkers(databasePath: string): Pr
 }
 
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { existingOnly: true; target?: never },
+  options: SqliteWorkerStoreOptions & { existingOnly: true },
 ): Promise<SqliteWorkerStore<Operations> | undefined>;
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { existingOnly?: false; target?: never },
+  options: SqliteWorkerStoreOptions & { existingOnly?: false },
 ): Promise<SqliteWorkerStore<Operations>>;
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { target?: never },
+  options: SqliteWorkerStoreOptions,
 ): Promise<SqliteWorkerStore<Operations> | undefined>;
 export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
-  options: SqliteWorkerStoreOptions & { target?: never },
+  options: SqliteWorkerStoreOptions,
 ): Promise<SqliteWorkerStore<Operations> | undefined> {
-  if (options.target) {
-    return Promise.reject(
-      new SqliteWorkerError(
-        "Ephemeral SQLite stores require their agent execution owner",
-        "closed",
-      ),
-    );
-  }
   if (!isMainThread) {
     return Promise.reject(
       new SqliteWorkerError(
@@ -197,8 +213,10 @@ export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>
 export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   options: SqliteWorkerStoreOptions,
   custody: {
+    startupPreparation?: boolean;
     stateContext?: SqliteWorkerStateContext;
     stateDatabasePath?: string;
+    onNativeLost?: SqliteWorkerOpenCustody["onNativeLost"];
     onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
     signal?: AbortSignal;
     assertCurrent(): void;
@@ -217,40 +235,13 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
       custody.stateContext,
       () => custody.assertCurrent(),
       {
+        carrierClass: custody.startupPreparation ? "agent" : undefined,
         createAdmission: custody.createAdmission,
         stateDatabasePath: custody.stateDatabasePath,
+        onNativeLost: custody.onNativeLost,
         onNativeStopped: custody.onNativeStopped,
         signal: custody.signal,
       },
-    ),
-  );
-}
-
-/** Inactive incognito foundation: its execution owner pins the client until explicit disposal. */
-export function openEphemeralAgentDatabaseSqliteWorkerStore<
-  Operations extends SqliteWorkerOperations,
->(
-  options: SqliteWorkerStoreOptions & { target: SqliteWorkerEphemeralTarget },
-  custody: {
-    assertCurrent(): void;
-    createAdmission: SqliteWorkerAdmissionFactory;
-    onNativeLost?: SqliteWorkerOpenCustody["onNativeLost"];
-    onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
-    signal?: AbortSignal;
-  },
-): Promise<SqliteWorkerStore<Operations> | undefined> {
-  if (!isMainThread) {
-    return Promise.reject(
-      new SqliteWorkerError("Ephemeral agent admission requires its host owner", "unavailable"),
-    );
-  }
-  custody.assertCurrent();
-  return withCallerErrors(
-    resolveSqliteWorkerBroker().open<Operations>(
-      options,
-      undefined,
-      () => custody.assertCurrent(),
-      custody,
     ),
   );
 }
@@ -272,7 +263,7 @@ export function openSharedStateSqliteWorkerStore<Operations extends SqliteWorker
       { ...options, input: undefined },
       stateContext,
       assertCurrent,
-      lifecycle,
+      { ...lifecycle, carrierClass: "shared-state" },
     ),
   ).then((store) => {
     if (store) {

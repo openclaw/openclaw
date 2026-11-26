@@ -9,6 +9,7 @@ import net from "node:net";
 import type { Duplex } from "node:stream";
 import { createLoopbackConnectOptions } from "../../infra/loopback-connect.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
+import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 
 const PORTAL_AUTH_NAME = "openclaw_portal";
 // Browser cookie jars are hostname-scoped, so the stable listener port in the
@@ -210,7 +211,7 @@ function htmlResponse(
 function respondPortalUnauthorized(req: IncomingMessage, res: ServerResponse): void {
   const html =
     "<!doctype html><meta charset=utf-8><title>Private portal</title>" +
-    "<p>This portal is private. Open it from the OpenClaw Control UI.</p>";
+    "<p>This portal is private. Open it from OpenClaw.</p>";
   htmlResponse(res, 401, html, req.method === "HEAD");
 }
 
@@ -441,19 +442,18 @@ function websocketHeaders(
 }
 
 function rejectPortalUpgrade(socket: Duplex): void {
-  socket.end(
-    "HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain; charset=utf-8\r\n" +
-      "Content-Length: 12\r\nConnection: close\r\n\r\nUnauthorized",
-  );
+  rejectWebSocketUpgrade(socket, {
+    status: 401,
+    body: { contentType: "text/plain; charset=utf-8", text: "Unauthorized" },
+  });
 }
 
 function respondUpgradeWaiting(socket: Duplex, targetPort: number): void {
-  const html = portalWaitingHtml(targetPort);
-  socket.end(
-    "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/html; charset=utf-8\r\n" +
-      `Cache-Control: no-store\r\nReferrer-Policy: ${PORTAL_REFERRER_POLICY}\r\n` +
-      `Content-Length: ${Buffer.byteLength(html)}\r\nConnection: close\r\n\r\n${html}`,
-  );
+  rejectWebSocketUpgrade(socket, {
+    status: 502,
+    body: { contentType: "text/html; charset=utf-8", text: portalWaitingHtml(targetPort) },
+    headers: { "Cache-Control": "no-store", "Referrer-Policy": PORTAL_REFERRER_POLICY },
+  });
 }
 
 function forwardWebSocketResponse(

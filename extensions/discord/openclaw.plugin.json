@@ -45,7 +45,9 @@
     "additionalProperties": false,
     "properties": {}
   },
-  "controlUi": {
-    "entry": "dist/control-ui/c2d38d8e93a88aeda39593ffa781b8440dd107d307b55973bf881c95f3601e71/index.js"
-  }
+  "recommendedPrompts": [
+    "Help me plan a Discord bot setup with access to only the channels I choose.",
+    "Summarize decisions and action items in a Discord thread without replying.",
+    "Help me plan a Discord voice transcript workflow with participant consent."
+  ]
 }

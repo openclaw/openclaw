@@ -1,5 +1,4 @@
 import { afterEach, expect, test, vi } from "vitest";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import {
   controlUiClient,
   settleWorkspaceRuns,
@@ -22,7 +21,6 @@ test.each([1800000, 0, undefined])(
     testState.agentConfig = { timeoutSeconds: 180 };
     const { storePath } = await createSessionStoreDir();
     const context = {
-      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
       dedupe: new Map(),
     };
     const received = vi.fn<(request: unknown) => void>();

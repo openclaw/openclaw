@@ -13,7 +13,11 @@ type WorkboardCardMutation = (
   scope: WorkboardMutationScope,
 ) => Promise<WorkboardCard>;
 
-export function createWorkboardCardMutations(store: WorkboardStore, ownerId: string) {
+export function createWorkboardCardMutations(
+  store: WorkboardStore,
+  ownerId: string,
+  runId: string | undefined,
+) {
   const readParams = async (rawParams: unknown, requireClaim = false) => {
     const record = asRecord(rawParams);
     const id = readStringParam(record, "id", { required: true });
@@ -29,7 +33,7 @@ export function createWorkboardCardMutations(store: WorkboardStore, ownerId: str
     if (requireClaim && !claim) {
       throw new Error("card must be claimed before lifecycle completion.");
     }
-    return { record, id, scope: { ownerId, token } };
+    return { record, id, scope: { ownerId, token, runId } };
   };
   const cardMutation =
     (mutate: WorkboardCardMutation, requireClaim = false) =>
@@ -62,7 +66,12 @@ export function workspaceField() {
     strictObject({
       kind: Type.String({ description: "scratch, dir, or worktree." }),
       path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
-      branch: Type.Optional(Type.String({ description: "Suggested branch." })),
+      branch: Type.Optional(
+        Type.String({
+          description:
+            "Optional worktree source base ref. Re-dispatch reuses a retained checkout; use a new card for a different base ref.",
+        }),
+      ),
     }),
   );
 }

@@ -50,5 +50,3 @@ export function createPluginToolAllowlist(list?: string[]) {
       entries.has(runtimePluginToolGrantKey(pluginId, toolName)),
   };
 }
-
-export type PluginToolAllowlist = ReturnType<typeof createPluginToolAllowlist>;

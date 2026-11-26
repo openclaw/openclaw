@@ -1,15 +1,15 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asPositiveFiniteNumber,
+  resolveNonNegativeIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { readPhaseSignalStore, readStore } from "./short-term-promotion-store.js";
-import {
-  DEFAULT_PROMOTION_MIN_RECALL_COUNT,
-  DEFAULT_PROMOTION_MIN_SCORE,
-  DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
-  type PromotionCandidate,
-  type PromotionWeights,
-  type RankShortTermPromotionOptions,
-  type ShortTermPhaseSignalEntry,
+import type {
+  PromotionCandidate,
+  PromotionWeights,
+  RankShortTermPromotionOptions,
+  ShortTermPhaseSignalEntry,
 } from "./short-term-promotion-types.js";
 import {
   calculateRecencyComponent,
@@ -17,9 +17,7 @@ import {
   isContaminatedDreamingSnippet,
   isShortTermMemoryPath,
   isShortTermSessionCorpusPath,
-  toFiniteNonNegativeInt,
-  toFinitePositive,
-  toFiniteScore,
+  resolvePromotionThresholds,
   totalSignalCountForEntry,
 } from "./short-term-promotion-utils.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
@@ -41,9 +39,6 @@ const PROMOTION_WEIGHTS: PromotionWeights = {
 function calculateConsolidationComponent(recallDays: string[]): number {
   if (recallDays.length === 0) {
     return 0;
-  }
-  if (recallDays.length === 1) {
-    return 0.2;
   }
   const parsed = recallDays
     .map((recallDay) => Date.parse(recallDay + "T00:00:00.000Z"))
@@ -95,21 +90,11 @@ export async function rankShortTermPromotionCandidates(
 
   const nowMs = resolveMemoryCoreNowMs(options.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
-  const minScore = toFiniteScore(options.minScore, DEFAULT_PROMOTION_MIN_SCORE);
-  const minRecallCount = toFiniteNonNegativeInt(
-    options.minRecallCount,
-    DEFAULT_PROMOTION_MIN_RECALL_COUNT,
-  );
-  const minUniqueQueries = toFiniteNonNegativeInt(
-    options.minUniqueQueries,
-    DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
-  );
-  const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
+  const { minScore, minRecallCount, minUniqueQueries, maxAgeDays } =
+    resolvePromotionThresholds(options);
   const includePromoted = Boolean(options.includePromoted);
-  const halfLifeDays = toFinitePositive(
-    options.recencyHalfLifeDays,
-    DEFAULT_RECENCY_HALF_LIFE_DAYS,
-  );
+  const halfLifeDays =
+    asPositiveFiniteNumber(Number(options.recencyHalfLifeDays)) ?? DEFAULT_RECENCY_HALF_LIFE_DAYS;
   const [store, phaseSignals] = await Promise.all([
     readStore(workspaceDir, nowIso),
     readPhaseSignalStore(workspaceDir, nowIso),
@@ -117,21 +102,15 @@ export async function rankShortTermPromotionCandidates(
   const candidates: PromotionCandidate[] = [];
 
   for (const entry of Object.values(store.entries)) {
-    if (!isShortTermMemoryPath(entry.path)) {
-      continue;
-    }
     // Apply rejects these origins too; exclude them before scoring and candidate limits.
-    if (isPromotionOriginBlocked(entry)) {
-      continue;
-    }
     if (
+      !isShortTermMemoryPath(entry.path) ||
+      isPromotionOriginBlocked(entry) ||
       isContaminatedDreamingSnippet(entry.snippet, {
         allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entry.path),
-      })
+      }) ||
+      (!includePromoted && entry.promotedAt)
     ) {
-      continue;
-    }
-    if (!includePromoted && entry.promotedAt) {
       continue;
     }
     const { recallCount, dailyCount, groundedCount, recallDays, conceptTags } = entry;
@@ -212,15 +191,9 @@ export async function rankShortTermPromotionCandidates(
     });
   }
 
-  const sorted = candidates.toSorted((a, b) => {
-    if (b.score !== a.score) {
-      return b.score - a.score;
-    }
-    if (b.recallCount !== a.recallCount) {
-      return b.recallCount - a.recallCount;
-    }
-    return a.path.localeCompare(b.path);
-  });
+  const sorted = candidates.toSorted(
+    (a, b) => b.score - a.score || b.recallCount - a.recallCount || a.path.localeCompare(b.path),
+  );
 
   const limit = resolveNonNegativeIntegerOption(options.limit, sorted.length);
   return sorted.slice(0, limit);

@@ -1,12 +1,18 @@
-import { captureCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
+import {
+  readPreparedSessionEntryChange,
+  readPreparedSessionEntryPublicationSource,
+  type SessionEntryPublicationSource,
+} from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { prepareCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
 import type {
   SessionMembershipFact,
   SessionParticipantProjection,
 } from "../config/sessions/session-membership-facts.types.js";
 import { withPreparedSessionParticipants } from "../config/sessions/session-participant-prepared-read.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
+import { notifyListeners } from "../shared/listeners.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-agent-db.js";
 
 type SessionMembershipProjectionTarget = {
@@ -26,6 +32,7 @@ type Store = {
   all: boolean;
   dirty: Set<string>;
   facts: Map<string, SessionMembershipFact>;
+  publishedSource?: SessionEntryPublicationSource;
 };
 const noMembership: readonly string[] = Object.freeze([]);
 const noParticipants: SessionParticipantProjection = Object.freeze({});
@@ -41,6 +48,9 @@ function freezeFact(fact: SessionMembershipFact): SessionMembershipFact {
   }
   Object.freeze(fact[3]);
   Object.freeze(fact[2]);
+  if (fact[5]) {
+    Object.freeze(fact[5]);
+  }
   return Object.freeze(fact);
 }
 
@@ -63,6 +73,21 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
   let disposed = false;
   let pending: Promise<void> | undefined;
   let groups: ReadonlyMap<string, readonly GroupTarget[]> | undefined;
+  const listeners = new Set<(sessionKey?: string) => void>();
+  const publishMembership = (sessionKey?: string) => notifyListeners(listeners, sessionKey);
+  const replaceFact = (store: Store, key: string, fact?: SessionMembershipFact) => {
+    const previous = store.facts.get(key)?.[2] ?? noMembership;
+    const next = fact?.[2] ?? noMembership;
+    if (fact) {
+      store.facts.set(key, freezeFact(fact));
+    } else {
+      store.facts.delete(key);
+    }
+    return (
+      previous !== next &&
+      (previous.length !== next.length || previous.some((id, index) => id !== next[index]))
+    );
+  };
   const needsPreparation = () =>
     !disposed && [...stores.values()].some((store) => store.all || store.dirty.size > 0);
   function updateTargets(targets: readonly SessionMembershipProjectionTarget[]) {
@@ -119,7 +144,10 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
     return stores.values();
   }
   function invalidate(change: SessionRowChange) {
-    if (disposed || (!("all" in change) && change.scope === "automation")) {
+    if (
+      disposed ||
+      (!("all" in change) && (change.scope === "automation" || change.scope === "acp"))
+    ) {
       return;
     }
     if ("all" in change) {
@@ -140,26 +168,58 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
           store.facts.clear();
         }
       }
+      publishMembership();
     } else {
       const facts = change.facts;
+      const prepared = readPreparedSessionEntryChange(change, change.sessionKey);
       if (
         !change.factsInvalidated &&
-        (!facts || facts.kind === "unchanged" || facts.kind === "owner")
+        (!facts || facts.kind === "unchanged" || facts.kind === "owner" || facts.kind === "acp")
       ) {
         return;
       }
-      for (const store of matching(change)) {
+      const publication = readPreparedSessionEntryPublicationSource(change);
+      let membershipChanged = false;
+      for (const store of matching({ storePath: publication.canonicalPath ?? change.storePath })) {
+        const source = prepared?.source;
+        if (
+          source &&
+          (source.identity !== store.target.identity ||
+            source.birthtime !== store.target.birthtime ||
+            (store.publishedSource?.incarnation === source.incarnation &&
+              store.publishedSource.revision !== undefined &&
+              source.revision !== undefined &&
+              store.publishedSource.revision > source.revision))
+        ) {
+          continue;
+        }
         store.revision++;
+        if (!change.factsInvalidated && facts?.kind === "replacement" && prepared?.projection) {
+          membershipChanged =
+            replaceFact(
+              store,
+              change.sessionKey,
+              structuredClone(prepared.projection.membership),
+            ) || membershipChanged;
+          store.publishedSource = source;
+          store.dirty.delete(change.sessionKey);
+          continue;
+        }
         if (change.factsInvalidated) {
-          store.facts.delete(change.sessionKey);
+          membershipChanged = replaceFact(store, change.sessionKey) || membershipChanged;
           store.dirty.add(change.sessionKey);
           continue;
         }
-        if (!facts || facts.kind === "unchanged" || facts.kind === "owner") {
+        if (
+          !facts ||
+          facts.kind === "unchanged" ||
+          facts.kind === "owner" ||
+          facts.kind === "acp"
+        ) {
           continue;
         }
         if (facts.kind === "removed") {
-          store.facts.delete(change.sessionKey);
+          membershipChanged = replaceFact(store, change.sessionKey) || membershipChanged;
           store.dirty.delete(change.sessionKey);
           continue;
         }
@@ -170,17 +230,19 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
           store.initial ||
           store.all ||
           store.dirty.has(change.sessionKey) ||
+          facts.kind === "replacement" ||
           (facts.kind === "entry" && previous[4] !== facts.previousSessionId) ||
           ((facts.kind === "member" || facts.kind === "category") &&
             previous[4] !== facts.sessionId) ||
-          (facts.kind === "participants" && !facts.projection)
+          (facts.kind === "participants" && !facts.projection && facts.projectionChanged !== false)
         ) {
-          store.facts.delete(change.sessionKey);
+          membershipChanged = replaceFact(store, change.sessionKey) || membershipChanged;
           store.dirty.add(change.sessionKey);
           continue;
         }
         let category = previous[1];
         let memberIds = previous[2];
+        let memberAccess = previous[5];
         let participants = previous[3];
         let sessionId = previous[4];
         if (facts.kind === "entry") {
@@ -188,8 +250,15 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
           sessionId = facts.sessionId;
           if (facts.clearMembers) {
             memberIds = noMembership;
+            memberAccess = undefined;
           }
         } else if (facts.kind === "member") {
+          const levels = { ...memberAccess };
+          delete levels[facts.identityId];
+          if (facts.present && facts.access !== undefined) {
+            levels[facts.identityId] = facts.access;
+          }
+          memberAccess = Object.keys(levels).length ? levels : undefined;
           memberIds = facts.present
             ? [...new Set([...memberIds, facts.identityId])].toSorted(compareSessionKeys)
             : memberIds.filter((identity) => identity !== facts.identityId);
@@ -207,10 +276,18 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
               : {}),
           };
         }
-        store.facts.set(
-          change.sessionKey,
-          freezeFact([change.sessionKey, category, memberIds, participants, sessionId]),
-        );
+        membershipChanged =
+          replaceFact(store, change.sessionKey, [
+            change.sessionKey,
+            category,
+            memberIds,
+            participants,
+            sessionId,
+            ...(memberAccess ? ([memberAccess] as const) : ([] as const)),
+          ]) || membershipChanged;
+      }
+      if (membershipChanged) {
+        publishMembership(change.sessionKey);
       }
     }
     groups = undefined;
@@ -231,11 +308,11 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
         env,
       );
       const continuations: NonNullable<
-        ReturnType<typeof captureCanonicalSessionReaderContinuation>
+        Awaited<ReturnType<typeof prepareCanonicalSessionReaderContinuation>>
       >[] = [];
       try {
         for (const database of nativeReaders.databases) {
-          const continuation = captureCanonicalSessionReaderContinuation(database);
+          const continuation = await prepareCanonicalSessionReaderContinuation(database);
           if (continuation) {
             continuations.push(continuation);
           }
@@ -260,6 +337,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
                 env,
                 continuation: continuation?.receipt,
               });
+              await continuation?.prepareCurrent();
               continuation?.assertCurrent();
               if (
                 disposed ||
@@ -289,9 +367,15 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
               store.all = false;
               store.dirty.clear();
               groups = undefined;
+              // Preparation can restore grants after an uncertain publication.
+              if (keys === undefined) {
+                publishMembership();
+              } else {
+                keys.forEach(publishMembership);
+              }
             }
           },
-          projectionLane,
+          sessionStoreLane,
         );
       } finally {
         for (const continuation of continuations.toReversed()) {
@@ -329,8 +413,16 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
   return {
     updateTargets,
     invalidate,
+    onMembershipChange(this: void, listener: (sessionKey?: string) => void) {
+      listeners.add(listener);
+    },
     prepare,
     membership,
+    access(this: void, storePath: string, sessionKey: string, identityId: string) {
+      return !disposed
+        ? aliases.get(storePath)?.facts.get(sessionKey)?.[5]?.[identityId]
+        : undefined;
+    },
     ready,
     matchesSession(storePath: string, sessionKey: string, sessionId: string | undefined) {
       return (
@@ -387,6 +479,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
       disposed = true;
       stores.clear();
       aliases.clear();
+      listeners.clear();
       groups = undefined;
     },
   };

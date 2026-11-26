@@ -1,9 +1,12 @@
 import type { ConfigReplaceResult } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  formatBundledPluginDevReloadWarning,
+  resolveBundledPluginDevReloadMode,
+} from "./bundled-plugin-dev-reload.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { getPluginRuntimeEntrySource } from "./plugin-runtime-artifact-binding.js";
-import { getSharedPluginCodeReloadWarning } from "./plugin-shared-module-loader.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistryVersion } from "./runtime.js";
 
@@ -33,6 +36,8 @@ export class PluginRuntimeApplicationError extends Error {
       pluginIds: string[];
       phase: "prepare" | "drain" | "activate" | "dispose";
       committed: boolean;
+      /** The failed replacement also could not restore model/reply publication. */
+      runtimeRestorationFailed?: true;
     },
     options?: ErrorOptions,
   ) {
@@ -76,6 +81,7 @@ export function createPluginRuntimeApplication(params: {
   const sourceDigests = new Map<string, string>();
   const selectedEntries = new Map<string, string>();
   const restartWarnings = new Set<string>();
+  const devReloadWarnings = new Set<string>();
   for (const record of params.registry.plugins) {
     if (!params.pluginIds.has(record.id)) {
       continue;
@@ -92,15 +98,24 @@ export function createPluginRuntimeApplication(params: {
       params.reloadPluginIds?.has(record.id) &&
       record.enabled &&
       record.status === "loaded" &&
-      instance
+      instance &&
+      record.origin === "bundled"
     ) {
-      const warning = getSharedPluginCodeReloadWarning(instance);
-      if (warning) {
-        restartWarnings.add(warning);
+      // Only a development reload's capture gives a bundled runtime instance a source digest.
+      if (instance.sourceDigest) {
+        devReloadWarnings.add(formatBundledPluginDevReloadWarning(record.id));
+        continue;
+      }
+      restartWarnings.add(
+        "Bundled plugin code is owned by the running Gateway. Restart the Gateway to load updated code; rebuild first when using compiled output.",
+      );
+      const ignored = resolveBundledPluginDevReloadMode().ignoredWarning;
+      if (ignored) {
+        restartWarnings.add(ignored);
       }
     }
   }
-  const warnings = [...restartWarnings, ...params.warnings];
+  const warnings = [...restartWarnings, ...devReloadWarnings, ...params.warnings];
   return {
     operationId: params.operationId,
     generation: params.generation,
@@ -121,8 +136,6 @@ export type PluginLifecycleRuntimeApply = (params: {
   waitForDrain?: boolean;
   drainSignal?: AbortSignal;
   expectedSourceDigests?: Readonly<Record<string, string>>;
-  /** Canonical install owners whose committed contents may already be running. */
-  expectedInstallHashes?: Readonly<Record<string, string>>;
   /** Private invoker authority; never part of the published runtime receipt. */
   assertInvokerOwned?: () => void;
 }) => Promise<PluginRuntimeApplication>;

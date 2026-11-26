@@ -4,7 +4,6 @@ import type {
   RealtimeVoiceGatewayControl,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
-  buildRealtimeVoiceAgentControlSpeechMessage,
   extractErrorCode,
   readErrorName,
   rawDataToString,
@@ -31,6 +30,16 @@ import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
 const WEBSOCKET_OPEN = 1;
 const CONSULT_FAILURE_TEXT =
   "The agent task failed. Tell the user it did not complete and offer to try again.";
+// Keep the launch note in one append; it does not establish consultation admission.
+const NATURAL_DELEGATION_ACK_MESSAGE = [
+  "Internal OpenClaw voice control note.",
+  "Do not delegate this note or call tools.",
+  "The request may not be accepted yet.",
+  "For this launch acknowledgment only, confirm hearing the request; never imply checking or doing it.",
+  "Reply in your own words and the user's language, under 8 words; vary naturally and avoid repeating recent acknowledgments.",
+  'Do not imply acceptance, work begun, or completion: no "on it", "taking that", "accepted", or equivalents in any language.',
+  "Do not guess an answer or promise one.",
+].join("\n");
 
 type PendingDelegation = {
   id: string;
@@ -119,27 +128,25 @@ export class OpenAIQuicksilverDelegationController {
   private stopped = false;
   private drainDisposition: "abort" | "detach" | undefined;
   private readonly transcript = new OpenAIQuicksilverTranscript();
-  private readonly publicDelegations: OpenAILiveDelegationQueue | undefined;
+  private readonly delegations: OpenAILiveDelegationQueue;
 
   constructor(
     private readonly options: OpenAIQuicksilverDelegationControllerOptions,
     private readonly formatErrorMessage: OpenAIRealtimeHost["formatErrorMessage"],
   ) {
-    if (isOpenAIGptLiveApiModel(options.model)) {
-      this.publicDelegations = new OpenAILiveDelegationQueue({
-        isActive: () => !this.stopped && !this.drainDisposition && !options.signal.aborted,
-        readInput: () => this.transcript.latestUserInput(),
-        dispatch: (id, input) => this.startDelegation(id, input),
-        onExpired: (id) => {
-          this.sendAppend(
-            "Ask the user to repeat their request; no user transcript was received.",
-            "speakable",
-            id,
-          );
-        },
-        onError: (error) => this.fail(error),
-      });
-    }
+    this.delegations = new OpenAILiveDelegationQueue({
+      isActive: () => !this.stopped && !this.drainDisposition && !options.signal.aborted,
+      readInput: () => this.transcript.latestUserInput(),
+      dispatch: (id, input) => this.startDelegation(id, input),
+      onExpired: (id) => {
+        this.sendAppend(
+          "Ask the user to repeat their request; no user transcript was received.",
+          "speakable",
+          id,
+        );
+      },
+      onError: (error) => this.fail(error),
+    });
     this.completionClaimsAdopted = options.runAgentConsult.adoptCompletionClaims !== undefined;
     options.runAgentConsult.adoptCompletionClaims?.();
     if (options.signal.aborted) {
@@ -218,7 +225,7 @@ export class OpenAIQuicksilverDelegationController {
           onTranscript: this.options.onTranscript,
           canAppend: () => !this.stopped,
         });
-        this.publicDelegations?.resume();
+        this.delegations.resume();
       } else {
         this.transcript.append(event);
         this.options.onTranscript?.(event.role, event.text, event.kind === "transcript-done");
@@ -235,9 +242,12 @@ export class OpenAIQuicksilverDelegationController {
       }
       return;
     }
-    if (this.publicDelegations) {
-      this.publicDelegations.enqueue(event.id);
+    if (isOpenAIGptLiveApiModel(this.options.model)) {
+      this.delegations.enqueue(event.id);
     } else {
+      if (!this.delegations.claim(event.id)) {
+        return;
+      }
       const input = event.prompt ?? this.transcript.latestUserInput();
       if (event.prompt === undefined && !input.trim()) {
         this.sendAppend(
@@ -264,7 +274,7 @@ export class OpenAIQuicksilverDelegationController {
       return;
     }
     this.drainDisposition = disposition;
-    this.publicDelegations?.stop();
+    this.delegations.stop();
     this.revokeRequesterFinal();
     this.pendingDelegation = undefined;
     if (disposition === "abort") {
@@ -273,24 +283,15 @@ export class OpenAIQuicksilverDelegationController {
   }
 
   stop(reason: Error): void {
-    if (this.stopped) {
-      return;
+    if (this.retire()) {
+      this.consultController?.abort(reason);
+      this.consultController = undefined;
     }
-    this.publicDelegations?.stop();
-    this.flushTranscript();
-    this.markStopped();
-    this.consultController?.abort(reason);
-    this.consultController = undefined;
   }
 
   /** Releases sideband ownership without canceling work already accepted by the host. */
   detach(): void {
-    if (this.stopped) {
-      return;
-    }
-    this.publicDelegations?.stop();
-    this.flushTranscript();
-    this.markStopped();
+    this.retire();
   }
 
   flushTranscript(): void {
@@ -452,12 +453,18 @@ export class OpenAIQuicksilverDelegationController {
     this.steeringPromise = completion;
   }
 
-  private markStopped(): void {
+  private retire(): boolean {
+    if (this.stopped) {
+      return false;
+    }
+    this.delegations.stop();
+    this.flushTranscript();
     this.stopped = true;
     this.revokeRequesterFinal();
     this.options.signal.removeEventListener("abort", this.onSessionAbort);
     this.pendingDelegation = undefined;
     this.transcript.clear();
+    return true;
   }
 
   private async runDelegation(
@@ -471,10 +478,7 @@ export class OpenAIQuicksilverDelegationController {
     try {
       // Host-classified sessions disable vendor filler. Receipt is launch-only, not run admission.
       if (this.options.handleDelegationInput) {
-        this.sendSessionContext(
-          buildRealtimeVoiceAgentControlSpeechMessage("I’ll check that request."),
-          "speakable",
-        );
+        this.sendSessionContext(NATURAL_DELEGATION_ACK_MESSAGE, "speakable");
       }
       const result = await runner({
         prompt: delegation.prompt,

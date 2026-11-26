@@ -1,16 +1,22 @@
 /** Tests merging user OpenClaw MCP server config into Claude bundle-MCP overlays. */
 import fs from "node:fs/promises";
-import http from "node:http";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { peekSessionMcpRuntime, retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
-import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { startCompletionServer } from "../simple-completion.test-support.js";
+import {
+  type CliMcpParams,
+  loopbackConfig,
+  prepareMcp,
+  readMcpConfig,
+  userMcpConfig as userConfig,
+} from "./bundle-mcp-fixtures.test-support.js";
 import {
   cliBundleMcpHarness,
   cliNativeMcpPolicyContext,
-  requireMcpConfigPath,
   setupCliBundleMcpTestHarness,
   writeCliMcpPolicyProbeServer,
 } from "./bundle-mcp.test-support.js";
@@ -27,29 +33,30 @@ vi.mock("../mcp-oauth.js", () => ({
 
 setupCliBundleMcpTestHarness();
 
-type CliMcpParams = Parameters<typeof prepareCliBundleMcpConfig>[0];
+const catalogTools = (sessionId: string) =>
+  peekSessionMcpRuntime({ sessionId })?.peekCatalog()?.tools;
 
-function prepareClaudeConfig(
-  params: Omit<CliMcpParams, "enabled" | "mode" | "backend"> & {
-    backend?: CliMcpParams["backend"];
-  },
-) {
-  return prepareCliBundleMcpConfig({
-    enabled: true,
-    mode: "claude-config-file",
-    backend: { command: "node", args: ["./fake-claude.mjs"] },
-    ...params,
+async function prepareClaudeConfig(params: Partial<CliMcpParams>, close?: () => Promise<void>) {
+  return prepareMcp({ mode: "claude-config-file", ...params }, async () => {
+    if (params.nativeMcpPolicy) {
+      await retireSessionMcpRuntime({
+        sessionId: params.nativeMcpPolicy.sessionId,
+        reason: "test-complete",
+      });
+    }
+    await close?.();
   });
+}
+
+async function readServers(prepared: Awaited<ReturnType<typeof prepareClaudeConfig>>) {
+  return (await readMcpConfig(prepared)).mcpServers;
 }
 
 async function startOAuthMcpProofServer() {
   const authorizationHeaders: Array<string | undefined> = [];
-  const httpServer = http.createServer((request, response) => {
+  const server = await startCompletionServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
+      const body = await text(request);
       authorizationHeaders.push(request.headers.authorization);
       if (request.headers.authorization !== "Bearer fresh-token") {
         response.writeHead(401, {
@@ -63,7 +70,7 @@ async function startOAuthMcpProofServer() {
         response.writeHead(204).end();
         return;
       }
-      const message = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+      const message = JSON.parse(body) as {
         id?: number;
         method?: string;
       };
@@ -80,11 +87,7 @@ async function startOAuthMcpProofServer() {
             }
           : {
               tools: [
-                {
-                  name: "read_docs",
-                  description: "Read docs",
-                  inputSchema: { type: "object" },
-                },
+                { name: "read_docs", description: "Read docs", inputSchema: { type: "object" } },
               ],
             };
       response.writeHead(200, { "content-type": "application/json" });
@@ -95,23 +98,10 @@ async function startOAuthMcpProofServer() {
       }
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(0, "127.0.0.1", resolve);
-  });
-  const address = httpServer.address();
-  if (!address || typeof address === "string") {
-    throw new Error("OAuth MCP proof server did not acquire a loopback port");
-  }
   return {
     authorizationHeaders,
-    url: `http://127.0.0.1:${address.port}/mcp`,
-    close: async () => {
-      httpServer.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        httpServer.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+    url: `${server.origin}/mcp`,
+    close: () => server[Symbol.asyncDispose](),
   };
 }
 
@@ -122,75 +112,26 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
   });
 
   it("translates OpenClaw transport field on user mcp.servers into Claude type", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-user-servers-transport-",
-    );
-
     const prepared = await prepareClaudeConfig({
-      workspaceDir,
-      config: {
-        plugins: { enabled: false },
-        mcp: {
-          servers: {
-            context7: {
-              transport: "streamable-http",
-              url: "https://mcp.context7.com/mcp",
-              headers: { CONTEXT7_API_KEY: "ctx7sk-test" },
-            },
-            "omi-sse": {
-              transport: "sse",
-              url: "https://api.omi.me/v1/mcp/sse",
-            },
-          },
+      config: userConfig({
+        context7: {
+          transport: "streamable-http",
+          url: "https://mcp.context7.com/mcp",
+          headers: { CONTEXT7_API_KEY: "ctx7sk-test" },
         },
-      },
+        "omi-sse": {
+          type: "http",
+          transport: "sse",
+          url: "https://api.omi.me/v1/mcp/sse",
+        },
+      }),
     });
 
-    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-      mcpServers?: Record<string, { type?: string; transport?: string; url?: string }>;
-    };
-
-    expect(raw.mcpServers?.context7?.type).toBe("http");
-    expect(raw.mcpServers?.context7?.url).toBe("https://mcp.context7.com/mcp");
-    expect(raw.mcpServers?.context7?.transport).toBeUndefined();
-
-    expect(raw.mcpServers?.["omi-sse"]?.type).toBe("sse");
-    expect(raw.mcpServers?.["omi-sse"]?.transport).toBeUndefined();
-
-    await prepared.cleanup?.();
-  });
-
-  it("encodes canonical transport when stale CLI type remains on user mcp.servers", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-user-servers-transport-explicit-",
-    );
-
-    const prepared = await prepareClaudeConfig({
-      workspaceDir,
-      config: {
-        plugins: { enabled: false },
-        mcp: {
-          servers: {
-            mixed: {
-              type: "http",
-              transport: "sse",
-              url: "https://mcp.example.com/mcp",
-            },
-          },
-        },
-      },
-    });
-
-    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-      mcpServers?: Record<string, { type?: string; transport?: string }>;
-    };
-
-    expect(raw.mcpServers?.mixed?.type).toBe("sse");
-    expect(raw.mcpServers?.mixed?.transport).toBeUndefined();
-
-    await prepared.cleanup?.();
+    const servers = await readServers(prepared);
+    expect(servers?.context7).toMatchObject({ type: "http", url: "https://mcp.context7.com/mcp" });
+    expect(servers?.context7?.transport).toBeUndefined();
+    expect(servers?.["omi-sse"]?.type).toBe("sse");
+    expect(servers?.["omi-sse"]?.transport).toBeUndefined();
   });
 
   it("omits unavailable OAuth servers without blocking the CLI agent", async () => {
@@ -200,56 +141,35 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
     const warn = vi.fn();
     const serverPath = await writeCliMcpPolicyProbeServer();
     const sessionId = "claude-unavailable-oauth-policy";
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-user-servers-oauth-",
-    );
-    const config = {
-      plugins: { enabled: false },
-      tools: { allow: ["localTools__read_docs"] },
-      mcp: {
-        servers: {
-          gbrain: {
-            transport: "streamable-http" as const,
-            url: "https://gbrain.example.com/mcp",
-            auth: "oauth" as const,
-          },
-          localTools: {
-            transport: "stdio" as const,
-            command: process.execPath,
-            args: [serverPath],
-          },
+    const config = userConfig(
+      {
+        gbrain: {
+          transport: "streamable-http",
+          url: "https://gbrain.example.com/mcp",
+          auth: "oauth",
+        },
+        localTools: {
+          transport: "stdio",
+          command: process.execPath,
+          args: [serverPath],
         },
       },
-    };
+      { tools: { allow: ["localTools__read_docs"] } },
+    );
 
-    let prepared: Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> | undefined;
-    try {
-      prepared = await prepareClaudeConfig({
-        workspaceDir,
-        config,
-        nativeMcpPolicy: cliNativeMcpPolicyContext(config, sessionId),
-        warn,
-      });
+    const prepared = await prepareClaudeConfig({
+      config,
+      nativeMcpPolicy: cliNativeMcpPolicyContext(config, sessionId),
+      warn,
+    });
 
-      const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
-      const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-        mcpServers?: Record<string, unknown>;
-      };
-      expect(Object.keys(raw.mcpServers ?? {})).toEqual(["localTools"]);
-      expect([
-        ...new Set(
-          peekSessionMcpRuntime({ sessionId })
-            ?.peekCatalog()
-            ?.tools.map((tool) => tool.serverName),
-        ),
-      ]).toEqual(["localTools"]);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("skipped unavailable OAuth server gbrain"),
-      );
-    } finally {
-      await prepared?.cleanup?.();
-      await retireSessionMcpRuntime({ sessionId, reason: "test-complete" });
-    }
+    expect(Object.keys((await readServers(prepared)) ?? {})).toEqual(["localTools"]);
+    expect([...new Set(catalogTools(sessionId)?.map((tool) => tool.serverName))]).toEqual([
+      "localTools",
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("skipped unavailable OAuth server gbrain"),
+    );
   });
 
   it("keeps native OAuth refresh available while projecting the child bearer", async () => {
@@ -259,174 +179,91 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       .mockResolvedValue("fresh-token")
       .mockResolvedValueOnce("stale-token")
       .mockResolvedValueOnce("stale-token");
-    const config = {
-      plugins: { enabled: false },
-      tools: { allow: ["docs__read_docs"] },
-      mcp: {
-        servers: {
-          docs: {
-            transport: "streamable-http" as const,
-            url: proof.url,
-            auth: "oauth" as const,
-            oauth: { scope: "docs.read" },
-          },
+    const config = userConfig(
+      {
+        docs: {
+          transport: "streamable-http",
+          url: proof.url,
+          auth: "oauth",
+          oauth: { scope: "docs.read" },
         },
       },
-    };
+      { tools: { allow: ["docs__read_docs"] } },
+    );
 
-    let prepared: Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> | undefined;
-    try {
-      prepared = await prepareClaudeConfig({
+    const prepared = await prepareClaudeConfig(
+      {
         workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
         config,
         nativeMcpPolicy: cliNativeMcpPolicyContext(config, sessionId),
-      });
+      },
+      proof.close,
+    );
 
-      const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
-      const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-        mcpServers?: Record<
-          string,
-          { auth?: string; oauth?: unknown; headers?: Record<string, string> }
-        >;
-      };
-      expect(proof.authorizationHeaders.slice(0, 2)).toEqual([
-        "Bearer stale-token",
-        "Bearer fresh-token",
-      ]);
-      expect(
-        peekSessionMcpRuntime({ sessionId })
-          ?.peekCatalog()
-          ?.tools.map((tool) => tool.toolName),
-      ).toEqual(["read_docs"]);
-      expect(raw.mcpServers?.docs).toMatchObject({
-        headers: { Authorization: "Bearer fresh-token" },
-      });
-      expect(raw.mcpServers?.docs?.auth).toBeUndefined();
-      expect(raw.mcpServers?.docs?.oauth).toBeUndefined();
-      expect(proof.authorizationHeaders.some((value) => value?.includes("OPENCLAW_MCP_AUTH"))).toBe(
-        false,
-      );
-    } finally {
-      await prepared?.cleanup?.();
-      await retireSessionMcpRuntime({ sessionId, reason: "test-complete" });
-      await proof.close();
-    }
+    const servers = await readServers(prepared);
+    expect(proof.authorizationHeaders.slice(0, 2)).toEqual([
+      "Bearer stale-token",
+      "Bearer fresh-token",
+    ]);
+    expect(catalogTools(sessionId)?.map((tool) => tool.toolName)).toEqual(["read_docs"]);
+    expect(servers?.docs).toMatchObject({
+      headers: { Authorization: "Bearer fresh-token" },
+    });
+    expect([servers?.docs?.auth, servers?.docs?.oauth]).toEqual([undefined, undefined]);
+    expect(proof.authorizationHeaders.some((value) => value?.includes("OPENCLAW_MCP_AUTH"))).toBe(
+      false,
+    );
   });
 
   it("user mcp.servers do not override the loopback additionalConfig", async () => {
-    // The OpenClaw loopback server is generated runtime state and must win over
-    // user config with the same server name.
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-user-servers-loopback-",
-    );
-
     const prepared = await prepareClaudeConfig({
-      workspaceDir,
-      config: {
-        plugins: { enabled: false },
-        mcp: {
-          servers: {
-            openclaw: {
-              type: "http",
-              url: "https://example.com/malicious",
-            },
-          },
-        },
-      },
-      additionalConfig: {
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:23119/mcp",
-            headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
-          },
-        },
-      },
+      config: userConfig({ openclaw: { type: "http", url: "https://example.com/malicious" } }),
+      additionalConfig: loopbackConfig({
+        headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+      }),
     });
 
-    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-      mcpServers?: Record<string, { url?: string }>;
-    };
-    expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
-
-    await prepared.cleanup?.();
+    expect((await readServers(prepared))?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
   });
 
   it("replaces overlapping bundle server entries with user-configured mcp.servers", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-user-servers-replace-",
-    );
     await writeClaudeBundleManifest({
       homeDir: cliBundleMcpHarness.bundleProbeHomeDir,
       pluginId: "omi",
       manifest: { name: "omi" },
     });
-    const pluginDir = path.join(
-      cliBundleMcpHarness.bundleProbeHomeDir,
-      ".openclaw",
-      "extensions",
-      "omi",
-    );
+    const pluginDir = path.join(cliBundleMcpHarness.bundleProbeHomeDir, ".openclaw/extensions/omi");
     await fs.writeFile(
       path.join(pluginDir, ".mcp.json"),
-      `${JSON.stringify(
-        {
-          mcpServers: {
-            omi: {
-              command: process.execPath,
-              args: [cliBundleMcpHarness.bundleProbeServerPath],
-              env: { BUNDLE_ONLY: "true" },
-            },
+      JSON.stringify({
+        mcpServers: {
+          omi: {
+            command: process.execPath,
+            args: [cliBundleMcpHarness.bundleProbeServerPath],
+            env: { BUNDLE_ONLY: "true" },
           },
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
+      }),
     );
-
     await withEnvAsync({ HOME: cliBundleMcpHarness.bundleProbeHomeDir }, async () => {
       const prepared = await prepareClaudeConfig({
-        workspaceDir,
-        config: {
-          plugins: {
-            entries: {
-              omi: { enabled: true },
+        config: userConfig(
+          {
+            omi: {
+              type: "sse",
+              url: "https://api.omi.me/v1/mcp/sse",
+              headers: { Authorization: "Bearer test-token" },
             },
           },
-          mcp: {
-            servers: {
-              omi: {
-                type: "sse",
-                url: "https://api.omi.me/v1/mcp/sse",
-                headers: { Authorization: "Bearer test-token" },
-              },
-            },
-          },
-        },
+          { plugins: { entries: { omi: { enabled: true } } } },
+        ),
       });
 
-      const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
-      const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-        mcpServers?: Record<
-          string,
-          {
-            type?: string;
-            url?: string;
-            command?: string;
-            args?: string[];
-            env?: Record<string, string>;
-          }
-        >;
-      };
-      expect(raw.mcpServers?.omi?.type).toBe("sse");
-      expect(raw.mcpServers?.omi?.url).toBe("https://api.omi.me/v1/mcp/sse");
-      expect(raw.mcpServers?.omi?.command).toBeUndefined();
-      expect(raw.mcpServers?.omi?.args).toBeUndefined();
-      expect(raw.mcpServers?.omi?.env).toBeUndefined();
-
-      await prepared.cleanup?.();
+      const servers = await readServers(prepared);
+      expect(servers?.omi).toMatchObject({ type: "sse", url: "https://api.omi.me/v1/mcp/sse" });
+      expect(servers?.omi?.command).toBeUndefined();
+      expect(servers?.omi?.args).toBeUndefined();
+      expect(servers?.omi?.env).toBeUndefined();
     });
   });
 });

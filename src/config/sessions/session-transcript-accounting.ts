@@ -1,121 +1,122 @@
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
-import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
-import { withRecentSessionTranscriptActiveEventsInSnapshot } from "./session-accessor.sqlite-active-events-read.js";
-import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
+import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import {
+  readProjectionTranscriptPayload,
+  selectActiveTranscriptEventRows,
+  type CurrentTranscriptProjection,
+} from "./session-accessor.sqlite-projection-read.js";
 import { readVisibleTranscriptStats } from "./session-accessor.sqlite-reset-window.js";
+import {
+  readSessionTranscriptAccountingTail,
+  selectSessionTranscriptAccountingTail,
+} from "./session-transcript-accounting-policy.js";
 import {
   SQLITE_USAGE_TAIL_MAX_EVENTS,
   type SessionTranscriptAccountingOptions,
   type SessionTranscriptAccountingSnapshot,
-  type SessionTranscriptUsageSnapshot,
 } from "./session-transcript-accounting.types.js";
 import {
-  isSessionTranscriptLeafControl,
-  selectSessionTranscriptLeafControlledPath,
-} from "./transcript-tree.js";
+  projectTranscriptNavigationForReadSql,
+  readTranscriptNavigation,
+} from "./session-transcript-navigation.js";
+import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
-function isUnavailableContextBarrier(
-  usage: NonNullable<ReturnType<typeof normalizeUsage>>,
-): boolean {
-  if (usage.contextUsage?.state !== "unavailable") {
-    return false;
-  }
-  return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].every(
-    (value) => !(typeof value === "number" && value > 0),
+function readAccountingTail(
+  projection: CurrentTranscriptProjection,
+  options: SessionTranscriptAccountingOptions,
+): SessionTranscriptAccountingSnapshot {
+  const query = selectActiveTranscriptEventRows(projection.database)
+    .where("active.session_id", "=", projection.resolved.sessionId)
+    .where("active.context_eligible", "=", 1)
+    .orderBy("active.active_position", "desc");
+  const candidates = Array.from(
+    iterateSqliteQuerySync(
+      projection.database.db,
+      query
+        .select("active.active_position")
+        .select((eb) => {
+          const navigation = projectTranscriptNavigationForReadSql(
+            projection.database.db,
+            transcriptEventNavigationSql(projection.database.db, "event"),
+          );
+          // SQLite treats literal NUL as an end marker, but JSON.parse rejects it.
+          // Do not let compact projection hide corrupted identity bytes from accounting.
+          return [
+            isPostgresSqlConnection(projection.database.db)
+              ? navigation.as("navigation")
+              : eb
+                  .case()
+                  .when(
+                    eb.fn<number>("instr", [
+                      eb.ref("event.event_json"),
+                      eb.fn<string>("char", [eb.val(0)]),
+                    ]),
+                    ">",
+                    0,
+                  )
+                  .then(null)
+                  .else(navigation)
+                  .end()
+                  .as("navigation"),
+          ];
+        })
+        .limit(SQLITE_USAGE_TAIL_MAX_EVENTS),
+    ),
+    (row) => {
+      if (row.navigation === null) {
+        throw new Error("Transcript accounting navigation is unavailable");
+      }
+      return { position: row.active_position, event: readTranscriptNavigation(row.navigation) };
+    },
   );
-}
-
-function deriveTranscriptUsageSnapshot(
-  usage: NonNullable<ReturnType<typeof normalizeUsage>>,
-  trailingMessages: AgentMessage[],
-): SessionTranscriptUsageSnapshot | undefined {
-  const promptTokens = deriveContextPromptTokens({ lastCallUsage: usage });
-  const outputTokens = asPositiveFiniteNumber(usage.output);
-  if (!(typeof promptTokens === "number") && !(typeof outputTokens === "number")) {
-    return undefined;
-  }
-  return {
-    promptTokens,
-    outputTokens,
-    trailingMessages,
-  };
-}
-
-function readTranscriptAccountingSnapshot(
-  visit: (visitor: (event: unknown) => void) => void,
-  options: { includeUsage: boolean; includeTurnTaint?: boolean },
-): {
-  boundaryFound: boolean;
-  eventCount: number;
-  hasLeafControl: boolean;
-  tainted: boolean;
-  usage?: SessionTranscriptUsageSnapshot;
-} {
-  let scanUsage = options.includeUsage;
-  let scanTaint = options.includeTurnTaint === true;
-  let latestUsage: ReturnType<typeof normalizeUsage>;
-  const trailingMessages: AgentMessage[] = [];
-  let boundaryFound = false;
-  let tainted = false;
-  let eventCount = 0;
-  let hasLeafControl = false;
-  visit((event) => {
-    eventCount += 1;
-    hasLeafControl ||= isSessionTranscriptLeafControl(event);
-    const record = asOptionalRecord(event);
-    if (!record) {
+  const selected = selectSessionTranscriptAccountingTail(
+    candidates.toReversed(),
+    (row) => row.event,
+  );
+  function* events(): Iterable<unknown> {
+    if (selected.length === 0) {
       return;
     }
-    const messageRecord = asOptionalRecord(record.message);
-    // SAFETY: Stored message payloads use the AgentMessage serialization contract.
-    const message = messageRecord as AgentMessage | undefined;
-    if (scanUsage) {
-      const rawUsage = messageRecord?.usage ?? record.usage;
-      const usageFields = asOptionalRecord(rawUsage);
-      if (
-        record.type === "compaction" ||
-        record.type === "reset" ||
-        (messageRecord?.api === "cli" && rawUsage && usageFields?.contextUsage === undefined)
-      ) {
-        scanUsage = false;
-        trailingMessages.length = 0;
+    // Keep the active-position index as the driver; sorting hydrated bodies defeats early exit.
+    const reordered = selected.some(
+      (row, index) => index > 0 && row.position <= selected[index - 1]!.position,
+    );
+    // Duplicate imported ids can put logical ancestors after their descendants on disk.
+    // Buffer only that bounded exceptional path, then replay the tree owner's order.
+    const buffered = reordered ? new Map<number, unknown>() : undefined;
+    const payloads = query
+      .where(
+        "active.active_position",
+        "in",
+        selected.map((row) => row.position),
+      )
+      .select([
+        "active.active_position",
+        "event.seq",
+        "event.event_json",
+        "event.event_zstd",
+        "event.event_utf8_bytes",
+      ]);
+    for (const row of iterateSqliteQuerySync(projection.database.db, payloads)) {
+      const event: unknown = JSON.parse(readProjectionTranscriptPayload(projection, row, row.seq));
+      if (buffered) {
+        buffered.set(row.active_position, event);
       } else {
-        const usage = normalizeUsage(usageFields);
-        if (usage && isUnavailableContextBarrier(usage)) {
-          scanUsage = false;
-          trailingMessages.length = 0;
-        } else if (usage && hasNonzeroUsage(usage)) {
-          latestUsage = usage;
-          scanUsage = false;
-        } else if (message) {
-          trailingMessages.push(message);
-        }
+        yield event;
       }
     }
-    if (scanTaint && message) {
-      if (message.role === "user") {
-        boundaryFound = true;
-        scanTaint = false;
-      } else {
-        const metadata = asOptionalRecord(messageRecord?.["__openclaw"]);
-        if (metadata?.turnTainted === true || metadata?.resultContentSource === "network") {
-          tainted = true;
-          scanTaint = false;
+    if (buffered) {
+      for (const row of selected.toReversed()) {
+        if (!buffered.has(row.position)) {
+          throw new Error("Transcript accounting path is incomplete");
         }
+        yield buffered.get(row.position);
       }
     }
-  });
-  return {
-    boundaryFound,
-    eventCount,
-    hasLeafControl,
-    tainted,
-    usage: latestUsage
-      ? deriveTranscriptUsageSnapshot(latestUsage, trailingMessages.toReversed())
-      : undefined,
-  };
+  }
+  // Monotone paths validate only the needed suffix; exceptional ordering validates its bounded set.
+  // Navigation and required-body failures still take the caller's conservative error path.
+  return readSessionTranscriptAccountingTail(events(), options, candidates.length);
 }
 
 export function readSessionTranscriptAccountingFromProjection(
@@ -130,38 +131,7 @@ export function readSessionTranscriptAccountingFromProjection(
       snapshot.eventCount = stats.eventCount;
     }
     if (params.includeUsage || params.includeTurnTaint) {
-      const accounting = withRecentSessionTranscriptActiveEventsInSnapshot(
-        projection,
-        params.usageEventLimit ?? SQLITE_USAGE_TAIL_MAX_EVENTS,
-        (visit) => {
-          const result = readTranscriptAccountingSnapshot(visit, params);
-          if (!result.hasLeafControl) {
-            return result;
-          }
-          // First-row and legacy flat projections can still contain leaf controls.
-          // Preserve their serialized navigation contract in this same snapshot.
-          const events: unknown[] = [];
-          visit((event) => events.push(event));
-          events.reverse();
-          const activeEvents = selectSessionTranscriptLeafControlledPath(events) ?? events;
-          return {
-            ...readTranscriptAccountingSnapshot((visitor) => {
-              for (let index = activeEvents.length - 1; index >= 0; index -= 1) {
-                visitor(activeEvents[index]);
-              }
-            }, params),
-            eventCount: result.eventCount,
-          };
-        },
-      );
-      if (params.includeUsage) {
-        snapshot.usage = accounting.usage;
-      }
-      if (params.includeTurnTaint) {
-        snapshot.turnTainted =
-          accounting.tainted ||
-          (!accounting.boundaryFound && accounting.eventCount >= SQLITE_USAGE_TAIL_MAX_EVENTS);
-      }
+      Object.assign(snapshot, readAccountingTail(projection, params));
     }
   } catch {
     if (params.includeTurnTaint) {

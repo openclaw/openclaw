@@ -146,17 +146,13 @@ extension ChatSessionSidebar {
 
     @ViewBuilder func pagesSection(
         _ sections: [ChatSessionSidebarModel.Section],
-        now: Date,
-        ownership: ChatSidebarOwnership,
-        previewRequest: ChatSessionSidebarPreviews.Request) -> some View
+        context: RowContext) -> some View
     {
         // app-sidebar.ts:445 keeps pinned trees in Pages; preserve the order supplied by sidebar interactions.
         if let pages = sections.first(where: { $0.id == "pinned" }) {
             self.sessionSection(
                 .init(id: pages.id, title: String(localized: "Pages"), nodes: pages.nodes),
-                now: now,
-                ownership: ownership,
-                previewRequest: previewRequest)
+                context: context)
         }
     }
 
@@ -170,9 +166,9 @@ extension ChatSessionSidebar {
 
     @ViewBuilder func agentRoster(
         _ sections: [ChatSessionSidebarModel.Section],
-        now: Date,
-        ownership: ChatSidebarOwnership,
-        previewRequest: ChatSessionSidebarPreviews.Request) -> some View
+        homes: [String: ChatSessionSidebarModel.Node],
+        homeParents: [String: [OpenClawChatSessionEntry]],
+        context: RowContext) -> some View
     {
         if let error = self.viewModel.agentsErrorText {
             Text(verbatim: error).foregroundStyle(.secondary).selectionDisabled()
@@ -185,8 +181,8 @@ extension ChatSessionSidebar {
             let visible = self.visibleAgentRows(nodes, agentID: agent.id)
             Section {
                 if !collapsed {
-                    ForEach(self.homeLoadParents(agentID: agent.id)) { self.childLoadState($0) }
-                    self.rows(visible, now: now, ownership: ownership, previewRequest: previewRequest)
+                    ForEach(homeParents[agent.id] ?? []) { self.childLoadState($0) }
+                    self.rows(visible, context: context)
                     if visible.count < nodes.count {
                         Button(String(localized: "Show more")) { self.agentReveal.limits[agent.id, default: 10] += 10 }
                             .selectionDisabled()
@@ -200,7 +196,7 @@ extension ChatSessionSidebar {
                     }
                 }
             } header: {
-                self.agentRosterHeader(agent, nodes: nodes, now: now)
+                self.agentRosterHeader(agent, home: homes[agent.id], nodes: nodes, now: context.now)
             }
             .onChange(of: collapsed ? [] : visible.map(\.id), initial: true) { _, keys in
                 self.agentReveal.members[agent.id] = Set(keys)
@@ -210,6 +206,7 @@ extension ChatSessionSidebar {
 
     private func agentRosterHeader(
         _ agent: OpenClawChatAgentChoice,
+        home: ChatSessionSidebarModel.Node?,
         nodes: [ChatSessionSidebarModel.Node],
         now: Date) -> some View
     {
@@ -219,7 +216,7 @@ extension ChatSessionSidebar {
             agentId: agent.id,
             current: self.viewModel.sessionKey)
         let summary = ChatSidebarTreeSummary(
-            home: self.homeTree(agentID: agent.id),
+            home: home,
             rows: nodes,
             collapsed: collapsed,
             isConnected: self.viewModel.healthOK)

@@ -3,14 +3,17 @@ import type { DoctorOptions } from "./doctor.types.js";
 
 export type DoctorRepairMode = ReturnType<typeof resolveDoctorRepairMode>;
 
-export function resolveDoctorRepairMode(options: DoctorOptions) {
+export function resolveDoctorRepairMode(
+  options: DoctorOptions,
+  env: NodeJS.ProcessEnv = process.env,
+) {
   const yes = options.yes === true;
   const requestedNonInteractive = options.nonInteractive === true;
   const shouldRepair = options.repair === true || yes;
   const shouldForce = options.force === true;
   const isTty = process.stdin.isTTY;
   const nonInteractive = requestedNonInteractive || (!isTty && !yes);
-  const updateInProgress = isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS);
+  const updateInProgress = isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS);
   const canPrompt = isTty && !yes && !nonInteractive;
 
   return {
@@ -33,14 +36,9 @@ export function shouldAutoApproveDoctorFix(
     blockDuringUpdate?: boolean;
   } = {},
 ): boolean {
-  if (!mode.shouldRepair) {
-    return false;
-  }
-  if (params.requiresForce && !mode.shouldForce) {
-    return false;
-  }
-  if (params.blockDuringUpdate && isDoctorUpdateRepairMode(mode)) {
-    return false;
-  }
-  return true;
+  return (
+    mode.shouldRepair &&
+    !(params.requiresForce && !mode.shouldForce) &&
+    !(params.blockDuringUpdate && isDoctorUpdateRepairMode(mode))
+  );
 }

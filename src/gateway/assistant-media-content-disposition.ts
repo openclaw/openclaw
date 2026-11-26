@@ -13,7 +13,6 @@ export function buildAssistantMediaContentDisposition(filename: string, mime?: s
   // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.
   const sanitizedInput = truncateFilenamePreservingExtension(
     toUSVString(filename.replace(/[\r\n]/g, "_")),
-    200,
   );
   const fallback = sanitizedInput.replace(/[^\x20-\x7e]|[%"\\]/g, "_").trim() || "download";
   const extended = encodeURIComponent(sanitizedInput).replace(
@@ -33,7 +32,8 @@ export function buildManagedMediaContentDisposition(
   return buildAssistantMediaContentDisposition(value?.trim() || fallback, contentType);
 }
 
-function truncateFilenamePreservingExtension(value: string, maxCodePoints: number): string {
+function truncateFilenamePreservingExtension(value: string): string {
+  const maxCodePoints = 200;
   const chars = Array.from(value);
   if (chars.length <= maxCodePoints) {
     return value;
@@ -44,7 +44,7 @@ function truncateFilenamePreservingExtension(value: string, maxCodePoints: numbe
     lastDot > 0 && lastDot < chars.length - 1 && chars.length - lastDot <= 32
       ? chars.slice(lastDot)
       : [];
-  if (extension.length === 0 || extension.length >= maxCodePoints - 1) {
+  if (extension.length === 0) {
     return chars.slice(0, maxCodePoints).join("");
   }
   return `${chars.slice(0, maxCodePoints - extension.length).join("")}${extension.join("")}`;

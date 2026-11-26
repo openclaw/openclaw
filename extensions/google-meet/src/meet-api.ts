@@ -1,8 +1,7 @@
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { requestGoogleApi } from "./google-api.js";
 
-const GOOGLE_MEET_API_ORIGIN = "https://meet.googleapis.com";
-const GOOGLE_MEET_API_BASE_URL = `${GOOGLE_MEET_API_ORIGIN}/v2`;
+const GOOGLE_MEET_API_BASE_URL = "https://meet.googleapis.com/v2";
 const GOOGLE_MEET_URL_HOST = "meet.google.com";
 const GOOGLE_MEET_API_HOST = "meet.googleapis.com";
 const GOOGLE_MEET_MEDIA_SCOPE =
@@ -27,27 +26,6 @@ export type GoogleMeetSpace = {
   config?: GoogleMeetSpaceConfig & Record<string, unknown>;
 };
 
-export type GoogleMeetPreflightReport = {
-  input: string;
-  resolvedSpaceName: string;
-  meetingCode?: string;
-  meetingUri?: string;
-  hasActiveConference: boolean;
-  previewAcknowledged: boolean;
-  tokenSource: "cached-access-token" | "refresh-token";
-  blockers: string[];
-};
-
-type GoogleMeetCreateSpaceResult = {
-  space: GoogleMeetSpace;
-  meetingUri: string;
-};
-
-type GoogleMeetEndActiveConferenceResult = {
-  space: string;
-  ended: true;
-};
-
 type GoogleMeetTimedResource = {
   name: string;
   startTime?: string;
@@ -59,7 +37,7 @@ export type GoogleMeetConferenceRecord = GoogleMeetTimedResource & {
   expireTime?: string;
 };
 
-export type GoogleMeetParticipant = {
+type GoogleMeetParticipant = {
   name: string;
   earliestStartTime?: string;
   latestEndTime?: string;
@@ -119,11 +97,9 @@ export type GoogleMeetArtifactsResult = GoogleMeetConferenceQueryResult & {
   artifacts: GoogleMeetArtifactsEntry[];
 };
 
-export type GoogleMeetLatestConferenceRecordResult = {
-  input: string;
-  space: GoogleMeetSpace;
-  conferenceRecord?: GoogleMeetConferenceRecord;
-};
+export type GoogleMeetLatestConferenceRecordResult = Awaited<
+  ReturnType<typeof fetchLatestGoogleMeetConferenceRecord>
+>;
 
 export type GoogleMeetAttendanceRow = {
   conferenceRecord: string;
@@ -179,10 +155,6 @@ function normalizeGoogleMeetSpaceName(input: string): string {
     return `spaces/${firstSegment}`;
   }
   return `spaces/${trimmed}`;
-}
-
-function encodeSpaceNameForPath(name: string): string {
-  return name.split("/").map(encodeURIComponent).join("/");
 }
 
 function encodeResourceNameForPath(name: string): string {
@@ -263,6 +235,7 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
   operation: string;
 }): Promise<T[]> {
   const items: T[] = [];
+  const seenPageTokens = new Set<string>();
   let pageToken: string | undefined;
   do {
     const payload = await fetchGoogleMeetJson<Record<string, unknown>>({
@@ -275,12 +248,18 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
       `Google Meet ${params.operation}`,
     );
     const remaining =
-      typeof params.maxItems === "number" ? Math.max(params.maxItems - items.length, 0) : undefined;
+      params.maxItems !== undefined ? Math.max(params.maxItems - items.length, 0) : undefined;
     items.push(...(remaining === undefined ? pageItems : pageItems.slice(0, remaining)));
-    if (typeof params.maxItems === "number" && items.length >= params.maxItems) {
+    if (params.maxItems !== undefined && items.length >= params.maxItems) {
       break;
     }
     pageToken = typeof payload.nextPageToken === "string" ? payload.nextPageToken : undefined;
+    if (pageToken && seenPageTokens.has(pageToken)) {
+      throw new Error(`Google Meet ${params.operation} repeated nextPageToken; retry later.`);
+    }
+    if (pageToken) {
+      seenPageTokens.add(pageToken);
+    }
   } while (pageToken);
   return items;
 }
@@ -292,7 +271,7 @@ export async function fetchGoogleMeetSpace(params: {
   const name = normalizeGoogleMeetSpaceName(params.meeting);
   const payload = await fetchGoogleMeetJson<GoogleMeetSpace>({
     accessToken: params.accessToken,
-    path: encodeSpaceNameForPath(name),
+    path: encodeResourceNameForPath(name),
     operation: "spaces.get",
     scopes: [GOOGLE_MEET_SPACE_SCOPE],
   });
@@ -305,7 +284,7 @@ export async function fetchGoogleMeetSpace(params: {
 export async function createGoogleMeetSpace(params: {
   accessToken: string;
   config?: GoogleMeetSpaceConfig;
-}): Promise<GoogleMeetCreateSpaceResult> {
+}) {
   const hasConfig = params.config && Object.keys(params.config).length > 0;
   const payload = await fetchGoogleMeetJson<GoogleMeetSpace>({
     accessToken: params.accessToken,
@@ -330,13 +309,13 @@ export async function createGoogleMeetSpace(params: {
 export async function endGoogleMeetActiveConference(params: {
   accessToken: string;
   meeting: string;
-}): Promise<GoogleMeetEndActiveConferenceResult> {
+}) {
   const resolved = await fetchGoogleMeetSpace(params);
   const space = resolved.name;
   await requestGoogleMeetApi(
     {
       accessToken: params.accessToken,
-      path: `${encodeSpaceNameForPath(space)}:endActiveConference`,
+      path: `${encodeResourceNameForPath(space)}:endActiveConference`,
       method: "POST",
       body: "{}",
       operation: "spaces.endActiveConference",
@@ -344,7 +323,7 @@ export async function endGoogleMeetActiveConference(params: {
     },
     async () => undefined,
   );
-  return { space, ended: true };
+  return { space, ended: true as const };
 }
 
 async function fetchGoogleMeetConferenceRecord(params: {
@@ -376,10 +355,7 @@ async function listGoogleMeetConferenceRecords(params: {
     accessToken: params.accessToken,
     path: "conferenceRecords",
     collectionKey: "conferenceRecords",
-    query: {
-      pageSize: params.pageSize,
-      filter,
-    },
+    query: { pageSize: params.pageSize, filter },
     maxItems: params.maxItems,
     operation: "conferenceRecords.list",
   });
@@ -388,7 +364,7 @@ async function listGoogleMeetConferenceRecords(params: {
 export async function fetchLatestGoogleMeetConferenceRecord(params: {
   accessToken: string;
   meeting: string;
-}): Promise<GoogleMeetLatestConferenceRecordResult> {
+}) {
   const space = await fetchGoogleMeetSpace(params);
   const [conferenceRecord] = await listGoogleMeetConferenceRecords({
     accessToken: params.accessToken,

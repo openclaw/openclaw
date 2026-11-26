@@ -1,157 +1,55 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Whatsapp tests cover channel actions plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  describeWhatsAppMessageActions,
-  resolveWhatsAppAgentReactionGuidance,
-} from "./channel-actions.js";
+import { whatsappPlugin } from "./channel.js";
 
-describe("whatsapp channel action helpers", () => {
-  it("defaults to minimal reaction guidance when reactions are available", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          allowFrom: ["*"],
-        },
-      },
-    } as OpenClawConfig;
+const { agentPrompt, actions } = whatsappPlugin;
 
-    expect(resolveWhatsAppAgentReactionGuidance({ cfg, accountId: "default" })).toBe("minimal");
+function config(whatsapp: NonNullable<OpenClawConfig["channels"]>["whatsapp"]): OpenClawConfig {
+  return { channels: { whatsapp: { allowFrom: ["*"], ...whatsapp } } };
+}
+
+describe("whatsapp public channel actions", () => {
+  it.each([
+    ["default", config({}), "minimal"],
+    ["unconfigured", {}, undefined],
+    ["disabled actions", config({ actions: { reactions: false } }), undefined],
+    ["ack only", config({ reactionLevel: "ack" }), undefined],
+  ] as const)("reaction guidance: %s", (_name, cfg, level) => {
+    const guidance = agentPrompt?.reactionGuidance?.({ cfg, accountId: "default" });
+    if (level === undefined) {
+      expect(guidance).toBeUndefined();
+    } else {
+      expect(guidance?.level).toBe(level);
+    }
   });
 
-  it("omits reaction guidance when WhatsApp is not configured", () => {
-    expect(
-      resolveWhatsAppAgentReactionGuidance({
-        cfg: {} as OpenClawConfig,
-        accountId: "default",
+  const withReactions = ["react", "poll", "upload-file"];
+  const withoutReactions = ["poll", "upload-file"];
+  const namedAccount = config({
+    reactionLevel: "ack",
+    accounts: { work: { reactionLevel: "minimal" } },
+  });
+  it.each([
+    ["default", config({}), "default", withReactions],
+    ["unconfigured", {}, "default", null],
+    ["ack only", config({ reactionLevel: "ack" }), "default", withoutReactions],
+    ["active account", namedAccount, "work", withReactions],
+    ["any enabled account", namedAccount, undefined, withReactions],
+    [
+      "disabled account",
+      config({
+        reactionLevel: "ack",
+        accounts: { work: { enabled: false, reactionLevel: "minimal" } },
       }),
-    ).toBeUndefined();
-  });
-
-  it("omits reaction guidance when WhatsApp reactions are disabled", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          actions: { reactions: false },
-          allowFrom: ["*"],
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveWhatsAppAgentReactionGuidance({ cfg, accountId: "default" })).toBeUndefined();
-  });
-
-  it("omits reaction guidance when reactionLevel disables agent reactions", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          reactionLevel: "ack",
-          allowFrom: ["*"],
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveWhatsAppAgentReactionGuidance({ cfg, accountId: "default" })).toBeUndefined();
-  });
-
-  it("advertises react when agent reactions are enabled", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          allowFrom: ["*"],
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
-      "react",
-      "poll",
-      "upload-file",
-    ]);
-  });
-
-  it("returns null when WhatsApp is not configured", () => {
-    expect(
-      describeWhatsAppMessageActions({ cfg: {} as OpenClawConfig, accountId: "default" }),
-    ).toBeNull();
-  });
-
-  it("omits react when reactionLevel disables agent reactions", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          reactionLevel: "ack",
-          allowFrom: ["*"],
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
-      "poll",
-      "upload-file",
-    ]);
-  });
-
-  it("uses the active account reactionLevel for discovery", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          reactionLevel: "ack",
-          allowFrom: ["*"],
-          accounts: {
-            work: {
-              reactionLevel: "minimal",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(describeWhatsAppMessageActions({ cfg, accountId: "work" })?.actions).toEqual([
-      "react",
-      "poll",
-      "upload-file",
-    ]);
-  });
-
-  it("keeps react in global discovery when any account enables agent reactions", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          reactionLevel: "ack",
-          allowFrom: ["*"],
-          accounts: {
-            work: {
-              reactionLevel: "minimal",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual([
-      "react",
-      "poll",
-      "upload-file",
-    ]);
-  });
-
-  it("omits react in global discovery when only disabled accounts enable agent reactions", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          reactionLevel: "ack",
-          allowFrom: ["*"],
-          accounts: {
-            work: {
-              enabled: false,
-              reactionLevel: "minimal",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual(["poll", "upload-file"]);
+      undefined,
+      withoutReactions,
+    ],
+  ] as const)("action discovery: %s", (_name, cfg, accountId, expected) => {
+    const result = actions?.describeMessageTool({ cfg, accountId });
+    if (expected === null) {
+      expect(result).toBeNull();
+    } else {
+      expect(result?.actions).toEqual(expected);
+    }
   });
 });

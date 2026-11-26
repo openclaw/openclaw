@@ -1,36 +1,103 @@
-// Runtime plugin health tests cover state shared across runtime processes.
 import { spawn } from "node:child_process";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { recordPersistedRuntimeToolSchemaQuarantine } from "../agents/tool-schema-quarantine-health.js";
+import { recordPersistedRuntimeToolSchemaQuarantine as recordTool } from "../agents/tool-schema-quarantine-health.js";
 import { resolveReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import {
-  clearPersistedContextEngineQuarantineForProcess,
-  recordPersistedContextEngineQuarantine,
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
+  clearPersistedContextEngineQuarantineForProcess as clearEngine,
+  recordPersistedContextEngineQuarantine as recordEngine,
 } from "../context-engine/quarantine-health.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "../context-engine/registry.test-support.js";
+import { resolveGatewayStartupPluginActivationConfig } from "../gateway/plugin-activation-runtime-config.js";
 import {
   createCorePluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
 import * as pluginStateWorker from "../plugin-state/plugin-state-worker-client.js";
 import { createRuntimeHealthRecordEnvelope } from "../plugin-state/runtime-health-store.js";
+import {
+  collectUnregisteredConfiguredMemoryEmbeddingProviders,
+  loadGatewayStartupPluginPlan,
+} from "../plugins/gateway-startup-plugin-ids.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { collectRuntimePluginHealthSnapshot } from "./status-plugin-health.runtime.js";
+import { formatDetailedPluginHealth } from "./status-plugin-health.js";
+import {
+  collectInstalledPluginHealthSnapshot as collectInstalled,
+  collectRuntimePluginHealthSnapshot as collectRuntime,
+} from "./status-plugin-health.runtime.js";
 
 vi.mock("../channels/plugins/read-only.js", () => ({
   resolveReadOnlyChannelPluginsForConfig: vi.fn(),
 }));
 
-const resolveReadOnlyChannelPluginsForConfigMock = vi.mocked(
-  resolveReadOnlyChannelPluginsForConfig,
-);
+// Only seeded runtime records participate in these installed snapshots.
+vi.mock("../plugins/status.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/status.js")>();
+  const emptyReport = { plugins: [], diagnostics: [] } as unknown as ReturnType<
+    typeof actual.buildPluginSnapshotReport
+  >;
+  return {
+    ...actual,
+    buildPluginSnapshotReport: vi.fn(() => emptyReport),
+    buildPluginCompatibilityNotices: vi.fn(() => []),
+  } as typeof actual;
+});
+vi.mock("../plugins/gateway-startup-plugin-ids.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/gateway-startup-plugin-ids.js")>();
+  return {
+    ...actual,
+    loadGatewayStartupPluginPlan: vi.fn(),
+    collectUnregisteredConfiguredMemoryEmbeddingProviders: vi.fn(() => []),
+  } as typeof actual;
+});
+vi.mock("../gateway/plugin-activation-runtime-config.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../gateway/plugin-activation-runtime-config.js")>();
+  return {
+    ...actual,
+    resolveGatewayStartupPluginActivationConfig: vi.fn(
+      (params: { runtimeConfig: unknown }) =>
+        params.runtimeConfig as ReturnType<
+          typeof actual.resolveGatewayStartupPluginActivationConfig
+        >,
+    ),
+  } as typeof actual;
+});
+
+const channelsMock = vi.mocked(resolveReadOnlyChannelPluginsForConfig);
+const toolQuarantine = (toolName: string, failedAt: number, owner?: string) => ({
+  toolName,
+  reason: "unsupported schema",
+  failedAt: new Date(failedAt),
+  ...(owner ? { owner } : {}),
+});
+const activate = (registry = createEmptyPluginRegistry(), key = "empty") =>
+  setActivePluginRegistry(registry, key, "default", "/tmp/ws");
+const engineQuarantine = (engineId: string, reason: string, owner?: string) => ({
+  engineId,
+  reason,
+  operation: "bootstrap",
+  failedAt: new Date(123),
+  ...(owner ? { owner } : {}),
+});
+function activatePlugins(...plugins: Array<[string, "loaded" | "error" | "disabled"]>) {
+  const registry = createEmptyPluginRegistry();
+  registry.plugins.push(
+    ...plugins.map(([id, status]) => ({ id, status, enabled: status !== "disabled" }) as never),
+  );
+  activate(registry);
+}
+const inState = (run: () => Promise<void>) => () => withStateDirEnv("openclaw-status-health-", run);
 
 afterEach(() => {
-  resolveReadOnlyChannelPluginsForConfigMock.mockReset();
+  channelsMock.mockReset();
   resetPluginRuntimeStateForTest();
   resetPluginStateStoreForTests();
 });
@@ -47,15 +114,13 @@ async function deadProcessId(): Promise<number> {
   return pid;
 }
 
-function seedPersistedToolQuarantineForTest(record: {
-  toolName: string;
-  owner?: string;
-  reason: string;
-  failedAtMs: number;
-  processId: number;
-  processToken: string;
-  processStartTime: number | null;
-}): void {
+function seedPersistedToolQuarantineForTest(
+  record: ReturnType<typeof createRuntimeHealthRecordEnvelope> & {
+    toolName: string;
+    owner?: string;
+    reason: string;
+  },
+): void {
   createCorePluginStateSyncKeyedStore<typeof record>({
     ownerId: "core:runtime-tool-quarantine-health",
     namespace: "schema-quarantines",
@@ -70,18 +135,10 @@ describe("runtime plugin health snapshot", () => {
     async (change) => {
       await withStateDirEnv("openclaw-status-quarantine-recovery-", async () => {
         await resetContextEngineRuntimeQuarantineForTests();
-        const quarantine = {
-          engineId: "recovered-engine",
-          operation: "bootstrap",
-          reason: "temporary failure",
-          failedAt: new Date(123),
-        };
-        await recordPersistedContextEngineQuarantine(quarantine);
-        await recordPersistedRuntimeToolSchemaQuarantine({
-          toolName: "still-quarantined-tool",
-          reason: "unsupported schema",
-          failedAt: new Date(456),
-        });
+        const quarantine = engineQuarantine("recovered-engine", "temporary failure");
+        await recordEngine(quarantine);
+        const tool = toolQuarantine("still-quarantined-tool", 456);
+        await recordTool(tool);
         const captured = createDeferredCore<unknown>();
         const release = createDeferredCore();
         const listEntries = pluginStateWorker.listPluginStateInWorker;
@@ -97,29 +154,23 @@ describe("runtime plugin health snapshot", () => {
             }
             return entries;
           });
-        const pending = collectRuntimePluginHealthSnapshot();
+        const pending = collectRuntime();
         try {
           expect(await captured.promise).toEqual([
             expect.objectContaining({
               value: expect.objectContaining({ engineId: "recovered-engine" }),
             }),
           ]);
-          await clearPersistedContextEngineQuarantineForProcess("recovered-engine", process.pid);
+          await clearEngine("recovered-engine", process.pid);
           const replacement = { ...quarantine, reason: "new failure", failedAt: new Date(789) };
           if (change === "replace") {
-            await recordPersistedContextEngineQuarantine(replacement);
+            await recordEngine(replacement);
           }
           release.resolve();
           const snapshot = await pending;
           expect(snapshot.contextEngineQuarantines).toEqual([quarantine]);
-          expect(snapshot.runtimeToolQuarantines).toEqual([
-            {
-              toolName: "still-quarantined-tool",
-              reason: "unsupported schema",
-              failedAt: new Date(456),
-            },
-          ]);
-          const nextSnapshot = await collectRuntimePluginHealthSnapshot();
+          expect(snapshot.runtimeToolQuarantines).toEqual([tool]);
+          const nextSnapshot = await collectRuntime();
           expect(nextSnapshot.contextEngineQuarantines).toEqual(
             change === "replace" ? [replacement] : [],
           );
@@ -132,60 +183,33 @@ describe("runtime plugin health snapshot", () => {
     },
   );
 
-  it("includes persisted context-engine quarantines without caller-thread SQLite", async () => {
-    await withStateDirEnv("openclaw-status-plugin-health-", async () => {
+  it(
+    "reads persisted engines without caller-thread SQLite",
+    inState(async () => {
       await resetContextEngineRuntimeQuarantineForTests();
-      await recordPersistedContextEngineQuarantine({
-        engineId: "lossless-claw",
-        owner: "plugin:lossless-claw",
-        operation: "bootstrap",
-        reason: "intentional bootstrap failure",
-        failedAt: new Date(123),
-      });
+      const quarantine = engineQuarantine(
+        "lossless-claw",
+        "intentional bootstrap failure",
+        "plugin:lossless-claw",
+      );
+      await recordEngine(quarantine);
 
       const observation = observeHostDataSql();
       let snapshot;
       try {
-        snapshot = await collectRuntimePluginHealthSnapshot();
+        snapshot = await collectRuntime();
         expect(observation.queries).toEqual([]);
       } finally {
         observation.restore();
       }
-      expect(snapshot.contextEngineQuarantines).toEqual([
-        {
-          engineId: "lossless-claw",
-          owner: "plugin:lossless-claw",
-          operation: "bootstrap",
-          reason: "intentional bootstrap failure",
-          failedAt: new Date(123),
-        },
-      ]);
-    });
-  });
+      expect(snapshot.contextEngineQuarantines).toEqual([quarantine]);
+    }),
+  );
 
-  it("includes core-owned runtime tool quarantines from this process", async () => {
-    await withStateDirEnv("openclaw-status-tool-quarantine-core-", async () => {
-      setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
-      await recordPersistedRuntimeToolSchemaQuarantine({
-        toolName: "core_bad_tool",
-        reason: "unsupported schema",
-        failedAt: new Date(789),
-      });
-
-      expect((await collectRuntimePluginHealthSnapshot()).runtimeToolQuarantines).toEqual([
-        {
-          toolName: "core_bad_tool",
-          reason: "unsupported schema",
-          failedAt: new Date(789),
-        },
-      ]);
-    });
-  });
-
-  it("drops runtime tool quarantines from dead or unverifiable recorder processes", async () => {
-    await withStateDirEnv("openclaw-status-tool-quarantine-liveness-", async () => {
-      setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
-      // Dead sibling: no current start time exists, so the record fails closed.
+  it(
+    "drops tools from dead or unverifiable recorder processes",
+    inState(async () => {
+      activate();
       seedPersistedToolQuarantineForTest({
         toolName: "stale_tool",
         reason: "unsupported schema",
@@ -200,19 +224,16 @@ describe("runtime plugin health snapshot", () => {
         ...createRuntimeHealthRecordEnvelope(new Date(456)),
       });
 
-      expect((await collectRuntimePluginHealthSnapshot()).runtimeToolQuarantines).toEqual([
-        {
-          toolName: "live_tool",
-          reason: "unsupported schema",
-          failedAt: new Date(456),
-        },
+      expect((await collectRuntime()).runtimeToolQuarantines).toEqual([
+        toolQuarantine("live_tool", 456),
       ]);
-    });
-  });
+    }),
+  );
 
-  it("drops runtime tool quarantines from a previous incarnation of this PID", async () => {
-    await withStateDirEnv("openclaw-status-tool-quarantine-pid-reuse-", async () => {
-      setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
+  it(
+    "drops quarantines from a previous incarnation of this PID",
+    inState(async () => {
+      activate();
       seedPersistedToolQuarantineForTest({
         toolName: "reused_pid_tool",
         reason: "unsupported schema",
@@ -220,40 +241,27 @@ describe("runtime plugin health snapshot", () => {
         processToken: "stale-incarnation-token",
       });
 
-      expect((await collectRuntimePluginHealthSnapshot()).runtimeToolQuarantines).toEqual([]);
-    });
-  });
+      expect((await collectRuntime()).runtimeToolQuarantines).toEqual([]);
+    }),
+  );
 
-  it("suppresses persisted plugin-owned runtime tool quarantines after the owner plugin is gone", async () => {
-    await withStateDirEnv("openclaw-status-tool-quarantine-owner-", async () => {
-      await recordPersistedRuntimeToolSchemaQuarantine({
-        toolName: "bad_tool",
-        owner: "plugin:bad-tools",
+  it(
+    "hides persisted tool quarantines while their owner is gone",
+    inState(async () => {
+      const tool = {
+        ...toolQuarantine("bad_tool", 456, "plugin:bad-tools"),
         reason: "unsupported anyOf",
-        failedAt: new Date(456),
-      });
+      };
+      await recordTool(tool);
 
-      setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
-      expect((await collectRuntimePluginHealthSnapshot()).runtimeToolQuarantines).toEqual([]);
+      activate();
+      expect((await collectRuntime()).runtimeToolQuarantines).toEqual([]);
 
-      const registry = createEmptyPluginRegistry();
-      registry.plugins.push({
-        id: "bad-tools",
-        status: "loaded",
-        enabled: true,
-      } as never);
-      setActivePluginRegistry(registry, "bad-tools", "default", "/tmp/ws");
+      activatePlugins(["bad-tools", "loaded"]);
 
-      expect((await collectRuntimePluginHealthSnapshot()).runtimeToolQuarantines).toEqual([
-        {
-          toolName: "bad_tool",
-          owner: "plugin:bad-tools",
-          reason: "unsupported anyOf",
-          failedAt: new Date(456),
-        },
-      ]);
-    });
-  });
+      expect((await collectRuntime()).runtimeToolQuarantines).toEqual([tool]);
+    }),
+  );
 
   it("does not inspect configured channel plugins for compact runtime health", async () => {
     const registry = createEmptyPluginRegistry();
@@ -263,9 +271,9 @@ describe("runtime plugin health snapshot", () => {
       code: "channel-setup-failure",
       message: "failed to load setup entry: boom",
     });
-    setActivePluginRegistry(registry, "broken-channel", "default", "/tmp/ws");
+    activate(registry, "broken-channel");
 
-    const snapshot = await collectRuntimePluginHealthSnapshot();
+    const snapshot = await collectRuntime();
 
     expect(snapshot.channelPluginFailures).toEqual([
       {
@@ -275,20 +283,139 @@ describe("runtime plugin health snapshot", () => {
         source: "diagnostic",
       },
     ]);
-    expect(resolveReadOnlyChannelPluginsForConfigMock).not.toHaveBeenCalled();
+    expect(channelsMock).not.toHaveBeenCalled();
   });
 
   it("records only runtime status:loaded plugins as runtime-loaded", async () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      { id: "runtime-ok", status: "loaded", enabled: true } as never,
-      { id: "runtime-broken", status: "error", enabled: true } as never,
-      { id: "runtime-off", status: "disabled", enabled: false } as never,
+    activatePlugins(
+      ["runtime-ok", "loaded"],
+      ["runtime-broken", "error"],
+      ["runtime-off", "disabled"],
     );
-    setActivePluginRegistry(registry, "runtime-loaded-ids", "default", "/tmp/ws");
 
-    expect((await collectRuntimePluginHealthSnapshot()).runtimeLoadedPluginIds).toEqual([
-      "runtime-ok",
-    ]);
+    expect((await collectRuntime()).runtimeLoadedPluginIds).toEqual(["runtime-ok"]);
   });
+});
+
+const planMock = vi.mocked(loadGatewayStartupPluginPlan);
+const activationMock = vi.mocked(resolveGatewayStartupPluginActivationConfig);
+const missingProvidersMock = vi.mocked(collectUnregisteredConfiguredMemoryEmbeddingProviders);
+const missingProvider = { configuredId: "custom-embed", source: "provider" } as const;
+const collect = (config?: Parameters<typeof collectInstalled>[0]["config"]) =>
+  collectInstalled({ config, workspaceDir: "/tmp/ws" });
+
+describe("installed plugin health", () => {
+  beforeEach(() => {
+    channelsMock.mockReturnValue({
+      loadFailures: [],
+      missingConfiguredChannelIds: [],
+    } as never);
+    planMock.mockReturnValue({ channelPluginIds: [], pluginIds: [] });
+  });
+
+  afterEach(() => {
+    planMock.mockReset();
+    activationMock.mockClear();
+    missingProvidersMock.mockReset();
+    missingProvidersMock.mockReturnValue([]);
+    clearRuntimeConfigSnapshot();
+  });
+
+  it(
+    "flags startup plugins that are not loaded as drift",
+    inState(async () => {
+      planMock.mockReturnValue({
+        channelPluginIds: [],
+        pluginIds: ["planned-missing", "runtime-ok"],
+      });
+
+      activatePlugins(["runtime-ok", "loaded"]);
+      const quarantine = engineQuarantine("quarantined-engine", "startup failed");
+      await recordEngine(quarantine);
+
+      const rawConfig = {} as never;
+      const snapshot = await collect(rawConfig);
+
+      expect(planMock).toHaveBeenCalledWith(
+        expect.objectContaining({ config: rawConfig, activationSourceConfig: rawConfig }),
+      );
+      expect([snapshot.shouldRunPluginIds, snapshot.contextEngineQuarantines]).toEqual([
+        ["planned-missing", "runtime-ok"],
+        [quarantine],
+      ]);
+
+      const text = formatDetailedPluginHealth(snapshot);
+      expect(text).toContain("Loaded: 1 (runtime-ok)");
+      expect(text).toContain("Configured to run but not loaded: 1 (planned-missing)");
+    }),
+  );
+
+  it(
+    "plans through the gateway helper with source and runtime config",
+    inState(async () => {
+      const sourceConfig = { plugins: { entries: {} } } as never;
+      const runtimeConfig = { plugins: { entries: { extra: { enabled: true } } } } as never;
+      setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+      activate();
+
+      await collect(runtimeConfig);
+
+      expect(activationMock).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimeConfig, activationSourceConfig: sourceConfig }),
+      );
+      expect(planMock).toHaveBeenCalledWith(
+        expect.objectContaining({ config: runtimeConfig, activationSourceConfig: sourceConfig }),
+      );
+    }),
+  );
+
+  it(
+    "omits the should-run set entirely when no config is provided",
+    inState(async () => {
+      activate();
+
+      const snapshot = await collect();
+
+      expect(snapshot.shouldRunPluginIds).toBeUndefined();
+      expect(snapshot.unregisteredMemoryEmbeddingProviders).toBeUndefined();
+      expect(missingProvidersMock).not.toHaveBeenCalled();
+      expect(planMock).not.toHaveBeenCalled();
+      expect(formatDetailedPluginHealth(snapshot)).not.toContain(
+        "Configured to run but not loaded:",
+      );
+    }),
+  );
+
+  it(
+    "reports configured but unregistered memory providers",
+    inState(async () => {
+      missingProvidersMock.mockReturnValue([missingProvider]);
+      activate();
+
+      const snapshot = await collect({});
+
+      expect(snapshot.unregisteredMemoryEmbeddingProviders).toEqual([missingProvider]);
+      expect(missingProvidersMock).toHaveBeenCalledWith(
+        expect.objectContaining({ registeredProviderIds: expect.any(Set) }),
+      );
+      expect(formatDetailedPluginHealth(snapshot)).toContain(
+        "Configured memory provider not registered: 1 (custom-embed (memorySearch.provider))",
+      );
+    }),
+  );
+
+  it(
+    "skips the check and renders no line without a runtime registry",
+    inState(async () => {
+      missingProvidersMock.mockReturnValue([missingProvider]);
+      resetPluginRuntimeStateForTest();
+      const snapshot = await collect({});
+
+      expect(snapshot.unregisteredMemoryEmbeddingProviders).toBeUndefined();
+      expect(missingProvidersMock).not.toHaveBeenCalled();
+      expect(formatDetailedPluginHealth(snapshot)).not.toContain(
+        "Configured memory provider not registered:",
+      );
+    }),
+  );
 });

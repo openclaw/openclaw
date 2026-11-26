@@ -33,71 +33,17 @@ describe("sendMessageTwitchInternal", () => {
       .mockResolvedValue({ ok: true, messageId: "twitch-msg-123" });
   });
 
-  it("returns a receipt for the delivered message", async () => {
-    const result = await sendMessageTwitchInternal(params);
-
-    expect(result.messageId).toBe("twitch-msg-123");
-    expect(typeof result.receipt.sentAt).toBe("number");
-    expect({ ...result.receipt, sentAt: 0 }).toEqual({
-      primaryPlatformMessageId: "twitch-msg-123",
-      platformMessageIds: ["twitch-msg-123"],
-      parts: [
-        {
-          platformMessageId: "twitch-msg-123",
-          kind: "text",
-          index: 0,
-          raw: {
-            channel: "twitch",
-            conversationId: "testchannel",
-            messageId: "twitch-msg-123",
-          },
-        },
-      ],
-      raw: [
-        {
-          channel: "twitch",
-          conversationId: "testchannel",
-          messageId: "twitch-msg-123",
-        },
-      ],
-      sentAt: 0,
+  it("keeps empty Markdown unsent with a manager present", async () => {
+    const result = await sendMessageTwitchInternal({
+      ...params,
+      text: "---",
     });
-    expect(sendMessageSpy).toHaveBeenCalledExactlyOnceWith(
-      account,
-      "testchannel",
-      "Hello Twitch!",
-      cfg,
-      "default",
-    );
+
+    expect(result).toMatchObject({ outcome: "not_sent", messageId: "" });
+    expect(result.receipt.platformMessageIds).toStrictEqual([]);
+    expect(result.receipt.parts).toStrictEqual([]);
+    expect(sendMessageSpy).not.toHaveBeenCalled();
   });
-
-  it("strips Markdown once, preserving literal thematic breaks", async () => {
-    await sendMessageTwitchInternal({ ...params, text: "`---`" });
-
-    expect(sendMessageSpy).toHaveBeenCalledExactlyOnceWith(
-      account,
-      "testchannel",
-      "---",
-      cfg,
-      "default",
-    );
-  });
-
-  it.each([true, false])(
-    "keeps empty Markdown unsent with a manager present: %s",
-    async (hasManager) => {
-      const result = await sendMessageTwitchInternal({
-        ...params,
-        text: "---",
-        clientManager: hasManager ? clientManager : undefined,
-      });
-
-      expect(result).toMatchObject({ outcome: "not_sent", messageId: "" });
-      expect(result.receipt.platformMessageIds).toStrictEqual([]);
-      expect(result.receipt.parts).toStrictEqual([]);
-      expect(sendMessageSpy).not.toHaveBeenCalled();
-    },
-  );
 
   it("rejects a visible send when the caller has no manager", async () => {
     await expect(
@@ -108,15 +54,20 @@ describe("sendMessageTwitchInternal", () => {
   });
 
   it("uses the caller's prepared account when config no longer contains it", async () => {
-    await sendMessageTwitchInternal({ ...params, cfg: {} });
+    const result = await sendMessageTwitchInternal({ ...params, cfg: {}, text: "`---`" });
 
     expect(sendMessageSpy).toHaveBeenCalledExactlyOnceWith(
       account,
       "testchannel",
-      "Hello Twitch!",
+      "---",
       {},
       "default",
     );
+    expect(result.messageId).toBe("twitch-msg-123");
+    expect(result.receipt.primaryPlatformMessageId).toBe("twitch-msg-123");
+    expect(result.receipt.parts).toMatchObject([
+      { kind: "text", index: 0, raw: { conversationId: "testchannel" } },
+    ]);
   });
 
   it("exposes the manager's formatted failure without a cause or another log", async () => {

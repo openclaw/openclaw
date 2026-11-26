@@ -1,5 +1,6 @@
 import type { AgentToolSurfacePresentation } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import type { HookContext } from "../agent-tools.before-tool-call.js";
 import {
@@ -15,7 +16,7 @@ import {
 } from "../local-model-lean.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-protocol.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -34,7 +35,7 @@ const CODE_MODE_CONTROL_ALLOWLIST_NAMES = [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_W
 
 type PreparedToolSurface = Pick<
   Parameters<typeof createCodeModeTools>[0],
-  "abortSignal" | "executeTool" | "forceRestartSafeTools" | "toolExecutionAllow" | "codeModeSkills"
+  "abortSignal" | "executeTool" | "toolExecutionAllow" | "codeModeSkills"
 > & { preserveToolNames: Iterable<string> };
 
 export function createAgentHarnessToolSurfaceRuntimeCore(
@@ -52,13 +53,18 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     modelToolsEnabled: boolean;
     /** False when the harness cannot dispatch an unregistered catalog name directly. */
     supportsDeferredToolCalls?: boolean;
+    /** True when the runner loads an on-demand catalog tool on its first direct call by name. */
+    loadsOnDemandTools?: boolean;
     prompt?: string;
     runId?: string;
     runtimeToolAllowlist?: readonly string[];
+    /** Owner-prepared policy projection for async tool-surface construction. */
+    preparedToolOverrideAllowlist?: readonly string[];
     sessionId?: string;
     scheduledToolPolicy?: ScheduledToolPolicyContext;
     sourceReplyDeliveryMode?: string;
   },
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority,
 ) {
   const presentation = input.presentation;
   const params = presentation
@@ -69,19 +75,21 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     : input;
   const forceDirectMessageTool =
     presentation?.forceDirectMessageTool ?? messageToolOwnsVisibleReply(params);
-  const plan = presentation
-    ? {
-        codeModeControlsEnabled: presentation.codeMode.enabled,
-        toolSearchControlsEnabled: presentation.toolSearch.enabled,
-        toolSearchConfig: presentation.toolSearch,
-        toolSearchRuntimeConfig: params.config,
-      }
-    : resolveAgentToolSurfacePlan({
-        ...params,
-        forceDirectMessageTool,
-        toolsEnabled: params.modelToolsEnabled,
-        isRawModelRun: params.isRawModelRun === true,
-      });
+  // Placement facts cannot restore general execution on a persistence-only turn.
+  const plan =
+    presentation && params.trigger !== "memory"
+      ? {
+          codeModeControlsEnabled: presentation.codeMode.enabled,
+          toolSearchControlsEnabled: presentation.toolSearch.enabled,
+          toolSearchConfig: presentation.toolSearch,
+          toolSearchRuntimeConfig: params.config,
+        }
+      : resolveAgentToolSurfacePlan({
+          ...params,
+          forceDirectMessageTool,
+          toolsEnabled: params.modelToolsEnabled,
+          isRawModelRun: params.isRawModelRun === true,
+        });
   if (params.supportsDeferredToolCalls === false && plan.toolSearchConfig.mode === "directory") {
     plan.toolSearchConfig = { ...plan.toolSearchConfig, mode: "tools" };
     plan.toolSearchRuntimeConfig = {
@@ -100,6 +108,9 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
   } = plan;
   const toolSearchCatalogRef =
     toolSearchControlsEnabled || codeModeControlsEnabled ? createToolSearchCatalogRef() : undefined;
+  if (toolSearchCatalogRef && params.loadsOnDemandTools === true) {
+    toolSearchCatalogRef.loadsOnDemandTools = true;
+  }
   const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.runtimeToolAllowlist, {
     forceToolNames: [
       ...(toolSearchControlsEnabled ? TOOL_SEARCH_CONTROL_TOOL_NAMES : []),
@@ -111,15 +122,17 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
   let runtimePreserveToolNames: string[] | undefined;
   const preserveRuntimeTools = () =>
     (runtimePreserveToolNames ??= resolveLocalModelLeanPreserveToolNames({
-      toolNames: resolveConversationCapabilityProfile({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        modelProvider: params.modelProvider,
-        modelId: params.modelId,
-        runtimeToolAllowlist,
-        scheduledToolPolicy: params.scheduledToolPolicy,
-      }).policy.explicitToolOverrideAllowlist,
+      toolNames: params.preparedToolOverrideAllowlist
+        ? [...params.preparedToolOverrideAllowlist, ...(runtimeToolAllowlist ?? [])]
+        : resolveConversationCapabilityProfile({
+            config: params.config,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            modelProvider: params.modelProvider,
+            modelId: params.modelId,
+            runtimeToolAllowlist,
+            scheduledToolPolicy: params.scheduledToolPolicy,
+          }).policy.explicitToolOverrideAllowlist,
       forceMessageTool: params.forceMessageTool,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     }));
@@ -158,12 +171,12 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
     const controls = createControls
       ? createControls({
           ...params,
+          pluginExecutionAuthority,
           runtimeConfig: codeModeControlsEnabled ? params.config : toolSearchRuntimeConfig,
           modelContextWindowTokens: params.contextTokenBudget ?? params.model?.contextWindow,
           catalogRef: toolSearchCatalogRef,
           abortSignal: prepared?.abortSignal ?? params.abortSignal,
           executeTool: prepared?.executeTool ?? params.executeTool,
-          forceRestartSafeTools: prepared?.forceRestartSafeTools,
           toolExecutionAllow: prepared?.toolExecutionAllow,
           codeModeSkills,
         })
@@ -174,7 +187,6 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
       toolSearchRuntimeConfig,
       codeModeControlsEnabled,
       toolSearchConfig,
-      forceDirectMessageTool,
       catalogRef: toolSearchCatalogRef,
       toolHookContext: options.hookContext,
       toolExecutionAllow: prepared?.toolExecutionAllow,
@@ -202,15 +214,20 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
       projectedTools: projectedCompactedTools,
       diagnostics: schemaProjection.diagnostics,
       promptToolPolicy: createAgentHarnessPromptToolPolicy({
+        diagnosticIdentity: params,
         tools: effectiveTools,
         catalogRef: toolSearchCatalogRef,
         codeModeControlsEnabled,
-        toolSearchPrompt: toolSearchControlsEnabled
-          ? {
-              config: toolSearchRuntimeConfig,
-              contextTokenBudget: params.contextTokenBudget ?? params.model?.contextWindow,
-            }
-          : undefined,
+        catalogPrompt:
+          toolSearchControlsEnabled || codeModeControlsEnabled
+            ? {
+                config: codeModeControlsEnabled ? params.config : toolSearchRuntimeConfig,
+                toolSearchDirectoryLean: presentation?.toolSearchDirectoryLean,
+                agentId: params.agentId,
+                sessionKey: params.sessionKey,
+                contextTokenBudget: params.contextTokenBudget ?? params.model?.contextWindow,
+              }
+            : undefined,
       }),
     };
   };

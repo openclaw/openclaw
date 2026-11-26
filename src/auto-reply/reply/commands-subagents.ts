@@ -1,5 +1,6 @@
 import { commandReply, defineAuthorizedTextCommand, matchCommandPrefix } from "./command-gates.js";
-import { buildSubagentsHelp, resolveRequesterSessionKey } from "./commands-subagents/shared.js";
+import { resolveCommandSourceSessionKey } from "./command-source-session-key.js";
+import { buildSubagentsHelp } from "./commands-subagents/shared.js";
 import type { CommandHandler } from "./commands-types.js";
 
 export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextCommand(
@@ -21,14 +22,13 @@ export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextComman
         ? null
         : { action: "agents", restTokens: [] };
     },
-    silentUnauthorized: true,
   },
   async (params, { action, restTokens }) => {
     if (action === "help") {
       return commandReply(buildSubagentsHelp());
     }
 
-    const requesterKey = resolveRequesterSessionKey(params);
+    const requesterKey = resolveCommandSourceSessionKey(params);
     if (!requesterKey) {
       return commandReply("⚠️ Missing session key.");
     }

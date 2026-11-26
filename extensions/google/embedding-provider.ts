@@ -1,14 +1,19 @@
-import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
+import type {
+  EmbeddingInput,
+  EmbeddingProviderCallOptions,
+} from "openclaw/plugin-sdk/embedding-providers";
 import {
-  buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
   embeddingProviderOwnsDestination,
+  resolveEmbeddingProviderSsrFPolicy,
+  formatEmbeddingTaskText,
   normalizeEmbeddingModelWithPrefixes,
   resolveEmbeddingEndpointUrl,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
+  type RemoteEmbeddingClient,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import {
@@ -23,7 +28,6 @@ import {
   readProviderJsonObjectResponse,
   readProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -31,11 +35,7 @@ import {
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 
-export type GeminiEmbeddingClient = {
-  baseUrl: string;
-  headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  model: string;
+export type GeminiEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl"> & {
   modelPath: string;
   apiKeys: string[];
   outputDimensionality?: number;
@@ -51,8 +51,6 @@ const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
 
 type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType"]>;
 
-// --- Gemini Embedding 2 support ---
-
 const GEMINI_EMBEDDING_2_MODELS = new Set(["gemini-embedding-2", "gemini-embedding-2-preview"]);
 
 const GEMINI_EMBEDDING_2_DEFAULT_DIMENSIONS = 3072;
@@ -61,15 +59,6 @@ const GOOGLE_RETRY_DELAY_RE = /^(\d+)(?:\.(\d{1,9}))?s$/u;
 // Mirrors core's own error-body read limit (extractProviderErrorInfo in
 // provider-http-errors.ts) so the clone read below stays bounded like core's.
 const GOOGLE_RETRY_INFO_BODY_LIMIT_BYTES = 16 * 1024;
-const GEMINI_EMBEDDING_2_TASK_PREFIXES: Record<GeminiTaskType, string> = {
-  RETRIEVAL_QUERY: "task: search result | query:",
-  RETRIEVAL_DOCUMENT: "title: none | text:",
-  SEMANTIC_SIMILARITY: "task: sentence similarity | query:",
-  CLASSIFICATION: "task: classification | query:",
-  CLUSTERING: "task: clustering | query:",
-  QUESTION_ANSWERING: "task: question answering | query:",
-  FACT_VERIFICATION: "task: fact checking | query:",
-};
 
 export type GeminiEmbeddingRequest = {
   content: { parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> };
@@ -117,12 +106,14 @@ export function buildGeminiEmbeddingRequest(params: {
   input: EmbeddingInput;
   model: string;
   role: "query" | "document";
+  queryInstructionApplied?: boolean;
+  documentFormatApplied?: boolean;
   taskType: GeminiTaskType;
   outputDimensionality?: number;
   modelPath?: string;
 }): GeminiEmbeddingRequest {
   const input = typeof params.input === "string" ? { text: params.input } : params.input;
-  const parts = input.parts?.map((part) =>
+  const parts: GeminiEmbeddingRequest["content"]["parts"] = input.parts?.map((part) =>
     part.type === "text"
       ? { text: part.text }
       : {
@@ -131,7 +122,11 @@ export function buildGeminiEmbeddingRequest(params: {
   ) ?? [{ text: input.text }];
   const isStableEmbedding2 = normalizeGeminiModel(params.model) === "gemini-embedding-2";
   const request: GeminiEmbeddingRequest = { content: { parts } };
-  if (isStableEmbedding2 && parts.every((part) => "text" in part)) {
+  if (
+    isStableEmbedding2 &&
+    !(params.role === "query" ? params.queryInstructionApplied : params.documentFormatApplied) &&
+    parts.every((part) => "text" in part)
+  ) {
     const first = parts[0];
     if (first && "text" in first) {
       const taskType =
@@ -141,7 +136,7 @@ export function buildGeminiEmbeddingRequest(params: {
           params.taskType === "FACT_VERIFICATION")
           ? "RETRIEVAL_DOCUMENT"
           : params.taskType;
-      first.text = `${GEMINI_EMBEDDING_2_TASK_PREFIXES[taskType]} ${first.text}`;
+      first.text = formatEmbeddingTaskText(first.text, taskType);
     }
   } else if (!isStableEmbedding2) {
     request.taskType = params.taskType;
@@ -337,7 +332,7 @@ export async function createGeminiEmbeddingProvider(
 
   const embedQuery = async (
     text: string,
-    callOptions?: { signal?: AbortSignal },
+    callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[]> => {
     if (!text.trim()) {
       return [];
@@ -349,6 +344,7 @@ export async function createGeminiEmbeddingProvider(
         input: text,
         model: client.model,
         role: "query",
+        queryInstructionApplied: callOptions?.queryInstructionApplied,
         taskType: options.taskType ?? "RETRIEVAL_QUERY",
         outputDimensionality,
       }),
@@ -362,7 +358,7 @@ export async function createGeminiEmbeddingProvider(
 
   const embedDocuments = async (
     inputs: EmbeddingInput[],
-    callOptions?: { signal?: AbortSignal },
+    callOptions?: EmbeddingProviderCallOptions,
   ): Promise<number[][]> => {
     if (inputs.length === 0) {
       return [];
@@ -376,6 +372,7 @@ export async function createGeminiEmbeddingProvider(
             input,
             model: client.model,
             role: "document",
+            documentFormatApplied: callOptions?.documentFormatApplied,
             modelPath: client.modelPath,
             taskType: options.taskType ?? "RETRIEVAL_DOCUMENT",
             outputDimensionality,
@@ -449,12 +446,25 @@ async function resolveGeminiEmbeddingClient(
     );
   }
 
-  const ssrfPolicy = buildRemoteBaseUrlPolicy(baseUrl);
-  const headerOverrides = Object.assign(
-    {},
-    providerOwnsDestination ? providerConfig?.headers : undefined,
-    remote?.headers,
-  );
+  const ssrfPolicy = resolveEmbeddingProviderSsrFPolicy({
+    provider: "google",
+    api: providerConfig?.api ?? "google-generative-ai",
+    baseUrl,
+    allowPrivateNetwork: providerConfig?.request?.allowPrivateNetwork,
+  });
+  const headerOverrides: Record<string, string> = {};
+  for (const [path, source] of [
+    [
+      "models.providers.google.headers",
+      providerOwnsDestination ? providerConfig?.headers : undefined,
+    ],
+    ["memory.search.remote.headers", remote?.headers],
+  ] as const) {
+    for (const [name, value] of Object.entries(source ?? {})) {
+      headerOverrides[name] =
+        resolveMemorySecretInputString({ value: value ?? null, path: `${path}.${name}` }) ?? "";
+    }
+  }
   const headers: Record<string, string> = {
     ...headerOverrides,
     ...resolveGoogleApiClientHeaders({

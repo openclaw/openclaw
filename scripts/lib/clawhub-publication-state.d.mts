@@ -9,3 +9,12 @@ export function classifyClawHubPublication(
   body: unknown,
   expected: { name: string; version: string },
 ): ClawHubPublicationState | null;
+
+export function waitForClawHubPublicVersion(
+  entry: { name: string; version: string; attemptId?: string },
+  options: {
+    deadline: number;
+    fetchImpl: typeof fetch;
+    onState: (publication: ClawHubPublicationState) => void;
+  },
+): Promise<void>;

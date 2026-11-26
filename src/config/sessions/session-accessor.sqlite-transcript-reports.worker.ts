@@ -1,10 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
-} from "../../infra/sqlite-transaction.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
@@ -14,10 +12,6 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
-import {
-  advanceCliHistoryBoundaryRangeInTransaction,
-  type CliHistoryWriterFacts,
-} from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
   SessionTranscriptContextVersion,
@@ -30,8 +24,6 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import {
   appendAbortedSessionTranscriptPartialInTransaction,
-  settleStartupSessionInTransaction,
-  inspectStartupSessionSettlementOwner,
   appendSelectedTranscriptReportInTransaction,
   prepareTranscriptReportSelection,
 } from "./session-accessor.sqlite-transcript-reports.kernel.js";
@@ -40,17 +32,16 @@ import type {
   PreparedTranscriptReport,
   TranscriptReportCommit,
   TranscriptReportWorkerOperations,
-  StartupSessionSettlementOutcome,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { requestSessionEntryCurrentAdmission } from "./session-entry-current-admission.worker.js";
 import type { SessionEntryCurrentSource } from "./session-entry-current.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
+import type { InternalSessionEntry } from "./types.js";
 
 export type TranscriptReportWorkerTarget = {
   resolved: Omit<ResolvedTranscriptScope, "env">;
-  cliWriter?: CliHistoryWriterFacts;
   sessionEntryCurrentSource?: SessionEntryCurrentSource;
   fence: Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">;
 };
@@ -59,7 +50,7 @@ export type TranscriptReportWorkerTarget = {
 export function bindSqliteWorkerBackend(
   target: TranscriptReportWorkerTarget,
   context: {
-    database: DatabaseSync;
+    database: EngineConnection;
     databasePath: string;
     admit(
       stage: "transaction" | "commit",
@@ -71,7 +62,7 @@ export function bindSqliteWorkerBackend(
   const resolved = { ...target.resolved, env: getSqliteWorkerStateContext().environment };
   const options = toDatabaseOptions(resolved);
   const pathname = resolveOpenClawAgentSqlitePath(options);
-  const sameOwner = context.database.location()
+  const sameOwner = sqlPublicationAnchor(context.database).location()
     ? readDatabasePathIdentitySync(pathname).canonicalPath === context.databasePath
     : pathname === context.databasePath &&
       getOpenClawAgentDatabaseIfOpen(options)?.db === context.database;
@@ -93,43 +84,37 @@ export function bindSqliteWorkerBackend(
         dispatch,
       ),
     );
-  let closed = false;
-  const assertOpen = () => {
-    if (closed || !database.db.isOpen) {
-      throw new Error("Transcript report domain is closed");
-    }
-    assertTransactionUsable(database.db);
+  const readCurrentEntry = () => {
+    const entry = readSessionEntryRow(database, resolved.sessionKey, "list")?.entry;
+    return {
+      entry,
+      refusal: resolveTranscriptAppendRefusal(entry, resolved, { ...resolved, ...fence }),
+    };
   };
-  const readRefusal = () =>
-    resolveTranscriptAppendRefusal(
-      readSessionEntryRow(database, resolved.sessionKey, "list")?.entry,
-      resolved,
-      { ...resolved, ...fence },
-    );
   let prepared:
     | {
         facts: PreparedTranscriptReport;
         version: SessionTranscriptContextVersion;
       }
     | undefined;
-  return {
+  return bindSqliteWorkerDatabase<TranscriptReportWorkerOperations>(database.db, {
     execute(command) {
-      assertOpen();
       if (command.type === "prepare") {
-        return runSqliteDeferredTransactionSync<
-          Result<PreparedTranscriptReport, TranscriptAppendRefusal>
-        >(database.db, () => {
-          prepared = undefined;
-          const refusal = readRefusal();
-          if (refusal) {
-            return err(refusal);
-          }
-          prepared = {
-            facts: prepareTranscriptReportSelection(database, resolved, command.input),
-            version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
-          };
-          return ok(prepared.facts);
-        });
+        return runSqliteReadSnapshotSync<Result<PreparedTranscriptReport, TranscriptAppendRefusal>>(
+          database.db,
+          () => {
+            prepared = undefined;
+            const { refusal } = readCurrentEntry();
+            if (refusal) {
+              return err(refusal);
+            }
+            prepared = {
+              facts: prepareTranscriptReportSelection(database, resolved, command.input),
+              version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+            };
+            return ok(prepared.facts);
+          },
+        );
       }
       return runOpenClawAgentWriteTransaction<
         Result<TranscriptReportCommit, TranscriptAppendRefusal>
@@ -139,27 +124,16 @@ export function bindSqliteWorkerBackend(
             throw new Error("Transcript report lost its canonical database owner");
           }
           admit("transaction");
-          if (
-            command.type === "startupSettlement" &&
-            inspectStartupSessionSettlementOwner(resolved, command.input) === "retained"
-          ) {
-            // Registry recovery owns this predecessor; no session or receipt write was attempted.
-            admit("commit");
-            inspectStartupSessionSettlementOwner(resolved, command.input);
-            return ok({ committed: false, projectionNeedsReconcile: false, outcome: "retained" });
-          }
-          const refusal = readRefusal();
+          const { refusal } = readCurrentEntry();
           if (refusal) {
             admit("commit");
             return err(refusal);
           }
-          const firstSeq =
-            target.cliWriter &&
-            !(command.type === "startupSettlement" && command.input.kind === "archive")
-              ? (readTranscriptContextVersionInTransaction(database, resolved.sessionId).rawSeq ??
-                  -1) + 1
-              : undefined;
           let projectionNeedsReconcile = false;
+          let fullEntry: InternalSessionEntry | undefined;
+          const onEntryUpdated = (entry: InternalSessionEntry) => {
+            fullEntry = entry;
+          };
           const projection = {
             scheduleProjectionReconcile: false as const,
             onProjectionReconcileNeeded: () => {
@@ -167,21 +141,14 @@ export function bindSqliteWorkerBackend(
             },
           };
           let abortedPartial: AbortedSessionTranscriptPartialResult | undefined;
-          let startupOutcome: Exclude<StartupSessionSettlementOutcome, "retained"> = "unchanged";
-          if (command.type === "startupSettlement") {
-            startupOutcome = settleStartupSessionInTransaction(
-              database,
-              resolved,
-              command.input,
-              projection,
-            );
-          } else if (command.type === "abortedPartial") {
+          if (command.type === "abortedPartial") {
             abortedPartial = appendAbortedSessionTranscriptPartialInTransaction(
               database,
               resolved,
               command.input,
               command.input.preparedMessage,
               projection,
+              onEntryUpdated,
             );
           } else if (command.type === "assistant") {
             const facts = prepareTranscriptReportSelection(database, resolved, {
@@ -221,38 +188,13 @@ export function bindSqliteWorkerBackend(
             );
           }
           let commitGranted = false;
-          const assertStartupOwnerless = () => {
-            if (
-              command.type === "startupSettlement" &&
-              inspectStartupSessionSettlementOwner(resolved, command.input) === "retained"
-            ) {
-              throw new Error("a retained run/task owns this session");
-            }
-          };
           const authorizeCommit = () => {
             if (!commitGranted) {
-              assertStartupOwnerless();
               admit("commit");
-              assertStartupOwnerless();
               commitGranted = true;
             }
           };
-          const cliHistoryChanged =
-            target.cliWriter && firstSeq !== undefined
-              ? advanceCliHistoryBoundaryRangeInTransaction(
-                  database,
-                  resolved,
-                  {
-                    first: firstSeq,
-                    last:
-                      readTranscriptContextVersionInTransaction(database, resolved.sessionId)
-                        .rawSeq ?? -1,
-                  },
-                  target.cliWriter,
-                  authorizeCommit,
-                )
-              : false;
-          const rebound = readRefusal();
+          const { entry, refusal: rebound } = readCurrentEntry();
           if (rebound) {
             throw new SessionTranscriptWriterClaimReboundError(rebound);
           }
@@ -260,10 +202,12 @@ export function bindSqliteWorkerBackend(
           return ok({
             committed: true,
             projectionNeedsReconcile,
-            cliHistoryChanged,
-            ...(command.type === "startupSettlement"
-              ? { sessionEntryChanged: startupOutcome !== "unchanged", outcome: startupOutcome }
-              : {}),
+            ...(abortedPartial &&
+              !abortedPartial.skipped &&
+              abortedPartial.append.appended && {
+                entry,
+                fullEntry,
+              }),
             ...(abortedPartial
               ? {
                   abortedPartial,
@@ -276,15 +220,8 @@ export function bindSqliteWorkerBackend(
         { operationLabel: "session.transcript.report" },
       );
     },
-    assertSettled() {
-      assertOpen();
-      if (database.db.isTransaction) {
-        throw new Error("Transcript report command left a transaction open");
-      }
-    },
     close() {
-      closed = true;
       prepared = undefined;
     },
-  };
+  });
 }

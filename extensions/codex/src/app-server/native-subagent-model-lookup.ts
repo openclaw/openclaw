@@ -1,4 +1,6 @@
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type {
   ChildState,
   KnownChild,
@@ -13,21 +15,12 @@ export function waitForNativeModelSourceChange(
   signal?: AbortSignal,
 ): Promise<void> {
   signal?.throwIfAborted();
-  return new Promise((resolve, reject) => {
-    const remove = () => {
-      state.modelSourceWaiters?.delete(changed);
-      signal?.removeEventListener("abort", aborted);
-    };
-    const changed = () => {
-      remove();
-      resolve();
-    };
-    const aborted = () => {
-      remove();
-      reject(toErrorObject(signal?.reason, "Codex model source capture was aborted"));
-    };
-    (state.modelSourceWaiters ??= new Set()).add(changed);
-    signal?.addEventListener("abort", aborted, { once: true });
+  const changed = createDeferred();
+  (state.modelSourceWaiters ??= new Set()).add(changed.resolve);
+  return racePromiseWithAbortSignal(changed.promise, signal, (aborted) =>
+    toErrorObject(aborted.reason, "Codex model source capture was aborted"),
+  ).finally(() => {
+    state.modelSourceWaiters?.delete(changed.resolve);
   });
 }
 
@@ -65,25 +58,21 @@ export function findUnqualifiedNativeModelParent(
   parents: ReadonlyMap<string, ParentState>,
   admissions: ReadonlyMap<string, NativeChildAdmissionEvidence[]>,
 ): ParentState | undefined {
-  const candidates = new Set(
-    matchingNativeModelAdmissions(request, admissions).flatMap((entry) => {
+  const candidates = new Set([
+    ...matchingNativeModelAdmissions(request, admissions).flatMap((entry) => {
       const state = parents.get(entry.parentThreadId);
       return state && entry.modelSource?.owner.unqualifiedModelExecution ? [state] : [];
     }),
-  );
-  for (const state of parents.values()) {
-    if (
+    ...[...parents.values()].filter((state) =>
       [...state.owners.values()].some(
         (owner) =>
           owner.unqualifiedModelExecution &&
           !owner.modelExecutionCancelled &&
           !owner.modelExecutionSettled &&
           matchingNativeModelCause(owner, request),
-      )
-    ) {
-      candidates.add(state);
-    }
-  }
+      ),
+    ),
+  ]);
   return candidates.size === 1 ? candidates.values().next().value : undefined;
 }
 
@@ -177,7 +166,6 @@ export function resolveNativeModelThreadId(
     if (!capture) {
       return undefined;
     }
-    capture.assertCurrent();
     return candidate?.[1];
   } catch {
     return undefined;

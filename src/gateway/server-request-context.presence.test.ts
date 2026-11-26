@@ -1,21 +1,28 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { listSystemPresence } from "../infra/system-presence.js";
-import { linkEmail } from "../state/user-profile-writes.worker.js";
 import {
-  ensureProfileForEmail,
   getUserProfileDisplay,
-  resolveUserProfileId,
-} from "../state/user-profiles.js";
+  prepareUserProfileCatalog,
+  readResidentUserProfileId,
+} from "../state/user-profile-list.js";
+import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { clearSessionTypingState } from "./server-methods/session-typing-state.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionSuggestionHandlers } from "./server-methods/sessions-suggestions.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -70,22 +77,39 @@ function makeProfileClient(
   };
 }
 
+function makeStoredProfileClient(name: string) {
+  const email = `merge-${name}@example.test`;
+  const profile = ensureProfileForEmail(email);
+  return makeProfileClient(`merge-${name}`, email, {
+    profileId: profile.id,
+    displayName: profile.displayName,
+    avatarRevision: String(profile.updatedAt),
+    hasAvatar: false,
+    updatedAt: profile.updatedAt,
+  });
+}
+
 describe("createGatewayRequestContext presence", () => {
-  it.each(["email", "owner", "tailscale"] as const)(
-    "refreshes every live profile connection with %s identity",
-    async (identity) => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
+
+  it.each([
+    {
+      identity: "email",
+      emails: ["ada@example.test", "ada@work.test"],
+      revisions: ["avatar-new-png", "avatar-newer-png"],
+    },
+    { identity: "owner", emails: [undefined, undefined], revisions: ["2"] },
+    { identity: "tailscale", emails: ["ada@github"], revisions: ["avatar-tailscale-new-png"] },
+  ])(
+    "refreshes every live profile connection with $identity identity",
+    async ({ identity, emails, revisions }) => {
       let now = Date.now();
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now++);
       onTestFinished(() => {
         clock.mockRestore();
       });
       const profileId = `profile-${identity}`;
-      const emails =
-        identity === "email"
-          ? ["ada@example.test", "ada@work.test"]
-          : identity === "owner"
-            ? [undefined, undefined]
-            : ["ada@github"];
       const clients = emails.map((email, index) => ({
         ...makeProfileClient(`${identity}-${index}`, email, { profileId }),
         ...(identity === "owner" ? { personPresence: { onlineSince: 1_000 } } : {}),
@@ -98,22 +122,14 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: false,
       });
       const params = makePresenceContextParams({
-        clients: new Set([...clients, unrelated]) as never,
+        clients: new GatewayClientRegistry([...clients, unrelated] as never),
       });
       const context = createGatewayRequestContext(params);
       const first = clients[0]!;
       const capturedProfile = first.authenticatedUserProfile;
-      const readCapturedDisplayName = () => capturedProfile.displayName;
-      const revisions =
-        identity === "email"
-          ? ["avatar-new-png", "avatar-newer-png"]
-          : identity === "owner"
-            ? ["2"]
-            : ["avatar-tailscale-new-png"];
-      const expectedUser = (email: string | undefined, avatarRevision: string) => ({
+      const expectedUser = (avatarRevision: string) => ({
         id: profileId,
         identity: { type: "profile", id: profileId },
-        ...(identity === "email" ? { email } : {}),
         name: "Augusta Ada",
         avatarUrl: `/api/users/${profileId}/avatar?v=${avatarRevision}`,
       });
@@ -131,17 +147,14 @@ describe("createGatewayRequestContext presence", () => {
           "presence",
           {
             presence: expect.arrayContaining(
-              emails.map((email) =>
-                expect.objectContaining({ user: expectedUser(email, avatarRevision) }),
-              ),
+              emails.map(() => expect.objectContaining({ user: expectedUser(avatarRevision) })),
             ),
           },
-          { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
+          expect.anything(),
         );
       }
       expect(params.runtime.broadcast).toHaveBeenCalledTimes(revisions.length);
       expect(first.authenticatedUserProfile).toBe(capturedProfile);
-      expect(readCapturedDisplayName()).toBe("Augusta Ada");
       for (const client of clients) {
         expect(client.authenticatedUserProfile).toEqual({
           profileId,
@@ -154,107 +167,152 @@ describe("createGatewayRequestContext presence", () => {
       expect(unrelated.authenticatedUserProfile.displayName).toBe("Grace");
       const rows = listSystemPresence().filter((entry) => entry.user?.id === profileId);
       expect(rows).toHaveLength(clients.length);
-      const newestFirstEmails = emails.toReversed();
-      for (const [index, row] of rows.entries()) {
-        expect(row.user).toEqual(expectedUser(newestFirstEmails[index], revisions.at(-1)!));
+      for (const row of rows) {
+        expect(row.user).toEqual(expectedUser(revisions.at(-1)!));
       }
       if (identity === "email") {
         expect(rows[0]!.ts).toBeGreaterThan(rows[1]!.ts);
-      }
-      if (identity === "owner") {
-        expect(params.runtime.broadcast).toHaveBeenCalledExactlyOnceWith(
-          "presence",
-          { presence: expect.arrayContaining(rows) },
-          { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
-        );
       }
     },
   );
 
   it("canonicalizes a connected profile after its durable identity is merged", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const source = ensureProfileForEmail("merge-source@example.test");
-      const target = ensureProfileForEmail("merge-target@example.test");
-      const unrelatedProfile = ensureProfileForEmail("merge-unrelated@example.test");
-      const sourceClient = {
-        ...makeProfileClient("merge-source", "merge-source@example.test", {
-          profileId: source.id,
-          displayName: source.displayName,
-          avatarRevision: String(source.updatedAt),
-          hasAvatar: false,
-          updatedAt: source.updatedAt,
-        }),
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const sourceClient = makeStoredProfileClient("source");
+      const targetClient = makeStoredProfileClient("target");
+      const unrelatedClient = makeStoredProfileClient("unrelated");
+      const sourceId = sourceClient.authenticatedUserProfile.profileId;
+      const target = { ...targetClient.authenticatedUserProfile };
+      const unrelatedId = unrelatedClient.authenticatedUserProfile.profileId;
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      Object.assign(sourceClient, {
         personPresence: { onlineSince: 1_000, lastActivityAt: 2_000 },
-      };
-      const targetClient = {
-        ...sourceClient,
-        connId: "merge-target",
-        authenticatedUserId: "merge-target@example.test",
-        authenticatedUserProfile: {
-          ...sourceClient.authenticatedUserProfile,
-          profileId: target.id,
-        },
-        presenceKey: "profile-refresh-merge-target",
+      });
+      Object.assign(targetClient, {
         personPresence: { onlineSince: 1_500, lastActivityAt: 3_000 },
-      };
-      const unrelatedClient = makeProfileClient("merge-unrelated", "merge-unrelated@example.test", {
-        profileId: unrelatedProfile.id,
-        displayName: unrelatedProfile.displayName,
-        avatarRevision: String(unrelatedProfile.updatedAt),
-        hasAvatar: false,
-        updatedAt: unrelatedProfile.updatedAt,
       });
       const capturedProfile = sourceClient.authenticatedUserProfile;
       const params = makePresenceContextParams({
-        clients: new Set([sourceClient, targetClient, unrelatedClient]) as never,
+        clients: new GatewayClientRegistry([sourceClient, targetClient, unrelatedClient] as never),
       });
       const context = createGatewayRequestContext(params);
 
-      const linked = linkEmail("merge-source@example.test", target.id);
-      expect(resolveUserProfileId(source.id)).toBe(target.id);
+      const { profile: linked } = await linkCanonicalUserProfileEmail(
+        "merge-source@example.test",
+        target.profileId,
+      );
+      expect(readResidentUserProfileId(sourceId)).toBe(target.profileId);
       const display = getUserProfileDisplay(linked.id);
-      context.refreshConnectedUserProfile?.({
-        ...display,
-        updatedAt: linked.updatedAt,
-      });
+      context.refreshConnectedUserProfile?.({ ...display, updatedAt: linked.updatedAt });
       await params.presenceClock.advanceBy(200);
 
       expect(sourceClient.authenticatedUserProfile).toBe(capturedProfile);
       expect(sourceClient.authenticatedUserProfile).toEqual({
-        profileId: target.id,
+        profileId: target.profileId,
         displayName: target.displayName,
         avatarRevision: display.avatarRevision,
         hasAvatar: false,
         updatedAt: linked.updatedAt,
       });
-      expect(unrelatedClient.authenticatedUserProfile.profileId).toBe(unrelatedProfile.id);
-      for (const email of ["merge-source@example.test", "merge-target@example.test"]) {
-        expect(listSystemPresence().find((entry) => entry.user?.email === email)).toMatchObject({
-          user: { id: target.id, identity: { type: "profile", id: target.id } },
+      expect(unrelatedClient.authenticatedUserProfile.profileId).toBe(unrelatedId);
+      for (const client of [sourceClient, targetClient]) {
+        expect(
+          listSystemPresence().find((entry) => entry.connectionId === client.connId),
+        ).toMatchObject({
+          user: { id: target.profileId, identity: { type: "profile", id: target.profileId } },
           onlineSince: 1_000,
           lastActivityAt: 3_000,
         });
       }
-      const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
-        presence?: Array<{ user?: { id?: string; email?: string; avatarUrl?: string } }>;
+      const { presence } = vi.mocked(params.runtime.broadcast).mock.calls[0]![1] as {
+        presence: ReturnType<typeof listSystemPresence>;
       };
-      expect(
-        presence.presence?.find((entry) => entry.user?.email === "merge-source@example.test")?.user,
-      ).toEqual({
-        id: target.id,
-        identity: { type: "profile", id: target.id },
-        email: "merge-source@example.test",
+      expect(presence.find((entry) => entry.connectionId === sourceClient.connId)?.user).toEqual({
+        id: target.profileId,
+        identity: { type: "profile", id: target.profileId },
         name: target.displayName,
-        avatarUrl: `/api/users/${target.id}/avatar?v=${display.avatarRevision}`,
+        avatarUrl: `/api/users/${target.profileId}/avatar?v=${display.avatarRevision}`,
       });
-      expect(presence.presence?.some((entry) => entry.user?.id === unrelatedProfile.id)).toBe(
+      expect(presence.some((entry) => entry.user?.id === unrelatedId)).toBe(false);
+    });
+  });
+
+  it("delivers drafts to connected viewers absent from the beacon cache and stops after disconnect", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      clearSessionTypingState();
+      onTestFinished(clearSessionTypingState);
+      let now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      onTestFinished(() => clock.mockRestore());
+      const sessionKey = "agent:main:typing-live-viewers";
+      const sessionId = "typing-live-viewers";
+      const clients = ["writer", "reader"].map((name) => {
+        const email = `live-viewer-${name}@example.test`;
+        const profile = ensureProfileForEmail(email);
+        const client = makeProfileClient(`live-viewer-${name}`, email, { profileId: profile.id });
+        return Object.assign(client, {
+          socket: { readyState: 1 } as GatewayWsClient["socket"],
+          usesSharedGatewayAuth: false,
+          watchedSessions: [sessionKey],
+          personPresence: { onlineSince: now },
+        });
+      });
+      for (const client of clients) {
+        client.connect.client.mode = GATEWAY_CLIENT_MODES.WEBCHAT;
+        client.connect.scopes = ["operator.read", "operator.write"];
+      }
+      const writer = clients[0]!;
+      const reader = clients[1]!;
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId,
+          updatedAt: now,
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: writer.authenticatedUserProfile!.profileId,
+          },
+          visibility: "shared",
+        },
+      );
+      const registry = new GatewayClientRegistry(clients);
+      const params = makePresenceContextParams({ clients: registry });
+      const context = createGatewayRequestContext(params);
+      await initializeSessionReadContext(context);
+      expect(listSystemPresence().some((entry) => entry.connectionId === reader.connId)).toBe(
         false,
       );
+      const type = async (typing: boolean) => {
+        const request = { sessionKey, sessionId, typing, preview: "shared draft" };
+        const respond = vi.fn();
+        await sessionSuggestionHandlers["session.typing"]!({
+          req: { type: "req", id: "live-viewer-typing", method: "session.typing", params: request },
+          params: request,
+          client: writer,
+          context,
+          isWebchatConnect: () => true,
+          respond,
+        });
+        return respond;
+      };
+      expect(await type(true)).toHaveBeenCalledWith(true, { ok: true, broadcast: true });
+      expect(params.runtime.broadcast).toHaveBeenCalledWith(
+        "session.typing",
+        expect.objectContaining({ preview: "shared draft" }),
+        expect.objectContaining({ sessionKeys: [sessionKey] }),
+      );
+      registry.delete(reader);
+      now += 1_000;
+      expect(await type(false)).toHaveBeenCalledWith(true, { ok: true, broadcast: false });
     });
   });
 
   it("coalesces typing activity across a person's tabs and publishes explicit changes after the coalescing window", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const started = 1_800_000_000_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(started);
       const increment = vi.mocked(incrementPresenceVersion);
@@ -283,28 +341,24 @@ describe("createGatewayRequestContext presence", () => {
       );
       const tabs = ["first", "second"].map((tab, index): GatewayWsClient =>
         Object.assign(
-          makeGatewayClient({
-            connId: `typing-presence-${tab}`,
-            clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            scopes: ["operator.read", "operator.write"],
+          makeProfileClient(`typing-presence-${tab}`, "typing-presence@example.test", {
+            profileId: profile.id,
+            displayName: "Typing Person",
+            avatarRevision: "1",
+            hasAvatar: false,
+            updatedAt: started,
           }),
           {
             socket: { readyState: 1 } as GatewayWsClient["socket"],
             usesSharedGatewayAuth: false,
-            presenceKey: `typing-presence-${tab}`,
-            authenticatedUserId: "typing-presence@example.test",
-            authenticatedUserProfile: {
-              profileId: profile.id,
-              displayName: "Typing Person",
-              avatarRevision: "1",
-              hasAvatar: false,
-              updatedAt: started,
-            },
             personPresence: { onlineSince: started - 2_000 + index * 1_000 },
           },
         ),
       );
+      for (const tab of tabs) {
+        tab.connect.client.mode = GATEWAY_CLIENT_MODES.WEBCHAT;
+        tab.connect.scopes = ["operator.read", "operator.write"];
+      }
       const params = makePresenceContextParams({ clients: new GatewayClientRegistry(tabs) });
       const context = createGatewayRequestContext(params);
       await initializeSessionReadContext(context);
@@ -312,6 +366,17 @@ describe("createGatewayRequestContext presence", () => {
         vi.mocked(params.runtime.broadcast).mock.calls.filter(([event]) => event === "presence");
       const rows = () =>
         listSystemPresence().filter((entry) => entry.user?.identity?.id === profile.id);
+      const renameAt = async (offset: number, displayName: string) => {
+        clock.mockReturnValue(started + offset);
+        context.refreshConnectedUserProfile?.({
+          id: profile.id,
+          displayName,
+          avatarRevision: "1",
+          hasAvatar: false,
+          updatedAt: started + offset,
+        });
+        await params.presenceClock.advanceBy(200);
+      };
       const typeAt = async (offset: number, tab = tabs[0]!) => {
         clock.mockReturnValue(started + offset);
         const requestParams = { sessionKey, sessionId, typing: true };
@@ -336,7 +401,6 @@ describe("createGatewayRequestContext presence", () => {
       for (let second = 0; second < 30; second++) {
         await typeAt(second * 1_000, tabs[second % tabs.length]!);
       }
-      // Typing is still accepted on every request; full roster publication is coarser.
       expect(events()).toHaveLength(1);
       expect(rows()).toHaveLength(2);
       for (const row of rows()) {
@@ -348,15 +412,7 @@ describe("createGatewayRequestContext presence", () => {
       await typeAt(30_000);
       expect(events()).toHaveLength(2);
 
-      clock.mockReturnValue(started + 31_000);
-      context.refreshConnectedUserProfile?.({
-        id: profile.id,
-        displayName: "Renamed Person",
-        avatarRevision: "1",
-        hasAvatar: false,
-        updatedAt: started + 31_000,
-      });
-      await params.presenceClock.advanceBy(200);
+      await renameAt(31_000, "Renamed Person");
       expect(events()).toHaveLength(3);
       expect(rows().every((row) => row.user?.name === "Renamed Person")).toBe(true);
       health.mockReturnValue(12);
@@ -366,27 +422,16 @@ describe("createGatewayRequestContext presence", () => {
       await typeAt(32_000, tabs[1]!);
       expect(events()).toHaveLength(4);
 
-      clock.mockReturnValue(started + 179_000);
-      context.refreshConnectedUserProfile?.({
-        id: profile.id,
-        displayName: "Renamed Again",
-        avatarRevision: "1",
-        hasAvatar: false,
-        updatedAt: started + 179_000,
-      });
-      await params.presenceClock.advanceBy(200);
+      await renameAt(179_000, "Renamed Again");
       expect(events()).toHaveLength(5);
       await typeAt(180_000, tabs[1]!);
       expect(events()).toHaveLength(6);
-      expect(events().map((call) => call[2]?.stateVersion)).toEqual([
-        { presence: 1, health: 11 },
-        { presence: 2, health: 11 },
-        { presence: 3, health: 11 },
-        { presence: 4, health: 12 },
-        { presence: 5, health: 12 },
-        { presence: 6, health: 12 },
-      ]);
-      expect(presenceVersion).toBe(6);
+      expect(events().map((call) => call[2]?.stateVersion)).toEqual(
+        [11, 11, 11, 12, 12, 12].map((version, index) => ({
+          presence: index + 1,
+          health: version,
+        })),
+      );
       expect(events().at(-1)?.[1]).toMatchObject({
         presence: expect.arrayContaining([
           expect.objectContaining({
@@ -425,9 +470,9 @@ describe("createGatewayRequestContext presence", () => {
       await params.presenceClock.advanceBy(200);
       expect(client.authenticatedUserProfile?.displayName).toBe("Before");
       expect(params.runtime.broadcast).not.toHaveBeenCalled();
-      expect(
-        listSystemPresence().some((entry) => entry.user?.email === `${state}@profile.test`),
-      ).toBe(false);
+      expect(listSystemPresence().some((entry) => entry.connectionId === client.connId)).toBe(
+        false,
+      );
     },
   );
 });

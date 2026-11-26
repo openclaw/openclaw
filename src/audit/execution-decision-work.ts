@@ -67,11 +67,13 @@ function parseRawRef<TNamespace extends string>(params: {
 function buildReceipt(params: {
   token: ExecutionIdentityAdmissionToken;
   receipt: ExecutionDecisionReceiptFacts;
+  representedSubject?: DecisionReceiptV1["representedSubject"];
   resourceRef?: string;
   targetRef?: string;
 }): DecisionReceiptV1 {
   return {
     ...params.receipt,
+    ...(params.representedSubject ? { representedSubject: params.representedSubject } : {}),
     contextId: params.token.contextId,
     executionId: params.token.executionId,
     runId: params.token.runId,
@@ -110,10 +112,34 @@ export function parseExecutionDecisionWork(value: unknown): ExecutionDecisionWor
   const token = parseExecutionIdentityAdmissionToken(value.token);
   let refs: ExecutionDecisionWork["refs"];
   if (value.refs !== undefined) {
-    if (!isClosedPayloadRecord(value.refs) || !hasOnlyKeys(value.refs, ["resource", "target"])) {
+    if (
+      !isClosedPayloadRecord(value.refs) ||
+      !hasOnlyKeys(value.refs, ["resource", "target", "representedSubject"])
+    ) {
       throw new Error("execution decision work violates its bounded ref contract");
     }
+    const subject = value.refs.representedSubject;
+    let representedSubject: NonNullable<ExecutionDecisionWork["refs"]>["representedSubject"];
+    if (subject !== undefined) {
+      if (
+        !isClosedPayloadRecord(subject) ||
+        !hasOnlyKeys(subject, ["state", "kind", "rawPrincipalRef"]) ||
+        subject.state !== "present" ||
+        subject.kind !== "person" ||
+        typeof subject.rawPrincipalRef !== "string" ||
+        subject.rawPrincipalRef.length < 1 ||
+        subject.rawPrincipalRef.length > EXECUTION_DECISION_RAW_REF_MAX_LENGTH
+      ) {
+        throw new Error("execution decision work violates its represented subject contract");
+      }
+      representedSubject = {
+        state: "present",
+        kind: "person",
+        rawPrincipalRef: subject.rawPrincipalRef,
+      };
+    }
     refs = {
+      ...(representedSubject ? { representedSubject } : {}),
       ...(value.refs.resource !== undefined
         ? {
             resource: parseRawRef({
@@ -178,8 +204,34 @@ export function processExecutionDecisionWorkInDatabase(
         value: work.refs.target.value,
       })
     : undefined;
+  const representedSubject = work.refs?.representedSubject;
+  const domainRef = representedSubject
+    ? pseudonymizeExecutionIdentityRef({
+        db,
+        kind: "domain",
+        scope: "gateway-cell",
+        value: "gateway-cell",
+      })
+    : undefined;
   const receipt = buildReceipt({
     token: work.token,
+    ...(representedSubject && domainRef
+      ? {
+          representedSubject: {
+            state: "present",
+            principal: {
+              kind: "person",
+              domainRef,
+              principalRef: pseudonymizeExecutionIdentityRef({
+                db,
+                kind: "principal",
+                scope: `${domainRef}:person`,
+                value: representedSubject.rawPrincipalRef,
+              }),
+            },
+          },
+        }
+      : {}),
     receipt: work.receipt,
     ...(resourceRef ? { resourceRef } : {}),
     ...(targetRef ? { targetRef } : {}),

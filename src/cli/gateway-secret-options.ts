@@ -26,10 +26,7 @@ export function resolveGatewayAuthOptions(opts: {
   tokenFile?: unknown;
   password?: unknown;
   passwordFile?: unknown;
-}): {
-  gatewayToken?: string;
-  gatewayPassword?: string;
-} {
+}) {
   const gatewayToken = resolveGatewaySecretOption(opts.token, opts.tokenFile, "token");
   const gatewayPassword = resolveGatewaySecretOption(opts.password, opts.passwordFile, "password");
   if (opts.token) {

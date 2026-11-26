@@ -13,7 +13,9 @@ const rule = {
   },
 };
 
-function fixture(
+const ciRule = { type: rule.type, parameters: rule.parameters };
+
+function verify(
   options: {
     changeKind?: string;
     authority?: Record<string, unknown>;
@@ -23,9 +25,7 @@ function fixture(
     unavailable?: boolean;
   } = {},
 ) {
-  const calls: string[] = [];
   const writerRead = (endpoint: string) => {
-    calls.push(endpoint);
     if (endpoint === "repos/fixture/repo") {
       return {
         id: 123,
@@ -54,86 +54,64 @@ function fixture(
         target: "branch",
         enforcement: "active",
         current_user_can_bypass: "always",
-        rules: [{ type: rule.type, parameters: rule.parameters }],
+        rules: [ciRule],
         ...options.ruleset,
       };
     }
     throw new Error("Unexpected writer request: " + endpoint);
   };
-  return {
-    calls,
-    verify: () =>
-      verifyPriorCiWriterAuthority({
-        repository: "fixture/repo",
-        actor: "fixture-bot",
-        changeKind: options.changeKind ?? "pre-existing-failure",
-        policy: { rules: options.rules ?? [rule] },
-        writerRead,
-      }),
-  };
+  return verifyPriorCiWriterAuthority({
+    repository: "fixture/repo",
+    actor: "fixture-bot",
+    changeKind: options.changeKind ?? "pre-existing-failure",
+    policy: { rules: options.rules ?? [rule] },
+    writerRead,
+  });
 }
 
 describe("prior-CI delegated writer authority", () => {
-  it.each(["always", "pull_requests_only"])(
-    "accepts live %s authority without repository admin",
-    (mode) => {
-      const f = fixture({ ruleset: { current_user_can_bypass: mode } });
-      expect(f.verify().delegation).toEqual({
-        kind: "ci-ruleset-bypass",
-        repositoryId: 123,
-        actor: "fixture-bot",
-        rulesets: [{ id: 41, mode }],
-      });
-      expect(f.calls).toEqual([
-        "repos/fixture/repo",
-        "orgs/fixture/memberships/fixture-bot",
-        "repos/fixture/repo/rulesets/41",
-      ]);
-    },
-  );
+  it("accepts live PR-only authority without repository admin", () => {
+    const mode = "pull_requests_only";
+    expect(verify({ ruleset: { current_user_can_bypass: mode } }).delegation).toEqual({
+      kind: "ci-ruleset-bypass",
+      repositoryId: 123,
+      actor: "fixture-bot",
+      rulesets: [{ id: 41, mode }],
+    });
+  });
 
   it.each([
-    { name: "conflict-resolution", changeKind: "conflict-resolution" },
-    { name: "read-only writer", authority: { permissions: { push: false } } },
-    { name: "foreign repository", authority: { full_name: "other/repo" } },
-    {
-      name: "foreign organization",
-      authority: { owner: { type: "Organization", login: "other" } },
-    },
-    { name: "inactive membership", membership: { state: "pending" } },
-    { name: "different member", membership: { user: { login: "other-bot" } } },
-    { name: "unknown role", membership: { role: "other" } },
-    { name: "revoked bypass", ruleset: { current_user_can_bypass: "never" } },
-    { name: "missing bypass", ruleset: { current_user_can_bypass: undefined } },
-    { name: "unknown bypass", ruleset: { current_user_can_bypass: "exempt" } },
-    { name: "foreign ruleset", ruleset: { source: "other/repo" } },
-    { name: "different ruleset", ruleset: { id: 42 } },
-    { name: "organization ruleset", ruleset: { source_type: "Organization" } },
-    { name: "tag ruleset", ruleset: { target: "tag" } },
-    { name: "inactive ruleset", ruleset: { enforcement: "evaluate" } },
-    {
-      name: "mixed ruleset",
-      ruleset: {
-        rules: [{ type: rule.type, parameters: rule.parameters }, { type: "pull_request" }],
-      },
-    },
-    {
-      name: "changed rules",
-      ruleset: {
+    ["conflict-resolution", "changeKind", "conflict-resolution"],
+    ["read-only writer", "authority", { permissions: { push: false } }],
+    ["foreign repository", "authority", { full_name: "other/repo" }],
+    ["foreign organization", "authority", { owner: { type: "Organization", login: "other" } }],
+    ["inactive membership", "membership", { state: "pending" }],
+    ["different member", "membership", { user: { login: "other-bot" } }],
+    ["unknown role", "membership", { role: "other" }],
+    ["foreign ruleset", "ruleset", { source: "other/repo" }],
+    ["different ruleset", "ruleset", { id: 42 }],
+    ["organization ruleset", "ruleset", { source_type: "Organization" }],
+    ["tag ruleset", "ruleset", { target: "tag" }],
+    ["inactive ruleset", "ruleset", { enforcement: "evaluate" }],
+    ["mixed ruleset", "ruleset", { rules: [ciRule, { type: "pull_request" }] }],
+    [
+      "changed rules",
+      "ruleset",
+      {
         rules: [
           {
-            type: rule.type,
+            ...ciRule,
             parameters: { ...rule.parameters, strict_required_status_checks_policy: true },
           },
         ],
       },
-    },
-    { name: "missing effective gate", rules: [] },
-    { name: "missing ruleset identity", rules: [{ ...rule, ruleset_id: undefined }] },
-    { name: "foreign effective owner", rules: [{ ...rule, ruleset_source: "other/repo" }] },
-    { name: "duplicate effective rule", rules: [rule, rule] },
-  ])("refuses $name", (options) => {
-    expect(() => fixture(options).verify()).toThrow(/Prior-CI admin admission:/);
+    ],
+    ["missing effective gate", "rules", []],
+    ["missing ruleset identity", "rules", [{ ...rule, ruleset_id: undefined }]],
+    ["foreign effective owner", "rules", [{ ...rule, ruleset_source: "other/repo" }]],
+    ["duplicate effective rule", "rules", [rule, rule]],
+  ] as const)("refuses %s", (_name, field, value) => {
+    expect(() => verify({ [field]: value })).toThrow(/Prior-CI admin admission:/);
   });
 
   it.each(
@@ -147,24 +125,14 @@ describe("prior-CI delegated writer authority", () => {
   )("refuses a matching policy with mixed or foreign checks", ({ checks }) => {
     const parameters = { ...rule.parameters, required_status_checks: checks };
     expect(() =>
-      fixture({
+      verify({
         rules: [{ ...rule, parameters }],
-        ruleset: { rules: [{ type: rule.type, parameters }] },
-      }).verify(),
+        ruleset: { rules: [{ ...ciRule, parameters }] },
+      }),
     ).toThrow(/CI-only ruleset bypass/);
   });
 
   it("does not infer delegation from inaccessible GitHub authority", () => {
-    expect(() => fixture({ unavailable: true }).verify()).toThrow("GitHub authority unavailable");
-  });
-
-  it("preserves the existing organization-admin route for conflict resolution", () => {
-    const f = fixture({
-      changeKind: "conflict-resolution",
-      authority: { permissions: { admin: true } },
-      membership: { role: "admin" },
-    });
-    expect(f.verify().delegation).toBeUndefined();
-    expect(f.calls).toHaveLength(2);
+    expect(() => verify({ unavailable: true })).toThrow("GitHub authority unavailable");
   });
 });

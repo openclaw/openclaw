@@ -26,7 +26,7 @@ const MAX_VISIBLE_WORK_LINKS = 5;
 type VisibleWorkSessions = Parameters<NonNullable<GetReplyOptions["onVisibleWorkSessions"]>>[0];
 
 export function createSlackDraftProgressCardRuntime(params: {
-  setup: Pick<SlackDispatchSetup, "account" | "cfg" | "ctx" | "prepared" | "slackClient">;
+  setup: Pick<SlackDispatchSetup, "cfg" | "prepared" | "slackClient">;
   draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
   enabled: boolean;
   detailed: boolean;
@@ -36,7 +36,8 @@ export function createSlackDraftProgressCardRuntime(params: {
   getSnapshot: () => ChannelProgressDraftCompositorSnapshot;
   getThreadTs: () => string | undefined;
 }) {
-  const { account, cfg, ctx, prepared, slackClient } = params.setup;
+  const { cfg, prepared, slackClient } = params.setup;
+  const { account, ctx } = prepared;
   let finalStatus: Exclude<DraftProgressCardState, "working"> | undefined;
   const visibleWorkSessions = new Map<string, VisibleWorkSessions[number]>();
 

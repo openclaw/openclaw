@@ -1,17 +1,24 @@
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { throwIfSettledRejected } from "./error-graph-internal.js";
 
 export type AgentDatabaseReadCandidate = { path: string; scope?: "sibling-family" };
 
 /** Close retained readers; a deletion also refuses later opens until the database is revived. */
 export type AgentDatabaseReaderRequest =
-  | { kind: "close"; candidates: AgentDatabaseReadCandidate[]; deleted: false }
+  | {
+      kind: "close";
+      candidates: AgentDatabaseReadCandidate[];
+      deleted: false;
+      retainedPaths?: string[];
+    }
   | { kind: "close"; candidates: AgentDatabaseReadCandidate[]; deleted: true; agentId: string }
   | { kind: "revive"; agentIds: string[] };
 
 type AgentDatabaseReaderCloser = (
   candidates: readonly AgentDatabaseReadCandidate[],
+  retainedPaths?: ReadonlySet<string>,
 ) => void | Promise<void>;
 
 const readers = resolveGlobalSingleton(Symbol.for("openclaw.agentDatabaseReaders"), () => ({
@@ -24,6 +31,9 @@ export function matchesAgentDatabaseReadCandidatePath(
   candidate: AgentDatabaseReadCandidate,
   pathname: string,
 ): boolean {
+  if (candidate.path === pathname) {
+    return true;
+  }
   const capturedPath = path.resolve(candidate.path);
   const resolvedPath = path.resolve(pathname);
   if (capturedPath === resolvedPath) {
@@ -50,12 +60,9 @@ export function registerAgentDatabaseReaderCloser(closer: AgentDatabaseReaderClo
 }
 
 /** A deleted agent's database stays closed in this isolate until the roster admits the agent again. */
-export function isDeletedAgentDatabasePath(pathname: string): boolean {
-  return readers.deleted.has(path.resolve(pathname));
-}
-
-export function hasDeletedAgentDatabases(): boolean {
-  return readers.deleted.size > 0;
+export function isDeletedAgentDatabasePath(pathname: string, agentId?: string): boolean {
+  const deletedAgentId = readers.deleted.get(path.resolve(pathname));
+  return deletedAgentId !== undefined && (agentId === undefined || deletedAgentId === agentId);
 }
 
 /** Task admission carries the parent owner's current fences into every worker generation. */
@@ -86,16 +93,13 @@ export async function applyAgentDatabaseReaderRequest(
       readers.deleted.set(path.resolve(candidate.path), request.agentId);
     }
   }
+  const retainedPaths = request.deleted
+    ? undefined
+    : new Set(request.retainedPaths?.map((entry) => path.resolve(entry)));
   const results = await Promise.allSettled(
-    [...readers.closers].map(async (closer) => closer(request.candidates)),
+    [...readers.closers].map(async (closer) => closer(request.candidates, retainedPaths)),
   );
-  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Agent database reader cleanup failed");
-  }
+  throwIfSettledRejected(results, "Agent database reader cleanup failed");
 }
 
 function normalizeCandidates(candidates: unknown): AgentDatabaseReadCandidate[] | undefined {
@@ -122,7 +126,11 @@ export function encodeAgentDatabaseReaderRequest(request: AgentDatabaseReaderReq
   const candidates = normalizeCandidates(request.candidates) ?? [];
   return request.deleted
     ? JSON.stringify({ deleted: candidates, agentId: request.agentId })
-    : JSON.stringify(candidates);
+    : JSON.stringify(
+        request.retainedPaths?.length
+          ? { candidates, retainedPaths: request.retainedPaths }
+          : candidates,
+      );
 }
 
 /** Worker resource keys that name agent databases; other keys belong to their worker's own closer. */
@@ -145,17 +153,20 @@ export function decodeAgentDatabaseReaderRequest(
   if (!isRecord(parsed)) {
     return undefined;
   }
+  if ("candidates" in parsed && !("deleted" in parsed)) {
+    const candidates = normalizeCandidates(parsed.candidates);
+    const retainedPaths = parsed.retainedPaths;
+    return candidates && isStringArray(retainedPaths)
+      ? { kind: "close", candidates, retainedPaths, deleted: false }
+      : undefined;
+  }
   if ("deleted" in parsed) {
     const candidates = normalizeCandidates(parsed.deleted);
     return candidates && typeof parsed.agentId === "string" && parsed.agentId.length > 0
       ? { kind: "close", candidates, deleted: true, agentId: parsed.agentId }
       : undefined;
   }
-  if (
-    "revive" in parsed &&
-    Array.isArray(parsed.revive) &&
-    parsed.revive.every((agentId) => typeof agentId === "string")
-  ) {
+  if ("revive" in parsed && isStringArray(parsed.revive)) {
     return { kind: "revive", agentIds: parsed.revive };
   }
   return undefined;

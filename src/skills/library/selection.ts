@@ -1,25 +1,19 @@
-import fs from "node:fs";
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
-  SKILL_LIBRARY_MAX_FILE_BYTES,
   SKILL_LIBRARY_MAX_SELECTIONS,
   type SkillLibrarySelection,
   type SkillsLibraryActivateParams,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
-import { openRootFileSync, readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
-import {
-  parseSkillFrontmatter,
-  resolveSkillInvocationPolicy,
-  resolveSkillManifestMetadata,
-} from "../loading/frontmatter.js";
-import { materializeSkill } from "../loading/skill-materializer.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { runSkillLibraryFilesystemTask } from "../runtime/refresh.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import type { SkillEntry } from "../types.js";
 import { readSkillLibraryManifestTree, skillLibraryRevisionDir } from "./bundle.js";
+import { materializeSkillLibrarySelection } from "./filesystem.kernel.js";
+import type { SkillLibraryReadQueries } from "./read.contract.js";
 import {
   readSkillLibrarySelectionDescriptions,
   readSkillLibrarySelectionManifests,
@@ -55,13 +49,30 @@ function bindPreparedSelection(prepared: {
 const selectedEntryCache = new Map<string, SkillEntry[]>();
 
 /** Async preparation retains pin values even when a caller later edits its snapshot. */
-export function captureSkillLibrarySelection(selections: readonly SkillLibrarySelection[]) {
+function captureSkillLibrarySelection(selections: readonly SkillLibrarySelection[]) {
   return selections.map(({ skillId, revision, name, ownerProfileId }) => ({
     skillId,
     revision,
     name,
     ownerProfileId,
   }));
+}
+
+export function captureSkillLibraryPreparation(
+  selections: readonly SkillLibrarySelection[],
+  assertCallerCurrent?: () => void,
+) {
+  const librarySelections = captureSkillLibrarySelection(selections);
+  const libraryContext = librarySelections.length ? captureOpenClawStateWorkerContext() : undefined;
+  return {
+    librarySelections,
+    libraryContext,
+    assertCurrent: () => {
+      assertCallerCurrent?.();
+      libraryContext?.maintenanceScope?.assertAdmission();
+      libraryContext?.admission.assertCurrent();
+    },
+  };
 }
 
 /** The session owner has already authorized this exact immutable pin. */
@@ -89,6 +100,26 @@ export async function seedSkillLibrarySelection(
   return bindPreparedSelection(prepared);
 }
 
+export type PreparedSkillLibrarySession = SkillLibraryReadQueries["session"]["output"] & {
+  assertCurrent: () => void;
+};
+
+/** Human ingress consumes one snapshot for initial pins and authoring presentation. */
+export async function prepareSkillLibrarySession(
+  authority: SkillLibraryAuthority,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<PreparedSkillLibrarySession> {
+  const prepared = await captureSkillLibraryAccess(authority, options).read("session", undefined);
+  return {
+    selections: bindPreparedSelection({
+      value: prepared.value.selections,
+      assertCurrent: prepared.assertCurrent,
+    }),
+    presentation: prepared.value.presentation,
+    assertCurrent: prepared.assertCurrent,
+  };
+}
+
 /** Session mutation authorization is separate; retain library authority through its commit. */
 export async function changeSkillLibrarySelection(
   authority: SkillLibraryAuthority,
@@ -104,8 +135,8 @@ export async function changeSkillLibrarySelection(
     return current.filter((item) => item.skillId !== params.skillId);
   }
   const prepared = await captureSkillLibraryAccess(authority, options).read("change", {
-    current,
-    params,
+    current: captureSkillLibrarySelection(current),
+    params: { ...params },
   });
   return bindPreparedSelection(prepared);
 }
@@ -167,79 +198,19 @@ export async function prepareSkillLibrarySelection(
   }
   const revisions = await readSkillLibrarySelectionDescriptions(selections, capturedOptions);
   assertCurrent();
-  return cacheSkillLibrarySelection(
-    cacheKey,
-    revisions && materializeSkillLibrarySelection(selections, revisions, capturedOptions.env),
-  );
-}
-
-function materializeSkillLibrarySelection(
-  selections: readonly SkillLibrarySelection[],
-  revisions: ReturnType<typeof selectSkillLibraryRevisionMetadataBatch>,
-  env: NodeJS.ProcessEnv | undefined,
-): SkillEntry[] {
-  return selections.map((selection, index) => {
-    const revision = revisions[index];
-    if (!revision) {
-      throw new SkillLibraryError(
-        "NOT_FOUND",
-        "A pinned skill revision is unavailable; restore the library artifact or detach it explicitly.",
-      );
-    }
-    const baseDir = skillLibraryRevisionDir(selection.skillId, selection.revision, env);
-    const filePath = path.join(baseDir, "SKILL.md");
-    const opened = openRootFileSync({
-      absolutePath: filePath,
-      rootPath: baseDir,
-      boundaryLabel: "skill library revision",
-      maxBytes: SKILL_LIBRARY_MAX_FILE_BYTES,
-      rejectHardlinks: true,
-      symlinks: "reject",
-    });
-    if (!opened.ok) {
-      throw new SkillLibraryError(
-        "INVALID_BUNDLE",
-        "Pinned skill instructions could not be read; restore the library artifact or detach it explicitly.",
-        undefined,
-        { cause: opened.error },
-      );
-    }
-    let content: string;
-    try {
-      content = readFileDescriptorBoundedSync(opened.fd, SKILL_LIBRARY_MAX_FILE_BYTES).toString(
-        "utf8",
-      );
-    } finally {
-      fs.closeSync(opened.fd);
-    }
-    const frontmatter = parseSkillFrontmatter(content);
-    const metadata = resolveSkillManifestMetadata(frontmatter);
-    const invocation = resolveSkillInvocationPolicy(frontmatter);
-    const name = selection.name;
-    return {
-      skill: materializeSkill({
-        content,
-        frontmatter,
-        name,
-        description: revision.description,
-        baseDir,
-        filePath,
-        source: "openclaw-library",
-        sourceOptions: { source: "openclaw-library" },
-      }),
-      frontmatter,
-      invocation,
-      // Untrusted frontmatter can constrain executable eligibility, but cannot claim global credentials/config.
-      metadata: {
-        skillKey: name,
-        os: metadata?.os,
-        requires: metadata?.requires,
-      },
-      disableCommandDispatch: true,
-      syncSourceDir: baseDir,
-      syncDirName: `library-${selection.skillId}-${selection.revision}`,
-    } satisfies SkillEntry;
-  });
+  const result =
+    revisions &&
+    (await runSkillLibraryFilesystemTask({
+      kind: "selection",
+      selections,
+      revisions,
+      stateDir: resolveStateDir(capturedOptions.env),
+    }));
+  assertCurrent();
+  if (result && result.kind !== "selection") {
+    throw new Error("Unexpected skill library selection response");
+  }
+  return cacheSkillLibrarySelection(cacheKey, result?.entries);
 }
 
 function cacheSkillLibrarySelection(cacheKey: string, entries: SkillEntry[] | undefined) {

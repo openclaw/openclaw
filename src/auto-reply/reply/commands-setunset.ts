@@ -1,4 +1,3 @@
-/** Shared parsing helpers for commands with set/unset subcommands. */
 import { parseSlashCommandOrNull } from "./commands-slash-parse.js";
 import { parseConfigValue } from "./config-value.js";
 
@@ -19,8 +18,7 @@ export function parseSlashCommandWithSetUnset<T>(params: {
     return null;
   }
   const error = (message: string): SetUnsetCommand => ({ action: "error", message });
-  const { action } = parsed;
-  const args = parsed.args.trim();
+  const { action, args } = parsed;
   if (action === "unset") {
     return args ? { action: "unset", path: args } : error(`Usage: ${params.slash} unset path`);
   }
@@ -33,9 +31,5 @@ export function parseSlashCommandWithSetUnset<T>(params: {
     const value = parseConfigValue(args.slice(equalsIndex + 1));
     return value.error ? error(value.error) : { action: "set", path, value: value.value };
   }
-  const knownAction = params.onKnownAction(action, args);
-  if (knownAction) {
-    return knownAction;
-  }
-  return error(params.usageMessage);
+  return params.onKnownAction(action, args) || error(params.usageMessage);
 }

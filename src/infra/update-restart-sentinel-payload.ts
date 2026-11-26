@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import { formatDoctorNonInteractiveHint, type RestartSentinelPayload } from "./restart-sentinel.js";
 import type { UpdateRunResult } from "./update-run-result.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
@@ -13,7 +14,7 @@ export type ForegroundUpdateOrigin = {
   configPath: string;
 };
 
-/** Metadata needed to route update restart continuation messages. */
+/** Metadata needed to publish the update outcome. */
 export type UpdateRestartSentinelMeta = {
   runId?: string;
   /** The foreground replacement Gateway verifies success after the CLI settles. */
@@ -80,10 +81,6 @@ export function buildUpdateRestartSentinelPayload(params: {
   const result = normalizeControlPlaneUpdateResult(params.result);
   const recovery = resolvePersistedRecovery(result);
   const { meta } = params;
-  const continuationMessage = result.status === "ok" ? meta.continuationMessage?.trim() : undefined;
-  const continuation: RestartSentinelPayload["continuation"] = continuationMessage
-    ? { kind: "agentTurn", message: continuationMessage }
-    : null;
   return {
     kind: "update",
     status: result.status,
@@ -92,8 +89,10 @@ export function buildUpdateRestartSentinelPayload(params: {
     ...(meta.deliveryContext ? { deliveryContext: meta.deliveryContext } : {}),
     ...(meta.threadId ? { threadId: meta.threadId } : {}),
     message: meta.note ?? null,
-    ...(continuation ? { continuation } : {}),
-    doctorHint: formatDoctorNonInteractiveHint(),
+    doctorHint:
+      result.status === "error"
+        ? `If repair requires stopping the Gateway, run \`${formatCliCommand("openclaw update repair")}\` from a terminal outside the Gateway process tree. Do not run this repair through the Gateway's exec tool.`
+        : formatDoctorNonInteractiveHint(),
     stats: {
       ...(meta.runId || result.runId ? { runId: meta.runId ?? result.runId } : {}),
       mode: result.mode,

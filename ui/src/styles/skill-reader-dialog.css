@@ -1,0 +1,32 @@
+/* A selected path can be longer than the dialog. Keep its label and source in the field column. */
+.skill-library-dialog .oc-dialog__body > .field {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-library-dialog__source {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  font-family: var(--mono);
+  resize: vertical;
+}
+
+.skill-library-details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.skill-library-dialog .oc-dialog__body > p {
+  margin: 0;
+}
+
+.skill-library-details > .settings-disclosure__summary {
+  padding-inline: 0;
+}
+
+.skill-library-details dl {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}

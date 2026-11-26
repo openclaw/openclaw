@@ -1,8 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveConversationRouteEligibilityForAgent } from "./conversation-route-ownership.js";
+import { resolveConversationRouteEligibilitiesForAgent } from "./conversation-route-ownership.js";
+
+type Conversation = Parameters<
+  typeof resolveConversationRouteEligibilitiesForAgent
+>[0]["conversations"][number];
+
+function resolveRoute(config: OpenClawConfig, agentId: string, conversation: Conversation) {
+  return resolveConversationRouteEligibilitiesForAgent({
+    config,
+    agentId,
+    conversations: [conversation],
+  });
+}
 
 const baseConversation = {
+  conversationRef: "conv_11111111111111111111111111111111",
   accountId: "default",
   channel: "reef",
   kind: "group" as const,
@@ -10,95 +23,56 @@ const baseConversation = {
   target: "group:topic-42",
 };
 
-function configWithBindings(bindings: NonNullable<OpenClawConfig["bindings"]>): OpenClawConfig {
+function configWithPeer(id: string, teamId?: string): OpenClawConfig {
   return {
     agents: { entries: { main: {}, finance: {} } },
-    bindings: [...bindings, { type: "route", agentId: "main", match: { channel: "reef" } }],
-  };
-}
-
-describe("resolveConversationRouteEligibilityForAgent", () => {
-  it("replays authoritative parent context when selecting the route owner", () => {
-    const config = configWithBindings([
+    bindings: [
       {
         type: "route",
         agentId: "finance",
-        match: { channel: "reef", peer: { kind: "group", id: "parent-room" } },
+        match: { channel: "reef", peer: { kind: "group", id }, ...(teamId ? { teamId } : {}) },
       },
-    ]);
+      { type: "route", agentId: "main", match: { channel: "reef" } },
+    ],
+  };
+}
+
+describe("resolveConversationRouteEligibilitiesForAgent", () => {
+  it("replays authoritative parent context when selecting the route owner", async () => {
+    const config = configWithPeer("parent-room");
     const conversation = {
       ...baseConversation,
       routeContextObserved: true as const,
       routeContext: { parentPeerId: "parent-room" },
     };
 
-    expect(
-      resolveConversationRouteEligibilityForAgent({ config, agentId: "main", conversation }),
-    ).toBe("denied");
-    expect(
-      resolveConversationRouteEligibilityForAgent({ config, agentId: "finance", conversation }),
-    ).toBe("eligible");
+    await expect(resolveRoute(config, "main", conversation)).resolves.toEqual(["denied"]);
+    await expect(resolveRoute(config, "finance", conversation)).resolves.toEqual(["eligible"]);
   });
 
-  it("does not treat an unrelated peer binding as a possible parent owner for a legacy thread", () => {
-    const config = configWithBindings([
-      {
-        type: "route",
-        agentId: "finance",
-        match: { channel: "reef", peer: { kind: "group", id: "unrelated-room" } },
-      },
-    ]);
+  it("does not treat an unrelated peer binding as a possible parent owner for a legacy thread", async () => {
+    const config = configWithPeer("unrelated-room");
 
-    expect(
-      resolveConversationRouteEligibilityForAgent({
-        config,
-        agentId: "main",
-        conversation: { ...baseConversation, threadId: "topic-7" },
-      }),
-    ).toBe("eligible");
+    await expect(
+      resolveRoute(config, "main", { ...baseConversation, threadId: "topic-7" }),
+    ).resolves.toEqual(["eligible"]);
   });
 
-  it("replays a legacy thread parent binding from its retained route peer", () => {
-    const config = configWithBindings([
-      {
-        type: "route",
-        agentId: "finance",
-        match: { channel: "reef", peer: { kind: "group", id: "parent-room" } },
-      },
-    ]);
+  it("replays a legacy thread parent binding from its retained route peer", async () => {
+    const config = configWithPeer("parent-room");
     const conversation = { ...baseConversation, peerId: "parent-room", threadId: "topic-7" };
 
-    expect(
-      resolveConversationRouteEligibilityForAgent({ config, agentId: "main", conversation }),
-    ).toBe("denied");
-    expect(
-      resolveConversationRouteEligibilityForAgent({ config, agentId: "finance", conversation }),
-    ).toBe("eligible");
+    await expect(resolveRoute(config, "main", conversation)).resolves.toEqual(["denied"]);
+    await expect(resolveRoute(config, "finance", conversation)).resolves.toEqual(["eligible"]);
   });
 
-  it("fails closed for a matching contextual wildcard when legacy context is absent", () => {
-    const config = configWithBindings([
-      {
-        type: "route",
-        agentId: "finance",
-        match: { channel: "reef", peer: { kind: "group", id: "*" }, teamId: "finance" },
-      },
-    ]);
+  it("fails closed for a matching contextual wildcard when legacy context is absent", async () => {
+    const config = configWithPeer("*", "finance");
 
-    expect(
-      resolveConversationRouteEligibilityForAgent({
-        config,
-        agentId: "main",
-        conversation: baseConversation,
-      }),
-    ).toBe("denied");
+    await expect(resolveRoute(config, "main", baseConversation)).resolves.toEqual(["denied"]);
 
-    expect(
-      resolveConversationRouteEligibilityForAgent({
-        config,
-        agentId: "main",
-        conversation: { ...baseConversation, routeContextObserved: true },
-      }),
-    ).toBe("eligible");
+    await expect(
+      resolveRoute(config, "main", { ...baseConversation, routeContextObserved: true }),
+    ).resolves.toEqual(["eligible"]);
   });
 });

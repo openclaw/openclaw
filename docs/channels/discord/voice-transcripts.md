@@ -121,7 +121,7 @@ and add an occupancy-driven transcript source:
   },
   tools: {
     media: {
-      models: [{ provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] }],
+      models: [{ provider: "openai", model: "gpt-transcribe", capabilities: ["audio"] }],
       audio: { enabled: true },
     },
   },
@@ -145,6 +145,10 @@ intent, which `voice.enabled: true` enables by default. Do not explicitly disabl
 `voice.autoJoin`, for this note-taking recipe. Tell participants that the bot
 captures and stores transcripts before enabling it.
 
+Speech-to-text reads the current `tools.media` config for each clip, so a
+changed transcription model or language applies to the next clip without a
+Gateway restart.
+
 For multiple Discord accounts, add `accountId` to select the voice-enabled bot
 unless the configured default account resolves it unambiguously. Configure at
 most one occupancy-driven `discord-voice` entry per account and guild; the bot
@@ -165,6 +169,6 @@ During capture, notes update about every five minutes when new speech has been
 saved. A quiet room does not trigger repeated summaries. Capture stop drains the
 received speech and saves final notes.
 They use the agent's utility model, falling back to its primary model and then
-deterministic heuristic notes if model generation fails. Read stored notes with
+rule-based notes if model generation fails. Read stored notes with
 the `transcripts` tool, the [CLI](/cli/transcripts), or the Control UI Meetings
 page. The tool's `summarize` action regenerates notes from the stored transcript.

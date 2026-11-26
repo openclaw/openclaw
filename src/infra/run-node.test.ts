@@ -10,6 +10,7 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "../../scripts/lib/local-build-metadata.mts";
+import { resolveRunNodeInputSignature } from "../../scripts/lib/run-node-input-state.mts";
 import {
   acquireRunNodeBuildLock,
   resolveBuildRequirement,
@@ -64,55 +65,56 @@ beforeEach(() => {
 
 describe("run-node script", () => {
   it.for([
-    { args: ["--profile", "ci", "qa", "mantis", "run"], mantis: true },
-    { args: ["--profile", "qa", "mantis", "run"], mantis: false },
-    { args: ["status", "qa", "mantis", "run"], mantis: false },
-  ])(
-    "grants Mantis lifecycle IPC only to the parsed command: %j",
-    async ({ args, mantis }, { tmp }) => {
-      await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
-      const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: true } });
-      const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) });
-      const { promise: childSpawned, resolve: markChildSpawned } = createDeferred();
-      const spawn = vi.fn((_cmd: string, childArgs: string[], _options: unknown) => {
-        if (!childArgs.includes("openclaw.mjs")) {
-          return createExitedProcess(0);
-        }
-        markChildSpawned();
-        return child;
-      });
-      const outcome = runNodeCommand(tmp, {
-        args,
-        process: fakeProcess,
-        spawn,
-        runRuntimePostBuild: skipRuntimePostBuild,
-      });
-      // Lifecycle listeners attach in the spawn call stack, after async build/postbuild work.
-      await Promise.race([childSpawned, outcome]);
-      try {
-        expect(child.listenerCount("exit")).toBe(1);
-        vi.useFakeTimers();
-        child.emit("message", { type: "openclaw:shutdown-grace", graceMs: 120_000 });
-        fakeProcess.emit("SIGTERM");
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(child.kill.mock.calls).toEqual(mantis ? [["SIGTERM"]] : [["SIGTERM"], ["SIGKILL"]]);
-        if (mantis) {
-          await vi.advanceTimersByTimeAsync(115_000);
-          expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
-        }
-      } finally {
-        child.emit("exit", 0, null);
-        await outcome;
-        vi.useRealTimers();
+    { args: ["gateway"], graceMs: 330_000 },
+    { args: ["--profile", "ci", "gateway", "run", "--port", "18790"], graceMs: 330_000 },
+    { args: ["gateway", "status"], graceMs: 5_000 },
+    { args: ["--profile", "gateway", "status"], graceMs: 5_000 },
+    { args: ["--profile", "ci", "qa", "mantis", "run"], graceMs: 120_000 },
+    { args: ["--profile", "qa", "mantis", "run"], graceMs: 5_000 },
+    { args: ["status", "qa", "mantis", "run"], graceMs: 5_000 },
+  ])("honors the parsed command's shutdown budget: %j", async ({ args, graceMs }, { tmp }) => {
+    await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+    const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: true } });
+    const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) });
+    const { promise: childSpawned, resolve: markChildSpawned } = createDeferred();
+    const spawn = vi.fn((_cmd: string, childArgs: string[], _options: unknown) => {
+      if (!childArgs.includes("openclaw.mjs")) {
+        return createExitedProcess(0);
       }
-      expect(await outcome).toBe(143);
-      expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
-    },
-  );
+      markChildSpawned();
+      return child;
+    });
+    const outcome = runNodeCommand(tmp, {
+      args,
+      process: fakeProcess,
+      spawn,
+      runRuntimePostBuild: skipRuntimePostBuild,
+    });
+    // Lifecycle listeners attach in the spawn call stack, after async build/postbuild work.
+    await Promise.race([childSpawned, outcome]);
+    try {
+      expect(child.listenerCount("exit")).toBe(1);
+      vi.useFakeTimers();
+      child.emit("message", { type: "openclaw:shutdown-grace", graceMs: 120_000 });
+      fakeProcess.emit("SIGTERM");
+      await vi.advanceTimersByTimeAsync(graceMs - 1);
+      expect(child.kill.mock.calls).toEqual([["SIGTERM"]]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+    } finally {
+      child.emit("exit", 0, null);
+      await outcome;
+      vi.useRealTimers();
+    }
+    expect(await outcome).toBe(143);
+    expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+  });
 
   it.for([undefined, "node", "bun"])(
     "starts the %s CLI only after the Node runtime build completes",
     async (runtime, { tmp }) => {
+      const bunPath = path.join(tmp, "fixture-bun");
+      await fs.writeFile(bunPath, "", { mode: 0o755 });
       const build = new EventEmitter();
       const fakeProcess = createFakeProcess();
       const { promise: buildSpawned, resolve: markBuildSpawned } = createDeferred();
@@ -128,7 +130,9 @@ describe("run-node script", () => {
         spawn,
         process: fakeProcess,
         env: {
+          CI: "",
           OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_BUN_PATH: bunPath,
           OPENCLAW_VITEST_RUNTIME: runtime,
           OPENCLAW_TRACE_SYNC_IO: "1",
         },
@@ -144,7 +148,12 @@ describe("run-node script", () => {
       expect(await result).toBe(0);
       expect(spawn.mock.calls.map(([cmd, args]) => [cmd].concat(args))).toEqual([
         expectedBuildSpawn(),
-        [runtime === "bun" ? "bun" : process.execPath, "--trace-sync-io", "openclaw.mjs", "status"],
+        [
+          runtime === "node" ? process.execPath : bunPath,
+          "--trace-sync-io",
+          "openclaw.mjs",
+          "status",
+        ],
       ]);
       // The canonical profile owns metadata and both stamps; the local runner
       // only invokes postbuild directly on its separate metadata-only path.
@@ -357,7 +366,13 @@ describe("run-node script", () => {
   it.runIf(process.platform !== "win32").for([false, true])(
     "force-cleans the active child process group after SIGTERM (rebuild: %s)",
     async (rebuild, { tmp }) => {
+      vi.stubEnv("CI", "true");
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
       await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+      const bunPath = path.join(tmp, "fixture-bun");
+      await fs.writeFile(bunPath, "", { mode: 0o755 });
 
       const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: false } });
       const child = Object.assign(new EventEmitter(), {
@@ -372,7 +387,12 @@ describe("run-node script", () => {
       });
 
       const exitCodePromise = runNodeCommand(tmp, {
-        env: { OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0", OPENCLAW_VITEST_RUNTIME: "bun" },
+        env: {
+          CI: "",
+          OPENCLAW_FORCE_BUILD: rebuild ? "1" : "0",
+          OPENCLAW_VITEST_RUNTIME: "bun",
+          OPENCLAW_BUN_PATH: bunPath,
+        },
         platform: "darwin",
         process: fakeProcess,
         signalProcess: (pid: number, signal?: string | number) => {
@@ -393,7 +413,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(143);
       const spawnCall = firstMockCall(spawn);
-      expect(spawnCall?.[0]).toBe(rebuild ? process.execPath : "bun");
+      expect(spawnCall?.[0]).toBe(rebuild ? process.execPath : bunPath);
       expect(spawnCall?.[1]).toEqual(
         rebuild ? expectedBuildSpawn().slice(1) : ["openclaw.mjs", "status"],
       );
@@ -557,6 +577,87 @@ describe("run-node script", () => {
     ]);
     expect(runRuntimePostBuild).not.toHaveBeenCalled();
   });
+
+  it.for([false, true])(
+    "reuses prepared dirty runtime inputs for Gateway status unless they changed (changed: %s)",
+    async (changed, { tmp }) => {
+      const input = "scripts/runtime-postbuild.mts";
+      await setupStampedProject(tmp, {
+        files: { [input]: "export {};\n" },
+        trackConfig: true,
+      });
+      const { deps } = await trackProjectWithGit(tmp);
+      const env = {
+        ...process.env,
+        OPENCLAW_DEV_SOURCE_ROOT: tmp,
+        OPENCLAW_VITEST_RUNTIME: "node",
+      };
+      await fs.appendFile(resolvePath(tmp, input), "\n");
+      writeRuntimePostBuildStamp({
+        cwd: tmp,
+        env,
+        inputSignature: resolveRunNodeInputSignature({ ...deps, env }, "runtime"),
+      });
+      if (changed) {
+        await fs.appendFile(resolvePath(tmp, input), "\n");
+      }
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn } = createSpawnRecorder();
+
+      expect(
+        await runNodeCommand(tmp, {
+          args: ["gateway", "status", "--deep"],
+          env,
+          spawn,
+          spawnSync: realSpawnSync,
+          runRuntimePostBuild,
+        }),
+      ).toBe(0);
+      expect(spawnCalls).toEqual([
+        [process.execPath, "openclaw.mjs", "gateway", "status", "--deep"],
+      ]);
+      expect(runRuntimePostBuild).toHaveBeenCalledTimes(changed ? 1 : 0);
+    },
+  );
+
+  it.for([false, true])(
+    "reuses a dirty build for a co-located source launcher unless inputs changed (changed: %s)",
+    async (changed, { tmp }) => {
+      await setupStampedProject(tmp, { trackConfig: true });
+      const { deps } = await trackProjectWithGit(tmp);
+      const env = {
+        ...process.env,
+        OPENCLAW_DEV_SOURCE_ROOT: tmp,
+        OPENCLAW_VITEST_RUNTIME: "node",
+      };
+      await fs.writeFile(resolvePath(tmp, ROOT_SRC), "export const value = 2;\n");
+      // The first launcher's build signed these dirty inputs.
+      writeBuildStamp({ cwd: tmp, inputSignature: resolveRunNodeInputSignature(deps, "build") });
+      writeRuntimePostBuildStamp({
+        cwd: tmp,
+        env,
+        inputSignature: resolveRunNodeInputSignature({ ...deps, env }, "runtime"),
+      });
+      if (changed) {
+        await fs.writeFile(resolvePath(tmp, ROOT_SRC), "export const value = 3;\n");
+      }
+      const { spawnCalls, spawn } = createSpawnRecorder();
+
+      expect(
+        await runNodeCommand(tmp, {
+          args: ["node", "run"],
+          env,
+          spawn,
+          spawnSync: realSpawnSync,
+          runRuntimePostBuild: skipRuntimePostBuild,
+        }),
+      ).toBe(0);
+      expect(spawnCalls).toEqual([
+        ...(changed ? [expectedBuildSpawn()] : []),
+        [process.execPath, "openclaw.mjs", "node", "run"],
+      ]);
+    },
+  );
 
   it.for([false, true])(
     "keeps legacy client stamps subject to required output checks (missing: %s)",

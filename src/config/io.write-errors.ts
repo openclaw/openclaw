@@ -1,12 +1,54 @@
-// Formats stable user-facing config write failures.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ConfigValidationIssue } from "./types.js";
 
 const CONFIG_VALIDATION_FAILED_CODE = "CONFIG_VALIDATION_FAILED";
 const CONFIG_INCLUDE_OWNERSHIP_CODE = "CONFIG_INCLUDE_OWNERSHIP";
+const CONFIG_WRITE_REJECTED_CODE = "CONFIG_WRITE_REJECTED";
+
+const CONFIG_WRITE_SAFETY_REJECTION_MESSAGE =
+  "OpenClaw blocked this config update because it looked like it could overwrite or remove existing settings. Your current config was left unchanged. Correct the proposed update so it preserves existing settings, then retry. If the saved config is already invalid, run openclaw doctor --fix first.";
 
 export type ConfigWriteRollbackStatus = "restored" | "not-restored" | "unknown";
+
+/**
+ * Refuses a suspicious root-config replacement without exposing filesystem
+ * paths or byte-level guard diagnostics through user-facing error surfaces.
+ */
+export function createConfigWriteSafetyRejectionError(params: {
+  reasons: readonly string[];
+  rejectedPath?: string;
+}): Error & { code: string; reasons: string[]; rejectedPath?: string } {
+  return Object.assign(new Error(CONFIG_WRITE_SAFETY_REJECTION_MESSAGE), {
+    code: CONFIG_WRITE_REJECTED_CODE,
+    reasons: [...params.reasons],
+    ...(params.rejectedPath ? { rejectedPath: params.rejectedPath } : {}),
+  });
+}
+
+type ConfigWritePostCommitFailure = {
+  configPath: string;
+  rollbackStatus: ConfigWriteRollbackStatus;
+  cause?: unknown;
+  publication?: "complete" | "partial";
+};
+
+function formatPostCommitFailure(
+  params: ConfigWritePostCommitFailure,
+  text: (value: string) => string = String,
+): string {
+  const recovery = {
+    restored: "The config write was rolled back.",
+    "not-restored": "The write was not rolled back. Inspect the current config before retrying.",
+    unknown: "Rollback could not be confirmed. Inspect the current config before retrying.",
+  }[params.rollbackStatus];
+  const configPath = text(params.configPath);
+  const reason = text(formatErrorMessage(params.cause));
+  return params.publication === "partial"
+    ? `Config publication failed after removing ${configPath}: ${reason}\n${recovery} Inspect recovery backups at ${configPath}.bak.`
+    : `Config was written to ${configPath}, but post-write processing failed: ${reason}\n${recovery}`;
+}
 
 /** A completed file write must not be handled as a retryable pre-write refusal. */
 export class ConfigWritePostCommitError extends Error {
@@ -21,23 +63,17 @@ export class ConfigWritePostCommitError extends Error {
     cause: unknown;
     publication?: "complete" | "partial";
   }) {
-    const recovery = {
-      restored: "The config write was rolled back.",
-      "not-restored": "The write was not rolled back. Inspect the current config before retrying.",
-      unknown: "Rollback could not be confirmed. Inspect the current config before retrying.",
-    }[params.rollbackStatus];
-    super(
-      params.publication === "partial"
-        ? `Config publication failed after removing ${params.configPath}: ${formatErrorMessage(params.cause)}\n${recovery} Inspect recovery backups at ${params.configPath}.bak.`
-        : `Config was written to ${params.configPath}, but post-write processing failed: ${formatErrorMessage(params.cause)}\n${recovery}`,
-      { cause: params.cause },
-    );
+    super(formatPostCommitFailure(params), { cause: params.cause });
     this.name = "ConfigWritePostCommitError";
     this.configPath = params.configPath;
     this.rollbackStatus = params.rollbackStatus;
     this.publication = params.publication ?? "complete";
     this.recoveryBackupPath =
       params.publication === "partial" ? `${params.configPath}.bak` : undefined;
+  }
+
+  get humanOutput(): string {
+    return formatPostCommitFailure(this, sanitizeTerminalText);
   }
 }
 
@@ -83,7 +119,6 @@ export function createConfigValidationFailedError(issues: ConfigValidationIssue[
   );
 }
 
-/** True when a config write was refused because the candidate failed schema validation. */
 export function isConfigValidationFailedError(
   error: unknown,
 ): error is Error & { issues: ConfigValidationIssue[] } {
@@ -111,7 +146,6 @@ export function createConfigIncludeOwnershipError(refusal: ConfigIncludeOwnershi
   );
 }
 
-/** True when a config write was refused because it would flatten an included file. */
 export function isConfigIncludeOwnershipError(
   error: unknown,
 ): error is Error & ConfigIncludeOwnershipRefusal {

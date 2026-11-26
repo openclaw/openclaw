@@ -9,6 +9,7 @@ import {
   resolveEnabledConfiguredAccountId,
 } from "openclaw/plugin-sdk/status-helpers";
 import {
+  asFiniteNumber,
   normalizeOptionalString,
   normalizeOptionalTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -21,10 +22,7 @@ function readDiscordPermissionsAuditSummary(value: unknown) {
   if (!isRecord(value)) {
     return {};
   }
-  const unresolvedChannels =
-    typeof value.unresolvedChannels === "number" && Number.isFinite(value.unresolvedChannels)
-      ? value.unresolvedChannels
-      : undefined;
+  const unresolvedChannels = asFiniteNumber(value.unresolvedChannels);
   const channelsRaw = value.channels;
   const channels = Array.isArray(channelsRaw)
     ? channelsRaw
@@ -68,41 +66,36 @@ export function collectDiscordStatusIssues(
     if (!accountId) {
       continue;
     }
+    const addIssue = (kind: ChannelStatusIssue["kind"], message: string, fix: string) =>
+      issues.push({ channel: "discord", accountId, kind, message, fix });
 
     if (account.groupPolicy === "allowlist" && account.guildsConfigured === 0) {
       const guildGuidance =
         accountId === "default"
           ? "Add your server under channels.discord.guilds. If channels.discord.accounts.default.guilds is set, add it there instead."
           : `Add your server under channels.discord.accounts.${accountId}.guilds.`;
-      issues.push({
-        channel: "discord",
-        accountId,
-        kind: "config",
-        message:
-          'Discord guild messages are blocked: effective groupPolicy is "allowlist", but no guilds are configured.',
-        fix: `${guildGuidance} Refresh channel status after the configuration reload applies.`,
-      });
+      addIssue(
+        "config",
+        'Discord guild messages are blocked: effective groupPolicy is "allowlist", but no guilds are configured.',
+        `${guildGuidance} Refresh channel status after the configuration reload applies.`,
+      );
     }
 
     if (isDiscordMessageContentIntentDisabled(account.application)) {
-      issues.push({
-        channel: "discord",
-        accountId,
-        kind: "intent",
-        message: "Message Content Intent is disabled. Bot may not see normal channel messages.",
-        fix: "Enable Message Content Intent in Discord Dev Portal → Bot → Privileged Gateway Intents, or require mention-only operation.",
-      });
+      addIssue(
+        "intent",
+        "Message Content Intent is disabled. Bot may not see normal channel messages.",
+        "Enable Message Content Intent in Discord Dev Portal → Bot → Privileged Gateway Intents, or require mention-only operation.",
+      );
     }
 
     const audit = readDiscordPermissionsAuditSummary(account.audit);
     if (audit.unresolvedChannels && audit.unresolvedChannels > 0) {
-      issues.push({
-        channel: "discord",
-        accountId,
-        kind: "config",
-        message: `Some configured guild channels are not numeric IDs (unresolvedChannels=${audit.unresolvedChannels}). Permission audit can only check numeric channel IDs.`,
-        fix: "Use numeric channel IDs as keys in channels.discord.guilds.*.channels (then rerun channels status --probe).",
-      });
+      addIssue(
+        "config",
+        `Some configured guild channels are not numeric IDs (unresolvedChannels=${audit.unresolvedChannels}). Permission audit can only check numeric channel IDs.`,
+        "Use numeric channel IDs as keys in channels.discord.guilds.*.channels (then rerun channels status --probe).",
+      );
     }
     for (const channel of audit.channels ?? []) {
       if (channel.ok === true) {
@@ -111,16 +104,11 @@ export function collectDiscordStatusIssues(
       const missing = channel.missing?.length ? ` missing ${channel.missing.join(", ")}` : "";
       const error = channel.error ? `: ${channel.error}` : "";
       const baseMessage = `Channel ${channel.channelId} permission check failed.${missing}${error}`;
-      issues.push({
-        channel: "discord",
-        accountId,
-        kind: "permissions",
-        message: appendMatchMetadata(baseMessage, {
-          matchKey: channel.matchKey,
-          matchSource: channel.matchSource,
-        }),
-        fix: "Ensure the bot role can view + send in this channel (and that channel overrides don't deny it).",
-      });
+      addIssue(
+        "permissions",
+        appendMatchMetadata(baseMessage, channel),
+        "Check that the bot role can view + send in this channel (and that channel overrides don't deny it).",
+      );
     }
   }
   return issues;

@@ -1,8 +1,11 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
@@ -11,9 +14,11 @@ import {
 import {
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
-  WORKSPACE_ATTESTATION_RECENT_MS,
 } from "./workspace-state-store.js";
 import { ensureAgentWorkspace, WORKSPACE_VANISHED_ERROR_CODE } from "./workspace.js";
+
+const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 
 let state: OpenClawTestState;
 beforeEach(async () => {
@@ -63,15 +68,11 @@ it.each(["transaction", "commit"] as const)(
     };
     await replaceWorkspaceAttestation(input);
     const before = await readWorkspaceStateSnapshot(state.workspaceDir);
-    const originalAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     let retired = false;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit, attachment) =>
-        originalAdmission((request, grant) => {
-          retired ||= request.stage === stage;
-          admit(request, grant);
-        }, attachment),
-    );
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      retired ||= request.stage === stage;
+      admit(request, grant);
+    });
     const error = new Error("workspace owner retired");
     await expect(
       replaceWorkspaceAttestation({
@@ -91,7 +92,7 @@ it.each(["transaction", "commit"] as const)(
   },
 );
 
-it("refreshes unchanged hashes so disappearance protection survives a database restart", async () => {
+it("preserves disappearance protection across a restart within the coalesced refresh window", async () => {
   const startedAt = Date.now() - WORKSPACE_ATTESTATION_RECENT_MS;
   const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
   await fs.writeFile(path.join(state.workspaceDir, "AGENTS.md"), "Synthetic instructions.\n");
@@ -105,12 +106,77 @@ it("refreshes unchanged hashes so disappearance protection survives a database r
   const refreshed = (await readWorkspaceStateSnapshot(state.workspaceDir)).attestation!;
   expect(refreshed.generatedHashes).toEqual(original.generatedHashes);
   expect(refreshed.attestedAtMs).toBe(refreshedAt);
+  clock.mockReturnValue(refreshedAt + HOUR_MS / 2);
+  await ensureAgentWorkspace({ dir: state.workspaceDir });
+  expect((await readWorkspaceStateSnapshot(state.workspaceDir)).attestation).toEqual(refreshed);
   await closeOpenClawStateDatabaseAsync();
   await fs.rm(state.workspaceDir, { recursive: true });
-  clock.mockReturnValue(startedAt + WORKSPACE_ATTESTATION_RECENT_MS + 1);
+  clock.mockReturnValue(refreshedAt + (3 * HOUR_MS) / 4);
 
   await expect(ensureAgentWorkspace({ dir: state.workspaceDir })).rejects.toMatchObject({
     code: WORKSPACE_VANISHED_ERROR_CODE,
   });
   await expect(fs.stat(state.workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("skips all workspace requests on unchanged populated warm turns until the attestation is over an hour old", async () => {
+  const startedAt = Date.now() - 2 * HOUR_MS;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+  await fs.writeFile(path.join(state.workspaceDir, "seed.txt"), "Synthetic workspace content.\n");
+  await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: false });
+  // Populate the read cache after first creation promotes the database identity.
+  await readWorkspaceStateSnapshot(state.workspaceDir);
+  const commands: string[] = [];
+  probe.command(stateWorker, (command, options, scope) => {
+    commands.push(command.type);
+    return scope.execute(command, options);
+  });
+  for (const elapsedMs of [1_000, HOUR_MS, HOUR_MS + 1, HOUR_MS + 2]) {
+    clock.mockReturnValue(startedAt + elapsedMs);
+    commands.length = 0;
+    await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: false });
+    expect(commands).toEqual(elapsedMs === HOUR_MS + 1 ? ["workspace.replaceAttestation"] : []);
+  }
+  expect(
+    (await readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true })).attestation
+      ?.attestedAtMs,
+  ).toBe(startedAt + HOUR_MS + 1);
+});
+
+it("persists changed generated hashes immediately within the refresh hour", async () => {
+  const startedAt = Date.now() - HOUR_MS;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+  await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: true });
+  const original = (await readWorkspaceStateSnapshot(state.workspaceDir)).attestation!;
+  expect(original.generatedHashes.has("AGENTS.md")).toBe(true);
+
+  await fs.writeFile(
+    path.join(state.workspaceDir, "AGENTS.md"),
+    "Customized synthetic instructions.\n",
+  );
+  clock.mockReturnValue(startedAt + 1_000);
+  await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: false });
+  const updated = (await readWorkspaceStateSnapshot(state.workspaceDir, { readOnly: true }))
+    .attestation!;
+  expect(updated.attestedAtMs).toBe(startedAt + 1_000);
+  expect(updated.generatedHashes.has("AGENTS.md")).toBe(false);
+  expect(updated.generatedHashes.size).toBe(original.generatedHashes.size - 1);
+});
+
+it("does not synchronously inventory skills when a recent attestation prevents expiry", async () => {
+  const skillDir = path.join(state.workspaceDir, "skills", "synthetic");
+  await fs.mkdir(skillDir, { recursive: true });
+  await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Synthetic skill\n");
+  await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: false });
+  const lstat = vi.spyOn(syncFs, "lstatSync");
+  const stat = vi.spyOn(syncFs, "statSync");
+  await ensureAgentWorkspace({ dir: state.workspaceDir, ensureBootstrapFiles: false });
+  const skillReads = [...lstat.mock.calls, ...stat.mock.calls].filter(([file]) =>
+    String(file).startsWith(path.join(state.workspaceDir, "skills") + path.sep),
+  );
+  expect(skillReads).toHaveLength(0);
+  await fs.rm(state.workspaceDir, { recursive: true });
+  await expect(ensureAgentWorkspace({ dir: state.workspaceDir })).rejects.toMatchObject({
+    code: WORKSPACE_VANISHED_ERROR_CODE,
+  });
 });

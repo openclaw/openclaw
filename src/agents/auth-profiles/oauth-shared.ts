@@ -1,8 +1,5 @@
-/**
- * Shared OAuth credential identity policy.
- * Used by manager, external CLI overlays, and persistence paths to decide when
- * incoming runtime credentials may bootstrap or settle stored profiles.
- */
+import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
+import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
@@ -14,14 +11,8 @@ import type { AuthProfileStore, OAuthCredential, RuntimeAuthProfileStore } from 
 
 export { hasOAuthIdentity } from "./oauth-identity.js";
 
-/** OAuth profile imported from a runtime external CLI source. */
-export type RuntimeExternalOAuthProfile = {
-  profileId: string;
-  credential: OAuthCredential;
-  persistence?: "runtime-only" | "persisted";
-};
+export type RuntimeExternalOAuthProfile = ProviderExternalAuthProfile;
 
-/** Returns true when two OAuth credentials contain the same token/identity data. */
 export function areOAuthCredentialsEquivalent(
   a: OAuthCredential | undefined,
   b: OAuthCredential,
@@ -42,7 +33,6 @@ export function areOAuthCredentialsEquivalent(
   );
 }
 
-/** Returns true when both credentials describe the same registered identity. */
 export function hasMatchingOAuthIdentity(
   existing: OAuthIdentity,
   incoming: OAuthIdentity,
@@ -50,7 +40,6 @@ export function hasMatchingOAuthIdentity(
   return hasOAuthIdentity(existing) && isSafeToCopyOAuthIdentity(existing, incoming);
 }
 
-/** Returns true when the current owner accepts its provider refresh result. */
 export function isSafeOAuthOwnerRefreshResult(
   claimed: OAuthCredential,
   refreshed: OAuthCredential,
@@ -58,7 +47,6 @@ export function isSafeOAuthOwnerRefreshResult(
   return claimed.provider === refreshed.provider && isSafeToCopyOAuthIdentity(claimed, refreshed);
 }
 
-/** Returns true when a claimed generation may settle with a live credential. */
 export function isSafeOAuthPostClaimSettlement(
   claimedGeneration: OAuthCredential,
   candidate: OAuthCredential | undefined,
@@ -71,7 +59,6 @@ export function isSafeOAuthPostClaimSettlement(
   );
 }
 
-/** Returns true when bootstrap may adopt an external OAuth identity. */
 export function isSafeToAdoptBootstrapOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
@@ -81,25 +68,11 @@ export function isSafeToAdoptBootstrapOAuthIdentity(
   );
 }
 
-/** Returns true when agent-local state may adopt a main-store OAuth identity. */
 export function isSafeToAdoptMainStoreOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
   return existing?.type === "oauth" && isSafeOAuthOwnerRefreshResult(existing, incoming);
-}
-
-/** Returns true when an external CLI credential should bootstrap stored OAuth. */
-export function shouldBootstrapFromExternalCliCredential(params: {
-  existing: OAuthCredential | undefined;
-  imported: OAuthCredential;
-  now?: number;
-}): boolean {
-  const now = params.now ?? Date.now();
-  if (hasUsableOAuthCredential(params.existing, { now })) {
-    return false;
-  }
-  return hasUsableOAuthCredential(params.imported, { now });
 }
 
 /** Overlays runtime external OAuth profiles on a cloned store. */
@@ -139,10 +112,10 @@ export function overlayRuntimeExternalOAuthProfiles(
       : undefined;
   next.runtimeExternalProfileIdsAuthoritative =
     options?.runtimeExternalProfileIdsAuthoritative === true ? true : undefined;
-  return next;
+  // Match the stored JSON shape so an unchanged scoped lookup skips snapshot publication.
+  return omitUndefinedFields(next);
 }
 
-/** Returns true when a runtime external OAuth profile should be persisted. */
 export function shouldPersistRuntimeExternalOAuthProfile(params: {
   profileId: string;
   credential: OAuthCredential;

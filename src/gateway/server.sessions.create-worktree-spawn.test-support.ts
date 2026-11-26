@@ -28,6 +28,10 @@ async function initializeRepositorySeed(root: string, name: string): Promise<voi
     "-m",
     "Initialize fixture",
   ]);
+  await execFileAsync("git", ["clone", "--bare", root, `${root}.git`]);
+  await execFileAsync("git", ["-C", root, "remote", "add", "origin", `${root}.git`]);
+  await execFileAsync("git", ["-C", root, "fetch", "origin"]);
+  await execFileAsync("git", ["-C", root, "remote", "set-head", "origin", "main"]);
 }
 
 export function createWorktreeSpawnRepositoryFixture(seedRoot: string) {
@@ -41,6 +45,8 @@ export function createWorktreeSpawnRepositoryFixture(seedRoot: string) {
     const root = path.join(caseRoot, name);
     // Preserve each source's distinct committed README, with private Git metadata per case.
     await fs.cp(seed, root, { recursive: true });
+    await fs.cp(`${seed}.git`, `${root}.git`, { recursive: true });
+    await execFileAsync("git", ["-C", root, "remote", "set-url", "origin", `${root}.git`]);
     return await fs.realpath(root);
   };
 }

@@ -1,9 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-type BytesParseOptions = {
-  defaultUnit?: "b" | "kb" | "mb" | "gb" | "tb";
-};
-
 const UNIT_MULTIPLIERS: Record<string, number> = {
   b: 1,
   kb: 1024,
@@ -24,8 +20,7 @@ function invalidByteSize(raw: string, reason?: string): Error {
   return new Error(`${prefix} Use values like 512kb, 10mb, 1gb, or 500.`);
 }
 
-/** Parse a non-negative byte size with optional binary units like kb, mb, gb, or tb. */
-export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
+export function parseByteSize(raw: string): number {
   const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
     throw invalidByteSize(raw, "empty");
@@ -37,11 +32,11 @@ export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
   }
 
   const value = Number(m[1]);
-  if (!Number.isFinite(value) || value < 0) {
+  if (!Number.isFinite(value)) {
     throw invalidByteSize(raw);
   }
 
-  const unit = normalizeLowercaseStringOrEmpty(m[2] ?? opts?.defaultUnit ?? "b");
+  const unit = normalizeLowercaseStringOrEmpty(m[2] ?? "b");
   const multiplier = UNIT_MULTIPLIERS[unit];
   if (!multiplier) {
     throw invalidByteSize(raw, `unknown unit "${unit}"`);

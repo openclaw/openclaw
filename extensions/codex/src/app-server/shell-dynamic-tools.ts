@@ -99,17 +99,25 @@ export function createGatewayProcessProjection(
   });
 }
 
-export function createSandboxExecProjection(execTool: OpenClawDynamicTool): OpenClawDynamicTool {
-  return {
-    ...execTool,
-    name: "sandbox_exec",
+export function createSandboxShellProjection(
+  tool: OpenClawDynamicTool,
+  kind: "exec" | "process",
+): OpenClawDynamicTool {
+  const projected = {
+    ...tool,
+    name: `sandbox_${kind}`,
     description:
-      "Run a shell command through OpenClaw's configured sandbox backend for this session. Use when OpenClaw sandboxing is active or when a command must execute in the sandbox backend, such as an SSH-backed sandbox or Docker container-path bind layout. Use Codex's native shell only when no OpenClaw sandbox is active and native Code Mode is available.",
-    execute: withProcessFollowupText(
-      execTool,
-      "Use sandbox_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
-    ),
+      kind === "exec"
+        ? "Run a shell command through OpenClaw's configured sandbox backend for this session. Use when OpenClaw sandboxing is active or when a command must execute in the sandbox backend, such as an SSH-backed sandbox or Docker container-path bind layout. Use Codex's native shell only when no OpenClaw sandbox is active and native Code Mode is available."
+        : "Manage background shell sessions through OpenClaw's configured sandbox backend for this session: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for sandbox follow-up; use Codex's native shell session handling only when no OpenClaw sandbox is active and native Code Mode is available.",
   };
+  if (kind === "exec") {
+    projected.execute = withProcessFollowupText(
+      tool,
+      "Use sandbox_process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.",
+    );
+  }
+  return projected;
 }
 
 function withProcessFollowupText(
@@ -128,17 +136,6 @@ function withProcessFollowupText(
           : item,
       ),
     };
-  };
-}
-
-export function createSandboxProcessProjection(
-  processTool: OpenClawDynamicTool,
-): OpenClawDynamicTool {
-  return {
-    ...processTool,
-    name: "sandbox_process",
-    description:
-      "Manage background shell sessions through OpenClaw's configured sandbox backend for this session: list, poll, log, write, send-keys, submit, paste, kill, clear, or remove. Use only for sandbox follow-up; use Codex's native shell session handling only when no OpenClaw sandbox is active and native Code Mode is available.",
   };
 }
 

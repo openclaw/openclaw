@@ -1,39 +1,38 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  bindPreparedModelRuntimeAuth,
+  getPreparedModelRuntimePolicyConfigReader,
+} from "../../prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
-import { rootedAgentRunParams } from "../../rooted-run-params.js";
+import { prepareAgentPromptProjects } from "../../prompt-projects.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
-import { bindRunToPreparedModelRuntime } from "./prepared-runtime-context.js";
+import {
+  bindRunToPreparedModelRuntime,
+  prepareRunModelRuntimeProjects,
+} from "./prepared-runtime-context.js";
+
+vi.mock("../../prompt-projects.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../prompt-projects.js")>()),
+  prepareAgentPromptProjects: vi.fn(),
+}));
+
+it("preserves the private admitted policy reader when capturing turn projects", async () => {
+  const run = { sessionId: "project-turn" } as RunEmbeddedAgentParamsWithSessionFile;
+  const snapshot = { config: {} } as PreparedModelRuntimeSnapshot;
+  const readPolicyConfig = () => snapshot.config;
+  const projects = { repoRoot: null, projectKey: null, activeProjectKeys: [] };
+  vi.mocked(prepareAgentPromptProjects).mockResolvedValueOnce(projects);
+  bindPreparedModelRuntimeAuth(snapshot, { readPolicyConfig });
+
+  const prepared = await prepareRunModelRuntimeProjects(run, snapshot);
+
+  expect(prepareAgentPromptProjects).toHaveBeenCalledWith(run);
+  expect(prepared).toEqual({ ...snapshot, ...projects });
+  expect(Object.isFrozen(prepared)).toBe(true);
+  expect(getPreparedModelRuntimePolicyConfigReader(prepared)).toBe(readPolicyConfig);
+});
 
 describe("bindRunToPreparedModelRuntime", () => {
-  it("adopts the committed generation without moving a rooted execution boundary", () => {
-    const rooted = rootedAgentRunParams("/tmp/bootstrap", "/tmp/task");
-    const config = { logging: { level: "debug" as const } };
-    const result = bindRunToPreparedModelRuntime({
-      runParams: {
-        ...rooted,
-        runId: "rooted",
-        sessionId: "rooted",
-        prompt: "review",
-      } as RunEmbeddedAgentParamsWithSessionFile,
-      requestedWorkspaceResolution: {
-        workspaceDir: "/tmp/task",
-        agentId: "main",
-        agentIdSource: "explicit",
-        isCanonicalWorkspace: false,
-        usedFallback: false,
-      },
-      preserveExecutionWorkspace: true,
-      preparedModelRuntime: {
-        agentId: "main",
-        agentDir: "/tmp/committed-agent",
-        workspaceDir: "/tmp/reloaded-workspace",
-        config,
-      } as PreparedModelRuntimeSnapshot,
-    });
-    expect(result.runParams).toMatchObject({ ...rooted, config, agentDir: "/tmp/committed-agent" });
-    expect(result.workspaceResolution.workspaceDir).toBe("/tmp/task");
-  });
-
   it("replaces queued config and directories with one committed generation", () => {
     const requestedConfig = { logging: { level: "info" as const } };
     const committedConfig = { logging: { level: "debug" as const } };
@@ -58,7 +57,6 @@ describe("bindRunToPreparedModelRuntime", () => {
       runParams,
       requestedWorkspaceResolution: {
         agentId: "requested-agent",
-        agentIdSource: "explicit",
         workspaceDir: "/tmp/requested-workspace",
         usedFallback: true,
         isCanonicalWorkspace: true,
@@ -77,7 +75,6 @@ describe("bindRunToPreparedModelRuntime", () => {
     );
     expect(result.workspaceResolution).toEqual({
       agentId: "committed-agent",
-      agentIdSource: "explicit",
       workspaceDir: "/tmp/committed-workspace",
       usedFallback: true,
       isCanonicalWorkspace: true,

@@ -9,15 +9,13 @@ import {
 import type { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
-type MessageReceivedHookContext = ReturnType<typeof deriveInboundMessageHookContext>;
-
 /** Emit observation hooks once for an accepted inbound turn, independent of reply dispatch. */
 export function emitMessageReceivedHooks(params: {
   ctx: FinalizedMsgContext;
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   sessionKey: string | undefined;
   timestamp?: number;
-  buildContext?: () => MessageReceivedHookContext;
+  buildContext?: () => ReturnType<typeof deriveInboundMessageHookContext>;
 }): void {
   if (params.ctx.SuppressMessageReceivedHooks === true) {
     return;

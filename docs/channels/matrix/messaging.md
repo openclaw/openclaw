@@ -1,5 +1,5 @@
 ---
-summary: "Streaming previews, voice-note transcription, and reactions"
+summary: "Inbound restart recovery, streaming previews, voice-note transcription, and reactions"
 read_when:
   - Turning on live reply previews in Matrix
   - Configuring Matrix ack reactions and custom emotes
@@ -7,7 +7,29 @@ title: "Matrix message behavior"
 sidebarTitle: "Messaging"
 ---
 
-How OpenClaw delivers replies into Matrix rooms: streaming previews, inbound voice notes, and reactions.
+How OpenClaw receives Matrix messages and delivers replies: restart recovery, streaming previews, inbound voice notes, and reactions.
+
+## Inbound delivery across restarts
+
+Matrix saves inbound messages to the shared SQLite ingress spool before advancing
+its sync cursor. Messages remain queued until an agent turn adopts them; a
+Gateway restart resumes any unadopted messages. Matrix event IDs prevent sync
+replay from delivering the same event twice within the retained replay window.
+Messages keep their sync timeline order within each room across restarts.
+Existing accounts migrate their committed replay markers automatically and need
+no configuration changes.
+
+On a first login without a saved cursor, Matrix ignores pre-startup history for
+the entire sync session, including rooms joined later. Those messages remain
+excluded when cached sync is replayed.
+
+## Final reply recovery
+
+Final replies that send a new message use the durable delivery queue. After a
+transient send failure, the Gateway can recover the reply without another
+inbound message, including after a restart. Recovery reuses saved Matrix
+transactions so a message accepted before its response was lost is not duplicated.
+Finalizing an existing streaming preview keeps its existing delivery path.
 
 ## Streaming previews
 
@@ -83,6 +105,7 @@ The full config accepts `{ mode, chunkMode, block, preview, progress }`:
 
 Notes:
 
+- Previews and their edits suppress mention alerts, even when their text contains a display name, user ID, or `@room`. Final replies retain normal mention delivery.
 - If a preview grows past Matrix's per-event size limit, OpenClaw stops preview streaming and falls back to final-only delivery.
 - Media replies always send attachments normally. If a visible preview cannot be reused safely, OpenClaw keeps it until the complete replacement is confirmed and then redacts it. If replacement delivery fails, is partial, or produces no visible event, the preview remains visible.
 - Tool-progress preview updates are on by default when preview streaming is active. Set `streaming.preview.toolProgress: false` to keep preview edits for answer text but leave tool progress on the normal delivery path.

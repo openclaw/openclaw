@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { sql } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
@@ -55,11 +56,15 @@ export function positionTranscriptDisplayEvents<
     const rows = executeSqliteQuerySync(
       projection.database.db,
       getActiveTranscriptKysely(projection.database)
-        .selectFrom("transcript_event_identities")
-        .select(["event_id", "seq"])
-        .where("session_id", "=", projection.resolved.sessionId)
-        .where("event_id", "in", sqliteStringSet(anchors))
-        .where("seq", "<=", maxSeq),
+        .selectFrom(
+          /* kysely-allow-raw: drive key lookups from requested IDs instead of the sequence range. */
+          sql<{ value: string }>`${sqliteStringSet(anchors)}`.as("requested"),
+        )
+        .crossJoin("transcript_event_identities as identity")
+        .select(["identity.event_id", "identity.seq"])
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .whereRef("identity.event_id", "=", "requested.value")
+        .where("identity.seq", "<=", maxSeq),
     ).rows;
     for (const row of rows) {
       sequences.set(row.event_id, row.seq);

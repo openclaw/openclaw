@@ -6,7 +6,12 @@ import {
   clearTelegramRuntimeForTest,
   resetTelegramTopicNameCacheForTest,
 } from "./runtime.test-support.js";
-import { getTopicCreatorUserId, getTopicName, updateTopicName } from "./topic-name-cache.js";
+import {
+  getTopicCreatorUserId,
+  getTopicName,
+  resolveTelegramDirectTopicNameCacheScope,
+  updateTopicName,
+} from "./topic-name-cache.js";
 
 describe("topic-name-cache", () => {
   let state: OpenClawTestState;
@@ -53,6 +58,18 @@ describe("topic-name-cache", () => {
     await expect(getTopicCreatorUserId(-100000, 2)).resolves.toBeUndefined();
     await expect(getTopicName(-100000, 1)).resolves.toBe("Active");
     await expect(getTopicName(-100000, 9999)).resolves.toBe("Newcomer");
+  });
+
+  it("isolates identical private bot topic coordinates by Telegram account", async () => {
+    const sharedStore = "/state/sessions.json";
+    const firstAccount = resolveTelegramDirectTopicNameCacheScope(sharedStore, "first-account");
+    const secondAccount = resolveTelegramDirectTopicNameCacheScope(sharedStore, "second-account");
+    await updateTopicName(42001, 77, { name: "Work" }, firstAccount);
+    await updateTopicName(42001, 77, { name: "Personal" }, secondAccount);
+    resetTelegramTopicNameCacheForTest();
+    resetPluginStateStoreForTests();
+    await expect(getTopicName(42001, 77, firstAccount)).resolves.toBe("Work");
+    await expect(getTopicName(42001, 77, secondAccount)).resolves.toBe("Personal");
   });
 
   it("isolates identical topic coordinates in separate persisted scopes", async () => {

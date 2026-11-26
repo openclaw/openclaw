@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { cloneAuthProfileJsonValue } from "./clone-value.js";
 import type { AuthProfileCredential } from "./types.js";
 
 export type CanonicalAuthProfileCredentialObservation = {
@@ -14,7 +15,7 @@ type ObserverScope = { observer: Observer | undefined; parent?: ObserverScope };
 type CredentialOrigin = {
   databasePath: string;
   profileId: string;
-  serialized: string;
+  credential: AuthProfileCredential;
 };
 
 // Host and bundled SDK auth resolution must report to the same request scope.
@@ -25,6 +26,33 @@ const state = resolveGlobalSingleton(
     origins: new WeakMap<AuthProfileCredential, readonly CredentialOrigin[]>(),
   }),
 );
+
+function matchesCanonicalCredential(
+  origin: CredentialOrigin,
+  credential: AuthProfileCredential,
+): boolean {
+  const equal = (left: unknown, right: unknown): boolean => {
+    if (left === right) {
+      return true;
+    }
+    if (!left || !right || typeof left !== "object" || typeof right !== "object") {
+      return false;
+    }
+    if (Array.isArray(left) !== Array.isArray(right)) {
+      return false;
+    }
+    const keys = Object.keys(left);
+    const otherKeys = Object.keys(right);
+    return (
+      keys.length === otherKeys.length &&
+      keys.every(
+        (key, index) =>
+          key === otherKeys[index] && equal(Reflect.get(left, key), Reflect.get(right, key)),
+      )
+    );
+  };
+  return equal(origin.credential, cloneAuthProfileJsonValue(credential));
+}
 
 export async function withCanonicalAuthProfileCredentialObserver<T>(
   observer: Observer,
@@ -45,7 +73,7 @@ function publish(databasePath: string, profiles: Readonly<Record<string, AuthPro
     return;
   }
   while (scope) {
-    scope.observer?.({ databasePath, profiles: structuredClone(profiles) });
+    scope.observer?.({ databasePath, profiles: cloneAuthProfileJsonValue(profiles) });
     scope = scope.parent;
   }
 }
@@ -61,7 +89,7 @@ export function observeCanonicalAuthProfileCredentials(
       ...previous.filter(
         (origin) => origin.databasePath !== databasePath || origin.profileId !== profileId,
       ),
-      { databasePath, profileId, serialized: JSON.stringify(credential) },
+      { databasePath, profileId, credential: cloneAuthProfileJsonValue(credential) },
     ]);
   }
   publish(databasePath, profiles);
@@ -81,7 +109,7 @@ export function copyCanonicalAuthProfileCredentialObservations(
       .get(original)
       ?.filter(
         (origin) =>
-          origin.profileId === profileId && origin.serialized === JSON.stringify(credential),
+          origin.profileId === profileId && matchesCanonicalCredential(origin, credential),
       );
     if (origins?.length) {
       state.origins.set(credential, origins);
@@ -99,7 +127,7 @@ export function observeCachedCanonicalAuthProfileCredentials(
   const byOwner = new Map<string, Map<string, AuthProfileCredential>>();
   for (const [profileId, credential] of Object.entries(profiles)) {
     for (const origin of state.origins.get(credential) ?? []) {
-      if (origin.profileId !== profileId || origin.serialized !== JSON.stringify(credential)) {
+      if (origin.profileId !== profileId || !matchesCanonicalCredential(origin, credential)) {
         continue;
       }
       const owned = byOwner.get(origin.databasePath) ?? new Map<string, AuthProfileCredential>();

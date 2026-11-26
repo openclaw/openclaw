@@ -24,9 +24,9 @@ export function pruneBindingsForMissingAgents<T extends object>(cfg: T, changes:
   const agents: unknown[] = roster;
   const bindings: unknown[] = root.bindings;
 
-  const validAgents = agents.filter((agent): agent is { id: string } => {
-    return isRecord(agent) && typeof agent.id === "string";
-  });
+  const validAgents = agents.filter(
+    (agent): agent is { id: string } => isRecord(agent) && typeof agent.id === "string",
+  );
   if (validAgents.length !== agents.length) {
     return cfg;
   }
@@ -50,7 +50,7 @@ export function pruneBindingsForMissingAgents<T extends object>(cfg: T, changes:
   );
   return {
     ...cfg,
-    ...(nextBindings.length > 0 ? { bindings: nextBindings } : { bindings: undefined }),
+    bindings: nextBindings.length > 0 ? nextBindings : undefined,
   };
 }
 
@@ -111,10 +111,9 @@ export function repairUnownedChannelAccountBindings({
       if (asNullableRecord(account)?.enabled === false) {
         continue;
       }
-      const routeInput = { cfg, channel: channelId, accountId };
       let missingOwner: AgentSelectionRequiredError | undefined;
       try {
-        const route = resolveAgentRoute(routeInput);
+        const route = resolveAgentRoute({ cfg, channel: channelId, accountId });
         if (!legacyDefaultAgentId || route.matchedBy !== "default") {
           continue;
         }

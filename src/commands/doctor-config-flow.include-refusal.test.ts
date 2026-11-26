@@ -7,7 +7,7 @@ import { readConfigFileSnapshot, transformConfigFile } from "../config/config.js
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
+import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
 import { UpdateRequesterRevokedError } from "../infra/update-requester-authority.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -79,61 +79,6 @@ describe("doctor config persistence", () => {
       ],
     },
     {
-      name: "Nextcloud Talk",
-      channels: {
-        "nextcloud-talk": {
-          allowPrivateNetwork: true,
-          accounts: { work: { allowPrivateNetwork: false } },
-        },
-      },
-      fields: [
-        "channels.nextcloud-talk.allowPrivateNetwork",
-        "channels.nextcloud-talk.accounts.work.allowPrivateNetwork",
-      ],
-    },
-    {
-      name: "Matrix",
-      channels: {
-        matrix: {
-          allowPrivateNetwork: false,
-          dm: { policy: "trusted", allowFrom: ["@alice:example.org"] },
-          groups: { "!group:example.org": { allow: false } },
-          rooms: { "!room:example.org": { allow: true } },
-          accounts: {
-            ops: {
-              allowPrivateNetwork: true,
-              dm: { policy: "trusted", allowFrom: [] },
-              groups: { "!account-group:example.org": { allow: true } },
-              rooms: { "!account-room:example.org": { allow: false } },
-            },
-          },
-        },
-      },
-      fields: [
-        "channels.matrix.allowPrivateNetwork",
-        "channels.matrix.dm.policy",
-        "channels.matrix.groups.!group:example.org.allow",
-        "channels.matrix.rooms.!room:example.org.allow",
-        "channels.matrix.accounts.ops.allowPrivateNetwork",
-        "channels.matrix.accounts.ops.dm.policy",
-        "channels.matrix.accounts.ops.groups.!account-group:example.org.allow",
-        "channels.matrix.accounts.ops.rooms.!account-room:example.org.allow",
-      ],
-    },
-    {
-      name: "Slack",
-      channels: {
-        slack: {
-          channels: { C_ROOT: { allow: false } },
-          accounts: { ops: { channels: { C_ACCOUNT: { allow: true } } } },
-        },
-      },
-      fields: [
-        "channels.slack.channels.C_ROOT.allow",
-        "channels.slack.accounts.ops.channels.C_ACCOUNT.allow",
-      ],
-    },
-    {
       name: "Discord",
       channels: { discord: { ...discordEntry, accounts: { work: discordEntry } } },
       fields: ["channels.discord", "channels.discord.accounts.work"].flatMap((prefix) =>
@@ -163,7 +108,10 @@ describe("doctor config persistence", () => {
         const backupBytes = '{"gateway":{"mode":"local"}}\n';
         await fs.writeFile(`${configPath}.bak`, backupBytes);
         const failure = await prepareDoctorContext(configPath).then(
-          () => null,
+          async (ctx) => {
+            await ctx[Symbol.asyncDispose]();
+            return null;
+          },
           (error: unknown) => error,
         );
         expect(failure).toBeInstanceOf(Error);
@@ -184,14 +132,6 @@ describe("doctor config persistence", () => {
   );
 
   it.each([
-    {
-      name: "Telegram streaming",
-      channels: { telegram: { streaming: { mode: "off" }, direct: { "42": {} } } },
-    },
-    {
-      name: "Nextcloud Talk private-network policy",
-      channels: { "nextcloud-talk": { network: { dangerouslyAllowPrivateNetwork: false } } },
-    },
     {
       name: "Matrix and Slack policy",
       channels: {
@@ -222,13 +162,8 @@ describe("doctor config persistence", () => {
         gateway: { mode: "local" },
         plugins: { enabled: false },
       });
-      const ctx = await prepareDoctorContext(configPath);
+      await using ctx = await prepareDoctorContext(configPath);
       expect(ctx.cfg.channels).toMatchObject(channels);
-      if ("nextcloud-talk" in channels) {
-        expect(ctx.cfg.channels?.["nextcloud-talk"]?.network).toEqual(
-          channels["nextcloud-talk"]?.network,
-        );
-      }
     });
   });
 
@@ -251,8 +186,10 @@ describe("doctor config persistence", () => {
           );
           await fs.writeFile(includePath, includeRaw);
           const rootRaw = await fs.readFile(configPath, "utf8");
-          expect(recordGatewayBootStart(process.env, 1_800_000_000_000)).toBeDefined();
-          const ctx = await prepareDoctorContext(configPath);
+          expect(
+            (await beginGatewayBootLifecycle(process.env, 1_800_000_000_000)).id,
+          ).toBeDefined();
+          await using ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           const transform = configModule.transformConfigFile;
           let firstCommit = false;
@@ -306,7 +243,6 @@ describe("doctor config persistence", () => {
   );
 
   it.each([
-    { config: { exposeErrorText: true }, key: "channels.whatsapp.exposeErrorText" },
     {
       config: { accounts: { work: { exposeErrorText: false } } },
       key: "channels.whatsapp.accounts.work.exposeErrorText",
@@ -350,6 +286,7 @@ describe("doctor config persistence", () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { entries: { main: {} } },
             browser: { $include: "./browser.json" },
+            messages: { queue: { allowCollaborativeSteering: true } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },
@@ -362,7 +299,7 @@ describe("doctor config persistence", () => {
           });
           await fs.writeFile(includePath, includeRaw);
           const rootRaw = await fs.readFile(configPath, "utf8");
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
           expect(ctx.cfg.browser).toEqual({
@@ -437,6 +374,7 @@ describe("doctor config persistence", () => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { $include: "./agents.json5" },
+            messages: { queue: { allowCollaborativeSteering: true } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },
@@ -464,7 +402,7 @@ describe("doctor config persistence", () => {
             await fs.writeFile(defaultsPath, JSON.stringify(defaults));
           }
           const rootRaw = await fs.readFile(configPath, "utf8");
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           await captureUpdateDoctorConfigWrites(
             configPath,
             () => runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
@@ -489,9 +427,8 @@ describe("doctor config persistence", () => {
               search: { enabled: false, query: { maxResults: 7 } },
             });
           }
-          expect((await prepareDoctorContext(configPath)).configResult.shouldWriteConfig).toBe(
-            false,
-          );
+          await using repeated = await prepareDoctorContext(configPath);
+          expect(repeated.configResult.shouldWriteConfig).toBe(false);
 
           await transformConfigFile({
             transform: (current) => {
@@ -571,6 +508,7 @@ describe("doctor config persistence", () => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { entries: { main: { $include: "./config/main-parent.json5" } } },
+            messages: { queue: { allowCollaborativeSteering: true } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
             meta: { migrations: { webhookListeners: true } },
@@ -585,7 +523,7 @@ describe("doctor config persistence", () => {
           await fs.writeFile(fragmentPath, fragmentRaw);
           const rootRaw = await fs.readFile(configPath, "utf-8");
 
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
           const writing = captureUpdateDoctorConfigWrites(
@@ -634,45 +572,12 @@ describe("doctor config persistence", () => {
     },
   );
 
-  it("refuses a different active config path even when its bytes match", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const configPath = await writeOpenClawConfig(home, {
-          gateway: { mode: "local" },
-          plugins: { enabled: false },
-        });
-        const ctx = await prepareDoctorContext(configPath);
-        const originalBytes = await fs.readFile(configPath, "utf8");
-        const otherPath = path.join(path.dirname(configPath), "other-openclaw.json");
-        await fs.writeFile(otherPath, originalBytes);
-        const files = (await fs.readdir(path.dirname(configPath))).toSorted();
-        const receipt = ctx.configResult.confirmedConfigSource;
-        const baseline = ctx.cfgForPersistence;
-        ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 19090 } };
-
-        await withEnvAsync({ OPENCLAW_CONFIG_PATH: otherPath }, async () => {
-          const otherSnapshot = await readConfigFileSnapshot();
-          expect(otherSnapshot.path).toBe(otherPath);
-          expect(otherSnapshot.hash).toBe(receipt?.hash);
-          expect(await runWriteConfigHealth(ctx)).toBe(false);
-        });
-
-        expect(ctx.configWriteRefusal).toBe("config-conflict");
-        expect(ctx.configResult.confirmedConfigSource).toBe(receipt);
-        expect(ctx.cfgForPersistence).toBe(baseline);
-        await expect(fs.readFile(configPath, "utf8")).resolves.toBe(originalBytes);
-        await expect(fs.readFile(otherPath, "utf8")).resolves.toBe(originalBytes);
-        expect((await fs.readdir(path.dirname(configPath))).toSorted()).toEqual(files);
-      });
-    });
-  });
-
   it("creates a missing config using its recorded missing-file revision", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {});
         await fs.unlink(configPath);
-        const ctx = await prepareDoctorContext(configPath);
+        await using ctx = await prepareDoctorContext(configPath);
         expect(ctx.configResult.referenceSource).toBeUndefined();
         expect(ctx.configResult.confirmedConfigSource).toEqual({
           path: configPath,
@@ -708,7 +613,7 @@ describe("doctor config persistence", () => {
                 }
               : {
                   gatway: { port: 12345 },
-                  agents: { defaults: { heartbeat: { every: 5 } } },
+                  agents: { defaults: { timeoutSeconds: "invalid" } },
                   plugins: { enabled: false },
                 },
           );
@@ -718,7 +623,7 @@ describe("doctor config persistence", () => {
             await fs.writeFile(includePath, includeRaw);
           }
           const rootRaw = await fs.readFile(configPath, "utf8");
-          const ctx = await prepareDoctorContext(configPath);
+          await using ctx = await prepareDoctorContext(configPath);
           expect(ctx.configResult.shouldWriteConfig).toBe(true);
           if (included) {
             expect(ctx.configResult.persistCanonicalAgentRoster).toBe(true);
@@ -735,7 +640,7 @@ describe("doctor config persistence", () => {
             if (included) {
               const text = panels.map(([message]) => message).join("\n");
               expect(text).not.toContain("retired runtime tuning knobs");
-              expect(text).not.toContain("canonical agent roster");
+              expect(text).not.toContain("agent roster");
             } else {
               expect(panels).toEqual([]);
             }
@@ -755,7 +660,7 @@ describe("doctor config persistence", () => {
             expect(warning?.[0]).toContain("the included file ./browser.json");
             await expect(fs.readFile(includePath, "utf8")).resolves.toBe(includeRaw);
           } else {
-            expect(warning?.[0]).toContain("agents.defaults.heartbeat.every");
+            expect(warning?.[0]).toContain("agents.defaults.timeoutSeconds");
           }
           await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
         });

@@ -1,7 +1,8 @@
 import { statSync } from "node:fs";
 import path from "node:path";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import {
   assertAgentDeletionPathFence,
@@ -16,8 +17,10 @@ import {
   recordOpenClawAgentDatabaseRegistryMutation,
 } from "./openclaw-agent-db-registry-listing.js";
 import {
+  adoptOpenClawAgentDatabaseSchema,
   invalidateOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidationsForAgent,
+  setOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
   isPersistentOpenClawAgentDatabasePath,
@@ -70,10 +73,15 @@ export function registerOpenClawAgentDatabase(
     path: string;
     env?: NodeJS.ProcessEnv;
     schemaVersion?: number;
+    /** Supplied only by the opener after integrity and canonical schema admission. */
+    admittedDb?: EngineConnection;
   },
   observer?: OpenClawAgentDatabaseRegistrationObserver,
 ): void {
   if (!isPersistentOpenClawAgentDatabasePath(params.path, params.env)) {
+    if (params.admittedDb) {
+      setOpenClawAgentDatabaseValidation({ ...params, db: params.admittedDb });
+    }
     return;
   }
   const deletionFence = prepareAgentDeletionPathFence(
@@ -136,9 +144,19 @@ export function registerOpenClawAgentDatabase(
       }
       emitOpenClawAgentDatabaseRegistryChange(params.agentId, database.db);
     },
-    { env: params.env },
+    { env: params.env, initializationAgentPaths: [params.path] },
   );
-  invalidateOpenClawAgentDatabaseValidation(params.path);
+  if (params.admittedDb) {
+    const database = { ...params, db: params.admittedDb };
+    if (!adoptOpenClawAgentDatabaseSchema(database)) {
+      setOpenClawAgentDatabaseValidation(database);
+    }
+  } else {
+    invalidateOpenClawAgentDatabaseValidation(
+      params.path,
+      "registration without an admitted connection",
+    );
+  }
 }
 
 export function unregisterOpenClawAgentDatabase(params: {
@@ -163,7 +181,7 @@ export function unregisterOpenClawAgentDatabase(params: {
     },
     { env: params.env, initializationAgentPaths: [params.path] },
   );
-  invalidateOpenClawAgentDatabaseValidation(params.path);
+  invalidateOpenClawAgentDatabaseValidation(params.path, "agent database unregistration");
 }
 
 /** Remove every durable database registration owned by a deleted agent. */

@@ -34,20 +34,13 @@ function extractCodexEventError(event: Record<string, unknown>): {
   message?: string;
 } {
   const nested = isRecord(event.error) ? event.error : undefined;
-  return {
-    code:
-      typeof event.code === "string"
-        ? event.code
-        : typeof nested?.code === "string"
-          ? nested.code
-          : undefined,
-    message:
-      typeof event.message === "string"
-        ? event.message
-        : typeof nested?.message === "string"
-          ? nested.message
-          : undefined,
-  };
+  const read = (field: "code" | "message") =>
+    typeof event[field] === "string"
+      ? event[field]
+      : typeof nested?.[field] === "string"
+        ? nested[field]
+        : undefined;
+  return { code: read("code"), message: read("message") };
 }
 
 export async function* mapCodexEvents(

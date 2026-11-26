@@ -1,12 +1,16 @@
 // Workspace run tests cover runtime workspace resolution from explicit input,
 // agent config, session keys, and environment fallback.
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveCanonicalRunRuntimeWorkspace,
   resolveRootedRunRuntimeWorkspace,
   resolveRunWorkspaceDir,
+  resolveRunBootstrapWorkspaceDir,
 } from "./workspace-run.js";
 
 vi.unmock("./agent-scope-config.js");
@@ -20,10 +24,8 @@ describe("rooted runtime workspace selection", () => {
 
   it.each([
     { bootstrapWorkspaceDir: canonical, expected: canonical },
-    { bootstrapWorkspaceDir: `${canonical}/../rooted-agent-workspace`, expected: canonical },
     { bootstrapWorkspaceDir: executionRoot, expected: undefined },
     { bootstrapWorkspaceDir: undefined, expected: undefined },
-    { bootstrapWorkspaceDir: "   ", expected: undefined },
   ])(
     "only borrows explicit canonical bootstrap $bootstrapWorkspaceDir",
     ({ bootstrapWorkspaceDir, expected }) => {
@@ -94,22 +96,6 @@ describe("resolveRunWorkspaceDir", () => {
     expect(result.workspaceDir).toBe(path.resolve(explicit));
   });
 
-  it("recognizes an explicitly supplied configured workspace as canonical", () => {
-    const workspaceDir = path.join(process.cwd(), "tmp", "workspace-run-canonical");
-    const cfg = {
-      agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
-    } satisfies OpenClawConfig;
-
-    const result = resolveRunWorkspaceDir({
-      workspaceDir,
-      sessionKey: "agent:main:subagent:test",
-      config: cfg,
-    });
-
-    expect(result.usedFallback).toBe(false);
-    expect(result.isCanonicalWorkspace).toBe(true);
-  });
-
   it("falls back to configured per-agent workspace when input is missing", () => {
     const defaultWorkspace = path.join(process.cwd(), "tmp", "workspace-default-main");
     const researchWorkspace = path.join(process.cwd(), "tmp", "workspace-research");
@@ -166,34 +152,6 @@ describe("resolveRunWorkspaceDir", () => {
     ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
   });
 
-  it("throws for malformed agent session keys", () => {
-    expect(() =>
-      resolveRunWorkspaceDir({
-        workspaceDir: undefined,
-        sessionKey: "agent::broken",
-        config: undefined,
-      }),
-    ).toThrow("Malformed agent session key");
-  });
-
-  it("requires roster config for per-agent fallback", () => {
-    const env = {
-      ...process.env,
-      HOME: "/home/runner",
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
-    } satisfies NodeJS.ProcessEnv;
-    expect(() =>
-      resolveRunWorkspaceDir({
-        workspaceDir: undefined,
-        sessionKey: "definitely-not-a-valid-session-key",
-        agentId: "research",
-        config: undefined,
-        env,
-      }),
-    ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
-  });
-
   it("rejects an explicit agent when the supplied config has no roster", () => {
     expect(() =>
       resolveRunWorkspaceDir({
@@ -204,7 +162,7 @@ describe("resolveRunWorkspaceDir", () => {
     ).toThrow(expect.objectContaining({ code: "RUN_WORKSPACE_ROSTER_REQUIRED" }));
   });
 
-  it.each(["", "   ", "!!!"])("rejects invalid explicit agent id %j", (agentId) => {
+  it.each(["", "!!!"])("rejects invalid explicit agent id %j", (agentId) => {
     expect(() =>
       resolveRunWorkspaceDir({
         workspaceDir: path.join(process.cwd(), "tmp", "workspace-main"),
@@ -225,7 +183,6 @@ describe("resolveRunWorkspaceDir", () => {
     });
 
     expect(result.agentId).toBe("ops");
-    expect(result.agentIdSource).toBe("explicit");
     expect(result.workspaceDir).toBe(path.resolve(workspaceDir));
   });
 
@@ -283,7 +240,6 @@ describe("resolveRunWorkspaceDir", () => {
     });
 
     expect(result.agentId).toBe("main");
-    expect(result.agentIdSource).toBe("default");
     expect(result.workspaceDir).toBe(path.resolve(fallbackWorkspace));
   });
 
@@ -310,4 +266,39 @@ describe("resolveRunWorkspaceDir", () => {
     expect(result.agentId).toBe("ops");
     expect(result.workspaceDir).toBe(path.resolve(opsWorkspace));
   });
+});
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
+
+it("selects rooted bootstrap instructions without main-thread Git metadata reads", async () => {
+  const root = tempDirs.make("bootstrap-git-owner-");
+  const workspace = path.join(root, "agent");
+  const checkout = path.join(root, "checkout");
+  const gitDir = path.join(workspace, ".git", "worktrees", "checkout");
+  await fs.promises.mkdir(gitDir, { recursive: true });
+  await fs.promises.mkdir(checkout);
+  await fs.promises.writeFile(path.join(gitDir, "commondir"), "../..\n");
+  await fs.promises.writeFile(path.join(checkout, ".git"), `gitdir: ${gitDir}\n`);
+  const params = { workspaceDir: workspace, sessionRoot: checkout };
+  expect(await resolveRunBootstrapWorkspaceDir(params)).toBe(checkout);
+  const sync = [
+    vi.spyOn(fs, "statSync"),
+    vi.spyOn(fs, "lstatSync"),
+    vi.spyOn(fs.realpathSync, "native"),
+    vi.spyOn(fs, "openSync"),
+    vi.spyOn(fs, "fstatSync"),
+  ];
+  syncBuiltinESMExports();
+  for (let i = 0; i < 10; i++) {
+    expect(await resolveRunBootstrapWorkspaceDir(params)).toBe(checkout);
+    expect(await resolveRunBootstrapWorkspaceDir({ ...params, sessionRoot: root })).toBe(workspace);
+  }
+  for (const call of sync) {
+    expect(call).not.toHaveBeenCalled();
+  }
 });

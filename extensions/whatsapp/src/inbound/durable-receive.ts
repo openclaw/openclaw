@@ -97,7 +97,6 @@ export function createWhatsAppIngressMonitor(params: {
   onError?: (error: unknown) => void;
   onActivityChange?: (active: boolean) => void;
   pollIntervalMs: number;
-  abortSignal?: AbortSignal;
 }) {
   return createChannelIngressMonitor<
     WhatsAppIngressAdmission,
@@ -153,7 +152,6 @@ export function createWhatsAppIngressMonitor(params: {
       },
       ...(params.onLog ? { onLog: params.onLog } : {}),
     },
-    ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     admissionMode: "while-running",
     createStoppedError: () => new Error("WhatsApp ingress monitor is stopped."),
     ...(params.onError ? { onError: params.onError } : {}),

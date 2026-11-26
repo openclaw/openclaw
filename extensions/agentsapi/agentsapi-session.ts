@@ -14,7 +14,10 @@ import {
   isAgentsApiOptionalHistoryReadFailure,
   isAgentsApiTransportDisconnect,
 } from "./agentsapi-errors.js";
-import { createAgentsApiSessionHistory } from "./agentsapi-session-history.js";
+import {
+  createAgentsApiSessionHistory,
+  waitForAgentsApiEventOrRecovery,
+} from "./agentsapi-session-history.js";
 import type { AgentsApiToolExecutionResult } from "./agentsapi-tools.js";
 
 /** Native input receipts and session idle, together, establish Agents API completion. */
@@ -33,8 +36,6 @@ export function createAgentsApiSession(options: {
   onUsageError?: (error: unknown) => void;
   onTranscriptOrderingGap?: () => void;
   executeFunction?: (call: AgentsApiFunctionCall) => Promise<AgentsApiToolExecutionResult>;
-  connectEnvironment?: (environmentId: string) => Promise<void>;
-  onSessionFailed?: () => Promise<void>;
   onFunctionResult?: (
     call: AgentsApiFunctionCall,
     result: AgentsApiToolExecutionResult,
@@ -65,6 +66,9 @@ export function createAgentsApiSession(options: {
   let latestInputTurnId: string | undefined;
   let usageTurns: Promise<Turn[]> | undefined;
   let terminatedByTool = false;
+  // Healthy streams remain event-driven. A terminal notification or transport gap
+  // needs saved-state recovery because the live stream cannot replay late records.
+  let reconciliationPending = options.initialInputSubmitted ?? false;
 
   const isAvailable = () =>
     submitted && !inputAdmissionClosed && !stopped && !settled && !rootTurn && !signal.aborted;
@@ -212,11 +216,7 @@ export function createAgentsApiSession(options: {
         await awaitReceipt(submissionFence);
         assertCurrent();
         const inputCount = admittedMessageCount;
-        const calls = await client.pendingFunctionCalls(
-          sessionId,
-          signal,
-          options.connectEnvironment,
-        );
+        const calls = await client.pendingFunctionCalls(sessionId, signal);
         if (!calls.length) {
           return;
         }
@@ -311,7 +311,7 @@ export function createAgentsApiSession(options: {
           const result = await options.executeFunction(call);
           assertCurrent();
           signal.throwIfAborted();
-          const terminate = result.terminate || result.sourceReplyDelivered;
+          const terminate = result.terminate;
           if (terminate) {
             // Fence new input before the acknowledgement can resume native work.
             // Already reserved input remains ahead of that acknowledgement.
@@ -366,6 +366,7 @@ export function createAgentsApiSession(options: {
       void nextEvent.catch(() => {});
       const bufferedEvents: AgentsApiEvent[] = [];
       const reconnectEvents = async () => {
+        reconciliationPending = true;
         streamController.abort();
         // A broken reader can reject return() as well as next(). Retire only
         // this transport; the admitted native work remains in the session.
@@ -396,22 +397,16 @@ export function createAgentsApiSession(options: {
         }
         nextEvent = events.next();
         void nextEvent.catch(() => {});
-        if (options.connectEnvironment) {
-          // Streams do not replay. Recover a connection request emitted while
-          // detached even when the input response has not arrived yet.
-          await client.pendingFunctionCalls(sessionId, signal, options.connectEnvironment);
-          assertCurrent();
-        }
       };
-      let initialConnectionReconciled = false;
-      const awaitReceipt = async (receipt: Promise<void>) => {
-        if (!initialConnectionReconciled && options.connectEnvironment) {
-          initialConnectionReconciled = true;
-          // The subscription cannot replay an action emitted before it opened.
-          // Resolve that action while the admitted input receipt is still pending.
-          await client.pendingFunctionCalls(sessionId, signal, options.connectEnvironment);
-          assertCurrent();
+      const disconnectedEvent = (error: unknown): IteratorReturnResult<undefined> => {
+        signal.throwIfAborted();
+        assertCurrent();
+        if (!isAgentsApiTransportDisconnect(error)) {
+          throw error;
         }
+        return { done: true, value: undefined };
+      };
+      const awaitReceipt = async (receipt: Promise<void>) => {
         const acknowledged = receipt.then(
           () => ({ kind: "acknowledged" as const }),
           (error: unknown) => ({ kind: "failed" as const, error }),
@@ -422,12 +417,7 @@ export function createAgentsApiSession(options: {
           try {
             chunk = await Promise.race([acknowledged, nextEvent]);
           } catch (error) {
-            signal.throwIfAborted();
-            assertCurrent();
-            if (!isAgentsApiTransportDisconnect(error)) {
-              throw error;
-            }
-            chunk = { done: true, value: undefined };
+            chunk = disconnectedEvent(error);
           }
           if ("kind" in chunk) {
             if (chunk.kind === "failed") {
@@ -442,12 +432,6 @@ export function createAgentsApiSession(options: {
           bufferedEvents.push(chunk.value);
           nextEvent = events.next();
           void nextEvent.catch(() => {});
-          if (chunk.value.type === "agent.session.requires_action" && options.connectEnvironment) {
-            // Only connection startup may cross an input receipt fence. Keep
-            // presentation and Gateway functions ordered in the main consumer.
-            await client.pendingFunctionCalls(sessionId, signal, options.connectEnvironment);
-            assertCurrent();
-          }
         }
       };
       const settleFromSavedState = async (recover = false): Promise<void> => {
@@ -460,7 +444,6 @@ export function createAgentsApiSession(options: {
         const session = await client.session(sessionId, signal);
         assertCurrent();
         if (session.status === "failed") {
-          await options.onSessionFailed?.();
           throw new Error(session.error ?? "Agents API session failed");
         }
         if (session.status === "requires_action") {
@@ -573,29 +556,15 @@ export function createAgentsApiSession(options: {
             if (buffered) {
               consumedBufferedEvent = true;
               chunk = { done: false, value: buffered };
-            } else if (options.initialInputSubmitted) {
-              // Creation events are not replayed, and saved records can lag them.
-              const refresh = new AbortController();
-              try {
-                chunk = await Promise.race([
-                  nextEvent,
-                  delay(1_000, undefined, {
-                    signal: AbortSignal.any([signal, refresh.signal]),
-                  }),
-                ]);
-              } finally {
-                refresh.abort();
-              }
+            } else if (reconciliationPending) {
+              // Terminal and disconnected-stream records may lag their last live event.
+              // Keep the next event in flight while reconciling within the attempt deadline.
+              chunk = await waitForAgentsApiEventOrRecovery(nextEvent, signal);
             } else {
               chunk = await nextEvent;
             }
           } catch (error) {
-            signal.throwIfAborted();
-            assertCurrent();
-            if (!isAgentsApiTransportDisconnect(error)) {
-              throw error;
-            }
-            chunk = { done: true, value: undefined };
+            chunk = disconnectedEvent(error);
           }
           if (!chunk) {
             await settleFromSavedState(true);
@@ -619,6 +588,7 @@ export function createAgentsApiSession(options: {
           await options.onEvent(event);
           assertCurrent();
           if (event.type === "agent.session.idle") {
+            reconciliationPending = true;
             await settleFromSavedState();
             continue;
           }
@@ -656,7 +626,6 @@ export function createAgentsApiSession(options: {
             if (session.status !== "failed") {
               continue;
             }
-            await options.onSessionFailed?.();
             throw new AgentsApiError(session.error ?? "Agents API session failed", event.error);
           }
           if (event.type === "agent.session.environment.failed") {
@@ -675,6 +644,7 @@ export function createAgentsApiSession(options: {
             event.turn?.subagent_id === null &&
             event.turn.id === latestInputTurnId
           ) {
+            reconciliationPending = true;
             rootTurn = event.turn;
             turnFailure = event.type.endsWith(".failed")
               ? new AgentsApiError(
@@ -702,7 +672,7 @@ export function createAgentsApiSession(options: {
     },
     async reconcileAfterClose(cleanupSignal: AbortSignal): Promise<Turn | undefined> {
       if (!closed) {
-        throw new Error("Agents API canonical cleanup requires a closed session attempt");
+        throw new Error("Agents API session cleanup requires a closed session attempt");
       }
       if (!submitted || !baselineCaptured) {
         return undefined;
@@ -710,11 +680,8 @@ export function createAgentsApiSession(options: {
       cleanupSignal.throwIfAborted();
       const session = await cleanupClient.session(sessionId, cleanupSignal);
       cleanupSignal.throwIfAborted();
-      if (session.status === "failed") {
-        await options.onSessionFailed?.();
-      }
       if (session.status !== "idle" && session.status !== "failed") {
-        throw new Error("Agents API canonical cleanup requires native work to be retired");
+        throw new Error("Agents API session cleanup requires native work to be retired");
       }
       const snapshot = await history.readSavedState(cleanupClient, cleanupSignal);
       await history.reconcilePriorHistory(cleanupClient, cleanupSignal, snapshot.itemsByTurn);

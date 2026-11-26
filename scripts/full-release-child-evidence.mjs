@@ -5,16 +5,18 @@ import { dirname } from "node:path";
 import process from "node:process";
 import {
   composeReleaseChildAttemptEvidence,
+  resolveReleaseAttemptJobs,
   releaseChildSpec,
   releaseCompositeJobsSha256,
   validateReleaseChildRunProvenance,
+  terminalPolicyPass,
 } from "./full-release-validation-policy.mjs";
 import { canonicalizeJsonValue } from "./lib/canonical-json.mjs";
 import {
   FULL_RELEASE_CHILD_EVIDENCE_JOB as PUBLISHER_JOB,
   serializeReleaseArtifact,
 } from "./lib/full-release-evidence.mjs";
-import { execGhRead } from "./lib/plain-gh.mjs";
+import { createReleaseEvidenceClient } from "./release-ci-summary.mjs";
 
 const MAX_INPUT_BYTES = 128 * 1024;
 function required(name, pattern) {
@@ -32,46 +34,7 @@ function readJson(path, maxBytes) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-function github(repository, endpoint, paginate = false) {
-  const args = ["api", `repos/${repository}/${endpoint}`];
-  if (paginate) {
-    args.push("--paginate", "--slurp");
-  }
-  return JSON.parse(
-    execGhRead(args, {
-      encoding: "utf8",
-      timeout: 60_000,
-      maxBuffer: 4 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  );
-}
-
-function readJobs(repository, runId, runAttempt) {
-  const pages = github(
-    repository,
-    `actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
-    true,
-  );
-  if (!Array.isArray(pages) || pages.length === 0 || pages.length > 20) {
-    throw new Error("Child evidence job inventory is incomplete");
-  }
-  const jobs = pages.flatMap((page) => {
-    if (!Array.isArray(page.jobs) || page.total_count !== pages[0].total_count) {
-      throw new Error("Child evidence job inventory is incomplete");
-    }
-    return page.jobs;
-  });
-  if (
-    jobs.length !== pages[0].total_count ||
-    jobs.some((job) => String(job.run_id) !== runId || job.run_attempt !== runAttempt)
-  ) {
-    throw new Error("Child evidence job inventory is incomplete or belongs to another attempt");
-  }
-  return jobs;
-}
-
-function seal() {
+async function seal() {
   const repository = required("GITHUB_REPOSITORY", /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u);
   const runId = required("GITHUB_RUN_ID", /^[1-9][0-9]*$/u);
   const runAttempt = Number(required("GITHUB_RUN_ATTEMPT", /^[1-9][0-9]*$/u));
@@ -97,7 +60,8 @@ function seal() {
   if (!Number.isSafeInteger(runAttempt) || runAttempt > 32) {
     throw new Error("Child evidence attempt inventory exceeds its bound");
   }
-  const run = github(repository, `actions/runs/${runId}`);
+  const client = createReleaseEvidenceClient(repository);
+  const run = await client.getRun(runId);
   const expected = {
     key: role,
     repository,
@@ -109,29 +73,44 @@ function seal() {
     workflowSha,
   };
   validateReleaseChildRunProvenance(run, expected);
+  // Partial reruns can stay queued while the exact publisher job below is running.
   if (
     run.run_attempt !== runAttempt ||
     run.head_repository?.full_name !== repository ||
-    run.status !== "in_progress" ||
+    !["queued", "in_progress"].includes(run.status) ||
     run.conclusion !== null
   ) {
     throw new Error("Child evidence publisher is not in the current active workflow attempt");
   }
-  if (workflowSha !== targetSha) {
-    throw new Error("Child evidence workflow SHA does not match the target SHA");
+  const targetInput =
+    role === "stableClientCompatibility"
+      ? "target_sha"
+      : role === "npmTelegram"
+        ? "harness_ref"
+        : role.startsWith("releaseChecks")
+          ? "ref"
+          : "target_ref";
+  if (inputs[targetInput] !== targetSha) {
+    throw new Error("Child evidence target differs from the exact dispatched product source");
   }
   const attempts = [];
   let publisher;
   for (let attempt = 1; attempt <= runAttempt; attempt += 1) {
-    const allJobs = readJobs(repository, runId, attempt);
-    const publishers = allJobs.filter((job) => job.name === PUBLISHER_JOB);
+    const allJobs = await client.getRunAttemptJobs(runId, attempt, { requireComplete: true });
+    if (allJobs.some((job) => String(job.run_id) !== runId || job.run_attempt !== attempt)) {
+      throw new Error("Child evidence job inventory belongs to another attempt");
+    }
+    const resolvedJobs = resolveReleaseAttemptJobs(allJobs, attempt, {
+      allowRunning: attempt === runAttempt,
+    });
+    const publishers = resolvedJobs.filter((job) => job.name === PUBLISHER_JOB);
     if (attempt === runAttempt) {
       if (publishers.length !== 1 || publishers[0].status !== "in_progress") {
         throw new Error("Child evidence publisher job identity is ambiguous or inactive");
       }
       publisher = publishers[0];
     }
-    const jobs = allJobs.filter((job) => job.name !== PUBLISHER_JOB);
+    const jobs = resolvedJobs.filter((job) => job.name !== PUBLISHER_JOB);
     if (jobs.some((job) => job.status !== "completed")) {
       throw new Error("Child evidence cannot seal while predecessor jobs are active");
     }
@@ -162,11 +141,17 @@ function seal() {
     dispatchId,
     sourceParentRunId: parent[1],
     sourceParentAttempt: Number(parent[2]),
-    workloadConclusion: composite.jobs.every((job) =>
-      ["success", "neutral"].includes(job.conclusion),
-    )
-      ? "success"
-      : "failure",
+    workloadConclusion:
+      (role !== "stableClientCompatibility" ||
+        terminalPolicyPass({
+          key: role,
+          jobs: composite.jobs,
+          status: "completed",
+          conclusion: "success",
+        })) &&
+      composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion))
+        ? "success"
+        : "failure",
     inputs: inputsWithoutDispatch,
     publisher: { jobId: String(publisher.id), jobName: PUBLISHER_JOB },
     ...composite,
@@ -182,7 +167,7 @@ function seal() {
 }
 
 try {
-  seal();
+  await seal();
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;

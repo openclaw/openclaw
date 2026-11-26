@@ -61,7 +61,21 @@ returns them.
 
 `providerOptions.deepgram` merges extra query params directly into the
 Deepgram `/listen` request, so any Deepgram-supported param name works
-(for example `detect_language`, `punctuate`, `smart_format`):
+(for example `detect_language`, `punctuate`, `smart_format`).
+
+Array values are sent as repeated query parameters in both batch and Flux
+requests. For example, set `providerOptions` on the audio config or a model entry
+to send each `keyterm` separately instead of a comma-separated list:
+
+```json validate=false
+{
+  "providerOptions": {
+    "deepgram": {
+      "keyterm": ["OpenClaw", "Deepgram"]
+    }
+  }
+}
+```
 
 <Tabs>
   <Tab title="With language hint">
@@ -129,16 +143,29 @@ precedence. Both settings are ignored for the English-only `flux-general-en` mod
 The bundled `deepgram` plugin also registers a realtime transcription provider
 for the Voice Call plugin.
 
-| Setting         | Config path                                                             | Default                                      |
-| --------------- | ----------------------------------------------------------------------- | -------------------------------------------- |
-| API key         | `plugins.entries.voice-call.config.streaming.providers.deepgram.apiKey` | Falls back to `DEEPGRAM_API_KEY`             |
-| Base URL        | `...deepgram.baseUrl`                                                   | `DEEPGRAM_BASE_URL` or Deepgram's public API |
-| Model           | `...deepgram.model`                                                     | `nova-3`                                     |
-| Language        | `...deepgram.language`                                                  | (unset)                                      |
-| Encoding        | `...deepgram.encoding`                                                  | `mulaw`                                      |
-| Sample rate     | `...deepgram.sampleRate`                                                | `8000`                                       |
-| Endpointing     | `...deepgram.endpointingMs`                                             | `800`                                        |
-| Interim results | `...deepgram.interimResults`                                            | `true`                                       |
+Realtime transcription WebSockets honor the Gateway's `HTTPS_PROXY` / `https_proxy`
+and `NO_PROXY` / `no_proxy` settings, including CIDR bypasses. Configured debug
+capture proxies take precedence; TLS certificate verification remains enabled.
+
+| Setting         | Config path                                                             | Default                                                                |
+| --------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| API key         | `plugins.entries.voice-call.config.streaming.providers.deepgram.apiKey` | Falls back to `DEEPGRAM_API_KEY`, then a saved `deepgram` auth profile |
+| Base URL        | `...deepgram.baseUrl`                                                   | `DEEPGRAM_BASE_URL` or Deepgram's public API                           |
+| Model           | `...deepgram.model`                                                     | `nova-3`                                                               |
+| Language        | `...deepgram.language`                                                  | (unset)                                                                |
+| Encoding        | `...deepgram.encoding`                                                  | `mulaw`                                                                |
+| Sample rate     | `...deepgram.sampleRate`                                                | `8000`                                                                 |
+| Endpointing     | `...deepgram.endpointingMs`                                             | `800`                                                                  |
+| Interim results | `...deepgram.interimResults`                                            | `true`                                                                 |
+
+The saved auth profile is used only when Deepgram is the named provider, for example
+`streaming.provider: "deepgram"`. Automatic selection counts only the config and
+environment keys.
+
+With interim results enabled and endpointing at most 5000 ms, a provider-detected
+word gap also completes confirmed speech when background noise prevents endpointing.
+The gap is at least 1000 ms and follows `endpointingMs` above that minimum. A long
+pause can therefore split a thought into separate turns; provisional text is never committed.
 
 ```json5
 {

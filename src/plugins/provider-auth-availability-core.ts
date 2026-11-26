@@ -17,6 +17,11 @@ import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth
 import { resolveDirectProviderCredentialMode } from "../agents/model-auth-runtime-shared.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolvePluginOwnedProviderAuthWith,
+  resolveProviderAuthScope,
+} from "./provider-auth-scope.js";
+import { warnPluginSdkDeprecation } from "./sdk-deprecation.js";
 
 type ProviderAuthProfileLookup = {
   /** Provider id whose usable auth profiles should be resolved. */
@@ -35,18 +40,56 @@ type ProviderAuthProfileLookup = {
   includeExternalCliAuth?: boolean;
 };
 
+type ProviderAuthProfileResolution = Omit<
+  ProviderAuthProfileLookup,
+  "profileTypes" | "capability"
+> & {
+  includePendingOAuthRefresh?: boolean;
+};
+
+function prepareProviderAuthProfileResolution(params: ProviderAuthProfileResolution) {
+  return {
+    agentDir: params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {}),
+    externalCli: params.includeExternalCliAuth
+      ? externalCliDiscoveryForProviderAuth({
+          cfg: params.cfg,
+          provider: params.provider,
+          allowKeychainPrompt: params.allowKeychainPrompt,
+        })
+      : undefined,
+    select: (store: AuthProfileStore) => ({
+      store,
+      profileIds: resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store,
+        provider: params.provider,
+        includePendingOAuthRefresh: params.includePendingOAuthRefresh,
+      }),
+    }),
+  };
+}
+
 export function createProviderAuthAvailability(
   authStore: Pick<
     ReturnType<typeof createAuthProfileStoreRuntime>,
     | "ensureAuthProfileStore"
+    | "ensureAuthProfileStoreAsync"
+    | "loadAuthProfileStoreWithoutExternalProfilesAsync"
+    | "loadAuthProfileStoreForRuntimeAsync"
     | "findPersistedAuthProfileCredential"
+    | "findPersistedAuthProfileCredentialAsync"
     | "loadAuthProfileStoreForSecretsRuntime"
     | "loadAuthProfileStoreWithoutExternalProfiles"
   >,
+  resolveProviderRuntimePlugin?: Parameters<typeof resolvePluginOwnedProviderAuthWith>[1],
 ) {
   const {
     ensureAuthProfileStore,
+    ensureAuthProfileStoreAsync,
+    loadAuthProfileStoreWithoutExternalProfilesAsync,
+    loadAuthProfileStoreForRuntimeAsync,
     findPersistedAuthProfileCredential,
+    findPersistedAuthProfileCredentialAsync,
     loadAuthProfileStoreForSecretsRuntime,
     loadAuthProfileStoreWithoutExternalProfiles,
   } = authStore;
@@ -54,31 +97,64 @@ export function createProviderAuthAvailability(
   /**
    * Checks whether a provider has usable config/env auth or matching local auth profiles.
    */
-  function isProviderApiKeyConfigured(
+  function isProviderApiKeyConfiguredFromStore(
     params: Pick<
       ProviderAuthProfileLookup,
       "provider" | "cfg" | "agentDir" | "profileTypes" | "capability"
     > & {
       /** Optional provider-owned acceptance predicate for a known selected credential. */
       acceptsApiKey?: (apiKey: string) => boolean;
+      store?: AuthProfileStore;
     },
+    persistedCredential?: AuthProfileCredential | null,
   ): boolean {
+    if (resolveProviderAuthScope({ provider: params.provider, config: params.cfg }) === "plugin") {
+      try {
+        if (!resolveProviderRuntimePlugin) {
+          return false;
+        }
+        const auth = resolvePluginOwnedProviderAuthWith(
+          { provider: params.provider, config: params.cfg },
+          resolveProviderRuntimePlugin,
+        );
+        const profileType = auth.mode === "api-key" ? "api_key" : auth.mode;
+        return (
+          !auth.nativeAuth &&
+          (!params.profileTypes || params.profileTypes.includes(profileType)) &&
+          isAuthModeAllowedForModel({
+            provider: params.provider,
+            mode: auth.mode,
+            capability: params.capability,
+          }) &&
+          (!params.acceptsApiKey || params.acceptsApiKey(auth.apiKey))
+        );
+      } catch {
+        return false;
+      }
+    }
     const agentDir = params.agentDir?.trim();
     if (params.acceptsApiKey) {
       const { acceptsApiKey, ...availability } = params;
-      if (!isProviderApiKeyConfigured(availability)) {
+      if (!isProviderApiKeyConfiguredFromStore(availability, persistedCredential)) {
         return false;
       }
 
       const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
       const authoredApiKey = providerConfig?.apiKey;
-      const store = agentDir
-        ? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false })
-        : undefined;
+      const store =
+        params.store ??
+        (agentDir ? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false }) : undefined);
       let profile =
-        typeof authoredApiKey === "string" ? store?.profiles[authoredApiKey.trim()] : undefined;
+        persistedCredential ??
+        (typeof authoredApiKey === "string" ? store?.profiles[authoredApiKey.trim()] : undefined);
       if (!profile && store && providerConfig?.auth !== "api-key") {
-        const [profileId] = listUsableProviderAuthProfileIds(availability).profileIds;
+        const [profileId] = params.store
+          ? filterAuthProfileIds(
+              store,
+              resolveAuthProfileOrder({ cfg: params.cfg, store, provider: params.provider }),
+              params,
+            )
+          : listUsableProviderAuthProfileIds(availability).profileIds;
         profile = profileId ? store.profiles[profileId] : undefined;
       }
       if (profile) {
@@ -125,7 +201,10 @@ export function createProviderAuthAvailability(
       const authoredApiKey = resolveMergedModelProviderConfig(params.cfg, params.provider)?.apiKey;
       const profileId = typeof authoredApiKey === "string" ? authoredApiKey.trim() : undefined;
       if (agentDir && profileId) {
-        const credential = findPersistedAuthProfileCredential({ agentDir, profileId });
+        const credential =
+          persistedCredential !== undefined
+            ? (persistedCredential ?? undefined)
+            : findPersistedAuthProfileCredential({ agentDir, profileId });
         if (credential) {
           const binding = resolveProviderEntryApiKeyProfileReference({
             cfg: params.cfg,
@@ -189,20 +268,72 @@ export function createProviderAuthAvailability(
     if (!agentDir) {
       return false;
     }
-    const store = ensureAuthProfileStore(agentDir, {
-      allowKeychainPrompt: false,
-    });
+    const store =
+      params.store ??
+      ensureAuthProfileStore(agentDir, {
+        allowKeychainPrompt: false,
+      });
     const profileIds = listProfilesForProvider(store, params.provider);
     return filterAuthProfileIds(store, profileIds, params).length > 0;
   }
 
-  /**
-   * Lists auth profile ids usable for a provider without throwing on missing stores or keychain access.
-   */
+  /** @deprecated Use isProviderApiKeyConfiguredAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+  function isProviderApiKeyConfigured(
+    params: Parameters<typeof isProviderApiKeyConfiguredFromStore>[0],
+  ): boolean {
+    warnPluginSdkDeprecation({
+      family: "provider-auth",
+      method: "isProviderApiKeyConfigured",
+      replacement: "isProviderApiKeyConfiguredAsync",
+    });
+    return isProviderApiKeyConfiguredFromStore(params);
+  }
+
+  async function isProviderApiKeyConfiguredAsync(
+    params: Parameters<typeof isProviderApiKeyConfigured>[0],
+  ): Promise<boolean> {
+    if (resolveProviderAuthScope({ provider: params.provider, config: params.cfg }) === "plugin") {
+      return isProviderApiKeyConfiguredFromStore(params);
+    }
+    const agentDir = params.agentDir?.trim();
+    const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
+    const apiKey = providerConfig?.apiKey;
+    const profileId = typeof apiKey === "string" ? apiKey.trim() : undefined;
+    const persistedCredential =
+      agentDir && profileId
+        ? ((await findPersistedAuthProfileCredentialAsync({ agentDir, profileId })) ?? null)
+        : null;
+    let store = params.store;
+    // A selected local profile takes precedence over env auth for key predicates.
+    if (
+      params.acceptsApiKey &&
+      !store &&
+      agentDir &&
+      !persistedCredential &&
+      providerConfig?.auth !== "api-key"
+    ) {
+      store = await ensureAuthProfileStoreAsync(agentDir, { allowKeychainPrompt: false });
+    }
+    // Plain availability and explicit config credentials can still avoid full-store reads.
+    const prepared = { ...params, store: store ?? { version: 1, profiles: {} } };
+    const configured = isProviderApiKeyConfiguredFromStore(prepared, persistedCredential);
+    if (configured || store || !agentDir || persistedCredential) {
+      return configured;
+    }
+    store = await ensureAuthProfileStoreAsync(agentDir, { allowKeychainPrompt: false });
+    return isProviderApiKeyConfiguredFromStore({ ...params, store }, persistedCredential);
+  }
+
+  /** @deprecated Use listUsableProviderAuthProfileIdsAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   function listUsableProviderAuthProfileIds(params: ProviderAuthProfileLookup): {
     agentDir: string;
     profileIds: string[];
   } {
+    warnPluginSdkDeprecation({
+      family: "auth-profile-sync-operations",
+      method: "listUsableProviderAuthProfileIds",
+      replacement: "await listUsableProviderAuthProfileIdsAsync()",
+    });
     try {
       const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
       return { agentDir, profileIds: filterAuthProfileIds(store, profileIds, params) };
@@ -211,11 +342,32 @@ export function createProviderAuthAvailability(
     }
   }
 
-  /**
-   * Checks whether any usable auth profile exists for a provider.
-   */
+  /** @deprecated Use isProviderAuthProfileConfiguredAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   function isProviderAuthProfileConfigured(params: ProviderAuthProfileLookup): boolean {
+    warnPluginSdkDeprecation({
+      family: "auth-profile-sync-operations",
+      method: "isProviderAuthProfileConfigured",
+      replacement: "await isProviderAuthProfileConfiguredAsync()",
+    });
     return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
+  }
+
+  async function isProviderAuthProfileConfiguredAsync(
+    params: ProviderAuthProfileLookup,
+  ): Promise<boolean> {
+    return (await listUsableProviderAuthProfileIdsAsync(params)).profileIds.length > 0;
+  }
+
+  async function listUsableProviderAuthProfileIdsAsync(params: ProviderAuthProfileLookup): Promise<{
+    agentDir: string;
+    profileIds: string[];
+  }> {
+    try {
+      const { agentDir, profileIds, store } = await resolveUsableProviderAuthProfilesAsync(params);
+      return { agentDir, profileIds: filterAuthProfileIds(store, profileIds, params) };
+    } catch {
+      return { agentDir: "", profileIds: [] };
+    }
   }
 
   /**
@@ -225,7 +377,7 @@ export function createProviderAuthAvailability(
     params: ProviderAuthProfileLookup,
   ): Promise<string | undefined> {
     const { resolveApiKeyForProfile } = await import("../agents/auth-profiles/oauth.js");
-    const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles({
+    const { agentDir, profileIds, store } = await resolveUsableProviderAuthProfilesAsync({
       ...params,
       includePendingOAuthRefresh: true,
     });
@@ -250,44 +402,51 @@ export function createProviderAuthAvailability(
     return undefined;
   }
 
-  function resolveUsableProviderAuthProfiles(
-    params: Omit<ProviderAuthProfileLookup, "profileTypes" | "capability"> & {
-      includePendingOAuthRefresh?: boolean;
-    },
-  ): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
-    const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
-    const externalCli = params.includeExternalCliAuth
-      ? externalCliDiscoveryForProviderAuth({
-          cfg: params.cfg,
-          provider: params.provider,
-          allowKeychainPrompt: params.allowKeychainPrompt,
-        })
-      : undefined;
-    const store = externalCli
-      ? loadAuthProfileStoreForSecretsRuntime(agentDir, { externalCli })
-      : loadAuthProfileStoreForSecretsRuntime(agentDir);
-    const profileIds = resolveAuthProfileOrder({
-      cfg: params.cfg,
-      store,
-      provider: params.provider,
-      includePendingOAuthRefresh: params.includePendingOAuthRefresh,
-    });
-    if (profileIds.length > 0) {
-      return { agentDir, profileIds, store };
+  function resolveUsableProviderAuthProfiles(params: ProviderAuthProfileResolution): {
+    agentDir: string;
+    profileIds: string[];
+    store: AuthProfileStore;
+  } {
+    const { agentDir, externalCli, select } = prepareProviderAuthProfileResolution(params);
+    const selected = select(
+      externalCli
+        ? loadAuthProfileStoreForSecretsRuntime(agentDir, { externalCli })
+        : loadAuthProfileStoreForSecretsRuntime(agentDir),
+    );
+    if (selected.profileIds.length > 0) {
+      return { agentDir, ...selected };
     }
-
-    const fallbackStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
-      allowKeychainPrompt: params.allowKeychainPrompt ?? false,
-    });
     return {
       agentDir,
-      profileIds: resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store: fallbackStore,
-        provider: params.provider,
-        includePendingOAuthRefresh: params.includePendingOAuthRefresh,
+      ...select(
+        loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+        }),
+      ),
+    };
+  }
+
+  async function resolveUsableProviderAuthProfilesAsync(
+    params: ProviderAuthProfileResolution,
+  ): Promise<{ agentDir: string; profileIds: string[]; store: AuthProfileStore }> {
+    const { agentDir, externalCli, select } = prepareProviderAuthProfileResolution(params);
+    const selected = select(
+      await loadAuthProfileStoreForRuntimeAsync(agentDir, {
+        readOnly: true,
+        allowKeychainPrompt: false,
+        ...(externalCli ? { externalCli } : {}),
       }),
-      store: fallbackStore,
+    );
+    if (selected.profileIds.length > 0) {
+      return { agentDir, ...selected };
+    }
+    return {
+      agentDir,
+      ...select(
+        await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir, {
+          allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+        }),
+      ),
     };
   }
 
@@ -320,8 +479,11 @@ export function createProviderAuthAvailability(
 
   return {
     isProviderApiKeyConfigured,
+    isProviderApiKeyConfiguredAsync,
     listUsableProviderAuthProfileIds,
+    listUsableProviderAuthProfileIdsAsync,
     isProviderAuthProfileConfigured,
+    isProviderAuthProfileConfiguredAsync,
     resolveProviderAuthProfileApiKey,
   };
 }

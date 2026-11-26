@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import * as json5 from "json5";
-import { resolveGatewayLockPaths } from "../infra/gateway-lock.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { registerSealedRuntime } from "../infra/sealed-runtime-registry.js";
 import { withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import { runCliWithExitFinalization } from "./one-shot-exit.js";
@@ -13,53 +14,8 @@ const control = path.join(process.env.OPENCLAW_HOME!, "control");
 fs.mkdirSync(control, { recursive: true });
 registerSealedRuntime({ json5, resolveSecureTempRoot: () => control });
 installCliSignalExitHandlers();
-const native = requireNodeSqlite();
-const ownerPath = resolveGatewayLockPaths(process.env).ownerLockPath;
-let adminSql = 0;
-let missingCustody = 0;
-const ownerPids = new Set<number>();
-const observe = (sql: string) => {
-  if (!/\b(?:channel_pairing_\w+|exec_approvals_config)\b/iu.test(sql)) {
-    return;
-  }
-  adminSql += 1;
-  try {
-    const owner: { pid: number } = JSON.parse(fs.readFileSync(ownerPath, "utf8"));
-    ownerPids.add(owner.pid);
-  } catch {
-    missingCustody += 1;
-  }
-};
-for (const method of ["prepare", "exec"] as const) {
-  Object.defineProperty(native.DatabaseSync.prototype, method, {
-    ...Object.getOwnPropertyDescriptor(native.DatabaseSync.prototype, method),
-    value: new Proxy(native.DatabaseSync.prototype[method], {
-      apply(target, receiver, args: [string]) {
-        observe(args[0]);
-        return Reflect.apply(target, receiver, args);
-      },
-    }),
-  });
-}
-for (const method of ["get", "all", "run", "iterate"] as const) {
-  Object.defineProperty(native.StatementSync.prototype, method, {
-    ...Object.getOwnPropertyDescriptor(native.StatementSync.prototype, method),
-    value: new Proxy(native.StatementSync.prototype[method], {
-      apply(target, receiver: import("node:sqlite").StatementSync, args) {
-        observe(receiver.sourceSQL);
-        return Reflect.apply(target, receiver, args);
-      },
-    }),
-  });
-}
-process.on("exit", () => {
-  fs.writeFileSync(
-    path.join(control, "sql-observation.json"),
-    JSON.stringify({ pid: process.pid, adminSql, missingCustody, ownerPids: [...ownerPids] }),
-  );
-});
-try {
-  await runCliWithExitFinalization({
+const run = () =>
+  runCliWithExitFinalization({
     run: () =>
       withConsoleLogsRoutedToStderrForJson(
         process.argv,
@@ -68,6 +24,16 @@ try {
           if (process.argv[2] === "pairing") {
             const { registerPairingCli } = await import("./pairing-cli.js");
             registerPairingCli(program);
+          } else if (process.argv[2] === "secrets") {
+            const { registerSecretStoreCli } = await import("./secrets-store-cli.js");
+            registerSecretStoreCli(program.command("secrets"));
+          } else if (process.argv[2] === "models") {
+            const { modelsRefreshCommand } = await import("../commands/models/refresh.js");
+            const { defaultRuntime } = await import("../runtime.js");
+            program
+              .command("models")
+              .command("refresh")
+              .action(() => modelsRefreshCommand({}, defaultRuntime));
           } else {
             const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
             registerExecApprovalsCli(program);
@@ -80,6 +46,37 @@ try {
       throw error;
     },
   });
+try {
+  const preload = process.env.OPENCLAW_TEST_SQLITE_WORKER_PRELOAD;
+  if (preload) {
+    await withRuntimeWorkerGeneration(
+      async (bind) => {
+        const workers = new Map<string, URL>();
+        for (const name of [
+          "sharedStateStore",
+          "stateRead",
+          "workerNativeLifecycle",
+          "spawnBroker",
+        ] as const) {
+          const original = resolveRuntimeProcessEntrypointUrl(name);
+          const extension = path.extname(original.pathname).endsWith("ts") ? ".mts" : ".mjs";
+          const wrapper = pathToFileURL(path.join(control, `observed-${name}${extension}`));
+          const load =
+            name === "sharedStateStore"
+              ? `export const { createSqliteWorkerBackend, openExistingSqliteWorkerBackend } = await import(${JSON.stringify(original.href)});`
+              : `await import(${JSON.stringify(original.href)});`;
+          fs.writeFileSync(wrapper, `await import(${JSON.stringify(preload)});\n${load}\n`);
+          workers.set(original.href, wrapper);
+        }
+        // Carry the observation into real CLI workers through their existing source owner.
+        bind((url) => workers.get(url.href) ?? url);
+        await run();
+      },
+      async () => {},
+    );
+  } else {
+    await run();
+  }
 } catch (error) {
   const { formatCliFailureLines } = await import("./failure-output.js");
   for (const line of formatCliFailureLines({

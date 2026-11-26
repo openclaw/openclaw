@@ -364,7 +364,7 @@ export function migrateTierEvalTranche(raw: Record<string, unknown>, changes: st
   }
   if (stripped || changes.length > initialChangeCount) {
     changes.push(
-      "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+      "Applied tier-eval tranche retirements; current settings and built-in defaults now apply.",
     );
   }
 }

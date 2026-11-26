@@ -22,7 +22,7 @@ it("keeps navigation eager and loads complete fallback copy before the page rend
   expect(manager.t("portalsPage.emptyHint")).toBe("portalsPage.emptyHint");
 
   await manager.setLocale("de");
-  await import("../pages/portals/portals-page.ts");
+  await import("../pages/portals/portals-page.tsx");
   const { registerPortalsEnglish } = await import("./locales/en-portals.ts");
   for (const [key, value] of flattenTranslations(registerPortalsEnglish.catalog)) {
     expect(manager.t(key)).toBe(value);

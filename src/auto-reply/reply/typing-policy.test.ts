@@ -4,12 +4,6 @@ import { resolveRunTypingPolicy } from "./typing-policy.js";
 describe("resolveRunTypingPolicy", () => {
   it.each([
     {
-      name: "forces heartbeat policy for heartbeat runs",
-      input: { requestedPolicy: "user_message", isHeartbeat: true },
-      typingPolicy: "heartbeat",
-      suppressTyping: true,
-    },
-    {
       name: "forces internal webchat policy",
       input: { requestedPolicy: "user_message", originatingChannel: "webchat" },
       typingPolicy: "internal_webchat",

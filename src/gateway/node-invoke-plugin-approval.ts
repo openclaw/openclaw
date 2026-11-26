@@ -9,6 +9,7 @@ import {
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
@@ -44,30 +45,15 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
   nodeSession: NodeSession;
   risk: OpenClawPluginNodeInvokePolicyContext["risk"];
   standingGrantAuthorization: NodeInvokePlacementGrantAuthorization;
-  placementGrantAuthority?: {
-    agentId: string;
-    sessionKey: string;
-    runId: string;
-    assertCurrent: (request: {
-      pluginId: string;
-      command: string;
-      nodeId: string;
-      workspace: {
-        workspaceDir: string;
-        environmentId: string;
-        sessionId: string;
-        ownerEpoch: number;
-        sessionKey: string;
-      };
-    }) => void;
-  };
+  placementGrantAuthority?: NonNullable<
+    PluginRuntimeGatewayRequestScope["nodePlacementGrantAuthority"]
+  >;
   turnSource?: {
     channel?: unknown;
     to?: unknown;
     accountId?: unknown;
     threadId?: unknown;
   };
-  isCurrent: () => boolean;
 }): OpenClawPluginNodeInvokePolicyContext["approvals"] | undefined {
   const manager = params.context.pluginApprovalManager;
   if (!manager) {
@@ -87,9 +73,6 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
         params.client?.internal?.pluginRuntimeOwnerId === params.pluginId
           ? params.client.internal.nodeInvokeApprovalSessionKey
           : undefined;
-      if (!params.isCurrent()) {
-        throw new Error("agent runtime approval authority is no longer active");
-      }
       const requestedDecisions =
         input.allowedDecisions === undefined
           ? undefined
@@ -116,7 +99,7 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
               }),
           }
         : undefined;
-      const placementGrantResolution = resolveNodeInvokePlacementGrant({
+      const placementGrantResolution = await resolveNodeInvokePlacementGrant({
         runtime: params.context.placementStandingGrants,
         requestedDecisions,
         owner: placementGrantOwner,
@@ -191,25 +174,21 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
         getIosPushDelivery: () => params.context.pluginApprovalIosPushDelivery,
         source: "node-policy",
       });
-      let decision = manager.projectDecisionIfActive(record.id, await decisionPromise);
-      if (!params.isCurrent()) {
-        return { id: record.id, decision: null };
-      }
+      const decision = manager.projectDecisionIfActive(record.id, await decisionPromise);
       if (
         decision === "allow-once" &&
         !(await manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`))
       ) {
         return { id: record.id, decision: null };
       }
-      decision = manager.projectDecisionIfActive(record.id, decision);
       if (
-        !retainResolvedNodeInvokePlacementGrant({
+        !(await retainResolvedNodeInvokePlacementGrant({
           runtime: params.context.placementStandingGrants,
           decision,
           binding: placementGrant,
           owner: placementGrantOwner,
           authorization: params.standingGrantAuthorization,
-        })
+        }))
       ) {
         return { id: record.id, decision: null };
       }

@@ -6,7 +6,6 @@ import { getPath } from "./path-utils.js";
 import { isExpectedResolvedSecretValue } from "./secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 
-/** One resolved SecretRef value ready to inject into a command-scoped config view. */
 /** One command config path whose value can be resolved from a SecretRef. */
 export type CommandSecretAssignment = {
   path: string;
@@ -15,22 +14,8 @@ export type CommandSecretAssignment = {
 };
 
 /** Active or inactive command target that could not be materialized. */
-export type UnresolvedCommandSecretAssignment = {
-  path: string;
-  pathSegments: string[];
-};
+export type UnresolvedCommandSecretAssignment = Omit<CommandSecretAssignment, "value">;
 
-/** Full command assignment analysis before unresolved active refs are rejected. */
-type AnalyzeAssignmentsFromSnapshotResult = {
-  assignments: CommandSecretAssignment[];
-  diagnostics: string[];
-  unresolved: UnresolvedCommandSecretAssignment[];
-  inactive: UnresolvedCommandSecretAssignment[];
-};
-
-/**
- * Compares source SecretRefs with the active resolved snapshot for command-time assignments.
- */
 /** Analyzes command secret assignments without mutating the source config. */
 export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
   sourceConfig: OpenClawConfig;
@@ -38,7 +23,7 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
   targetIds: ReadonlySet<string>;
   inactiveRefPaths?: ReadonlySet<string>;
   allowedPaths?: ReadonlySet<string>;
-}): AnalyzeAssignmentsFromSnapshotResult {
+}) {
   const defaults = params.sourceConfig.secrets?.defaults;
   const assignments: CommandSecretAssignment[] = [];
   const diagnostics: string[] = [];
@@ -68,17 +53,14 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
     ) {
       // Inactive surfaces are diagnostics, not hard failures; active unresolved refs block the
       // command because the runtime snapshot promised that target was usable.
-      if (params.inactiveRefPaths?.has(target.path)) {
+      const isInactive = params.inactiveRefPaths?.has(target.path);
+      if (isInactive) {
         diagnostics.push(
           `${target.path}: secret ref is configured on an inactive surface; skipping command-time assignment.`,
         );
-        inactive.push({
-          path: target.path,
-          pathSegments: [...target.pathSegments],
-        });
-        continue;
       }
-      unresolved.push({
+      const unavailable = isInactive ? inactive : unresolved;
+      unavailable.push({
         path: target.path,
         pathSegments: [...target.pathSegments],
       });

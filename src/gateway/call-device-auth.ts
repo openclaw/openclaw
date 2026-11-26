@@ -2,6 +2,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { readMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/gateway-error-details.js";
 import {
   loadDeviceAuthToken,
   loadDeviceAuthTokenReadOnly,
@@ -9,13 +10,14 @@ import {
   loadOriginDeviceTokenReadOnly,
 } from "../infra/device-auth-store.js";
 import {
-  loadDeviceIdentityIfPresent,
-  loadOrCreateDeviceIdentity,
-  type DeviceIdentity,
-} from "../infra/device-identity.js";
+  loadDeviceIdentityIfPresentAsync,
+  loadOrCreateDeviceIdentityAsync,
+} from "../infra/device-identity-async.js";
+import type { DeviceIdentity } from "../infra/device-identity.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import type { resolveGatewayAuth } from "./auth-resolve.js";
 import type { GatewayClientOptions } from "./client.js";
+import { projectGatewayUrlForDiagnostics } from "./connection-details.js";
 import { isLoopbackGatewayUrl } from "./net.js";
 
 export type GatewayCallDeviceAuthOptions = Pick<
@@ -32,6 +34,8 @@ export type GatewayCallDeviceAuthOptions = Pick<
   requireLocalBackendSharedAuth?: boolean;
   /** Reuse local auth-none authority without opening device storage for ordinary CLI RPCs. */
   allowLocalBackendAuthNone?: boolean;
+  /** CLI storage selection is lazy until authentication needs a local identity. */
+  beforeDeviceIdentityLoad?: () => Promise<void>;
 };
 
 export class GatewayCredentialsRequiredError extends Error {
@@ -76,7 +80,9 @@ export async function resolveReadOnlyLocalGatewayAuth(params: {
 }) {
   const { auth, authNone, env } = params;
   const identity =
-    authNone || auth?.token || auth?.password ? null : loadDeviceIdentityIfPresent({ env });
+    authNone || auth?.token || auth?.password
+      ? null
+      : await loadDeviceIdentityIfPresentAsync({ env });
   const preparedDeviceAuth = await loadStoredOperatorDeviceAuthToken(
     identity,
     undefined,
@@ -96,21 +102,22 @@ export async function resolveReadOnlyLocalGatewayAuth(params: {
   };
 }
 
-export function resolveDeviceIdentityForGatewayCall(
+export async function resolveDeviceIdentityForGatewayCall(
   sharedStateMode?: "read-only",
-): DeviceIdentity | null {
+): Promise<DeviceIdentity | null> {
   try {
     return sharedStateMode === "read-only"
-      ? loadDeviceIdentityIfPresent()
-      : loadOrCreateDeviceIdentity();
-  } catch {
-    // Read-only or restricted environments should still be able to call the
-    // gateway with token/password auth without crashing before the RPC.
-    return null;
+      ? await loadDeviceIdentityIfPresentAsync()
+      : await loadOrCreateDeviceIdentityAsync();
+  } catch (cause) {
+    throw new Error(
+      'Cannot load device identity. Check access to your OpenClaw state directory and run "openclaw doctor --fix", then retry.',
+      { cause },
+    );
   }
 }
 
-export function resolveGatewayCallDeviceAuth(params: {
+export async function resolveGatewayCallDeviceAuth(params: {
   opts: GatewayCallDeviceAuthOptions;
   url: string;
   authMode: ReturnType<typeof resolveGatewayAuth>["mode"];
@@ -167,11 +174,14 @@ export function resolveGatewayCallDeviceAuth(params: {
       "local backend shared auth requires a loopback gateway with token/password credentials or auth mode none",
     );
   }
+  if (opts.deviceIdentity === undefined && !omitDeviceIdentity) {
+    await opts.beforeDeviceIdentityLoad?.();
+  }
   const deviceIdentity =
     opts.deviceIdentity === undefined
       ? omitDeviceIdentity
         ? null
-        : resolveDeviceIdentityForGatewayCall(opts.sharedStateMode)
+        : await resolveDeviceIdentityForGatewayCall(opts.sharedStateMode)
       : opts.deviceIdentity;
   return { clientOptions, omitDeviceIdentity, deviceIdentity };
 }
@@ -206,4 +216,26 @@ export async function loadStoredOperatorDeviceAuthToken(
   } catch {
     return null;
   }
+}
+
+/**
+ * A device with no identity behind gateway.remote.edgeAuth reaches the Gateway
+ * through the proxy but holds no scopes. `gateway call` is read-only and cannot
+ * pair it; the TUI can. An explicit --url stays in the command, because a bare
+ * `openclaw tui` may select another Gateway (for example a local one).
+ */
+export function withEdgeAuthPairingHint(
+  error: Error,
+  edgeAuthHeaders: Readonly<Record<string, string>> | undefined,
+  deviceIdentity: DeviceIdentity | null,
+  explicitUrl: string | undefined,
+): Error {
+  const details = "details" in error ? error.details : undefined;
+  if (edgeAuthHeaders && !deviceIdentity && readMissingScopeErrorDetails(details)) {
+    const tui = explicitUrl
+      ? `openclaw tui --url ${projectGatewayUrlForDiagnostics(explicitUrl)}`
+      : "openclaw tui";
+    error.message = `${error.message}\nFix: this device is not paired with this Gateway yet. Run \`${tui}\` once to pair this device, approve the request in that Gateway's Control UI (Settings -> Devices), then retry.`;
+  }
+  return error;
 }

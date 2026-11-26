@@ -5,11 +5,11 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import type { ProviderNonInteractiveApiKeyCredentialParams } from "./provider-auth-types.js";
 import type {
   ProviderAuthContext,
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
-  ProviderNonInteractiveApiKeyCredentialParams,
   ProviderPluginWizardSetup,
 } from "./types.js";
 
@@ -27,6 +27,7 @@ type ProviderApiKeyAuthMethodOptions = {
   flagName: `--${string}`;
   envVar: string;
   promptMessage: string;
+  validateApiKey?: (apiKey: string) => string | undefined;
   profileId?: string;
   profileIds?: string[];
   allowProfile?: boolean;
@@ -114,11 +115,7 @@ export async function persistProviderApiKey(
   return true;
 }
 
-function resolveProfileIds(params: {
-  providerId: string;
-  profileId?: string;
-  profileIds?: string[];
-}) {
+function resolveProfileIds(params: Parameters<typeof createProviderApiKeyAuthMethod>[0]) {
   const explicit = normalizeUniqueStringEntries(params.profileIds ?? []);
   if (explicit.length > 0) {
     return explicit;
@@ -147,16 +144,26 @@ async function resolveDefaultModel(
 export function createProviderApiKeyAuthMethod(
   params: ProviderApiKeyAuthMethodOptions,
 ): ProviderAuthMethod {
+  const assertValidApiKey = (apiKey: string) => {
+    const error = params.validateApiKey?.(apiKey);
+    if (error) {
+      throw new Error(error);
+    }
+  };
   const resolveNonInteractiveCredential = async (
     ctx: ProviderAuthMethodNonInteractiveValidationContext,
   ) => {
-    return await ctx.resolveApiKey({
+    const resolved = await ctx.resolveApiKey({
       provider: params.providerId,
       flagValue: normalizeOptionalSecretInput(ctx.opts?.[params.optionKey]),
       flagName: params.flagName,
       envVar: params.envVar,
       ...(params.allowProfile === false ? { allowProfile: false } : {}),
     });
+    if (resolved) {
+      assertValidApiKey(resolved.key);
+    }
+    return resolved;
   };
   return {
     id: params.methodId,
@@ -181,6 +188,7 @@ export function createProviderApiKeyAuthMethod(
         noteMessage: params.noteMessage,
         noteTitle: params.noteTitle,
       });
+      assertValidApiKey(apiKey);
       const profileIds = resolveProfileIds(params);
       const defaultModel = await resolveDefaultModel(params, {
         apiKey,

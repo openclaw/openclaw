@@ -193,7 +193,6 @@ export function createNodeDesktopService(params: {
               "VNC password is required to observe this node",
             );
           }
-          registerSecretValueForRedaction(password);
           preauth = { auth: attached.auth, credentials: { password } };
         } else {
           const username = request.credentials?.username?.trim() ?? "";
@@ -204,10 +203,10 @@ export function createNodeDesktopService(params: {
               "macOS account credentials are required to observe this node",
             );
           }
-          registerSecretValueForRedaction(password);
           preauth = { auth: attached.auth, credentials: { username, password } };
         }
 
+        registerSecretValueForRedaction(preauth.credentials.password);
         const attachment = active.publish();
         if (!attachment) {
           throw new Error("node desktop session was superseded before publication");

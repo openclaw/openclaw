@@ -1,4 +1,3 @@
-// Thin `openclaw status --json` wrapper.
 // Command wiring lives here; scan/payload behavior lives in the shared JSON command runner.
 
 import type { RuntimeEnv } from "../runtime.js";
@@ -7,13 +6,7 @@ import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js
 
 /** Runs status JSON with the standard fast scan and all-mode security audit behavior. */
 export async function statusJsonCommand(
-  opts: {
-    deep?: boolean;
-    usage?: boolean;
-    agent?: string;
-    timeoutMs?: number;
-    all?: boolean;
-  },
+  opts: Omit<Parameters<typeof runStatusJsonCommand>[0]["opts"], "gatewayProbeDeadlineMs">,
   runtime: RuntimeEnv,
 ) {
   await runStatusJsonCommand({

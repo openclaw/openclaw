@@ -5,13 +5,6 @@ import type { ChannelPairingAdapter } from "../channels/plugins/pairing.types.js
 // channels use channel ids but keep a narrower alias for readability.
 export type PairingChannel = ChannelId;
 
-export type PairingReadOperations = {
-  "pairing.allowFrom": {
-    input: { channel: string; accountId: string };
-    output: { type: "pairing.allowFrom"; entries: string[] };
-  };
-};
-
 export type PairingRequestRecord = {
   id: string;
   code: string;

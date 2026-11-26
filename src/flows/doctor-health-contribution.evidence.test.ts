@@ -31,14 +31,16 @@ describe("Doctor health contribution repair evidence", () => {
       warnings: [],
     });
     const applied = vi.fn();
-    const contribution = createDoctorHealthContribution({
-      id: "doctor:test-state-only",
-      label: "Test state-only repair",
-      healthChecks: {
-        description: "Repairs runtime state without changing config",
-        detect: vi.fn(async () => []),
+    const contribution = createDoctorHealthContribution(
+      "doctor:test-state-only",
+      "Test state-only repair",
+      {
+        healthChecks: {
+          description: "Repairs runtime state without changing config",
+          detect: vi.fn(async () => []),
+        },
       },
-    });
+    );
 
     await contribution.run(
       createDoctorHealthFlowContext({

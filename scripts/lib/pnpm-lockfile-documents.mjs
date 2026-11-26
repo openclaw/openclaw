@@ -92,15 +92,13 @@ function parseYamlScalar(value) {
   return unquoteYamlString(value.trim());
 }
 
-function splitInlineYamlMapEntries(text) {
-  const entries = [];
-  let current = "";
+function* topLevelYamlSeparators(text, separator) {
   let quote = null;
   let depth = 0;
 
-  for (const character of text) {
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
     if (quote) {
-      current += character;
       if (character === quote) {
         quote = null;
       }
@@ -108,33 +106,31 @@ function splitInlineYamlMapEntries(text) {
     }
     if (character === "'" || character === '"') {
       quote = character;
-      current += character;
       continue;
     }
     if (character === "{" || character === "[" || character === "(") {
       depth += 1;
-      current += character;
       continue;
     }
     if (character === "}" || character === "]" || character === ")") {
       depth = Math.max(0, depth - 1);
-      current += character;
       continue;
     }
-    if (character === "," && depth === 0) {
-      const entry = current.trim();
-      if (entry) {
-        entries.push(entry);
-      }
-      current = "";
-      continue;
+    if (character === separator && depth === 0) {
+      yield index;
     }
-    current += character;
   }
+}
 
-  const entry = current.trim();
-  if (entry) {
-    entries.push(entry);
+function splitInlineYamlMapEntries(text) {
+  const entries = [];
+  let start = 0;
+  for (const end of [...topLevelYamlSeparators(text, ","), text.length]) {
+    const entry = text.slice(start, end).trim();
+    if (entry) {
+      entries.push(entry);
+    }
+    start = end + 1;
   }
   return entries;
 }
@@ -162,33 +158,7 @@ function parseInlineYamlMap(rawValue) {
 }
 
 function findYamlMappingSeparator(line) {
-  let quote = null;
-  let depth = 0;
-
-  for (let index = 0; index < line.length; index += 1) {
-    const character = line[index];
-    if (quote) {
-      if (character === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      quote = character;
-      continue;
-    }
-    if (character === "{" || character === "[" || character === "(") {
-      depth += 1;
-      continue;
-    }
-    if (character === "}" || character === "]" || character === ")") {
-      depth = Math.max(0, depth - 1);
-      continue;
-    }
-    if (character !== ":" || depth !== 0) {
-      continue;
-    }
-
+  for (const index of topLevelYamlSeparators(line, ":")) {
     const nextCharacter = line[index + 1];
     if (nextCharacter === undefined || /\s/u.test(nextCharacter)) {
       return index;
@@ -327,32 +297,24 @@ export function parsePnpmLockfileSections(lockfileText) {
   };
 }
 
+function* snapshotKeyCandidates(dependencyName, reference) {
+  yield `${dependencyName}@${reference}`;
+  yield reference;
+  if (reference.startsWith("npm:")) {
+    yield reference.slice(4);
+  }
+}
+
 export function resolveSnapshot({ dependencyName, reference, snapshots, includeLocal = false }) {
   if (!includeLocal && isLocalReference(reference)) {
     return null;
   }
 
-  const directKey = `${dependencyName}@${reference}`;
-  if (directKey in snapshots) {
-    return {
-      snapshotKey: directKey,
-      ...parseSnapshotKey(directKey),
-    };
-  }
-
-  if (reference in snapshots) {
-    return {
-      snapshotKey: reference,
-      ...parseSnapshotKey(reference),
-    };
-  }
-
-  if (reference.startsWith("npm:")) {
-    const aliasKey = reference.slice(4);
-    if (aliasKey in snapshots) {
+  for (const snapshotKey of snapshotKeyCandidates(dependencyName, reference)) {
+    if (snapshotKey in snapshots) {
       return {
-        snapshotKey: aliasKey,
-        ...parseSnapshotKey(aliasKey),
+        snapshotKey,
+        ...parseSnapshotKey(snapshotKey),
       };
     }
   }

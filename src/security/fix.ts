@@ -1,6 +1,6 @@
-// Applies safe automatic fixes for supported security audit findings.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createIcaclsResetCommand, formatIcaclsResetCommand } from "@openclaw/fs-safe/advanced";
 import { modeBits } from "@openclaw/fs-safe/permissions";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -12,7 +12,6 @@ import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/p
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runExec } from "../process/exec.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../routing/session-key.js";
-import { createIcaclsResetCommand, formatIcaclsResetCommand, type ExecFn } from "./windows-acl.js";
 
 type SecurityFixAction = {
   path: string;
@@ -20,16 +19,6 @@ type SecurityFixAction = {
   skipped?: string;
   error?: string;
 } & ({ kind: "chmod"; mode: number } | { kind: "icacls"; command: string });
-
-type SecurityFixResult = {
-  ok: boolean;
-  stateDir: string;
-  configPath: string;
-  configWritten: boolean;
-  changes: string[];
-  actions: SecurityFixAction[];
-  errors: string[];
-};
 
 type SecurityPermissionTarget = {
   path: string;
@@ -39,16 +28,16 @@ type SecurityPermissionTarget = {
 
 async function applyPermissionFix(
   target: SecurityPermissionTarget,
-  options: { platform: NodeJS.Platform; env: NodeJS.ProcessEnv; exec: ExecFn },
+  env: NodeJS.ProcessEnv,
 ): Promise<SecurityFixAction> {
   const action: SecurityFixAction =
-    options.platform === "win32"
+    process.platform === "win32"
       ? {
           kind: "icacls",
           path: target.path,
           command: formatIcaclsResetCommand(target.path, {
             isDir: target.require === "dir",
-            env: options.env,
+            env,
           }),
           ok: false,
         }
@@ -72,12 +61,12 @@ async function applyPermissionFix(
     } else {
       const cmd = createIcaclsResetCommand(target.path, {
         isDir: st.isDirectory(),
-        env: options.env,
+        env,
       });
       if (!cmd) {
         return { ...action, skipped: "missing-user" };
       }
-      await options.exec(cmd.command, cmd.args);
+      await runExec(cmd.command, cmd.args);
       action.command = cmd.display;
     }
     return { ...action, ok: true };
@@ -135,10 +124,7 @@ async function applySecurityFixConfigMutations(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   channelPlugins?: ChannelPlugin[];
-}): Promise<{
-  cfg: OpenClawConfig;
-  changes: string[];
-}> {
+}) {
   let nextCfg = params.cfg;
   const channelChanges: string[] = [];
   const collectPlugins = async (): Promise<ChannelPlugin[]> => {
@@ -244,13 +230,9 @@ export async function fixSecurityFootguns(opts?: {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   configPath?: string;
-  platform?: NodeJS.Platform;
-  exec?: ExecFn;
   channelPlugins?: ChannelPlugin[];
-}): Promise<SecurityFixResult> {
+}) {
   const env = opts?.env ?? process.env;
-  const platform = opts?.platform ?? process.platform;
-  const exec = opts?.exec ?? runExec;
   const stateDir = opts?.stateDir ?? resolveStateDir(env);
   const configPath = opts?.configPath ?? resolveConfigPath(env, stateDir);
   const actions: SecurityFixAction[] = [];
@@ -308,7 +290,7 @@ export async function fixSecurityFootguns(opts?: {
     return [] as SecurityPermissionTarget[];
   });
   for (const target of permissionTargets) {
-    actions.push(await applyPermissionFix(target, { env, platform, exec }));
+    actions.push(await applyPermissionFix(target, env));
   }
 
   return {

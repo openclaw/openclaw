@@ -8,7 +8,6 @@ export type SessionResourceCleanup = (sessionId?: string, owner?: SessionResourc
 
 // Process-local registry of cleanup hooks owned by LLM providers/transports.
 const sessionResourceCleanups = new Set<SessionResourceCleanup>();
-const sessionResourceCleanupObservers = new Set<SessionResourceCleanup>();
 const sessionResourceOwnerIds = new WeakMap<SessionResourceOwner, number>();
 let nextSessionResourceOwnerId = 1;
 
@@ -31,16 +30,6 @@ export function registerSessionResourceCleanup(cleanup: SessionResourceCleanup):
   };
 }
 
-/** Registers metadata cleanup that runs only after every resource cleanup succeeds. */
-export function registerSessionResourceCleanupObserver(
-  observer: SessionResourceCleanup,
-): () => void {
-  sessionResourceCleanupObservers.add(observer);
-  return () => {
-    sessionResourceCleanupObservers.delete(observer);
-  };
-}
-
 /** Runs all registered cleanup hooks, aggregating failures after every hook has run. */
 export function cleanupSessionResources(sessionId?: string, owner?: SessionResourceOwner): void {
   const errors: unknown[] = [];
@@ -54,7 +43,25 @@ export function cleanupSessionResources(sessionId?: string, owner?: SessionResou
   if (errors.length > 0) {
     throw new AggregateError(errors, "Failed to cleanup session resources");
   }
-  for (const observer of sessionResourceCleanupObservers) {
-    observer(sessionId, owner);
-  }
+}
+
+declare const providerStateBrand: unique symbol;
+
+/**
+ * Ownership of one conversation's mutable provider state (response continuation, pooled
+ * sockets). Only the conversation's writer run obtains one; every other run shares the
+ * conversation's affinity (`sessionId`, prompt-cache key) but keeps no state.
+ */
+export type ProviderStateScope = {
+  readonly sessionId: string;
+  readonly [providerStateBrand]: true;
+};
+
+/** The stream option that carries the writer's scope; absent for every other run. */
+export const PROVIDER_STATE_SCOPE: unique symbol = Symbol("providerStateScope");
+
+/** Called only by the writer's lane admission; a lint rule enforces that. */
+export function claimConversationProviderState(sessionId: string): ProviderStateScope {
+  // SAFETY: the brand is type-only; it keeps a plain session id from standing in for a scope.
+  return { sessionId } as ProviderStateScope;
 }

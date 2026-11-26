@@ -103,7 +103,17 @@ export type DeliveryQueueEntryState = {
   platformSendAttemptId?: string;
   platformSendStartedAt?: number;
   recoveryState?: string;
+  /** Producer-specific durable attempt budget; an unconfirmed final-text replay caps it. */
+  maxRetries?: number;
 };
+
+export function resolveDeliveryQueueAttemptCount(
+  entry: Pick<DeliveryQueueEntryState, "attemptCount" | "retryCount">,
+): number {
+  const count = entry.attemptCount;
+  const persisted = typeof count === "number" && Number.isInteger(count) && count >= 0 ? count : 0;
+  return Math.max(persisted, entry.retryCount);
+}
 
 /** Additional work needs a live claim; settling an observed outcome only needs exact ownership. */
 export function hasLiveDeliveryQueueClaim(

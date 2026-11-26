@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { FileSystem } from "typescript/unstable/fs";
+import { serverFS, type FileSystemCallbacks } from "typescript/fs";
 import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
 
 export type DeclarationLookup =
@@ -18,7 +18,25 @@ export function createDeclarationFileSystem(
   admit: ((file: string) => string) | undefined,
   virtualFiles: ReadonlyMap<string, string>,
   readText: (file: string) => string = (file) => fs.readFileSync(file, "utf8"),
-) {
+): {
+  filesystem: {
+    readFile(file: string): string | undefined;
+    fileExists(file: string): boolean;
+    directoryExists(directory: string): boolean;
+    getAccessibleEntries(directory: string): {
+      files: string[];
+      directories: string[];
+      symlinks: undefined;
+    };
+    realpath(file: string): string;
+    stat: typeof serverFS.fakeStat;
+    removeFile(this: void): void;
+    writeFile(this: void): void;
+  };
+  inputs: Set<string>;
+  getLookups(): DeclarationLookup[];
+  assertValid(this: void): void;
+} {
   const boundary = admit ? createDeclarationInputBoundary(cwd) : undefined;
   const resolve = (file: string) => boundary?.resolve(file) ?? path.resolve(cwd, file);
   const inputs = new Set<string>();
@@ -57,10 +75,6 @@ export function createDeclarationFileSystem(
           }
         : { ...lookup, path: file };
     const key = `${recorded.kind}\0${recorded.path}`;
-    const previous = lookups.get(key);
-    if (previous && JSON.stringify(previous) !== JSON.stringify(recorded)) {
-      reject(new Error(`Native compiler lookup changed during compilation: ${recorded.path}`));
-    }
     lookups.set(key, recorded);
   };
   const local = (file: string) => {
@@ -99,10 +113,10 @@ export function createDeclarationFileSystem(
     }
   };
   const physical = {
-    readFile(file) {
+    readFile(file: string) {
       const accepted = local(file);
       if (accepted === undefined) {
-        return null;
+        return undefined;
       }
       const virtual = virtualFiles.get(accepted);
       if (virtual !== undefined) {
@@ -114,25 +128,25 @@ export function createDeclarationFileSystem(
         return text;
       } catch (error) {
         if (missing(error)) {
-          return null;
+          return undefined;
         }
         reject(error);
-        return null;
+        return undefined;
       }
     },
-    fileExists(file) {
+    fileExists(file: string) {
       const accepted = local(file);
       return (
         accepted !== undefined && (virtualFiles.has(accepted) || stat(accepted)?.isFile() === true)
       );
     },
-    directoryExists(directory) {
+    directoryExists(directory: string) {
       const accepted = local(directory);
       return accepted !== undefined && stat(accepted)?.isDirectory() === true;
     },
-    getAccessibleEntries(directory) {
+    getAccessibleEntries(directory: string) {
       const accepted = local(directory);
-      const entries = { files: [] as string[], directories: [] as string[] };
+      const entries = { files: [] as string[], directories: [] as string[], symlinks: undefined };
       if (accepted === undefined) {
         return entries;
       }
@@ -145,7 +159,11 @@ export function createDeclarationFileSystem(
           const isDirectory = file === undefined ? entry.isDirectory() : stat(file)?.isDirectory();
           (isDirectory ? entries.directories : entries.files).push(entry.name);
         }
-        return { files: entries.files.toSorted(), directories: entries.directories.toSorted() };
+        return {
+          files: entries.files.toSorted(),
+          directories: entries.directories.toSorted(),
+          symlinks: undefined,
+        };
       } catch (error) {
         if (missing(error)) {
           return entries;
@@ -154,10 +172,9 @@ export function createDeclarationFileSystem(
         return entries;
       }
     },
-    realpath(file) {
+    realpath(file: string) {
       const accepted = local(file);
-      // Returning undefined delegates to the host filesystem, including outside
-      // paths. Missing paths retain their spelling instead of escaping the view.
+      // Missing paths retain their spelling instead of escaping the bounded view.
       if (accepted === undefined || virtualFiles.has(accepted)) {
         return resolve(file);
       }
@@ -171,14 +188,18 @@ export function createDeclarationFileSystem(
         return accepted;
       }
     },
+    stat: serverFS.fakeStat,
+    removeFile(this: void) {
+      reject(new Error("Native declarations must be emitted in memory"));
+    },
     writeFile(this: void) {
       reject(new Error("Native declarations must be emitted in memory"));
     },
-  } satisfies FileSystem;
+  } satisfies FileSystemCallbacks;
   const filesystem = {
     readFile(file: string) {
       const result = physical.readFile(file);
-      observe({ kind: "readFile", path: file, result: result !== null });
+      observe({ kind: "readFile", path: file, result: result !== undefined });
       return result;
     },
     fileExists(file: string) {
@@ -201,8 +222,10 @@ export function createDeclarationFileSystem(
       observe({ kind: "realpath", path: file, result });
       return result;
     },
+    stat: physical.stat,
+    removeFile: physical.removeFile,
     writeFile: physical.writeFile,
-  } satisfies FileSystem;
+  } satisfies FileSystemCallbacks;
   return {
     filesystem,
     inputs,

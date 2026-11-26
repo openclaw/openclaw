@@ -1,18 +1,24 @@
-import {
-  isSessionDeliveryGenerationRevokedError,
-  prepareSessionGenerationFacts,
-} from "../config/sessions/session-delivery-generation.js";
+import { isSessionDeliveryGenerationRevokedError } from "../config/sessions/session-delivery-generation.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  acquireTranscriptLease,
+  type TranscriptLease,
+} from "../config/sessions/transcript-lease.js";
+import type {
+  InternalSessionEntry,
+  SessionEntry,
+  SessionScheduledMemoryParent,
+} from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { MemoryAudience, MemoryCallerContext } from "./memory-provider-types.js";
 
 const MAX_LINEAGE_HOPS = 64;
 const SESSION_ID_PATTERN = /^[a-f0-9-]{36}$/;
 
-type GenerationLease = Awaited<ReturnType<typeof prepareSessionGenerationFacts>>;
+type GenerationLease = TranscriptLease;
 
 // One record per minted audience. A delegated record owns its child-session
 // lease and borrows its parent's record, so either side going stale rejects it.
@@ -26,12 +32,22 @@ type AudienceRecord = {
 /** A host-minted audience plus the owner-held release for its session leases. */
 export type MemoryAudienceGrant = { audience: MemoryAudience; release: () => void };
 
+/**
+ * Why no audience was granted, classified by its repair:
+ * - `stale-lineage`: the session's recorded lineage no longer matches its ancestors or
+ *   predates lineage receipts; only respawning or recreating the session restores access.
+ * - `unverified`: storage could not verify the lineage now; a later turn resolves again.
+ * - `ineligible`: the lineage carries no audience by design, for example a host-run,
+ *   rowless-parent, or chat-less root session, or cross-agent lineage that is not
+ *   owner-private.
+ */
+type MemoryAudienceDenialKind = "stale-lineage" | "unverified" | "ineligible";
+
 /** Resolution outcome; a denial names why no memory audience was granted. */
 export type MemoryAudienceResolution =
   | ({ status: "granted" } & MemoryAudienceGrant)
-  | { status: "denied"; reason: string; legacyLineage?: true };
+  | { status: "denied"; kind: MemoryAudienceDenialKind; reason: string };
 
-const hostAudiences = new WeakSet<object>();
 const audienceRecords = new WeakMap<object, AudienceRecord>();
 const audienceSessionKeys = new WeakMap<object, string>();
 
@@ -73,7 +89,7 @@ async function readEntryInWorker(params: {
   sessionKey: string;
   storePath: string;
   assertCallerCurrent: () => void;
-}): Promise<SessionEntry | undefined> {
+}): Promise<InternalSessionEntry | undefined> {
   const read = await withSessionEntryReadOnlyInWorker(
     { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
     params.assertCallerCurrent,
@@ -95,13 +111,20 @@ async function leaseSessionGeneration(params: {
   entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
 }): Promise<GenerationLease | undefined> {
   try {
-    return await prepareSessionGenerationFacts({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      storePath: resolveGenerationStorePath(params.agentId, params.sessionKey, params.storePath),
-      sessionId: params.entry?.sessionId ?? null,
-      lifecycleRevision: params.entry?.lifecycleRevision ?? null,
-    });
+    // A grant holds the incarnation it was minted in: a reset ends it, a compaction successor
+    // keeps it.
+    return await acquireTranscriptLease(
+      chatRef({
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        storePath: resolveGenerationStorePath(params.agentId, params.sessionKey, params.storePath),
+      }),
+      {
+        sessionId: params.entry?.sessionId ?? null,
+        lifecycleRevision: params.entry?.lifecycleRevision,
+      },
+      { exact: "lifecycle" },
+    );
   } catch (error) {
     if (isSessionDeliveryGenerationRevokedError(error)) {
       return undefined;
@@ -143,7 +166,6 @@ function mintMemoryAudience(
   record: AudienceRecord,
 ): MemoryAudienceGrant {
   const frozen = Object.freeze(audience);
-  hostAudiences.add(frozen);
   audienceRecords.set(frozen, record);
   audienceSessionKeys.set(frozen, sessionKey);
   for (let current: AudienceRecord | undefined = record; current; current = current.parent) {
@@ -162,6 +184,15 @@ function mintMemoryAudience(
   };
 }
 
+/**
+ * A scheduled run's exact parent incarnation and the owner bit its execution
+ * context resolved for this occurrence. Scheduled run rows record no spawn
+ * receipt, so this plays that role for the run's first lineage hop. A
+ * child-placement run also stamps it on its row as `scheduledMemoryParent`
+ * for the sessions it spawns.
+ */
+export type ScheduledMemoryParent = Readonly<SessionScheduledMemoryParent>;
+
 type MemoryAudienceResolutionParams = {
   agentId: string;
   sessionKey: string;
@@ -169,6 +200,9 @@ type MemoryAudienceResolutionParams = {
   senderIsOwner: boolean | undefined;
   /** Store that admitted the turn; lineage hops for the same agent share it. */
   storePath: string;
+  /** Session store of another configured agent; without it, cross-agent lineage is denied. */
+  resolveAgentStorePath?: (agentId: string) => string;
+  scheduledParent?: ScheduledMemoryParent;
   assertCallerCurrent?: () => void;
 };
 
@@ -179,52 +213,125 @@ type MemoryAudienceResolutionParams = {
  */
 export async function resolveMemoryAudienceFromEntry(
   params: MemoryAudienceResolutionParams,
-  admittedEntry: SessionEntry,
+  admittedEntry: InternalSessionEntry,
 ): Promise<MemoryAudienceResolution> {
   let { sessionKey, sessionId, senderIsOwner } = params;
-  const { agentId, storePath } = params;
+  const { agentId } = params;
+  let hopAgentId = agentId;
+  let crossedAgents = false;
   const assertCallerCurrent = params.assertCallerCurrent ?? (() => {});
   const seen = new Set<string>();
   const record: AudienceRecord = { leases: [], state: "current", holders: 0 };
   let requiredLifecycleRevision: string | undefined;
-  const deny = (reason: string, legacyLineage?: true): MemoryAudienceResolution => {
+  let sessionIdOnly = false;
+  // A scheduled occurrence's requester check caps owner status for the whole
+  // lineage: no spawn receipt on any hop can restore what this run lost.
+  const scheduledOwnerCap = params.scheduledParent?.senderIsOwner;
+  const deny = (kind: MemoryAudienceDenialKind, reason: string): MemoryAudienceResolution => {
     releaseRecordLeases(record);
-    return { status: "denied", reason, ...(legacyLineage ? { legacyLineage } : {}) };
+    return { status: "denied", kind, reason };
   };
 
   try {
     for (let depth = 0; depth < MAX_LINEAGE_HOPS; depth += 1) {
-      // Every hop must remain within the configured agent and exact durable
-      // session incarnation. Session-key shape alone never grants authority.
+      // Every hop must name its agent and exact durable session incarnation.
+      // Session-key shape alone never grants authority; the receipt walk below
+      // decides whether a hop may leave the turn's agent.
       if (
-        !isAgentSessionKey(sessionKey, agentId) ||
+        !isAgentSessionKey(sessionKey, hopAgentId) ||
         !isSessionId(sessionId) ||
         seen.has(sessionKey)
       ) {
-        return deny(`session lineage at ${sessionKey} is malformed, cyclic, or cross-agent`);
+        return deny("ineligible", `session lineage at ${sessionKey} is malformed or cyclic`);
       }
       seen.add(sessionKey);
+      const storePath =
+        hopAgentId === agentId ? params.storePath : params.resolveAgentStorePath!(hopAgentId);
       // A turn admission already owns its current row. Reuse that prepared fact
       // at depth zero; only delegated parent hops need another canonical read.
       const entry =
         depth === 0
           ? admittedEntry
-          : await readEntryInWorker({ agentId, sessionKey, storePath, assertCallerCurrent });
+          : await readEntryInWorker({
+              agentId: hopAgentId,
+              sessionKey,
+              storePath,
+              assertCallerCurrent,
+            });
       if (
         !entry ||
         entry.sessionId !== sessionId ||
-        (depth > 0 && entry.lifecycleRevision !== requiredLifecycleRevision)
+        (depth > 0 && !sessionIdOnly && entry.lifecycleRevision !== requiredLifecycleRevision)
       ) {
-        return deny(`session ${sessionKey} is missing or no longer matches its recorded lineage`);
+        // The admitted row moving under this turn is transient. An ancestor reset or
+        // removal after the spawn is permanent: the receipt names a lost incarnation.
+        if (depth === 0) {
+          return deny("unverified", `session ${sessionKey} no longer matches its admitted turn`);
+        }
+        return deny(
+          "stale-lineage",
+          `session ${params.sessionKey} has stale lineage: ancestor ${sessionKey} was reset or removed after its child was spawned. Respawn or recreate it from a current session to restore memory access; resetting it keeps the stale lineage.`,
+        );
       }
       // The lease re-verifies this exact incarnation against current storage,
       // so a change between the read above and here denies the grant.
-      const lease = await leaseSessionGeneration({ agentId, sessionKey, storePath, entry });
+      const lease = await leaseSessionGeneration({
+        agentId: hopAgentId,
+        sessionKey,
+        storePath,
+        entry,
+      });
       if (!lease) {
-        return deny(`session ${sessionKey} changed while its memory audience was resolved`);
+        return deny(
+          "unverified",
+          `session ${sessionKey} changed while its memory audience was resolved`,
+        );
       }
       record.leases.push(lease);
+      sessionIdOnly = false;
 
+      const parent = depth === 0 ? params.scheduledParent : undefined;
+      if (parent?.sessionKey === sessionKey) {
+        // An in-session run executes on its parent's own row: that row must still be
+        // the linked incarnation, and this occurrence's owner bit replaces the sender's.
+        if (
+          entry.sessionId !== parent.sessionId ||
+          (parent.lifecycleRevision !== undefined &&
+            entry.lifecycleRevision !== parent.lifecycleRevision)
+        ) {
+          return deny(
+            "stale-lineage",
+            `scheduled run session ${sessionKey} was reset or replaced after its automation was linked to it`,
+          );
+        }
+        senderIsOwner = parent.senderIsOwner;
+      } else if (parent && entry.spawnedBy === undefined) {
+        sessionKey = parent.sessionKey;
+        sessionId = parent.sessionId;
+        requiredLifecycleRevision = parent.lifecycleRevision;
+        sessionIdOnly = parent.lifecycleRevision === undefined;
+        senderIsOwner = parent.senderIsOwner;
+        continue;
+      }
+      // A session spawned by a scheduled run reaches the run's row, which cron
+      // stamped with the parent its occurrence was admitted against. Both the
+      // spawn and the occurrence must be owner-attributed to follow it; any other
+      // combination keeps resolving from the run row, as before the receipt.
+      const receipt =
+        depth > 0 && entry.spawnedBy === undefined ? entry.scheduledMemoryParent : undefined;
+      if (receipt?.senderIsOwner && senderIsOwner === true) {
+        if (receipt.lifecycleRevision === "") {
+          return deny(
+            "ineligible",
+            `scheduled run session ${sessionKey} has a malformed parent receipt`,
+          );
+        }
+        sessionKey = receipt.sessionKey;
+        sessionId = receipt.sessionId;
+        requiredLifecycleRevision = receipt.lifecycleRevision;
+        sessionIdOnly = receipt.lifecycleRevision === undefined;
+        continue;
+      }
       if (entry.spawnedBy !== undefined) {
         // A child inherits only the owner bit and exact parent incarnation stamped
         // by the spawn owner. Its launch turn and copied chat metadata are not grants.
@@ -232,8 +339,8 @@ export async function resolveMemoryAudienceFromEntry(
         // revision (such as a channel-created row) is recorded by its absence.
         if (typeof entry.spawnedBySenderIsOwner !== "boolean") {
           return deny(
+            "stale-lineage",
             `spawned session ${sessionKey} predates memory lineage receipts (spawnedBySenderIsOwner), so it has no inherited memory audience. Respawn it from its parent session to restore memory access.`,
-            true,
           );
         }
         // Voice consult children record no navigation parent; a recorded one must agree.
@@ -243,7 +350,21 @@ export async function resolveMemoryAudienceFromEntry(
           !isSessionId(entry.spawnedBySessionId) ||
           entry.parentSessionLifecycleRevision === ""
         ) {
-          return deny(`spawned session ${sessionKey} has malformed lineage receipts`);
+          return deny("ineligible", `spawned session ${sessionKey} has malformed lineage receipts`);
+        }
+        // A spawn from another agent carries only the owner's private audience,
+        // so the crossing itself must be owner-attributed. Conversation
+        // partitions are keyed to one agent's session and never cross.
+        const parentAgentId = parseAgentSessionKey(entry.spawnedBy)?.agentId;
+        if (parentAgentId && parentAgentId !== hopAgentId) {
+          if (!params.resolveAgentStorePath || !entry.spawnedBySenderIsOwner) {
+            return deny(
+              "ineligible",
+              `session lineage at ${sessionKey} crosses agents without an owner spawn`,
+            );
+          }
+          crossedAgents = true;
+          hopAgentId = parentAgentId;
         }
         sessionKey = entry.spawnedBy;
         sessionId = entry.spawnedBySessionId;
@@ -257,11 +378,17 @@ export async function resolveMemoryAudienceFromEntry(
       assertRecordCurrent(record);
       // Only the durable root chat type selects the partition. Thread-shaped
       // keys intentionally receive no special interpretation here.
-      if (entry.chatType === "direct" && senderIsOwner === true) {
+      if (entry.chatType === "direct" && senderIsOwner === true && scheduledOwnerCap !== false) {
         return {
           status: "granted",
           ...mintMemoryAudience({ kind: "owner-private", agentId }, params.sessionKey, record),
         };
+      }
+      if (crossedAgents) {
+        return deny(
+          "ineligible",
+          `cross-agent lineage grants only owner-private memory; root session ${sessionKey} is not an owner direct chat`,
+        );
       }
       if (
         entry.chatType === "direct" ||
@@ -277,21 +404,24 @@ export async function resolveMemoryAudienceFromEntry(
           ),
         };
       }
-      return deny(`root session ${sessionKey} has no durable chat type`);
+      return deny("ineligible", `root session ${sessionKey} has no durable chat type`);
     }
-    return deny(`session lineage exceeds ${MAX_LINEAGE_HOPS} hops`);
+    return deny("ineligible", `session lineage exceeds ${MAX_LINEAGE_HOPS} hops`);
   } catch (error) {
     releaseRecordLeases(record);
     // A caller that is no longer current propagates; unavailable session
     // storage denies memory access instead of failing the whole turn.
     assertCallerCurrent();
-    return deny(`session storage could not verify the lineage: ${formatErrorMessage(error)}`);
+    return deny(
+      "unverified",
+      `session storage could not verify the lineage: ${formatErrorMessage(error)}`,
+    );
   }
 }
 
 /** Return whether a memory audience was minted by this host process. */
 export function isHostMemoryAudience(value: unknown): value is MemoryAudience {
-  return typeof value === "object" && value !== null && hostAudiences.has(value);
+  return typeof value === "object" && value !== null && audienceRecords.has(value);
 }
 
 /** Reject an audience presented outside its host-bound invocation session. */
@@ -364,6 +494,51 @@ export async function delegateMemoryAudience(
     throw error;
   }
   return mintMemoryAudience({ ...audience }, child.sessionKey, record);
+}
+
+/** Join admitted session publications without weakening the synchronous final guard. */
+export function prepareMemoryAudienceRead(audience: MemoryAudience): Promise<void> | undefined {
+  const record = audienceRecords.get(audience);
+  if (!record) {
+    throw new Error("memory audience was not minted by this host");
+  }
+  const pending: Promise<void>[] = [];
+  try {
+    // Delegated grants depend on every captured parent, not just the current session.
+    for (let current: AudienceRecord | undefined = record; current; current = current.parent) {
+      if (current.state !== "current") {
+        assertRecordCurrent(current);
+      }
+      for (const lease of current.leases) {
+        const publication = lease.prepareRead();
+        if (publication) {
+          pending.push(publication);
+        }
+      }
+    }
+  } catch (error) {
+    // A later ancestor can reject after earlier leases started waiting on publication.
+    // Observe those promises without hiding the synchronous authority failure.
+    void Promise.all(pending).catch(() => {});
+    throw error;
+  }
+  if (pending.length > 0) {
+    // A successor may have been admitted while the exact publication promises settled.
+    return Promise.all(pending).then(() => prepareMemoryAudienceRead(audience));
+  }
+  assertRecordCurrent(record);
+  return undefined;
+}
+
+/** Prepare only the host-owned audience; callers still recheck their full authority after await. */
+export function prepareMemoryCallerRead(context: MemoryCallerContext): Promise<void> | undefined {
+  context.signal?.throwIfAborted();
+  const { authority } = context;
+  if (authority.kind === "session" && authority.audience) {
+    assertMemoryAudienceSession(authority.audience, authority.sessionKey);
+    return prepareMemoryAudienceRead(authority.audience);
+  }
+  return undefined;
 }
 
 /** Reject a retained audience after any captured session incarnation changes. */

@@ -10,7 +10,6 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 type LocalAudioCandidate = {
   id: "parakeet-mlx" | "whisper-cli" | "sherpa-onnx-offline" | "whisper";
   command: string;
-  resolvedCommand?: string;
   available: boolean;
   ready: boolean;
   capableBackend?: "cuda" | "metal" | "mlx";
@@ -26,16 +25,6 @@ type LocalAudioSelection = {
   candidates: LocalAudioCandidate[];
   entries: MediaUnderstandingModelConfig[];
   selected?: LocalAudioCandidate;
-};
-
-type InspectionOptions = {
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  arch?: string;
-  resolveBinary?: (name: string, env: NodeJS.ProcessEnv) => Promise<string | null>;
-  resolveRealpath?: (filePath: string) => Promise<string>;
-  inspectLinkedLibraries?: (filePath: string, platform: NodeJS.Platform) => Promise<string | null>;
-  listDirectory?: (dirPath: string) => Promise<string[]>;
 };
 
 const WHISPER_CPP_MODEL_DIRS = [
@@ -57,11 +46,9 @@ async function listDirectoryEntries(dirPath: string): Promise<string[]> {
  * Larger models transcribe better, so prefer non-tiny when several exist;
  * WHISPER_CPP_MODEL remains the explicit override.
  */
-async function discoverWhisperCppModel(
-  listDirectory: (dirPath: string) => Promise<string[]>,
-): Promise<string | null> {
+async function discoverWhisperCppModel(): Promise<string | null> {
   for (const dir of WHISPER_CPP_MODEL_DIRS) {
-    const models = (await listDirectory(dir))
+    const models = (await listDirectoryEntries(dir))
       .filter((name) => name.startsWith("ggml-") && name.endsWith(".bin"))
       .toSorted((a, b) => {
         const tinyA = a.includes("tiny") ? 1 : 0;
@@ -182,10 +169,8 @@ async function inspectWhisperBackend(params: {
   command: string;
   platform: NodeJS.Platform;
   arch: string;
-  realpath: (filePath: string) => Promise<string>;
-  libraries: (filePath: string, platform: NodeJS.Platform) => Promise<string | null>;
 }): Promise<Pick<LocalAudioCandidate, "capableBackend" | "evidence">> {
-  const libraries = await params.libraries(params.command, params.platform);
+  const libraries = await inspectLinkedLibraries(params.command, params.platform);
   if (/(?:ggml[-_]?cuda|libcuda|libcudart)/i.test(libraries ?? "")) {
     return {
       capableBackend: "cuda",
@@ -193,7 +178,7 @@ async function inspectWhisperBackend(params: {
     };
   }
   if (params.platform === "darwin" && params.arch === "arm64") {
-    const realCommand = await params.realpath(params.command).catch(() => params.command);
+    const realCommand = await fs.realpath(params.command).catch(() => params.command);
     if (
       /(?:ggml[-_]?metal|Metal\.framework)/i.test(libraries ?? "") ||
       /\/Cellar\/whisper-cpp\/[^/]+\/bin\/whisper-cli$/.test(realCommand)
@@ -225,30 +210,27 @@ function rank(candidate: LocalAudioCandidate): number {
   return candidate.id === "parakeet-mlx" ? 3 : 4;
 }
 
-export async function inspectLocalAudioSelection(
-  options: InspectionOptions = {},
-): Promise<LocalAudioSelection> {
-  const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
-  const arch = options.arch ?? process.arch;
+export async function inspectLocalAudioSelection(language?: string): Promise<LocalAudioSelection> {
+  const env = process.env;
+  const platform = process.platform;
+  const arch = process.arch;
   const delimiter = process.platform === "win32" ? ";" : path.delimiter;
   const pathEntries = (resolveEnvironmentValue(env, "PATH") ?? "")
     .split(delimiter)
     .map((entry) => expandHomeDir(entry, env));
-  const resolveBinary = async (name: string) =>
-    options.resolveBinary
-      ? await options.resolveBinary(name, env)
-      : (resolveExecutableFromPathEnv(name, pathEntries, env) ?? null);
-  const [parakeetCommand, whisperCommand, sherpaCommand, pythonCommand] = await Promise.all(
-    ["parakeet-mlx", "whisper-cli", "sherpa-onnx-offline", "whisper"].map(resolveBinary),
-  );
+  const [parakeetCommand, whisperCommand, sherpaCommand, pythonCommand] = [
+    "parakeet-mlx",
+    "whisper-cli",
+    "sherpa-onnx-offline",
+    "whisper",
+  ].map((name) => resolveExecutableFromPathEnv(name, pathEntries, env) ?? null);
 
   const envModel = env.WHISPER_CPP_MODEL?.trim();
   const whisperModel =
     whisperCommand !== null
       ? envModel && (await pathExists(envModel))
         ? envModel
-        : await discoverWhisperCppModel(options.listDirectory ?? listDirectoryEntries)
+        : await discoverWhisperCppModel()
       : null;
   const whisperReady = whisperCommand !== null && Boolean(whisperModel);
   const whisperBackend = whisperCommand
@@ -256,8 +238,6 @@ export async function inspectLocalAudioSelection(
         command: whisperCommand,
         platform,
         arch,
-        realpath: options.resolveRealpath ?? fs.realpath,
-        libraries: options.inspectLinkedLibraries ?? inspectLinkedLibraries,
       })
     : {
         evidence: "whisper-cli command not found",
@@ -283,6 +263,9 @@ export async function inspectLocalAudioSelection(
     "--output-template",
     "{filename}",
   ];
+  // Both Whisper CLIs take bare language codes and reject region tags such as "pt-BR".
+  const languageCode = language?.trim().split(/[-_]/, 1)[0];
+  const languageArgs = languageCode ? ["--language", languageCode] : [];
   const whisperArgs = [
     "-m",
     // Args are only executed when whisperReady, which requires a model.
@@ -291,6 +274,8 @@ export async function inspectLocalAudioSelection(
     "-of",
     "{{OutputBase}}",
     "-nt",
+    // whisper.cpp assumes English without a language, unlike Python Whisper's autodetection.
+    ...languageArgs,
     "{{AttachmentPath}}",
   ];
   const sherpaArgs = [
@@ -309,6 +294,7 @@ export async function inspectLocalAudioSelection(
     "{{OutputDir}}",
     "--verbose",
     "False",
+    ...languageArgs,
     "{{AttachmentPath}}",
   ];
 
@@ -357,15 +343,13 @@ export async function inspectLocalAudioSelection(
       reason: undefined,
       args: pythonArgs,
     },
-  ].map(({ args, reason, ...candidate }) =>
+  ].map(({ args, reason, resolvedCommand, ...candidate }) =>
     Object.assign(candidate, {
       command: candidate.id,
-      available: Boolean(candidate.resolvedCommand),
+      available: Boolean(resolvedCommand),
       selected: false,
-      reason: candidate.resolvedCommand ? reason : "command not found",
-      entry: candidate.ready
-        ? { type: "cli", command: candidate.resolvedCommand, args }
-        : undefined,
+      reason: resolvedCommand ? reason : "command not found",
+      entry: candidate.ready ? { type: "cli", command: resolvedCommand, args } : undefined,
     } satisfies Partial<LocalAudioCandidate>),
   );
   candidates.sort((left, right) => rank(left) - rank(right));

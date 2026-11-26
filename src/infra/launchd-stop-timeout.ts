@@ -159,32 +159,24 @@ export async function readLaunchdStopTimeout(
         : { stop: null };
     }
     const rawSeconds = entries["exit timeout"]?.trim();
-    if (rawSeconds === "0") {
-      return launcherMs !== undefined
-        ? {
-            stop: {
-              timeoutMs: launcherMs,
-              source: `launchd ${target} unlimited exit timeout capped at the launcher's ${launcherMs}ms stop timer`,
-            },
-          }
-        : { stop: { timeoutMs: Infinity, source: `launchd ${target} unlimited exit timeout` } };
-    }
-    const seconds = parseStrictPositiveInteger(rawSeconds ?? "");
+    const unlimited = rawSeconds === "0";
+    const seconds = unlimited ? Infinity : parseStrictPositiveInteger(rawSeconds ?? "");
     if (seconds === undefined) {
       return defaultStopDeadline(target, "its exit timeout is missing or invalid");
     }
     const jobMs = seconds * 1_000;
+    const source = `launchd ${target}${unlimited ? " unlimited" : ""} exit timeout`;
     // A parent that reaps this process on its own timer binds before the job's
     // ExitTimeOut, and spending the longer deadline would only get the drain
     // force-killed.
-    return launcherMs !== undefined && launcherMs < jobMs
+    return launcherMs !== undefined && (unlimited || launcherMs < jobMs)
       ? {
           stop: {
             timeoutMs: launcherMs,
-            source: `launchd ${target} exit timeout capped at the launcher's ${launcherMs}ms stop timer`,
+            source: `${source} capped at the launcher's ${launcherMs}ms stop timer`,
           },
         }
-      : { stop: { timeoutMs: jobMs, source: `launchd ${target} exit timeout` } };
+      : { stop: { timeoutMs: jobMs, source } };
   }
   return unresolved(failures);
 }

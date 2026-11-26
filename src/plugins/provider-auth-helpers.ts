@@ -5,6 +5,7 @@ import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import {
   upsertAuthProfile,
+  upsertAuthProfileAsync,
   upsertAuthProfileWithLock,
   upsertAuthProfileWithLockOrThrow,
 } from "../agents/auth-profiles/profiles.js";
@@ -21,10 +22,11 @@ import {
 } from "../config/types.secrets.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
-import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { resolveDefaultProviderEnvVar } from "./provider-auth-ref.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
+import { warnPluginSdkDeprecation } from "./sdk-deprecation.js";
 
 const resolveAuthAgentDir = (agentDir?: string, config?: OpenClawConfig) =>
   agentDir ?? resolveDefaultAgentDir(config ?? {});
@@ -45,11 +47,7 @@ function buildEnvSecretRef(id: string): SecretRef {
 }
 
 function resolveProviderDefaultEnvSecretRef(provider: string, config?: OpenClawConfig): SecretRef {
-  const envVars = getProviderEnvVarsCore(provider, {
-    ...(config ? { config } : {}),
-    includeUntrustedWorkspacePlugins: false,
-  });
-  const envVar = envVars?.find((candidate) => candidate.trim().length > 0);
+  const envVar = resolveDefaultProviderEnvVar(provider, config);
   if (!envVar) {
     throw new Error(
       `Provider "${provider}" does not have a default env var mapping for secret-input-mode=ref.`,
@@ -106,6 +104,7 @@ export function buildApiKeyCredential(
   };
 }
 
+/** @deprecated Use upsertApiKeyProfileAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function upsertApiKeyProfile(params: {
   provider: string;
   input: SecretInput;
@@ -114,8 +113,30 @@ export function upsertApiKeyProfile(params: {
   profileId?: string;
   metadata?: Record<string, string>;
 }): string {
+  warnPluginSdkDeprecation({
+    family: "auth-profiles",
+    method: "upsertApiKeyProfile",
+    replacement: "upsertApiKeyProfileAsync",
+  });
   const profileId = params.profileId ?? buildAuthProfileId({ providerId: params.provider });
   upsertAuthProfile({
+    profileId,
+    credential: buildApiKeyCredential(
+      params.provider,
+      params.input,
+      params.metadata,
+      params.options,
+    ),
+    agentDir: resolveAuthAgentDir(params.agentDir, params.options?.config),
+  });
+  return profileId;
+}
+
+export async function upsertApiKeyProfileAsync(
+  params: Parameters<typeof upsertApiKeyProfile>[0],
+): Promise<string> {
+  const profileId = params.profileId ?? buildAuthProfileId({ providerId: params.provider });
+  await upsertAuthProfileAsync({
     profileId,
     credential: buildApiKeyCredential(
       params.provider,

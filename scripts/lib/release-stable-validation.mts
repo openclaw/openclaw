@@ -5,6 +5,7 @@ import {
   pollRelease,
   probeCapabilities,
   ReleaseRefusal,
+  requireReleaseValue as requireValue,
   shellCommand,
   type ReleaseContext,
 } from "./release-stable-state.mts";
@@ -12,13 +13,6 @@ import { parseJson, positiveInteger, readReleaseRun } from "./release-stable-wor
 
 const DRY_SHA = "a".repeat(40);
 const HOUR = 60 * 60 * 1_000;
-
-function requireValue(value: string | undefined, name: string): string {
-  if (!value) {
-    throw new Error(`Missing ${name}; complete the preceding release phase.`);
-  }
-  return value;
-}
 
 async function ensureToolingTag(ctx: ReleaseContext, sha: string): Promise<string> {
   let tag = ctx.state.validate.toolingTag;
@@ -154,7 +148,7 @@ export async function validate(ctx: ReleaseContext): Promise<void> {
       [shellCommand("pnpm", ["frv", "status", "--run", state.validate.runId])],
     );
   }
-  await ctx.run(
+  const dispatch = await ctx.run(
     "pnpm",
     retained ? ["ci:full-release", "--", "--reconcile-request", requestFile] : args,
     { allowFailure: true },
@@ -175,18 +169,10 @@ export async function validate(ctx: ReleaseContext): Promise<void> {
     !positiveInteger(request.run.attempt)
   ) {
     throw new ReleaseRefusal(
-      `Full Release Validation request ${requestFile} has no observed run.`,
+      `Full Release Validation request ${requestFile} has no observed run. Follow the canonical helper's recovery advice below; only it verifies whether resume is safe.
+${dispatch.stdout}${dispatch.stderr}`,
       [
         shellCommand("pnpm", ["ci:full-release", "--", "--reconcile-request", requestFile]),
-        ...(isRecord(request) &&
-        request.kind === "openclaw.full-release-dispatch/v2" &&
-        request.phase === "prepared" &&
-        isRecord(request.request) &&
-        request.request.trustedWorkflowRef === "candidate" &&
-        isRecord(request.refs) &&
-        request.refs.workflow === "intended"
-          ? [shellCommand("pnpm", ["ci:full-release", "--", "--resume-request", requestFile])]
-          : []),
         ctx.resume("validate"),
       ],
     );

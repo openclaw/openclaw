@@ -271,6 +271,43 @@ describe.runIf(process.platform === "linux" && process.getuid?.() === 0)(
       expect(result.stdout.trim()).toBe(f.nextSha);
     });
 
+    it("admits a version-3 bridge while the published v2 launcher refuses before execution", async () => {
+      const f = await setup();
+      f.descriptor.version = 3;
+      f.descriptor.releaseRetention = {
+        version: 1,
+        mode: "inspect",
+        keepVerifiedGenerations: 3,
+        pins: [],
+      };
+      f.write(null);
+      const unsupported = f.launch();
+      expect(unsupported.status).toBe(78);
+      expect(unsupported.stdout).toBe("");
+      fs.writeFileSync(
+        path.join(f.descriptor.current.path, "package.json"),
+        JSON.stringify({
+          type: "module",
+          openclaw: { immutableInstallDescriptorVersion: 3 },
+        }),
+      );
+      const supported = f.launch();
+      expect(supported.status, supported.stderr).toBe(0);
+      expect(supported.stdout.trim()).toBe(f.oldSha);
+      const oldLauncher = fs
+        .readFileSync(
+          new URL("../../test/fixtures/immutable-update/launcher-v2.mjs", import.meta.url),
+          "utf8",
+        )
+        .replace(/^#![^\n]*\n/u, `#!${runtime}\n`);
+      fs.writeFileSync(f.launcher, oldLauncher);
+      const before = fs.readFileSync(f.journal);
+      const refused = f.launch();
+      expect(refused.status).toBe(78);
+      expect(refused.stdout).toBe("");
+      expect(fs.readFileSync(f.journal)).toEqual(before);
+    });
+
     it("refuses malformed, unknown and mismatched version-2 startup state", async () => {
       const f = await setup();
       for (const activation of [
@@ -309,53 +346,64 @@ describe.runIf(process.platform === "linux" && process.getuid?.() === 0)(
       expect([fs.readFileSync(f.journal), fs.readFileSync(`${f.journal}-journal`)]).toEqual(before);
     });
 
-    it("upgrades only the exact opted-in v1 launcher and retains its original bytes", async () => {
-      const f = await setup(false);
-      const previous = fs
-        .readFileSync(
-          new URL("../../test/fixtures/immutable-update/launcher-v1.mjs", import.meta.url),
-          "utf8",
-        )
-        .replace(/^#![^\n]*\n/u, `#!${runtime}\n`);
-      fs.writeFileSync(f.launcher, previous, { mode: 0o755 });
-      fs.mkdirSync(f.control, { mode: 0o755 });
-      await expect(
-        installImmutableLauncher({ root: f.root, runtimePath: runtime }),
-      ).rejects.toThrow("conflicts");
-      const oldIdentity = fileIdentity(f.launcher);
-      await installImmutableLauncher({
-        root: f.root,
-        runtimePath: runtime,
-        upgradeFromV1: { assertCurrent: () => {} },
-      });
-      expect(fileIdentity(f.launcher)).not.toBe(oldIdentity);
-      expect(fs.readFileSync(path.join(f.control, "openclaw-gateway.v1"), "utf8")).toBe(previous);
-      f.write(f.operation("stopping"));
-      expect(f.launch().status).toBe(78);
-      const current = fs.readFileSync(f.launcher);
-      await installImmutableLauncher({
-        root: f.root,
-        runtimePath: runtime,
-        upgradeFromV1: { assertCurrent: () => {} },
-      });
-      expect(fs.readFileSync(f.launcher)).toEqual(current);
-    });
-
-    it("preserves an unknown launcher despite explicit v1 upgrade authorization", async () => {
-      const f = await setup(false);
-      const previous = `#!${runtime}\n// custom operator launcher\n`;
-      fs.writeFileSync(f.launcher, previous, { mode: 0o755 });
-      fs.mkdirSync(f.control, { mode: 0o755 });
-      await expect(
-        installImmutableLauncher({
+    it.each([1, 2] as const)(
+      "upgrades only the exact opted-in v%i launcher and retains its original bytes",
+      async (version) => {
+        const f = await setup(false);
+        const previous = fs
+          .readFileSync(
+            new URL(
+              `../../test/fixtures/immutable-update/launcher-v${version}.mjs`,
+              import.meta.url,
+            ),
+            "utf8",
+          )
+          .replace(/^#![^\n]*\n/u, `#!${runtime}\n`);
+        fs.writeFileSync(f.launcher, previous, { mode: 0o755 });
+        fs.mkdirSync(f.control, { mode: 0o755 });
+        await expect(
+          installImmutableLauncher({ root: f.root, runtimePath: runtime }),
+        ).rejects.toThrow("conflicts");
+        const oldIdentity = fileIdentity(f.launcher);
+        await installImmutableLauncher({
           root: f.root,
           runtimePath: runtime,
-          upgradeFromV1: { assertCurrent: () => {} },
-        }),
-      ).rejects.toThrow("known v1 upgrade");
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe(previous);
-      expect(fs.readdirSync(f.control)).toEqual([]);
-    });
+          upgrade: { version, assertCurrent: () => {} },
+        });
+        expect(fileIdentity(f.launcher)).not.toBe(oldIdentity);
+        expect(fs.readFileSync(path.join(f.control, `openclaw-gateway.v${version}`), "utf8")).toBe(
+          previous,
+        );
+        f.write(f.operation("stopping"));
+        expect(f.launch().status).toBe(78);
+        const current = fs.readFileSync(f.launcher);
+        await installImmutableLauncher({
+          root: f.root,
+          runtimePath: runtime,
+          upgrade: { version, assertCurrent: () => {} },
+        });
+        expect(fs.readFileSync(f.launcher)).toEqual(current);
+      },
+    );
+
+    it.each([1, 2] as const)(
+      "preserves an unknown launcher despite explicit v%i upgrade authorization",
+      async (version) => {
+        const f = await setup(false);
+        const previous = `#!${runtime}\n// custom operator launcher\n`;
+        fs.writeFileSync(f.launcher, previous, { mode: 0o755 });
+        fs.mkdirSync(f.control, { mode: 0o755 });
+        await expect(
+          installImmutableLauncher({
+            root: f.root,
+            runtimePath: runtime,
+            upgrade: { version, assertCurrent: () => {} },
+          }),
+        ).rejects.toThrow(`known v${version} upgrade`);
+        expect(fs.readFileSync(f.launcher, "utf8")).toBe(previous);
+        expect(fs.readdirSync(f.control)).toEqual([]);
+      },
+    );
 
     it("keeps the original launcher when upgrade authority is revoked after backup publication", async () => {
       const f = await setup(false);
@@ -379,7 +427,8 @@ describe.runIf(process.platform === "linux" && process.getuid?.() === 0)(
         installImmutableLauncher({
           root: f.root,
           runtimePath: runtime,
-          upgradeFromV1: {
+          upgrade: {
+            version: 1,
             assertCurrent: () => {
               if (!current) {
                 throw new Error("upgrade authority ended");

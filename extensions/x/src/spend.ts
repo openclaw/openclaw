@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap, resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { XCostLimits } from "./cost-limits.js";
@@ -7,14 +8,7 @@ const X_STREAM_HEADROOM_MICRO_USD = 500_000;
 const MICRO_USD = 1_000_000;
 const RETENTION_MS = 70 * 24 * 60 * 60_000;
 
-export type XSpendStatus = {
-  dayUsd: number;
-  cycleUsd: number;
-  dailyLimitUsd: number;
-  monthlyLimitUsd: number;
-  cycleStart: string;
-  exhaustedUntil?: string;
-};
+export type XSpendStatus = Awaited<ReturnType<XSpend["status"]>>;
 
 // Shared owners can outlive a module copy; their errors must retain instanceof identity.
 export const XBudgetExceededError = resolveGlobalSingleton(
@@ -34,7 +28,7 @@ export type XBudgetExceededError = InstanceType<typeof XBudgetExceededError>;
 
 type SpendRuntime = {
   state: Pick<PluginRuntime["state"], "openKeyedStore" | "resolveStateDir">;
-  logging?: Pick<PluginRuntime["logging"], "getChildLogger">;
+  logging: Pick<PluginRuntime["logging"], "getChildLogger">;
 };
 type Period = { day: string; cycle: string; dayEnd: number; cycleEnd: number };
 type Pending = { key: string; amount: number; day: string; cycle: string };
@@ -81,7 +75,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
     });
   let store = openStore(runtime);
   let state = runtime.state;
-  let logger = runtime.logging?.getChildLogger({ channel: "x", accountId });
+  let logger = runtime.logging.getChildLogger({ channel: "x", accountId });
   let limits = getLimits;
   let tail: Promise<unknown> = Promise.resolve();
   let initialized = false;
@@ -108,6 +102,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
           failure = new Error("X spend accounting unavailable; paid requests paused", {
             cause: error,
           });
+          materializeErrorStack(failure);
           notify();
         }
         throw error;
@@ -241,14 +236,14 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
       ? error
       : refusal({ ...view, day: view.day - view.held, cycle: view.cycle - view.held }, 0);
     if (warnedUntil !== undefined && (Date.now() >= warnedUntil || !notice)) {
-      logger?.info("X API budget reset; paid requests may resume");
+      logger.info("X API budget reset; paid requests may resume");
       warnedUntil = undefined;
     }
     if (!error) {
       refusedAmount = 0;
-    } else if (notice && logger && warnedUntil === undefined) {
+    } else if (notice && warnedUntil === undefined) {
       warnedUntil = notice.exhaustedUntil;
-      logger?.warn(notice.message);
+      logger.warn(notice.message);
     }
     return error;
   };
@@ -303,7 +298,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
       });
     },
     status: () =>
-      serialized(async (): Promise<XSpendStatus> => {
+      serialized(async () => {
         const view = await snapshot();
         const exhausted = updateNotice(view);
         const dollars = (amount: number) => Math.round(amount / 10_000) / 100;
@@ -333,9 +328,10 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
   };
   return {
     api,
+    failed: () => failure !== undefined,
     update(nextRuntime: SpendRuntime, nextLimits: () => XCostLimits) {
       limits = nextLimits;
-      logger = nextRuntime.logging?.getChildLogger({ channel: "x", accountId }) ?? logger;
+      logger = nextRuntime.logging.getChildLogger({ channel: "x", accountId });
       if (state !== nextRuntime.state) {
         store = openStore(nextRuntime);
         state = nextRuntime.state;
@@ -343,6 +339,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
     },
     async close() {
       failure = new Error("X spend owner closed; pending reservations retained for recovery");
+      materializeErrorStack(failure);
       await tail;
     },
   };
@@ -351,7 +348,9 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
 export function openXSpend(runtime: SpendRuntime, accountId: string, getLimits: () => XCostLimits) {
   const key = JSON.stringify([runtime.state.resolveStateDir(), accountId]);
   let owner = owners.get(key);
-  if (!owner) {
+  // A failed owner keeps refusing its handles. Reopening recovers from the durable
+  // reservations, as a restart would, so one transient write error cannot pause spend forever.
+  if (!owner || owner.failed()) {
     owner = createSpendOwner(runtime, accountId, getLimits);
     owners.set(key, owner);
   } else {

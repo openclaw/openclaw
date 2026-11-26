@@ -3,12 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   publishFileExclusive,
   requireDirectorySync,
   syncDirectory,
 } from "./directory-durability.js";
-import { hashFileDescriptorSync } from "./file-descriptor.js";
+import { hashFileDescriptorSync, sameFileMutationFingerprint } from "./file-descriptor.js";
 
 const IdentitySchema = z.object({
   dev: z.string(),
@@ -37,11 +38,39 @@ export const MigrationArtifactSchema = z.object({
 export type MigrationArtifact = z.infer<typeof MigrationArtifactSchema>;
 export type MigrationArtifactIdentity = MigrationArtifact["identity"];
 
-export function statMigrationPath(filePath: string): fs.Stats | undefined {
+export function sameSourceContent(
+  left: MigrationArtifactIdentity,
+  right: MigrationArtifactIdentity,
+) {
+  return left.sha256 === right.sha256 && left.size === right.size;
+}
+
+/** One maintenance operation owns these facts; never persist or share them across runs. */
+export type MigrationArtifactVerification = Map<
+  string,
+  { stat: fs.BigIntStats; content: ReturnType<typeof hashFileDescriptorSync> }
+>;
+
+export function statMigrationPath(filePath: string): fs.Stats | undefined;
+export function statMigrationPath(
+  filePath: string,
+  options: { bigint: true },
+): fs.BigIntStats | undefined;
+export function statMigrationPath(
+  filePath: string,
+  options?: { bigint: true },
+): fs.Stats | fs.BigIntStats | undefined {
   try {
-    return fs.lstatSync(filePath);
+    return options ? fs.lstatSync(filePath, options) : fs.lstatSync(filePath);
   } catch (error) {
-    if ((isRecord(error) ? error.code : undefined) === "ENOENT") {
+    const code = isRecord(error) ? error.code : undefined;
+    // Older receipts can name an impossible destination; the original never moved there.
+    if (code === "ENOENT" || code === "ENAMETOOLONG") {
+      if (code === "ENAMETOOLONG") {
+        createSubsystemLogger("doctor").warn(
+          `Ignoring an overlong migration path as absent; original files and receipts are preserved: ${filePath}`,
+        );
+      }
       return undefined;
     }
     throw error;
@@ -86,6 +115,7 @@ export function readMigrationArtifactIdentity(
   filePath: string,
   expectedLinks = 1n,
   importedFingerprint?: Pick<fs.BigIntStats, "ctimeNs" | "dev" | "ino" | "mtimeNs" | "size">,
+  verification?: MigrationArtifactVerification,
 ): MigrationArtifactIdentity {
   const before = fs.lstatSync(filePath, { bigint: true });
   if (!before.isFile() || before.nlink !== expectedLinks) {
@@ -105,28 +135,50 @@ export function readMigrationArtifactIdentity(
   );
   try {
     const opened = fs.fstatSync(fd, { bigint: true });
-    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
+    if (
+      !opened.isFile() ||
+      opened.nlink !== expectedLinks ||
+      !sameFileMutationFingerprint(opened, before)
+    ) {
       throw new Error("artifact identity changed");
     }
-    const { sha256, sizeBytes: bytes } = hashFileDescriptorSync(fd);
+    const key =
+      before.dev !== 0n && before.ino !== 0n && before.ctimeNs !== 0n
+        ? `${before.dev}:${before.ino}`
+        : undefined;
+    const previous = key === undefined ? undefined : verification?.get(key);
+    // Both names of a claimed original share one content generation. Link/unlink
+    // changes ctime and nlink, so each transition still requires a fresh full hash.
+    const content =
+      previous &&
+      previous.stat.nlink === before.nlink &&
+      sameFileMutationFingerprint(previous.stat, before)
+        ? previous.content
+        : hashFileDescriptorSync(fd);
+    const { sha256, sizeBytes: bytes } = content;
     const after = fs.lstatSync(filePath, { bigint: true });
+    const descriptorAfter = fs.fstatSync(fd, { bigint: true });
     if (
-      after.dev !== before.dev ||
-      after.ino !== before.ino ||
-      after.mtimeNs !== before.mtimeNs ||
-      after.ctimeNs !== before.ctimeNs ||
-      after.size !== before.size ||
+      !after.isFile() ||
+      after.nlink !== expectedLinks ||
+      descriptorAfter.nlink !== expectedLinks ||
+      !sameFileMutationFingerprint(after, before) ||
+      !sameFileMutationFingerprint(descriptorAfter, before) ||
       BigInt(bytes) !== before.size
     ) {
       throw new Error("artifact changed while hashing");
     }
-    return {
+    const identity = {
       dev: String(before.dev),
       ino: String(before.ino),
       mtimeNs: String(before.mtimeNs),
       size: bytes,
       sha256,
     };
+    if (key !== undefined) {
+      verification?.set(key, { stat: after, content });
+    }
+    return identity;
   } finally {
     fs.closeSync(fd);
   }
@@ -153,10 +205,16 @@ export async function moveMigrationArtifact(
   expected: MigrationArtifactIdentity,
   onPublished?: () => undefined,
   publishSourceRemoval?: (remove: () => void, retainSource: () => void) => void,
+  verification?: MigrationArtifactVerification,
 ): Promise<void> {
   let createdPublication = false;
   if (!fs.lstatSync(targetPath, { bigint: true, throwIfNoEntry: false })) {
-    if (!sameMigrationArtifact(readMigrationArtifactIdentity(sourcePath), expected)) {
+    if (
+      !sameMigrationArtifact(
+        readMigrationArtifactIdentity(sourcePath, 1n, undefined, verification),
+        expected,
+      )
+    ) {
       throw new Error("artifact changed before publication");
     }
     const published = await publishFileExclusive({
@@ -177,10 +235,10 @@ export async function moveMigrationArtifact(
     );
   }
   const removeSource = () => {
-    assertMigrationArtifactPublication(sourcePath, targetPath, expected);
+    assertMigrationArtifactPublication(sourcePath, targetPath, expected, verification);
     if (onPublished) {
       onPublished();
-      assertMigrationArtifactPublication(sourcePath, targetPath, expected);
+      assertMigrationArtifactPublication(sourcePath, targetPath, expected, verification);
     }
     fs.unlinkSync(sourcePath);
   };
@@ -189,7 +247,7 @@ export async function moveMigrationArtifact(
     if (!createdPublication) {
       throw new Error("Cannot discard a recovery publication created by an earlier run.");
     }
-    assertMigrationArtifactPublication(sourcePath, targetPath, expected);
+    assertMigrationArtifactPublication(sourcePath, targetPath, expected, verification);
     fs.unlinkSync(targetPath);
     retainedSource = true;
   };
@@ -208,7 +266,12 @@ export async function moveMigrationArtifact(
     }
   }
   requireDirectorySync(await syncDirectory(path.dirname(sourcePath)), "Recovery artifact source");
-  if (!sameMigrationArtifact(readMigrationArtifactIdentity(targetPath), expected)) {
+  if (
+    !sameMigrationArtifact(
+      readMigrationArtifactIdentity(targetPath, 1n, undefined, verification),
+      expected,
+    )
+  ) {
     throw new Error("artifact changed during publication");
   }
 }
@@ -218,6 +281,7 @@ function assertMigrationArtifactPublication(
   sourcePath: string,
   targetPath: string,
   expected: MigrationArtifactIdentity,
+  verification?: MigrationArtifactVerification,
 ): void {
   // A crash can leave both names. Only this exact two-link original can complete the move.
   const target = fs.lstatSync(targetPath, { bigint: true });
@@ -228,8 +292,14 @@ function assertMigrationArtifactPublication(
     target.dev !== source.dev ||
     target.ino !== source.ino ||
     source.nlink !== 2n ||
-    !sameMigrationArtifact(readMigrationArtifactIdentity(sourcePath, 2n), expected) ||
-    !sameMigrationArtifact(readMigrationArtifactIdentity(targetPath, 2n), expected)
+    !sameMigrationArtifact(
+      readMigrationArtifactIdentity(sourcePath, 2n, undefined, verification),
+      expected,
+    ) ||
+    !sameMigrationArtifact(
+      readMigrationArtifactIdentity(targetPath, 2n, undefined, verification),
+      expected,
+    )
   ) {
     throw new Error("publication paths changed or have unexpected aliases");
   }

@@ -1,11 +1,11 @@
 import { performance } from "node:perf_hooks";
 import {
   validateUpdateHoldParams,
-  validateUpdateHoldResult,
   validateUpdateRunsGetParams,
   validateUpdateRunsListParams,
   validateUpdateStatusParams,
-  validateUpdateStatusResult,
+  type UpdateHoldResult,
+  type UpdateStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { areDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -49,6 +49,8 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateStatusParams, "update.status", respond)) {
       return;
     }
+    const warn = (stage: string, error: unknown) =>
+      context?.logGateway?.warn(`update.status ${stage} failed: ${formatErrorMessage(error)}`);
     const lifecycle = currentUpdateCheckLifecycle();
     const startedAt = areDiagnosticsEnabledForProcess() ? performance.now() : undefined;
     const timing =
@@ -77,20 +79,23 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
       try {
         sentinel = manager ? null : await prepareLatestUpdateRestartSentinel(undefined, lifecycle);
       } catch (err) {
-        context?.logGateway?.warn(
-          `update.status sentinel refresh failed: ${formatErrorMessage(err)}`,
-        );
+        warn("sentinel refresh", err);
         sentinel = getLatestUpdateRestartSentinel();
       }
       mark("checkout");
       const config = context?.getRuntimeConfig?.();
-      if ((params.refreshCheckout === true || immutable) && config) {
+      if ((params.refreshCheckout === true || immutable) && context?.getRuntimeConfig) {
         try {
-          await refreshGatewayUpdateStatus(config);
+          await refreshGatewayUpdateStatus(context.getRuntimeConfig);
         } catch (err) {
-          context?.logGateway?.warn(
-            `update.status checkout refresh failed: ${formatErrorMessage(err)}`,
-          );
+          warn("checkout refresh", err);
+          if (params.refreshCheckout === true) {
+            respond(false, undefined, {
+              code: "UNAVAILABLE",
+              message: "Could not check the latest update. Try again.",
+            });
+            return;
+          }
         }
       }
       mark("reconciliation");
@@ -99,9 +104,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
           await reconcileAbandonedUpdateRunsAsync();
         }
       } catch (error) {
-        context?.logGateway?.warn(
-          `update.status reconciliation failed: ${formatErrorMessage(error)}`,
-        );
+        warn("reconciliation", error);
       }
       mark("history");
       const { activeRun, lastRun } = manager
@@ -118,9 +121,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
           : activeRun?.runId === campaignRunId
             ? activeRun
             : await getUpdateRunAsync(campaignRunId).catch((error: unknown) => {
-                context?.logGateway?.warn(
-                  `update.status campaign run lookup failed: ${formatErrorMessage(error)}`,
-                );
+                warn("campaign run lookup", error);
                 return undefined;
               });
       if (lifecycle.isCurrent() && !lifecycle.signal.aborted) {
@@ -135,9 +136,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         try {
           effectiveChannel = await getUpdateEffectiveChannel();
         } catch (err) {
-          context?.logGateway?.warn(
-            `update.status install identity failed: ${formatErrorMessage(err)}`,
-          );
+          warn("install identity", err);
         }
         currentConfig = context?.getRuntimeConfig?.() ?? currentConfig;
         effectiveChannel =
@@ -149,7 +148,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
           : undefined
         : getUpdateSchedule();
       mark("response");
-      const result = {
+      const result: UpdateStatusResult = {
         sentinel,
         ...(activeRun ? { activeRun: toPublicUpdateRun(activeRun) } : {}),
         ...(lastRun ? { lastRun: toPublicUpdateRun(lastRun) } : {}),
@@ -157,13 +156,6 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         ...(effectiveChannel ? { effectiveChannel } : {}),
         ...(schedule ? { schedule } : {}),
       };
-      if (!validateUpdateStatusResult(result)) {
-        respond(false, undefined, {
-          code: "UNAVAILABLE",
-          message: "update status is temporarily unavailable",
-        });
-        return;
-      }
       respond(true, result);
     } finally {
       if (timing && startedAt !== undefined && areDiagnosticsEnabledForProcess()) {
@@ -209,17 +201,10 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         reason,
       });
     }
-    const result = {
+    const result: UpdateHoldResult = {
       ok,
       ...(schedule ? { schedule } : {}),
     };
-    if (!validateUpdateHoldResult(result)) {
-      respond(false, undefined, {
-        code: "UNAVAILABLE",
-        message: "update hold status is temporarily unavailable",
-      });
-      return;
-    }
     respond(true, result);
   },
   "update.runs.get": async ({ params, respond, context }) => {

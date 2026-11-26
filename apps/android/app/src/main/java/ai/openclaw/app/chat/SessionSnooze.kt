@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.i18n.nativeString
 import java.time.DayOfWeek
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeFormatterBuilder
@@ -10,6 +11,12 @@ import java.time.format.FormatStyle
 import java.time.format.TextStyle
 import java.time.temporal.ChronoField
 import java.time.temporal.TemporalAdjusters
+
+internal data class SessionWakeDeadline(
+  val serverMs: Long,
+  val localMs: Long,
+  val isRetry: Boolean = false,
+)
 
 object SessionSnooze {
   data class Preset(
@@ -24,26 +31,20 @@ object SessionSnooze {
   ): List<Preset> {
     val now = Instant.ofEpochMilli(nowMs).atZone(zone)
     val today = now.toLocalDate()
-    val evening =
-      today
-        .atTime(18, 0)
+
+    fun wakeAt(
+      date: LocalDate,
+      hour: Int,
+    ): Long =
+      date
+        .atTime(hour, 0)
         .atZone(zone)
         .toInstant()
         .toEpochMilli()
-    val tomorrow =
-      today
-        .plusDays(1)
-        .atTime(9, 0)
-        .atZone(zone)
-        .toInstant()
-        .toEpochMilli()
-    val nextMonday =
-      today
-        .with(TemporalAdjusters.next(DayOfWeek.MONDAY))
-        .atTime(9, 0)
-        .atZone(zone)
-        .toInstant()
-        .toEpochMilli()
+
+    val evening = wakeAt(today, 18)
+    val tomorrow = wakeAt(today.plusDays(1), 9)
+    val nextMonday = wakeAt(today.with(TemporalAdjusters.next(DayOfWeek.MONDAY)), 9)
     return buildList {
       add(Preset("hour", nativeString("In 1 hour"), now.plusHours(1).toInstant().toEpochMilli()))
       add(Preset("three-hours", nativeString("In 3 hours"), now.plusHours(3).toInstant().toEpochMilli()))
@@ -89,13 +90,22 @@ object SessionSnooze {
     }
   }
 
+  internal fun nextWake(
+    entries: List<ChatSessionEntry>,
+    nowMs: Long,
+    window: SessionWakeDeadline?,
+  ): SessionWakeDeadline? {
+    val row =
+      entries
+        .asSequence()
+        .filter { it.isSnoozed(nowMs) && it.snoozedUntil != window?.serverMs }
+        .minByOrNull { requireNotNull(it.localSnoozeWakeMs) }
+        ?.let { SessionWakeDeadline(requireNotNull(it.snoozedUntil), requireNotNull(it.localSnoozeWakeMs)) }
+    return listOfNotNull(window, row).minByOrNull { it.localMs }
+  }
+
   fun nextWakeMs(
     entries: List<ChatSessionEntry>,
     nowMs: Long,
-  ): Long? =
-    entries
-      .asSequence()
-      .filter { it.isSnoozed(nowMs) }
-      .mapNotNull { it.snoozedUntil }
-      .minOrNull()
+  ): Long? = nextWake(entries, nowMs, window = null)?.localMs
 }

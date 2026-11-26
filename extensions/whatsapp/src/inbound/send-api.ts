@@ -113,11 +113,11 @@ export function createWebSendApi(params: {
         ? { text, mentionedJids: [] }
         : await resolveMentions(jid, text);
       if (mediaBuffer && mediaType) {
+        const mediaFields = { caption: resolvedPayloadText.text || undefined, mimetype: mediaType };
         if (mediaType.startsWith("image/") && sendOptions?.asDocument !== true) {
           payload = await addWhatsAppImagePreviewFields({
             image: mediaBuffer,
-            caption: resolvedPayloadText.text || undefined,
-            mimetype: mediaType,
+            ...mediaFields,
           });
         } else if (mediaType.startsWith("audio/")) {
           payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
@@ -125,8 +125,7 @@ export function createWebSendApi(params: {
           const gifPlayback = sendOptions?.gifPlayback;
           payload = {
             video: mediaBuffer,
-            caption: resolvedPayloadText.text || undefined,
-            mimetype: mediaType,
+            ...mediaFields,
             ...(gifPlayback ? { gifPlayback: true } : {}),
           };
         } else {
@@ -137,8 +136,7 @@ export function createWebSendApi(params: {
           payload = {
             document: mediaBuffer,
             fileName,
-            caption: resolvedPayloadText.text || undefined,
-            mimetype: mediaType,
+            ...mediaFields,
           };
         }
       } else {

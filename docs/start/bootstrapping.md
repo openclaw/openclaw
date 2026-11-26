@@ -38,8 +38,18 @@ OpenClaw:
   acknowledges the stored offer so it never asks again.
 - Deletes `BOOTSTRAP.md` once the workspace looks configured, so the ritual only runs once.
 
-A workspace counts as configured once `SOUL.md`, `IDENTITY.md`, or `USER.md` has
-diverged from its starter template, or a `memory/` folder exists.
+With the stock `BOOTSTRAP.md`, a workspace counts as configured once `SOUL.md`,
+`IDENTITY.md`, or `USER.md` has diverged from its starter template, or a `memory/`
+folder exists. Custom `BOOTSTRAP.md` instructions stay pending until the file is
+removed after setup completes; preconfigured profiles and skills do not complete
+that onboarding.
+When OpenClaw has recorded a file as generated, an unchanged copy of that starter
+file keeps onboarding pending even if an update changes the bundled template.
+
+Once setup is recorded as complete, the main conversation's system prompt
+replaces the bootstrap instructions with a short note that setup finished and
+that the missing `BOOTSTRAP.md` is expected. The note reports OpenClaw's recorded
+state; it does not verify each bootstrap step.
 
 <Note>
 `BOOTSTRAP.md` covers the full identity conversation. See its contents at

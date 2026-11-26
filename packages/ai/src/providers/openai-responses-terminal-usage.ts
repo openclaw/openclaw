@@ -12,7 +12,7 @@ import {
   asNonNegativeFiniteNumber as readReportedCount,
 } from "@openclaw/normalization-core/number-coercion";
 import type OpenAI from "openai";
-import type { AssistantMessage, StopReason, Usage } from "../types.js";
+import type { AssistantMessage, StopReason, StreamOptions, Usage } from "../types.js";
 
 /** A known output ceiling can resume sampling after admitted tools have settled. */
 export function isResponsesOutputLimitToolCallError(
@@ -40,6 +40,10 @@ export type ResponsesTerminalUsagePayload = {
   input_tokens_details?: {
     cached_tokens?: number | null;
     cache_write_tokens?: number | null;
+    cache_write_tokens_details?: {
+      ttl_30m_tokens?: number | null;
+      ttl_12h_tokens?: number | null;
+    } | null;
   } | null;
   output_tokens_details?: { reasoning_tokens?: number | null } | null;
 };
@@ -93,6 +97,34 @@ export function mapResponsesTerminalUsage(
       : { state: "unavailable" },
     totalTokens,
   };
+}
+
+/** Apply lifetime pricing after base model pricing, before service-tier adjustments. */
+export function applyResponsesCacheWritePricing(
+  usage: Usage,
+  reported: ResponsesTerminalUsagePayload | undefined | null,
+  promptCacheTtl?: StreamOptions["promptCacheTtl"],
+): void {
+  if (usage.cacheWrite === 0) {
+    return;
+  }
+  const details = reported?.input_tokens_details?.cache_write_tokens_details;
+  const shortWrites = readReportedCount(details?.ttl_30m_tokens);
+  const longWrites = readReportedCount(details?.ttl_12h_tokens);
+  // Breakpoints may override the request default. Compatible endpoints without a
+  // coherent split retain the request-default estimate.
+  const extendedWrites =
+    shortWrites !== undefined &&
+    longWrites !== undefined &&
+    shortWrites + longWrites === usage.cacheWrite
+      ? longWrites
+      : promptCacheTtl === "12h"
+        ? usage.cacheWrite
+        : 0;
+  // Catalog prices cover 30m writes; each 12h write costs one additional unit.
+  const extendedCost = usage.cost.cacheWrite * (extendedWrites / usage.cacheWrite);
+  usage.cost.cacheWrite += extendedCost;
+  usage.cost.total += extendedCost;
 }
 
 /** Reasoning tokens are reported by the agent path only; the package path does not track them. */

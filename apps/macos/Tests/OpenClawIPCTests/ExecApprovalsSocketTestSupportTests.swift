@@ -7,7 +7,7 @@ struct ExecApprovalsSocketTestSupportTests {
     @MainActor
     @Test func `socket roots are private unique temporary children with room for CUA endpoints`() throws {
         let fileManager = FileManager.default
-        let base = fileManager.temporaryDirectory.resolvingSymlinksInPath()
+        let base = temporaryDirectoryForTests()
         let first = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? fileManager.removeItem(at: first) }
         let second = try ExecApprovalsSocketTestSupport.makeRoot()

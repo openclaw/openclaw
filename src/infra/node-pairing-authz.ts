@@ -1,4 +1,5 @@
 // Maps node pairing command declarations to required operator scopes.
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_RUN_COMMANDS,
@@ -16,11 +17,22 @@ function isAdminPairApprovalCommand(command: string): boolean {
   );
 }
 
-/** Map declared node commands to the least operator scopes needed for approval. */
-export function resolveNodePairApprovalScopes(commands: unknown): NodeApprovalScope[] {
-  const normalized = Array.isArray(commands)
-    ? commands.filter((command): command is string => typeof command === "string")
-    : [];
+/** Resolve recorded approval scopes, or derive them from declared commands. */
+export function resolveNodePairApprovalScopes(
+  commands: unknown,
+  declaredScopes?: unknown,
+): NodeApprovalScope[] {
+  const scopes = new Set<NodeApprovalScope>(["operator.pairing"]);
+  for (const scope of Array.isArray(declaredScopes) ? declaredScopes : []) {
+    if (scope === "operator.write" || scope === "operator.admin") {
+      scopes.add(scope);
+    }
+  }
+  if (scopes.size > 1) {
+    return [...scopes];
+  }
+  // Older requests can record only the default pairing scope alongside commands.
+  const normalized = filterStringEntries(commands);
   if (normalized.some(isAdminPairApprovalCommand)) {
     return ["operator.pairing", "operator.admin"];
   }

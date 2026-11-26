@@ -42,14 +42,9 @@ export function createReplyHotPathTimingTracker(options: { profilerEnabled?: boo
       timing.logIfSlow(params);
     },
     logPreparationIfSlow(params: ReplyHotPathLogContext) {
-      const { channel, messageId, runId, sessionId, sessionKey } = params;
       timing.logIfSlow(
         {
-          channel,
-          messageId,
-          runId,
-          sessionId,
-          sessionKey,
+          ...params,
           outcome: "milestone",
           reason: "before_reply_resolver",
         },

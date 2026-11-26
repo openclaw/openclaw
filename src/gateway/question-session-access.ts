@@ -4,6 +4,7 @@ import {
   errorShape,
   type QuestionRecord,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { PreparedSessionEntryWorkerRead } from "../config/sessions/session-entry-read-runtime.types.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
@@ -13,15 +14,16 @@ import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { readUserProfileAliases } from "../state/user-profile-list.js";
+import { readResidentUserProfileAliases } from "../state/user-profile-list.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   hasOperatorBoundary,
   operatorSessionCap,
   resolveGatewayOperatorRoleActor,
+  resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import { usesOwnRunQuestionAccess } from "./question-access.js";
 import {
   QuestionManagerError,
@@ -54,7 +56,6 @@ export type PreparedQuestionSession = {
   assertCurrent: () => void;
   canAccess: (
     client: GatewayClient | null,
-    access: "read" | "mutate",
     narrow: boolean,
     binding?: QuestionSessionAccess,
   ) => boolean;
@@ -68,6 +69,7 @@ function prepareQuestionSharing(
   cfg: OpenClawConfig,
   client: GatewayClient | null,
   isMember: (target: SessionSharingTarget, identityId: string) => boolean,
+  memberAccess?: NonNullable<Parameters<typeof prepareSessionSharing>[1]>["memberAccess"],
 ) {
   // Hosted callers carry an admitted role actor without a browser profile.
   // Keep sharing identity precedence and role assignment in their existing owners.
@@ -75,9 +77,11 @@ function prepareQuestionSharing(
   return prepareSessionSharing(
     { cfg, client },
     {
-      aliases: identity ? readUserProfileAliases(identity.id) : new Set(),
+      aliases: identity ? readResidentUserProfileAliases(identity.id) : new Set(),
       sessionCap: operatorSessionCap(client, cfg),
       isMember,
+      memberAccess,
+      policy: resolveOperatorRolePolicy(client, cfg),
     },
   );
 }
@@ -87,9 +91,10 @@ export async function withPreparedQuestionSessions<T>(
   options: GatewayRequestHandlerOptions,
   questions: readonly QuestionTarget[],
   consume: (prepared: readonly (PreparedQuestionSession | undefined)[]) => T,
-  operation: { assertCurrent: () => void; includeMembers?: boolean },
+  operation: { assertCurrent: () => void },
 ): Promise<T> {
   const signal = getAsyncWorkSignal();
+  const callerRead = readGatewayRequestMutationAuthority(options).questionCallerRead;
   while (true) {
     operation.assertCurrent();
     const cfg = options.context.getRuntimeConfig();
@@ -101,7 +106,7 @@ export async function withPreparedQuestionSessions<T>(
         agentId: string;
         storePath: string;
         sessionKeys: string[];
-        includeMembers: boolean;
+        includeMembers: true;
         includeAuthorization: true;
         snapshotFields: readonly [];
       }
@@ -126,7 +131,8 @@ export async function withPreparedQuestionSessions<T>(
         agentId,
         storePath,
         sessionKeys: [],
-        includeMembers: operation.includeMembers ?? false,
+        // Reads and event recipients need the same membership facts as answers.
+        includeMembers: true as const,
         includeAuthorization: true as const,
         snapshotFields: [] as const,
       };
@@ -136,7 +142,7 @@ export async function withPreparedQuestionSessions<T>(
     });
     // An empty batch completes locally after a waiter closes. Actual reads still
     // belong to the work scope; request authority is checked for both paths.
-    const readSignal = groups.size > 0 ? signal : undefined;
+    const readSignal = groups.size > 0 || callerRead?.reads.length ? signal : undefined;
     readSignal?.throwIfAborted();
     const keys = [...groups.keys()];
     // Reuse committed row publications without materializing the listing projection.
@@ -163,8 +169,9 @@ export async function withPreparedQuestionSessions<T>(
         );
       }
     });
+    const inputs = [...groups.values(), ...(callerRead?.reads ?? [])];
     try {
-      const outcome = await withSessionEntriesFromStoresInWorker([...groups.values()], (reads) => {
+      const consumePrepared = (reads: readonly PreparedSessionEntryWorkerRead[]) => {
         readSignal?.throwIfAborted();
         operation.assertCurrent();
         if (
@@ -229,7 +236,6 @@ export async function withPreparedQuestionSessions<T>(
                 throw new Error("Question recipient is no longer current");
               }
               client?.internal?.operatorAccessAuthority?.assertCurrent();
-              client?.internal?.operatorRunAuthority?.assertCurrent();
               let sharing = recipients.get(client);
               if (!sharing) {
                 sharing = prepareQuestionSharing(
@@ -239,6 +245,10 @@ export async function withPreparedQuestionSessions<T>(
                     read.result.members?.[selected.canonicalKey]?.some(
                       (member) => member.identityId === identityId,
                     ) ?? false,
+                  (selected, identityId) =>
+                    read.result.members?.[selected.canonicalKey]?.find(
+                      (member) => member.identityId === identityId,
+                    )?.access,
                 );
                 recipients.set(client, sharing);
               }
@@ -248,7 +258,7 @@ export async function withPreparedQuestionSessions<T>(
               target,
               read,
               assertCurrent,
-              canAccess: (client, _access, narrow, binding = selection.binding) => {
+              canAccess: (client, narrow, binding = selection.binding) => {
                 try {
                   if (narrow && binding) {
                     binding.assertCurrent(preparedSession);
@@ -260,7 +270,6 @@ export async function withPreparedQuestionSessions<T>(
                   }
                   if (narrow) {
                     client?.internal?.operatorAccessAuthority?.assertCurrent();
-                    client?.internal?.operatorRunAuthority?.assertCurrent();
                     if (
                       !binding?.canSelect(client) ||
                       authorizeCurrentOperatorRoleScopes(client, cfg) ||
@@ -281,9 +290,7 @@ export async function withPreparedQuestionSessions<T>(
                       })
                     );
                   }
-                  return (
-                    sharingFor(client).entryFilter?.(target.canonicalKey, target.entry) ?? true
-                  );
+                  return sharingFor(client).canReadTarget(target);
                 } catch {
                   return false;
                 }
@@ -311,6 +318,8 @@ export async function withPreparedQuestionSessions<T>(
             };
             return preparedSession;
           });
+          callerRead?.assertPrepared(reads.slice(groups.size));
+          operation.assertCurrent();
           const value = consume(prepared);
           if (isPromiseLike(value)) {
             void Promise.resolve(value).catch(() => {});
@@ -320,6 +329,9 @@ export async function withPreparedQuestionSessions<T>(
         } finally {
           active = false;
         }
+      };
+      const outcome = await withSessionEntriesFromStoresInWorker(inputs, consumePrepared, {
+        ordered: Boolean(callerRead),
       });
       if (!outcome.retry) {
         return outcome.value;
@@ -330,7 +342,15 @@ export async function withPreparedQuestionSessions<T>(
   }
 }
 
-/** Capture before the first worker await, then bind only the exact admitted row in its consumer. */
+/** Admit each question producer once, independently of optional session disclosure access. */
+export async function prepareQuestionProducer(
+  options: GatewayRequestHandlerOptions,
+  agentId?: string,
+) {
+  return await captureGatewayOperatorContinuation({ ...options, agentId });
+}
+
+/** Bind the handler-owned producer to the exact admitted row before transferring disclosure access. */
 export async function withQuestionSessionAccess<T>(
   options: GatewayRequestHandlerOptions,
   sessionKey: string,
@@ -339,141 +359,119 @@ export async function withQuestionSessionAccess<T>(
     access: QuestionSessionAccess | undefined,
     prepared: PreparedQuestionSession | undefined,
   ) => T,
-  operation: { assertCurrent: () => void; includeMembers?: boolean },
+  operation: { assertCurrent: () => void; operatorAuthority?: AdmittedRunOperatorAuthority },
 ): Promise<T> {
   operation.assertCurrent();
   const producer = resolveGatewayOperatorRoleActor(options.client);
-  const source = await captureGatewayOperatorRunAuthority(options);
+  const source = operation.operatorAuthority;
   const profileId =
     usesOwnRunQuestionAccess(options.client) && options.client?.internal?.operatorRunAuthority
-      ? source?.authority.profileId
+      ? source?.profileId
       : undefined;
-  let transferred = false;
-  try {
-    return await withPreparedQuestionSessions(
-      options,
-      [{ sessionKey, agentId }],
-      ([prepared]) => {
-        const selected = prepared?.target;
+  return await withPreparedQuestionSessions(
+    options,
+    [{ sessionKey, agentId }],
+    ([prepared]) => {
+      const selected = prepared?.target;
+      if (
+        !prepared ||
+        !selected?.entry.sessionId ||
+        !selected.entry.lifecycleRevision ||
+        selected.entry.incognito ||
+        isIncognitoSessionKey(selected.canonicalKey)
+      ) {
+        return consume(undefined, prepared);
+      }
+      const retained = retainSessionHistoryWorkerDatabase(prepared.read.database);
+      const identity = prepared.read.result.databaseIdentity;
+      const original = {
+        agentId: selected.agentId,
+        sessionKey: selected.canonicalKey,
+        storePath: selected.storePath,
+        databasePath: prepared.read.database.path,
+        sessionId: selected.entry.sessionId,
+        lifecycleRevision: selected.entry.lifecycleRevision,
+      };
+      let released = false;
+      let invalidated = false;
+      const assertSourceCurrent = () => {
+        if (released || invalidated) {
+          throw new Error("Question session source was released");
+        }
+        // Discovery may rotate worker connections normally; the retained host
+        // resource, not a worker connection UUID, owns close/reopen revocation.
+        retained.owner.assertCurrent();
+        const currentProducer = resolveGatewayOperatorRoleActor(options.client);
         if (
-          !prepared ||
-          !selected?.entry.sessionId ||
-          !selected.entry.lifecycleRevision ||
-          selected.entry.incognito ||
-          isIncognitoSessionKey(selected.canonicalKey)
+          producer?.kind === "operator" &&
+          (currentProducer?.kind !== "operator" || producer.profileId !== currentProducer.profileId)
         ) {
-          return consume(undefined, prepared);
+          throw new Error("Question producer identity changed");
         }
-        source?.authority.assertCurrent();
-        const retained = retainSessionHistoryWorkerDatabase(prepared.read.database);
-        const identity = prepared.read.result.databaseIdentity;
-        const original = {
-          agentId: selected.agentId,
-          sessionKey: selected.canonicalKey,
-          storePath: selected.storePath,
-          databasePath: prepared.read.database.path,
-          sessionId: selected.entry.sessionId,
-          lifecycleRevision: selected.entry.lifecycleRevision,
-        };
-        let released = false;
-        let invalidated = false;
-        const assertSourceCurrent = () => {
-          if (released || invalidated) {
-            throw new Error("Question session source was released");
-          }
-          // Discovery may rotate worker connections normally; the retained host
-          // resource, not a worker connection UUID, owns close/reopen revocation.
-          retained.owner.assertCurrent();
-          source?.authority.assertCurrent();
-          const currentProducer = resolveGatewayOperatorRoleActor(options.client);
+      };
+      const access: QuestionSessionAccess = {
+        agentId: original.agentId,
+        sessionKey: original.sessionKey,
+        canSelect: (client) =>
+          Boolean(
+            profileId &&
+            client &&
+            !client.invalidated &&
+            (client.connect.role ?? "operator") === "operator" &&
+            !authorizeOwnSessionMutation({ client, target: null, expectedProfileId: profileId }),
+          ),
+        assertSourceCurrent,
+        assertCurrent: (current) => {
+          assertSourceCurrent();
+          current.assertCurrent();
+          const next = current.target;
+          const nextIdentity = current.read.result.databaseIdentity;
           if (
-            producer?.kind === "operator" &&
-            (currentProducer?.kind !== "operator" ||
-              producer.profileId !== currentProducer.profileId)
+            !identity ||
+            !nextIdentity ||
+            identity.identity !== nextIdentity.identity ||
+            identity.birthtime !== nextIdentity.birthtime ||
+            current.read.database.path !== original.databasePath ||
+            next?.agentId !== original.agentId ||
+            next.canonicalKey !== original.sessionKey ||
+            next.storePath !== original.storePath ||
+            next.entry.sessionId !== original.sessionId ||
+            next.entry.lifecycleRevision !== original.lifecycleRevision ||
+            next.entry.incognito
           ) {
-            throw new Error("Question producer identity changed");
+            // A proven successor cannot revive this source. Pending requester checks
+            // cancel only this binding; terminal records remain immutable but unreadable.
+            invalidated = true;
+            throw new Error("Question session generation changed");
           }
-        };
-        const access: QuestionSessionAccess = {
-          agentId: original.agentId,
-          sessionKey: original.sessionKey,
-          canSelect: (client) =>
-            Boolean(
-              profileId &&
-              client &&
-              !client.invalidated &&
-              (client.connect.role ?? "operator") === "operator" &&
-              !authorizeOwnSessionMutation({ client, target: null, expectedProfileId: profileId }),
-            ),
-          assertSourceCurrent,
-          assertCurrent: (current) => {
-            assertSourceCurrent();
-            current.assertCurrent();
-            const next = current.target;
-            const nextIdentity = current.read.result.databaseIdentity;
-            if (
-              !identity ||
-              !nextIdentity ||
-              identity.identity !== nextIdentity.identity ||
-              identity.birthtime !== nextIdentity.birthtime ||
-              current.read.database.path !== original.databasePath ||
-              next?.agentId !== original.agentId ||
-              next.canonicalKey !== original.sessionKey ||
-              next.storePath !== original.storePath ||
-              next.entry.sessionId !== original.sessionId ||
-              next.entry.lifecycleRevision !== original.lifecycleRevision ||
-              next.entry.incognito
-            ) {
-              // A proven successor cannot revive this source. Pending requester checks
-              // cancel only this binding; terminal records remain immutable but unreadable.
-              invalidated = true;
-              throw new Error("Question session generation changed");
-            }
-          },
-          release: () => {
-            if (!released) {
-              released = true;
-              try {
-                retained.release();
-              } finally {
-                source?.release();
-              }
-            }
-          },
-        };
-        transferred = true;
-        try {
-          const value = consume(access, prepared);
-          if (isPromiseLike(value)) {
-            void Promise.resolve(value).catch(() => {});
-            throw new Error("Question session consumers must remain synchronous");
-          }
-          return value;
-        } catch (error) {
-          access.release();
-          throw error;
-        }
-      },
-      {
-        assertCurrent: () => {
-          operation.assertCurrent();
-          source?.authority.assertCurrent();
         },
-        includeMembers: operation.includeMembers,
-      },
-    );
-  } finally {
-    if (!transferred) {
-      source?.release();
-    }
-  }
+        release: () => {
+          if (!released) {
+            released = true;
+            retained.release();
+          }
+        },
+      };
+      try {
+        const value = consume(access, prepared);
+        if (isPromiseLike(value)) {
+          void Promise.resolve(value).catch(() => {});
+          throw new Error("Question session consumers must remain synchronous");
+        }
+        return value;
+      } catch (error) {
+        access.release();
+        throw error;
+      }
+    },
+    operation,
+  );
 }
 
 function canAccessSessionQuestion(
   observation: QuestionObservation | null,
   prepared: PreparedQuestionSession | undefined,
   client: GatewayClient | null,
-  access: "read" | "mutate",
 ): boolean {
   try {
     if (
@@ -484,7 +482,7 @@ function canAccessSessionQuestion(
     ) {
       return false;
     }
-    const allowed = prepared.canAccess(client, access, true, observation.sessionAccess);
+    const allowed = prepared.canAccess(client, true, observation.sessionAccess);
     if (!allowed) {
       // A worker may have just proved the original binding invalid. Settle that
       // exact entry now; neither a transient read failure nor a successor is cancellation.
@@ -513,6 +511,7 @@ export function prepareQuestionAuthorization(
   const narrow = usesOwnRunQuestionAccess(options.client);
   return {
     target:
+      observation?.authorizeClient ||
       narrow ||
       (!isGatewayAdmin(options.client) &&
         hasOperatorBoundary(options.client, options.context.getRuntimeConfig()))
@@ -536,6 +535,14 @@ export function prepareQuestionAuthorization(
       if (!observation?.isCurrent()) {
         return questionNotFound(id);
       }
+      if (observation.authorizeClient) {
+        authority.assertCurrent();
+        return observation.authorizeClient(options.client, prepared?.target) &&
+          (prepared?.canAccess(options.client, false) ||
+            (!prepared?.target && isGatewayAdmin(options.client)))
+          ? null
+          : questionNotFound(id);
+      }
       if (narrow) {
         authority.assertCurrent();
         const current = resolveGatewayOperatorRoleActor(options.client);
@@ -543,7 +550,7 @@ export function prepareQuestionAuthorization(
           actor?.kind !== "operator" ||
           current?.kind !== "operator" ||
           current.profileId !== actor.profileId ||
-          !canAccessSessionQuestion(observation, prepared, options.client, access)
+          !canAccessSessionQuestion(observation, prepared, options.client)
         ) {
           return questionNotFound(id);
         }
@@ -556,7 +563,7 @@ export function prepareQuestionAuthorization(
       ) {
         return null;
       }
-      if (!prepared?.canAccess(options.client, "read", false)) {
+      if (!prepared?.canAccess(options.client, false)) {
         return questionNotFound(id);
       }
       return access === "mutate" ? prepared.authorizeMutation(options.client) : null;
@@ -592,10 +599,17 @@ export async function prepareQuestionCommitAuthority(
           allowMissing: true,
         })
       : undefined;
+  let callerCommit:
+    | ReturnType<
+        NonNullable<
+          ReturnType<typeof readGatewayRequestMutationAuthority>["questionCallerRead"]
+        >["retainCurrent"]
+      >
+    | undefined;
   const assertCurrent = () => {
     authorization.assertCurrent();
+    callerCommit?.assertCurrent();
     options.client?.internal?.operatorAccessAuthority?.assertCurrent();
-    options.client?.internal?.operatorRunAuthority?.assertCurrent();
     const currentCfg = options.context.getRuntimeConfig();
     const accessRevision = readGatewayAccessRevision();
     let current = facts?.readCurrent(currentCfg);
@@ -603,9 +617,11 @@ export async function prepareQuestionCommitAuthority(
       currentCfg,
       options.client,
       (_target, identityId) => current?.membership.has(identityId) ?? false,
+      (_target, identityId) => current?.memberAccess?.[identityId],
     );
     // Policy callbacks can revoke the source; reread the owner-held facts afterward.
     authorization.assertCurrent();
+    callerCommit?.assertCurrent();
     current = facts?.readCurrent(options.context.getRuntimeConfig());
     if (
       !observation?.isCurrent() ||
@@ -615,7 +631,7 @@ export async function prepareQuestionCommitAuthority(
         hasOperatorBoundary(options.client, currentCfg) &&
         observation.record.sessionKey &&
         (!current?.target ||
-          sharing.entryFilter?.(current.target.storeKey, current.target.entry) === false ||
+          !sharing.canReadTarget(current.target) ||
           sharing.authorizeTarget(current.target))) ||
       accessRevision !== readGatewayAccessRevision()
     ) {
@@ -626,9 +642,17 @@ export async function prepareQuestionCommitAuthority(
     }
   };
   try {
+    callerCommit = readGatewayRequestMutationAuthority(options).questionCallerRead?.retainCurrent();
     assertCurrent();
-    return { assertCurrent, release: () => facts?.release() };
+    return {
+      assertCurrent,
+      release: () => {
+        callerCommit?.release();
+        facts?.release();
+      },
+    };
   } catch (error) {
+    callerCommit?.release();
     facts?.release();
     throw error;
   }
@@ -658,8 +682,11 @@ export function questionBroadcastOptions(params: {
       if (!isCurrent()) {
         return false;
       }
-      if (usesOwnRunQuestionAccess(client)) {
-        return canAccessSessionQuestion(observation, prepared, client, "read");
+      if (observation?.authorizeClient && !observation.authorizeClient(client, prepared?.target)) {
+        return false;
+      }
+      if (usesOwnRunQuestionAccess(client) && !observation?.authorizeClient) {
+        return canAccessSessionQuestion(observation, prepared, client);
       }
       if (prepared) {
         return prepared.canReceive(client);

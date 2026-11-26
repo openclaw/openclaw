@@ -5,7 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { write } from "../fixtures/common.mjs";
+import { readJson, write } from "../fixtures/common.mjs";
+import { readDatabase } from "./observations.mjs";
 
 const root = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
 const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
@@ -83,7 +84,7 @@ function processIdentity(pid) {
 }
 
 function survivingRefusalProcesses() {
-  const record = JSON.parse(fs.readFileSync(refusalChild, "utf8"));
+  const record = readJson(refusalChild);
   assert.equal(record.child.group, record.worker.pid, "Output child escaped its worker group");
   assert.equal(record.worker.group, record.worker.pid, "Worker is not its group leader");
   return [record.worker, record.child].flatMap((expected) => {
@@ -115,7 +116,7 @@ function installationDigest(packageRoot) {
 
 function armRefusal(packageRoot) {
   assert.equal(process.platform, "linux", "Refusal process identity proof requires Linux");
-  const installed = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+  const installed = readJson(path.join(packageRoot, "package.json"));
   assert.equal(installed.version, "2026.9.6", "Refusal proof requires the published 9.6 updater");
   const operatorFile = path.join(root, "workspace", "MEMORY.md");
   write(operatorFile, "# Existing operator memory\nPreserve this through the refused update.\n");
@@ -134,8 +135,7 @@ function armRefusal(packageRoot) {
 
 function assertRefusal(packageRoot, exitCode) {
   assert.equal(Number(exitCode), 1, "Published updater did not report a failed update");
-  const raw = fs.readFileSync(path.join(artifacts, "sibling-refusal-update.json"), "utf8");
-  const result = JSON.parse(raw);
+  const result = readJson(path.join(artifacts, "sibling-refusal-update.json"));
   assert.equal(result.status, "error");
   assert.equal(result.before?.version, "2026.9.6");
   const failed = result.steps.find((step) => step.name === "candidate-doctor-lint");
@@ -177,7 +177,7 @@ function assertRefusal(packageRoot, exitCode) {
     ),
     "Saved failed run lost the authentic supervisor refusal",
   );
-  const before = JSON.parse(fs.readFileSync(refusalBaseline, "utf8"));
+  const before = readJson(refusalBaseline);
   assert.equal(fs.realpathSync(packageRoot), before.packageRoot);
   assert.equal(
     installationDigest(packageRoot),
@@ -186,9 +186,7 @@ function assertRefusal(packageRoot, exitCode) {
   );
   assert.equal(digest(configPath), before.config, "Refusal changed operator config");
   assert.equal(digest(before.operatorFile), before.operator, "Refusal changed operator memory");
-  for (const [file, expected] of Object.entries(
-    JSON.parse(fs.readFileSync(evidencePath, "utf8")),
-  )) {
+  for (const [file, expected] of Object.entries(readJson(evidencePath))) {
     assert.equal(digest(file), expected, `Refusal changed original plugin source: ${file}`);
   }
   assert.deepEqual(
@@ -229,6 +227,7 @@ function seed() {
   const observe = (surface) => `fs.appendFileSync(${JSON.stringify(registrations)}, JSON.stringify({
       value,
       surface: ${JSON.stringify(surface)},
+      pid: process.pid,
       stateDir: process.env.OPENCLAW_STATE_DIR,
       source: import.meta.url,
       sharedSource,
@@ -356,7 +355,7 @@ for (let offset = 0; offset < bytes.length; offset += 64 * 1024) {
         auth: { mode: "token", token: "survivor-sibling-token" },
         controlUi: { enabled: false },
       },
-      agents: { defaults: { workspace: path.join(root, "workspace"), heartbeat: { every: "0m" } } },
+      agents: { defaults: { workspace: path.join(root, "workspace") } },
       plugins: {
         allow: [pluginId],
         load: { paths: [pluginRoot] },
@@ -381,37 +380,61 @@ function inspect(stage) {
   console.log(`${stage}: enabled sibling-import plugin loaded`);
 }
 
-function assertCanary() {
-  const events = fs
+function readRegistrations() {
+  return fs
     .readFileSync(registrations, "utf8")
     .trim()
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
+}
+
+function assertUpdateImports(updatePath) {
+  const update = readJson(updatePath);
+  assert.equal(update.status, "ok", "Sibling upgrade did not succeed");
+  const passed = (name) => update.steps.some((step) => step.name === name && step.exitCode === 0);
+  const activated =
+    !passed("candidate-doctor-lint") &&
+    (passed("update-driver-handoff") ||
+      update.steps.some((step) => step.name === "activated-gateway-startup"));
+  const events = readRegistrations();
   const canary = events.filter(
     (event) => event.stateDir !== stateDir && event.stateDir?.includes("openclaw-update-canary-"),
   );
-  assert(
-    canary.some((event) => event.surface === "doctor-contract"),
-    "No custom plugin Doctor contract execution from the private update canary; healthy readiness alone does not prove sibling imports",
-  );
-  assert(
-    canary.some((event) => event.surface === "runtime" && event.argv.includes("--update-canary")),
-    "The private Gateway canary did not register the enabled custom plugin",
-  );
-  for (const event of canary) {
-    assert.equal(event.value, marker, "Canary loaded the wrong sibling source");
-    for (const field of ["source", "sharedSource"]) {
-      const url = new URL(event[field]);
-      assert.equal(url.protocol, "file:", `Canary ${field} is not a file URL`);
-      const relative = path.relative(event.stateDir, fileURLToPath(url));
-      assert(
-        relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative),
-        `Canary ${field} resolved outside its private state: ${event[field]}`,
-      );
+  if (activated) {
+    assert(passed("openclaw doctor"), "Activated upgrade did not complete installed Doctor");
+    const doctor = events.filter(
+      (event) => event.surface === "doctor-contract" && event.stateDir === stateDir,
+    );
+    assert(doctor.length > 0, "Installed Doctor did not execute the sibling plugin contract");
+    for (const event of doctor) {
+      assert.equal(event.value, marker, "Installed Doctor loaded the wrong sibling source");
+      assert.equal(event.sourceSha256, digest(path.join(pluginRoot, "doctor-contract-api.mjs")));
+      assert.equal(event.sharedSourceSha256, digest(path.join(sharedRoot, "value.mjs")));
+    }
+  } else {
+    assert(
+      canary.some((event) => event.surface === "doctor-contract"),
+      "No custom plugin Doctor contract execution from the private update canary; healthy readiness alone does not prove sibling imports",
+    );
+    assert(
+      canary.some((event) => event.surface === "runtime" && event.argv.includes("--update-canary")),
+      "The private Gateway canary did not register the enabled custom plugin",
+    );
+    for (const event of canary) {
+      assert.equal(event.value, marker, "Canary loaded the wrong sibling source");
+      for (const field of ["source", "sharedSource"]) {
+        const url = new URL(event[field]);
+        assert.equal(url.protocol, "file:", `Canary ${field} is not a file URL`);
+        const relative = path.relative(event.stateDir, fileURLToPath(url));
+        assert(
+          relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative),
+          `Canary ${field} resolved outside its private state: ${event[field]}`,
+        );
+      }
     }
   }
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const config = readJson(configPath);
   assert.equal(
     config.plugins.entries[pluginId].enabled,
     true,
@@ -419,29 +442,36 @@ function assertCanary() {
   );
   assert.equal(config.plugins.slots.memory, pluginId, "Updater replaced the memory plugin");
   assert.equal(config.plugins.slots.contextEngine, pluginId, "Updater replaced the context engine");
-  for (const [file, expected] of Object.entries(
-    JSON.parse(fs.readFileSync(evidencePath, "utf8")),
-  )) {
+  for (const [file, expected] of Object.entries(readJson(evidencePath))) {
     assert.equal(digest(file), expected, `Updater changed original plugin source: ${file}`);
   }
   write(
-    path.join(artifacts, "sibling-canary.json"),
-    JSON.stringify({ marker, registrations: canary }, null, 2),
+    path.join(artifacts, "sibling-update-imports.json"),
+    JSON.stringify({ marker, activated, registrations: activated ? events : canary }, null, 2),
   );
   console.log(
-    `canary: ${canary.length} actual plugin executions resolved sibling source; original files preserved`,
+    `${activated ? "installed Doctor" : "private canary"}: sibling imports resolved; original files preserved`,
   );
 }
 
 function assertActivation() {
-  const activation = JSON.parse(fs.readFileSync(activationSeed, "utf8"));
+  const activation = readJson(activationSeed);
   assert.equal(activation.databasePath, path.join(stateDir, "state", "openclaw.sqlite"));
   assert.equal(activation.entries.length, 3, "Activation did not author all fixture records");
   process.kill(activation.processId, 0);
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const runtime = readRegistrations().find(
+    (event) =>
+      event.surface === "runtime" &&
+      event.pid === activation.processId &&
+      event.stateDir === stateDir,
+  );
+  assert(runtime, "Ready Gateway did not register the sibling plugin");
+  assert.equal(runtime.value, marker, "Ready Gateway loaded the wrong sibling source");
+  assert.equal(runtime.sourceSha256, digest(path.join(pluginRoot, "index.mjs")));
+  assert.equal(runtime.sharedSourceSha256, digest(path.join(sharedRoot, "value.mjs")));
+  const config = readJson(configPath);
   assert.equal(config.plugins.slots.contextEngine, pluginId);
-  const database = new DatabaseSync(activation.databasePath, { readOnly: true });
-  try {
+  readDatabase(activation.databasePath, (database) => {
     const read = database.prepare(
       "SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
     );
@@ -459,9 +489,7 @@ function assertActivation() {
       activation.entries[2].value,
       "Activation changed another process",
     );
-  } finally {
-    database.close();
-  }
+  });
   const receipt = {
     processId: activation.processId,
     selectedEngine: pluginId,
@@ -484,8 +512,8 @@ if (mode === "seed") {
   assertRefusal(packageRoot, exitCode);
 } else if (mode === "cleanup-refusal") {
   cleanupRefusal();
-} else if (mode === "assert-canary") {
-  assertCanary();
+} else if (mode === "assert-update-imports") {
+  assertUpdateImports(packageRoot);
 } else if (mode === "assert-activation") {
   assertActivation();
 } else {

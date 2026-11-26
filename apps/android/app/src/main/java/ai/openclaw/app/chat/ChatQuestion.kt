@@ -68,12 +68,10 @@ data class ChatQuestionDraft(
     if (question.options.none { (it.value ?: it.label) == value }) return this
     val selected = selectedOptions[question.questionId].orEmpty()
     val next =
-      if (question.multiSelect == true) {
-        if (value in selected) selected - value else selected + value
-      } else if (selected == setOf(value)) {
-        emptySet()
-      } else {
-        setOf(value)
+      when {
+        question.multiSelect == true -> if (value in selected) selected - value else selected + value
+        selected == setOf(value) -> emptySet()
+        else -> setOf(value)
       }
     return copy(
       selectedOptions = selectedOptions + (question.questionId to next),

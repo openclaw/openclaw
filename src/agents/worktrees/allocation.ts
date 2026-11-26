@@ -1,8 +1,7 @@
 import {
-  collectNestedErrorCandidates,
-  extractErrorCode,
-} from "@openclaw/normalization-core/error-coercion";
-import { verifyOpenClawStateLeaseOwnership } from "../../state/openclaw-state-lease-storage.js";
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+} from "../../config/sessions/session-source-authority.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import {
   OpenClawStateLeaseError,
@@ -14,36 +13,59 @@ import {
   WORKTREE_CAPACITY_RESERVATION_SCOPE,
   type WorktreeCapacityContentionError,
 } from "./capacity.js";
+import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
+import { recoverPendingWorktrees } from "./pending-slots.js";
+import {
+  startWorktreePreparationPhase,
+  timeWorktreePreparationPhase,
+} from "./preparation-timing.js";
 import { captureWorktreeRunEndContext, retainWorktreeRunEndFailure } from "./run-end-lifecycle.js";
-import type { WorktreeLeaseSet, WorktreeWorkerAuthority } from "./types.js";
+import type {
+  WorktreeLeaseSet,
+  WorktreeSourceCurrent,
+  WorktreeSourceStage,
+  WorktreeWaitBudget,
+  WorktreeWorkerAuthority,
+} from "./types.js";
 
 const WORKTREE_CREATE_LEASE_MS = 60_000;
 // A dependency install can take 15 minutes; contenders also wait for checkout and cleanup.
-const WORKTREE_CREATE_LEASE_WAIT_MS = 30 * 60_000;
+export const WORKTREE_CREATE_LEASE_WAIT_MS = 30 * 60_000;
 
 export type WorktreeAllocationGuard = WorktreeFilesystemOptions & {
   rollbackGuard: () => void;
+  waitBudget?: WorktreeWaitBudget;
   workerAuthority: WorktreeWorkerAuthority & { leaseSet: WorktreeLeaseSet };
   requireDiskSpace: ReturnType<typeof createWorktreeDiskAdmission>["requireDiskSpace"];
 };
 
 type WorktreeLeaseParams = {
+  idleIoPriority?: boolean;
   env: NodeJS.ProcessEnv;
   id?: string;
+  waitBudget?: WorktreeWaitBudget;
   signal?: AbortSignal;
   commitGuard?: () => void;
   rollbackGuard?: () => void;
   workerAuthority?: WorktreeWorkerAuthority;
 };
 
-/** Serialize managed worktree allocations across repositories and processes. */
+/** Serialize slot admission and count-changing maintenance across repositories and processes. */
 export async function withWorktreeAllocationLease<T>(
   params: WorktreeLeaseParams,
   run: (guard: WorktreeAllocationGuard) => Promise<T>,
 ): Promise<T> {
+  if (params.id && !params.workerAuthority?.leaseSet?.mutationWorktreeIds?.includes(params.id)) {
+    return withWorktreeMutationLease({ ...params, id: params.id }, (checkout) =>
+      withWorktreeAllocationLease({ ...params, ...checkout, id: undefined }, run),
+    );
+  }
   return await withWorktreeLease(params, WORKTREE_CREATE_LEASE_SCOPE, "capacity", (guard) =>
-    params.id ? withWorktreeMutationLease({ ...params, ...guard, id: params.id }, run) : run(guard),
+    timeWorktreePreparationPhase("reservation", async () => {
+      await recoverPendingWorktrees(params.env, guard.workerAuthority);
+      return run(guard);
+    }),
   );
 }
 
@@ -60,19 +82,88 @@ export async function waitForWorktreeCapacity(
   params: WorktreeLeaseParams,
 ): Promise<void> {
   params.commitGuard?.();
-  await withOpenClawStateLeaseAsync(
-    {
-      scope: WORKTREE_CAPACITY_RESERVATION_SCOPE,
-      key: error.reservationKey,
-      leaseMs: WORKTREE_CREATE_LEASE_MS,
-      waitMs: WORKTREE_CREATE_LEASE_WAIT_MS,
-      signal: params.signal,
-      leaseLabel: "managed worktree disk admission",
-      operationLabel: "agents.worktrees.capacity-wait",
+  const waiting = startWorktreeWait(params.waitBudget);
+  const finishWait = startWorktreePreparationPhase("capacityWait");
+  try {
+    await withOpenClawStateLeaseAsync(
+      {
+        scope: WORKTREE_CAPACITY_RESERVATION_SCOPE,
+        key: error.reservationKey,
+        leaseMs: WORKTREE_CREATE_LEASE_MS,
+        waitMs: waiting.waitMs,
+        signal: params.signal,
+        leaseLabel: "managed worktree disk admission",
+        operationLabel: "agents.worktrees.capacity-wait",
+      },
+      captureWorktreeRunEndContext(params.env),
+      async () => {
+        waiting.end();
+        finishWait();
+        params.commitGuard?.();
+      },
+    );
+  } catch (acquisitionError) {
+    waiting.end(acquisitionError);
+    throw acquisitionError;
+  } finally {
+    waiting.end();
+    finishWait();
+  }
+}
+
+export function startWorktreeWait(budget?: WorktreeWaitBudget) {
+  const startedAt = performance.now();
+  let active = true;
+  return {
+    waitMs: Math.max(0, Math.floor(budget?.remainingMs ?? WORKTREE_CREATE_LEASE_WAIT_MS)),
+    end(error?: unknown) {
+      if (!active) {
+        return;
+      }
+      active = false;
+      if (budget) {
+        budget.remainingMs = Math.max(0, budget.remainingMs - (performance.now() - startedAt));
+      }
+      if (
+        budget &&
+        error instanceof OpenClawStateLeaseError &&
+        error.code === "OPENCLAW_STATE_LEASE_HELD"
+      ) {
+        throw new Error(
+          "Managed worktree creation timed out waiting for capacity or checkout custody; inspect openclaw worktrees list and run openclaw worktrees gc before retrying.",
+          { cause: error },
+        );
+      }
     },
-    captureWorktreeRunEndContext(params.env),
-    async () => params.commitGuard?.(),
-  );
+  };
+}
+
+/** Charge source acquisition once, ending before any protected work starts. */
+export async function withWorktreeSourceWait<T>(
+  withSource: WorktreeSourceStage,
+  budget: WorktreeWaitBudget | undefined,
+  run: (source: WorktreeSourceCurrent) => T | Promise<T>,
+  acquisition?: { waitMs?: number },
+): Promise<T> {
+  if (!budget || acquisition?.waitMs !== undefined) {
+    // Immediate reservation refusal must retain its typed busy outcome for safe re-entry.
+    return await withSource(run, acquisition);
+  }
+  const waiting = startWorktreeWait(budget);
+  try {
+    return await withSource(
+      (source) => {
+        waiting.end();
+        return run(source);
+      },
+      { waitMs: waiting.waitMs },
+    );
+  } catch (error) {
+    waiting.end(error);
+    throw error;
+  } finally {
+    waiting.end();
+  }
 }
 
 async function withWorktreeLease<T>(
@@ -87,8 +178,17 @@ async function withWorktreeLease<T>(
   if (params.signal?.aborted) {
     abortAcquisition();
   }
+  const waiting = startWorktreeWait(params.waitBudget);
+  const finishWait = startWorktreePreparationPhase(
+    scope === WORKTREE_CREATE_LEASE_SCOPE ? "allocationWait" : "mutationWait",
+  );
+  let finishRelease: (() => void) | undefined;
   try {
     params.commitGuard?.();
+    const source = params.commitGuard
+      ? await prepareSessionSourceEffect(params.commitGuard)
+      : undefined;
+    await using _ = { [Symbol.asyncDispose]: async () => await source?.release?.() };
     const captured = captureWorktreeRunEndContext(params.env);
     const inherited = params.workerAuthority?.leaseSet;
     const context = inherited?.context ?? captured;
@@ -100,7 +200,7 @@ async function withWorktreeLease<T>(
         scope,
         key,
         leaseMs: WORKTREE_CREATE_LEASE_MS,
-        waitMs: WORKTREE_CREATE_LEASE_WAIT_MS,
+        waitMs: waiting.waitMs,
         heartbeat: "worker",
         leaseLabel: "managed worktree allocation lease",
         operationLabel: "agents.worktrees.allocation",
@@ -108,41 +208,49 @@ async function withWorktreeLease<T>(
       },
       context,
       (lease) => {
+        waiting.end();
         const leaseSet: WorktreeLeaseSet = {
           context,
           leases: [...(inherited?.leases ?? []), lease],
+          mutationWorktreeIds: [
+            ...(inherited?.mutationWorktreeIds ?? []),
+            ...(scope === WORKTREE_MUTATION_LEASE_SCOPE ? [key] : []),
+          ],
         };
         return withOpenClawStateLeasesWorkerAdmission(
           leaseSet.leases,
           context,
           async (authority) => {
+            finishWait();
             // Caller cancellation stops new work; ownership survives through native settlement.
             params.signal?.removeEventListener("abort", abortAcquisition);
             const signal = params.signal
               ? AbortSignal.any([params.signal, lease.signal])
               : lease.signal;
             const assertOwned = () => {
+              // The lease owner checks its live phase, token custody, and shared heartbeat expiry.
               authority.assertCurrent();
-              for (const identity of authority.identities) {
-                verifyOpenClawStateLeaseOwnership({
-                  ...identity,
-                  leaseLabel: "managed worktree allocation lease",
-                  database: {
-                    scope: "shared",
-                    options: { path: context.admission.databasePath, env: context.environment },
-                  },
-                });
-              }
             };
-            const commitGuard = () => {
-              assertOwned();
-              signal.throwIfAborted();
-              params.commitGuard?.();
-            };
+            const commitGuard = composeSessionSourceAssertion(
+              params.commitGuard ? [params.commitGuard] : [],
+              (assertSource) => {
+                assertOwned();
+                signal.throwIfAborted();
+                assertSource();
+              },
+            );
             const workerAuthority = {
+              ...params.workerAuthority,
               leaseSet,
               predicates: params.workerAuthority?.predicates,
+              workspaceEvidence: [
+                ...new Set([
+                  ...(params.workerAuthority?.workspaceEvidence ?? []),
+                  ...(source?.workspaceEvidence ?? []),
+                ]),
+              ],
               assertCurrent: () => {
+                assertOwned();
                 captured.admission.assertCurrent();
                 signal.throwIfAborted();
                 (params.workerAuthority
@@ -158,7 +266,9 @@ async function withWorktreeLease<T>(
             let releaseCapacity = true;
             try {
               const result = await run({
+                idleIoPriority: params.idleIoPriority,
                 signal,
+                waitBudget: params.waitBudget,
                 commitGuard,
                 rollbackGuard: () => {
                   assertOwned();
@@ -170,11 +280,7 @@ async function withWorktreeLease<T>(
               signal.throwIfAborted();
               return result;
             } catch (error) {
-              if (
-                collectNestedErrorCandidates(error).some(
-                  (cause) => extractErrorCode(cause) === "outcome-unknown",
-                )
-              ) {
+              if (hasWorktreeUnknownOutcome(error)) {
                 releaseCapacity = false;
                 retainWorktreeRunEndFailure(error);
                 throw error;
@@ -188,6 +294,7 @@ async function withWorktreeLease<T>(
               }
               throw error;
             } finally {
+              finishRelease = startWorktreePreparationPhase("leaseRelease");
               if (releaseCapacity) {
                 await capacity.release();
               }
@@ -196,7 +303,13 @@ async function withWorktreeLease<T>(
         );
       },
     );
+  } catch (error) {
+    waiting.end(error);
+    throw error;
   } finally {
+    waiting.end();
+    finishWait();
+    finishRelease?.();
     params.signal?.removeEventListener("abort", abortAcquisition);
   }
 }

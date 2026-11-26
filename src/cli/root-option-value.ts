@@ -1,7 +1,6 @@
 import { isValueToken } from "../infra/cli-root-options.js";
 import { parseInlineOptionToken } from "../infra/inline-option-token.js";
 
-/** Return the normalized option value and whether the next argv token was consumed. */
 export function takeCliRootOptionValue(
   raw: string,
   next: string | undefined,

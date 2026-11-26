@@ -93,22 +93,20 @@ internal fun projectToolActivity(
       toolKeys.add(key)
       index = tools.lastIndex
     }
-    run {
-      val tool = tools[index]
-      tools[index] =
-        tool.copy(
-          arguments = tool.arguments ?: displayCall.args,
-          isError = tool.isError || call.isError == true,
-          activity =
-            if (call.activity?.status in setOf("blocked", "failed", "skipped")) {
-              call.activity
-            } else if (tool.activityPrepared) {
-              tool.activity
-            } else {
-              call.activity ?: tool.activity
-            },
-        )
-    }
+    val tool = tools[index]
+    tools[index] =
+      tool.copy(
+        arguments = tool.arguments ?: displayCall.args,
+        isError = tool.isError || call.isError == true,
+        activity =
+          if (call.activity?.status in setOf("blocked", "failed", "skipped")) {
+            call.activity
+          } else if (tool.activityPrepared) {
+            tool.activity
+          } else {
+            call.activity ?: tool.activity
+          },
+      )
     groups[scope] = group.copy(tools = tools, toolKeys = toolKeys, liveTools = group.liveTools + (key to if (key in group.settledToolKeys) call.copy(isComplete = true) else call))
   }
   groups.replaceAll { _, group ->

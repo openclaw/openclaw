@@ -34,13 +34,62 @@ describe("projectMcpCallToolResult", () => {
       expect(result.details).not.toHaveProperty("structuredContent");
       expect(consumeMcpCodeModeGuestResult(result)).toEqual({ content, isError: true });
     } else {
-      expect(result.content).toEqual([
-        { type: "text", text: 'structuredContent:\n{\n  "answer": 42\n}' },
-      ]);
+      expect(result.content).toEqual([{ type: "text", text: 'structuredContent:\n{"answer":42}' }]);
       expect(result.details).toEqual({
         structuredContent: { answer: 42 },
         ...(isError ? { status: "error" } : {}),
       });
     }
+  });
+
+  it.each([
+    [{ answer: 42, items: [1, 2] }, JSON.stringify({ answer: 42, items: [1, 2] }, null, 2)],
+    [{ answer: 42, items: [1, 2] }, JSON.stringify({ answer: 42, items: [1, 2] })],
+    [{ answer: 42, items: [1, 2] }, '{"items":[1,2],"answer":42}'],
+    // Servers wrap non-object values under one key and send the bare value as text.
+    [{ items: [{ id: "C1", name: "a" }] }, '[\n {\n  "name": "a",\n  "id": "C1"\n }\n]'],
+    [{ result: [1, 2] }, "[1,2]"],
+    [{ result: 42 }, "42"],
+    [{ result: "ok" }, '"ok"'],
+    [{ result: "ok" }, "ok"],
+  ])("drops a mirror of %j: %s", (structuredContent, text) => {
+    const result = projectMcpCallToolResult({
+      content: [{ type: "text", text }],
+      structuredContent,
+    });
+    expect(result.content).toEqual([
+      { type: "text", text: `structuredContent:\n${JSON.stringify(structuredContent)}` },
+    ]);
+  });
+
+  it("keeps text that is not a JSON mirror of structured content", () => {
+    const result = projectMcpCallToolResult({
+      content: [
+        { type: "text", text: '{"answer":41}' },
+        { type: "text", text: '{"answer":42' },
+        { type: "text", text: "answer: 42; retry with a narrower query" },
+      ],
+      structuredContent: { answer: 42 },
+    });
+    expect(result.content).toEqual([
+      { type: "text", text: 'structuredContent:\n{"answer":42}' },
+      { type: "text", text: '{"answer":41}' },
+      { type: "text", text: '{"answer":42' },
+      { type: "text", text: "answer: 42; retry with a narrower query" },
+    ]);
+  });
+
+  it.each([
+    ["the value of a multi-key result", { items: [1, 2], next: null }, "[1,2]"],
+    ["text too deeply nested to compare", { items: [] }, `${"[".repeat(1e5)}${"]".repeat(1e5)}`],
+  ])("keeps %s", (_label, structuredContent, text) => {
+    const result = projectMcpCallToolResult({
+      content: [{ type: "text", text }],
+      structuredContent,
+    });
+    expect(result.content).toEqual([
+      { type: "text", text: `structuredContent:\n${JSON.stringify(structuredContent)}` },
+      { type: "text", text },
+    ]);
   });
 });

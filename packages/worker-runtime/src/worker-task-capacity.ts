@@ -10,9 +10,13 @@ export function createWorkerComputeCapacity(limit: number) {
   }
   const active = new Set<WorkerComputePermit>();
   const waiting = new Set<() => void>();
+  const admissionListeners = new Set<() => void>();
   let pendingTasks = 0;
   let pendingBytes = 0;
   let draining = false;
+  const canAdmit = (bytes: number) =>
+    pendingTasks < DEFAULT_WORKER_PENDING_TASKS &&
+    pendingBytes + bytes <= DEFAULT_WORKER_PENDING_BYTES;
   const requestCheckpoints = () => {
     let demand = waiting.size;
     if (demand) {
@@ -47,11 +51,13 @@ export function createWorkerComputeCapacity(limit: number) {
       pendingTasks,
       pendingBytes,
     }),
+    canAdmit,
+    subscribeAdmission(listener: () => void): () => void {
+      admissionListeners.add(listener);
+      return () => admissionListeners.delete(listener);
+    },
     admit(bytes: number): boolean {
-      if (
-        pendingTasks >= DEFAULT_WORKER_PENDING_TASKS ||
-        pendingBytes + bytes > DEFAULT_WORKER_PENDING_BYTES
-      ) {
+      if (!canAdmit(bytes)) {
         return false;
       }
       pendingTasks++;
@@ -61,6 +67,9 @@ export function createWorkerComputeCapacity(limit: number) {
     finish(bytes: number) {
       pendingTasks--;
       pendingBytes -= bytes;
+      for (const listener of admissionListeners) {
+        listener();
+      }
     },
     acquire(resume: () => void, requestCheckpoint: () => boolean): WorkerComputePermit | undefined {
       // A newly submitting pool must not overtake an already waiting pool.

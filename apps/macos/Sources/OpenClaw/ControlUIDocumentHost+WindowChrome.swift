@@ -78,7 +78,6 @@ extension ControlUIDocumentHost {
     }
 
     static func isWindowDragRequest(_ body: Any) -> Bool {
-        guard let payload = body as? [String: Any] else { return false }
-        return payload["type"] as? String == "window-drag"
+        (body as? [String: Any])?["type"] as? String == "window-drag"
     }
 }

@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 
 function contextWithGitStatus(status: "behind" | "current" | "unavailable"): ApplicationContext {
@@ -17,11 +18,11 @@ function contextWithGitStatus(status: "behind" | "current" | "unavailable"): App
         updateAvailable: {
           currentVersion: "2026.9.2",
           latestVersion: "2026.9.3",
-          channel: "dev",
+          channel: "stable",
           commitsBehind: 246,
         },
         updateSchedule: {
-          channel: "dev",
+          channel: "stable",
           autoEnabled: false,
           install: { kind: "git", git },
           target: {
@@ -31,49 +32,83 @@ function contextWithGitStatus(status: "behind" | "current" | "unavailable"): App
             commitsBehind: 246,
           },
         },
-        updateRunning: false,
-        updateReconciliationPending: false,
-        updateStatusBanner: null,
       },
     },
   } as unknown as ApplicationContext;
 }
 
-describe("update attention", () => {
-  it.each([
-    { status: "current", present: false },
-    { status: "behind", present: true },
-    { status: "unavailable", present: true },
-  ] as const)(
-    "sets Inbox presence to $present after a $status comparison",
-    ({ status, present }) => {
-      const entry = resolveSidebarUpdateAttention(contextWithGitStatus(status));
-      if (present) {
-        expect(entry).not.toBeNull();
-      } else {
-        expect(entry).toBeNull();
-      }
-    },
-  );
+it.each([
+  ["stable", "stable", "behind", true],
+  ["beta", "beta", "behind", true],
+  ["dev", "dev", "behind", false],
+  ["extended-stable", "extended-stable", "behind", false],
+  ["unknown", "unknown", "behind", false],
+  ["stable", "dev", "behind", false],
+  ["stable", null, "behind", true],
+  ["dev", null, "behind", false],
+  ["stable", "stable", "current", false],
+  ["stable", "stable", "unavailable", true],
+] as const)("eligibility %s / %s / %s", (advertised, selected, status, visible) => {
+  const context = contextWithGitStatus(status);
+  const snapshot = context.overlays.snapshot;
+  snapshot.updateAvailable!.channel = advertised;
+  snapshot.updateSchedule =
+    selected === null ? null : { ...snapshot.updateSchedule!, channel: selected };
+  expect(resolveSidebarUpdateAttention(context) !== null).toBe(visible);
+});
 
-  it.each([
-    { name: "stable admin update", canDismiss: true, forced: false, dismissible: true },
-    { name: "read-only update", canDismiss: false, forced: false, dismissible: false },
-    { name: "forced update", canDismiss: true, forced: true, dismissible: false },
-  ])("projects $name with explicit dismissal policy", ({ canDismiss, forced, dismissible }) => {
-    const context = contextWithGitStatus("behind");
-    context.gateway.snapshot.client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+it("keeps explicit dev update progress and errors visible", () => {
+  const context = contextWithGitStatus("behind");
+  context.overlays.snapshot.updateSchedule!.channel = "dev";
+  context.overlays.snapshot.updateAvailable!.channel = "dev";
+  context.overlays.snapshot.updateRunning = true;
+  expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+  context.overlays.snapshot.updateRunning = false;
+  context.overlays.snapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
+  expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+});
+
+it.each([
+  ["installed ahead", "2026.10.1", "2026.9.4", "2026.9.4", false],
+  ["serving moved", "2026.9.4", "2026.10.1", "2026.9.4", true],
+  ["installed ahead, no observation", "2026.10.1", "2026.9.4", undefined, false],
+  ["newer Gateway, no observation", "2026.9.4", "2026.10.1", undefined, false],
+] as const)(
+  "keeps only current failed-run attention: %s",
+  (_name, installed, version, recorded, historical) => {
+    const context = contextWithGitStatus("current");
+    context.overlays.snapshot.updateRun = createUpdateRunFixture({
+      status: "failed",
+      before: { version: installed },
+      verification: recorded ? { serviceRunning: true, runningVersion: recorded } : {},
+      finishedAtMs: Date.now(),
+    });
     context.gateway.snapshot.hello = {
       type: "hello-ok",
       protocol: 1,
-      server: { bootId: "boot-a" },
-      auth: { role: "operator", scopes: [canDismiss ? "operator.admin" : "operator.read"] },
-      features: { methods: ["update.run"] },
+      server: { version },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: { methods: [] },
     };
-    context.overlays.snapshot.updateRunning = forced;
+    expect(resolveSidebarUpdateAttention(context) !== null).toBe(!historical);
+  },
+);
 
-    const entry = resolveSidebarUpdateAttention(context);
+it.each([
+  ["stable admin update", "operator.admin", false, true],
+  ["read-only update", "operator.read", false, false],
+  ["forced update", "operator.admin", true, false],
+] as const)("projects %s with explicit dismissal policy", (_name, scope, forced, dismissible) => {
+  const context = contextWithGitStatus("behind");
+  context.gateway.snapshot.client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+  context.gateway.snapshot.hello = {
+    type: "hello-ok",
+    protocol: 1,
+    server: { bootId: "boot-a" },
+    auth: { role: "operator", scopes: [scope] },
+    features: { methods: ["update.run"] },
+  };
+  context.overlays.snapshot.updateRunning = forced;
 
-    expect(Boolean(entry?.dismissal)).toBe(dismissible);
-  });
+  expect(Boolean(resolveSidebarUpdateAttention(context)?.dismissal)).toBe(dismissible);
 });

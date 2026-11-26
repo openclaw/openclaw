@@ -16,7 +16,7 @@ export type CopilotPermissionPolicy = (
 ) => SdkPermissionRequestResult | undefined | Promise<SdkPermissionRequestResult | undefined>;
 
 const REJECT_ALL_FEEDBACK =
-  "copilot agent runtime: no permission policy installed (fail-closed default)";
+  "copilot agent runtime: no permission policy installed (denied by default)";
 
 export const rejectAllPolicy: CopilotPermissionPolicy = () => ({
   kind: "reject",

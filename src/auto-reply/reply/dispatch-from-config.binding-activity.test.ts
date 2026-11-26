@@ -1,5 +1,4 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { inspectRuntimeConversationBindingRoute } from "../../channels/plugins/binding-routing.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -15,11 +14,12 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   createAcpRuntime,
+  createDispatchGate,
   describe0BeforeEach0,
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -52,17 +52,13 @@ describe("dispatch binding activity settlement", () => {
         },
         pluginRoot: "/tmp/test-plugin",
       });
-      const lookup = createDeferred<typeof binding>();
-      const lookupStarted = createDeferred();
+      const lookup = createDispatchGate<typeof binding>();
       sessionBindingMocks.resolveByConversation.mockImplementation(() => {
         throw new Error("dispatch must await binding reads");
       });
       sessionBindingMocks.resolveByConversationAsync
         .mockResolvedValue(binding)
-        .mockImplementationOnce(() => {
-          lookupStarted.resolve();
-          return lookup.promise;
-        });
+        .mockImplementationOnce(lookup.wait);
       if (mode === "fast abort") {
         mocks.tryFastAbortFromMessage.mockResolvedValue({
           handled: true,
@@ -70,12 +66,8 @@ describe("dispatch binding activity settlement", () => {
           stoppedSubagents,
         });
       }
-      const mutation = createDeferred();
-      const started = createDeferred();
-      sessionBindingMocks.touch.mockImplementationOnce(() => {
-        started.resolve();
-        return mutation.promise;
-      });
+      const mutation = createDispatchGate();
+      sessionBindingMocks.touch.mockImplementationOnce(mutation.wait);
       const dispatcher = createDispatcher();
       const replyResolver = vi.fn(async () => ({ text: "should not run" }));
       const params = {
@@ -92,13 +84,13 @@ describe("dispatch binding activity settlement", () => {
         replyResolver,
       };
       const dispatch = dispatchReplyFromConfig(params);
-      await Promise.race([lookupStarted.promise, dispatch]);
+      await Promise.race([lookup.started, dispatch]);
       expect(sessionBindingMocks.touch).not.toHaveBeenCalled();
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
       expect(hookMocks.runner.runMessageReceived).not.toHaveBeenCalled();
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
       lookup.resolve(binding);
-      await started.promise;
+      await mutation.started;
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
       expect(hookMocks.runner.runMessageReceived).not.toHaveBeenCalled();
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -186,19 +178,11 @@ describe("dispatch binding activity settlement", () => {
         });
       }
       sessionBindingMocks.resolveByConversationAsync.mockImplementation(async () => current);
-      const firstActivity = createDeferred();
-      const firstStarted = createDeferred();
-      const replacementActivity = createDeferred();
-      const replacementStarted = createDeferred();
+      const firstActivity = createDispatchGate();
+      const replacementActivity = createDispatchGate();
       sessionBindingMocks.touch
-        .mockImplementationOnce(() => {
-          firstStarted.resolve();
-          return firstActivity.promise;
-        })
-        .mockImplementationOnce(() => {
-          replacementStarted.resolve();
-          return replacementActivity.promise;
-        });
+        .mockImplementationOnce(firstActivity.wait)
+        .mockImplementationOnce(replacementActivity.wait);
       const dispatcher = createDispatcher();
       const replyResolver = vi.fn();
       const dispatch = dispatchReplyFromConfig({
@@ -213,10 +197,10 @@ describe("dispatch binding activity settlement", () => {
         dispatcher,
         ...(plugin ? {} : { replyResolver }),
       });
-      await Promise.race([firstStarted.promise, dispatch]);
+      await Promise.race([firstActivity.started, dispatch]);
       current = replacement;
       firstActivity.resolve();
-      await Promise.race([replacementStarted.promise, dispatch]);
+      await Promise.race([replacementActivity.started, dispatch]);
       expect(sessionBindingMocks.touch).toHaveBeenCalledTimes(2);
       if (plugin) {
         expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
@@ -347,19 +331,16 @@ describe("channel-derived ACP route admission", () => {
       const runtime = createAcpRuntime([{ type: "done" }]);
       acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });
       let current: SessionBindingRecord | null = binding;
-      const started = createDeferred();
-      const release = createDeferred();
+      const bindingWork = createDispatchGate();
       sessionBindingMocks.resolveByConversationAsync.mockImplementation(async () => current);
       if (phase === "initial read") {
         sessionBindingMocks.resolveByConversationAsync.mockImplementationOnce(async () => {
-          started.resolve();
-          await release.promise;
+          await bindingWork.wait();
           return current;
         });
       } else {
         sessionBindingMocks.touch.mockImplementationOnce(async () => {
-          started.resolve();
-          await release.promise;
+          await bindingWork.wait();
         });
       }
       const dispatcher = createDispatcher();
@@ -375,7 +356,7 @@ describe("channel-derived ACP route admission", () => {
         () => ({ error: undefined }),
         (error: unknown) => ({ error }),
       );
-      await Promise.race([started.promise, result]);
+      await Promise.race([bindingWork.started, result]);
       current =
         change === "removed"
           ? null
@@ -395,7 +376,7 @@ describe("channel-derived ACP route admission", () => {
       if (change === "plugin-metadata" && current) {
         current = { ...binding, metadata: current.metadata };
       }
-      release.resolve();
+      bindingWork.resolve();
       expect((await result).error).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
       expect(runtime.runTurn).not.toHaveBeenCalled();
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();

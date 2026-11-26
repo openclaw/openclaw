@@ -1,5 +1,5 @@
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-exact-read.js";
+import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
 import type {
   PendingInputHistoryWorkerInput,

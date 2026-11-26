@@ -13,4 +13,8 @@ export type GatewayOwnerLeaseIdentity = StateLeaseProcessOwner & {
   state: "live" | "dead" | "unknown";
   expired: boolean;
   heartbeatAt?: number;
+  listeningAt?: number;
+  stateDatabaseProvenance?: string;
+  /** Opaque scheduling acknowledgement; never grants restart or ownership authority. */
+  externalRestartReceipt?: string;
 };

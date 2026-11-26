@@ -89,13 +89,12 @@ final class GatewaySleepCycleController {
         // Refresh first: after real sleep the transport is usually dead, and the
         // resume RPC needs the re-established connection to succeed at all.
         await self.refresh()
-        if let suspension {
-            if let route = suspension.route, self.currentRoute() == route {
-                await self.resumeWithRetries(suspension.id, route: route, generation: generation)
-            } else {
-                self.log(Self.changedRouteMessage)
-            }
+        guard let suspension else { return }
+        guard let route = suspension.route, self.currentRoute() == route else {
+            self.log(Self.changedRouteMessage)
+            return
         }
+        await self.resumeWithRetries(suspension.id, route: route, generation: generation)
     }
 
     private func resumeWithRetries(_ suspensionID: String, route: String, generation: UInt64) async {

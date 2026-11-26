@@ -38,7 +38,7 @@ enum DeepLinkAgentPolicy {
         }
         let channel = GatewayAgentChannel(raw: link.channel)
         let deliver = channel.shouldDeliver(link.deliver)
-        let to = link.to?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        let to = link.to?.nonEmpty
         return (deliver: deliver, to: to, channel: channel)
     }
 }
@@ -62,6 +62,11 @@ final class DeepLinkHandler {
     }
 
     func handle(url: URL) async {
+        if let link = CatalogInstallDeepLink(url: url) {
+            // No action query: opening a package never installs or enables executable code.
+            await DashboardManager.shared.show(atPath: link.dashboardPath, search: link.dashboardSearch)
+            return
+        }
         guard let route = DeepLinkParser.parse(url) else {
             deepLinkLogger.debug("ignored deep link \(Self.invalidRouteMetadata(url), privacy: .public)")
             return
@@ -125,9 +130,7 @@ final class DeepLinkHandler {
 
         do {
             let effectiveDelivery = DeepLinkAgentPolicy.effectiveDelivery(link: link, allowUnattended: allowUnattended)
-            let explicitSessionKey = link.sessionKey?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .nonEmpty
+            let explicitSessionKey = link.sessionKey?.nonEmpty
             let resolvedSessionKey: String = if let explicitSessionKey {
                 explicitSessionKey
             } else {
@@ -136,7 +139,7 @@ final class DeepLinkHandler {
             let invocation = GatewayAgentInvocation(
                 message: messagePreview,
                 sessionKey: resolvedSessionKey,
-                thinking: link.thinking?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
+                thinking: link.thinking?.nonEmpty,
                 deliver: effectiveDelivery.deliver,
                 to: effectiveDelivery.to,
                 channel: effectiveDelivery.channel,

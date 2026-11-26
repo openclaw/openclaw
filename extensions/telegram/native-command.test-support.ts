@@ -1,23 +1,18 @@
-// Native command fixtures register Vitest hooks and must load during test collection.
+import assert from "node:assert/strict";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  ModelsAuthLoginFlowOptions,
-  ModelsAuthLoginFlowResult,
-} from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { vi } from "vitest";
 import { registerTelegramNativeCommands } from "./src/bot-native-commands.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
-  createPrivateCommandContext,
   deliverReplies,
+  nativeCommandMocks,
   resetNativeCommandMenuMocks,
 } from "./src/bot-native-commands.menu-test-support.js";
 import { setTelegramRuntime } from "./src/runtime.js";
 import { clearTelegramRuntimeForTest } from "./src/runtime.test-support.js";
 
-export function createTelegramNativeCommandTestDriver(options: {
+export async function createTelegramNativeCommandTestDriver(options: {
   cfg: OpenClawConfig;
   runtime: PluginRuntime;
 }) {
@@ -34,7 +29,7 @@ export function createTelegramNativeCommandTestDriver(options: {
     },
   });
   setTelegramRuntime(options.runtime);
-  registerTelegramNativeCommands(params);
+  await registerTelegramNativeCommands(params);
   return {
     invoke(
       input: {
@@ -46,58 +41,41 @@ export function createTelegramNativeCommandTestDriver(options: {
         match?: string;
       } = {},
     ) {
-      const command = input.command ?? "qaowner";
-      const native = bot.commandHandlers.get(command);
-      if (!native) {
-        throw new Error(`Expected registered native /${command} command`);
-      }
-      const senderId = input.senderId ?? 100;
-      const chatId = input.chatId ?? senderId;
-      return native(
-        input.group
-          ? {
-              match: input.match ?? "",
-              message: {
-                message_id: 17,
-                date: 1_700_000_000,
-                chat: { id: chatId, type: "supergroup", title: "Owners", is_forum: true },
-                message_thread_id: input.threadId,
-                from: { id: senderId, username: "admin" },
-              },
-            }
-          : createPrivateCommandContext({
-              userId: senderId,
-              chatId,
-              messageId: 17,
-              match: input.match,
-            }),
-      );
+      const native = bot.commandHandlers.get(input.command ?? "qaowner");
+      assert(native, "Expected registered native command");
+      const { senderId = 100, chatId = senderId } = input;
+      return native({
+        match: input.match ?? "",
+        message: {
+          message_id: 17,
+          date: input.group ? 1_700_000_000 : Math.floor(Date.now() / 1000),
+          chat: {
+            id: chatId,
+            type: input.group ? "supergroup" : "private",
+            ...(input.group ? { title: "Owners", is_forum: true } : {}),
+          },
+          ...(input.group ? { message_thread_id: input.threadId } : {}),
+          from: { id: senderId, username: input.group ? "admin" : "bob" },
+        },
+      });
     },
-    pairingStoreReadCount: () =>
-      vi.mocked(params.telegramDeps.readChannelAllowFromStore).mock.calls.length,
-    deliveries: () =>
-      deliverReplies.mock.calls.map(([delivery]) => ({ replies: delivery.replies })),
+    pairingStoreReadCount: () => nativeCommandMocks.readChannelAllowFromStore.mock.calls.length,
+    deliveries: () => deliverReplies.mock.calls.map(([{ replies }]) => ({ replies })),
     sentMessages: () =>
-      bot.sendMessage.mock.calls.map((call) => {
-        const chatId: unknown = call[0];
-        const text: unknown = call[1];
-        if (
-          (typeof chatId !== "number" && typeof chatId !== "string") ||
-          typeof text !== "string"
-        ) {
-          throw new Error("Expected Telegram sendMessage chat ID and text");
-        }
+      bot.sendMessage.mock.calls.map(([chatId, text]: unknown[]) => {
+        assert(typeof chatId === "number" || typeof chatId === "string");
+        assert(typeof text === "string");
         return { chatId, text };
       }),
     configureLogin(input: {
-      run: (options: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>;
+      run: Parameters<typeof nativeCommandMocks.runModelsAuthLoginFlow.mockImplementation>[0];
       onResult: () => void;
     }) {
-      params.telegramDeps.runModelsAuthLoginFlow = input.run;
-      params.telegramDeps.sendMessageTelegram = async () => {
+      nativeCommandMocks.runModelsAuthLoginFlow.mockImplementation(input.run);
+      nativeCommandMocks.sendMessageTelegram.mockImplementation(async () => {
         input.onResult();
         return { messageId: "999", chatId: "100" };
-      };
+      });
     },
     close: clearTelegramRuntimeForTest,
   };

@@ -23,7 +23,12 @@ function withDefaultResponsesStreamEncoding(
 /** Preserve the existing fetch policy while binding explicit continuation dispatch to its signal. */
 export function createResponsesRequestFetch(
   model: Model,
-  options: { compact: boolean; stream?: boolean; lifecycle?: ResponsesRequestLifecycle },
+  options: {
+    compact: boolean;
+    stream?: boolean;
+    lifecycle?: ResponsesRequestLifecycle;
+    onSseComment?: () => void;
+  },
 ): typeof globalThis.fetch | undefined {
   const lifecycle = options.lifecycle;
   if (lifecycle && options.compact) {
@@ -34,7 +39,9 @@ export function createResponsesRequestFetch(
   let fetchOverride = options.compact
     ? createBoundedOpenAIResponsesCompactionFetch(buildGuardedModelFetch(model))
     : options.stream
-      ? withDefaultResponsesStreamEncoding(buildGuardedModelFetch(model))
+      ? withDefaultResponsesStreamEncoding(
+          buildGuardedModelFetch(model, undefined, { onSseComment: options.onSseComment }),
+        )
       : undefined;
   if (lifecycle) {
     const dispatchFetch = fetchOverride ?? buildGuardedModelFetch(model);

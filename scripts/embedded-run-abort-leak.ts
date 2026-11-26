@@ -320,8 +320,6 @@ async function main(): Promise<void> {
   }
 
   const rssGrowthMb = (final.rssBytes - baseline.rssBytes) / 1024 / 1024;
-  // Tracked retention: how many iter-allocated transcripts are STILL alive
-  // (have not been finalized). Lower is better.
   const trackedRetention = final.totalIters - final.trackedFinalized;
 
   const durationSec = ((Date.now() - startedAt) / 1000).toFixed(1);

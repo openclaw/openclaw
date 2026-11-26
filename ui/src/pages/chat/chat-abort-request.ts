@@ -1,7 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { invitedSessionAccess } from "../../app/operator-access.ts";
 import {
   scopedAgentParamsForSession,
   type SessionScopeHost,
@@ -37,6 +39,8 @@ export type PendingChatAbort = ChatAbortIntentBase & {
   runId: string;
   /** True when the exact run is embedded-owned and must go through sessions.abort. */
   sessionAbortable?: boolean;
+  /** Keeps replay pending for a missing row, never substitutes for its current invitation. */
+  invitedSend?: true;
 };
 
 export type ChatAbortIntent =
@@ -46,18 +50,16 @@ export type ChatAbortIntent =
       clearQueued?: true;
     });
 
-type ChatAbortRequestTarget = { sessionKey: string; agentId?: string } & (
-  | { runId: string; sessionAbortable?: boolean; discardPendingInput?: true }
-  | { runId: null; clearQueued?: true }
-);
-
 export type ChatAbortRequestResult =
   | { ok: true; noActiveRun: boolean; warning?: string }
   | { ok: false; error: unknown; errorKind?: "state_contention" };
 
 export async function requestChatAbort(
   client: GatewayBrowserClient,
-  intent: ChatAbortRequestTarget,
+  intent: { sessionKey: string; agentId?: string; userInitiated?: true } & (
+    | { runId: string; sessionAbortable?: boolean; discardPendingInput?: true }
+    | { runId: null; clearQueued?: true }
+  ),
 ): Promise<ChatAbortRequestResult> {
   try {
     // Recovered embedded runs retain their exact identity on the session-owned route.
@@ -66,6 +68,7 @@ export async function requestChatAbort(
       await client.request(sessionAbort ? "sessions.abort" : "chat.abort", {
         ...(sessionAbort ? { key: intent.sessionKey } : { sessionKey: intent.sessionKey }),
         ...(intent.agentId ? { agentId: intent.agentId } : {}),
+        ...(intent.userInitiated ? { userInitiated: true } : {}),
         ...(intent.runId !== null
           ? {
               runId: intent.runId,
@@ -124,9 +127,10 @@ export function chatAbortTargetSession(
 export function currentChatAbortIntent(
   state: ChatAbortTargetState,
   sourceClient: GatewayBrowserClient,
+  scope: "run" | "session" = "run",
 ): ChatAbortIntent {
   const sessionAbortable = state.chatRunSessionAbortable === true;
-  const runId = state.chatRunId ?? null;
+  const runId = scope === "run" ? (state.chatRunId ?? null) : null;
   const target = {
     sourceClient,
     recoveryScope: state.hello?.auth?.recoveryScope ?? sourceClient.recoveryScope,
@@ -134,10 +138,16 @@ export function currentChatAbortIntent(
     conversation: resolveUiConversationIdentity(state, state.sessionKey),
     ...scopedAgentParamsForSession(state, state.sessionKey),
   };
-  const sessionId = chatAbortTargetSession(state, target)?.sessionId;
+  const session = chatAbortTargetSession(state, target);
+  const sessionId = session?.sessionId;
   const base = { ...target, ...(sessionId ? { sessionId } : {}) };
   return runId
-    ? { ...base, runId, ...(sessionAbortable ? { sessionAbortable: true } : {}) }
+    ? {
+        ...base,
+        runId,
+        ...(sessionAbortable ? { sessionAbortable: true } : {}),
+        ...(invitedSessionAccess(session) === "send" ? { invitedSend: true } : {}),
+      }
     : {
         ...base,
         runId: null,

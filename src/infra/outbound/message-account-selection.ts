@@ -77,30 +77,14 @@ export async function validateExplicitMessageAccountSelection(params: {
       "message-account:known",
     );
   }
-  if (
-    isChannelAccountExplicitlyDisabled({
-      cfg: params.cfg,
-      channel: plugin.id,
-      accountId: listedAccountId,
-    })
-  ) {
-    throw new MessageActionDeniedError(
-      `Account "${listedAccountId}" for channel ${channel} is disabled.`,
-      "message_account_disabled",
-      "message-account:enabled",
-    );
-  }
-  if (params.checkResolvedAccount !== false) {
-    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
-    const account = await resolveChannelAccount({ plugin, cfg: params.cfg, accountId });
-    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
+  const assertAccountEnabled = (isResolvedEnabled?: () => boolean) => {
     if (
       isChannelAccountExplicitlyDisabled({
         cfg: params.cfg,
         channel: plugin.id,
         accountId: listedAccountId,
       }) ||
-      !resolveChannelAccountEnabled({ plugin, account, cfg: params.cfg })
+      (isResolvedEnabled && !isResolvedEnabled())
     ) {
       throw new MessageActionDeniedError(
         `Account "${listedAccountId}" for channel ${channel} is disabled.`,
@@ -108,6 +92,13 @@ export async function validateExplicitMessageAccountSelection(params: {
         "message-account:enabled",
       );
     }
+  };
+  assertAccountEnabled();
+  if (params.checkResolvedAccount !== false) {
+    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
+    const account = await resolveChannelAccount({ plugin, cfg: params.cfg, accountId });
+    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
+    assertAccountEnabled(() => resolveChannelAccountEnabled({ plugin, account, cfg: params.cfg }));
   }
   return accountId;
 }

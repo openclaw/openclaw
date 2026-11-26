@@ -38,11 +38,6 @@ enum DevicePermissionStatusMap {
 
     /// Add-events access; `.writeOnly` already satisfies it.
     static func eventKitWrite(_ status: EKAuthorizationStatus) -> DeviceSettingsPermissionStatus {
-        switch status {
-        case .authorized, .fullAccess, .writeOnly: .granted
-        case .notDetermined: .notDetermined
-        case .denied, .restricted: .denied
-        @unknown default: .denied
-        }
+        status == .writeOnly ? .granted : self.eventKitRead(status)
     }
 }

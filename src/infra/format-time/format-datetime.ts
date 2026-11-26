@@ -1,31 +1,14 @@
-type TimeZoneFormatter = {
-  timeZone: string;
-  dateTimeFormatConstructor: typeof Intl.DateTimeFormat;
-  formatter: Intl.DateTimeFormat;
-};
-
-let timezoneValidationFormatter: TimeZoneFormatter | undefined;
+let validatedTimezone: string | undefined;
+let timeZoneDayKeyFormatter: { timeZone: string; formatter: Intl.DateTimeFormat } | undefined;
 
 /**
  * Validate an IANA timezone string. Returns the string if valid, undefined otherwise.
  */
 export function resolveTimezone(value: string): string | undefined {
   try {
-    const DateTimeFormat = Intl.DateTimeFormat;
-    const cached = timezoneValidationFormatter;
-    const formatter =
-      typeof value === "string" &&
-      cached?.timeZone === value &&
-      cached.dateTimeFormatConstructor === DateTimeFormat
-        ? cached.formatter
-        : new DateTimeFormat("en-US", { timeZone: value });
-    formatter.format(new Date());
-    if (typeof value === "string" && formatter !== cached?.formatter) {
-      timezoneValidationFormatter = {
-        timeZone: value,
-        dateTimeFormatConstructor: DateTimeFormat,
-        formatter,
-      };
+    if (value !== validatedTimezone) {
+      Intl.DateTimeFormat("en-US", { timeZone: value });
+      validatedTimezone = value;
     }
     return value;
   } catch {
@@ -33,26 +16,20 @@ export function resolveTimezone(value: string): string | undefined {
   }
 }
 
-let timeZoneDayKeyFormatter: TimeZoneFormatter | undefined;
-
 /** Build a stable YYYY-MM-DD formatter for instants in one IANA timezone. */
 export function createTimeZoneDayKeyFormatter(timeZone: string): (date: Date) => string {
-  const DateTimeFormat = Intl.DateTimeFormat;
-  const cached = timeZoneDayKeyFormatter;
-  // Default zones capture host state; only the latest explicit zone is retained.
+  // Only explicit zones are retained; default zones capture the current host state.
   const formatter =
-    typeof timeZone === "string" &&
-    cached?.timeZone === timeZone &&
-    cached.dateTimeFormatConstructor === DateTimeFormat
-      ? cached.formatter
-      : new DateTimeFormat("en-US-u-ca-iso8601-nu-latn", {
+    typeof timeZone === "string" && timeZoneDayKeyFormatter?.timeZone === timeZone
+      ? timeZoneDayKeyFormatter.formatter
+      : new Intl.DateTimeFormat("en-US-u-ca-iso8601-nu-latn", {
           timeZone,
           year: "numeric",
           month: "2-digit",
           day: "2-digit",
         });
-  if (typeof timeZone === "string" && formatter !== cached?.formatter) {
-    timeZoneDayKeyFormatter = { timeZone, dateTimeFormatConstructor: DateTimeFormat, formatter };
+  if (typeof timeZone === "string") {
+    timeZoneDayKeyFormatter = { timeZone, formatter };
   }
   return (date) => {
     const parts = formatter.formatToParts(date);
@@ -68,42 +45,9 @@ export function createTimeZoneDayKeyFormatter(timeZone: string): (date: Date) =>
   };
 }
 
-/** Resolve the first instant belonging to a calendar day in an IANA timezone. */
-export function resolveTimeZoneDayStartMs(dayKey: string, timeZone: string): number | undefined {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
-  if (!match) {
-    return undefined;
-  }
-  const naiveUtcMs = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-
-  const formatDayKey = createTimeZoneDayKeyFormatter(timeZone);
-  const searchWindowMs = 2 * 24 * 60 * 60 * 1000;
-  let low = naiveUtcMs - searchWindowMs;
-  let high = naiveUtcMs + searchWindowMs;
-  // Calendar-day labels are monotonic across this bounded window. Find the
-  // first millisecond whose local label is the requested day, including days
-  // whose first wall-clock time is not 00:00 because of an offset transition.
-  while (low < high) {
-    const middle = low + Math.floor((high - low) / 2);
-    if (formatDayKey(new Date(middle)) < dayKey) {
-      low = middle + 1;
-    } else {
-      high = middle;
-    }
-  }
-  return formatDayKey(new Date(low)) === dayKey ? low : undefined;
-}
-
 type FormatTimestampOptions = {
   /** Include seconds in the output. Default: false */
   displaySeconds?: boolean;
-};
-
-type FormatZonedTimestampOptions = FormatTimestampOptions & {
-  /** IANA timezone string (e.g., 'America/New_York'). Default: system timezone */
-  timeZone?: string;
-  /** Include an abbreviated weekday before the date. Default: false */
-  displayWeekday?: boolean;
 };
 
 let zonedTimestampFormatter: { key: string; formatter: Intl.DateTimeFormat } | undefined;
@@ -137,7 +81,12 @@ export function formatUtcTimestamp(date: Date, options?: FormatTimestampOptions)
  */
 export function formatZonedTimestamp(
   date: Date,
-  options?: FormatZonedTimestampOptions,
+  options?: FormatTimestampOptions & {
+    /** IANA timezone string (e.g., 'America/New_York'). Default: system timezone */
+    timeZone?: string;
+    /** Include an abbreviated weekday before the date. Default: false */
+    displayWeekday?: boolean;
+  },
 ): string | undefined {
   try {
     const { timeZone, displaySeconds = false, displayWeekday = false } = options ?? {};
@@ -169,13 +118,9 @@ export function formatZonedTimestamp(
       formatter.formatToParts(date).map(({ type, value }) => [type, value]),
     );
     const { year, month, day, hour, minute, second, weekday } = parts;
-    const tz = parts.timeZoneName?.trim();
-    if (!year || !month || !day || !hour || !minute || (displayWeekday && !weekday)) {
-      return undefined;
-    }
-    const seconds = displaySeconds && second ? `:${second}` : "";
+    const seconds = displaySeconds ? `:${second}` : "";
     const prefix = displayWeekday ? `${weekday} ` : "";
-    return `${prefix}${year}-${month}-${day} ${hour}:${minute}${seconds}${tz ? ` ${tz}` : ""}`;
+    return `${prefix}${year}-${month}-${day} ${hour}:${minute}${seconds} ${parts.timeZoneName}`;
   } catch {
     return undefined;
   }

@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -7,7 +8,6 @@ import {
   type SessionsPatchMutation,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
@@ -19,12 +19,8 @@ const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
 const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
 
 function sessionsToolResultFitsBudget(payload: Record<string, unknown>): boolean {
-  const compactSize = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
-  return (
-    compactSize.complete &&
-    compactSize.bytes <= SESSIONS_TOOL_RESULT_MAX_BYTES &&
-    Buffer.byteLength(JSON.stringify(payload, null, 2), "utf8") <= SESSIONS_TOOL_RESULT_MAX_BYTES
-  );
+  const size = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
+  return size.complete && size.bytes <= SESSIONS_TOOL_RESULT_MAX_BYTES;
 }
 
 export function withBoundedSessionsResolved(
@@ -83,22 +79,24 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
   if (params.thinkingLevel !== undefined) {
     patch.thinkingLevel = readToolStringParam(params, "thinkingLevel", { required: true });
   }
-  if (Object.keys(patch).length === 0) {
+  const fields = Object.keys(patch);
+  if (patch.pinned !== undefined && fields.length > 1) {
+    throw new ToolInputError("Send pinned separately from shared session settings.");
+  }
+  if (fields.length === 0) {
     throw new ToolInputError("Patch setting required");
   }
   return patch;
 }
 
-type ResolvedPatchTarget = {
-  agentId: string;
-  key: string;
-  isRequesterSession: boolean;
-};
-
 export async function runSessionsToolPatchMany(params: {
   targets: unknown;
   patch: SessionsPatchMutation;
-  resolveTarget: (sessionKey: string) => Promise<ResolvedPatchTarget>;
+  resolveTarget: (sessionKey: string) => Promise<{
+    agentId: string;
+    key: string;
+    isRequesterSession: boolean;
+  }>;
   callGateway: AgentToolGatewayRequestCaller;
 }) {
   if (

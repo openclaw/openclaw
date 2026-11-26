@@ -7,28 +7,12 @@ const MAX_PROFILE_AVATAR_SOURCE_BYTES = 10 * 1024 * 1024;
 type ProcessedProfileAvatar = {
   mime: "image/png" | "image/webp";
   avatarBase64: string;
-  byteLength: number;
 };
 
 export class ProfileAvatarError extends Error {
   constructor(readonly code: "invalid-image" | "source-too-large" | "too-large") {
     super(code);
     this.name = "ProfileAvatarError";
-  }
-}
-
-async function loadImage(file: File): Promise<HTMLImageElement> {
-  const objectUrl = URL.createObjectURL(file);
-  try {
-    const image = new Image();
-    image.decoding = "async";
-    image.src = objectUrl;
-    await image.decode();
-    return image;
-  } catch {
-    throw new ProfileAvatarError("invalid-image");
-  } finally {
-    URL.revokeObjectURL(objectUrl);
   }
 }
 
@@ -49,7 +33,18 @@ export async function processProfileAvatar(file: File): Promise<ProcessedProfile
   if (file.size > MAX_PROFILE_AVATAR_SOURCE_BYTES) {
     throw new ProfileAvatarError("source-too-large");
   }
-  const image = await loadImage(file);
+  const objectUrl = URL.createObjectURL(file);
+  let image: HTMLImageElement;
+  try {
+    image = new Image();
+    image.decoding = "async";
+    image.src = objectUrl;
+    await image.decode();
+  } catch {
+    throw new ProfileAvatarError("invalid-image");
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
   const { naturalWidth: width, naturalHeight: height } = image;
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     throw new ProfileAvatarError("invalid-image");
@@ -90,5 +85,5 @@ export async function processProfileAvatar(file: File): Promise<ProcessedProfile
     throw new ProfileAvatarError("too-large");
   }
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  return { mime, avatarBase64: bytesToBase64(bytes), byteLength: bytes.byteLength };
+  return { mime, avatarBase64: bytesToBase64(bytes) };
 }

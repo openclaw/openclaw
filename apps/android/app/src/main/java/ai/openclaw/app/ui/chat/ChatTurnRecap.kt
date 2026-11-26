@@ -5,6 +5,7 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -45,11 +46,9 @@ private data class TurnRecapWatch(
   var absorbedTerminal: Boolean,
   /** First idle render after the indicator cleared; canceled queued sends must expire promptly. */
   var settleStartedAt: Long?,
-  var pendingTerminal: TurnRecap?,
   var pendingTerminalEndedAt: Long?,
   val settled: TurnRecap?,
   val settledTranscriptItemId: String?,
-  val tracksTranscript: Boolean,
 )
 
 /**
@@ -79,7 +78,7 @@ internal class TurnRecapResolver(
     sessionKey: String,
     indicatorVisible: Boolean,
     row: ChatSessionEntry?,
-    transcript: TurnRecapTranscriptState? = null,
+    transcript: TurnRecapTranscriptState,
   ): TurnRecap? {
     val watch = watches[sessionKey]
     val rowEndedAt = row?.endedAt
@@ -92,11 +91,9 @@ internal class TurnRecapResolver(
             baselineEndedAt = rowEndedAt,
             absorbedTerminal = false,
             settleStartedAt = null,
-            pendingTerminal = null,
             pendingTerminalEndedAt = null,
             settled = null,
             settledTranscriptItemId = null,
-            tracksTranscript = transcript != null,
           )
       } else if (!watch.baselineKnown) {
         if (row != null) {
@@ -112,11 +109,7 @@ internal class TurnRecapResolver(
     if (watch == null) return null
     watch.watching = false
     watch.settled?.let { settled ->
-      if (
-        !watch.tracksTranscript ||
-        transcript?.sessionKey != sessionKey ||
-        watch.settledTranscriptItemId == transcript.newestItemId
-      ) {
+      if (transcript.sessionKey != sessionKey || watch.settledTranscriptItemId == transcript.newestItemId) {
         return settled
       }
       // A newer transcript turn has replaced the content this recap summarized. Session rows do
@@ -156,32 +149,24 @@ internal class TurnRecapResolver(
       watches.remove(sessionKey)
       return null
     }
-    if (
-      watch.tracksTranscript &&
-      (
-        transcript?.sessionKey != sessionKey ||
-          transcript.completedEndedAt != rowEndedAt
-      )
-    ) {
+    if (transcript.sessionKey != sessionKey || transcript.completedEndedAt != rowEndedAt) {
       // The terminal session row can arrive before the terminal-triggered chat.history snapshot.
       // Keep waiting so its final item becomes the recap anchor, not an intermediate tool row.
-      watch.pendingTerminal = terminal
       watch.pendingTerminalEndedAt = rowEndedAt
       return null
     }
-    if (watch.tracksTranscript && transcript?.newestItemId != transcript?.completedNewestItemId) {
+    if (transcript.newestItemId != transcript.completedNewestItemId) {
       // Newer transcript content already superseded the completed snapshot before this pane could
       // settle it, so there is no safe recap attribution left to display.
       watches.remove(sessionKey)
       return null
     }
-    val settled = watch.pendingTerminal ?: terminal
     watches[sessionKey] =
       watch.copy(
-        settled = settled,
-        settledTranscriptItemId = transcript?.completedNewestItemId,
+        settled = terminal,
+        settledTranscriptItemId = transcript.completedNewestItemId,
       )
-    return settled
+    return terminal
   }
 }
 
@@ -195,14 +180,26 @@ internal fun ChatTurnRecapRow(recap: TurnRecap) {
     horizontalArrangement = Arrangement.spacedBy(7.dp),
   ) {
     WorkingClawIcon(runKey = "turn-recap", color = ClawTheme.colors.primary, parked = true)
-    Text(
-      text = nativeStringResource("Done in \$duration", duration),
-      style = ClawTheme.type.caption,
-      color = ClawTheme.colors.textMuted,
-    )
-    tokens?.let {
-      Text(text = nativeStringResource("·"), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
-      Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    FlowRow(
+      modifier = Modifier.weight(1f),
+      horizontalArrangement = Arrangement.spacedBy(7.dp),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+      itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = nativeStringResource("Done in \$duration", duration),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
+      tokens?.let {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+          Text(text = nativeStringResource("·"), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
+          Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        }
+      }
     }
   }
 }

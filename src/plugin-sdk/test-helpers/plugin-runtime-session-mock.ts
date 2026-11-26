@@ -16,6 +16,8 @@ export function createPluginSessionRuntimeMock() {
     recordSessionMetaFromInbound:
       vi.fn<PluginRuntime["channel"]["session"]["recordSessionMetaFromInbound"]>(),
     recordInboundSession: vi.fn<PluginRuntime["channel"]["session"]["recordInboundSession"]>(),
+    updateLastRouteWithAuthority:
+      vi.fn<PluginRuntime["channel"]["session"]["updateLastRouteWithAuthority"]>(),
     updateLastRoute: vi.fn<PluginRuntime["channel"]["session"]["updateLastRoute"]>(),
     resolveEntryResetFreshness: vi.fn(resolveSessionEntryResetFreshness),
     resolveEntryResetFreshnessAsync: vi.fn(

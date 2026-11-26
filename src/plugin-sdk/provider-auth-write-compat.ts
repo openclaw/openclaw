@@ -14,9 +14,9 @@ type AuthProfileUpsertParams = {
   stateDir?: string;
 };
 
-type AuthProfileUpdateParams = Omit<
+type AuthProfileUpdateParams = Pick<
   Parameters<typeof updateAuthProfileStoreWithLockStrict>[0],
-  "updater"
+  "agentDir" | "profileId" | "sharedStoreWrite" | "stateDir" | "saveOptions"
 > & { updater: (store: AuthProfileStore) => boolean };
 
 // These Plugin SDK exports shipped with nullable failure semantics. Core callers use the
@@ -26,7 +26,11 @@ export async function updateAuthProfileStoreWithLockCompat(
 ): Promise<AuthProfileStore | null> {
   try {
     return await updateAuthProfileStoreWithLockStrict({
-      ...params,
+      agentDir: params.agentDir,
+      profileId: params.profileId,
+      sharedStoreWrite: params.sharedStoreWrite,
+      stateDir: params.stateDir,
+      saveOptions: params.saveOptions,
       updater: (store) => {
         const changed = params.updater(store);
         if (changed) {

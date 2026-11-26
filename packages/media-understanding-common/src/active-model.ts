@@ -1,5 +1,6 @@
-/** Provider/model pair selected for one media-understanding request. */
 export type ActiveMediaModel = {
   provider: string;
   model?: string;
+  /** Effective API captured from the prepared model selection. */
+  api?: string;
 };

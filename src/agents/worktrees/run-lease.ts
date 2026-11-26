@@ -1,21 +1,30 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
+import { formatErrorMessage as errorMessage, toErrorObject } from "../../infra/errors.js";
+import { realpathOrResolve } from "../../infra/path-existence.js";
+import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { sleep } from "../../utils/sleep.js";
-import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
+import {
+  assertManagedWorktreeRemovalComplete,
+  lockWorktreeForProcess,
+  unlockWorktree,
+} from "./git-lock.js";
 import { worktreePathExists } from "./git.js";
 import { readRegistryWorktree, readRegistryWorktrees } from "./registry-read.js";
 import {
   claimWorktreeRemovalRow,
-  hasLiveWorktreeRunLeaseRow,
+  recordRegistryWorktreeActivity,
   releaseWorktreeRunLeaseRow,
 } from "./registry.js";
+import { setWorktreeRunEndCleanupFailure, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import {
   admitWorktreeRunLeaseRowAsync,
   releaseWorktreeRunLeaseRowAsync,
@@ -62,6 +71,7 @@ type LeaseCleanup = {
   admissionSettled: boolean;
   gitRetained: boolean;
   refcountReleased: boolean;
+  failure?: unknown;
 };
 const pendingLeaseCleanups = new Set<LeaseCleanup>();
 let exitCleanupRegistered = false;
@@ -85,7 +95,10 @@ async function retainGitLock(context: OpenClawStateWorkerContext, id: string): P
       if (!record) {
         return;
       }
-      await lockWorktreeForProcess(record);
+      const options = { beforeRun: () => context.admission.assertCurrent() };
+      await assertManagedWorktreeRemovalComplete(record, options);
+      await recordRegistryWorktreeActivity(context.environment, record, options.beforeRun);
+      await lockWorktreeForProcess(record, options);
       held.gitLocked = true;
     } catch (error) {
       heldGitLocks.delete(id);
@@ -121,6 +134,7 @@ async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
     try {
       const record = await readRegistryWorktree(cleanup.context, cleanup.id);
       if (record) {
+        await recordRegistryWorktreeActivity(cleanup.context.environment, record);
         await unlockWorktree(record);
       }
     } catch (error) {
@@ -132,21 +146,11 @@ async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
   });
 }
 
-async function realpathOrSelf(candidate: string): Promise<string> {
-  try {
-    return await fs.realpath(candidate);
-  } catch {
-    return path.resolve(candidate);
-  }
-}
-
 export async function resolveWorktreeForPath(params: {
   sessionEntry?: { worktree?: { id: string } };
   candidatePaths: Array<string | undefined>;
-  env?: NodeJS.ProcessEnv;
 }): Promise<WorktreeRunSource | undefined> {
-  const env = params.env ?? process.env;
-  const context = captureOpenClawStateWorkerContext({ env });
+  const context = captureOpenClawStateWorkerContext({ env: process.env });
   const boundId = params.sessionEntry?.worktree?.id;
   if (boundId !== undefined) {
     // The session's stored binding is authoritative: if that worktree is gone the
@@ -162,23 +166,23 @@ export async function resolveWorktreeForPath(params: {
   if (records.length === 0) {
     return undefined;
   }
-  const bases = new Map<string, string>();
-  for (const record of records) {
-    bases.set(record.id, await realpathOrSelf(record.path));
-  }
-  const seen = new Set<string>();
-  for (const candidate of params.candidatePaths) {
-    if (!candidate || seen.has(candidate)) {
+  // Paths are canonical at creation/migration; keep registry order for overlapping roots.
+  const bases = new Map(records.map((record, index) => [record.path, index] as const).toReversed());
+  for (const candidate of new Set(params.candidatePaths)) {
+    if (!candidate) {
       continue;
     }
-    seen.add(candidate);
-    const real = await realpathOrSelf(candidate);
-    for (const record of records) {
-      const base = bases.get(record.id);
-      if (base && (real === base || real.startsWith(`${base}${path.sep}`))) {
-        context.admission.assertCurrent();
-        return { context, record };
+    let first = records.length;
+    for (let current = await realpathOrResolve(candidate); ; current = path.dirname(current)) {
+      first = Math.min(first, bases.get(current) ?? records.length);
+      if (path.dirname(current) === current) {
+        break;
       }
+    }
+    const record = records[first];
+    if (record) {
+      context.admission.assertCurrent();
+      return { context, record };
     }
   }
   context.admission.assertCurrent();
@@ -196,6 +200,11 @@ async function deleteRunLeaseRowWithRetries(cleanup: LeaseCleanup): Promise<bool
       );
       return true;
     } catch (error) {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        // Neither lifecycle retry nor process exit may replay an uncertain release.
+        cleanup.admissionSettled = false;
+        throw error;
+      }
       log.warn(
         `failed to release worktree run lease for ${cleanup.id} (attempt ${attempt}): ${errorMessage(error)}`,
       );
@@ -214,13 +223,32 @@ async function runLeaseCleanup(cleanup: LeaseCleanup): Promise<boolean> {
   if (!cleanup.admissionSettled) {
     return false;
   }
-  if (!cleanup.rowDeleted) {
-    if (!(await deleteRunLeaseRowWithRetries(cleanup))) {
-      return false;
+  try {
+    if (!cleanup.rowDeleted) {
+      cleanup.rowDeleted = await deleteRunLeaseRowWithRetries(cleanup);
     }
-    cleanup.rowDeleted = true;
+    if (cleanup.rowDeleted && (!cleanup.gitRetained || (await releaseGitLock(cleanup)))) {
+      setWorktreeRunEndCleanupFailure(cleanup.context, cleanup);
+      cleanup.failure = undefined;
+      pendingLeaseCleanups.delete(cleanup);
+      return true;
+    }
+    retainCleanupFailure(
+      cleanup,
+      new Error("Managed worktree run lease cleanup did not settle; custody retained"),
+    );
+    return false;
+  } catch (error) {
+    retainCleanupFailure(cleanup, error);
+    throw error;
   }
-  return !cleanup.gitRetained || (await releaseGitLock(cleanup));
+}
+
+function retainCleanupFailure(cleanup: LeaseCleanup, error: unknown): void {
+  materializeErrorStack(error);
+  cleanup.failure = error;
+  pendingLeaseCleanups.add(cleanup);
+  setWorktreeRunEndCleanupFailure(cleanup.context, cleanup, { error });
 }
 
 async function drainPendingLeaseCleanups(): Promise<void> {
@@ -237,7 +265,7 @@ function ensureExitCleanupRegistered(): void {
   }
   exitCleanupRegistered = true;
   // Only settled admissions can be deleted synchronously; unknown writers may still insert.
-  process.on("exit", () => {
+  registerProcessExitCleanup(() => {
     for (const cleanup of pendingLeaseCleanups) {
       if (cleanup.admissionSettled && !cleanup.rowDeleted) {
         try {
@@ -261,9 +289,37 @@ export async function acquireWorktreeRunLease(
     source?: WorktreeRunSource;
   } = {},
 ): Promise<WorktreeRunLease> {
+  const ready = createDeferredCore<WorktreeRunLease>();
+  const releaseRequested = createDeferredCore();
+  const settled = withWorktreeRunEnd(
+    opts.source?.context.environment ?? opts.env ?? process.env,
+    async () => {
+      const lease = await acquireWorktreeRunLeaseInScope(id, opts);
+      ready.resolve({
+        id: lease.id,
+        token: lease.token,
+        release() {
+          releaseRequested.resolve();
+          return settled;
+        },
+      });
+      await releaseRequested.promise;
+      await lease.release();
+    },
+    { independent: true },
+  );
+  // Publishing the handle never waits for release; the existing owner still joins its cleanup.
+  void settled.catch(ready.reject);
+  return ready.promise;
+}
+
+async function acquireWorktreeRunLeaseInScope(
+  id: string,
+  opts: NonNullable<Parameters<typeof acquireWorktreeRunLease>[1]>,
+): Promise<WorktreeRunLease> {
   const env = opts.env ?? process.env;
   const context = opts.source?.context ?? captureOpenClawStateWorkerContext({ env });
-  const observed = opts.source ? structuredClone(opts.source.record) : undefined;
+  const observed = opts.source?.record;
   if (observed && observed.id !== id) {
     throw new Error("Worktree run source belongs to another worktree");
   }
@@ -311,7 +367,7 @@ export async function acquireWorktreeRunLease(
     context.admission.assertCurrent();
   } catch (error) {
     if (!(await runLeaseCleanup(cleanup))) {
-      pendingLeaseCleanups.add(cleanup);
+      retainCleanupFailure(cleanup, error);
     }
     throw error;
   }
@@ -322,7 +378,10 @@ export async function acquireWorktreeRunLease(
     release: () =>
       (release ??= runLeaseCleanup(cleanup).then((complete) => {
         if (!complete) {
-          pendingLeaseCleanups.add(cleanup);
+          throw toErrorObject(
+            cleanup.failure,
+            "Managed worktree run lease cleanup remains unsettled",
+          );
         }
       })),
   };
@@ -348,13 +407,12 @@ export function claimWorktreeRemoval(
   });
 }
 
-export function hasLiveWorktreeRunLease(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
-  return hasLiveWorktreeRunLeaseRow(env, worktreeId);
-}
-
 const testing = {
   drainPendingCleanupsForTest: drainPendingLeaseCleanups,
   resetForTest(): void {
+    for (const cleanup of pendingLeaseCleanups) {
+      setWorktreeRunEndCleanupFailure(cleanup.context, cleanup);
+    }
     heldGitLocks.clear();
     gitLockTransitionTails.clear();
     pendingLeaseCleanups.clear();

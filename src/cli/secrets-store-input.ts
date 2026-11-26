@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { password } from "@clack/prompts";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { parseSecretStoreDotEnvText } from "../secrets/store/dotenv.js";
 import {
   SECRET_STORE_VALUE_MAX_BYTES,
@@ -21,11 +22,14 @@ async function readBoundedStdin(maxBytes: number): Promise<string> {
         `Stdin input exceeds ${limit} bytes.`,
       ),
   });
-  return bytes.toString("utf8");
+  return decodeUtf8Input(bytes, "Stdin input");
 }
 
 async function readBoundedFile(pathname: string, maxBytes: number): Promise<string> {
-  const file = await fs.open(pathname, "r");
+  // Open FIFOs without waiting for a writer so the descriptor check can reject them.
+  const flags =
+    process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
+  const file = await fs.open(pathname, flags);
   try {
     const stat = await file.stat();
     if (!stat.isFile()) {
@@ -37,7 +41,7 @@ async function readBoundedFile(pathname: string, maxBytes: number): Promise<stri
         `Input file exceeds ${maxBytes} bytes: ${pathname}`,
       );
     }
-    return (await readFileDescriptorBounded(file.fd, maxBytes)).toString("utf8");
+    return decodeUtf8Input(await readFileDescriptorBounded(file.fd, maxBytes), "Input file");
   } finally {
     await file.close();
   }

@@ -1,78 +1,48 @@
-// A `canDeliverSourceReply` tool that authored a final reply ends the turn once the
-// whole tool batch settles; progress replies, errors and ordinary tools keep the
-// model turn going. These tests drive the real agent loop and count provider requests.
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { setInternalToolTurnCompletion } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
 import { Agent, type AgentTool } from "../../runtime/index.js";
-import {
-  getInternalToolTurnCompletion,
-  setInternalToolTurnCompletion,
-} from "../../runtime/internal-hooks.js";
-import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { installToolAuthoredSourceReplyTerminalHook } from "./message-tool-terminal.js";
+import {
+  createTerminalTestModel,
+  terminalResponse,
+  terminalToolCall,
+} from "./message-tool-terminal.test-support.js";
 
 const finalReply = { ok: true, sourceReply: { text: "Pedido creado." } };
 const progressReply = { sourceReply: { text: "Comprobando…", final: false } };
 
-const model: Model = {
-  id: "test-model",
-  name: "Test Model",
-  api: "openai-responses",
-  provider: "test-provider",
-  baseUrl: "https://example.test",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1_000,
-  maxTokens: 1_000,
-};
+const model = createTerminalTestModel();
 
 type ToolPlan = {
   name: string;
   details: unknown;
   isError?: boolean;
+  terminate?: boolean;
   /** Required arguments the call omits, so validation rejects it before execution. */
   rejectBeforeExecution?: boolean;
 };
 
-function assistant(
-  content: AssistantMessage["content"],
-): AssistantMessage & { stopReason: "toolUse" | "stop" } {
-  const stopReason: "toolUse" | "stop" = content.some((entry) => entry.type === "toolCall")
-    ? "toolUse"
-    : "stop";
-  return {
-    role: "assistant",
-    content,
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsageFixture(),
-    stopReason,
-    timestamp: Date.now(),
-  };
-}
-
-/**
- * Runs one model step that calls every planned tool in parallel. Each executing tool
- * waits on its own gate; `completionOrder` releases the gates one at a time, waiting
- * for each tool to finish before releasing the next. A second model step would answer
- * "restated".
- */
+// Release parallel calls one at a time to exercise batch settlement in either order.
 async function runBatch(params: {
-  tools: ToolPlan[];
-  completionOrder: string[];
+  tools?: ToolPlan[];
+  sibling?: ToolPlan;
+  completionOrder?: string[];
   capableToolNames?: string[];
+  assistantIdentity?: Pick<AssistantMessage, "responseId" | "turnId">;
+  runId?: string;
   configureAgent?: (agent: Agent) => void;
 }) {
+  const plans = params.tools ?? [
+    { name: "order_confirm", details: finalReply },
+    ...(params.sibling ? [params.sibling] : []),
+  ];
+  const executing = plans.filter((plan) => !plan.rejectBeforeExecution);
   const signalsByTool = new Map(
-    params.tools.map((tool) => [
+    plans.map((tool) => [
       tool.name,
       { gate: createDeferred(), started: createDeferred(), finished: createDeferred() },
     ]),
@@ -85,7 +55,7 @@ async function runBatch(params: {
     return toolSignals;
   };
   const completed: string[] = [];
-  const tools: AgentTool[] = params.tools.map((plan) => ({
+  const tools: AgentTool[] = plans.map((plan) => ({
     name: plan.name,
     label: plan.name,
     description: plan.name,
@@ -100,16 +70,15 @@ async function runBatch(params: {
       if (plan.isError) {
         throw new Error(`${plan.name} failed`);
       }
-      return { content: [{ type: "text", text: `${plan.name} done` }], details: plan.details };
+      return {
+        content: [{ type: "text", text: `${plan.name} done` }],
+        details: plan.details,
+        terminate: plan.terminate,
+      };
     },
   }));
   const turns: AssistantMessage["content"][] = [
-    params.tools.map((plan) => ({
-      type: "toolCall",
-      id: `call-${plan.name}`,
-      name: plan.name,
-      arguments: {},
-    })),
+    plans.map((plan) => terminalToolCall(plan.name, `call-${plan.name}`)),
     [{ type: "text", text: "restated" }],
   ];
   let requests = 0;
@@ -121,122 +90,168 @@ async function runBatch(params: {
       if (!content) {
         throw new Error(`unexpected provider request ${requests}`);
       }
-      const message = assistant(content);
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        stream.push({ type: "done", reason: message.stopReason, message });
-        stream.end();
-      });
-      return stream;
+      return terminalResponse(
+        content,
+        content.some((entry) => entry.type === "toolCall") ? "toolUse" : "stop",
+        params.assistantIdentity,
+      );
     },
   });
   params.configureAgent?.(agent);
+  const replies: MessagingToolSourceReplyPayload[] = [];
   installToolAuthoredSourceReplyTerminalHook({
     agent,
+    idempotencyScope: params.runId ?? "run-test",
+    onSourceReplies: (payloads) => replies.push(...payloads),
     sourceReplyCapableToolNames: new Set(params.capableToolNames ?? ["order_confirm"]),
   });
   const run = agent.prompt("confirm the order");
-  const executing = params.tools.filter((plan) => !plan.rejectBeforeExecution);
   await Promise.all(executing.map((plan) => signals(plan.name).started.promise));
-  for (const name of params.completionOrder) {
+  for (const name of params.completionOrder ?? executing.map((plan) => plan.name)) {
     signals(name).gate.resolve();
     await signals(name).finished.promise;
   }
   await run;
-  return { requests, completed };
+  return { requests, completed, replies };
+}
+
+function expectContinuation(run: Awaited<ReturnType<typeof runBatch>>, completed?: string[]) {
+  expect(run.requests).toBe(2);
+  expect(run.replies).toEqual([]);
+  if (completed) {
+    expect(run.completed).toEqual(completed);
+  }
+}
+
+function expectFinal(run: Awaited<ReturnType<typeof runBatch>>) {
+  expect(run.requests).toBe(1);
+  expect(run.replies).toEqual([
+    expect.objectContaining({ text: "Pedido creado.", toolAuthored: true }),
+  ]);
 }
 
 describe("tool-authored source reply turn completion", () => {
-  it.each([
-    { order: ["order_confirm", "crm_note"], label: "the capable tool finishes first" },
-    { order: ["crm_note", "order_confirm"], label: "the ordinary tool finishes first" },
-  ])("ends the turn after the whole batch settles when $label", async ({ order }) => {
-    const run = await runBatch({
-      tools: [
-        { name: "order_confirm", details: finalReply },
-        { name: "crm_note", details: { ok: true } },
-      ],
-      completionOrder: order,
-    });
-
-    expect(run.completed).toEqual(order);
-    expect(run.requests).toBe(1);
+  it("keeps reused call IDs distinct across assistant turns and stable across recovery runs", async () => {
+    const replies: MessagingToolSourceReplyPayload[] = [];
+    for (const [runId, turnId, responseId] of [
+      ["run-first", "persisted-1", "response-1"],
+      ["run-first", "persisted-2", "response-2"],
+      ["run-recovery", "persisted-1", "response-1"],
+      ["run-without-response-id", "persisted-3", undefined],
+      ["run-response-only", undefined, "response-4"],
+    ] as const) {
+      const run = await runBatch({
+        assistantIdentity: { turnId, responseId },
+        runId,
+      });
+      expect(run.requests).toBe(1);
+      replies.push(...run.replies);
+    }
+    const identities = ["response-1", "response-2", "response-1", "persisted-3", "response-4"];
+    expect(replies.map((reply) => reply.idempotencyKey)).toEqual(
+      identities.map((identity) => `${identity}:tool-source-reply:call-order_confirm`),
+    );
+    expect(replies.map((reply) => reply.toolAuthoredForTurnId)).toEqual(identities);
   });
-
   it.each([
-    { label: "a progress reply", plan: { name: "stock_check", details: progressReply } },
-    { label: "an error", plan: { name: "stock_check", details: {}, isError: true } },
-    { label: "ordinary details", plan: { name: "stock_check", details: { ok: true } } },
-  ])("ends the turn when a second capable tool in the batch returns $label", async ({ plan }) => {
-    const run = await runBatch({
-      tools: [{ name: "order_confirm", details: finalReply }, plan],
-      completionOrder: ["order_confirm", "stock_check"],
-      capableToolNames: ["order_confirm", "stock_check"],
-    });
-
-    expect(run.completed).toEqual(["order_confirm", "stock_check"]);
-    expect(run.requests).toBe(1);
-  });
-
-  it("ends the turn when another call is rejected before it executes", async () => {
-    const run = await runBatch({
-      tools: [
-        { name: "order_confirm", details: finalReply },
-        { name: "file_read", details: {}, rejectBeforeExecution: true },
-      ],
-      completionOrder: ["order_confirm"],
-    });
-
-    expect(run.completed).toEqual(["order_confirm"]);
-    expect(run.requests).toBe(1);
-  });
-
-  it.each([
-    { label: "authored a progress reply", details: progressReply, isError: false },
-    { label: "failed", details: finalReply, isError: true },
-    { label: "reported ok: false", details: { ...finalReply, ok: false }, isError: false },
-    { label: "returned no source reply", details: { ok: true }, isError: false },
-    {
-      label: "returned only blank media",
-      details: { sourceReply: { mediaUrls: ["", "  "] } },
-      isError: false,
+    [false, false],
+    [true, true],
+  ])(
+    "retains a final reply beside a terminal sibling (authored terminate=%s, capable=%s)",
+    async (terminate, capable) => {
+      const run = await runBatch({
+        tools: [
+          { name: "order_confirm", details: finalReply, terminate },
+          { name: "handoff", details: { ok: true }, terminate: true },
+        ],
+        capableToolNames: capable ? ["order_confirm", "handoff"] : ["order_confirm"],
+      });
+      expectFinal(run);
     },
-  ])("lets the model continue when the capable tool $label", async ({ details, isError }) => {
+  );
+
+  it.each([progressReply, { ok: false }])(
+    "does not admit a partial reply beside a terminal sibling with %j",
+    async (details) => {
+      const run = await runBatch({
+        tools: [
+          { name: "order_confirm", details: finalReply },
+          { name: "handoff", details, terminate: true },
+        ],
+        capableToolNames: ["order_confirm", "handoff"],
+        completionOrder: ["handoff", "order_confirm"],
+      });
+      expectContinuation(run);
+    },
+  );
+
+  it.each([
+    ["order_confirm", "crm_note"],
+    ["crm_note", "order_confirm"],
+  ])(
+    "keeps the model responsible for an unhandled sibling finishing %s then %s",
+    async (...order) => {
+      const run = await runBatch({
+        sibling: { name: "crm_note", details: { ok: true } },
+        completionOrder: order,
+      });
+
+      expectContinuation(run, order);
+    },
+  );
+
+  it.each([
+    ["a progress reply", progressReply, false],
+    ["an error", finalReply, true],
+    ["ordinary details", { ok: true }, false],
+    ["ok: false", { ...finalReply, ok: false }, false],
+    ["blank media", { sourceReply: { mediaUrls: ["", "  "] } }, false],
+  ] satisfies [string, unknown, boolean][])(
+    "continues when a second capable tool returns %s",
+    async (_label, details, isError) => {
+      const run = await runBatch({
+        sibling: { name: "stock_check", details, isError },
+        capableToolNames: ["order_confirm", "stock_check"],
+      });
+
+      expectContinuation(run, ["order_confirm", "stock_check"]);
+    },
+  );
+
+  it("continues when another call is rejected before it executes", async () => {
+    const run = await runBatch({
+      sibling: { name: "file_read", details: {}, rejectBeforeExecution: true },
+    });
+
+    expectContinuation(run, ["order_confirm"]);
+  });
+
+  it.each([{ capableToolNames: [] }, { capableToolNames: ["other_tool"] }])(
+    "continues when the tool is not capable ($capableToolNames)",
+    async ({ capableToolNames }) => {
+      expect((await runBatch({ capableToolNames })).requests).toBe(2);
+    },
+  );
+
+  it("commits every final reply only after all capable siblings settle", async () => {
     const run = await runBatch({
       tools: [
-        { name: "order_confirm", details, isError },
-        { name: "crm_note", details: { ok: true } },
+        { name: "Order_Confirm", details: finalReply },
+        { name: "stock_check", details: { sourceReply: { text: "Stock reserved." } } },
       ],
-      completionOrder: ["order_confirm", "crm_note"],
+      capableToolNames: ["order_confirm", "stock_check"],
+      completionOrder: ["stock_check", "Order_Confirm"],
     });
-
-    expect(run.requests).toBe(2);
-  });
-
-  it("lets the model continue for a tool without the capability", async () => {
-    const run = await runBatch({
-      tools: [{ name: "order_confirm", details: finalReply }],
-      completionOrder: ["order_confirm"],
-      capableToolNames: ["other_tool"],
-    });
-
-    expect(run.requests).toBe(2);
-  });
-
-  it("matches a capable tool by its policy-normalized name", async () => {
-    const run = await runBatch({
-      tools: [{ name: "Order_Confirm", details: finalReply }],
-      completionOrder: ["Order_Confirm"],
-      capableToolNames: ["order_confirm"],
-    });
-
     expect(run.requests).toBe(1);
+    expect(
+      run.replies
+        .map((reply) => reply.text)
+        .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+    ).toEqual(["Pedido creado.", "Stock reserved."]);
   });
 
   it("reads the result after afterToolCall hooks, so a hook can withdraw the reply", async () => {
     const run = await runBatch({
-      tools: [{ name: "order_confirm", details: finalReply }],
-      completionOrder: ["order_confirm"],
       configureAgent: (agent) => {
         agent.afterToolCall = async () => ({ details: { redacted: true } });
       },
@@ -245,21 +260,21 @@ describe("tool-authored source reply turn completion", () => {
     expect(run.requests).toBe(2);
   });
 
+  it("captures a reply even when the previous hook already completes the turn", async () => {
+    const run = await runBatch({
+      configureAgent: (agent) => setInternalToolTurnCompletion(agent, () => true),
+    });
+    expectFinal(run);
+  });
+
   it("keeps an earlier turn-completion hook in charge", async () => {
     const run = await runBatch({
       tools: [{ name: "crm_note", details: { ok: true } }],
-      completionOrder: ["crm_note"],
       configureAgent: (agent) => {
         setInternalToolTurnCompletion(agent, () => true);
       },
     });
 
     expect(run.requests).toBe(1);
-  });
-
-  it("installs nothing when no tool is capable", () => {
-    const agent = new Agent({ initialState: { model } });
-    installToolAuthoredSourceReplyTerminalHook({ agent, sourceReplyCapableToolNames: new Set() });
-    expect(getInternalToolTurnCompletion(agent)).toBeUndefined();
   });
 });

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   getBoundLegacyPluginSdkResourceHost,
   type LegacyPluginSdkResourceHost,
@@ -5,9 +6,9 @@ import {
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
+
+const acceptedUsage = new AsyncLocalStorage<UsageWork>();
 
 type UsageWork = {
   work: AsyncWorkScope;
@@ -27,54 +28,6 @@ function usageWork(host: LegacyPluginSdkResourceHost): UsageWork {
     state.owners.set(host, owner);
   }
   return owner;
-}
-
-/** Reserve native-writer order while asynchronous reads choose the physical owner. */
-export function reserveAuthProfileUsageWrite<T>(options: OpenClawAgentDatabaseOptions) {
-  const assignment = createDeferredCore<(() => Promise<T>) | undefined>();
-  const controller = new AbortController();
-  let selected = false;
-  let released = false;
-  const completion = runOpenClawAgentWriteAdmission(
-    options,
-    async () => {
-      const operation = await assignment.promise;
-      return operation ? { value: await operation() } : undefined;
-    },
-    true,
-    undefined,
-    controller.signal,
-  );
-  // A candidate can be refused before routing selects it; run/dispose join that result.
-  void completion.catch(() => {});
-  const release = () => {
-    if (selected || released) {
-      return;
-    }
-    released = true;
-    assignment.resolve(undefined);
-    controller.abort(new Error("Unused auth usage writer reservation"));
-  };
-  return {
-    async run(operation: () => Promise<T>): Promise<T> {
-      if (released) {
-        return operation();
-      }
-      selected = true;
-      assignment.resolve(operation);
-      const result = await completion;
-      if (!result) {
-        throw new Error("Auth usage writer reservation settled without its operation");
-      }
-      return result.value;
-    },
-    release,
-    async dispose() {
-      release();
-      // Selected failures reach run(); unselected candidates never execute a write.
-      await Promise.allSettled([completion]);
-    },
-  };
 }
 
 /** Reserve overlapping physical stores before asynchronous reads can reorder ready writes. */
@@ -112,12 +65,15 @@ export async function runAuthProfileUsage<T>(operation: () => Promise<T>): Promi
     return trackAsyncWork(run);
   }
   const owner = usageWork(host);
-  if (owner.closing) {
+  const inherited = acceptedUsage.getStore();
+  const alreadyAccepted = inherited === owner;
+  if (owner.closing && !alreadyAccepted) {
     throw new Error("Auth profile usage owner is closed");
   }
-  host.scheduler.signal.throwIfAborted();
-  // The scheduler fences new work; accepted persistence keeps independent custody.
-  return owner.work.track(run);
+  if (!alreadyAccepted) {
+    host.scheduler.signal.throwIfAborted();
+  }
+  return owner.work.track(() => acceptedUsage.run(owner, run));
 }
 
 /** Fence synchronously, then join accepted work before its worker transports close. */

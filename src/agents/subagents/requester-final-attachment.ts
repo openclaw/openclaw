@@ -23,7 +23,7 @@ type RequesterFinalAttachment = {
   lifecycleGeneration: string;
   expiresAt: number;
   append: (text: string) => boolean;
-  batch?: RequesterFinalAttachmentBatch;
+  batch?: RequesterFinalAttachmentBatch & { pendingRunIds: Set<string> };
 };
 
 type RequesterFinalAttachmentState = {
@@ -49,6 +49,7 @@ function getCurrentAttachment(
     Partial<RequesterFinalAttachmentBatch> & {
       requesterSessionId?: string;
     },
+  partition = false,
 ): RequesterFinalAttachment | undefined {
   const key = ownerKey(params.requesterAgentId, params.requesterSessionKey);
   const attachment = state.byOwner.get(key);
@@ -62,12 +63,16 @@ function getCurrentAttachment(
     state.byOwner.delete(key);
     return undefined;
   }
+  const batch = attachment.batch;
   if (
     (params.requesterSessionId !== undefined &&
       attachment.requesterSessionId !== params.requesterSessionId) ||
     (params.batchRunIds !== undefined &&
-      (!attachment.batch ||
-        !sameRunIds(attachment.batch.batchRunIds, params.batchRunIds.toSorted()))) ||
+      (!batch ||
+        !(partition
+          ? params.batchRunIds.length > 0 &&
+            params.batchRunIds.every((runId) => batch.pendingRunIds.has(runId))
+          : sameRunIds(batch.batchRunIds, params.batchRunIds.toSorted())))) ||
     (params.rearmGeneration !== undefined &&
       attachment.batch?.rearmGeneration !== params.rearmGeneration)
   ) {
@@ -124,6 +129,7 @@ export function promoteRequesterFinalAttachment(
   }
   attachment.batch = {
     batchRunIds: params.batchRunIds.toSorted(),
+    pendingRunIds: new Set(params.batchRunIds),
     rearmGeneration: params.rearmGeneration,
   };
   return true;
@@ -136,7 +142,7 @@ export function transferRequesterFinalAttachment(
       requesterTurnRunId: string;
     },
 ): boolean {
-  const attachment = getCurrentAttachment(params);
+  const attachment = getCurrentAttachment(params, true);
   if (!attachment) {
     return false;
   }
@@ -157,27 +163,6 @@ export function revokeRequesterFinalAttachment(
   }
   state.byOwner.delete(key);
   return true;
-}
-
-function consumeRequesterFinalAttachment(
-  params: RequesterFinalAttachmentOwner &
-    RequesterFinalAttachmentBatch & {
-      requesterSessionId: string;
-      text: string;
-    },
-): "appended" | "rejected" | "missing" {
-  const key = ownerKey(params.requesterAgentId, params.requesterSessionKey);
-  const attachment = getCurrentAttachment(params);
-  if (!attachment) {
-    return "missing";
-  }
-  // Claim before invoking provider code so replay and callback failure cannot double-append.
-  state.byOwner.delete(key);
-  try {
-    return attachment.append(params.text) ? "appended" : "rejected";
-  } catch {
-    return "rejected";
-  }
 }
 
 /** A settled yield batch either attaches its visible final or releases the attachment. */
@@ -201,23 +186,37 @@ export function finalizeRequesterFinalAttachment(params: {
   ) {
     return;
   }
+  const owner = {
+    requesterAgentId,
+    requesterSessionKey: params.requesterSessionKey,
+    batchRunIds: params.batchRunIds,
+    rearmGeneration,
+  };
   const text = params.finalAssistantVisibleText?.trim();
-  if (params.delivered && params.requesterSessionId && text) {
-    consumeRequesterFinalAttachment({
-      requesterAgentId,
-      requesterSessionKey: params.requesterSessionKey,
+  const attachment = getCurrentAttachment(
+    {
+      ...owner,
       requesterSessionId: params.requesterSessionId,
-      batchRunIds: params.batchRunIds,
-      rearmGeneration,
-      text,
-    });
-  } else {
-    revokeRequesterFinalAttachment({
-      requesterAgentId,
-      requesterSessionKey: params.requesterSessionKey,
-      batchRunIds: params.batchRunIds,
-      rearmGeneration,
-    });
+    },
+    true,
+  );
+  if (!attachment?.batch) {
+    return;
+  }
+  // Consume only this partition before provider I/O; failed siblings cannot erase its final.
+  for (const runId of params.batchRunIds) {
+    attachment.batch.pendingRunIds.delete(runId);
+  }
+  if (attachment.batch.pendingRunIds.size === 0) {
+    state.byOwner.delete(ownerKey(requesterAgentId, params.requesterSessionKey));
+  }
+  if (!params.delivered || !params.requesterSessionId || !text) {
+    return;
+  }
+  try {
+    attachment.append(text);
+  } catch {
+    // A failed append still consumes this partition.
   }
 }
 

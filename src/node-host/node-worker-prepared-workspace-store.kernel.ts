@@ -1,11 +1,14 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { ensureNodeWorkerPreparedWorkspaceSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -18,16 +21,17 @@ import type {
   NodeWorkerPreparedWorkspaceBinding,
   NodeWorkerPreparedWorkspaceRegistration,
 } from "../worker/node-workspace-prepared-protocol.js";
+import { nodePreparedWorkspacePublication } from "./node-worker-prepared-workspace-publication.js";
 
 type PreparedDatabase = Pick<DB, "node_worker_prepared_workspaces">;
 export type NodeWorkerPreparedWorkspaceRow = Selectable<DB["node_worker_prepared_workspaces"]>;
 const TABLE = "node_worker_prepared_workspaces";
 
-function query(db: DatabaseSync) {
+function query(db: EngineConnection) {
   return getNodeSqliteKysely<PreparedDatabase>(db);
 }
 
-function selectRow(db: DatabaseSync, preparationKey: string) {
+function selectRow(db: EngineConnection, preparationKey: string) {
   return executeSqliteQueryTakeFirstSync(
     db,
     query(db).selectFrom(TABLE).selectAll().where("preparation_key", "=", preparationKey),
@@ -44,18 +48,29 @@ function requireUnchanged(
   return row;
 }
 
-/** One fresh dedicated node owns one immutable registration and one session binding. */
+/** A dedicated node may refresh its available baseline before its one session binding. */
 export class NodeWorkerPreparedWorkspaceKernel {
   constructor(private readonly options: OpenClawStateDatabaseOptions) {}
 
-  private write<T>(operationLabel: string, operation: (database: DatabaseSync) => T): T {
+  private write<T>(operationLabel: string, operation: (database: EngineConnection) => T): T {
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         requestSqliteWorkerOperationAdmission({
           stage: "transaction",
           facts: { kind: "node-worker-journal" },
         });
-        return operation(db);
+        const { result, receipt } = nodePreparedWorkspacePublication.capture(db, () =>
+          operation(db),
+        );
+        deferSqliteWorkerCommitReceipt(
+          db,
+          {
+            kind: "node-prepared-workspace",
+            receipt: nodePreparedWorkspacePublication.bound(receipt),
+          },
+          receipt.facts.size === 0 ? "settlement" : "commit",
+        );
+        return result;
       },
       this.options,
       { operationLabel },
@@ -102,18 +117,42 @@ export class NodeWorkerPreparedWorkspaceKernel {
       if (existing) {
         if (
           existing.state !== "available" ||
+          existing.session_id !== null ||
+          existing.session_key !== null ||
+          existing.owner_epoch !== null ||
+          existing.bound_at_ms !== null ||
           existing.preparation_key !== input.preparationKey ||
           existing.cache_key !== input.cacheKey ||
           existing.gateway_namespace !== input.gatewayNamespace ||
           existing.environment_id !== input.environmentId ||
           existing.workspace_dir !== input.workspaceDir ||
-          existing.home_dir !== input.homeDir ||
-          existing.source_manifest_ref !== input.sourceManifestRef ||
-          existing.prepared_manifest_ref !== input.preparedManifestRef
+          existing.home_dir !== input.homeDir
         ) {
           throw new Error("INVALID_REQUEST: this node already owns a prepared workspace");
         }
-        return existing;
+        if (
+          existing.source_manifest_ref === input.sourceManifestRef &&
+          existing.prepared_manifest_ref === input.preparedManifestRef
+        ) {
+          return existing;
+        }
+        const refreshed = {
+          ...existing,
+          source_manifest_ref: input.sourceManifestRef,
+          prepared_manifest_ref: input.preparedManifestRef,
+        };
+        executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable(TABLE)
+            .set({
+              source_manifest_ref: input.sourceManifestRef,
+              prepared_manifest_ref: input.preparedManifestRef,
+            })
+            .where("preparation_key", "=", input.preparationKey),
+        );
+        nodePreparedWorkspacePublication.stagePostimages(db, [refreshed]);
+        return refreshed;
       }
       const row = {
         preparation_key: input.preparationKey,
@@ -133,7 +172,8 @@ export class NodeWorkerPreparedWorkspaceKernel {
         retired_at_ms: null,
       };
       executeSqliteQuerySync(db, query(db).insertInto(TABLE).values(row));
-      return selectRow(db, input.preparationKey)!;
+      nodePreparedWorkspacePublication.stagePostimages(db, [row]);
+      return row;
     });
   }
 
@@ -182,6 +222,7 @@ export class NodeWorkerPreparedWorkspaceKernel {
         db,
         query(db).updateTable(TABLE).set(bound).where("preparation_key", "=", input.preparationKey),
       );
+      nodePreparedWorkspacePublication.stagePostimages(db, [bound]);
       return bound;
     });
   }
@@ -196,6 +237,7 @@ export class NodeWorkerPreparedWorkspaceKernel {
           .set({ state: "bound" })
           .where("preparation_key", "=", retiring.preparation_key),
       );
+      nodePreparedWorkspacePublication.stagePostimages(db, [{ ...retiring, state: "bound" }]);
     });
   }
 
@@ -222,6 +264,7 @@ export class NodeWorkerPreparedWorkspaceKernel {
           .set(retired)
           .where("preparation_key", "=", row.preparation_key),
       );
+      nodePreparedWorkspacePublication.stagePostimages(db, [retired]);
       return retired;
     });
   }

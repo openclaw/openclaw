@@ -1,4 +1,3 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import type { SchemaContract } from "../schema-contract.js";
@@ -13,7 +12,6 @@ import { NonEmptyString } from "./primitives.js";
  */
 const ApnsEnvironmentSchema = Type.String({ enum: ["sandbox", "production"] });
 
-/** Request payload for sending a test APNS notification to one node. */
 export const PushTestParamsSchema = closedObject({
   nodeId: NonEmptyString,
   title: Type.Optional(Type.String()),
@@ -21,7 +19,6 @@ export const PushTestParamsSchema = closedObject({
   environment: Type.Optional(ApnsEnvironmentSchema),
 });
 
-/** Result payload from an APNS push test, including provider status and transport. */
 export const PushTestResultSchema = closedObject({
   ok: Type.Boolean(),
   status: Type.Integer(),
@@ -32,8 +29,6 @@ export const PushTestResultSchema = closedObject({
   environment: ApnsEnvironmentSchema,
   transport: Type.String({ enum: ["direct", "relay"] }),
 });
-
-// --- Web Push schemas ---
 
 const WebPushKeysSchema = closedObject({
   p256dh: Type.String({ minLength: 1, maxLength: 512 }),
@@ -95,16 +90,13 @@ export const WebPushDevicePreferencesSchema = closedObject({
   ),
 });
 
-/** Empty request payload for fetching the Web Push VAPID public key. */
 export const WebPushVapidPublicKeyParamsSchema = closedObject({});
 
-/** Browser Web Push subscription payload registered with the gateway. */
 export const WebPushSubscribeParamsSchema = closedObject({
   endpoint: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https://" }),
   keys: WebPushKeysSchema,
 });
 
-/** Browser Web Push endpoint removal payload. */
 export const WebPushUnsubscribeParamsSchema = closedObject({
   endpoint: Type.String({ minLength: 1, maxLength: 2048, pattern: "^https://" }),
 });
@@ -138,13 +130,10 @@ export const WebPushPreferencesSetParamsSchema = Type.Union([
   }),
 ]);
 
-/** Empty request type for fetching the Web Push VAPID public key. */
 export type WebPushVapidPublicKeyParams = Record<string, never>;
 /** Browser PushSubscription subset persisted by the gateway. */
 export type WebPushSubscribeParams = Static<typeof WebPushSubscribeParamsSchema>;
-/** Browser PushSubscription endpoint removal request. */
 export type WebPushUnsubscribeParams = Static<typeof WebPushUnsubscribeParamsSchema>;
-/** Optional title/body overrides for a Web Push test notification. */
 export type WebPushTestParams = SchemaContract<Static<typeof WebPushTestParamsSchema>>;
 export type WebPushNotificationCategory = Static<typeof WebPushNotificationCategorySchema>;
 export type WebPushDetailLevel = Static<typeof WebPushDetailLevelSchema>;

@@ -11,7 +11,10 @@ import {
 } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
+import { prepareAuthProfileProvider } from "../auth-profiles/store-runtime.js";
+import { DEFAULT_PROVIDER } from "../defaults.js";
 import {
+  NO_MODEL_CONFIGURED_MESSAGE,
   buildModelAliasIndex,
   modelKey,
   resolveDefaultModelForAgent,
@@ -67,9 +70,10 @@ export async function patchSessionStatusModel(params: {
 
   const configured = resolveDefaultModelForAgent({ cfg, agentId });
   const raw = normalizeToolModelOverride(params.raw);
-  let modelSelection = { ...configured, isDefault: true };
+  let modelSelection = configured && { ...configured, isDefault: true };
   if (raw) {
-    const currentProvider = resolved.entry.providerOverride?.trim() || configured.provider;
+    const currentProvider =
+      resolved.entry.providerOverride?.trim() || configured?.provider || DEFAULT_PROVIDER;
 
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
@@ -101,26 +105,24 @@ export async function patchSessionStatusModel(params: {
             ...(workspaceDir ? { workspaceDir } : {}),
             env: process.env,
           });
-    const policy = createModelVisibilityPolicy({
-      cfg: params.cfg,
-      catalog,
+    const modelResolution = {
+      cfg,
+      agentId,
       defaultProvider: currentProvider,
-      defaultModel: configured,
-      agentId: params.agentId,
       allowManifestNormalization: true,
       allowPluginNormalization: true,
       manifestPlugins: manifestMetadataSnapshot,
+    };
+    const policy = createModelVisibilityPolicy({
+      ...modelResolution,
+      catalog,
+      defaultModel: configured,
     });
 
     const selected = resolveModelRefFromString({
-      cfg: params.cfg,
-      agentId: params.agentId,
+      ...modelResolution,
       raw,
-      defaultProvider: currentProvider,
       aliasIndex,
-      allowManifestNormalization: true,
-      allowPluginNormalization: true,
-      manifestPlugins: manifestMetadataSnapshot,
     });
     if (!selected) {
       throw new Error(`Unrecognized model "${raw}".`);
@@ -132,29 +134,43 @@ export async function patchSessionStatusModel(params: {
     modelSelection = {
       ...selected.ref,
       isDefault:
-        selected.ref.provider === configured.provider && selected.ref.model === configured.model,
+        selected.ref.provider === configured?.provider && selected.ref.model === configured.model,
     };
   }
-  const applySelection = (entry: SessionEntry) =>
-    applyModelOverrideWithAuthProfileCompatibility({
+  if (!modelSelection) {
+    // Resetting to the default needs a configured model.
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
+  const selection = modelSelection;
+  const applySelection = async (entry: SessionEntry) => {
+    const pinnedProfile = entry.authProfileOverride?.trim();
+    const recordedProvider = pinnedProfile
+      ? await prepareAuthProfileProvider({ agentDir: params.agentDir, profileId: pinnedProfile })
+      : undefined;
+    return applyModelOverrideWithAuthProfileCompatibility({
       cfg,
       agentDir: params.agentDir,
       entry,
       currentProvider:
-        entry.providerOverride?.trim() || entry.modelProvider?.trim() || configured.provider,
-      selection: modelSelection,
-      explicitDefaultSelection: modelSelection.isDefault,
+        entry.providerOverride?.trim() ||
+        entry.modelProvider?.trim() ||
+        configured?.provider ||
+        selection.provider,
+      selection,
+      explicitDefaultSelection: selection.isDefault,
+      recordedProvider,
       markLiveSwitchPending: true,
     });
-  const applied = applySelection({ ...resolved.entry });
+  };
+  const applied = await applySelection({ ...resolved.entry });
   if (!applied.updated) {
     return { resolved, changedModel: false };
   }
   const patched = await patchSessionEntryWithKey(
     { agentId, sessionKey: resolved.key, storePath: params.storePath },
-    (entry, context) => {
+    async (entry, context) => {
       const next: SessionEntry = { ...entry };
-      applySelection(next);
+      await applySelection(next);
       if (!next.sessionId.trim() && !context.existingEntry?.sessionId?.trim()) {
         next.sessionId = randomUUID();
       }
@@ -178,4 +194,20 @@ export async function patchSessionStatusModel(params: {
     resolved: { entry: patched.entry, key: patched.sessionKey, persisted: true },
     changedModel: true,
   };
+}
+
+export function withActiveStatusModelIdentity(
+  entry: SessionEntry,
+  identity: { provider?: string; model: string },
+): SessionEntry {
+  const next: SessionEntry = {
+    ...entry,
+    model: identity.model,
+    ...(identity.provider ? { modelProvider: identity.provider } : {}),
+  };
+  delete next.providerOverride;
+  delete next.modelOverride;
+  delete next.modelOverrideSource;
+  delete next.modelOverrideRouteResolution;
+  return next;
 }

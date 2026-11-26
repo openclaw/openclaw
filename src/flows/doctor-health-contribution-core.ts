@@ -1,13 +1,12 @@
-import type {
-  DoctorHealthCheckContext,
-  DoctorHealthFlowContext,
-} from "./doctor-health-contribution-types.js";
-import { resolveDoctorWorkspaceDir } from "./doctor-health-contribution-utils.js";
+import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import {
+  noteDoctorRepairResult,
+  resolveDoctorWorkspaceDir,
+} from "./doctor-health-contribution-utils.js";
 import {
   recordDoctorHealthWarnings,
   renderStructuredHealthFindings,
 } from "./doctor-health-contribution.js";
-import { copyHealthChecks } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import { isHealthCheckEnabledByDefault, type HealthFinding } from "./health-checks.js";
 
@@ -15,32 +14,26 @@ function reportDoctorRepairResult(
   ctx: DoctorHealthFlowContext,
   result: Awaited<ReturnType<typeof import("./doctor-repair-flow.js").runDoctorHealthRepairs>>,
   findings: readonly HealthFinding[],
-  note: typeof import("../../packages/terminal-core/src/note.js").note,
 ): void {
-  const configChanged = JSON.stringify(ctx.cfg) !== JSON.stringify(result.config);
-  if (!ctx.options.externallyManaged) {
-    ctx.cfg = result.config;
-  } else if (configChanged || result.configChangesSkipped) {
-    ctx.repairEvidence?.remaining("config", result.changes);
-  }
-  if (!configChanged && !result.configChangesSkipped) {
+  ctx.cfg = result.config;
+  if (result.configChangesSkipped) {
+    ctx.repairEvidence?.remaining(
+      "config",
+      result.changes.length ? result.changes : ["Deployment-owned configuration requires repair."],
+    );
+  } else {
     ctx.repairEvidence?.applied("structured-health-repairs", result.changes);
   }
   renderStructuredHealthFindings(ctx, findings);
   recordDoctorHealthWarnings(ctx, findings, result.warnings);
-  if (result.changes.length > 0) {
-    note(result.changes.join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorRepairResult(result);
 }
 
-function withDoctorHealthCheckFacts<T extends object>(
-  ctx: DoctorHealthFlowContext,
-  input: T,
-): T & Pick<DoctorHealthCheckContext, "runWithPluginMetadataSnapshot" | "agentDatabaseRefusals"> {
+function createDoctorHealthCheckContext<T extends object>(ctx: DoctorHealthFlowContext, input: T) {
   return {
+    runtime: ctx.runtime,
+    cfg: ctx.cfg,
+    configPath: ctx.configPath,
     ...input,
     agentDatabaseRefusals: ctx.agentDatabaseRefusals,
     ...(ctx.runWithPluginMetadataSnapshot
@@ -59,7 +52,6 @@ export async function runStructuredHealthRepairs(
   const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
   const { listExtensionHealthChecksForDoctor } = await import("./health-check-registry.js");
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
 
   const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
   const availabilityFindings = registerBundledHealthChecks({
@@ -67,28 +59,23 @@ export async function runStructuredHealthRepairs(
     cwd: workspaceDir,
     env: ctx.env,
   });
-  const checks = copyHealthChecks(
-    listExtensionHealthChecksForDoctor(await resolveCoreChecks(), availabilityFindings).filter(
-      isHealthCheckEnabledByDefault,
-    ),
-  );
+  const checks = listExtensionHealthChecksForDoctor(
+    await resolveCoreChecks(),
+    availabilityFindings,
+  ).filter(isHealthCheckEnabledByDefault);
   const result = await runDoctorHealthRepairs(
-    withDoctorHealthCheckFacts(ctx, {
+    createDoctorHealthCheckContext(ctx, {
       mode: "fix" as const,
-      runtime: ctx.runtime,
-      cfg: ctx.cfg,
       env: ctx.env,
       cwd: workspaceDir,
-      configPath: ctx.configPath,
     }),
-    { checks, allowConfigMutation: ctx.options.externallyManaged !== true },
+    {
+      checks,
+      progress: ctx.options.json !== true,
+      allowConfigMutation: ctx.options.externallyManaged !== true,
+    },
   );
-  reportDoctorRepairResult(
-    ctx,
-    result,
-    [...availabilityFindings, ...result.remainingFindings],
-    note,
-  );
+  reportDoctorRepairResult(ctx, result, [...availabilityFindings, ...result.remainingFindings]);
 }
 
 export async function runCoreContributionHealth(
@@ -100,7 +87,6 @@ export async function runCoreContributionHealth(
   }
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
 
   const selectedIds = new Set(checkIds);
   const checks = CORE_HEALTH_CHECKS.filter((check) => selectedIds.has(check.id));
@@ -110,55 +96,66 @@ export async function runCoreContributionHealth(
   const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
   const dryRun = !ctx.prompter.shouldRepair;
   const result = await runDoctorHealthRepairs(
-    withDoctorHealthCheckFacts(ctx, {
+    createDoctorHealthCheckContext(ctx, {
       mode: "fix" as const,
-      runtime: ctx.runtime,
-      cfg: ctx.cfg,
       cwd: workspaceDir,
-      configPath: ctx.configPath,
       dryRun,
     }),
-    { checks, dryRun, allowConfigMutation: ctx.options.externallyManaged !== true },
+    {
+      checks,
+      dryRun,
+      progress: ctx.options.json !== true,
+      allowConfigMutation: ctx.options.externallyManaged !== true,
+    },
   );
-  reportDoctorRepairResult(ctx, result, dryRun ? result.findings : result.remainingFindings, note);
-}
-
-function formatHealthFindings(findings: readonly HealthFinding[]): string {
-  return findings
-    .map((finding) => {
-      const lines = [`- ${finding.message}`];
-      if (finding.path) {
-        lines.push(`  path: ${finding.path}`);
-      }
-      if (finding.requirement) {
-        lines.push(`  issue: ${finding.requirement}`);
-      }
-      if (finding.fixHint) {
-        lines.push(`  fix: ${finding.fixHint}`);
-      }
-      return lines.join("\n");
-    })
-    .join("\n");
+  reportDoctorRepairResult(ctx, result, dryRun ? result.findings : result.remainingFindings);
 }
 
 export async function runCoreHealthFindingNote(
   ctx: DoctorHealthFlowContext,
   checkId: string,
+  options?: HealthFindingNoteOptions,
 ): Promise<void> {
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  await renderHealthFindingNote(
+    ctx,
+    CORE_HEALTH_CHECKS.find((candidate) => candidate.id === checkId),
+    options,
+  );
+}
 
-  const check = CORE_HEALTH_CHECKS.find((candidate) => candidate.id === checkId);
+type HealthFindingNoteOptions = {
+  /** Print info findings as a doctor note under this title; the summary only shows fix-now items. */
+  infoNoteTitle?: string;
+};
+
+/** Plain `openclaw doctor` note for one bundled plugin check (structured runs cover --lint/--fix). */
+export async function runBundledHealthFindingNote(
+  ctx: DoctorHealthFlowContext,
+  checkId: string,
+): Promise<void> {
+  const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
+  const { getHealthCheck } = await import("./health-check-registry.js");
+  registerBundledHealthChecks({
+    cfg: ctx.cfg,
+    cwd: resolveDoctorWorkspaceDir(ctx.cfg, ctx.env),
+    env: ctx.env,
+  });
+  await renderHealthFindingNote(ctx, getHealthCheck(checkId));
+}
+
+async function renderHealthFindingNote(
+  ctx: DoctorHealthFlowContext,
+  check: Pick<DoctorHealthCheck, "detect"> | undefined,
+  options?: HealthFindingNoteOptions,
+): Promise<void> {
   if (!check) {
     return;
   }
   const findings = await check.detect(
-    withDoctorHealthCheckFacts(ctx, {
+    createDoctorHealthCheckContext(ctx, {
       mode: "doctor" as const,
-      runtime: ctx.runtime,
-      cfg: ctx.cfg,
       cwd: resolveDoctorWorkspaceDir(ctx.cfg, ctx.env),
-      configPath: ctx.configPath,
       allowExecSecretRefs: ctx.options.allowExec === true,
     }),
   );
@@ -166,13 +163,27 @@ export async function runCoreHealthFindingNote(
     return;
   }
   recordDoctorHealthWarnings(ctx, findings);
-  const information = findings.filter((finding) => finding.severity === "info");
-  const warnings = findings.filter((finding) => finding.severity !== "info");
-  if (information.length > 0) {
-    note(formatHealthFindings(information), "Doctor information");
+  renderStructuredHealthFindings(ctx, findings);
+  const infoFindings = findings.filter((finding) => finding.severity === "info");
+  if (options?.infoNoteTitle && infoFindings.length > 0) {
+    const { note } = await import("../../packages/terminal-core/src/note.js");
+    note(
+      infoFindings
+        .map((finding) =>
+          finding.fixHint ? `- ${finding.message}\n  ${finding.fixHint}` : `- ${finding.message}`,
+        )
+        .join("\n"),
+      options.infoNoteTitle,
+    );
   }
-  if (warnings.length > 0) {
+  if (
+    findings.some(
+      (finding) =>
+        finding.severity !== "info" &&
+        finding.category !== "recommended" &&
+        finding.category !== "historical",
+    )
+  ) {
     ctx.healthOk = false;
-    note(formatHealthFindings(warnings), "Doctor warnings");
   }
 }

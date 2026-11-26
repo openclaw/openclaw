@@ -1,4 +1,3 @@
-// Microsoft Teams plugin owns durable Bot Framework activity admission and draining.
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
@@ -41,12 +40,6 @@ type MSTeamsIngressOptions = {
     liveContext?: MSTeamsTurnContext,
   ) => Promise<MSTeamsIngressDispatchResult | void> | MSTeamsIngressDispatchResult | void;
   queue?: ChannelIngressQueue<MSTeamsIngressPayload>;
-};
-
-type MSTeamsIngress = {
-  accept: (activity: MSTeamsIngressActivity, liveContext?: MSTeamsTurnContext) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
 };
 
 const MSTeamsIngressPayloadError = createChannelIngressError<
@@ -134,7 +127,7 @@ function parseClaimedActivity(
   return parsed;
 }
 
-export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIngress {
+export function createMSTeamsIngress(options: MSTeamsIngressOptions) {
   const queue =
     options.queue ??
     getMSTeamsRuntime().state.openChannelIngressQueue<MSTeamsIngressPayload>({
@@ -203,7 +196,7 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
   let stopTask: Promise<void> | undefined;
 
   return {
-    accept: async (activity, liveContext) => {
+    accept: async (activity: MSTeamsIngressActivity, liveContext?: MSTeamsTurnContext) => {
       const facts = inspectMSTeamsIngressActivity(activity);
       if (!facts) {
         return;
@@ -215,12 +208,9 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
       if (liveContext && installedLiveContext) {
         liveContexts.set(facts.eventId, liveContext);
       }
-      // Identity-guarded uninstall: only remove OUR context so a concurrent
-      // redelivery's fresh install is never clobbered. A failed or
-      // tombstoned-duplicate append leaves no claim to consume the entry, and
-      // a later retry must not dispatch this request's stale context.
+      // A rejected append has no delivery that can consume the context.
       const uninstallLiveContext = () => {
-        if (installedLiveContext && liveContexts.get(facts.eventId) === liveContext) {
+        if (installedLiveContext) {
           liveContexts.delete(facts.eventId);
         }
       };

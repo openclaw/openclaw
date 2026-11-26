@@ -1,10 +1,18 @@
 import type { NativeWorkerFailure } from "../../infra/worker-native-error.js";
+import type { NativeResourceAuthority } from "./resource-authority.js";
 
 export const SPAWN_BROKER_STARTUP_TIMEOUT_MS = 15_000;
 
+const monotonic = process.hrtime.bigint.bind(process.hrtime);
+
+/** Native startup shares the host's monotonic clock across Node contexts. */
+export function spawnBrokerStartupNowMs(): number {
+  return Number(monotonic() / 1_000_000n);
+}
+
 export type BrokerBootstrap = {
   type: "bootstrap";
-  nativeResource?: { endpoint: string; secret: string; generation: number };
+  nativeResource?: NativeResourceAuthority & { generation: number };
 };
 
 /** The domain decoder, not a transport adapter, restores this original cleanup payload. */
@@ -20,9 +28,12 @@ export type BrokerResourceAttachment = {
   endpoint: string;
   secret: string;
   generation: number;
+  /** Same-host monotonic milliseconds, scoped to this native source's startup. */
   startupDeadline?: number;
   id: number;
   moduleUrl: string;
+  /** Resolved by the host when a compiled broker receives a source resource. */
+  sourceLoaderUrl?: string;
   input?: unknown;
   ownerPort: boolean;
 };

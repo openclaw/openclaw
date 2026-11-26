@@ -1,5 +1,8 @@
+import { onCleanup } from "solid-js";
+
 function scrollViewportRef(onUpdate: (element: HTMLElement) => void) {
   let dispose = () => {};
+  onCleanup(() => dispose());
   return (element: Element | undefined) => {
     dispose();
     if (!(element instanceof HTMLElement)) {
@@ -9,17 +12,26 @@ function scrollViewportRef(onUpdate: (element: HTMLElement) => void) {
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(update) : null;
     // Ref runs before children commit. Observe their final sizes too:
     // async content can grow without resizing the scroll viewport itself.
-    const frame = requestAnimationFrame(() => {
+    let frame = 0;
+    const observeChildren = () => {
       update();
+      observer?.disconnect();
       observer?.observe(element);
       for (const child of element.children) {
         observer?.observe(child);
       }
+    };
+    const childrenObserver = new MutationObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(observeChildren);
     });
+    childrenObserver.observe(element, { childList: true });
+    frame = requestAnimationFrame(observeChildren);
     element.addEventListener("scroll", update, { passive: true });
     dispose = () => {
       cancelAnimationFrame(frame);
       observer?.disconnect();
+      childrenObserver.disconnect();
       element.removeEventListener("scroll", update);
     };
   };
@@ -32,13 +44,11 @@ export function workboardScrollFadeRef() {
     const scrollable = maxScroll > 1 && (overflow === "auto" || overflow === "scroll");
     const top = scrollable ? Math.max(0, element.scrollTop) : 0;
     const bottom = scrollable ? Math.max(0, maxScroll - element.scrollTop) : 0;
+    const scrollbarWidth = element.offsetWidth - element.clientWidth;
     element.toggleAttribute("data-scrollable", scrollable);
     element.style.setProperty("--workboard-fade-top", `${Math.min(top, 24)}px`);
     element.style.setProperty("--workboard-fade-bottom", `${Math.min(bottom, 24)}px`);
-    element.style.setProperty(
-      "--workboard-scrollbar-width",
-      `${element.offsetWidth - element.clientWidth}px`,
-    );
+    element.style.setProperty("--workboard-scrollbar-width", `${scrollbarWidth}px`);
   });
 }
 

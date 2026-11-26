@@ -65,10 +65,7 @@ function refFromPathTarget(target: ControlUiSessionPathTarget): SessionTargetRef
   return { kind: "literal", sessionKey: target.sessionKey };
 }
 
-function parseControlPath(pathname: string): {
-  basePath: string;
-  target: ControlUiSessionPathTarget;
-} {
+function parseControlPath(pathname: string) {
   const direct = parseControlUiSessionPath(pathname);
   if (direct) {
     return { basePath: "", target: direct };
@@ -185,10 +182,7 @@ export function parseSessionTargetInput(raw: string): SessionTargetInput {
   throw new SessionTargetParseError();
 }
 
-export type BareSessionInvocation = {
-  target: string;
-  options: BareSessionTuiOptions;
-};
+export type BareSessionInvocation = NonNullable<ReturnType<typeof parseBareSessionInvocation>>;
 
 function isSessionUrlInputCandidate(raw: string): boolean {
   return /^(?:https?|wss?):\/\//iu.test(raw.trim());
@@ -201,7 +195,7 @@ function bareSessionOptionError(flag: string): Error {
 }
 
 /** Parse the complete bare-root URL invocation before generic command discovery can see secrets. */
-export function parseBareSessionInvocation(argv: readonly string[]): BareSessionInvocation | null {
+export function parseBareSessionInvocation(argv: readonly string[]) {
   if (!argv.slice(2).some(isSessionUrlInputCandidate)) {
     return null;
   }

@@ -53,7 +53,7 @@ export function canonicalizeNativeProgressCardInput(input: CodexNativePlan): {
 
 /** Retains the latest projected plan so Codex compaction cannot discard it. */
 export class CodexCompactionPlanState {
-  private latestPlan: CodexNativePlan | undefined;
+  private latestPlan: string | undefined;
 
   record(event: AgentEvent): void {
     if (event.stream !== "plan") {
@@ -90,7 +90,7 @@ export class CodexCompactionPlanState {
             content: [
               {
                 type: "input_text",
-                text: `${RESTORED_PLAN_PREAMBLE}\n${serializePlan(this.latestPlan)}`,
+                text: `${RESTORED_PLAN_PREAMBLE}\n${this.latestPlan}`,
               },
             ],
           },
@@ -101,7 +101,7 @@ export class CodexCompactionPlanState {
   }
 }
 
-function readBoundedPlan(markdownValue: unknown, stepsValue: unknown): CodexNativePlan | undefined {
+function readBoundedPlan(markdownValue: unknown, stepsValue: unknown): string | undefined {
   const canonical = canonicalizeNativeProgressCardInput({
     ...(typeof markdownValue === "string" ? { markdown: markdownValue } : {}),
     steps: readPlanSteps(stepsValue),
@@ -110,24 +110,18 @@ function readBoundedPlan(markdownValue: unknown, stepsValue: unknown): CodexNati
     canonical.markdown === undefined
       ? undefined
       : truncateUtf8(canonical.markdown, RESTORED_PLAN_MAX_MARKDOWN_BYTES);
-  const steps: AgentPlanStep[] = [];
+  const plan: AgentPlanStep[] = [];
+  const restored = { ...(markdown?.trim() ? { markdown } : {}), plan };
+  let serialized = markdown?.trim() ? JSON.stringify(restored) : undefined;
   for (const step of canonical.plan) {
-    const candidate = {
-      ...(markdown?.trim() ? { markdown } : {}),
-      steps: [...steps, step],
-    };
-    if (Buffer.byteLength(serializePlan(candidate), "utf8") > RESTORED_PLAN_MAX_PAYLOAD_BYTES) {
+    restored.plan.push(step);
+    const candidate = JSON.stringify(restored);
+    if (Buffer.byteLength(candidate, "utf8") > RESTORED_PLAN_MAX_PAYLOAD_BYTES) {
       break;
     }
-    steps.push(step);
+    serialized = candidate;
   }
-  return markdown?.trim() || steps.length > 0
-    ? { ...(markdown?.trim() ? { markdown } : {}), steps }
-    : undefined;
-}
-
-function serializePlan(plan: CodexNativePlan): string {
-  return JSON.stringify({ markdown: plan.markdown, plan: plan.steps });
+  return serialized;
 }
 
 function truncateUtf8(value: string, maxBytes: number): string {

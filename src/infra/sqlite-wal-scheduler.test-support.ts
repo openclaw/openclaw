@@ -3,7 +3,10 @@ import { createGatewaySchedulerClock } from "../test-utils/gateway-scheduler-clo
 import { GatewayScheduler } from "./gateway-scheduler.js";
 
 /** Trigger selected WAL work through real scheduler dispatch at a controlled admission boundary. */
-export function observeSqliteWalPeriodicWork(select: () => boolean = () => true) {
+export function observeSqliteWalPeriodicWork(
+  select: () => boolean = () => true,
+  phase: "periodic" | "tick" = "periodic",
+) {
   const scopeDescriptor = Object.getOwnPropertyDescriptors(GatewayScheduler.prototype).scope;
   const originalScope = scopeDescriptor.value;
   if (!originalScope) {
@@ -12,6 +15,7 @@ export function observeSqliteWalPeriodicWork(select: () => boolean = () => true)
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = new GatewayScheduler({ clock: clock.clock });
   let periodic: (() => void | Promise<unknown>) | undefined;
+  let periodicId: string | undefined;
   GatewayScheduler.prototype.scope = function (this: GatewayScheduler) {
     if (!select()) {
       return originalScope.call(this);
@@ -20,17 +24,18 @@ export function observeSqliteWalPeriodicWork(select: () => boolean = () => true)
     return {
       ...scope,
       schedule(params) {
-        if (params.id.startsWith("sqlite-wal:") && params.id.endsWith(":periodic")) {
-          if (periodic) {
+        if (params.id.startsWith("sqlite-wal:") && params.id.endsWith(`:${phase}`)) {
+          if (periodic && periodicId !== params.id) {
             throw new Error("Expected one published WAL maintenance owner");
           }
+          periodicId = params.id;
           const registrationContext = AsyncLocalStorage.snapshot();
           periodic = () => {
             if (scope.signal.aborted) {
               return;
             }
             // Move only this job's next deadline; retain its owner, callback, and authority.
-            // The separate checkpoint tick stays pending while normal dispatch owns the join.
+            // Other scheduled work stays pending while normal dispatch owns the join.
             registrationContext(() => scope.schedule({ ...params, delayMs: 0 }));
             return clock.wake();
           };

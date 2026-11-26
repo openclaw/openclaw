@@ -26,7 +26,7 @@ export function buildZalouserGroupCandidates(params: {
     candidates.push(groupChannel, groupName, normalizeChannelSlug(groupName));
   }
   candidates.push("*");
-  return uniqueStrings(candidates.map(toGroupCandidate).filter(Boolean));
+  return uniqueStrings(candidates.filter(Boolean));
 }
 
 export function findZalouserGroupEntry(

@@ -54,8 +54,7 @@ enum WizardCliError: Error, CustomStringConvertible {
         switch self {
         case let .invalidUrl(raw): "Invalid URL: \(raw)"
         case .missingRemoteUrl: "gateway.remote.url is missing"
-        case let .gatewayError(msg): msg
-        case let .decodeError(msg): msg
+        case let .gatewayError(msg), let .decodeError(msg): msg
         case .cancelled: "Wizard cancelled"
         }
     }
@@ -90,13 +89,35 @@ func runWizardCommand(_ args: [String], configURL: URL) async {
             throw WizardCliError.gatewayError("Wizard requires an interactive TTY.")
         }
         let endpoint = try resolveWizardGatewayEndpoint(opts: opts, config: config)
-        let client = GatewayWizardClient(
+        let client = GatewayChannelActor(
             url: endpoint.url,
             token: endpoint.token,
-            password: endpoint.password)
-        try await client.connect()
-        defer { Task { await client.close() } }
-        try await runWizard(client: client, opts: opts)
+            password: endpoint.password,
+            connectOptions: GatewayConnectOptions(
+                role: "operator",
+                scopes: GatewayChannelActor.defaultOperatorConnectScopes,
+                scopesAreExplicit: true,
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-macos",
+                clientMode: "ui",
+                clientDisplayName: Host.current().localizedName ?? "OpenClaw macOS Wizard CLI",
+                allowStoredDeviceAuth: false))
+        do {
+            try await client.connect()
+            guard let generation = await client.currentConnectionGeneration() else {
+                throw WizardCliError.gatewayError("gateway not connected")
+            }
+            try await runWizard(client: client, connectionGeneration: generation, opts: opts)
+        } catch {
+            await client.shutdown()
+            if let error = error as? GatewayConnectAuthError {
+                throw WizardCliError.gatewayError(error.message)
+            }
+            throw error
+        }
+        await client.shutdown()
     } catch {
         fputs("wizard: \(error)\n", stderr)
         exit(1)
@@ -123,186 +144,24 @@ private func resolveWizardGatewayEndpoint(opts: WizardCliOptions, config: Gatewa
         mode: mode)
 }
 
-actor GatewayWizardClient {
-    private enum ConnectChallengeError: Error {
-        case invalid
-        case timeout
-    }
-
-    private let url: URL
-    private let token: String?
-    private let password: String?
-    private let encoder = JSONEncoder()
-    private let decoder = JSONDecoder()
-    private let session = URLSession(configuration: .default)
-    private let connectChallengeTimeoutSeconds: Double = 0.75
-    private var task: URLSessionWebSocketTask?
-
-    init(url: URL, token: String?, password: String?) {
-        self.url = url
-        self.token = token
-        self.password = password
-    }
-
-    func connect() async throws {
-        let socket = self.session.webSocketTask(with: self.url)
-        socket.maximumMessageSize = 16 * 1024 * 1024
-        socket.resume()
-        self.task = socket
-        try await self.sendConnect()
-    }
-
-    func close() {
-        self.task?.cancel(with: .goingAway, reason: nil)
-        self.task = nil
-    }
-
-    func request(method: String, params: [String: ProtoAnyCodable]?) async throws -> ResponseFrame {
-        guard let task = self.task else {
-            throw WizardCliError.gatewayError("gateway not connected")
-        }
-        return try await self.request(task: task, method: method, params: params, failureMessage: "gateway error")
-    }
-
-    private func request(
-        task: URLSessionWebSocketTask,
-        method: String,
-        params: [String: ProtoAnyCodable]?,
-        failureMessage: String) async throws -> ResponseFrame
-    {
-        let id = UUID().uuidString
-        let frame = RequestFrame(
-            type: "req",
-            id: id,
-            method: method,
-            params: params.map { ProtoAnyCodable($0) })
-        let data = try self.encoder.encode(frame)
-        try await task.send(.data(data))
-
-        while true {
-            let message = try await task.receive()
-            let frame = try decodeFrame(message)
-            if case let .res(res) = frame, res.id == id {
-                if res.ok == false {
-                    let msg = res.error?.message ?? failureMessage
-                    throw WizardCliError.gatewayError(msg)
-                }
-                return res
-            }
+private func runWizard(
+    client: GatewayChannelActor,
+    connectionGeneration: UInt64,
+    opts: WizardCliOptions) async throws
+{
+    func request(method: String, params: [String: ProtoAnyCodable]) async throws -> Data {
+        do {
+            // A wizard session belongs to one socket; never replay an answer after reconnect.
+            return try await client.request(
+                method: method,
+                params: params,
+                timeoutMs: 0,
+                ifCurrentConnectionGeneration: connectionGeneration)
+        } catch let error as GatewayResponseError {
+            throw WizardCliError.gatewayError(error.message)
         }
     }
 
-    func decodePayload<T: Decodable>(_ response: ResponseFrame, as _: T.Type) throws -> T {
-        guard let payload = response.payload else {
-            throw WizardCliError.decodeError("missing payload")
-        }
-        let data = try self.encoder.encode(payload)
-        return try self.decoder.decode(T.self, from: data)
-    }
-
-    private func decodeFrame(_ message: URLSessionWebSocketTask.Message) throws -> GatewayFrame {
-        let data: Data? = switch message {
-        case let .data(data): data
-        case let .string(text): text.data(using: .utf8)
-        @unknown default: nil
-        }
-        guard let data else {
-            throw WizardCliError.decodeError("empty gateway response")
-        }
-        return try self.decoder.decode(GatewayFrame.self, from: data)
-    }
-
-    private func sendConnect() async throws {
-        guard let task = self.task else {
-            throw WizardCliError.gatewayError("gateway not connected")
-        }
-        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
-        let platform = "macos \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
-        let clientId = "openclaw-macos"
-        let clientMode = "ui"
-        let role = "operator"
-        // Explicit scopes; gateway no longer defaults empty scopes to admin.
-        let scopes = GatewayChannelActor.defaultOperatorConnectScopes
-        let client: [String: ProtoAnyCodable] = [
-            "id": ProtoAnyCodable(clientId),
-            "displayName": ProtoAnyCodable(Host.current().localizedName ?? "OpenClaw macOS Wizard CLI"),
-            "version": ProtoAnyCodable("dev"),
-            "platform": ProtoAnyCodable(platform),
-            "deviceFamily": ProtoAnyCodable("Mac"),
-            "mode": ProtoAnyCodable(clientMode),
-            "instanceId": ProtoAnyCodable(UUID().uuidString),
-        ]
-
-        var params: [String: ProtoAnyCodable] = [
-            "minProtocol": ProtoAnyCodable(GATEWAY_MIN_PROTOCOL_VERSION),
-            "maxProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
-            "client": ProtoAnyCodable(client),
-            "caps": ProtoAnyCodable([String]()),
-            "locale": ProtoAnyCodable(Locale.preferredLanguages.first ?? Locale.current.identifier),
-            "userAgent": ProtoAnyCodable(ProcessInfo.processInfo.operatingSystemVersionString),
-            "role": ProtoAnyCodable(role),
-            "scopes": ProtoAnyCodable(scopes),
-        ]
-        if let token = self.token {
-            params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(token)])
-        } else if let password = self.password {
-            params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
-        }
-        let connectChallenge = try await self.waitForConnectChallenge()
-        let connectNonce = connectChallenge.nonce
-        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else {
-            throw NSError(
-                domain: "OpenClawMacCLI",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Could not access the persisted device identity"])
-        }
-        let signedAtMs = connectChallenge.issuedAtMs
-        let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
-            fields: .init(
-                deviceId: identity.deviceId,
-                client: .init(id: clientId, mode: clientMode),
-                role: role,
-                scopes: scopes,
-                signedAtMs: signedAtMs,
-                token: self.token,
-                nonce: connectNonce))
-        if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
-            payload: payload,
-            identity: identity,
-            signedAtMs: signedAtMs,
-            nonce: connectNonce)
-        {
-            params["device"] = ProtoAnyCodable(device)
-        }
-
-        let response = try await self.request(
-            task: task, method: "connect", params: params, failureMessage: "gateway connect failed")
-        _ = try self.decodePayload(response, as: HelloOk.self)
-    }
-
-    private func waitForConnectChallenge() async throws -> GatewayConnectChallenge {
-        guard let task = self.task else { throw ConnectChallengeError.timeout }
-        return try await AsyncTimeout.withTimeout(
-            seconds: self.connectChallengeTimeoutSeconds,
-            onTimeout: { ConnectChallengeError.timeout },
-            operation: {
-                while true {
-                    let message = try await task.receive()
-                    let frame = try await self.decodeFrame(message)
-                    if case let .event(evt) = frame, evt.event == "connect.challenge" {
-                        guard let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                              let challenge = GatewayConnectChallengeSupport.challenge(from: payload)
-                        else {
-                            throw ConnectChallengeError.invalid
-                        }
-                        return challenge
-                    }
-                }
-            })
-    }
-}
-
-private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) async throws {
     var params: [String: ProtoAnyCodable] = [:]
     let mode = opts.mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     if mode == "local" || mode == "remote" {
@@ -312,8 +171,8 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
         params["workspace"] = ProtoAnyCodable(workspace)
     }
 
-    let startResponse = try await client.request(method: "wizard.start", params: params)
-    let startResult = try await client.decodePayload(startResponse, as: WizardStartResult.self)
+    let startResponse = try await request(method: "wizard.start", params: params)
+    let startResult = try decodeWizardResult(startResponse, as: WizardStartResult.self)
     if opts.json {
         dumpResult(startResponse)
     }
@@ -359,22 +218,27 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
             } else if let step = nextResult.step, !opts.json {
                 printWizardStepHeader(step)
             }
-            let response = try await client.request(method: "wizard.next", params: nextParams)
-            nextResult = try await client.decodePayload(response, as: WizardNextResult.self)
+            let response = try await request(method: "wizard.next", params: nextParams)
+            nextResult = try decodeWizardResult(response, as: WizardNextResult.self)
             if opts.json {
                 dumpResult(response)
             }
         }
     } catch WizardCliError.cancelled {
-        _ = try? await client.request(
+        _ = try? await request(
             method: "wizard.cancel",
             params: ["sessionId": ProtoAnyCodable(sessionId)])
         throw WizardCliError.cancelled
     }
 }
 
-private func dumpResult(_ response: ResponseFrame) {
-    guard let payload = response.payload else {
+private func decodeWizardResult<T: Decodable>(_ data: Data, as _: T.Type) throws -> T {
+    guard !data.isEmpty else { throw WizardCliError.decodeError("missing payload") }
+    return try JSONDecoder().decode(T.self, from: data)
+}
+
+private func dumpResult(_ data: Data) {
+    guard let payload = try? JSONDecoder().decode(ProtoAnyCodable.self, from: data) else {
         print("{\"error\":\"missing payload\"}")
         return
     }
@@ -395,22 +259,19 @@ private func promptAnswer(for step: WizardStep) throws -> Any {
     printWizardStepHeader(step)
 
     switch type {
-    case "note", "progress":
-        _ = try readLineWithPrompt("Continue? (enter)")
-        return NSNull()
     case "action":
         _ = try readLineWithPrompt("Run? (enter)")
         return true
     case "text":
         let initial = anyCodableString(step.initialvalue)
         let prompt = step.placeholder ?? "Value"
+        let value: String
         if step.sensitive == true {
             let sensitivePrompt = initial.isEmpty ? prompt : "\(prompt) (leave blank to keep existing)"
-            let value = try readSensitiveLineWithPrompt(sensitivePrompt)
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? initial : trimmed
+            value = try readSensitiveLineWithPrompt(sensitivePrompt)
+        } else {
+            value = try readLineWithPrompt("\(prompt)\(initial.isEmpty ? "" : " [\(initial)]")")
         }
-        let value = try readLineWithPrompt("\(prompt)\(initial.isEmpty ? "" : " [\(initial)]")")
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? initial : trimmed
     case "confirm":

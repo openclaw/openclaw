@@ -11,6 +11,7 @@ import {
 } from "@codemirror/view";
 import { classHighlighter } from "@lezer/highlight";
 import { loadCodeLanguage } from "../../../components/code-language.ts";
+import { observeFileScroll } from "./chat-file-scroll.ts";
 import { detectLineSeparator } from "./file-line-separator.ts";
 
 export type FileEditorDecorations = {
@@ -39,17 +40,29 @@ export async function createFileEditorView(params: {
   parent: HTMLElement;
   content: string;
   name: string;
+  language?: string;
+  isCurrent?: () => boolean;
   editable?: boolean;
   wrap?: boolean;
+  highlight?: boolean;
+  scrollFades?: boolean;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
+  onSelectContent?: () => void;
   onSave: () => void;
 }) {
   const editable = new Compartment();
   const wrapping = new Compartment();
-  const language = await loadCodeLanguage(params.name);
+  const highlighting = new Compartment();
+  const language = await loadCodeLanguage(params.name, params.language);
+  // Language chunks may finish after selection changed; never clear a newer editor.
+  if (params.isCurrent && !params.isCurrent()) {
+    throw new DOMException("Editor selection changed", "AbortError");
+  }
   let docChanged: ((content: string) => void) | null = null;
   let destroyed = false;
   let isEditable = params.editable === true;
   let isWrapped = params.wrap === true;
+  let isHighlighted = params.highlight !== false;
   let separator = detectLineSeparator(params.content);
   let sourceContent = params.content;
   const readContent = (state: EditorState) =>
@@ -78,13 +91,16 @@ export async function createFileEditorView(params: {
             },
           },
         ]),
-        syntaxHighlighting(classHighlighter),
+        highlighting.of(isHighlighted ? syntaxHighlighting(classHighlighter) : []),
         ...(language ? [language] : []),
         EditorView.contentAttributes.of({ "aria-label": params.name, tabindex: "0" }),
         editable.of([EditorState.readOnly.of(!isEditable), EditorView.editable.of(isEditable)]),
         wrapping.of(isWrapped ? EditorView.lineWrapping : []),
         lineDecorations,
         EditorView.updateListener.of((update) => {
+          if (update.selectionSet && !update.state.selection.main.empty) {
+            params.onSelectContent?.();
+          }
           if (update.docChanged) {
             docChanged?.(readContent(update.state));
           }
@@ -105,17 +121,28 @@ export async function createFileEditorView(params: {
     state: initialState,
   });
 
-  const clampLine = (line: number) => Math.max(1, Math.min(Math.floor(line), view.state.doc.lines));
-  // Compare logical lines without treating a read-only mixed-ending preview as an edit.
-  const contentEquals = (content: string) => view.state.toText(content).eq(view.state.doc);
+  const releaseScrollPort = params.onScrollPortRef?.(view.scrollDOM);
+  const scrollFades = observeFileScroll(
+    view.scrollDOM,
+    view.contentDOM,
+    params.scrollFades === true,
+  );
+
+  // The detail-panel owner derives a fresh match array for each synchronization.
+  let previousDecorations:
+    | (FileEditorDecorations & { document: EditorState["doc"]; matches: readonly number[] })
+    | undefined;
 
   return {
     destroy: () => {
       if (!destroyed) {
         destroyed = true;
+        scrollFades.destroy();
+        releaseScrollPort?.();
         view.destroy();
       }
     },
+    setScrollFades: (enabled: boolean) => scrollFades.setEnabled(enabled),
     setContent: (content: string) => {
       if (destroyed) {
         return;
@@ -133,9 +160,10 @@ export async function createFileEditorView(params: {
       }
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
     },
-    contentEquals,
+    // Compare logical lines without treating a read-only mixed-ending preview as an edit.
+    contentEquals: (content: string) => view.state.toText(content).eq(view.state.doc),
     setEditable: (nextEditable: boolean) => {
-      if (destroyed) {
+      if (destroyed || nextEditable === isEditable) {
         return;
       }
       // Tracked so a setContent state rebuild keeps the current edit mode.
@@ -155,20 +183,59 @@ export async function createFileEditorView(params: {
       isWrapped = wrap;
       view.dispatch({ effects: wrapping.reconfigure(wrap ? EditorView.lineWrapping : []) });
     },
+    setSyntaxHighlighting: (highlight: boolean) => {
+      if (destroyed || highlight === isHighlighted) {
+        return;
+      }
+      const domSelection = view.dom.ownerDocument.getSelection();
+      const restoreSelection =
+        !isEditable &&
+        !view.hasFocus &&
+        domSelection?.anchorNode != null &&
+        domSelection.focusNode != null &&
+        view.contentDOM.contains(domSelection.anchorNode) &&
+        view.contentDOM.contains(domSelection.focusNode);
+      isHighlighted = highlight;
+      view.dispatch({
+        effects: highlighting.reconfigure(highlight ? syntaxHighlighting(classHighlighter) : []),
+      });
+      // Rewritten token spans can collapse the browser range while toolbar focus
+      // prevents CodeMirror from syncing it. Keep the reader selection and focus.
+      if (restoreSelection && domSelection) {
+        const { anchor, head } = view.state.selection.main;
+        const anchorDOM = view.domAtPos(anchor);
+        const headDOM = view.domAtPos(head);
+        domSelection.setBaseAndExtent(
+          anchorDOM.node,
+          anchorDOM.offset,
+          headDOM.node,
+          headDOM.offset,
+        );
+      }
+    },
     setDecorations: ({ targetLine, matches = [], currentMatch }: FileEditorDecorations) => {
       if (destroyed) {
         return;
       }
+      // Panel chrome refreshes must not dispatch unchanged editor effects. A
+      // changed document still needs fresh line anchors even with equal inputs.
+      const previous = previousDecorations;
+      if (
+        previous?.document === view.state.doc &&
+        previous.targetLine === targetLine &&
+        previous.currentMatch === currentMatch &&
+        previous.matches.length === matches.length &&
+        matches.every((line, index) => line === previous.matches[index])
+      ) {
+        return;
+      }
+      previousDecorations = { document: view.state.doc, targetLine, matches, currentMatch };
       const matchingLines = new Set(matches);
-      const lineNumbersToDecorate = new Set(matches);
-      if (targetLine != null) {
-        lineNumbersToDecorate.add(targetLine);
-      }
-      if (currentMatch != null) {
-        lineNumbersToDecorate.add(currentMatch);
-      }
-      const decorations = [...lineNumbersToDecorate]
-        .filter((line) => Number.isInteger(line) && line >= 1 && line <= view.state.doc.lines)
+      const decorations = [...new Set([...matches, targetLine, currentMatch])]
+        .filter(
+          (line): line is number =>
+            line != null && Number.isInteger(line) && line >= 1 && line <= view.state.doc.lines,
+        )
         .toSorted((a, b) => a - b)
         .map((line) => {
           const classes: string[] = [];
@@ -192,8 +259,9 @@ export async function createFileEditorView(params: {
       if (destroyed) {
         return;
       }
+      const targetLine = Math.max(1, Math.min(Math.floor(line), view.state.doc.lines));
       view.dispatch({
-        effects: EditorView.scrollIntoView(view.state.doc.line(clampLine(line)).from, {
+        effects: EditorView.scrollIntoView(view.state.doc.line(targetLine).from, {
           y: center ? "center" : "nearest",
         }),
       });

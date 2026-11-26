@@ -85,13 +85,6 @@ private class AndroidSystemNotificationPoster(
   }
 }
 
-private fun compatPriority(priority: String?): Int =
-  when (priority.orEmpty().trim().lowercase()) {
-    "passive" -> NotificationCompat.PRIORITY_LOW
-    "timesensitive" -> NotificationCompat.PRIORITY_HIGH
-    else -> NotificationCompat.PRIORITY_DEFAULT
-  }
-
 private fun isSilentSound(sound: String?): Boolean {
   val normalized = sound?.trim()?.lowercase() ?: return false
   return normalized in setOf("none", "silent", "off", "false", "0")
@@ -107,8 +100,8 @@ internal fun buildSystemNotification(
     .setSmallIcon(android.R.drawable.ic_dialog_info)
     .setContentTitle(request.title)
     .setContentText(request.body)
+    .setStyle(NotificationCompat.BigTextStyle().bigText(request.body))
     .setContentIntent(mainActivityPendingIntent(appContext, NOTIFICATION_CONTENT_REQUEST_CODE))
-    .setPriority(compatPriority(request.priority))
     .setAutoCancel(true)
     .setOnlyAlertOnce(true)
     .setSilent(isSilentSound(request.sound))

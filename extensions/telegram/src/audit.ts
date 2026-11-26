@@ -8,28 +8,19 @@ import type {
 export function collectTelegramUnmentionedGroupIds(
   groups: Record<string, TelegramGroupConfig> | undefined,
 ) {
-  if (!groups || typeof groups !== "object") {
-    return {
-      groupIds: [] as string[],
-      unresolvedGroups: 0,
-      hasWildcardUnmentionedGroups: false,
-    };
-  }
+  const configuredGroups = groups && typeof groups === "object" ? groups : undefined;
   const hasWildcardUnmentionedGroups =
-    groups["*"]?.requireMention === false && groups["*"]?.enabled !== false;
+    configuredGroups?.["*"]?.requireMention === false && configuredGroups?.["*"]?.enabled !== false;
   const groupIds: string[] = [];
   let unresolvedGroups = 0;
-  for (const [key, value] of Object.entries(groups)) {
-    if (key === "*") {
-      continue;
-    }
-    if (!value || typeof value !== "object") {
-      continue;
-    }
-    if (value.enabled === false) {
-      continue;
-    }
-    if (value.requireMention !== false) {
+  for (const [key, value] of Object.entries(configuredGroups ?? {})) {
+    if (
+      key === "*" ||
+      !value ||
+      typeof value !== "object" ||
+      value.enabled === false ||
+      value.requireMention !== false
+    ) {
       continue;
     }
     const id = normalizeOptionalString(key) ?? "";

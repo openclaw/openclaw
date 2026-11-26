@@ -50,19 +50,24 @@ export type ResolveQuestionOverGatewayParams = {
     }
 );
 
-function readTerminalReason(error: unknown): "already-terminal" | "not-found" | undefined {
+function terminalResolution(
+  error: unknown,
+): Extract<ResolveQuestionOverGatewayResult, { status: "already-terminal" }> {
   if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
-    return undefined;
+    throw error;
   }
   const details = (error as Error & { details?: unknown }).details;
   if (!details || typeof details !== "object" || Array.isArray(details)) {
-    return undefined;
+    throw error;
   }
   const reason = (details as { reason?: unknown }).reason;
   if (reason === "QUESTION_ALREADY_TERMINAL") {
-    return "already-terminal";
+    return { status: "already-terminal", reason: "already-terminal" };
   }
-  return reason === "QUESTION_NOT_FOUND" ? "not-found" : undefined;
+  if (reason === "QUESTION_NOT_FOUND") {
+    return { status: "already-terminal", reason: "not-found" };
+  }
+  throw error;
 }
 
 /** Params for the overload that re-checks access before the resolve write. */
@@ -113,11 +118,7 @@ export async function resolveQuestionOverGateway(
       params: { id: params.questionId },
     });
   } catch (error) {
-    const reason = readTerminalReason(error);
-    if (reason) {
-      return { status: "already-terminal", reason };
-    }
-    throw error;
+    return terminalResolution(error);
   }
 
   const record = getResult.question;
@@ -153,11 +154,7 @@ export async function resolveQuestionOverGateway(
       },
     });
   } catch (error) {
-    const reason = readTerminalReason(error);
-    if (reason) {
-      return { status: "already-terminal", reason };
-    }
-    throw error;
+    return terminalResolution(error);
   }
   return { status: "answered", questionId: question.questionId, optionValue };
 }

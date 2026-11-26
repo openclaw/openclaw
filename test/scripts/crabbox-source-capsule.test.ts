@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -21,6 +21,11 @@ import {
 import { createMirrorStaging } from "../../scripts/crabbox-staging.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const childProcess = await importOriginal<typeof import("node:child_process")>();
+  return { ...childProcess, execFileSync: vi.fn(childProcess.execFileSync) };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
@@ -137,7 +142,138 @@ function fileIdentity(path: string) {
   return { ino: stat.ino, mtime: stat.mtimeNs, ctime: stat.ctimeNs, size: stat.size };
 }
 
+function expectNoEmptyGitBatches() {
+  for (const [command, args, options] of vi.mocked(execFileSync).mock.calls) {
+    if (
+      command === "git" &&
+      ((args?.includes("update-index") && args.includes("--index-info")) ||
+        (args?.includes("hash-object") &&
+          (args.includes("--stdin") || args.includes("--stdin-paths"))))
+    ) {
+      expect(options?.input, args.join(" ")).not.toBe("");
+    }
+  }
+}
+
 describe.skipIf(process.platform === "win32")("persistent Crabbox source capsules", () => {
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])("freezes empty source (mirror=%s, empty base=%s)", (mirror, emptyBase) => {
+    const f = fixture();
+    const deleted = f.git(f.repository, "ls-files").split("\n");
+    f.git(f.repository, "rm", "-r", "--", ".");
+    if (emptyBase) {
+      f.git(f.repository, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "empty");
+    }
+    const capsule = f.prepare(mirror);
+    try {
+      expect(f.git(capsule.directory, "ls-tree", "-r", capsule.tree)).toBe("");
+      expect(
+        JSON.parse(f.git(capsule.directory, "show", "-s", "--format=%B", capsule.carrier)),
+      ).toEqual({ deleted: emptyBase ? [] : deleted });
+    } finally {
+      capsule.cleanup();
+    }
+  });
+
+  it.each([false, true])("observes cold source only while copying (mirror=%s)", (mirror) => {
+    const f = fixture({ ".gitignore": "*.secret\n*.ignored\n.crabboxignore\n" });
+    writeFileSync(join(f.repository, "new.txt"), "new source\n");
+    writeFileSync(join(f.repository, ".crabboxignore"), "private.secret\n");
+    writeFileSync(join(f.repository, "private.secret"), "synthetic private source\n");
+    vi.mocked(lstatSync).mockClear();
+    vi.mocked(execFileSync).mockClear();
+    const capsule = f.prepare(mirror);
+    try {
+      expectNoEmptyGitBatches();
+      for (const path of [
+        "stable.txt",
+        "new.txt",
+        ".crabboxignore",
+        ".crabbox.yaml",
+        "crabbox.yaml",
+      ]) {
+        expect(
+          vi.mocked(lstatSync).mock.calls.filter(([file]) => file === join(f.repository, path)),
+          path,
+        ).toHaveLength(1);
+      }
+      expect(
+        vi
+          .mocked(lstatSync)
+          .mock.calls.filter(([file]) => file === join(f.repository, "private.secret")),
+      ).toHaveLength(0);
+      expect(readFileSync(join(capsule.directory, "new.txt"), "utf8")).toBe("new source\n");
+      expect(f.paths(capsule)).not.toContain(".crabboxignore");
+      expect(f.paths(capsule)).not.toContain("private.secret");
+    } finally {
+      capsule.cleanup();
+    }
+  });
+
+  it("records fresh copied source after retention and skips newly ineligible paths", async () => {
+    const f = fixture();
+    writeFileSync(join(f.repository, "future.txt"), "initially eligible source\n");
+    const first = f.prepare();
+    first.cleanup();
+    writeFileSync(join(f.repository, ".gitignore"), "*.secret\n*.ignored\nfuture.txt\n");
+    writeFileSync(join(f.repository, "change.txt"), "retention observation\n");
+    writeFileSync(join(f.repository, "new.txt"), "arriving source\n");
+    const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let replaced = false;
+    vi.mocked(lstatSync).mockClear();
+    vi.mocked(lstatSync).mockImplementation(((...args: Parameters<typeof lstatSync>) => {
+      const result = fs.lstatSync(...args);
+      if (args[0] === join(f.repository, "change.txt") && !replaced) {
+        replaced = true;
+        writeFileSync(join(f.repository, "change.txt"), "copy-consumed source\n");
+      }
+      return result;
+    }) as typeof lstatSync);
+    try {
+      const warm = f.prepare();
+      try {
+        expect(replaced).toBe(true);
+        for (const [path, calls] of [
+          ["stable.txt", 1],
+          ["change.txt", 2],
+          ["new.txt", 1],
+          ["future.txt", 0],
+        ] as const) {
+          expect(
+            vi.mocked(lstatSync).mock.calls.filter(([file]) => file === join(f.repository, path)),
+            path,
+          ).toHaveLength(calls);
+        }
+        expect(readFileSync(join(warm.directory, "change.txt"), "utf8")).toBe(
+          "copy-consumed source\n",
+        );
+        expect(f.paths(warm)).not.toContain("future.txt");
+        f.expectColdEquivalent(warm);
+      } finally {
+        warm.cleanup();
+      }
+      const copied = fileIdentity(join(warm.directory, "change.txt"));
+      vi.mocked(lstatSync).mockClear();
+      const retained = f.prepare();
+      try {
+        expect(
+          vi
+            .mocked(lstatSync)
+            .mock.calls.filter(([file]) => file === join(f.repository, "change.txt")),
+        ).toHaveLength(1);
+        expect(fileIdentity(join(retained.directory, "change.txt"))).toEqual(copied);
+      } finally {
+        retained.cleanup();
+      }
+    } finally {
+      vi.mocked(lstatSync).mockReset();
+    }
+  });
+
   it.each(["initial allocation", "cold rebuild"])(
     "rejects an unrecorded mirror before freezing during %s",
     async (allocation) => {
@@ -192,11 +328,13 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
 
     const arrivingSecret = join(f.repository, "arriving.secret");
     vi.mocked(lstatSync).mockClear();
+    vi.mocked(execFileSync).mockClear();
     const unchanged = f.prepare(
       true,
       `require("node:fs").writeFileSync(${JSON.stringify(arrivingSecret)},"synthetic secret");`,
     );
     try {
+      expectNoEmptyGitBatches();
       // One pre-Git integrity check and one shared final seal per retained file.
       expect(
         vi.mocked(lstatSync).mock.calls.filter(([path]) => path === join(directory, "stable.txt")),
@@ -494,57 +632,21 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
     }
   });
 
-  it.each(["stable.txt", "new.txt", "frozen mirror", "commit"])(
-    "rejects source or frozen bytes changed during warm freezing: %s",
-    (path) => {
-      const f = fixture();
-      const first = f.prepare();
-      first.cleanup();
-      if (path === "commit") {
-        const commit = [
-          "-C",
-          f.repository,
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.invalid",
-          "-c",
-          "commit.gpgsign=false",
-          "commit",
-          "--quiet",
-          "--allow-empty",
-          "-m",
-          "changed during freeze",
-        ];
-        expect(() =>
-          f.prepare(
-            true,
-            `require("node:child_process").execFileSync("git", ${JSON.stringify(commit)}, {stdio:"ignore"});`,
-          ),
-        ).toThrow("source revision, index, or eligibility changed while freezing");
-        return;
-      }
-      const source = path === "frozen mirror" ? "stable.txt" : join(f.repository, path);
-      expect(() =>
-        f.prepare(
-          true,
-          `require("node:fs").writeFileSync(${JSON.stringify(source)},"raced edit\\n");`,
-        ),
-      ).toThrow(/changed while freezing/u);
-      const next = f.prepare();
-      try {
-        expect(
-          readFileSync(
-            join(next.directory, path === "frozen mirror" ? "stable.txt" : path),
-            "utf8",
-          ),
-        ).toBe(path === "frozen mirror" ? "untouched bytes\n" : "raced edit\n");
-        f.expectColdEquivalent(next);
-      } finally {
-        next.cleanup();
-      }
-    },
-  );
+  it("rejects frozen mirror bytes changed outside their owner", () => {
+    const f = fixture();
+    const first = f.prepare();
+    first.cleanup();
+    expect(() =>
+      f.prepare(true, 'require("node:fs").writeFileSync("stable.txt","raced edit\\n");'),
+    ).toThrow(/changed while freezing/u);
+    const next = f.prepare();
+    try {
+      expect(readFileSync(join(next.directory, "stable.txt"), "utf8")).toBe("untouched bytes\n");
+      f.expectColdEquivalent(next);
+    } finally {
+      next.cleanup();
+    }
+  });
 
   it.skipIf(process.platform === "win32")(
     "suppresses configured Git callbacks while preserving a reusable mirror",

@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "../config/types.js";
-import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
-import type { TtsTelephonyResult } from "./tts-runtime-types.js";
+import type { TtsDirectiveOverrides, TtsTelephonyResult } from "./tts-runtime-types.js";
 import { executeTtsProviderAttempts, withOwnedTtsRequest } from "./tts-synthesis-support.js";
 
 export async function textToSpeechTelephony(params: {
@@ -31,7 +30,6 @@ export async function textToSpeechTelephony(params: {
         timeoutMs: params.timeoutMs,
         target: "telephony",
         logLabel: "TTS telephony",
-        requireTelephony: true,
         selectOperation: ({ resolvedProvider }) => {
           const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony as NonNullable<
             typeof resolvedProvider.provider.synthesizeTelephony

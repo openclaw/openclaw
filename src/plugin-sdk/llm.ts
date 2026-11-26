@@ -1,8 +1,6 @@
-/**
- * Public SDK subpath for LLM streaming, model utils, and validation.
- */
 export type { ApiProvider } from "@openclaw/ai";
-export { resolveProviderContext } from "../../packages/ai/src/provider-types.js";
+export { resolveProviderContext } from "@openclaw/ai/provider-types";
+export { resolveOpenAIRequestReasoning } from "../../packages/ai/src/providers/openai-request-reasoning.js";
 export {
   resolveOpenAIModelReasoningEfforts,
   resolveOpenAIReasoningEffortMapping,
@@ -14,7 +12,7 @@ export type {
   ProviderStreamFunction,
   ProviderStreamOptions as ProviderCallStreamOptions,
   VideoContent,
-} from "../../packages/ai/src/provider-types.js";
+} from "@openclaw/ai/provider-types";
 export {
   calculateCost,
   clampThinkingLevel,
@@ -47,6 +45,7 @@ export type {
   ImageContent,
   Message,
   Model,
+  ModelRequestHeaders,
   ModelThinkingLevel,
   ProviderResponse,
   ProviderStreamOptions,

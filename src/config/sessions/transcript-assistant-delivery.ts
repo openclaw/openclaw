@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { AssistantDeliveryTtsFacts, AssistantMessage } from "../../llm/types.js";
+import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
+import type { AssistantDeliveryTtsFacts, AssistantHistoryMessage } from "../../llm/types.js";
 import { readAssistantTextBlocksForPhase } from "../../shared/chat-message-content.js";
 import { createTextPartCodeRegionResolver } from "../../shared/text/code-regions.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
@@ -13,17 +14,18 @@ export { projectAssistantTranscriptText } from "./transcript-assistant-delivery-
 
 type AssistantDirectiveMessage = {
   content?: unknown;
+  display?: boolean;
   openclawDelivery?: unknown;
   role?: unknown;
 };
 
-type AssistantDeliveryFacts = NonNullable<AssistantMessage["openclawDelivery"]>;
+type AssistantDeliveryFacts = NonNullable<AssistantHistoryMessage["openclawDelivery"]>;
 
 /** Turn-owned display preparation; source text precedes transcript-only hook rewrites. */
-export type PrepareAssistantTranscriptMessage = (
-  message: AssistantMessage,
+export type PrepareAssistantTranscriptMessage = <T extends AssistantHistoryMessage>(
+  message: T,
   sourceText: string | undefined,
-) => AssistantMessage;
+) => T;
 
 /** Record display ownership without rewriting bytes used by runtime transcript identity. */
 export function recordAssistantManagedMediaUrls<T extends AssistantDirectiveMessage>(
@@ -78,6 +80,7 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
       ? createTextPartCodeRegionResolver(tts.map((part) => part.cleanedText))
       : undefined;
   let facts: AssistantDeliveryFacts | undefined;
+  let textChanged = false;
   for (const [index, block] of blocks.entries()) {
     const reply = expectDefined(parsed[index], "parsed assistant part");
     const speech = expectDefined(tts[index], "prepared assistant speech part");
@@ -88,6 +91,7 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
     block.text = speech.facts
       ? trimTextPreservingCode(speech.cleanedText, "both", codeRegions?.(index))
       : speech.cleanedText;
+    textChanged ||= block.text !== original[index];
     if (!hasDeliveryFacts) {
       continue;
     }
@@ -98,6 +102,13 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
       ...(reply.replyToExplicitId ? { replyToId: reply.replyToExplicitId } : {}),
       ...(speech.facts ? { tts: mergeTtsFacts(facts.tts, speech.facts) } : {}),
     });
+  }
+  if (
+    textChanged &&
+    message.display === undefined &&
+    stripMixedSilentReplyTokens(original.join("")) === null
+  ) {
+    Object.assign(message, { display: true });
   }
   if (facts) {
     const currentFacts = isRecord(message.openclawDelivery) ? message.openclawDelivery : undefined;

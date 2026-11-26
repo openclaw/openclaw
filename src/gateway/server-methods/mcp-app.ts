@@ -14,6 +14,7 @@ import { buildMcpAppSandboxPath } from "../../agents/mcp-app-sandbox.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
+import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { createLazyRuntimeMethod } from "../../shared/lazy-runtime.js";
 import {
   executeMcpAppOperation,
@@ -21,11 +22,13 @@ import {
   McpAppViewExpiredError,
   type McpAppOperation,
   requireMcpAppInteraction,
+  supportsMcpAppInteraction,
   resolveMcpAppActiveView,
   withMcpAppActiveView,
 } from "../mcp-app-operations.js";
 import { createMcpAppStandaloneTicket } from "../mcp-app-standalone.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { resolveSandboxView } from "../sandbox-view.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
@@ -96,12 +99,15 @@ function resolveMcpAppSessionOwner(params: Record<string, unknown>, cfg: OpenCla
   return owner.agentId;
 }
 
-function resolveRequestedMcpAppView({ params, context, client }: GatewayRequestHandlerOptions) {
+function resolveRequestedMcpAppView(
+  { params, context, client }: GatewayRequestHandlerOptions,
+  prepared?: { cfg: OpenClawConfig; requesterId: string | undefined },
+) {
   return resolveMcpAppActiveView({
     sessionKey: requireString(params, "sessionKey"),
-    agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
+    agentId: resolveMcpAppSessionOwner(params, prepared?.cfg ?? context.getRuntimeConfig()),
     viewId: requireString(params, "viewId"),
-    requesterId: resolveMcpAppRequesterId(client),
+    requesterId: prepared ? prepared.requesterId : resolveMcpAppRequesterId(client),
     cfg: context.getRuntimeConfig(),
     restore: false,
   });
@@ -116,15 +122,8 @@ function operationHandler(
     const operation = buildOperation(params);
     const cfg = context.getRuntimeConfig();
     const requesterId = resolveMcpAppRequesterId(client);
-    const active = await resolveMcpAppActiveView({
-      sessionKey: requireString(params, "sessionKey"),
-      agentId: resolveMcpAppSessionOwner(params, cfg),
-      viewId: requireString(params, "viewId"),
-      requesterId,
-      cfg: context.getRuntimeConfig(),
-      restore: false,
-    });
-    const read = retainSessionScopedRead(
+    const active = await resolveRequestedMcpAppView(options, { cfg, requesterId });
+    const read = await retainSessionScopedRead(
       options,
       requireString(params, "sessionKey"),
       active.view.agentId,
@@ -203,7 +202,13 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
     const sessionKey = requireString(params, "sessionKey");
     const agentId = resolveMcpAppSessionOwner(params, context.getRuntimeConfig());
     const requesterId = resolveMcpAppRequesterId(client);
-    const read = retainSessionScopedRead(options, sessionKey, agentId);
+    const read = await retainSessionScopedRead(options, sessionKey, agentId);
+    const assertRequestCurrent = () => {
+      read?.assertCurrent();
+      if (requesterId !== resolveMcpAppRequesterId(client)) {
+        throw new McpAppViewExpiredError();
+      }
+    };
     try {
       const active = await resolveMcpAppActiveView({
         sessionKey: requireString(params, "sessionKey"),
@@ -256,13 +261,8 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
             stop();
           }
         }
-        let interactive = false;
-        try {
-          await requireMcpAppInteraction(view);
-          interactive = true;
-        } catch {
-          // Stale board leases remain renderable but lose every interactive capability.
-        }
+        // Stale board leases remain renderable but lose every interactive capability.
+        const interactive = await supportsMcpAppInteraction(view);
         const openFilesSupported =
           interactive && Boolean(active.runtime.sessionKey) && (await canOpenMcpAppFiles(view));
         const updateModelContextSupported =
@@ -274,7 +274,6 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         if (sandboxPort === undefined) {
           throw new Error("MCP App sandbox listener is unavailable; restart the Gateway");
         }
-        const configuredOrigin = context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
         let standalone: ReturnType<typeof createMcpAppStandaloneTicket> = undefined;
         try {
           standalone = createMcpAppStandaloneTicket({
@@ -290,14 +289,27 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
           // existing authenticated Control UI view payload.
           logWarn(`mcp-app: standalone ticket unavailable: ${formatErrorMessage(error)}`);
         }
-        read?.assertCurrent();
-        if (requesterId !== resolveMcpAppRequesterId(client)) {
-          throw new McpAppViewExpiredError();
-        }
+        assertRequestCurrent();
+        const catalog = active.runtime.peekCatalog();
+        const server = catalog?.servers[view.serverName];
+        const plugin = server?.pluginId
+          ? getGatewayPluginMetadataSnapshot()?.byPluginId.get(server.pluginId)
+          : undefined;
+        const tool = catalog?.tools.find(
+          (entry) => entry.serverName === view.serverName && entry.toolName === view.toolName,
+        );
         return {
-          sandboxUrl: buildMcpAppSandboxPath(view.csp),
+          appIdentity: {
+            label: plugin?.name ?? server?.title ?? view.serverName,
+            icons: [...(tool?.appExtensions?.icons ?? []), ...(server?.icons ?? [])],
+            ...(plugin?.iconPath ? { pluginId: plugin.id } : {}),
+          },
+          ...resolveSandboxView(
+            buildMcpAppSandboxPath(view.csp),
+            client,
+            context.getRuntimeConfig().mcp?.apps?.sandboxOrigin,
+          ),
           sandboxPort,
-          ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
           html: view.html,
           ...(view.csp ? { csp: view.csp } : {}),
           toolInput: view.toolInput,
@@ -323,10 +335,7 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
           updateModelContextSupported,
         };
       });
-      read?.assertCurrent();
-      if (requesterId !== resolveMcpAppRequesterId(client)) {
-        throw new McpAppViewExpiredError();
-      }
+      assertRequestCurrent();
       return payload;
     } finally {
       read?.release();

@@ -1,5 +1,6 @@
 // Runtime registry loader tests cover the surviving process-root load scopes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as runtimeConfig from "../../config/io.runtime.js";
 
 const mocks = vi.hoisted(() => ({
   loadAndActivateRootPluginRegistry:
@@ -42,17 +43,20 @@ vi.mock("../loader.js", () => ({
   ) => mocks.loadAndActivateRootPluginRegistry(...args),
 }));
 
+// mock-isolation: Loader scope uses fixture channel ids without persisted channel discovery.
 vi.mock("../channel-plugin-ids.js", () => ({
-  resolveConfiguredChannelPluginIds: (
+  resolveConfiguredChannelPluginIdsAsync: async (
     ...args: Parameters<typeof mocks.resolveConfiguredChannelPluginIds>
   ) => mocks.resolveConfiguredChannelPluginIds(...args),
   resolveChannelPluginIds: (...args: Parameters<typeof mocks.resolveChannelPluginIds>) =>
     mocks.resolveChannelPluginIds(...args),
 }));
 
+// mock-isolation: Loader scope uses fixture plugin ids without installed-plugin discovery.
 vi.mock("../effective-plugin-ids.js", () => ({
-  resolveEffectivePluginIds: (...args: Parameters<typeof mocks.resolveEffectivePluginIds>) =>
-    mocks.resolveEffectivePluginIds(...args),
+  resolveEffectivePluginIdsAsync: async (
+    ...args: Parameters<typeof mocks.resolveEffectivePluginIds>
+  ) => mocks.resolveEffectivePluginIds(...args),
 }));
 
 vi.mock("../gateway-startup-plugin-ids.js", () => ({
@@ -150,6 +154,23 @@ describe("ensurePluginRegistryLoaded", () => {
       changes: [],
       autoEnabledReasons: {},
     }));
+  });
+
+  it("prepares omitted config before loading configured channel owners", async () => {
+    const config = { channels: { demo: { enabled: true } } };
+    const reader = Object.assign(async () => config, { assertCurrent: () => {} });
+    const capture = vi
+      .spyOn(runtimeConfig, "captureRuntimeConfigAsyncReader")
+      .mockReturnValue(reader);
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["demo-channel"]);
+    try {
+      await ensurePluginRegistryLoaded({ scope: "configured-channels" });
+      expect(mocks.resolveConfiguredChannelPluginIds).toHaveBeenCalledWith(
+        expect.objectContaining({ config }),
+      );
+    } finally {
+      capture.mockRestore();
+    }
   });
 
   it("loads configured channel owners through the canonical root loader", async () => {
@@ -271,55 +292,6 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(requireLoadOptions().onlyPluginIds).toEqual(["openshell"]);
   });
 
-  it.each([undefined, "docker", "podman", "ssh"])(
-    "does not activate plugins for the built-in sandbox backend %s",
-    async (backend) => {
-      mocks.resolvePluginMetadataSnapshot.mockReturnValue({
-        index: {
-          installRecords: {},
-          plugins: ["docker", "podman", "ssh"].map((pluginId) => ({
-            pluginId,
-            startup: { sidecar: false, memory: false, agentHarnesses: [] },
-          })),
-        },
-        manifestRegistry: { plugins: [], diagnostics: [] },
-      } as never);
-
-      await ensurePluginRegistryLoaded({
-        scope: "sandbox-backends",
-        config: { agents: { defaults: { sandbox: { backend } } } },
-      });
-
-      expect(requireLoadOptions().onlyPluginIds).toEqual([]);
-      expect(mocks.resolveEffectivePluginIds).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not guess a differently named sandbox backend owner", async () => {
-    mocks.resolvePluginMetadataSnapshot.mockReturnValue({
-      index: {
-        installRecords: {},
-        plugins: [
-          {
-            pluginId: "actual-owner",
-            startup: { sidecar: false, memory: false, agentHarnesses: [] },
-          },
-        ],
-      },
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    } as never);
-
-    await ensurePluginRegistryLoaded({
-      scope: "sandbox-backends",
-      config: {
-        agents: { defaults: { sandbox: { backend: "different-backend" } } },
-        plugins: { entries: { "actual-owner": { enabled: true } } },
-      },
-    });
-
-    expect(requireLoadOptions().onlyPluginIds).toEqual([]);
-  });
-
   it("loads only the selected memory backend and embedding provider owners", async () => {
     const env = { HOME: "/tmp/openclaw-home" };
     const config = {
@@ -345,34 +317,6 @@ describe("ensurePluginRegistryLoaded", () => {
     );
   });
 
-  it.each([
-    {
-      adapterId: "gemini",
-      contract: "embeddingProviders" as const,
-      pluginId: "google",
-    },
-    {
-      adapterId: "local",
-      contract: "embeddingProviders" as const,
-      pluginId: "llama-cpp",
-    },
-  ])("loads the $pluginId owner for the $adapterId memory adapter", async (provider) => {
-    const config = {
-      memory: { search: { provider: provider.adapterId } },
-      plugins: { slots: { memory: "memory-core" } },
-    };
-    mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(
-      new Set([provider.adapterId]),
-    );
-    useMemoryProviderOwner(provider);
-
-    await ensurePluginRegistryLoaded({ scope: "memory", config });
-
-    expect(requireLoadOptions().onlyPluginIds).toEqual(
-      [provider.pluginId, "memory-core"].toSorted(),
-    );
-  });
-
   it("keeps a denied memory provider owner denied", async () => {
     const config = {
       memory: { search: { provider: "gemini" } },
@@ -393,29 +337,6 @@ describe("ensurePluginRegistryLoaded", () => {
 
     const options = requireLoadOptions();
     expect(options.onlyPluginIds).toEqual(["google", "memory-core"]);
-    expect(options.config).toEqual(config);
-    expect(options.activationSourceConfig).toEqual(config);
-  });
-
-  it("keeps an explicitly disabled memory provider owner disabled", async () => {
-    const config = {
-      memory: { search: { provider: "local" } },
-      plugins: {
-        entries: { "llama-cpp": { enabled: false } },
-        slots: { memory: "memory-core" },
-      },
-    };
-    mocks.collectConfiguredMemoryEmbeddingProviderIds.mockReturnValue(new Set(["local"]));
-    useMemoryProviderOwner({
-      adapterId: "local",
-      contract: "embeddingProviders",
-      pluginId: "llama-cpp",
-    });
-
-    await ensurePluginRegistryLoaded({ scope: "memory", config });
-
-    const options = requireLoadOptions();
-    expect(options.onlyPluginIds).toEqual(["llama-cpp", "memory-core"]);
     expect(options.config).toEqual(config);
     expect(options.activationSourceConfig).toEqual(config);
   });

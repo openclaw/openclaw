@@ -1,5 +1,6 @@
 // Policy automatic repairs apply only deterministic narrowing config changes.
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { ensureRecord } from "openclaw/plugin-sdk/collection-input-runtime";
 import type {
   HealthFinding,
   HealthRepairContext,
@@ -61,11 +62,8 @@ export function repairPolicyAutomaticNarrower(
   }
   if (
     findings.length === 0 ||
-    findings.some(
-      (finding) =>
-        finding.checkId !== checkId ||
-        POLICY_FIX_METADATA_BY_CHECK_ID.get(finding.checkId)?.fixClass !== "automatic",
-    )
+    POLICY_FIX_METADATA_BY_CHECK_ID.get(checkId)?.fixClass !== "automatic" ||
+    findings.some((finding) => finding.checkId !== checkId)
   ) {
     return Promise.resolve({
       status: "skipped",
@@ -136,47 +134,24 @@ function disableElevatedTools(
   ) {
     return { config: cfg, changes: [] };
   }
-  const next = cloneConfig(cfg);
-  const tools = ensureRecord(next, "tools");
-  const elevated = ensureRecord(tools, "elevated");
-  if (elevated.enabled === false) {
-    return { config: cfg, changes: [] };
-  }
-  elevated.enabled = false;
-  return {
-    config: next as OpenClawConfig,
-    changes: ["Set tools.elevated.enabled=false for policy conformance."],
-  };
+  return setFixedConfigFields(cfg, ["tools", "elevated"], { enabled: false });
 }
 
 function disableInsecureControlUi(
   cfg: OpenClawConfig,
   findings: readonly HealthFinding[],
 ): RepairPatch {
-  const next = cloneConfig(cfg);
-  const gateway = ensureRecord(next, "gateway");
-  const controlUi = ensureRecord(gateway, "controlUi");
-  const changes: string[] = [];
-  const fields = [
-    [
-      "dangerouslyDisableDeviceAuth",
-      "oc://openclaw.config/gateway/controlUi/dangerouslyDisableDeviceAuth",
-    ],
-    [
-      "dangerouslyAllowHostHeaderOriginFallback",
-      "oc://openclaw.config/gateway/controlUi/dangerouslyAllowHostHeaderOriginFallback",
-    ],
-  ] as const;
+  const fields = ["dangerouslyDisableDeviceAuth", "dangerouslyAllowHostHeaderOriginFallback"];
   const findingPaths = new Set(findings.map((finding) => finding.ocPath));
-  for (const [field, ocPath] of fields) {
-    if (findingPaths.has(ocPath) && controlUi[field] !== false) {
-      controlUi[field] = false;
-      changes.push(`Set gateway.controlUi.${field}=false for policy conformance.`);
-    }
-  }
-  return changes.length > 0
-    ? { config: next as OpenClawConfig, changes }
-    : { config: cfg, changes };
+  return setFixedConfigFields(
+    cfg,
+    ["gateway", "controlUi"],
+    Object.fromEntries(
+      fields
+        .filter((field) => findingPaths.has(`oc://openclaw.config/gateway/controlUi/${field}`))
+        .map((field) => [field, false]),
+    ),
+  );
 }
 
 function disableRemoteGatewayMode(
@@ -186,16 +161,7 @@ function disableRemoteGatewayMode(
   if (!findings.some((finding) => finding.ocPath === "oc://openclaw.config/gateway/mode")) {
     return { config: cfg, changes: [] };
   }
-  const next = cloneConfig(cfg);
-  const gateway = ensureRecord(next, "gateway");
-  const changes: string[] = [];
-  if (gateway.mode === "remote") {
-    gateway.mode = "local";
-    changes.push("Set gateway.mode=local for policy conformance.");
-  }
-  return changes.length > 0
-    ? { config: next as OpenClawConfig, changes }
-    : { config: cfg, changes };
+  return setFixedConfigFields(cfg, ["gateway"], { mode: "local" }, "remote");
 }
 
 function disableTelemetryContentCapture(
@@ -208,17 +174,29 @@ function disableTelemetryContentCapture(
       "Skipped scoped data-handling repair. The finding reports shared telemetry config, so changing it would affect more than the scoped policy target.",
     );
   }
+  return setFixedConfigFields(cfg, ["diagnostics", "otel"], { captureContent: false });
+}
+
+function setFixedConfigFields(
+  cfg: OpenClawConfig,
+  path: readonly string[],
+  values: Readonly<Record<string, unknown>>,
+  requiredCurrentValue?: string,
+): RepairPatch {
   const next = cloneConfig(cfg);
-  const diagnostics = ensureRecord(next, "diagnostics");
-  const otel = ensureRecord(diagnostics, "otel");
-  if (otel.captureContent === false) {
-    return { config: cfg, changes: [] };
+  const parent = path.reduce(ensureRecord, next);
+  const changes: string[] = [];
+  for (const [field, value] of Object.entries(values)) {
+    if (
+      parent[field] === value ||
+      (requiredCurrentValue !== undefined && parent[field] !== requiredCurrentValue)
+    ) {
+      continue;
+    }
+    parent[field] = value;
+    changes.push(`Set ${[...path, field].join(".")}=${String(value)} for policy conformance.`);
   }
-  otel.captureContent = false;
-  return {
-    config: next as OpenClawConfig,
-    changes: ["Set diagnostics.otel.captureContent=false for policy conformance."],
-  };
+  return { config: changes.length > 0 ? (next as OpenClawConfig) : cfg, changes };
 }
 
 function setFindingConfigValues(
@@ -260,31 +238,8 @@ function mergeStringArrayAtOcPath(cfg: ConfigRecord, ocPath: string, entry: stri
   if (segments.length === 0 || segments.at(-1) !== "deny") {
     return false;
   }
-  let current: unknown = cfg;
-  for (let index = 0; index < segments.length - 1; index += 1) {
-    const segment = segments[index];
-    if (segment === undefined) {
-      return false;
-    }
-    if (segment.startsWith("#")) {
-      const arrayIndex = Number.parseInt(segment.slice(1), 10);
-      if (!Array.isArray(current) || !Number.isInteger(arrayIndex) || arrayIndex < 0) {
-        return false;
-      }
-      current = current[arrayIndex];
-      continue;
-    }
-    if (!isRecord(current)) {
-      return false;
-    }
-    const nextSegment = segments[index + 1];
-    const existing = current[segment];
-    if (existing === undefined) {
-      current[segment] = nextSegment?.startsWith("#") ? [] : {};
-    }
-    current = current[segment];
-  }
-  if (!isRecord(current)) {
+  const current = configPathParent(cfg, segments, true);
+  if (current === undefined) {
     return false;
   }
   const existing = current.deny;
@@ -292,7 +247,7 @@ function mergeStringArrayAtOcPath(cfg: ConfigRecord, ocPath: string, entry: stri
     return false;
   }
   const deny = existing ?? [];
-  if (deny.some((value) => typeof value === "string" && value === entry)) {
+  if (deny.includes(entry)) {
     return false;
   }
   current.deny = [...deny, entry];
@@ -362,25 +317,8 @@ function setValueAtOcPath(cfg: ConfigRecord, ocPath: string, value: unknown): bo
   if (segments.length === 0) {
     return false;
   }
-  let current: unknown = cfg;
-  for (let index = 0; index < segments.length - 1; index += 1) {
-    const segment = segments[index];
-    if (segment === undefined || segment.startsWith("#")) {
-      return false;
-    }
-    if (!isRecord(current)) {
-      return false;
-    }
-    const existing = current[segment];
-    if (existing !== undefined && !isRecord(existing)) {
-      return false;
-    }
-    if (existing === undefined) {
-      current[segment] = {};
-    }
-    current = current[segment];
-  }
-  if (!isRecord(current)) {
+  const current = configPathParent(cfg, segments, false);
+  if (current === undefined) {
     return false;
   }
   const last = segments.at(-1);
@@ -389,6 +327,45 @@ function setValueAtOcPath(cfg: ConfigRecord, ocPath: string, value: unknown): bo
   }
   current[last] = value;
   return true;
+}
+
+function configPathParent(
+  cfg: ConfigRecord,
+  segments: readonly string[],
+  allowArrays: boolean,
+): ConfigRecord | undefined {
+  let current: unknown = cfg;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (segment === undefined) {
+      return undefined;
+    }
+    if (segment.startsWith("#")) {
+      const arrayIndex = Number.parseInt(segment.slice(1), 10);
+      if (
+        !allowArrays ||
+        !Array.isArray(current) ||
+        !Number.isInteger(arrayIndex) ||
+        arrayIndex < 0
+      ) {
+        return undefined;
+      }
+      current = current[arrayIndex];
+      continue;
+    }
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    const existing = current[segment];
+    if (!allowArrays && existing !== undefined && !isRecord(existing)) {
+      return undefined;
+    }
+    if (existing === undefined) {
+      current[segment] = allowArrays && segments[index + 1]?.startsWith("#") ? [] : {};
+    }
+    current = current[segment];
+  }
+  return isRecord(current) ? current : undefined;
 }
 
 function workspaceRepairsDisabledResult(): HealthRepairResult {
@@ -415,16 +392,4 @@ function isScopedInheritedChannelDefaultFinding(finding: HealthFinding): boolean
     hasScopedPolicyRequirement([finding]) &&
     finding.ocPath?.startsWith("oc://openclaw.config/channels/defaults/") === true
   );
-}
-
-function ensureRecord(parent: ConfigRecord, key: string): ConfigRecord {
-  const current = parent[key];
-  if (isRecord(current)) {
-    const copy = { ...current };
-    parent[key] = copy;
-    return copy;
-  }
-  const next: ConfigRecord = {};
-  parent[key] = next;
-  return next;
 }

@@ -87,10 +87,8 @@ object TalkDirectiveParser {
     val unknownKeys = obj.keys.filter { !knownKeys.contains(it.lowercase()) }.sorted()
 
     lines.removeAt(firstNonEmpty)
-    if (firstNonEmpty < lines.size) {
-      if (lines[firstNonEmpty].trim().isEmpty()) {
-        lines.removeAt(firstNonEmpty)
-      }
+    if (firstNonEmpty < lines.size && lines[firstNonEmpty].trim().isEmpty()) {
+      lines.removeAt(firstNonEmpty)
     }
 
     return TalkDirectiveParseResult(directive, lines.joinToString("\n"), unknownKeys)

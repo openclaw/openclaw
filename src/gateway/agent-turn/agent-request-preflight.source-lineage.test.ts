@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
-import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
+import { createAgentTurnTestContext } from "./agent-run-dispatch.test-support.js";
 import { createAgentTurnIo } from "./io.js";
 
 it.each([
@@ -57,11 +57,10 @@ it.each([
           }),
         });
       }
-      const { context } = createTrackedDispatch();
-      context.chatAbortControllers.clear();
+      const context = createAgentTurnTestContext();
       context.getRuntimeConfig = () => cfg;
       context.logGateway = createSubsystemLogger("test/source-lineage");
-      const result = prepareAgentRequestPreflight({
+      const result = await prepareAgentRequestPreflight({
         request: {
           message: "Worker progress",
           sessionKey: parentKey,

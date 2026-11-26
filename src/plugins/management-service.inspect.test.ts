@@ -3,6 +3,7 @@ import {
   createConfigResolutionFacts,
   setConfigResolutionFacts,
 } from "../config/resolution-facts.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as bundleMcp from "./bundle-mcp.js";
@@ -10,9 +11,10 @@ import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import {
   emptyMetadataSnapshot,
   hostedFeedDiffsEntry,
-  metadataSnapshot,
+  metadataSnapshot as managementMetadataSnapshot,
 } from "./management-service.test-helpers.js";
 import { bindPluginMetadataSnapshotCache, createPluginCache } from "./plugin-cache.js";
+import { makeEmptyPluginMetadataOwners } from "./plugin-metadata-empty.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
@@ -47,8 +49,19 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
 const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
 const { inspectManagedPlugin } = await import("./management-service.js");
 
+function metadataSnapshot(params: Parameters<typeof managementMetadataSnapshot>[0]) {
+  const snapshot = managementMetadataSnapshot(params);
+  return {
+    ...snapshot,
+    manifestRegistry: { plugins: snapshot.plugins, diagnostics: snapshot.diagnostics },
+  };
+}
+
 describe("managed plugin inspection", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetConfigRuntimeState();
+  });
 
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
@@ -185,6 +198,66 @@ describe("managed plugin inspection", () => {
     },
   );
 
+  it("offers Models setup only for an enabled plugin with declared guided sign-in", async () => {
+    const pluginId = "cloud-plugin";
+    const provider = "cloud-models";
+    const snapshot = metadataSnapshot({ enabled: true, id: pluginId });
+    const owners = {
+      ...makeEmptyPluginMetadataOwners(),
+      providers: new Map([[provider, [pluginId]]]),
+    };
+    const manifest = snapshot.plugins[0]!;
+    manifest.providers = [provider];
+    mocks.metadata.mockReturnValue({ ...snapshot, owners });
+    const inspect = (enabled: boolean) =>
+      inspectManagedPlugin({
+        config: { plugins: { entries: { [pluginId]: { enabled } } } },
+        pluginId,
+        env: {},
+      });
+    expect((await inspect(true)).providerSignIn).toBeUndefined();
+    manifest.providerAuthChoices = [
+      {
+        provider,
+        method: "oauth",
+        choiceId: "cloud-login",
+        choiceLabel: "Sign in to Cloud Models",
+        appGuidedAuth: "oauth",
+        credentialOnly: true,
+      },
+    ];
+    expect((await inspect(true)).providerSignIn).toBe(true);
+    expect((await inspect(false)).providerSignIn).toBeUndefined();
+  });
+
+  it("offers installed account sign-in and follows operator configuration changes", async () => {
+    const snapshot = metadataSnapshot({ enabled: true });
+    snapshot.plugins[0]!.mcpServers = {
+      docs: { transport: "streamable-http", url: "https://example.test/mcp", auth: "oauth" },
+    };
+    mocks.metadata.mockReturnValue(snapshot);
+    mocks.mcpAuth.mockResolvedValue([{ state: "unauthenticated" }]);
+    const config: OpenClawConfig = {
+      plugins: { entries: { workboard: { enabled: true } } },
+    };
+    setRuntimeConfigSnapshot(config);
+    const inspect = () => inspectManagedPlugin({ config, pluginId: "workboard", env: {} });
+    const auth = [{ serverName: "docs", state: "unauthenticated" }];
+    expect((await inspect()).mcpAuth).toEqual(auth);
+    expect(config.mcp).toBeUndefined();
+
+    config.mcp = {
+      servers: { docs: { url: "https://override.test/mcp", auth: "oauth" } },
+    };
+    expect((await inspect()).mcpAuth).toBeUndefined();
+    config.mcp.servers!.docs!.url = "https://example.test/mcp";
+    expect((await inspect()).mcpAuth).toEqual(auth);
+    config.mcp.servers!.docs = { enabled: false };
+    expect((await inspect()).mcpAuth).toBeUndefined();
+    delete config.mcp.servers!.docs;
+    expect((await inspect()).mcpAuth).toEqual(auth);
+  });
+
   it("projects only eligible operator MCP connections without credential details", async () => {
     const snapshot = metadataSnapshot({ enabled: true });
     const states = [
@@ -210,6 +283,7 @@ describe("managed plugin inspection", () => {
     };
     const excluded: Record<string, McpServerConfig> = {
       disabled: { ...base, enabled: false },
+      disabledOnly: { enabled: false },
       command: { ...base, command: "node" },
       unauthenticated: { ...base, auth: undefined },
       requester: { ...base, oauth: { identity: "per-requester" } },
@@ -220,10 +294,7 @@ describe("managed plugin inspection", () => {
       ...servers,
       ...Object.fromEntries(Object.keys(excluded).map((name) => [name, base])),
     };
-    mocks.metadata.mockReturnValue({
-      ...snapshot,
-      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
-    });
+    mocks.metadata.mockReturnValue(snapshot);
     mocks.mcpAuth.mockResolvedValue(states.map((state) => ({ state, expiresAt: 100 })));
 
     const inspection = await inspectManagedPlugin({
@@ -264,6 +335,7 @@ describe("managed plugin inspection", () => {
       plugins: { entries: { workboard: { enabled: true }, other: { enabled: false } } },
       mcp: { servers: { docs: server } },
     };
+    setRuntimeConfigSnapshot(config);
     const inspect = (currentConfig = config) =>
       inspectManagedPlugin({ config: currentConfig, pluginId: "workboard", env: {} });
     const load = vi.spyOn(bundleMcp, "loadEnabledBundleMcpConfig");
@@ -294,16 +366,22 @@ describe("managed plugin inspection", () => {
     mocks.metadata.mockReturnValue(metadata);
     expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
     expect(load).toHaveBeenCalledTimes(3);
+
+    config.plugins!.entries!.other!.enabled = true;
+    setRuntimeConfigSnapshot(config);
+    const shadowed = await inspect();
+    expect(shadowed.plugin.enabled).toBe(true);
+    expect(shadowed.mcpAuth).toBeUndefined();
+    config.plugins!.entries!.other!.enabled = false;
+    setRuntimeConfigSnapshot(config);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
   });
 
   it("omits resolver-owned requester credentials from operator plugin inspection", async () => {
     const server = { url: "https://example.test/mcp", auth: "oauth" as const };
     const snapshot = metadataSnapshot({ enabled: true });
     snapshot.plugins[0]!.mcpServers = { docs: server };
-    mocks.metadata.mockReturnValue({
-      ...snapshot,
-      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
-    });
+    mocks.metadata.mockReturnValue(snapshot);
     const registry = createEmptyPluginRegistry();
     registry.mcpServerConnectionResolvers.push({
       pluginId: "workboard",
@@ -418,7 +496,7 @@ describe("managed plugin inspection", () => {
           entries: {
             "community-plugin": {
               enabled: false,
-              hooks: { allowPromptInjection: false, allowConversationAccess: true },
+              hooks: { allowPromptModification: false, allowConversationAccess: true },
               llm: { allowModelOverride: true },
             },
           },

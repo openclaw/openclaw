@@ -1,17 +1,21 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { Value } from "typebox/value";
-import {
-  AgentActivityItemSchema,
-  type AgentActivityItem,
-} from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-presentation.js";
 import type { SidebarToolActivity } from "../../components/app-sidebar-session-types.ts";
 import { readSidebarToolActivity } from "../../components/sidebar-tool-activity.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
-import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
+import {
+  extractToolCardsCached,
+  projectToolCardActivityOutcome,
+  resolveToolCardOutcome,
+} from "../../lib/chat/tool-cards.ts";
+import { resolveToolDisplayIdentity } from "../../lib/chat/tool-display-identity.ts";
+import {
+  cleanAgentActivityItem,
+  isAgentActivityItem,
+} from "../../lib/protocol-validators.generated/activity.js";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
 
@@ -28,8 +32,8 @@ export function readSubagentToolEvent(
 ): AgentActivityItem | undefined {
   const data = asOptionalRecord(value);
   if (stream === "item") {
-    const candidate = Value.Clean(AgentActivityItemSchema, { ...data });
-    if (!Value.Check(AgentActivityItemSchema, candidate) || candidate.kind !== "tool") {
+    const candidate = cleanAgentActivityItem({ ...data });
+    if (!isAgentActivityItem(candidate) || candidate.kind !== "tool") {
       return undefined;
     }
     return candidate.suppressChannelProgress && previous ? previous : candidate;
@@ -47,7 +51,7 @@ export function readSubagentToolEvent(
     toolCallId: data.toolCallId,
     kind: "tool",
     name,
-    title: resolveToolDisplay({ name }).label,
+    title: resolveToolDisplayIdentity(name).label,
     phase: data.phase === "result" ? "end" : data.phase === "start" ? "start" : "update",
     ...(data.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     ...(data.suppressChannelProgress === true ? { suppressChannelProgress: true } : {}),
@@ -134,15 +138,14 @@ export function readSubagentActivitySnapshot(history: ChatHistoryResult): Subage
       if (preparedCallIds.has(identity)) {
         continue;
       }
-      const outcome = resolveToolCardOutcome(card, false);
       const item: AgentActivityItem = {
         itemId: card.callId,
         toolCallId: card.callId,
         kind: "tool",
         name: card.name,
-        title: resolveToolDisplay({ name: card.name }).label,
+        title: resolveToolDisplayIdentity(card.name).label,
         phase: "end",
-        status: outcome === "succeeded" ? "completed" : outcome === "unknown" ? undefined : outcome,
+        ...projectToolCardActivityOutcome(resolveToolCardOutcome(card, false)),
       };
       calls.set(identity, item);
       tool = { name: card.name, toolCallId: card.callId };
@@ -182,12 +185,13 @@ export function readSubagentActivitySnapshot(history: ChatHistoryResult): Subage
   };
 }
 
-export function subagentToolCallCount(snapshot: SubagentActivitySnapshot): number | undefined {
-  return snapshot.complete
-    ? summarizeAgentActivity(
-        Array.from(snapshot.calls, ([identity, item]) =>
-          Object.assign({}, item, { toolCallId: identity }),
-        ),
-      ).total
-    : undefined;
+export function subagentToolCallCount(
+  snapshot: SubagentActivitySnapshot,
+): { count: number; exact: boolean } | undefined {
+  const count = summarizeAgentActivity(
+    Array.from(snapshot.calls, ([identity, item]) =>
+      Object.assign({}, item, { toolCallId: identity }),
+    ),
+  ).total;
+  return snapshot.complete || count > 0 ? { count, exact: snapshot.complete } : undefined;
 }

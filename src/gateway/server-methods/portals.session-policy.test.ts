@@ -1,5 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -27,6 +28,7 @@ describe("session Portal RPC policy admission", () => {
     "rejects a locked canonical session through the actual router under %s",
     async (scope) =>
       withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const writer = await ensureCanonicalUserProfileForEmail("portal-writer@example.test");
         const sessionKey = "agent:main:preview";
         const projection = createSessionRowProjectionFixture({

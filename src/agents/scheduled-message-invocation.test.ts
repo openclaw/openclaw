@@ -5,11 +5,16 @@ import "./test-helpers/fast-openclaw-tools.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayScopedTools } from "../gateway/tool-resolution.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { prepareTemplateInstallSchemaVersions } from "../templates/provenance-runtime-read.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 describe("scheduled message invocation admission", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    // Synchronous tool assembly consumes the runtime owner’s prepared consent facts.
+    (await prepareTemplateInstallSchemaVersions({ artifactPreservingReadOnly: false })).publish();
+  });
   afterEach(() => clearRuntimeConfigSnapshot());
 
   it.each(["embedded", "loopback"] as const)(
@@ -36,7 +41,7 @@ describe("scheduled message invocation admission", () => {
       };
       const tools =
         surface === "embedded"
-          ? createOpenClawCodingTools({
+          ? await createOpenClawCodingToolsAsync({
               ...run,
               config,
               policyAgentId: "reader",

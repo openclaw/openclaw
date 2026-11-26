@@ -4,7 +4,7 @@ import {
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
-import { buildNpmResolutionFields } from "../infra/install-source-utils.js";
+import { buildNpmResolutionFields } from "../infra/npm-registry-spec.js";
 import {
   expectedIntegrityForUpdate,
   isPackageVersionDowngrade,
@@ -21,29 +21,12 @@ import {
 } from "./install.js";
 import { readHookInstalls } from "./installs.js";
 
-/** Logger contract for hook pack update operations. */
-type HookPackUpdateLogger = {
-  info?: (message: string) => void;
-  warn?: (message: string) => void;
-};
-
-/** Per-pack update status emitted by updateNpmInstalledHookPacks. */
-type HookPackUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
-
-/** Outcome for one hook pack update attempt. */
 type HookPackUpdateOutcome = {
   hookId: string;
-  status: HookPackUpdateStatus;
+  status: "updated" | "unchanged" | "skipped" | "error";
   message: string;
   currentVersion?: string;
   nextVersion?: string;
-};
-
-/** Aggregate update result with the possibly updated config. */
-type HookPackUpdateSummary = {
-  config: OpenClawConfig;
-  changed: boolean;
-  outcomes: HookPackUpdateOutcome[];
 };
 
 /** Integrity drift payload enriched with hook pack identity and dry-run state. */
@@ -58,14 +41,16 @@ type HookPackUpdateIntegrityDriftParams = HookNpmIntegrityDriftParams & {
 export async function updateNpmInstalledHookPacks(params: {
   config: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  logger?: HookPackUpdateLogger;
+  logger?: Parameters<typeof installHooksFromNpmSpec>[0]["logger"];
   hookIds?: string[];
   dryRun?: boolean;
   lease?: PluginLifecycleLeaseContext;
   beforePersistentApply?: () => void;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: HookPackUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
-}): Promise<HookPackUpdateSummary> {
+  /** Once aborted, no further hook pack update starts; this loop does not stop one in progress. */
+  signal?: AbortSignal;
+}) {
   const logger = params.logger ?? {};
   const transactionRequest = resolvePluginInstallTransactionRequest(params);
   // The caller owns the config commit and settles every staged payload/record together.
@@ -91,6 +76,9 @@ export async function updateNpmInstalledHookPacks(params: {
   let changed = false;
 
   for (const hookId of targets) {
+    if (params.signal?.aborted) {
+      break;
+    }
     const record = installs[hookId];
     if (!record) {
       outcomes.push({
@@ -225,8 +213,8 @@ export async function updateNpmInstalledHookPacks(params: {
     outcomes.push({
       hookId,
       status,
-      currentVersion: currentVersion ?? undefined,
-      nextVersion: nextVersion ?? undefined,
+      currentVersion,
+      nextVersion,
       message:
         status === "unchanged"
           ? persistence

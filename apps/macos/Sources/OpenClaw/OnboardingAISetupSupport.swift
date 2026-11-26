@@ -138,8 +138,6 @@ extension OnboardingAISetupModel {
         let authOptions: [AuthOption]?
         let prepareOptions: [PrepareOption]?
         let recommendedInstalls: [RecommendedInstall]?
-        let nativeSessionCatalogs: [NativeSessionCatalog]?
-        let nativeSessionCatalogPreferenceRequired: Bool?
         let configuredModel: String?
         let utilityModel: String?
         let setupModel: String?
@@ -294,6 +292,7 @@ extension OnboardingAISetupModel {
         let kind: String
         let featured: Bool
         let modelTarget: ModelTarget?
+        var actionLabel: String?
     }
 
     struct RecommendedInstall: Identifiable, Equatable, Decodable {
@@ -303,16 +302,6 @@ extension OnboardingAISetupModel {
         let website: String
         let icon: String
         let brandId: String?
-    }
-
-    struct NativeSessionCatalog: Identifiable, Equatable, Decodable {
-        let pluginId: String
-        let label: String
-        let detail: String?
-
-        var id: String {
-            self.pluginId
-        }
     }
 
     struct PrepareOption: Identifiable, Equatable, Decodable {
@@ -400,10 +389,6 @@ extension OnboardingAISetupModel {
         return false
     }
 
-    var nativeSessionCatalogSummary: String {
-        self.nativeSessionCatalogs.map(\.label).formatted(.list(type: .and))
-    }
-
     var busyReason: String? {
         // Every connection attempt must make quitting mid-setup confirmable.
         if self.phase == .testing || self.manualTesting ||
@@ -421,6 +406,12 @@ extension OnboardingAISetupModel {
 
     var isBusy: Bool {
         self.phase == .detecting || self.phase == .testing || self.manualTesting || self.authBusy ||
+            self.pendingActivationVerification
+    }
+
+    /// A choice the person started while discovery ran; late results must not replace it.
+    var hasSetupAttemptInFlight: Bool {
+        self.phase == .testing || self.manualTesting || self.activeAuthOption != nil ||
             self.pendingActivationVerification
     }
 
@@ -467,7 +458,7 @@ extension OnboardingAISetupModel {
     /// Once setup starts changing inference, its successful result belongs to
     /// OpenClaw rather than the existing-Gateway onboarding bypass.
     var ownsInferenceTransition: Bool {
-        (self.phase == .detecting && self.configuredGatewayBlocker == nil) ||
+        (self.phase == .detecting && self.configuredGatewayBlocker == nil) || self.discovering ||
             self.phase == .testing || self.manualTesting || self.authBusy || self.connected ||
             self.pendingActivationVerification
     }
@@ -479,25 +470,22 @@ extension OnboardingAISetupModel {
         // Released Gateways do not send prepareOptions. Preserve their two
         // existing rows until the connected Gateway advertises provider-owned choices.
         let legacyOptions = [
+            ("ollama", "Ollama", "Download a tools-capable model from your Ollama server"),
+            (
+                "llama-cpp",
+                "Local model (llama.cpp)",
+                "Download an approximately 5.0 GB local model; requires 16 GB RAM"),
+        ].map { id, label, hint in
             PrepareOption(
-                id: "ollama",
-                label: "Ollama",
-                hint: "Download a tools-capable model from your Ollama server",
+                id: id,
+                label: label,
+                hint: hint,
                 actionLabel: nil,
-                brandId: "ollama",
+                brandId: id,
                 icon: nil,
                 website: nil,
-                modelTarget: nil),
-            PrepareOption(
-                id: "llama-cpp",
-                label: "Local model (llama.cpp)",
-                hint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
-                actionLabel: nil,
-                brandId: "llama-cpp",
-                icon: nil,
-                website: nil,
-                modelTarget: nil),
-        ]
+                modelTarget: nil)
+        }
         return (advertisedOptions ?? legacyOptions).filter { choice in
             let providerKind = self.providerAutoSetupKind(choiceID: choice.id)
             return !candidates.contains(where: {

@@ -1,8 +1,13 @@
 // Whatsapp tests cover inbound plugin behavior.
 import type { proto } from "baileys";
 import { describe, expect, it } from "vitest";
-import { extractContactContext, extractLocationData, extractText } from "./inbound.js";
-import { extractExternalAdReplyContext, extractMediaKind } from "./inbound/extract.js";
+import {
+  extractContactContext,
+  extractExternalAdReplyContext,
+  extractLocationData,
+  extractMediaKind,
+  extractText,
+} from "./inbound/extract.js";
 
 const message = (value: proto.IMessage) => value;
 const vcard = (name: string, phones: string[] = []) =>
@@ -28,19 +33,70 @@ describe("web inbound helpers", () => {
     expect(extractText(message(input))).toBe(expected);
   });
 
-  it("extracts WhatsApp contact cards", () => {
+  it.each([
+    {
+      label: "display names",
+      displayName: "Ada Lovelace",
+      card: vcard("Ada Lovelace", ["+15555550123"]),
+      name: "Ada Lovelace",
+    },
+    {
+      label: "folded names and telephone numbers",
+      displayName: undefined,
+      card: [
+        "BEGIN:VCARD",
+        "VERSION:4.0",
+        "FN:Ada",
+        "  Lovelace",
+        "TEL;VALUE=uri:tel:+",
+        "\t15555550123",
+        "END:VCARD",
+        "",
+      ].join("\r\n"),
+      name: "Ada Lovelace",
+    },
+    {
+      label: "colons in quoted name and phone parameters",
+      displayName: "",
+      card: [
+        "BEGIN:VCARD",
+        "VERSION:4.0",
+        'FN;LANGUAGE=en;ALTID=":":Lane:Desk',
+        'item1.TEL;ALTID="a:b";VALUE=uri:tel:+15555550123',
+        "END:VCARD",
+      ].join("\r\n"),
+      name: "Lane:Desk",
+    },
+    {
+      label: "escaped vCard names and telephone prefixes",
+      displayName: undefined,
+      card: vcard("Ada\\nLovelace\\, Countess\\; Byron", ["TeL: +15555550123 "]),
+      name: "Ada Lovelace, Countess; Byron",
+    },
+  ])("extracts WhatsApp contact cards with $label", ({ displayName, card, name }) => {
     const input = message({
       contactMessage: {
-        displayName: "Ada Lovelace",
-        vcard: vcard("Ada Lovelace", ["+15555550123"]),
+        displayName,
+        vcard: card,
       },
     });
     expect(extractText(input)).toBe("<contact>");
     expect(extractContactContext(input)).toEqual({
       kind: "contact",
       total: 1,
-      contacts: [{ name: "Ada Lovelace", phones: ["+15555550123"] }],
+      contacts: [{ name, phones: ["+15555550123"] }],
     });
+  });
+
+  it.each([
+    [String.raw`FN:Studio\\north\nDesk`, String.raw`Studio\north Desk`],
+    ["FN:A;B", "A;B"],
+    ['N;ALTID="a:b":Family;Given;;;', "Family Given"],
+    [String.raw`N:A\;B;C;;;`, "A;B C"],
+  ])("reads the shared contact name from %s", (field, name) => {
+    const card = ["BEGIN:VCARD", "VERSION:4.0", field, "END:VCARD"].join("\r\n");
+    const input = message({ contactMessage: { displayName: "", vcard: card } });
+    expect(extractContactContext(input)?.contacts).toEqual([{ name, phones: [] }]);
   });
 
   it.each([

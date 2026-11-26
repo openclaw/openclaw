@@ -168,19 +168,7 @@ function buildForwardParams(
       }
       return approved(forwarded);
     }
-    case "pullAudio": {
-      const forwarded: Record<string, unknown> = { action };
-      const bridgeId = readNonEmptyString(params.bridgeId);
-      const timeoutMs = readPositiveNumber(params.timeoutMs);
-      if (!bridgeId) {
-        return denyMissing(options, action, "bridgeId");
-      }
-      forwarded.bridgeId = bridgeId;
-      if (timeoutMs) {
-        forwarded.timeoutMs = timeoutMs;
-      }
-      return approved(forwarded);
-    }
+    case "pullAudio":
     case "pushAudio":
     case "clearAudio": {
       const forwarded: Record<string, unknown> = { action };
@@ -188,6 +176,10 @@ function buildForwardParams(
       const base64 = action === "pushAudio" ? readNonEmptyString(params.base64) : undefined;
       if (!bridgeId) {
         return denyMissing(options, action, "bridgeId");
+      }
+      if (action === "pullAudio") {
+        const timeoutMs = readPositiveNumber(params.timeoutMs);
+        return approved({ action, bridgeId, ...(timeoutMs ? { timeoutMs } : {}) });
       }
       if (action === "pushAudio") {
         if (!base64) {

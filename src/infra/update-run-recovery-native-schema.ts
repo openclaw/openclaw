@@ -80,12 +80,9 @@ export const RecoveryNativeManagerSchema = z
             : entry.observedRevision === undefined ||
               entry.observedRevision <= entry.intentRevision) ||
         (entry.reconciledStop !== undefined &&
-          entry.state !== "reconciled" &&
-          entry.state !== "observed") ||
-        (entry.reconciledStop !== undefined &&
-          entry.reconciledStop.revision <= (entry.observedRevision ?? entry.intentRevision)) ||
-        (entry.reconciledStop !== undefined &&
-          (manager.identity.platform !== "linux" ||
+          ((entry.state !== "reconciled" && entry.state !== "observed") ||
+            entry.reconciledStop.revision <= (entry.observedRevision ?? entry.intentRevision) ||
+            manager.identity.platform !== "linux" ||
             entry.action !== "suppress" ||
             !entry.before.exists ||
             !entry.before.loaded ||

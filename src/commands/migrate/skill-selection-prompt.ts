@@ -84,19 +84,18 @@ export function promptMigrationSkillSelectionValues(
       };
 
       switch (this.state) {
-        case "submit": {
-          const selected = this.options
-            .filter((option) => value.includes(option.value))
-            .map((option) => formatOption(option, "submitted"))
-            .join(styleText("dim", ", "));
-          const label = selected || styleText("dim", "none");
-          return `${header}${wrapTextWithPrefix(opts.output, label, withGuide ? `${styleText("gray", S_BAR)}  ` : "")}`;
-        }
+        case "submit":
         case "cancel": {
           const selected = this.options
             .filter((option) => value.includes(option.value))
-            .map((option) => formatOption(option, "cancelled"))
+            .map((option) =>
+              formatOption(option, this.state === "submit" ? "submitted" : "cancelled"),
+            )
             .join(styleText("dim", ", "));
+          if (this.state === "submit") {
+            const label = selected || styleText("dim", "none");
+            return `${header}${wrapTextWithPrefix(opts.output, label, withGuide ? `${styleText("gray", S_BAR)}  ` : "")}`;
+          }
           if (selected.trim() === "") {
             return `${header}${styleText("gray", S_BAR)}`;
           }
@@ -162,21 +161,19 @@ export function promptMigrationSkillSelectionValues(
       // (the recommended set) regardless of any toggles the user made.
       if (activatedValue === MIGRATION_SELECTION_ACCEPT) {
         prompt.value = [...(opts.initialValues ?? [])];
-        lastSpaceDeselectedValue = undefined;
-        lastSelectedValues = [...(prompt.value ?? [])];
-        return;
+      } else {
+        prompt.value = reconcileInteractiveMigrationEnterValues(
+          prompt.value ?? [],
+          activatedValue,
+          opts.selectableValues,
+          {
+            preserveDeselectedActivatedValue:
+              activatedValue !== undefined &&
+              activatedValue === lastSpaceDeselectedValue &&
+              !(prompt.value ?? []).includes(activatedValue),
+          },
+        );
       }
-      prompt.value = reconcileInteractiveMigrationEnterValues(
-        prompt.value ?? [],
-        activatedValue,
-        opts.selectableValues,
-        {
-          preserveDeselectedActivatedValue:
-            activatedValue !== undefined &&
-            activatedValue === lastSpaceDeselectedValue &&
-            !(prompt.value ?? []).includes(activatedValue),
-        },
-      );
       // Enter can submit the active row without a Space event; keep the local
       // selection cache aligned for subsequent shortcut reconciliation.
       lastSpaceDeselectedValue = undefined;

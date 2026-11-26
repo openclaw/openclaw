@@ -51,6 +51,8 @@ export type DiagnosticStabilityEventRecord = DiagnosticMemoryPressureMetrics & {
   provider?: string;
   model?: string;
   durationMs?: number;
+  providerProcessingMs?: number;
+  providerWaitEstimateMs?: number;
   requestBytes?: number;
   responseBytes?: number;
   timeToFirstByteMs?: number;
@@ -242,17 +244,6 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
   };
 
   switch (event.type) {
-    case "agent.commentary":
-      // Trusted commentary belongs to harness traces, not the stability subscription.
-      break;
-    case "gateway.rpc":
-    case "gateway.event_loop.sample":
-    case "diagnostic.gc":
-    case "diagnostic.child_process.spawn":
-    case "log.record":
-    case "telemetry.exporter":
-      // These events use separate exporters and are excluded by the subscription.
-      break;
     case "model.usage":
       copy(event, "channel", "provider", "model");
       record.usage = { ...event.usage };
@@ -476,10 +467,15 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "model.call.error":
       copy(event, "provider", "model");
       if (event.type !== "model.call.started") {
-        record.durationMs = event.durationMs;
+        copy(
+          event,
+          "durationMs",
+          "timeToFirstByteMs",
+          "providerProcessingMs",
+          "providerWaitEstimateMs",
+        );
         record.requestBytes = event.requestPayloadBytes;
         record.responseBytes = event.responseStreamBytes;
-        record.timeToFirstByteMs = event.timeToFirstByteMs;
         if (event.type === "model.call.error") {
           record.failureKind = event.failureKind;
           record.memory = event.memory ? { ...event.memory } : undefined;
@@ -523,6 +519,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.provider = event.fromProvider;
       record.model = event.fromModel;
       assignReasonCode(record, event.reason);
+      break;
+    default:
+      // Other event families are excluded by the recorder subscription.
       break;
   }
 
@@ -615,12 +614,6 @@ function listRecords(): DiagnosticStabilityEventRecord[] {
     }
   }
   return records;
-}
-
-function listExporterRecords(): DiagnosticStabilityEventRecord[] {
-  return [...getDiagnosticStabilityState().exporterRecords.values()].toSorted(
-    (left, right) => left.seq - right.seq,
-  );
 }
 
 function summarizeRecords(
@@ -718,19 +711,21 @@ export function startDiagnosticStabilityRecorder(): void {
     return;
   }
   state.unsubscribe = onInternalDiagnosticEvent(
-    (event) => {
-      appendRecord(sanitizeDiagnosticEvent(event));
-    },
+    (event) => appendRecord(sanitizeDiagnosticEvent(event)),
     {
-      // Recovery needs model-call telemetry; other trusted events have dedicated owners.
+      includePromptStats: false, // Recovery consumes lifecycle facts, not prompt sizes.
       includeTrusted: ["model.call.started", "model.call.completed", "model.call.error"],
       exclude: [
         "log.record",
         "telemetry.exporter",
         "gateway.rpc",
         "gateway.event_loop.sample",
+        "gateway.http.cancelled",
         "diagnostic.gc",
         "diagnostic.child_process.spawn",
+        "worker.request",
+        "secret.egress",
+        "tool.catalog",
       ],
     },
   );
@@ -750,7 +745,9 @@ export function getDiagnosticStabilitySnapshot(options?: {
   const state = getDiagnosticStabilityState();
   const exporterQuery = options?.type === "telemetry.exporter";
   const { filtered, events } = selectRecords(
-    exporterQuery ? listExporterRecords() : listRecords(),
+    exporterQuery
+      ? [...state.exporterRecords.values()].toSorted((left, right) => left.seq - right.seq)
+      : listRecords(),
     options,
   );
   return {
@@ -785,13 +782,13 @@ export function selectDiagnosticStabilitySnapshot(
   };
 }
 
+/** @internal Test-support reset; see diagnostic.test-support.ts. */
 export function resetDiagnosticStabilityRecorderForTest(): void {
   const state = getDiagnosticStabilityState();
   state.unsubscribe?.();
-  const next = createState(state.capacity);
   const globalStore = globalThis as typeof globalThis & {
     __openclawDiagnosticStabilityState?: DiagnosticStabilityState;
   };
-  globalStore["__openclawDiagnosticStabilityState"] = next;
+  globalStore["__openclawDiagnosticStabilityState"] = createState(state.capacity);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

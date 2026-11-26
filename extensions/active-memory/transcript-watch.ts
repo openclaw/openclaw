@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
+import { rethrowIncognitoSessionError } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readMemoryResultFromSessionRecord,
@@ -103,7 +104,11 @@ export function watchTerminalMemorySearchResult(params: {
 }): TerminalMemorySearchWatch {
   const controller = new AbortController();
   const signal = AbortSignal.any([controller.signal, params.abortSignal]);
-  const { promise, resolve: resolveWatch } = createDeferred<TerminalMemorySearchResult>();
+  const {
+    promise,
+    resolve: resolveWatch,
+    reject: rejectWatch,
+  } = createDeferred<TerminalMemorySearchResult>();
   const stop = () => controller.abort();
   const poll = async () => {
     while (!signal.aborted) {
@@ -121,7 +126,8 @@ export function watchTerminalMemorySearchResult(params: {
           resolveWatch(result);
           return;
         }
-      } catch {
+      } catch (error) {
+        rethrowIncognitoSessionError(error);
         // Transcript polling is opportunistic; normal timeout handling remains authoritative.
       }
       await sleepWithAbort(TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS, signal, { ref: false }).catch(
@@ -129,7 +135,7 @@ export function watchTerminalMemorySearchResult(params: {
       );
     }
   };
-  void poll();
+  void poll().catch(rejectWatch);
   return {
     promise,
     stop,

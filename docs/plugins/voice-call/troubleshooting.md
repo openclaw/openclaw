@@ -147,7 +147,7 @@ signatures do not include the request URL. If signatures fail:
 
 - Confirm the provider webhook URL exactly matches `publicUrl`, including scheme, host, and path.
 - For ngrok free-tier URLs, update `publicUrl` when the tunnel hostname changes.
-- Ensure the proxy preserves the original host and proto headers, or configure `webhookSecurity.allowedHosts`.
+- Check that the proxy preserves the original host and proto headers, or configure `webhookSecurity.allowedHosts`.
 - Do not enable `skipSignatureVerification` outside local testing.
 
 ### Google Meet Twilio joins fail

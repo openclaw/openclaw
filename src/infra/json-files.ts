@@ -1,4 +1,10 @@
 import { writeTextAtomic as writeFsSafeTextAtomic } from "@openclaw/fs-safe/atomic";
+import {
+  tryReadJsonSync,
+  writeJson as writeFsSafeJson,
+  writeJsonSync as writeFsSafeJsonSync,
+} from "@openclaw/fs-safe/json";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 
 export {
   JsonFileReadError,
@@ -10,12 +16,27 @@ export {
   tryReadJson,
   tryReadJson as readJsonFile, // Sanctioned domain alias.
   tryReadJsonSync,
-  writeJson,
-  writeJson as writeJsonAtomic, // Sanctioned domain alias.
-  writeJsonSync,
 } from "@openclaw/fs-safe/json";
 
+export const writeJson: typeof writeFsSafeJson = async (filePath, value, options) =>
+  writeFsSafeJson(filePath, value, {
+    ...options,
+    allowDrvfsRenameRecovery: options?.allowDrvfsRenameRecovery ?? true,
+  });
+
+export { writeJson as writeJsonAtomic }; // Sanctioned domain alias.
+
+export const writeJsonSync: typeof writeFsSafeJsonSync = (filePath, value, options) =>
+  writeFsSafeJsonSync(filePath, value, {
+    ...options,
+    allowDrvfsRenameRecovery: options?.allowDrvfsRenameRecovery ?? true,
+  });
+
 export { createAsyncLock } from "@openclaw/fs-safe/advanced";
+
+export function tryReadJsonObjectSync(filePath: string): Record<string, unknown> | null {
+  return asNullableRecord(tryReadJsonSync(filePath));
+}
 
 export const writeTextAtomic: typeof writeFsSafeTextAtomic = async (filePath, content, options) => {
   // The public SDK treats empty prefixes as defaults and ignores unrelated options.
@@ -26,5 +47,6 @@ export const writeTextAtomic: typeof writeFsSafeTextAtomic = async (filePath, co
     durable: options?.durable,
     beforeRename: options?.beforeRename || undefined,
     tempPrefix: options?.tempPrefix || undefined,
+    allowDrvfsRenameRecovery: options?.allowDrvfsRenameRecovery ?? true,
   });
 };

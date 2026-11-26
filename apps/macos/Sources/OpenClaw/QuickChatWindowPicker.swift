@@ -26,7 +26,7 @@ struct QuickChatWindowCandidate: Equatable, Sendable, Identifiable {
     let bundleIdentifier: String?
     let appName: String
     let title: String
-    let bounds: CGRect
+    var bounds: CGRect
 }
 
 enum QuickChatWindowPickerLogic {
@@ -267,17 +267,13 @@ final class QuickChatWindowPicker {
             let localCandidates = candidates.compactMap { candidate -> QuickChatWindowCandidate? in
                 let clipped = candidate.bounds.intersection(cgScreenFrame)
                 guard !clipped.isNull, clipped.width > 0, clipped.height > 0 else { return nil }
-                return QuickChatWindowCandidate(
-                    windowID: candidate.windowID,
-                    processID: candidate.processID,
-                    bundleIdentifier: candidate.bundleIdentifier,
-                    appName: candidate.appName,
-                    title: candidate.title,
-                    bounds: CGRect(
-                        x: clipped.minX - cgScreenFrame.minX,
-                        y: clipped.minY - cgScreenFrame.minY,
-                        width: clipped.width,
-                        height: clipped.height))
+                var localCandidate = candidate
+                localCandidate.bounds = CGRect(
+                    x: clipped.minX - cgScreenFrame.minX,
+                    y: clipped.minY - cgScreenFrame.minY,
+                    width: clipped.width,
+                    height: clipped.height)
+                return localCandidate
             }
 
             let panel = Self.makeOverlayPanel(frame: screen.frame)

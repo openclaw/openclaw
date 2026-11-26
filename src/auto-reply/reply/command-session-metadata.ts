@@ -15,9 +15,7 @@ function addChange(target: object, change: CommandSessionMetadataChange): void {
   if (
     !changes.some(
       (candidate) =>
-        candidate.sessionKey === change.sessionKey &&
-        candidate.agentId === change.agentId &&
-        candidate.reason === change.reason,
+        candidate.sessionKey === change.sessionKey && candidate.agentId === change.agentId,
     )
   ) {
     changes.push(change);

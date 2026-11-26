@@ -347,12 +347,7 @@ const recoveryInspectionRecordSchema = z
                 effect.kind === "package-restore" ||
                 effect.kind === "checkpoint-restore"),
           )) ||
-        (record.terminal &&
-          nativeFinal &&
-          (nativeFinal.exists !== native.original.exists ||
-            nativeFinal.enabled !== native.original.enabled ||
-            nativeFinal.loaded !== native.original.loaded ||
-            nativeFinal.stopped !== native.original.stopped)))
+        (record.terminal && nativeFinal && !isDeepStrictEqual(nativeFinal, native.original)))
     ) {
       reportIssue("Native manager evidence must match admitted source and revision");
     }
@@ -585,24 +580,24 @@ export function decodeUpdateRecovery(raw: string, runId: string): UpdateRecovery
   return record;
 }
 
-/** Only decoded records may be tested: an aborted preparation is historical,
- * and can never confer restart, cleanup, or future claim authority. */
-export function isUpdateRecoveryPending(record: {
-  terminal?: unknown;
-  preparationAborted?: unknown;
-  retainedPair?: { state: string };
-  effects: readonly { state: string; kind?: string; package?: { outcome?: string } }[];
-}): boolean {
+/** Only validated inspection/execution records qualify. Historical completion
+ * permits admission, never restart, cleanup, or another recovery claim. */
+export function isUpdateRecoveryPending(
+  record: Pick<
+    UpdateRecoveryInspection["record"],
+    "terminal" | "preparationAborted" | "restore" | "effects"
+  >,
+): boolean {
   return (
     !record.preparationAborted &&
     (!record.terminal ||
-      record.effects.some((effect) => effect.state === "intent") ||
-      (record.retainedPair?.state === "superseded" &&
-        !record.effects.some(
-          (effect) =>
-            effect.kind === "retirement" &&
-            effect.state === "observed" &&
-            effect.package?.outcome === "completed",
-        )))
+      (record.restore !== null && record.restore.phase !== "observed") ||
+      record.effects.some(
+        (effect) =>
+          effect.state === "intent" &&
+          // Only typed obsolete-package retirement is cleanup. A missing or
+          // contradictory action must not hide an unfinished live mutation.
+          !(effect.kind === "retirement" && effect.package?.intent.action === "retire"),
+      ))
   );
 }

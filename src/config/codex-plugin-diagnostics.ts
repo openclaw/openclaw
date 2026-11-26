@@ -1,5 +1,8 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
-import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  parseModelCatalogRef,
+  type ModelCatalogRef as ModelRoute,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -13,11 +16,12 @@ import {
   resolveAgentConfig,
   resolveNativeModelPrimary,
   resolveAgentModelFallbacksOverride,
-  resolveEffectiveModelFallbacks,
 } from "../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import {
   resolveDefaultModelForAgent,
+  resolveEffectiveModelFallbacks,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection-config.js";
 import {
@@ -25,17 +29,13 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
 import { resolveOpenAIImplicitAgentRuntime } from "../agents/openai-routing.js";
+import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentModelFallbackValues } from "./model-input.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const CODEX_PLUGIN_ID = "codex";
 const OPENAI_PROVIDER_ID = "openai";
-
-type ModelRoute = {
-  provider: string;
-  modelId: string;
-};
 
 function codexPluginEntryEnabled(cfg: OpenClawConfig): boolean | undefined {
   for (const [pluginId, entry] of Object.entries(cfg.plugins?.entries ?? {})) {
@@ -170,15 +170,19 @@ function configuredRefIsEffectiveForAgent(params: {
   ) {
     return params.selectedModelRefs.has(params.value);
   }
-  const agent = resolveAgentConfig(params.cfg, params.agentId);
   if (params.path.endsWith(".heartbeat.model")) {
+    const agent = resolveAgentConfig(params.cfg, params.agentId);
     const heartbeat =
       agent?.heartbeat?.model?.trim() || params.cfg.agents?.defaults?.heartbeat?.model?.trim();
     return heartbeat === params.value;
   }
-  if (params.path.endsWith(".utilityModel")) {
-    const utilityModel = (agent?.utilityModel ?? params.cfg.agents?.defaults?.utilityModel)?.trim();
-    return utilityModel === params.value;
+  if (/\.utilityModel(?:\.|$)/.test(params.path)) {
+    const utility = readUtilityModelSetting(params.cfg, params.agentId);
+    return (
+      utility.kind !== "disabled" &&
+      ((utility.kind === "explicit" && utility.modelRef === params.value) ||
+        utility.fallbacks.some((ref) => ref.trim() === params.value))
+    );
   }
   return true;
 }
@@ -246,13 +250,15 @@ function configuredModelRefsNeedCodex(params: {
       agentId,
       manifestPlugins: [],
     });
+    const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
-      defaultProvider: primary.provider,
+      defaultProvider,
       manifestPlugins: [],
     });
     for (const ref of refs) {
       if (
+        ref.capability === "decision" ||
         !configuredRefIsEffectiveForAgent({
           cfg: params.cfg,
           sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,
@@ -267,7 +273,7 @@ function configuredModelRefsNeedCodex(params: {
       const resolved = resolveModelRefFromString({
         cfg: params.cfg,
         raw: ref.value,
-        defaultProvider: primary.provider,
+        defaultProvider,
         aliasIndex,
         allowManifestNormalization: false,
       });

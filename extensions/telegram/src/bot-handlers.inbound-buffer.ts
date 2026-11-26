@@ -17,7 +17,10 @@ import {
   latestPromptContextMinTimestampMs,
   promptContextBoundaryOptions,
 } from "./bot-handlers.message-context.js";
-import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
+import type {
+  TelegramMediaRuntime,
+  TelegramMessagePipeline,
+} from "./bot-handlers.message-pipeline.js";
 import type {
   RegisterTelegramHandlerParams,
   TelegramPendingInboundTarget,
@@ -54,7 +57,7 @@ export type TelegramDebounceEntry = {
   msg: Message;
   allMedia: TelegramMediaRef[];
   /** Deferred attachment download for a buffered forward; replaces `allMedia` at flush. */
-  hydrateMedia?: (abortSignals: readonly AbortSignal[]) => Promise<TelegramInboundMediaHydration>;
+  hydrateMedia?: (mediaRuntime: TelegramMediaRuntime) => Promise<TelegramInboundMediaHydration>;
   storeAllowFrom: string[];
   receivedAtMs: number;
   debounceKey: string | null;
@@ -83,10 +86,9 @@ export function createTelegramInboundBuffers({
   const {
     mergeDispatchDedupeClaims,
     releaseDispatchDedupeClaims,
-    buildFailedProcessingResult,
     settleSpooledReplayParticipants,
-    spooledReplayOptions,
     processMessageWithReplyChain,
+    resolveMediaRuntime,
   } = message;
   const readConfig = createRuntimeConfigReader(cfg);
   const resolveDebounceMs = () => {
@@ -138,10 +140,13 @@ export function createTelegramInboundBuffers({
     entries: readonly TelegramDebounceEntry[],
     participants: readonly TelegramSpooledReplayDeferredParticipant[],
   ): Promise<TelegramDebounceEntry[]> => {
-    const abortSignals = participants.map((participant) => participant.abortSignal);
+    // One budget for the whole burst, like an album.
+    const mediaRuntime = resolveMediaRuntime(
+      ...participants.map((participant) => participant.abortSignal),
+    );
     const hydrated: TelegramDebounceEntry[] = [];
     for (const entry of entries) {
-      const media = await entry.hydrateMedia?.(abortSignals);
+      const media = await entry.hydrateMedia?.(mediaRuntime);
       if (media?.kind === "retry") {
         releaseDispatchDedupeClaims(
           mergeDispatchDedupeClaims(...entries.map((item) => item.dispatchDedupeClaims)),
@@ -252,21 +257,15 @@ export function createTelegramInboundBuffers({
                   batched && last.debounceLane !== "forward" ? "text-batch" : "inbound-debounce",
                 threadSpec: first.threadSpec,
                 ...promptContextBoundaryOptions(
-                  batched
-                    ? latestPromptContextMinTimestampMs(
-                        ...entries.map((entry) => entry.promptContextMinTimestampMs),
-                      )
-                    : first.promptContextMinTimestampMs,
-                  batched
-                    ? latestPromptContextAmbientWatermark(
-                        ...entries.map((entry) => entry.promptContextAmbientWatermark),
-                      )
-                    : first.promptContextAmbientWatermark,
+                  latestPromptContextMinTimestampMs(
+                    ...entries.map((entry) => entry.promptContextMinTimestampMs),
+                  ),
+                  latestPromptContextAmbientWatermark(
+                    ...entries.map((entry) => entry.promptContextAmbientWatermark),
+                  ),
                 ),
-                ...spooledReplayOptions(participants),
-                channelIngressResolvers: batched
-                  ? entries.flatMap((entry) => entry.channelIngressResolvers)
-                  : first.channelIngressResolvers,
+                ...(participants.length > 0 ? { spooledReplay: true } : {}),
+                channelIngressResolvers: entries.flatMap((entry) => entry.channelIngressResolvers),
               },
               dispatchDedupeClaims,
               spooledReplayParticipants: participants,
@@ -276,14 +275,14 @@ export function createTelegramInboundBuffers({
             });
             settleSpooledReplayParticipants(participants, result);
           } catch (error) {
-            settleSpooledReplayParticipants(participants, buildFailedProcessingResult(error));
+            settleSpooledReplayParticipants(participants, { kind: "failed-retryable", error });
             throw error;
           }
         },
       }),
     onError: (error, items) => {
       const participants = spooledReplayParticipants(items);
-      settleSpooledReplayParticipants(participants, buildFailedProcessingResult(error));
+      settleSpooledReplayParticipants(participants, { kind: "failed-retryable", error });
       runtime.error?.(danger(`telegram debounce flush failed: ${String(error)}`));
       if (participants.length > 0) {
         return;

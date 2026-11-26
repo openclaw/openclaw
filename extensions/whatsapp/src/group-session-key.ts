@@ -5,10 +5,6 @@ import {
   type ResolvedAgentRoute,
 } from "openclaw/plugin-sdk/routing";
 
-function resolveWhatsAppGroupAccountThreadId(accountId: string): string {
-  return `whatsapp-account-${normalizeAccountId(accountId)}`;
-}
-
 export function resolveWhatsAppGroupSessionKey(params: {
   sessionKey: string;
   accountId?: string | null;
@@ -19,7 +15,7 @@ export function resolveWhatsAppGroupSessionKey(params: {
   }
   return resolveThreadSessionKeys({
     baseSessionKey: params.sessionKey,
-    threadId: resolveWhatsAppGroupAccountThreadId(accountId),
+    threadId: `whatsapp-account-${accountId}`,
   }).sessionKey;
 }
 

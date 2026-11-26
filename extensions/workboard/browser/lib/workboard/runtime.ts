@@ -1,33 +1,30 @@
 import type { WorkboardChange } from "@openclaw/workboard-contract";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { WORKBOARD_DRAFT_DEFAULTS } from "./card-state.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import { WORKBOARD_STATUSES, type WorkboardUiState } from "./types.ts";
 
 export type WorkboardHost = object;
 
-export type WorkboardLoadToken = {
-  queuedAfterGeneration?: number;
-  catalogOnly: boolean;
+export type WorkboardClientContext = {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
 };
 
 type WorkboardLiveRefreshEntry = {
   client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
   refresh?: () => Promise<boolean>;
   shouldDefer?: () => boolean;
 };
 
 type WorkboardRuntime = {
+  listeners?: Set<() => void>;
   state?: WorkboardUiState;
   cardsRevision?: WorkboardChange | null;
   loadPromise?: Promise<boolean>;
-  loadToken?: WorkboardLoadToken;
+  loadClient?: GatewayBrowserClient;
   loadError?: string;
-  loadGeneration?: number;
-  liveRefreshGeneration?: number;
-  liveChangeEpoch?: string;
-  liveHighestSeenRevision?: number;
-  liveAppliedRevision?: number;
+  liveLastChange?: WorkboardChange;
   liveRefreshPending?: boolean;
   liveRefreshPromise?: Promise<void>;
   liveRefreshRetryTimer?: ReturnType<typeof setTimeout>;
@@ -35,15 +32,17 @@ type WorkboardRuntime = {
 };
 
 const workboardRuntimes = new WeakMap<WorkboardHost, WorkboardRuntime>();
-export function nextWorkboardLoadGeneration(host: WorkboardHost): number {
+export function subscribeWorkboard(host: WorkboardHost, listener: () => void) {
   const runtime = getWorkboardRuntime(host);
-  const generation = (runtime.loadGeneration ?? 0) + 1;
-  runtime.loadGeneration = generation;
-  return generation;
+  const listeners = (runtime.listeners ??= new Set());
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
-export function isCurrentWorkboardLoadGeneration(host: WorkboardHost, generation: number): boolean {
-  return getWorkboardRuntime(host).loadGeneration === generation;
+export function notifyWorkboard(host: WorkboardHost) {
+  for (const listener of getWorkboardRuntime(host).listeners ?? []) {
+    listener();
+  }
 }
 
 export function invalidateWorkboardLoads(host: WorkboardHost) {
@@ -60,24 +59,20 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
     }
   }
   delete runtime.cardsRevision;
-  nextWorkboardLoadGeneration(host);
   delete runtime.loadPromise;
-  delete runtime.loadToken;
+  delete runtime.loadClient;
 }
 
 export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
   const runtime = getWorkboardRuntime(host);
   const loadInFlight = Boolean(runtime.loadPromise);
-  runtime.liveRefreshGeneration = (runtime.liveRefreshGeneration ?? 0) + 1;
   if (runtime.liveRefreshRetryTimer) {
     clearTimeout(runtime.liveRefreshRetryTimer);
     delete runtime.liveRefreshRetryTimer;
   }
   delete runtime.liveRefreshEntry;
   delete runtime.liveRefreshPromise;
-  delete runtime.liveChangeEpoch;
-  delete runtime.liveHighestSeenRevision;
-  delete runtime.liveAppliedRevision;
+  delete runtime.liveLastChange;
   delete runtime.liveRefreshPending;
   if (loadInFlight) {
     invalidateWorkboardLoads(host);
@@ -99,10 +94,7 @@ export function resetWorkboardConnectionState(host: WorkboardHost) {
     state.loaded = false;
     state.loadAttempted = false;
   }
-  delete runtime.cardsRevision;
-  nextWorkboardLoadGeneration(host);
-  delete runtime.loadPromise;
-  delete runtime.loadToken;
+  invalidateWorkboardLoads(host);
 }
 
 function createDefaultState(): WorkboardUiState {
@@ -113,6 +105,7 @@ function createDefaultState(): WorkboardUiState {
     mutationReadiness: "ready",
     error: null,
     cards: [],
+    nextCursor: null,
     boards: [],
     statuses: WORKBOARD_STATUSES,
     lastDispatchSummary: null,
@@ -133,20 +126,8 @@ function createDefaultState(): WorkboardUiState {
     expandedEmptyStatuses: new Set(),
     lastRefreshAt: null,
     lastRefreshError: null,
-    draftOpen: false,
-    draftDiscardOpen: false,
+    ...WORKBOARD_DRAFT_DEFAULTS,
     draftSaving: false,
-    editingCardId: null,
-    editingCardBase: null,
-    draftTitle: "",
-    draftNotes: "",
-    draftStatus: "todo",
-    draftPriority: "normal",
-    draftLabels: "",
-    draftAgentId: "",
-    draftSessionKey: "",
-    draftTemplateId: "",
-    draftCommentBody: "",
     detailCardId: null,
     detailTab: "overview",
     detailCommentBody: "",

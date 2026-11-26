@@ -10,16 +10,12 @@ import {
   runLiveProviderCatalog,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { LLAMA_CPP_PROVIDER_ID } from "../defaults.js";
-import {
-  hasLlamaServerAuthorizationHeader,
-  resolveLlamaServerProviderHeaders,
-  resolveLlamaServerRuntimeApiKey,
-} from "./auth.js";
+import { hasLlamaServerAuthorizationHeader } from "./auth-policy.js";
+import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
 import { discoverLlamaServer } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig } from "./models.js";
 
-/** Discovers external llama-server models for provider runtime resolution. */
 export async function discoverLlamaServerProvider(
   ctx: ProviderCatalogContext,
 ): Promise<ProviderCatalogResult> {
@@ -44,6 +40,7 @@ export async function discoverLlamaServerProvider(
         baseUrl: configured?.baseUrl,
         apiKey,
         headers,
+        allowPrivateNetwork: configured?.request?.allowPrivateNetwork,
       });
       if (discovery.kind !== "success") {
         if (!configured && !apiKey && !headers) {
@@ -80,6 +77,7 @@ export async function prepareLlamaServerDynamicModel(
     baseUrl: ctx.providerConfig?.baseUrl,
     apiKey: hasLlamaServerAuthorizationHeader(headers) ? undefined : apiKey,
     headers,
+    allowPrivateNetwork: ctx.providerConfig?.request?.allowPrivateNetwork,
   });
   const model =
     discovery.kind === "success"
@@ -93,8 +91,5 @@ export async function prepareLlamaServerDynamicModel(
     provider: LLAMA_CPP_PROVIDER_ID,
     api: ctx.providerConfig?.api ?? "openai-completions",
     baseUrl: resolveLlamaServerEndpoint(ctx.providerConfig?.baseUrl).inferenceBaseUrl,
-    input: model.config.input.filter(
-      (entry): entry is "text" | "image" => entry === "text" || entry === "image",
-    ),
   };
 }

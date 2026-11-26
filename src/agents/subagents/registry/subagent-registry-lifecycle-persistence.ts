@@ -7,11 +7,13 @@ import {
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  bindSubagentRunRuntimeKey,
-  getSubagentRunRuntimeKey,
-  isSameSubagentRunOwner,
-} from "./subagent-run-generation.js";
+import { copySubagentRunRuntimeOwner, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+
+export class SubagentLifecycleOwnerChangedError extends SubagentRegistryMutationRejectedError {
+  constructor() {
+    super("Subagent cleanup execution changed.");
+  }
+}
 
 export async function commitSubagentLifecycleMutation(
   context: SubagentLifecycleCommonContext,
@@ -33,7 +35,7 @@ export async function commitSubagentLifecycleMutation(
     assertSubagentRegistryWriteSourceCurrent(args.stateContext);
     const current = getCurrentSubagentRunOwner(context.options.runs, args.entry);
     if (!current) {
-      throw new SubagentRegistryMutationRejectedError("Subagent cleanup execution changed.");
+      throw new SubagentLifecycleOwnerChangedError();
     }
     if (current.runId !== runId) {
       throw new SubagentRegistryMutationRejectedError(
@@ -48,22 +50,18 @@ export async function commitSubagentLifecycleMutation(
     (rows) => {
       const current = rows.get(runId);
       if (!current || !isSameSubagentRunOwner(current, args.entry)) {
-        throw new SubagentRegistryMutationRejectedError("Subagent cleanup execution changed.");
+        throw new SubagentLifecycleOwnerChangedError();
       }
       args.assertCurrent(current);
-      const draft = structuredClone(current);
-      bindSubagentRunRuntimeKey(draft, getSubagentRunRuntimeKey(current));
+      const draft = copySubagentRunRuntimeOwner(current, structuredClone(current));
       if (args.mutate(draft, current) === false) {
         return { value: current };
       }
+      const retire = typeof args.retire === "function" ? args.retire(draft) : args.retire;
       return {
         value: draft,
-        postimages: new Map([
-          [
-            draft.runId,
-            (typeof args.retire === "function" ? args.retire(draft) : args.retire) ? null : draft,
-          ],
-        ]),
+        postimages: new Map([[draft.runId, retire ? null : draft]]),
+        terminalRows: retire ? new Map([[draft.runId, draft]]) : undefined,
       };
     },
     {

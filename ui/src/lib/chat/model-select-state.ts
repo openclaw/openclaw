@@ -1,13 +1,14 @@
 import type {
   FastMode,
   GatewaySessionRow,
+  ModelAuthStatusResult,
   ModelCatalogEntry,
   ModelCatalogResult,
   SessionsListResult,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
-import { resolveModelRuntimeEntry, type ModelRuntimeEntry } from "../model-runtime-choice.ts";
+import { resolveModelRuntimeEntry } from "../model-runtime-choice.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
@@ -21,12 +22,14 @@ import {
 registerModelControlsEnglish();
 
 type ChatModelSelectStateInput = {
-  activeSession?: GatewaySessionRow;
+  activeSession?: Pick<GatewaySessionRow, "model" | "modelProvider" | "modelOverrideSource">;
   agentDefaultModel?: string;
   chatModelCatalog: ModelCatalogEntry[];
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
   sessionKey: string;
-  sessionsResult: SessionsListResult | null;
+  sessionsResult: {
+    defaults: Partial<Pick<SessionsListResult["defaults"], "model" | "modelProvider">>;
+  } | null;
   modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
   catalogRetired?: boolean;
   catalogInitialized?: boolean;
@@ -39,23 +42,19 @@ type ChatModelSelectOption = {
   unavailableReason?: ModelCatalogEntry["unavailableReason"];
 };
 
-type ChatModelSelectState = {
-  currentOverride: string;
-  defaultModel: string;
-  defaultLabel: string;
-  modelOverrideSource: GatewaySessionRow["modelOverrideSource"];
-  options: ChatModelSelectOption[];
-};
-
 export type ChatFastModeSelectValue = "" | "on" | "off" | "auto" | "ultrafast";
 
 export type ChatFastModeSelectState = {
   /** Fast output is effectively enabled (explicitly or via auto/inherited default). */
   active: boolean;
+  /** Effective selection shown after defaults and capability recovery. */
   currentOverride: ChatFastModeSelectValue;
+  /** Saved session choice; an empty value still inherits the configured tier. */
+  persistedOverride: ChatFastModeSelectValue;
   disabled: boolean;
   /** Resolved speed label, separate from the saved preference. */
   label: string;
+  hint?: string;
   /** Value the toggle commits when clicked. */
   nextValue: ChatFastModeSelectValue;
   supported: boolean;
@@ -63,23 +62,15 @@ export type ChatFastModeSelectState = {
   ultrafastSupported?: boolean;
 };
 
+export type ChatFastModePresentation = Pick<
+  ChatFastModeSelectState,
+  "active" | "currentOverride" | "label" | "supported"
+>;
+
 export type ChatFastModeTarget = Pick<
   GatewaySessionRow,
   "effectiveFastMode" | "fastMode" | "model" | "modelProvider" | "agentRuntime"
 >;
-
-type ChatFastModeSelectStateInput = {
-  activeRunId: string | null;
-  catalog: ModelCatalogEntry[];
-  connected: boolean;
-  currentModelOverride: string;
-  fastModeTarget?: ChatFastModeTarget;
-  gatewayAvailable: boolean;
-  loading: boolean;
-  sending: boolean;
-  sessionsResult: SessionsListResult | null;
-  stream: string | null;
-};
 
 // Preserve existing controls only when the selected request's applicability is unknown.
 const FAST_MODE_PROVIDER_IDS = new Set(["anthropic", "minimax", "minimax-portal", "openai", "xai"]);
@@ -98,7 +89,7 @@ function resolveModelOverrideSource(state: ChatModelSelectStateInput) {
 }
 
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
-  const catalog = state.chatModelCatalog ?? [];
+  const catalog = state.chatModelCatalog;
 
   const sharedOverrides = state.modelOverrides;
   if (Object.hasOwn(sharedOverrides, state.sessionKey)) {
@@ -119,7 +110,7 @@ function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
   const agentDefault = resolvePreferredServerChatModelValue(
     state.agentDefaultModel,
     undefined,
-    state.chatModelCatalog ?? [],
+    state.chatModelCatalog,
   );
   if (agentDefault) {
     return agentDefault;
@@ -127,7 +118,7 @@ function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
   return resolvePreferredServerChatModelValue(
     state.sessionsResult?.defaults?.model,
     state.sessionsResult?.defaults?.modelProvider,
-    state.chatModelCatalog ?? [],
+    state.chatModelCatalog,
   );
 }
 
@@ -205,24 +196,32 @@ export function resolveChatModelUnavailableReason(
   model: string | null | undefined,
   provider: string | null | undefined,
   catalog: ModelCatalogEntry[],
+  agentRuntime?: string,
 ): ModelCatalogEntry["unavailableReason"] {
   const value = resolvePreferredServerChatModelValue(model, provider, catalog);
   const key = normalizeChatModelAvailabilityKey(value);
-  const matches = catalog.filter((entry) => catalogModelAvailabilityKey(entry) === key);
-  if (
-    !matches.length ||
-    matches.some((entry) => entry.available !== false || !entry.unavailableReason)
-  ) {
-    return undefined;
+  let reason: ModelCatalogEntry["unavailableReason"];
+  for (const catalogEntry of catalog) {
+    // A session on a runtime choice is served by that route, not the model's default route.
+    const entry =
+      catalogModelAvailabilityKey(catalogEntry) === key
+        ? resolveModelRuntimeEntry(catalogEntry, agentRuntime)
+        : undefined;
+    if (!entry) {
+      continue;
+    }
+    if (entry.available !== false || !entry.unavailableReason) {
+      return undefined;
+    }
+    // Any recovering route can still serve the selection. Do not let an alias's
+    // permanent auth failure turn a transient catalog snapshot into a send gate.
+    if (!reason || entry.unavailableReason === "cooldown") {
+      reason = entry.unavailableReason;
+    } else if (reason !== "cooldown" && entry.unavailableReason === "auth-failed") {
+      reason = "auth-failed";
+    }
   }
-  // Any recovering route can still serve the selection. Do not let an alias's
-  // permanent auth failure turn a transient catalog snapshot into a send gate.
-  if (matches.some((entry) => entry.unavailableReason === "cooldown")) {
-    return "cooldown";
-  }
-  return matches.some((entry) => entry.unavailableReason === "auth-failed")
-    ? "auth-failed"
-    : "missing-auth";
+  return reason;
 }
 
 export function hasChatModelCatalogSelection(
@@ -238,9 +237,49 @@ export function hasChatModelCatalogSelection(
   );
 }
 
+function hasConfiguredChatModelRoute(
+  entry: Pick<ModelCatalogEntry, "available" | "unavailableReason">,
+): boolean {
+  // Failed credentials and cooldowns still describe a configured route.
+  return (
+    entry.available !== false ||
+    entry.unavailableReason === "auth-failed" ||
+    entry.unavailableReason === "cooldown"
+  );
+}
+
+/** An empty catalog alone cannot establish that a configured model needs initial setup. */
+export function hasNoConnectedChatModel(
+  catalog: readonly ModelCatalogEntry[],
+  auth: ModelAuthStatusResult | null | undefined,
+): boolean {
+  return Boolean(
+    catalog.length > 0 &&
+    auth &&
+    auth.ts > 0 &&
+    !auth.unavailable &&
+    auth.providers.every(
+      (provider) =>
+        provider.status === "missing" &&
+        provider.profiles.length === 0 &&
+        !provider.apiKey &&
+        !provider.nativeAuth,
+    ) &&
+    !catalog.some(
+      (entry) =>
+        hasConfiguredChatModelRoute(entry) ||
+        entry.runtimeChoices?.some(hasConfiguredChatModelRoute),
+    ),
+  );
+}
+
 export function chatModelUnavailableMessage(
-  reason: ModelRuntimeEntry["unavailableReason"],
+  reason: ModelCatalogEntry["unavailableReason"],
+  inference?: "worker",
 ): string | undefined {
+  if (inference === "worker" && (reason === "missing-auth" || reason === "auth-failed")) {
+    return undefined;
+  }
   if (reason === "missing-auth") {
     return t("modelSetup.missingAuth");
   }
@@ -252,10 +291,7 @@ export function chatModelUnavailableMessage(
     : undefined;
 }
 
-export function resolveChatModelSelectState(
-  state: ChatModelSelectStateInput,
-): ChatModelSelectState {
-  const catalog = state.chatModelCatalog ?? [];
+export function prepareChatModelSelectCatalog(catalog: ModelCatalogEntry[]) {
   const availableKeys = new Set(
     catalog.filter((entry) => entry.available !== false).map(catalogModelAvailabilityKey),
   );
@@ -265,18 +301,44 @@ export function resolveChatModelSelectState(
     (entry) => entry.available !== false || !availableKeys.has(catalogModelAvailabilityKey(entry)),
   );
   const displayLookup = buildCatalogDisplayLookup(pickerCatalog);
-  const options = buildChatModelOptions(pickerCatalog, displayLookup);
-  const currentOverride = resolveCatalogChatModelValue(
-    resolveChatModelOverrideValue(state),
-    options,
-  );
-  const defaultModel = resolveCatalogChatModelValue(resolveDefaultModelValue(state), options);
+  return { displayLookup, options: buildChatModelOptions(pickerCatalog, displayLookup) };
+}
+
+export function resolveChatModelSelectValues(
+  state: ChatModelSelectStateInput,
+  preparedOptions?: ChatModelSelectOption[],
+) {
+  let options = preparedOptions;
+  const currentOverride = resolveChatModelOverrideValue(state);
+  const defaultModel = resolveDefaultModelValue(state);
+  if (!options) {
+    const currentKey = normalizeChatModelAvailabilityKey(currentOverride);
+    const defaultKey = normalizeChatModelAvailabilityKey(defaultModel);
+    // Only these identities can change the returned values. Keep their aliases
+    // together so the existing availability and canonical-provider ordering applies.
+    const candidates = state.chatModelCatalog.filter((entry) => {
+      const key = catalogModelAvailabilityKey(entry);
+      return key === currentKey || key === defaultKey;
+    });
+    options = prepareChatModelSelectCatalog(candidates).options;
+  }
+  return {
+    currentOverride: resolveCatalogChatModelValue(currentOverride, options),
+    defaultModel: resolveCatalogChatModelValue(defaultModel, options),
+  };
+}
+
+export function resolveChatModelSelectState(
+  state: ChatModelSelectStateInput,
+  { displayLookup, options } = prepareChatModelSelectCatalog(state.chatModelCatalog),
+) {
+  const { currentOverride, defaultModel } = resolveChatModelSelectValues(state, options);
   const defaultLabel = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
 
   return {
     currentOverride,
     defaultModel,
-    defaultLabel: defaultModel ? `Default (${defaultLabel})` : "Default model",
+    defaultLabel: defaultModel ? `Default (${defaultLabel})` : t("chat.modelControls.defaultModel"),
     modelOverrideSource: resolveModelOverrideSource(state),
     options,
   };
@@ -285,6 +347,9 @@ export function resolveChatModelSelectState(
 export function normalizeChatFastModeInput(raw: string): FastMode | undefined {
   if (raw === "auto" || raw === "ultrafast") {
     return raw;
+  }
+  if (raw === "ultra") {
+    return "ultrafast";
   }
   if (raw === "on") {
     return true;
@@ -369,7 +434,7 @@ function resolveFastModeProvider(
 }
 
 function isChatStandardOnlySpeed(
-  entry: Pick<ModelRuntimeEntry, "supportsFastMode" | "serviceTiers"> | undefined,
+  entry: Pick<ModelCatalogEntry, "supportsFastMode" | "serviceTiers"> | undefined,
   canRecoverRejectedTier: boolean,
 ): boolean {
   return (
@@ -382,9 +447,19 @@ function isChatStandardOnlySpeed(
   );
 }
 
-export function resolveChatFastModeSelectState(
-  input: ChatFastModeSelectStateInput,
-): ChatFastModeSelectState {
+export function resolveChatFastModeSelectState(input: {
+  catalog: ModelCatalogEntry[];
+  connected: boolean;
+  currentModelOverride: string;
+  fastModeTarget?: Omit<ChatFastModeTarget, "agentRuntime"> & {
+    agentRuntime?: Pick<NonNullable<ChatFastModeTarget["agentRuntime"]>, "id">;
+  };
+  gatewayAvailable: boolean;
+  loading: boolean;
+  sessionsResult: {
+    defaults: Partial<Pick<SessionsListResult["defaults"], "model" | "modelProvider">>;
+  } | null;
+}): ChatFastModeSelectState {
   const activeRow = input.fastModeTarget;
   const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;
   const defaultProvider =
@@ -426,27 +501,25 @@ export function resolveChatFastModeSelectState(
   );
   const selectedSupport = applicability.size === 1 ? [...applicability][0] : undefined;
   const requestSupported = selectedSupport ?? isChatFastModeProviderSupported(effectiveProvider);
+  const everySelected = (
+    predicate: (selected: (typeof selectedEntries)[number]) => boolean | undefined,
+  ) => selectedEntries.length > 0 && selectedEntries.every(predicate);
   const ultrafastOffered =
     requestSupported &&
-    selectedEntries.length > 0 &&
-    selectedEntries.every(
+    everySelected(
       ({ runtime }) => runtime?.available === true && runtime.serviceTiers?.includes("ultrafast"),
     );
   // The transport owns recovery support; provider and runtime names do not identify the endpoint.
-  const canRecoverRejectedTier =
-    selectedEntries.length > 0 &&
-    selectedEntries.every(({ runtime }) => runtime?.supportsServiceTierRecovery === true);
-  const standardOnly =
-    selectedEntries.length > 0 &&
-    selectedEntries.every(({ runtime }) =>
-      isChatStandardOnlySpeed(runtime, canRecoverRejectedTier),
-    );
-  const ultrafastUnavailable =
-    selectedEntries.length > 0 &&
-    selectedEntries.every(
-      ({ runtime }) =>
-        runtime?.serviceTiers !== undefined && !runtime.serviceTiers.includes("ultrafast"),
-    );
+  const canRecoverRejectedTier = everySelected(
+    ({ runtime }) => runtime?.supportsServiceTierRecovery === true,
+  );
+  const standardOnly = everySelected(({ runtime }) =>
+    isChatStandardOnlySpeed(runtime, canRecoverRejectedTier),
+  );
+  const ultrafastUnavailable = everySelected(
+    ({ runtime }) =>
+      runtime?.serviceTiers !== undefined && !runtime.serviceTiers.includes("ultrafast"),
+  );
   const effectiveMode = standardOnly
     ? false
     : savedMode === "ultrafast" &&
@@ -464,22 +537,22 @@ export function resolveChatFastModeSelectState(
           ? effectiveMode
           : "off"
       : configuredOverride;
-  const supported = standardOnly || requestSupported || Boolean(configuredOverride);
-  // A saved Ultrafast setting remains Ultrafast even when access is unavailable.
-  const active =
-    effectiveMode === true || effectiveMode === "auto" || effectiveMode === "ultrafast";
+  const supported = requestSupported && !standardOnly;
+  // A request that cannot carry Fast runs at its standard tier, whatever the saved or
+  // inherited preference says. Keep that preference without exposing a no-op speed control.
+  // A saved Ultrafast setting remains Ultrafast when only Ultrafast access is unavailable.
+  const runningMode = requestSupported ? effectiveMode : false;
+  const active = runningMode === true || runningMode === "auto" || runningMode === "ultrafast";
   const label =
-    effectiveMode === "auto"
+    runningMode === "auto"
       ? "Auto"
-      : effectiveMode === "ultrafast"
+      : runningMode === "ultrafast"
         ? "Ultrafast"
         : active
           ? "Fast"
           : isOpenAI || currentOverride === "off"
             ? "Standard"
             : "Default";
-  // A legacy override on a provider without a wire mapping stays visible so it
-  // can be cleared, but the toggle must not write a new no-op fast override.
   // For mapped providers an active toggle always writes an explicit off: the
   // inherited baseline is unknowable while an override exists, and clearing
   // could land on a fast default, turning the click into a visible no-op.
@@ -491,19 +564,24 @@ export function resolveChatFastModeSelectState(
       : active
         ? "off"
         : "on";
+  const requestedTier = runningMode === "ultrafast" ? "ultrafast" : active ? "priority" : undefined;
+  const observation = selectedEntries
+    .flatMap(({ runtime }) => runtime?.serviceTierObservations ?? [])
+    .find((value) => value.requestedTier === requestedTier);
   return {
     active,
     currentOverride,
-    disabled:
-      standardOnly ||
-      !supported ||
-      !input.connected ||
-      input.loading ||
-      input.sending ||
-      Boolean(input.activeRunId) ||
-      input.stream !== null ||
-      !input.gatewayAvailable,
+    persistedOverride: configuredOverride,
+    disabled: !supported || !input.connected || input.loading || !input.gatewayAvailable,
     label,
+    hint: observation
+      ? observation.responseTier
+        ? t("chat.modelControls.tierDowngrade", {
+            requested: label,
+            served: observation.responseTier,
+          })
+        : t("chat.modelControls.tierRejected", { requested: label })
+      : undefined,
     nextValue,
     supported,
     ultrafastSupported: ultrafastUnavailable ? false : ultrafastOffered || undefined,

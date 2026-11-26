@@ -4,38 +4,31 @@ import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  resolveConfiguredChannelPluginIds,
+  resolveConfiguredChannelPluginIdsAsync,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
 import { loadPluginRegistryHandle } from "../../plugins/loader.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import type { WizardPrompter } from "../../wizard/prompts.js";
-import {
-  ensureOnboardingPluginInstalled,
-  type OnboardingPluginInstallStatus,
-} from "../onboarding-plugin-install.js";
+import { ensureOnboardingPluginInstalled } from "../onboarding-plugin-install.js";
 import { getTrustedChannelPluginCatalogEntry } from "./trusted-catalog.js";
 
-type InstallResult = {
-  cfg: OpenClawConfig;
-  installed: boolean;
-  pluginId?: string;
-  status: OnboardingPluginInstallStatus;
-};
+type OnboardingInstallResult = Awaited<ReturnType<typeof ensureOnboardingPluginInstalled>>;
 
 /** Install or reuse the plugin package required by a trusted channel catalog entry. */
-export async function ensureChannelSetupPluginInstalled(params: {
-  cfg: OpenClawConfig;
-  entry: ChannelPluginCatalogEntry;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-  workspaceDir?: string;
-  promptInstall?: boolean;
-  autoConfirmSingleSource?: boolean;
-  beforePersistentEffect?: () => Promise<void>;
-}): Promise<InstallResult> {
-  const result = await ensureOnboardingPluginInstalled({
+export async function ensureChannelSetupPluginInstalled(
+  params: Omit<
+    Parameters<typeof ensureOnboardingPluginInstalled>[0],
+    "entry" | "onCapabilityConsent" | "beforePersistentEffect"
+  > & {
+    entry: ChannelPluginCatalogEntry;
+    beforePersistentEffect?: () => Promise<void>;
+  },
+): Promise<
+  Pick<OnboardingInstallResult, "cfg" | "installed" | "status" | "error"> &
+    Partial<Pick<OnboardingInstallResult, "pluginId">>
+> {
+  return await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
     entry: {
       pluginId: params.entry.pluginId ?? params.entry.id,
@@ -49,6 +42,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
     runtime: params.runtime,
     workspaceDir: params.workspaceDir,
     ...(params.promptInstall !== undefined ? { promptInstall: params.promptInstall } : {}),
+    ...(params.failureOutput ? { failureOutput: params.failureOutput } : {}),
     ...(params.autoConfirmSingleSource !== undefined
       ? { autoConfirmSingleSource: params.autoConfirmSingleSource }
       : {}),
@@ -56,23 +50,17 @@ export async function ensureChannelSetupPluginInstalled(params: {
       ? { beforePersistentEffect: params.beforePersistentEffect }
       : {}),
   });
-  return {
-    cfg: result.cfg,
-    installed: result.installed,
-    pluginId: result.pluginId,
-    status: result.status,
-  };
 }
 
 /** Load an inactive setup-plugin registry snapshot for resolving a channel without side effects. */
-export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
+export async function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   channel: string;
   pluginId?: string;
   workspaceDir?: string;
   forceSetupOnlyChannelPlugins?: boolean;
-}): PluginRegistry {
+}): Promise<PluginRegistry> {
   let scopedPluginId = params.pluginId?.trim();
   if (!scopedPluginId) {
     scopedPluginId = getTrustedChannelPluginCatalogEntry(params.channel, {
@@ -96,7 +84,7 @@ export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
     resolveAgentWorkspaceDir(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
   const onlyPluginIds = scopedPluginId
     ? [scopedPluginId]
-    : resolveConfiguredChannelPluginIds({
+    : await resolveConfiguredChannelPluginIdsAsync({
         config: resolvedConfig,
         activationSourceConfig: params.cfg,
         workspaceDir,

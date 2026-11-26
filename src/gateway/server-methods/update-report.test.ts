@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   getLatest: vi.fn<() => RestartSentinelPayload | null>(),
@@ -74,6 +75,7 @@ async function invoke(
   await handler({
     ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
     client: { internal: { operatorRoleActor: { kind: "system" } } },
+    context: createDirectChatContext(),
     params,
     respond,
   } as never);

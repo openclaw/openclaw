@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { prependShellPath } from "../infra/login-shell-path-carrier.js";
+import { resolveShellCommandLaunch } from "../infra/node-shell.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RunResult } from "./invoke-types.js";
 
@@ -48,8 +50,18 @@ export async function runCommand(
 ): Promise<RunResult> {
   assertCurrent?.();
   try {
-    const result = await runCommandWithTimeout(argv, {
-      baseEnv: env,
+    const launch = resolveShellCommandLaunch(argv);
+    // Only OpenClaw's generated login-shell envelope needs service PATH restoration.
+    const servicePath = env?.PATH;
+    let childEnv = env;
+    if (servicePath && argv.length === 3 && argv[0] === "/bin/sh" && argv[1] === "-lc") {
+      childEnv = { ...env };
+      launch.argv = [argv[0], argv[1], prependShellPath(argv[2] ?? "", childEnv, servicePath)];
+    }
+    const result = await runCommandWithTimeout(launch.argv, {
+      executionIntent: "agent-tool",
+      ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+      baseEnv: childEnv,
       cwd,
       killProcessTree: true,
       maxCombinedOutputBytes: OUTPUT_CAP,

@@ -4,15 +4,14 @@ import path from "node:path";
 import { z } from "zod";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import { rawPathStat } from "./git-path-inventory.js";
 import { commandError, listGitWorktrees, requireGit, requireGitBuffer, runGit } from "./git.js";
 import { restoreProvisionedFiles } from "./provisioned-files.js";
 import {
   assertExactStateSourceIdentity,
   hasExactWorktreeIndex,
-  requireExactManagedWorktreeHead,
-  requireExactWorktreeRepository,
-  withExactStateGitLocks,
+  withExactSnapshotRestore,
 } from "./removal-git.js";
 import { restoreExactStateMetadata, type ExactStateSnapshot } from "./snapshot-exact-state.js";
 import type { ManagedWorktreeRecord, ProvisionedFileState } from "./types.js";
@@ -55,7 +54,7 @@ const binding = (record: ManagedWorktreeRecord) =>
 export async function readExactRestoreReceipt(
   record: ManagedWorktreeRecord,
   options: GitOptions,
-): Promise<Receipt | undefined> {
+): Promise<(Receipt & { ref: string }) | undefined> {
   const found = await runGit(
     record.repoRoot,
     ["rev-parse", "--verify", "--quiet", receiptRef(record) + "^{commit}"],
@@ -81,10 +80,10 @@ export async function readExactRestoreReceipt(
   ) {
     throw new Error("Exact restore receipt ownership changed; source and snapshot preserved");
   }
-  return { ...receipt, commit };
+  return { ...receipt, commit, ref: receiptRef(record) };
 }
 
-export async function clearExactRestoreReceipt(
+async function clearExactRestoreReceipt(
   record: ManagedWorktreeRecord,
   receipt: Receipt,
   options: GitOptions,
@@ -94,6 +93,28 @@ export async function clearExactRestoreReceipt(
     ["update-ref", "-d", receiptRef(record), receipt.commit],
     options,
   );
+}
+
+/** A live exact restore may have lost acknowledgement before deleting its receipt. */
+export async function clearCompletedExactRestoreReceipt(
+  live: ManagedWorktreeRecord,
+  options: GitOptions,
+): Promise<void> {
+  const receipt = await readExactRestoreReceipt(live, options);
+  if (receipt) {
+    if (
+      receipt.snapshot !==
+      (await requireGit(live.repoRoot, ["rev-parse", live.snapshotRef + "^{commit}"], options))
+    ) {
+      throw new Error("Completed exact restore snapshot changed; source and receipt preserved");
+    }
+    const assertCurrent = () => {
+      options?.beforeRun?.();
+      assertExactStateSourceIdentity(live.path, receipt);
+    };
+    assertCurrent();
+    await clearExactRestoreReceipt(live, receipt, { ...options, beforeRun: assertCurrent });
+  }
 }
 
 async function createReceipt(
@@ -260,21 +281,7 @@ export async function restoreExactSnapshotFallback<T>(params: {
     assertCurrent();
     await params.add(assertCurrent);
   }
-  await requireExactWorktreeRepository(record, record.path, options);
-  return await withExactStateGitLocks(record, assertCurrent, async () => {
-    await requireExactManagedWorktreeHead(
-      { ...record, removedAt: undefined },
-      {
-        ownerKind: record.ownerKind,
-        ownerId: record.ownerId,
-        createdAt: record.createdAt,
-        lastActiveAt: record.lastActiveAt,
-        head: metadata.head,
-        branchHead: metadata.branchHead,
-        indexSha256: metadata.indexSha256,
-      },
-      options,
-    );
+  return await withExactSnapshotRestore(record, metadata, options, assertCurrent, async () => {
     const temporaryRoot = path.join(record.path, ".openclaw-restore-" + receipt.nonce);
     if (
       metadata.files.some(
@@ -288,7 +295,7 @@ export async function restoreExactSnapshotFallback<T>(params: {
     await params.admitCapacity([record.repoRoot, record.path]);
     if (!(await hasExactWorktreeIndex(record.path, metadata, options))) {
       assertCurrent();
-      await fs.rm(temporaryRoot, { recursive: true, force: true });
+      await nativeWorktreeFilesystem.remove(temporaryRoot, { commitGuard: assertCurrent });
       await restoreProvisionedAtomically({
         env: params.env,
         record,
@@ -306,7 +313,7 @@ export async function restoreExactSnapshotFallback<T>(params: {
       });
     }
     assertCurrent();
-    await fs.rm(temporaryRoot, { recursive: true, force: true });
+    await nativeWorktreeFilesystem.remove(temporaryRoot, { commitGuard: assertCurrent });
     assertCurrent();
     const result = await params.finalize(identity);
     await clearExactRestoreReceipt(record, receipt, options);

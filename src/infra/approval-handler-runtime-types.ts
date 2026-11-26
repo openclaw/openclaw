@@ -1,4 +1,3 @@
-// Defines channel-native approval handler runtime types.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 import type { PreparedChannelNativeApprovalTarget } from "./approval-native-runtime-types.js";
@@ -17,7 +16,6 @@ export type { ApprovalResolved, ChannelApprovalKind } from "./approval-types.js"
 /** Backward-compatible approval request accepted by public plugin callbacks. */
 export type ApprovalRequest = ApprovalRequestInput;
 
-/** Shared context passed to channel-native approval hooks. */
 export type ChannelApprovalCapabilityHandlerContext = {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -41,17 +39,22 @@ type FinalApprovalEntryContext<TEntry> = ChannelApprovalCapabilityHandlerContext
   phase: "resolved" | "expired";
 };
 
-/** Result instruction for updating, deleting, clearing, or leaving a delivered approval entry. */
 export type ChannelApprovalNativeFinalAction<TPayload> =
   | { kind: "update"; payload: TPayload }
   | { kind: "delete" }
   | { kind: "clear-actions" }
   | { kind: "leave" };
 
-/** Availability gate for deciding whether a channel-native approval runtime can handle work. */
+/** Synchronous eligibility for adapters whose availability is already in memory. */
 export type ChannelApprovalNativeAvailabilityAdapter = {
   isConfigured: (params: ChannelApprovalCapabilityHandlerContext) => boolean;
   shouldHandle: (params: ApprovalRequestContext) => boolean;
+};
+
+/** Eligibility may prepare account state through its owning worker. */
+export type ChannelApprovalNativeAvailabilityAdapterAsync = {
+  isConfigured: (params: ChannelApprovalCapabilityHandlerContext) => boolean | Promise<boolean>;
+  shouldHandle: (params: ApprovalRequestContext) => boolean | Promise<boolean>;
 };
 
 type ChannelApprovalNativePresentationAdapterForView<
@@ -89,7 +92,6 @@ type ChannelApprovalNativePresentationAdapterForView<
     | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
 };
 
-/** Builds channel-native payloads for pending, resolved, and expired approval views. */
 export type ChannelApprovalNativePresentationAdapter<
   TPendingPayload = unknown,
   TFinalPayload = unknown,
@@ -120,12 +122,13 @@ type ChannelApprovalNativeTransportAdapterForView<
     params: ApprovalRequestContext &
       FinalApprovalEntryContext<TPendingEntry> & {
         payload: TFinalPayload;
+        /** Delivered entries still awaiting terminal processing, in fanout order. */
+        remainingEntries?: readonly TPendingEntry[];
       },
   ) => Promise<void>;
   deleteEntry?: (params: FinalApprovalEntryContext<TPendingEntry>) => Promise<void>;
 };
 
-/** Transport hooks for preparing, delivering, updating, and deleting native approval entries. */
 export type ChannelApprovalNativeTransportAdapter<
   TPreparedTarget = unknown,
   TPendingEntry = unknown,
@@ -163,7 +166,6 @@ type ChannelApprovalNativeInteractionAdapterForView<
   ) => Promise<void> | void;
 };
 
-/** Optional hooks for binding and clearing interactive approval controls. */
 export type ChannelApprovalNativeInteractionAdapter<
   TPendingEntry = unknown,
   TBinding = unknown,
@@ -202,7 +204,6 @@ type ChannelApprovalNativeObserveAdapterForView<
   ) => void;
 };
 
-/** Optional observer hooks for delivery errors, duplicates, and successful deliveries. */
 export type ChannelApprovalNativeObserveAdapter<
   TPreparedTarget = unknown,
   TPendingPayload = unknown,
@@ -219,7 +220,9 @@ type ChannelApprovalNativeRuntimeOptions = {
   availability: ChannelApprovalNativeAvailabilityAdapter;
 };
 
-/** Runtime adapter consumed by core after a plugin's strongly typed spec has been erased. */
+/**
+ * Runtime adapter consumed by core after a plugin's strongly typed spec has been erased.
+ */
 export type ChannelApprovalNativeRuntimeAdapter<
   TPendingPayload = unknown,
   TPreparedTarget = unknown,
@@ -238,7 +241,9 @@ export type ChannelApprovalNativeRuntimeAdapter<
   observe?: ChannelApprovalNativeObserveAdapter;
 };
 
-/** Strongly typed plugin spec used to build a channel-native approval runtime adapter. */
+/**
+ * Strongly typed plugin spec used to build a channel-native approval runtime adapter.
+ */
 export type ChannelApprovalNativeRuntimeSpec<
   TPendingPayload,
   TPreparedTarget,
@@ -277,3 +282,43 @@ export type ChannelApprovalNativeRuntimeSpec<
     TPendingView
   >;
 };
+
+export type ChannelApprovalNativeRuntimeAdapterAsync<
+  TPendingPayload = unknown,
+  TPreparedTarget = unknown,
+  TPendingEntry = unknown,
+  TBinding = unknown,
+  TFinalPayload = unknown,
+> = Omit<
+  ChannelApprovalNativeRuntimeAdapter<
+    TPendingPayload,
+    TPreparedTarget,
+    TPendingEntry,
+    TBinding,
+    TFinalPayload
+  >,
+  "availability"
+> & { availability: ChannelApprovalNativeAvailabilityAdapterAsync };
+
+export type ChannelApprovalNativeRuntimeSpecAsync<
+  TPendingPayload,
+  TPreparedTarget,
+  TPendingEntry,
+  TBinding = unknown,
+  TFinalPayload = unknown,
+  TPendingView extends PendingApprovalView = PendingApprovalView,
+  TResolvedView extends ResolvedApprovalView = ResolvedApprovalView,
+  TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
+> = Omit<
+  ChannelApprovalNativeRuntimeSpec<
+    TPendingPayload,
+    TPreparedTarget,
+    TPendingEntry,
+    TBinding,
+    TFinalPayload,
+    TPendingView,
+    TResolvedView,
+    TExpiredView
+  >,
+  "availability"
+> & { availability: ChannelApprovalNativeAvailabilityAdapterAsync };

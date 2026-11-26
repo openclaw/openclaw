@@ -16,8 +16,7 @@ struct DebugSettings: View {
     @State private var sessionStorePath: String = SessionLoader.defaultStorePath
     @State private var sessionStoreSaveError: String?
     @State private var debugSendInFlight = false
-    @State private var debugSendStatus: String?
-    @State private var debugSendError: String?
+    @State private var debugSendResult: Result<String, DebugActionError>?
     @State private var testNotificationOutcome: TestNotificationOutcome?
     @State private var portCheckInFlight = false
     @State private var portReports: [PortGuardian.PortReport] = []
@@ -265,13 +264,10 @@ struct DebugSettings: View {
                         }
                         .pickerStyle(.menu)
                         .labelsHidden()
-                        .help("Controls the macOS app log verbosity.")
 
                         Toggle("Write rolling diagnostics log (JSONL)", isOn: self.$diagnosticsFileLogEnabled)
                             .toggleStyle(.checkbox)
-                            .help(
-                                "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. " +
-                                    "Enable only while actively debugging.")
+                            .help("Local rotating log: ~/Library/Logs/OpenClaw/. Enable only for debugging.")
 
                         HStack(spacing: 8) {
                             Button("Open folder") {
@@ -477,12 +473,12 @@ struct DebugSettings: View {
                     .disabled(self.debugSendInFlight)
 
                     if !self.debugSendInFlight {
-                        if let debugSendStatus {
-                            Text(debugSendStatus)
+                        if case let .success(message) = self.debugSendResult {
+                            Text(message)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                        } else if let debugSendError {
-                            Text(debugSendError)
+                        } else if case let .failure(error) = self.debugSendResult {
+                            Text(error.localizedDescription)
                                 .font(.caption)
                                 .foregroundStyle(.red)
                         } else {
@@ -553,7 +549,7 @@ struct DebugSettings: View {
                     }
                     .buttonStyle(.bordered)
                     Button("Write sample page") {
-                        Task { await self.canvasWriteSamplePage() }
+                        Task { await self.canvasPresent(writeSample: true) }
                     }
                     .buttonStyle(.bordered)
                     Spacer(minLength: 0)
@@ -594,7 +590,7 @@ struct DebugSettings: View {
                 GridRow {
                     self.gridLabel("Chat")
                     Toggle("Use native conversation view", isOn: self.$useNativeConversation)
-                        .help("Use the Swift conversation view in newly opened chat windows.")
+                        .help("Applies to newly opened chat windows.")
                 }
             }
         }
@@ -604,8 +600,7 @@ struct DebugSettings: View {
     private func runPortCheck() async {
         self.portCheckInFlight = true
         self.portKillStatus = nil
-        let reports = await DebugActions.checkGatewayPorts()
-        self.portReports = reports
+        self.portReports = await DebugActions.checkGatewayPorts()
         self.portCheckInFlight = false
     }
 
@@ -613,12 +608,11 @@ struct DebugSettings: View {
     private func resetGatewayTunnel() async {
         self.tunnelResetInFlight = true
         self.tunnelResetStatus = nil
-        let result = await DebugActions.resetGatewayTunnel()
-        switch result {
+        self.tunnelResetStatus = switch await DebugActions.resetGatewayTunnel() {
         case let .success(message):
-            self.tunnelResetStatus = message
+            message
         case let .failure(err):
-            self.tunnelResetStatus = err.localizedDescription
+            err.localizedDescription
         }
         await self.runPortCheck()
         self.tunnelResetInFlight = false
@@ -638,8 +632,8 @@ struct DebugSettings: View {
         let result = await DebugActions.killProcess(Int(pid))
         switch result {
         case .success:
-            self.portKillStatus = "Sent kill to \(pid)."
             await self.runPortCheck()
+            self.portKillStatus = "Sent kill to \(pid)."
         case let .failure(err):
             self.portKillStatus = "Kill \(pid) failed: \(err.localizedDescription)"
         }
@@ -647,20 +641,12 @@ struct DebugSettings: View {
 
     private func sendVoiceDebug() async {
         self.debugSendInFlight = true
-        self.debugSendError = nil
-        self.debugSendStatus = nil
+        self.debugSendResult = nil
 
         let result = await DebugActions.sendDebugVoice()
 
         self.debugSendInFlight = false
-        switch result {
-        case let .success(message):
-            self.debugSendStatus = message
-            self.debugSendError = nil
-        case let .failure(error):
-            self.debugSendStatus = nil
-            self.debugSendError = error.localizedDescription
-        }
+        self.debugSendResult = result
     }
 
     @MainActor
@@ -717,23 +703,15 @@ extension DebugSettings {
     // MARK: - Canvas debug actions
 
     @MainActor
-    private func canvasPresent() async {
+    private func canvasPresent(writeSample: Bool = false) async {
         self.canvasError = nil
         let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             let dir = try CanvasManager.shared.show(sessionKey: session.isEmpty ? "main" : session, path: "/")
-            self.canvasStatus = "dir: \(dir)"
-        } catch {
-            self.canvasError = error.localizedDescription
-        }
-    }
-
-    @MainActor
-    private func canvasWriteSamplePage() async {
-        self.canvasError = nil
-        let session = self.canvasSessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            let dir = try CanvasManager.shared.show(sessionKey: session.isEmpty ? "main" : session, path: "/")
+            guard writeSample else {
+                self.canvasStatus = "dir: \(dir)"
+                return
+            }
             let url = URL(fileURLWithPath: dir).appendingPathComponent("index.html", isDirectory: false)
             let now = ISO8601DateFormatter().string(from: Date())
             let html = """

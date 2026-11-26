@@ -3,10 +3,9 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { FACETIME_FEED_DEVICE_NAME, FACETIME_MIC_DEVICE_NAME } from "./audio-pump.js";
+import { firstLine } from "./command-output.js";
 import type { FaceTimeConfig } from "./config.js";
 import { agentIdFromSessionKey, resolveFaceTimeRealtimeProvider } from "./talk-driver-config.js";
-
-type RunCommandWithTimeout = PluginRuntime["system"]["runCommandWithTimeout"];
 
 type AudioDeviceDescription = {
   isAggregate: boolean;
@@ -61,10 +60,6 @@ export type FaceTimePreflightResult = {
   checks: FaceTimePreflightCheck[];
 };
 
-function firstLine(value: unknown) {
-  return typeof value === "string" ? value.trim().split(/\r?\n/u)[0] || undefined : undefined;
-}
-
 function pushCheck(
   checks: FaceTimePreflightCheck[],
   check: Omit<FaceTimePreflightCheck, "required"> & { required?: boolean },
@@ -81,7 +76,7 @@ function parseCoreAudioDevices(systemProfilerOutput: string): CoreAudioDevicePro
       const items = record["_items"];
       return Array.isArray(items) ? items : [record];
     });
-    const devices = deviceEntries.flatMap((entry): CoreAudioDeviceProfile[] => {
+    return deviceEntries.flatMap((entry): CoreAudioDeviceProfile[] => {
       const record = asRecord(entry);
       const name = record["_name"];
       return typeof name === "string"
@@ -93,21 +88,9 @@ function parseCoreAudioDevices(systemProfilerOutput: string): CoreAudioDevicePro
           ]
         : [];
     });
-    if (devices.length > 0) {
-      return devices;
-    }
   } catch {
-    // Older test fixtures and unusual system_profiler failures can still
-    // provide the human-readable device list without transport metadata.
+    return [];
   }
-  const devices: CoreAudioDeviceProfile[] = [];
-  for (const line of systemProfilerOutput.split(/\r?\n/u)) {
-    const match = line.match(/^\s{8}(.+):\s*$/u);
-    if (match?.[1]) {
-      devices.push({ name: match[1].trim(), virtual: false });
-    }
-  }
-  return [...new Map(devices.map((device) => [device.name, device])).values()];
 }
 
 function findPhysicalOutputProblem(
@@ -124,32 +107,6 @@ function findPhysicalOutputProblem(
     return `system output is virtual device ${defaults.output.name}`;
   }
   return undefined;
-}
-
-async function checkCallApp(params: {
-  runCommandWithTimeout: RunCommandWithTimeout;
-  checks: FaceTimePreflightCheck[];
-}) {
-  for (const app of ["FaceTime", "Phone"]) {
-    const result = await params.runCommandWithTimeout(["/usr/bin/pgrep", "-x", app], {
-      timeoutMs: 5_000,
-    });
-    if (result.code === 0) {
-      pushCheck(params.checks, {
-        id: "call-app-running",
-        label: "FaceTime or Phone process",
-        ok: true,
-        message: app,
-      });
-      return;
-    }
-  }
-  pushCheck(params.checks, {
-    id: "call-app-running",
-    label: "FaceTime or Phone process",
-    ok: false,
-    message: "open FaceTime for video calls or Phone for FaceTime audio calls",
-  });
 }
 
 export async function runFaceTimePreflight(params: {
@@ -183,7 +140,15 @@ export async function runFaceTimePreflight(params: {
         : "capture helper is missing; reinstall with brew install openclaw/tap/openclaw-facetime",
   });
 
-  await checkCallApp({ runCommandWithTimeout, checks });
+  const result = await runCommandWithTimeout(["/usr/bin/pgrep", "-x", "FaceTime"], {
+    timeoutMs: 5_000,
+  });
+  pushCheck(checks, {
+    id: "call-app-running",
+    label: "FaceTime process",
+    ok: result.code === 0,
+    message: result.code === 0 ? "FaceTime" : "open FaceTime for audio or video calls",
+  });
 
   const profiler = await runCommandWithTimeout(
     ["/usr/sbin/system_profiler", "SPAudioDataType", "-json"],

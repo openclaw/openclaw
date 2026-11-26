@@ -4,52 +4,36 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
-import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
+import compactionSafeguardExtension, {
+  runCompactionSafeguard,
+} from "../agent-hooks/compaction-safeguard.js";
 import { resolveEffectiveCompactionMode } from "../agent-settings.js";
 import {
   finalizeToolTerminalPresentation,
   peekAdjustedParamsForToolCall,
 } from "../agent-tools.before-tool-call.js";
-import { resolveContextWindowInfo } from "../context-window-guard.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
+import { createAgentToolResultMiddlewareApplier } from "../harness/tool-result-middleware.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ToolResultEvent } from "../sessions/extensions/types.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { recordEmbeddedToolReceipt } from "./tool-send-receipts.js";
 
-export function buildEmbeddedExtensionFactories(params: {
+/** The private loader knows the builtin it installs; generic extension paths do not. */
+export function resolveEmbeddedCompactionSafeguard(params: {
   cfg: OpenClawConfig | undefined;
-  sessionManager: SessionManager;
-  workspaceDir?: string;
-  provider: string;
-  modelId: string;
+  workspaceDir: string;
   model: ProviderRuntimeModel | undefined;
-  contextTokenBudget?: number;
-  agentId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-}): ExtensionFactory[] {
-  const factories: ExtensionFactory[] = [];
-  if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
-    const compactionCfg = params.cfg?.agents?.defaults?.compaction;
-    const qualityGuardCfg = compactionCfg?.qualityGuard;
-    // Prepared runs carry the canonical policy budget; fallback resolution is
-    // only for callers that do not own a prepared attempt.
-    const contextWindowTokens =
-      params.contextTokenBudget ??
-      resolveContextWindowInfo({
-        cfg: params.cfg,
-        provider: params.provider,
-        modelId: params.modelId,
-        modelContextTokens: params.model?.contextTokens,
-        modelContextWindow: params.model?.contextWindow,
-        defaultTokens: DEFAULT_CONTEXT_TOKENS,
-      }).tokens;
-    setCompactionSafeguardRuntime(params.sessionManager, {
-      contextWindowTokens,
+}) {
+  if (resolveEffectiveCompactionMode(params.cfg) !== "safeguard") {
+    return undefined;
+  }
+  const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  const qualityGuardCfg = compactionCfg?.qualityGuard;
+  return {
+    factory: compactionSafeguardExtension,
+    execute: runCompactionSafeguard,
+    runtime: {
       identifierPolicy: compactionCfg?.identifierPolicy,
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
@@ -58,14 +42,31 @@ export function buildEmbeddedExtensionFactories(params: {
       workspaceDir: params.workspaceDir,
       postCompactionSections: compactionCfg?.postCompactionSections,
       provider: compactionCfg?.provider,
-    });
-    factories.push(compactionSafeguardExtension);
+    },
+  };
+}
+
+export function buildEmbeddedExtensionFactories(params: {
+  cfg: OpenClawConfig | undefined;
+  sessionManager: SessionManager;
+  workspaceDir: string;
+  model: ProviderRuntimeModel | undefined;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+}): ExtensionFactory[] {
+  const factories: ExtensionFactory[] = [];
+  const safeguard = resolveEmbeddedCompactionSafeguard(params);
+  if (safeguard) {
+    setCompactionSafeguardRuntime(params.sessionManager, safeguard.runtime);
+    factories.push(safeguard.factory);
   }
   const { agentId, sessionKey, runId, sessionManager } = params;
   // Snapshot the prepared session once; tool results must never rediscover
   // mutable session identity after a later turn has started.
   const sessionId = params.sessionId ?? sessionManager.getSessionId?.();
-  const runner = createAgentToolResultMiddlewareRunner({
+  const applyToolResultMiddleware = createAgentToolResultMiddlewareApplier({
     runtime: "openclaw",
     ...(agentId ? { agentId } : {}),
     ...(sessionId ? { sessionId } : {}),
@@ -86,10 +87,10 @@ export function buildEmbeddedExtensionFactories(params: {
           ? event.toolCallId
           : undefined;
       const toolCallId = eventToolCallId ?? `openclaw-${randomUUID()}`;
-      const current = {
+      const current: AgentToolResult<unknown> = {
         content: Array.isArray(event.content) ? event.content : [],
         details: event.details,
-      } satisfies AgentToolResult<unknown>;
+      };
       if (eventToolCallId) {
         // Delivery evidence stays private so middleware may fully replace result details.
         recordEmbeddedToolReceipt(
@@ -103,16 +104,19 @@ export function buildEmbeddedExtensionFactories(params: {
       const adjustedInput = eventToolCallId
         ? peekAdjustedParamsForToolCall(eventToolCallId, runId)
         : undefined;
-      const result = await runner.applyToolResultMiddleware({
+      const update = await applyToolResultMiddleware({
         threadId: event.threadId,
         turnId: event.turnId,
         toolCallId,
         toolName: event.toolName,
-        args: asOptionalRecord(adjustedInput ?? event.input) ?? {},
+        args:
+          asOptionalRecord(adjustedInput == null ? event.input : structuredClone(adjustedInput)) ??
+          {},
         cwd: ctx.cwd,
         isError: event.isError,
         result: current,
       });
+      const result = update ?? current;
       const isAcceptedSessionSpawn =
         event.toolName === "sessions_spawn" && normalizeAcceptedSessionSpawnResult(result) !== null;
       const hasError = event.isError === true || inputHadErrorStatus || isToolResultError(result);
@@ -124,6 +128,10 @@ export function buildEmbeddedExtensionFactories(params: {
           result,
           isError,
         });
+      }
+      // No middleware ran, so classification alone must not rewrite the tool's outcome.
+      if (update === undefined && isError === event.isError) {
+        return undefined;
       }
       return {
         content: result.content,

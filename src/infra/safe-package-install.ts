@@ -1,4 +1,3 @@
-// Builds script-disabled npm install commands and env.
 import type { NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import { createNpmProjectInstallEnv, findExplicitNpmConfigKeys } from "./npm-install-env.js";
 
@@ -58,10 +57,6 @@ export function createSafeNpmInstallEnv(
   return nextEnv;
 }
 
-/**
- * Builds npm install argv that mirrors the safe environment defaults.
- * Callers opt into peer omission, legacy peer resolution, and workspace isolation.
- */
 export function createSafeNpmInstallArgs(options: SafeNpmInstallArgsOptions = {}): string[] {
   return [
     "install",

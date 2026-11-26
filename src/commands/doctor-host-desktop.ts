@@ -10,25 +10,20 @@ const SCREEN_SHARING_COMMAND =
   "sudo launchctl enable system/com.apple.screensharing && sudo launchctl kickstart -k system/com.apple.screensharing";
 const SCREEN_SHARING_SETTINGS = "System Settings → General → Sharing → Screen Sharing";
 
-function hostDesktopSeverity(
-  status: Awaited<ReturnType<typeof inspectHostDesktop>>["status"],
-): HealthFinding["severity"] {
-  return status.state === "unavailable" ||
-    (status.state === "managed" && status.managedState === "failed")
-    ? "warning"
-    : "info";
-}
-
 /** Collects the non-mutating host desktop diagnostic shared by doctor modes. */
 export async function collectHostDesktopHealthFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
-  const inspection = await inspectHostDesktop({ config: cfg.desktop?.host });
+  const { status, detail } = await inspectHostDesktop({ config: cfg.desktop?.host });
   return [
     {
       checkId: "core/doctor/host-desktop",
-      severity: hostDesktopSeverity(inspection.status),
-      message: inspection.detail,
+      severity:
+        status.state === "unavailable" ||
+        (status.state === "managed" && status.managedState === "failed")
+          ? "warning"
+          : "info",
+      message: detail,
       path: "desktop.host",
     },
   ];
