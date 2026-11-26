@@ -241,7 +241,7 @@ export function SidebarAutomations(props: {
       </a>
       <Show when={failedJobs().length > 0}>
         <SidebarListGroup
-          label={t("cron.stats.failing")}
+          label={t("chat.sessionDetails.automationAttention")}
           open={failedOpen()}
           onToggle={() => setFailedOpen(!failedOpen())}
         >

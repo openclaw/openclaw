@@ -137,7 +137,7 @@ it("lists failing automations in their own group, out of Active and Paused", asy
           .querySelector(`[role='group'][aria-label='${label}']`)
           ?.querySelectorAll(".sidebar-automations__name") ?? []),
       ].map((name) => name.textContent);
-    await waitForSolid(() => expect(group("Failing")).toEqual(["Broken", "Stopped"]));
+    await waitForSolid(() => expect(group("Needs attention")).toEqual(["Broken", "Stopped"]));
     expect(group("Active")).toEqual(["Healthy"]);
   } finally {
     inventory.read.mockImplementation(pages);
