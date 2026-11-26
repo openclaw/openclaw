@@ -56,6 +56,7 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { formatSchemaMigrationFailure, SCHEMA_RECOVERY } from "./schema-migration-diagnostics.js";
+import { readSqliteDatabaseIntegrityVerification } from "./sqlite-database-admission.js";
 import {
   backupDoctorSqliteRepair,
   repairDoctorSqliteIndexCorruptionAsync,
@@ -122,8 +123,8 @@ async function migrateAgentDatabase(params: {
   if (agentEngineInput()) {
     return inspectPostgresMediaPersistence(params);
   }
-  const database = openNodeSqliteDatabase(params.pathname);
-  const nativeVersionMigration = params.migratedFromVersion !== undefined;
+  const { pathname, integrityCheck: check = "quick", migratedFromVersion } = params;
+  const database = openNodeSqliteDatabase(pathname);
   const schemaWarnings: string[] = [];
   const schemaOptions = {
     agentId: params.agentId,
@@ -178,10 +179,10 @@ async function migrateAgentDatabase(params: {
         finalVersion: userVersion,
       };
     }
-    if (!nativeVersionMigration) {
+    if (migratedFromVersion === undefined) {
       invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(params.pathname);
     }
-    const initialVersion = params.migratedFromVersion ?? userVersion;
+    const initialVersion = migratedFromVersion ?? userVersion;
     let preserved = false;
     const prepareRewrite = async () => {
       if (!preserved) {
@@ -212,13 +213,11 @@ async function migrateAgentDatabase(params: {
       }
       if (userVersion >= AGENT_MEDIA_SCHEMA_VERSION) {
         // The canonical owner admits supported versions and converges additive schema.
-        if (nativeVersionMigration) {
-          // The preserving backup can retain stale FTS. Route physical damage
-          // through the index repair below before publishing reader admission.
-          const check = params.integrityCheck ?? "quick";
-          await runSchema(
-            sqliteIntegrityCheckSteps(database, params.pathname, undefined, { check }),
-          );
+        if (migratedFromVersion !== undefined) {
+          // Tolerated FTS damage has no clean receipt and must reach index repair.
+          if (!readSqliteDatabaseIntegrityVerification(database)) {
+            await runSchema(sqliteIntegrityCheckSteps(database, pathname, undefined, { check }));
+          }
           ensureOpenClawAgentSchema(database, params.agentId, params.pathname);
           const admittedDb = admitOpenClawAgentDatabaseSchema(database, schemaOptions);
           registerOpenClawAgentDatabase({ ...schemaOptions, admittedDb });
