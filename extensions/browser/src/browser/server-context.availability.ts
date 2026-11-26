@@ -106,7 +106,7 @@ function recordManagedLaunchFailure(profileState: ProfileRuntimeState, err: unkn
     consecutiveFailures >= MANAGED_LAUNCH_FAILURE_THRESHOLD
       ? Math.min(MANAGED_LAUNCH_COOLDOWN_MAX_MS, MANAGED_LAUNCH_COOLDOWN_BASE_MS * 2 ** exponent)
       : 0;
-  const now = Date.now();
+  const now = performance.now();
   profileState.managedLaunchFailure = {
     consecutiveFailures,
     ...(cooldownMs > 0 ? { cooldownUntil: now + cooldownMs } : {}),
@@ -121,7 +121,7 @@ function assertManagedLaunchNotCoolingDown(profileName: string, profileState: Pr
     return;
   }
   const cooldownUntil = failure.cooldownUntil ?? 0;
-  const remainingMs = cooldownUntil - Date.now();
+  const remainingMs = cooldownUntil - performance.now();
   if (remainingMs <= 0) {
     return;
   }
@@ -131,6 +131,12 @@ function assertManagedLaunchNotCoolingDown(profileName: string, profileState: Pr
       `Retry in ${retrySeconds}s after fixing Chrome startup, or set browser.enabled=false if the browser tool is not needed. ` +
       `Last error: ${failure.lastError}`,
   );
+}
+
+/** Effective launch mode of the profile's browser process, when known. */
+export async function resolveProfileHeadless(state: BrowserServerState, profileName: string) {
+  const runtime = state.profiles.get(profileName);
+  return runtime?.running?.headless ?? (await runtime?.externalBrowserMode?.headless);
 }
 
 export function createProfileAvailability({

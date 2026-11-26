@@ -575,7 +575,9 @@ suite.define(() => {
         "failed",
         "Completed",
       ]);
-      await browserExpect(pane.locator(".chat-tool-term__cmd").nth(1)).toHaveText(`$${command}`);
+      await browserExpect(
+        pane.locator(".chat-tool-term__cmd").filter({ hasText: command }),
+      ).toHaveText(`$${command}`);
       await browserExpect(pane.locator(".chat-diff")).toHaveCount(1);
       expect((await pane.textContent())?.match(/\[Output truncated\]/g)).toHaveLength(1);
       await browserExpect(

@@ -58,6 +58,16 @@ describe("runMessageAction send validation", () => {
     setActivePluginRegistry(createTestRegistry([]));
     vi.restoreAllMocks();
   });
+
+  it("rejects a captionless table before sending the rest of the message", async () => {
+    const sentText = captureWorkspaceSend();
+    const table = { type: "table", headers: ["Name"], rows: [["Alpha"]] };
+    await expect(
+      runSend({ message: "Summary", presentation: { blocks: [table] } }),
+    ).rejects.toThrow("presentation.blocks[].caption required");
+    expect(sentText).toEqual([]);
+  });
+
   it("requires message when no media hint is provided", async () => {
     await expect(runDrySend({})).rejects.toThrow(/message required/i);
   });

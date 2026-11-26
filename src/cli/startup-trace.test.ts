@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { sampleTrackedWorkerMemory, trackNativeWorkerForCpu } from "../infra/worker-cpu.js";
+import { ExitError } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewayDispatchStartupTrace,
@@ -67,7 +68,14 @@ it.each(["0", "1"])(
     trace.setLineFormatter((message) => message);
     expect(messages().at(-1)).toMatch(/ rssMb=128\.0 heapUsedMb=\d+\.\d workers=0 /);
 
-    await measureGatewayBootstrapStep("cli.bootstrap.admission.database-readiness", () => {});
+    await measureGatewayBootstrapStep(
+      "cli.bootstrap.admission.database-readiness",
+      () => {},
+      () => ({ stateIntegrityCheckCount: 1, stateIntegrityReason: "schema-mismatch" }),
+    );
+    expect(messages().at(-1)).toContain(
+      "stateIntegrityCheckCount=1 stateIntegrityReason=schema-mismatch",
+    );
     expect(messages().at(-1)).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d workers=0 /);
   },
 );
@@ -105,6 +113,25 @@ it("reports environment selection sub-phases without full tracing only for gatew
       }
     }
   }
+});
+
+it.each(["0", "1"])("leaves a refused start's remedy last (trace=%s)", async (enabled) => {
+  vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
+  vi.spyOn(process, "argv", "get").mockReturnValue(["node", "openclaw", "gateway", "run"]);
+  const trace = makeTrace(["gateway", "run"], "cli.main");
+  trace.setLineFormatter((message) => message);
+  const reason = "Free space on the PostgreSQL server, then run openclaw update.";
+  const refusal = new ExitError(78, reason);
+  await expect(
+    trace.measure("gateway-run-pre-bootstrap", () =>
+      measureGatewayBootstrapStep("cli.bootstrap.state-upgrade", () => {
+        process.stderr.write(`${reason}\n`);
+        throw refusal;
+      }),
+    ),
+  ).rejects.toBe(refusal);
+  expect(messages()).toHaveLength(3);
+  expect(messages().at(-1)).toBe(`${reason}\n`);
 });
 
 it("formats live worker counts and cached heap coverage without requesting samples", async () => {

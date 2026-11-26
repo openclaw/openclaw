@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { SessionManager } from "./sessions/index.js";
+import { sessionManagerReadTranscriptBranch } from "./sessions/session-manager-view-types.js";
 
 type SessionEntry = { type: string; customType: string; data: unknown };
 export type SanitizeSessionHistoryFn =
@@ -40,6 +41,7 @@ export function makeInMemorySessionManager(
     getSessionTarget: () => undefined,
     getEntries: vi.fn(() => entries),
     getBranch: vi.fn(() => activeBranchEntries),
+    [sessionManagerReadTranscriptBranch]: () => activeBranchEntries,
     appendCustomEntryAsync: vi.fn(async (customType: string, data: unknown) => {
       const entry = { type: "custom", customType, data };
       entries.push(entry);
@@ -56,6 +58,7 @@ export function makeMockSessionManager(): SessionManager {
     getSessionTarget: () => undefined,
     getEntries: vi.fn().mockReturnValue([]),
     getBranch: vi.fn().mockReturnValue([]),
+    [sessionManagerReadTranscriptBranch]: () => [],
     appendCustomEntryAsync: vi.fn(async () => "custom-entry"),
   } as unknown as SessionManager;
 }
@@ -76,7 +79,6 @@ export async function createSanitizeSessionHistoryProviderRuntimeMock(
     ...actual,
     // Default to no provider plugin participation; individual tests opt in to
     // hooks so ownership boundaries stay explicit.
-    resolveProviderRuntimePlugin: vi.fn(() => undefined),
     sanitizeProviderReplayHistoryWithPluginAsync: vi.fn(() => undefined),
     validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
     ...extra,

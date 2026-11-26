@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
@@ -13,8 +12,6 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
-import { createCliHistoryOwnerProbe, type CliHistoryWriterFacts } from "./cli-history-boundary.js";
-import { advanceCliHistoryBoundaryRangeInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
   SessionTranscriptContextVersion,
@@ -45,7 +42,6 @@ import type { InternalSessionEntry } from "./types.js";
 
 export type TranscriptReportWorkerTarget = {
   resolved: Omit<ResolvedTranscriptScope, "env">;
-  cliWriter?: CliHistoryWriterFacts;
   sessionEntryCurrentSource?: SessionEntryCurrentSource;
   fence: Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">;
 };
@@ -79,15 +75,11 @@ export function bindSqliteWorkerBackend(
   if (!database || database.db !== context.database || database.path !== context.databasePath) {
     throw new Error("Transcript report lost its canonical database owner");
   }
-  // Coverage asks the host for its live owner check on the commit admission of the write.
-  const ownerProbe = target.cliWriter?.confirmOwner ? createCliHistoryOwnerProbe() : undefined;
   const admit = (stage: "transaction" | "commit") =>
     context.admit(stage, (request, dispatch) =>
       requestSessionEntryCurrentAdmission(
         target.sessionEntryCurrentSource,
-        ownerProbe && stage === "commit" && isRecord(request.facts)
-          ? { ...request, facts: { ...request.facts, publication: ownerProbe.fact } }
-          : request,
+        request,
         { database },
         dispatch,
       ),
@@ -137,10 +129,6 @@ export function bindSqliteWorkerBackend(
             admit("commit");
             return err(refusal);
           }
-          const firstSeq = target.cliWriter
-            ? (readTranscriptContextVersionInTransaction(database, resolved.sessionId).rawSeq ??
-                -1) + 1
-            : undefined;
           let projectionNeedsReconcile = false;
           let fullEntry: InternalSessionEntry | undefined;
           const onEntryUpdated = (entry: InternalSessionEntry) => {
@@ -206,23 +194,6 @@ export function bindSqliteWorkerBackend(
               commitGranted = true;
             }
           };
-          const cliHistoryChanged =
-            target.cliWriter && firstSeq !== undefined
-              ? advanceCliHistoryBoundaryRangeInTransaction(
-                  database,
-                  resolved,
-                  {
-                    first: firstSeq,
-                    last:
-                      readTranscriptContextVersionInTransaction(database, resolved.sessionId)
-                        .rawSeq ?? -1,
-                  },
-                  target.cliWriter,
-                  authorizeCommit,
-                  ownerProbe?.holds,
-                  onEntryUpdated,
-                )
-              : false;
           const { entry, refusal: rebound } = readCurrentEntry();
           if (rebound) {
             throw new SessionTranscriptWriterClaimReboundError(rebound);
@@ -231,12 +202,12 @@ export function bindSqliteWorkerBackend(
           return ok({
             committed: true,
             projectionNeedsReconcile,
-            cliHistoryChanged,
-            ...((cliHistoryChanged ||
-              (abortedPartial && !abortedPartial.skipped && abortedPartial.append.appended)) && {
-              entry,
-              fullEntry,
-            }),
+            ...(abortedPartial &&
+              !abortedPartial.skipped &&
+              abortedPartial.append.appended && {
+                entry,
+                fullEntry,
+              }),
             ...(abortedPartial
               ? {
                   abortedPartial,

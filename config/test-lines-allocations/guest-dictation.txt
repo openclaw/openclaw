@@ -1,4 +1,0 @@
-# Guest dictation: authenticated WebSocket authorization/revocation, relay lifetime,
-# provider-wire discard/reconnect safety, editable existing/new-chat flows,
-# and persisted first-send retry recovery.
-1465

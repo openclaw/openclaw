@@ -1,4 +1,6 @@
-// Owner microbenchmark: 64 recipients, 64 projected rows, one watch change per publication.
+// Owner microbenchmark: configurable recipients/rows, one watch change per publication.
+// Acceptance: five A/B pairs plus A/A, lower allocation/publication, no >20% CPU regression,
+// identical wire digests; owner measurements exclude transport and do not claim Gateway latency.
 // Run on each revision: node --import ./scripts/tsx.mjs scripts/perf/presence-delivery-measure.ts
 // Append --allocations for a separate allocation pass; timing in that pass is diagnostic only.
 // --owner <saved-presence-delivery.ts> compares an exact saved owner with the same fixture.
@@ -16,7 +18,13 @@ import { listSystemPresence, upsertPresence } from "../../src/infra/system-prese
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 
 const { values } = parseArgs({
-  options: { allocations: { type: "boolean", default: false }, owner: { type: "string" } },
+  options: {
+    allocations: { type: "boolean", default: false },
+    owner: { type: "string" },
+    recipients: { type: "string", default: "64" },
+    "reset-interval": { type: "string", default: "0" },
+    "distinct-baselines": { type: "boolean", default: false },
+  },
 });
 const ownerUrl = new URL("../../src/gateway/presence-delivery.ts", import.meta.url);
 const ownerSource = readFileSync(values.owner ?? ownerUrl, "utf8");
@@ -33,29 +41,27 @@ const hooks = registerHooks({
 const { preparePresenceDelivery } = await import("../../src/gateway/presence-delivery.js");
 hooks.deregister();
 assert(ownerLoaded, "The selected presence owner must be loaded");
-const clients = Array.from({ length: 64 }, () => ({}) as GatewayWsClient);
+const recipients = Number(values.recipients);
+const resetInterval = Number(values["reset-interval"]);
+assert(Number.isSafeInteger(recipients) && recipients > 0);
+assert(Number.isSafeInteger(resetInterval) && resetInterval >= 0);
+const clients = Array.from({ length: recipients }, () => ({}) as GatewayWsClient);
 for (let index = 0; index < clients.length; index++) {
   upsertPresence(`delivery-measure-${index}`, {
     connectionId: `delivery-measure-${index}`,
     host: `synthetic-workstation-${index}`,
-    text: "Synthetic operator presence",
+    text: `Synthetic operator presence ${"x".repeat(260)}`,
     platform: "macos",
     version: "dev",
     roles: ["operator"],
     scopes: ["operator.read", "operator.write"],
-    user: {
-      id: `synthetic-${index}`,
-      identity: { type: "profile", id: `synthetic-${index}` },
-      name: `Synthetic Operator ${index}`,
-      avatarUrl: `https://example.com/${"x".repeat(140)}-${index}.png`,
-    },
     watchedSessions: ["agent:main:visible"],
   });
 }
 const source = listSystemPresence()
   .filter((row) => row.connectionId?.startsWith("delivery-measure-"))
   .toSorted((left, right) => left.connectionId!.localeCompare(right.connectionId!));
-assert.equal(source.length, 64);
+assert.equal(source.length, recipients);
 let version = 0;
 let wireBytes = 0;
 const digest = createHash("sha256");
@@ -70,9 +76,14 @@ async function run(publications: number) {
         index === version % source.length ? "agent:main:other" : "agent:main:visible",
       ],
     }));
+    if (resetInterval > 0 && version % resetInterval === 0) {
+      clients[0]!.presenceSnapshot = undefined;
+    }
     for (const client of clients) {
       const delivery = preparePresenceDelivery(client, source, view, version);
-      client.presenceSnapshot = delivery.snapshot;
+      client.presenceSnapshot = values["distinct-baselines"]
+        ? { ...delivery.snapshot }
+        : delivery.snapshot;
       wireBytes += delivery.fragment.length;
       if (client === clients[0]) {
         digest.update(delivery.fragment);
@@ -116,6 +127,8 @@ console.log(
     publications: 3000,
     ownerSha256: createHash("sha256").update(ownerSource).digest("hex"),
     recipients: clients.length,
+    resetInterval,
+    distinctBaselines: values["distinct-baselines"],
     wallMs,
     threadCpuMs: (used.user + used.system) / 1000,
     allocatedBytes,

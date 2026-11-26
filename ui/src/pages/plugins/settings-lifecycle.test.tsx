@@ -23,6 +23,12 @@ function objectSchema(properties: Record<string, JsonSchema>): JsonSchema {
   return { type: "object", additionalProperties: false, properties };
 }
 
+function pluginRootSchema(properties: Record<string, JsonSchema>): JsonSchema {
+  return objectSchema({
+    plugins: objectSchema({ entries: objectSchema({ workboard: objectSchema(properties) }) }),
+  });
+}
+
 function setting(container: ParentNode, key: string) {
   return container.querySelector(`[data-setting="${key}"]`)!;
 }
@@ -119,7 +125,7 @@ it("does not offer enablement or Settings for an uninstalled plugin", () => {
   const { find } = mount({
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),
   });
-  expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
+  expect(find('[role="switch"][aria-label="Workboard"], [aria-label="Settings"]')).toBeNull();
 });
 
 it("retains inspection retry focus and uses the current error and callback", async () => {
@@ -165,22 +171,18 @@ it.each(["needs-setup", "disconnected"])("does not dispatch enablement when %s",
     expect(container.textContent).toContain("Agent work queue and session handoff.");
     expect(find("[inert]")).toBeNull();
   }
-  const button = find<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
-  expect(
-    disconnected
-      ? button.disabled
-      : button.disabled || button.getAttribute("aria-disabled") === "true",
-  ).toBe(true);
+  const button = find<HTMLInputElement>('[role="switch"][aria-label="Workboard"]')!;
+  expect(button.getAttribute("aria-disabled")).toBe("true");
   button.click();
   expect(props.onSetEnabled).not.toHaveBeenCalled();
 });
 
 it("gives inherited host permissions the setting menu and preserves read-only values", async () => {
-  const { container, props } = mount({
+  const { container, props, update } = mount({
     tab: "configuration",
     inspection: createInspectResult(),
     onAskSetting: vi.fn(),
-    hostControlsSchema: objectSchema({
+    rawConfigSchema: pluginRootSchema({
       hooks: objectSchema({
         allowPromptModification: { type: "boolean" },
       }),
@@ -199,9 +201,18 @@ it("gives inherited host permissions the setting menu and preserves read-only va
   expect(props.onAskSetting).toHaveBeenCalledWith(
     expect.objectContaining({ path, value: true, label: "Modify prompts" }),
   );
-  row.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
-  expect(props.onConfigPatch).toHaveBeenCalledWith(path, false);
-  vi.mocked(props.onConfigPatch).mockClear();
+  const input = row.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+  const currentPatch = vi.fn();
+  update({
+    configValue: {
+      plugins: { entries: { workboard: { hooks: { allowPromptModification: true } } } },
+    },
+    onConfigPatch: currentPatch,
+  });
+  expect(setting(container, "hooks.allowPromptModification").querySelector("input")).toBe(input);
+  input.click();
+  expect(currentPatch).toHaveBeenCalledExactlyOnceWith(path, false);
+  expect(props.onConfigPatch).not.toHaveBeenCalled();
   const { container: readOnly } = mount({ ...props, canEditConfig: false });
   await Promise.resolve();
   flush();
@@ -235,3 +246,73 @@ it("shows selected capabilities without a catalog", () => {
   expect(container.textContent).toContain("Pages");
   expect(container.textContent).not.toMatch(/speechProviders:|sibling-|Video generation/);
 });
+
+it.each([false, true])(
+  "keeps failed inspection separate from permission loading (cached: %s)",
+  async (cached) => {
+    const failure = new Error("Plugin inspection unavailable");
+    const { container, props } = mount({
+      tab: "configuration",
+      inspection: cached ? createInspectResult() : null,
+      inspectionRead: {
+        receipt: () => null,
+        value: () => {
+          throw failure;
+        },
+      },
+      rawConfigSchema: pluginRootSchema({
+        config: objectSchema({ workspaceLabel: { type: "string", title: "Workspace label" } }),
+        hooks: objectSchema({ allowPromptModification: { type: "boolean" } }),
+      }),
+      configValue: {
+        plugins: { entries: { workboard: { config: { workspaceLabel: "Planning" } } } },
+      },
+    });
+    await waitForSolid(() =>
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(failure.message),
+    );
+    const input = container.querySelector<HTMLInputElement>('input[type="text"]')!;
+    expect(input.value).toBe("Planning");
+    expect(input.disabled).toBe(false);
+    expect(container.querySelectorAll(".plugin-editor .settings-loading-skeleton")).toHaveLength(0);
+    if (cached) {
+      expect(
+        setting(container, "hooks.allowPromptModification").querySelector<HTMLInputElement>(
+          'input[type="checkbox"]',
+        )?.checked,
+      ).toBe(true);
+    } else {
+      expect(container.querySelector('[data-setting="hooks.allowPromptModification"]')).toBeNull();
+    }
+    container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    expect(props.onRetryInspection).toHaveBeenCalledOnce();
+    expect(props.onConfigPatch).not.toHaveBeenCalled();
+  },
+);
+
+it.each([false, true])(
+  "shows empty settings only after permissions are known (%s)",
+  async (known) => {
+    const { container } = mount({
+      tab: "configuration",
+      rawConfigSchema: pluginRootSchema({ config: objectSchema({}) }),
+      inspection: known ? createInspectResult() : null,
+      inspectionRead: {
+        receipt: () => null,
+        value: () => {
+          if (!known) {
+            throw new Error("Inspection unavailable");
+          }
+          return null;
+        },
+      },
+    });
+    await waitForSolid(() =>
+      expect(container.querySelector("openclaw-plugin-settings-editor")).not.toBeNull(),
+    );
+    expect(container.textContent?.includes("This plugin has no configurable settings.")).toBe(
+      known,
+    );
+    expect(container.querySelector(".plugin-editor .settings-loading-skeleton")).toBeNull();
+  },
+);

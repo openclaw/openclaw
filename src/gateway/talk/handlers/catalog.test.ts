@@ -52,6 +52,35 @@ describe("talk.catalog handler", () => {
       },
     );
   });
+  it("answers the caller's unstarted main conversation from its agent", async () => {
+    const config: OpenClawConfig = {};
+    const client = { connect: { scopes: ["operator.read", "operator.sessions.write"] } };
+    const catalog = (sessionKey: string, caller = client) =>
+      invokeTalkHandler("talk.catalog", {
+        params: { sessionKey },
+        config,
+        client: caller,
+        context: {
+          getRuntimeConfig: () => config,
+          ...bindSessionRowProjection({}, () => projection),
+        },
+      });
+    await mocks.resolveSessionKeyFromResolveParams.withImplementation(
+      () => ({ ok: true, missing: true }),
+      async () => {
+        expectRespondOk(await catalog("agent:main:main"));
+        expectRespondError(await catalog("agent:main:unknown"), {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: "No session found: agent:main:unknown",
+        });
+        // A caller who cannot start the conversation gets the same answer as for a hidden one.
+        expectRespondError(await catalog("agent:main:main", readClient()), {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: "No session found: agent:main:main",
+        });
+      },
+    );
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listSpeechProviders.mockReturnValue([]);
@@ -111,7 +140,8 @@ describe("talk.catalog handler", () => {
 
     expectRespondError(respond, {
       code: ErrorCodes.INVALID_REQUEST,
-      message: expect.stringContaining("Talk session ownership has no explicit owner"),
+      message:
+        "Multiple agents are configured, but Talk session ownership has no explicit owner. Set talk.agentId to the agent that owns unscoped Talk sessions.",
     });
     expect(mocks.canonicalizeSpeechProviderId).not.toHaveBeenCalled();
     expect(mocks.listRealtimeTranscriptionProviders).not.toHaveBeenCalled();
@@ -278,6 +308,7 @@ describe("talk.catalog handler", () => {
             ],
           },
           transcription: {
+            source: "streaming",
             ready: true,
             activeProvider: "openai",
             providers: [
@@ -566,6 +597,7 @@ describe("talk.catalog handler", () => {
 
       expect(mockCallArg(respond, 0, 1)).toMatchObject({
         transcription: {
+          source: "voice-model",
           ready: true,
           activeProvider: "transcription-fast",
           providers: [
@@ -611,8 +643,10 @@ describe("talk.catalog handler", () => {
       }) as OpenClawConfig,
     });
 
+    // Options for xAI name no provider: the runtime still picks by order and readiness.
     expect(mockCallArg(respond, 0, 1)).toMatchObject({
       transcription: {
+        source: "streaming-auto",
         ready: true,
         activeProvider: "xai",
         providers: [
@@ -677,7 +711,7 @@ describe("talk.catalog handler", () => {
     });
 
     expect(mockCallArg(respond, 0, 1)).toMatchObject({
-      transcription: { ready: true, activeProvider: "transcription-alias" },
+      transcription: { source: "streaming", ready: true, activeProvider: "transcription-alias" },
       realtime: { ready: true, activeProvider: "realtime-alias" },
     });
   });
@@ -714,6 +748,10 @@ describe("talk.catalog handler", () => {
           : {},
       });
       const catalog = mockCallArg(respond, 0, 1) as Record<string, Record<string, unknown>>;
+      // Without a named provider the runtime picks one automatically.
+      expect(catalog.transcription).toMatchObject({
+        source: explicit ? "streaming" : "streaming-auto",
+      });
       for (const kind of ["transcription", "realtime"]) {
         expect(catalog[kind]).toMatchObject({ ready: false });
         if (explicit) {

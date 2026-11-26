@@ -86,6 +86,8 @@ it("projects the Side Chat model catalog only when its panel mounts", async () =
 
   state.updateSidebarLayout(openSlot(state.sidebarLayout, "companion"));
   await renderPanels();
+  // Reveal starts the real lazy load; registration is a prerequisite to mounted-state checks.
+  await customElements.whenDefined("openclaw-chat-session-rail");
   await waitForSolid(() =>
     expect(mount.querySelector("openclaw-chat-session-rail")).not.toBeNull(),
   );
@@ -236,6 +238,8 @@ it("discards a Details process request after switching agents on the same global
   state.assistantAgentId = "research";
   expect(runtime.companionIntents.processesShowRequest?.()).toBeUndefined();
 
+  // The research agent's global row is outside the roster; its history read names it.
+  state.currentSessionId = "research-global-session";
   open();
   expect(runtime.companionIntents.processesShowRequest?.()).toEqual({
     instanceId: "process-main",

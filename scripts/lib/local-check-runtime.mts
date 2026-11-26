@@ -136,7 +136,7 @@ export function createDeclarationInputBoundary(cwd: string) {
   // Translate only declared checkout spellings; never canonicalize outside candidates into scope.
   const resolve = (file: string) => {
     // Drive-relative paths can depend on the current directory on Windows.
-    const cacheable = path.isAbsolute(file);
+    const cacheable = path.isAbsolute(file) || !/^[a-z]:/iu.test(file);
     const cached = cacheable ? resolvedPaths.get(file) : undefined;
     if (cached !== undefined) {
       return cached;

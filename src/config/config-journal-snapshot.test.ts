@@ -5,6 +5,7 @@ import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   fingerprintConfigSnapshotAuthoredConfig,
@@ -53,10 +54,15 @@ async function fixture(name: string) {
 
 it("fingerprints every snapshot leaf with a per-install key", async () => {
   const { stateDir, context } = await fixture("fingerprint-home");
-  const fingerprinted = fingerprintConfigSnapshotAuthoredConfig(
-    { gateway: { auth: { token: "test-token" }, port: 18789 } },
-    context,
-  );
+  const fingerprinted = await (async () => {
+    using observation = observeMainThreadFs();
+    const result = await fingerprintConfigSnapshotAuthoredConfig(
+      { gateway: { auth: { token: "test-token" }, port: 18789 } },
+      context,
+    );
+    expect(observation.calls()).toEqual({});
+    return result;
+  })();
 
   expect(fingerprinted).toMatchObject({
     gateway: {
@@ -69,11 +75,12 @@ it("fingerprints every snapshot leaf with a per-install key", async () => {
     0o600,
   );
 
-  const fingerprintOf = (value: unknown) =>
-    (fingerprintConfigSnapshotAuthoredConfig({ leaf: value }, context) as { leaf: string }).leaf;
-  const variants = ["1", 1, true, "true"].map(fingerprintOf);
+  const fingerprintOf = async (value: unknown) =>
+    ((await fingerprintConfigSnapshotAuthoredConfig({ leaf: value }, context)) as { leaf: string })
+      .leaf;
+  const variants = await Promise.all(["1", 1, true, "true"].map(fingerprintOf));
   expect(new Set(variants).size).toBe(variants.length);
-  expect(fingerprintOf("1")).toBe(fingerprintOf("1"));
+  expect(await fingerprintOf("1")).toBe(await fingerprintOf("1"));
 });
 
 it("hands the snapshot slot to another config path via the unfiltered CAS token", async () => {
@@ -155,7 +162,7 @@ it("falls back to a redaction marker when the fingerprint key cannot be stored",
   await fsPromises.writeFile(statePath, "not a directory", "utf-8");
 
   expect(
-    fingerprintConfigSnapshotAuthoredConfig(
+    await fingerprintConfigSnapshotAuthoredConfig(
       { gateway: { auth: { token: "test-token" } } },
       { env: { OPENCLAW_STATE_DIR: statePath }, homedir: () => home },
     ),

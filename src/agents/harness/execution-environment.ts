@@ -41,6 +41,7 @@ import { AgentHarnessPreflightError } from "./errors.js";
 import {
   collectHarnessSafeDeniedToolNames,
   policyDeniesAllTools,
+  resolveHarnessSafeDenies,
   toolPolicyRestrictsHarnessNativeTools,
   type PluginHarnessToolPolicy,
 } from "./native-tool-deny-policy.js";
@@ -131,8 +132,9 @@ export function resolveAgentHarnessSessionExecutionRestriction(params: {
     | "nativeRuntimeConsent"
   > & { sessionId?: string };
   preparedSessionCapabilityEntry?: PreparedSessionCapabilityEntry;
-  provider: string;
-  modelId: string;
+  /** Absent when the session has no model; sandbox and remote-execution rules still apply. */
+  provider?: string;
+  modelId?: string;
   /** An owner caller, whose unset chat modes remembered agent consent covers. */
   callerCanConsent?: boolean;
 }): ExecutionRestriction | undefined {
@@ -355,8 +357,6 @@ type PluginHarnessToolPolicyContext = Pick<
   | "sandboxAgentId"
   | "sandbox"
   | "agentId"
-  | "provider"
-  | "modelId"
   | "messageProvider"
   | "messageChannel"
   | "conversationToolPolicy"
@@ -383,11 +383,15 @@ type PluginHarnessToolPolicyContext = Pick<
   | "toolsAllow"
   | "disableTools"
   | "swarmCollector"
-> & {
-  sessionId?: string;
-  preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
-  preparedSessionCapabilityEntry?: PreparedSessionCapabilityEntry;
-};
+> &
+  Partial<Pick<EmbeddedRunAttemptParams, "workspaceDir" | "preparedModelRuntime">> & {
+    /** Absent before a session has a model; model-scoped policy then does not apply. */
+    provider?: string;
+    modelId?: string;
+    sessionId?: string;
+    preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
+    preparedSessionCapabilityEntry?: PreparedSessionCapabilityEntry;
+  };
 
 export type ResolvedPluginHarnessToolPolicies = {
   webSearchPolicy?: EmbeddedRunAttemptParams["preparedWebSearchPolicy"];
@@ -628,9 +632,7 @@ export function resolvePluginHarnessToolPolicies(
     policy.runtimeToolPolicyForInheritance,
     requestedToolPolicy,
   ];
-  const safeDenyToolNameSet = safeDenyToolNames
-    ? new Set(safeDenyToolNames.map(normalizeToolPolicyName))
-    : undefined;
+  const safeDenyToolNameSet = resolveHarnessSafeDenies(explicitPolicies, safeDenyToolNames, params);
   const profilePolicies = [
     mergeAlsoAllowPolicy(policy.profilePolicy, policy.profileAlsoAllow),
     mergeAlsoAllowPolicy(policy.providerProfilePolicy, policy.providerProfileAlsoAllow),

@@ -56,6 +56,7 @@ async function writeReportText(
   // Unlike beforeRename, this synchronous dependency guard covers each new
   // mutation after an await, including rename retries and copy fallback.
   await replaceFileAtomic({
+    allowDrvfsRenameRecovery: true,
     filePath,
     content,
     mode: 0o600,

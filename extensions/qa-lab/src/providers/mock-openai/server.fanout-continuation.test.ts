@@ -6,6 +6,7 @@ import {
   outputText,
   outputToolArgsFromItem,
   outputToolCall,
+  outputToolCallId,
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
@@ -19,13 +20,15 @@ it.each(["kickoff", "resumed"])(
     const tools = [{ type: "function", name: "sessions_spawn" }];
     const client_metadata = { session_id: "kickoff" };
     const first = await respond(server, prompt, { tools, client_metadata });
-    expect(outputToolArgsFromItem(outputToolCall(first, "sessions_spawn"))).toMatchObject({
+    const firstCall = outputToolCall(first, "sessions_spawn");
+    expect(outputToolArgsFromItem(firstCall)).toMatchObject({
       label: "qa-fanout-alpha",
     });
     const second = await respond(
       server,
-      userInputs(prompt, {
+      userInputs(prompt, firstCall, {
         type: "function_call_output",
+        call_id: outputToolCallId(firstCall, "fanout-alpha"),
         output:
           '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
       }),

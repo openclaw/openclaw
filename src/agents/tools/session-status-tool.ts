@@ -592,21 +592,21 @@ export function createSessionStatusTool(opts?: {
               cfg,
               scopedResolved.entry,
               agentId,
-              `${configured.provider}/${configured.model}`,
+              configured && `${configured.provider}/${configured.model}`,
             );
           const hasExplicitModelOverride = Boolean(
             !activeModelIdentity &&
             (scopedResolved.entry.providerOverride?.trim() ||
               scopedResolved.entry.modelOverride?.trim()),
           );
-          const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
-          const runtimeModelForCard = runtimeModelIdentity.model.trim();
+          const runtimeProviderForCard = runtimeModelIdentity?.provider?.trim();
+          const runtimeModelForCard = runtimeModelIdentity?.model.trim() ?? "";
           const defaultProviderForCard = hasExplicitModelOverride
-            ? configured.provider
+            ? (configured?.provider ?? "")
             : (runtimeProviderForCard ?? "");
           const defaultModelForCard = hasExplicitModelOverride
-            ? configured.model
-            : runtimeModelForCard || configured.model;
+            ? (configured?.model ?? "")
+            : runtimeModelForCard || (configured?.model ?? "");
           const statusSessionEntry = activeModelIdentity
             ? withActiveStatusModelIdentity(scopedResolved.entry, activeModelIdentity)
             : !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
@@ -684,7 +684,7 @@ export function createSessionStatusTool(opts?: {
           const routeContextText = Object.keys(routeDetails).length
             ? `Route context:
 \`\`\`json
-${JSON.stringify(routeDetails, null, 2)}
+${JSON.stringify(routeDetails)}
 \`\`\``
             : undefined;
           const stateVersion = await getSessionStateVersion(scopedResolved.key, agentId);

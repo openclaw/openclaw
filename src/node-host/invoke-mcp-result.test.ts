@@ -47,4 +47,14 @@ describe("boundMcpToolResultPayload", () => {
       structuredContent,
     });
   });
+
+  it("drops the bare value of single-key structured content", () => {
+    const structuredContent = { items: [{ id: "C1" }] };
+    const content = [
+      { type: "text", text: '[\n {\n  "id": "C1"\n }\n]' },
+      { type: "text", text: "[]" },
+    ];
+    const payload = boundMcpToolResultPayload({ content, structuredContent });
+    expect(payload).toEqual({ content: [content[1]], structuredContent });
+  });
 });

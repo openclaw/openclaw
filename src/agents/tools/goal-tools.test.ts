@@ -87,6 +87,27 @@ describe("goal tools", () => {
     expect(readGoal()?.status).toBe("active");
   });
 
+  it.each(["blocked", "paused", "complete", "budget_limited", "usage_limited"] as const)(
+    "keeps an inactive %s goal separate from current-turn authority",
+    async (status) => {
+      const { options, readGoal } = await createStoreConfig("global", {
+        goal: makeGoal({ status, lastStatusNote: "Waiting on an earlier prerequisite" }),
+      });
+      const before = readGoal();
+      const result = await createGetGoalTool(options).execute("call-inactive-goal", {});
+
+      expect(result.details).toMatchObject({
+        goal: { status },
+        nextAction: expect.stringContaining("Goal Resume is not a prerequisite for this turn"),
+      });
+      expect(result.details).toHaveProperty(
+        "nextAction",
+        expect.stringContaining("within its actual permissions"),
+      );
+      expect(readGoal()).toEqual(before);
+    },
+  );
+
   it.each([
     { sessionKey: "global", budget: 100, otherAgent: "main" },
     { sessionKey: "agent:ops:main", budget: undefined, otherAgent: "research" },
@@ -118,6 +139,45 @@ describe("goal tools", () => {
 
     expect(readGoal()).toBeUndefined();
   });
+
+  it.each(["complete", "active", "paused", "blocked", "budget_limited", "usage_limited"] as const)(
+    "starts a fresh goal only when the existing %s goal is complete",
+    async (status) => {
+      const previous = makeGoal({
+        status,
+        tokensUsed: 100,
+        tokenBudget: 100,
+        continuationTurns: 4,
+        ...(status === "complete" ? { completedAt: 2 } : {}),
+      });
+      const { options, readGoal } = await createStoreConfig("global", {
+        goal: previous,
+        totalTokens: 500,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      });
+      const creation = createCreateGoalTool(options).execute("next-goal", {
+        objective: "Verify the next task",
+      });
+      if (status !== "complete") {
+        await expect(creation).rejects.toThrow("goal already exists");
+        expect(readGoal()).toEqual(previous);
+        return;
+      }
+      expect((await creation).details).toMatchObject({ status: "created" });
+      const goal = readGoal();
+      expect(goal).toMatchObject({
+        objective: "Verify the next task",
+        status: "active",
+        tokenStart: 500,
+        tokensUsed: 0,
+        continuationTurns: 0,
+      });
+      expect(goal?.id).not.toBe(previous.id);
+      expect(goal?.completedAt).toBeUndefined();
+      expect(goal?.tokenBudget).toBeUndefined();
+    },
+  );
 
   it("returns actionable guidance when goal is already complete", async () => {
     const { options, readGoal } = await createStoreConfig("global", {

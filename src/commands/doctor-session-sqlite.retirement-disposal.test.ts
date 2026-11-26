@@ -285,12 +285,12 @@ it.each([
 
 it("retains complete recovery when durable transcript verification is short", async () => {
   const store = transcriptStore(message("root", "root"));
-  const snapshot = sqliteReaders.readOnlySqliteValidationSnapshot;
+  const snapshot = sqliteReaders.readSessionImportValidationSnapshot;
   let imported;
   {
-    using spy = vi.spyOn(sqliteReaders, "readOnlySqliteValidationSnapshot");
-    spy.mockImplementation((target) => {
-      const result = snapshot(target);
+    using spy = vi.spyOn(sqliteReaders, "readSessionImportValidationSnapshot");
+    spy.mockImplementation((target, env) => {
+      const result = snapshot(target, env);
       if (!result.ok) {
         return result;
       }

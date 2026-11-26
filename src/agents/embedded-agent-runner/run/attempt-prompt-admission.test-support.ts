@@ -5,7 +5,7 @@ import type {
   agentSessionSetPromptPreparation,
 } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
-import type { CreateAgentSessionOptions } from "../../sessions/index.js";
+import type { CreateAgentSessionOptions } from "../../sessions/sdk.js";
 
 export type MutableSession = {
   sessionId: string;

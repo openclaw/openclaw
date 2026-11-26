@@ -23,10 +23,15 @@ const fixture = vi.hoisted(() => ({
   redirectLocation: "",
 }));
 
-vi.mock("node:dns/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:dns/promises")>()),
-  lookup: (hostname: string) => fixture.lookup(hostname),
-}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: (hostname: string) => fixture.lookup(hostname),
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 vi.mock("../src/infra/net/runtime-fetch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/infra/net/runtime-fetch.js")>();
@@ -180,7 +185,7 @@ it("rejects authority closed while DNS is pending before any HTTP attempt", asyn
     },
   );
   resolved.resolve([{ address: "169.254.1.2", family: 4 }]);
-  await expect(pending).rejects.toThrow("no longer active");
+  await expect(pending).rejects.toThrow("The guarded request ended.");
   expect(fixture).toMatchObject({ attempts: [], requests: [] });
 });
 

@@ -102,7 +102,7 @@ it.each([
   const token = service.prepareUpload("environment", snapshot.manifestRef);
   const reached = createDeferred();
   const release = createDeferred();
-  const finished = createDeferred();
+  let handler: ReturnType<typeof handleRequest> | undefined;
   if (boundary === "after body") {
     const realpath = fs.realpath.bind(fs);
     vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
@@ -127,14 +127,14 @@ it.each([
   const callback = createNodeWorkspaceTransferHttpCallback(service);
   const server = createServer((req, res) => {
     incoming = req;
-    void handleRequest(req, res, async (request) => {
+    handler = handleRequest(req, res, async (request) => {
       const authorized = await callback(request);
       if (boundary === "before handler") {
         reached.resolve();
         await release.promise;
       }
       return authorized;
-    }).finally(() => finished.resolve());
+    });
   });
   const address = await listen(server);
   const raw = Buffer.from(snapshot.rawManifest);
@@ -191,7 +191,7 @@ it.each([
       expect(cleanupSettled, "cleanup must join blocked staging validation").toBe(false);
     }
     release.resolve();
-    await finished.promise;
+    await handler;
     if (cancellation === "discard-and-fail") {
       await expect(
         cleanup?.catch((error: unknown) => {
@@ -227,7 +227,8 @@ it.each([
     release.resolve();
     server.closeAllConnections();
     await request;
-    await finished.promise;
+    // A failed connection never starts a handler.
+    await handler;
     await cleanup?.catch(() => undefined);
     await closeServer(server);
     await service.closeAll().catch((error: unknown) => {

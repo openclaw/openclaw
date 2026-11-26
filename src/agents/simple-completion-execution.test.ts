@@ -22,7 +22,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../llm/stream.js", () => ({ completeSimple: mocks.complete }));
-vi.mock("./ai-transport-runtime-host.js", () => ({}));
+// mock-isolation: Provider bootstrap is outside the synthetic execution boundary.
+vi.mock("./ai-transport-runtime-host.js", () => ({ configureAiTransportRuntimeHost: () => {} }));
 vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/ai/transports")>()),
   prepareModelForSimpleCompletion: mocks.prepareModel,

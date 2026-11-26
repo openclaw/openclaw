@@ -13,7 +13,7 @@ import {
 } from "./service-worker-cache.test-support.ts";
 
 describe("Control UI service worker HTTP recovery", () => {
-  it("never stores or replays private, unversioned, or no-store HTTP reads", async () => {
+  it("never reads cache policy, stores, or replays private, unversioned, or authenticated reads", async () => {
     const reads: Array<{
       scope?: string;
       route: string;
@@ -46,10 +46,21 @@ describe("Control UI service worker HTTP recovery", () => {
         route: "assets/app-AbCd1234.js",
         headers: new Headers({ Authorization: "Bearer synthetic" }),
       },
+      {
+        route: "fonts/custom.woff2?v=public-fixture",
+        headers: new Headers({ Authorization: "Bearer synthetic" }),
+      },
     ];
     for (const { scope, route, cache, headers, liveProbe } of reads) {
       const worker = createFetchServiceWorker(scope);
-      const request = { url: `${worker.scope}${route}`, cache, headers };
+      const cachePolicy = vi.fn(() => cache ?? "default");
+      const request = {
+        url: `${worker.scope}${route}`,
+        get cache() {
+          return cachePolicy();
+        },
+        headers,
+      };
       const payload = { ok: true, status: "live" };
       worker.cache.set(
         request.url,
@@ -74,7 +85,41 @@ describe("Control UI service worker HTTP recovery", () => {
         [],
       );
       expect(worker.windowClients[1].postMessage).not.toHaveBeenCalled();
+      expect(cachePolicy).not.toHaveBeenCalled();
     }
+  });
+
+  it.each([
+    "assets/app-AbCd1234.js",
+    "fonts/custom.woff2?v=public-fixture",
+    "fonts/custom.woff2?v=previous-build",
+  ])("bypasses every cached generation and new writes for no-store %s", async (route) => {
+    const worker = createFetchServiceWorker();
+    const url = worker.scope + route;
+    for (const generation of [worker.cache, worker.priorCache, worker.olderCache]) {
+      generation.set(worker.scope + "__offline_shell__", new Response("complete shell"));
+      generation.set(url, new Response("cached asset"));
+    }
+    const cachePolicy = vi.fn(() => "no-store" as const);
+    const request = {
+      url,
+      get cache() {
+        return cachePolicy();
+      },
+    };
+    worker.fetch.mockResolvedValueOnce(new Response("fresh asset"));
+    expect(await (await worker.dispatch(request))?.text()).toBe("fresh asset");
+    worker.fetch.mockRejectedValueOnce(new TypeError("offline"));
+    expect((await worker.dispatch(request))?.type).toBe("error");
+    expect(cachePolicy).toHaveBeenCalledTimes(2);
+    expect(worker.fetch).toHaveBeenCalledTimes(2);
+    expect(worker.cacheMatch).not.toHaveBeenCalled();
+    expect(worker.cachePut).not.toHaveBeenCalled();
+    expect(worker.windowClients[0].postMessage).toHaveBeenCalledExactlyOnceWith(
+      { type: "openclaw-http-request-failed" },
+      [],
+    );
+    expect(worker.windowClients[1].postMessage).not.toHaveBeenCalled();
   });
 
   it("does not report expected reachability-probe failures to browser auth recovery", async () => {

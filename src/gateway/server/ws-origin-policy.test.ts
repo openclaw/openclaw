@@ -1,10 +1,12 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "../auth-policy.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import type { OperatorScope } from "../operator-scopes.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { dispatchProfile, gatewayConnect } from "./client-fixtures.test-support.js";
@@ -226,6 +228,73 @@ describe("committed authentication policy", () => {
       revokedAuth.gateway!.auth = { mode: "token", token: "synthetic-replacement" };
       disconnectDisallowedGatewayPolicyClients([client], revokedAuth);
       expect(client.sourceInvalidated).toBe(true);
+      expect(revoked).toHaveBeenCalledOnce();
+    });
+  });
+  it("reconnects a role-capped connection when its role stops capping it", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const person = ensureProfileForEmail("widened@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const viewer: GatewayOperatorRoleDefinition = {
+        sessions: { others: "view" },
+        agents: "*",
+        scopes: ["operator.sessions.read"],
+      };
+      const enforced: OpenClawConfig = {
+        gateway: { auth: { mode: "none" }, roles: { default: "viewer", definitions: { viewer } } },
+      };
+      // Connected under the default role, which capped an admin device's scopes.
+      const client = {
+        ...policyClient(enforced, { role: "operator", authMethod: "none" }),
+        connect: gatewayConnect(["operator.sessions.read"]),
+        authenticatedUserProfile: dispatchProfile(person.id),
+        internal: { roleCappedScopes: ["operator.admin"] },
+      };
+      disconnectDisallowedGatewayPolicyClients([client], enforced);
+      expect(client.socket.close).not.toHaveBeenCalled();
+      const unenforced = structuredClone(enforced);
+      delete unenforced.gateway!.roles!.default;
+      disconnectDisallowedGatewayPolicyClients([client], unenforced);
+      expect(client.socket.close).toHaveBeenCalledExactlyOnceWith(4001, "gateway policy changed");
+      expect(client.sourceInvalidated).toBe(false);
+    });
+  });
+
+  it("keeps a linked owner device's grants under its person's restricted role (OCF-510)", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const person = ensureProfileForEmail("linked-owner@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const owner = { kind: "owner" as const, peerKey: `iroh:${"3c".repeat(32)}` };
+      let ownerCurrent = true;
+      setOpenClawIdTunnelPrincipalLookup((peerKey) =>
+        ownerCurrent && peerKey === owner.peerKey ? owner : undefined,
+      );
+      onTestFinished(() => setOpenClawIdTunnelPrincipalLookup(undefined));
+      const config: OpenClawConfig = {
+        gateway: {
+          auth: { mode: "none" },
+          roles: {
+            default: "talker",
+            definitions: {
+              talker: { sessions: { others: "none" }, agents: [], scopes: ["operator.talk"] },
+            },
+          },
+        },
+      };
+      const client = {
+        ...policyClient(config, { role: "operator", authMethod: "none" }),
+        connect: gatewayConnect(["operator.admin"]),
+        authenticatedUserProfile: dispatchProfile(person.id),
+        internal: { openclawIdPrincipal: owner },
+      };
+      const revoked = vi.fn();
+      onTestFinished(onGatewayPolicyClientInvalidated(client, revoked));
+      disconnectDisallowedGatewayPolicyClients([client], structuredClone(config));
+      expect(client.socket.close).not.toHaveBeenCalled();
+      // Once the owner certificate is no longer current, the person's role applies again.
+      ownerCurrent = false;
+      disconnectDisallowedGatewayPolicyClients([client], structuredClone(config));
+      expect(client.socket.close).toHaveBeenCalledExactlyOnceWith(4001, "gateway policy changed");
       expect(revoked).toHaveBeenCalledOnce();
     });
   });

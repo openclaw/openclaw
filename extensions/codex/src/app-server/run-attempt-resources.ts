@@ -636,7 +636,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
-      loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
       hostCapabilities: params.hostCapabilities,
       nativeProcessAuthority: requiresProcessAdmission

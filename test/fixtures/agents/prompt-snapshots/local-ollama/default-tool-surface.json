@@ -66,7 +66,7 @@
     },
     {
       "name": "tool_describe",
-      "description": "Load the full schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
+      "description": "Load the full input schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
       "parameters": {
         "type": "object",
         "required": [
@@ -76,6 +76,10 @@
           "id": {
             "type": "string",
             "description": "Tool search result id or tool name."
+          },
+          "includeRarelyNeededOutputSchema": {
+            "type": "boolean",
+            "description": "Rarely needed; leave unset. Adds the tool's full output schema, which can cost tens of thousands of characters of context. A call's result already shows its shape. Set true only when you must know the result shape before calling, for example to plan code over the result."
           }
         }
       }

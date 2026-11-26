@@ -1,11 +1,11 @@
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  createAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -142,7 +142,6 @@ export async function withPersonalToolTurn<T>(
       person: Person,
       options?: { reject?: boolean; scopes?: string[] },
     ): Promise<ReplyMessageInjectionOutcome>;
-    revoke(profileId: string): void;
     complete(): Promise<void>;
     operation: ReturnType<typeof createTestReplyOperation>;
     admittedRunContext: AdmittedRunContext;
@@ -151,7 +150,6 @@ export async function withPersonalToolTurn<T>(
     authorityLeases: Array<{ profileId: string; releases: number }>;
   }) => Promise<T>,
 ): Promise<T> {
-  const revoked = new Set<string>();
   const releaseCounts = new Map<string, number>();
   const authorityLeases: Array<{ profileId: string; releases: number }> = [];
   const run = createQueueTestRun({ prompt: "Arrange my view" });
@@ -159,17 +157,12 @@ export async function withPersonalToolTurn<T>(
   const modelPolicy = prepareOperatorModelPolicy({ cfg: {}, policy: {} });
   const authority = (person: Person, scopes = ["operator.read", "operator.write"]) =>
     person.operatorAuthority ??
-    createAdmittedRunOperatorAuthority({
+    createTestOperatorAuthority({
       profileId: person.profileId,
       scopes,
       gatewayAccessGrant: null,
       modelPolicy,
       readCurrentRoleFacts: person.readCurrentRoleFacts,
-      assertCurrent() {
-        if (revoked.has(person.profileId)) {
-          throw new Error("Profile access revoked");
-        }
-      },
       retain: () => {
         const lease = { profileId: person.profileId, releases: 0 };
         authorityLeases.push(lease);
@@ -304,9 +297,6 @@ export async function withPersonalToolTurn<T>(
             operation.complete();
             completionRequested.resolve();
             await producer;
-          },
-          revoke: (profileId) => {
-            revoked.add(profileId);
           },
           steer: async (person, options) => {
             reject = options?.reject === true;

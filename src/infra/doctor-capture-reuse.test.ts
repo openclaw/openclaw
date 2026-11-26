@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
 import type { DoctorMaintenanceParams } from "../commands/doctor-maintenance-types.js";
@@ -22,6 +23,7 @@ import * as discoveryWorker from "./update-candidate-state.inspection.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 import * as backupReader from "./update-recovery-backup-reader.js";
+import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
 import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -152,10 +154,36 @@ it("reuses a sealed standalone baseline only while the complete source is unchan
   const stat = await fs.stat(f.file);
   await fs.writeFile(f.file, "after!");
   await fs.utimes(f.file, stat.atime, stat.mtime);
-  expect(await f.capture()).toHaveLength(2);
-  expect(await f.capture(true), "explicit full integrity verification does not reuse").toHaveLength(
-    3,
+  // A fresh capture replaces the superseded original rather than adding to it.
+  const changed = await f.capture();
+  expect(changed).toHaveLength(1);
+  expect(changed).not.toEqual(first);
+  const full = await f.capture(true);
+  expect(full, "explicit full integrity verification does not reuse").toHaveLength(1);
+  expect(full).not.toEqual(changed);
+});
+
+it("captures declared SQLite sidecar roots through their database image and reuses it", async () => {
+  const f = await fixture();
+  // Mirrors memory-core's legacy index declarations: the database plus every sidecar suffix.
+  const legacy = path.join(f.stateDir, "memory", "main.sqlite");
+  await fs.mkdir(path.dirname(legacy));
+  {
+    using db = new DatabaseSync(legacy);
+    db.exec("CREATE TABLE chunks (id INTEGER PRIMARY KEY); INSERT INTO chunks VALUES (1)");
+  }
+  const sidecars = ["-wal", "-shm", "-journal"].map((suffix) => `${legacy}${suffix}`);
+  f.resources.push(
+    { path: legacy, kind: "file" },
+    ...sidecars.map((sidecar) => ({ path: sidecar, kind: "file" as const })),
   );
+  const first = await f.capture();
+  expect(first).toHaveLength(1);
+  const { ref } = await f.capturedFile(legacy, true);
+  const manifest = parseUpdateRecoveryBackupManifest(await fs.readFile(ref.manifestPath, "utf8"));
+  expect(manifest.roots).toContain(legacy);
+  expect(manifest.roots.filter((root) => sidecars.includes(root))).toEqual([]);
+  expect(await f.capture(), "an unchanged sidecar declaration reuses the baseline").toEqual(first);
 });
 
 it("rejects an ineligible retained capture before verifying its payloads", async () => {
@@ -173,6 +201,69 @@ it("rejects an ineligible retained capture before verifying its payloads", async
     verifyPayloads,
     "an ineligible capture must stream zero payload hashes",
   ).not.toHaveBeenCalled();
+});
+
+it("rejects a changed database before hashing retained payloads or imaging current databases", async () => {
+  const f = await fixture();
+  const file = path.join(f.plugin, "plugin.sqlite");
+  {
+    using db = new DatabaseSync(file);
+    db.exec(
+      "PRAGMA journal_mode=WAL; CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES('retained')",
+    );
+  }
+  const originals = await f.capture();
+  expect(await f.capture(), "an unchanged WAL-mode database is still reused").toEqual(originals);
+  const verifyPayloads = vi.spyOn(backupReader, "withVerifiedUpdateRecoveryBackup");
+  const imageDatabases = vi.spyOn(discoveryWorker, "runUpdateStateInspectionWorker");
+  const expectNoComparison = (reason: string) => {
+    expect(verifyPayloads, `${reason}: zero payload hashes`).not.toHaveBeenCalled();
+    expect(imageDatabases, `${reason}: no database image`).not.toHaveBeenCalled();
+  };
+  {
+    // A Gateway writing between Doctor runs typically adds pages.
+    using db = new DatabaseSync(file);
+    db.exec("INSERT INTO payload VALUES(zeroblob(65536))");
+  }
+  expect(await f.reuse(), "grown database").toBeUndefined();
+  expectNoComparison("grown database");
+
+  const fresh = await f.capture();
+  expect(fresh).toHaveLength(2);
+  expect(fresh).toEqual(expect.arrayContaining(originals));
+  expect(await f.capture(), "the fresh capture is reusable while unchanged").toEqual(fresh);
+  const { payloadPath } = await f.capturedFile(file, true);
+  {
+    // A database at its steady size: rows change in place, as a lease renewal does.
+    using db = new DatabaseSync(file);
+    db.exec("UPDATE payload SET value = 'replaced' WHERE value = 'retained'");
+  }
+  expect((await fs.stat(file)).size).toBe((await fs.stat(payloadPath)).size);
+  verifyPayloads.mockClear();
+  imageDatabases.mockClear();
+  expect(await f.reuse(), "same-size change").toBeUndefined();
+  expectNoComparison("same-size page change");
+});
+
+it("leaves FULL auto-vacuum databases to the full comparison", async () => {
+  const f = await fixture();
+  const file = path.join(f.plugin, "plugin.sqlite");
+  {
+    // Journal normalization may rewrite pages here, so page equality proves nothing.
+    using db = new DatabaseSync(file);
+    db.exec(
+      "PRAGMA auto_vacuum=FULL; CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES('retained')",
+    );
+  }
+  const originals = await f.capture();
+  expect(await f.capture(), "an unchanged FULL auto-vacuum database is reused").toEqual(originals);
+  {
+    using db = new DatabaseSync(file);
+    db.exec("UPDATE payload SET value = 'replaced'");
+  }
+  const verifyPayloads = vi.spyOn(backupReader, "withVerifiedUpdateRecoveryBackup");
+  expect(await f.reuse(), "same-size change").toBeUndefined();
+  expect(verifyPayloads, "only the full comparison decides").toHaveBeenCalled();
 });
 
 it("rediscovers files, declared paths, config includes, links, permissions, and new agent databases", async () => {
@@ -226,9 +317,9 @@ it("rediscovers files, declared paths, config includes, links, permissions, and 
   expect(await f.reuse(), "restored source despite timestamp drift").toBeDefined();
 });
 
-it("verifies retained payloads and seals, and leaves unusable originals intact while capturing fresh", async () => {
+it("verifies retained payloads and seals without changing them, then replaces an unusable original", async () => {
   const f = await fixture();
-  await f.capture();
+  const original = await f.capture();
   const { ref, payloadPath } = await f.capturedFile(f.file);
   const partial = `${ref.manifestPath}.partial`;
   await fs.writeFile(partial, "unfinished");
@@ -239,8 +330,10 @@ it("verifies retained payloads and seals, and leaves unusable originals intact w
   await fs.rm(path.join(ref.directory, "candidate"), { recursive: true });
   await fs.writeFile(payloadPath, "broken");
   expect(await f.reuse()).toBeUndefined();
-  expect(await f.capture()).toHaveLength(2);
   expect(await fs.readFile(payloadPath, "utf8")).toBe("broken");
+  const fresh = await f.capture();
+  expect(fresh).toHaveLength(1);
+  expect(fresh).not.toEqual(original);
 });
 
 it("accepts only exact consolidated SQLite bytes and rejects durable WAL data and changed databases", async () => {
@@ -339,15 +432,51 @@ it.each(["selection", "discovery", "comparison"] as const)(
         return pending;
       });
     } else {
+      const preload = path.join(f.root, "interrupt-snapshot-allocation.mjs");
+      if (phase === "discovery") {
+        // Stop the real child between mkdir and native-token creation, rather than
+        // depending on signal delivery racing those adjacent filesystem calls.
+        await fs.writeFile(
+          preload,
+          `import fs from "node:fs";
+           import path from "node:path";
+           const allocated = (directory) => {
+             if (path.dirname(directory) !== process.env.XDG_CACHE_HOME ||
+                 !path.basename(directory).startsWith("openclaw-sqlite-readonly-v2-")) return;
+             fs.writeSync(2, ${JSON.stringify(UPDATE_STATE_INSPECTION_PROGRESS_PREFIX)} +
+               JSON.stringify({phase: "snapshot directory allocated", path: ${JSON.stringify(shared)}}) + "\\n");
+             Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+           };
+           const mkdtemp = fs.mkdtempSync;
+           fs.mkdtempSync = (...args) => {
+             const directory = mkdtemp(...args);
+             allocated(directory);
+             return directory;
+           };
+           const mkdir = fs.mkdirSync;
+           fs.mkdirSync = (...args) => {
+             const result = mkdir(...args);
+             allocated(String(args[0]));
+             return result;
+           };`,
+        );
+      }
       const runWorker = discoveryWorker.runUpdateStateInspectionWorker;
       // Cancel the real child at progress, without replacing its work or settlement.
       vi.spyOn(discoveryWorker, "runUpdateStateInspectionWorker").mockImplementation((params) =>
         runWorker({
           ...params,
+          ...(phase === "discovery"
+            ? { sourceEnv: withRuntimePreload(params.sourceEnv, preload) }
+            : {}),
           onProgress: (progress) => {
             params.onProgress?.(progress);
             const mode = phase === "comparison" ? "database-backup" : "discover";
-            if (params.input.mode === mode && progress.path === shared) {
+            if (
+              params.input.mode === mode &&
+              progress.path === shared &&
+              (phase !== "discovery" || progress.phase === "snapshot directory allocated")
+            ) {
               staging = params.stagingRoot;
               controller.abort(cancellation);
             }
@@ -390,7 +519,9 @@ it("treats the verification entry bound as a cache miss and still creates a fres
   for (let i = 0; i < 4096; i++) {
     await fs.mkdir(path.join(f.plugin, String(i)));
   }
-  await f.capture();
+  const first = await f.capture();
   expect(await f.reuse()).toBeUndefined();
-  expect(await f.capture()).toHaveLength(2);
+  const fresh = await f.capture();
+  expect(fresh).toHaveLength(1);
+  expect(fresh).not.toEqual(first);
 });

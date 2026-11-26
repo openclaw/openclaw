@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { createServer, ServerResponse } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import { crc32 } from "node:zlib";
@@ -253,6 +254,37 @@ it.each([
     const range = await fetch("?variant=thumbnail", "GET", { range: "bytes=0-7" });
     expect(range.res.statusCode).toBe(206);
     expect(range.end).toHaveBeenCalledExactlyOnceWith(bytes.subarray(0, 8));
+  },
+);
+
+it.skipIf(process.platform !== "darwin")(
+  "serves a JPEG preview and retains the original HEIC",
+  async () => {
+    const source = await readFile(new URL("./fixtures/thumbnail-still.heic", import.meta.url));
+    const client = createClient();
+    const grant = grantFor(client, artifactFrom(source, { type: "image", mimeType: "image/heic" }));
+    vi.stubEnv("PATH", "/usr/bin:/bin");
+    try {
+      const preview = requestDownload(client, `${grant.url}?variant=thumbnail`);
+      expect(await preview.pending).toBe(true);
+      expect(preview.res.statusCode).toBe(200);
+      expect(preview.res.getHeaders()).toMatchObject({
+        "content-type": "image/jpeg",
+        "content-disposition": expect.stringMatching(/-preview\.jpg/),
+      });
+      const bytes = preview.end.mock.calls[0]?.[0];
+      assert.instanceOf(bytes, Uint8Array);
+      expect(await createImageProcessor().probe(bytes)).toMatchObject({
+        format: "jpeg",
+        width: 160,
+        height: 96,
+      });
+      const original = requestDownload(client, grant.url);
+      expect(await original.pending).toBe(true);
+      expect(original.end).toHaveBeenCalledExactlyOnceWith(new Uint8Array(source));
+    } finally {
+      vi.unstubAllEnvs();
+    }
   },
 );
 

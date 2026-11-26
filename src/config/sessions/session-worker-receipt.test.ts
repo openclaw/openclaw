@@ -45,7 +45,7 @@ it.each(["result", "settlement"] as const)(
         return true;
       });
     } finally {
-      admission.finish();
+      await admission.finish();
     }
   },
 );

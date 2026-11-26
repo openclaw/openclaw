@@ -44,7 +44,7 @@ it("records a lost sandbox image once across a real session tool loop and later 
   if (!bridge) {
     throw new Error("Expected sandbox filesystem bridge");
   }
-  const stat = vi.spyOn(bridge, "stat");
+  const read = vi.spyOn(bridge, "readFile");
   const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
   const onCurrentTurnImageFailure = vi.fn();
   const message = buildPersistedUserTurnMessage({
@@ -52,7 +52,9 @@ it("records a lost sandbox image once across a real session tool loop and later 
     idempotencyKey: "sandbox-image-retry",
     timestamp: 1,
     media: ["lost", "retained"].map((name) => ({
+      path: `media/inbound/${name}.png`,
       url: `media://inbound/${name}.png`,
+      workspaceDir,
       contentType: "image/png",
     })),
   });
@@ -72,7 +74,7 @@ it("records a lost sandbox image once across a real session tool loop and later 
     execute: async () => {
       if (++toolCalls === 1) {
         await fs.rm(path.join(inbound, "lost.png"));
-        stat.mockClear();
+        read.mockClear();
       }
       return { content: [{ type: "text" as const, text: "Advanced" }], details: {} };
     },
@@ -135,12 +137,10 @@ it("records a lost sandbox image once across a real session tool loop and later 
   }
   expect(session.getLastAssistantText()).toContain("please resend the missing image");
   expect(session.messages.filter((entry) => entry.role === "toolResult")).toHaveLength(3);
-  expect(stat.mock.calls.filter(([arg]) => arg.filePath === "media/inbound/lost.png")).toHaveLength(
-    1,
-  );
-  expect(warn.mock.calls).toEqual([
-    ["Native image: sandbox validation failed (reason=not-staged, pathClass=managed-media)"],
-  ]);
+  expect(
+    read.mock.calls.filter(([arg]) => arg.filePath === path.join(inbound, "lost.png")),
+  ).toHaveLength(1);
+  expect(warn.mock.calls).toEqual([["Native image: failed to load"]]);
   expect(onCurrentTurnImageFailure).toHaveBeenCalledWith(1);
   // Reappearing files must not silently change the established provider prefix.
   await fs.writeFile(path.join(inbound, "lost.png"), bytes);
@@ -148,7 +148,7 @@ it("records a lost sandbox image once across a real session tool loop and later 
   expect(requests).toHaveLength(5);
   expect(requests[4]?.match(/"type":"input_image"/g)).toHaveLength(1);
   expect(requests[4]).toContain(buildPromptImageFailureNotice(1));
-  expect(stat.mock.calls.filter(([arg]) => arg.filePath === "media/inbound/lost.png")).toHaveLength(
-    1,
-  );
+  expect(
+    read.mock.calls.filter(([arg]) => arg.filePath === path.join(inbound, "lost.png")),
+  ).toHaveLength(1);
 });
