@@ -385,6 +385,10 @@ try {
       if (!oid.test(source)) throw new Error("Invalid workflow source");
       run(["merge-base", "--is-ancestor", source, anchor]);
     };
+    const workflowClosure = source => {
+      const inventory = run(["show", `${source}:scripts/pr-lib/wrapper-components.txt`]).split("\n");
+      return git(repository, ["ls-tree", "-r", "-z", "--full-tree", source, "--", "scripts/pr", "scripts/pr-lib", ...inventory]);
+    };
     const current = operation === "workflow-history" ? null : read();
     const currentWorkflowAnchor = anchor => {
       const symbolicAnchor = spawnSync(binary, ["-C", repository, "symbolic-ref", "--quiet", anchor], { stdio: "ignore" });
@@ -393,17 +397,25 @@ try {
       }
       return run(["rev-parse", "--verify", `${anchor}^{commit}`]);
     };
-    const requireCurrent = (source, anchor) => {
+    const requireCurrent = (source, anchor, admission = "0") => {
       const checkpoint = currentWorkflowAnchor(anchor);
       if (!current ||
-          source !== checkpoint ||
+          (admission !== "proof-baseline" && source !== checkpoint) ||
           !officialOrigin()) {
         throw new Error("Current workflow recovery requires official current main and a retained workflow");
       }
+      if (admission === "proof-baseline") {
+        // Preserve the reviewed operation identity across unrelated main commits;
+        // ancestry and the entire immutable closure still authenticate its code.
+        requireSource(source, anchor);
+        if (!workflowClosure(source).equals(workflowClosure(checkpoint))) {
+          throw new Error("Proof baseline workflow differs from authenticated current main");
+        }
+      }
       requireSource(current.source, anchor);
     };
-    const requireAdmission = (source, anchor = "refs/remotes/origin/main") => {
-      requireCurrent(source, anchor);
+    const requireAdmission = (source, anchor = "refs/remotes/origin/main", admission = "0") => {
+      requireCurrent(source, anchor, admission);
       const outcomeRef = `refs/openclaw/pr-merge-outcomes/${revision}`;
       const symbolic = spawnSync(binary, ["-C", repository, "symbolic-ref", "--quiet", outcomeRef], { stdio: "ignore" });
       if (symbolic.error || symbolic.signal || symbolic.status !== 1 ||
@@ -523,7 +535,7 @@ try {
       if (successor) {
         if (bootstrap || outcome || admission !== "0") throw new Error("Conflicting workflow successor selection");
         requireSuccessor(source, successor);
-      } else if (isCurrentAdmission(admission)) requireAdmission(source);
+      } else if (isCurrentAdmission(admission)) requireAdmission(source, undefined, admission);
       else if (outcome) requireRecovery(source, outcome, replacementHead, undefined, action);
       if (!oid.test(source) || (current?.oid ?? "") !== binding || !successor && !isCurrentAdmission(admission) && !outcome && !bootstrap && current && current.source !== source ||
           !/^[1-9][0-9]*$/.test(creator)) throw new Error("Workflow selection changed before handoff");
@@ -556,7 +568,7 @@ try {
       }
       if (isCurrentAdmission(admission)) {
         if (selection.admission !== (admission === "1" ? true : admission) || selection.bootstrap || outcome) throw new Error("Workflow admission selection changed across handoff");
-        requireAdmission(selection.source, selection.source);
+        requireAdmission(selection.source, selection.source, admission);
       }
       if (outcome) {
         if (JSON.stringify(selection.recovery) !== JSON.stringify({ outcome, replacementHead, action }) || selection.bootstrap) {
@@ -591,13 +603,9 @@ try {
         if (ancestry.error || ancestry.signal || ![0, 1].includes(ancestry.status)) throw new Error("Cannot qualify canonical bootstrap");
         selected = ancestry.status === 0 ? bootstrap : main;
       }
-      const closure = source => {
-        const inventory = run(["show", `${source}:scripts/pr-lib/wrapper-components.txt`]).split("\n");
-        return git(repository, ["ls-tree", "-r", "-z", "--full-tree", source, "--", "scripts/pr", "scripts/pr-lib", ...inventory]);
-      };
       // Loaded helpers belong to the captured bootstrap, even if files move
       // during acquisition. Compare immutable closures before admitting it.
-      if (!closure(bootstrap).equals(closure(selected))) {
+      if (!workflowClosure(bootstrap).equals(workflowClosure(selected))) {
         throw new Error(`Cold workflow source differs from the running canonical wrapper ${bootstrap}; selected source ${selected}`);
       }
       process.stdout.write(selected);
@@ -606,7 +614,7 @@ try {
       if (successor) {
         if (outcome || admission !== "0") throw new Error("Conflicting workflow successor admission");
         requireSuccessor(source, successor, anchor);
-      } else if (isCurrentAdmission(admission)) requireAdmission(source, anchor);
+      } else if (isCurrentAdmission(admission)) requireAdmission(source, anchor, admission);
       else if (outcome) requireRecovery(source, outcome, replacementHead, anchor, action);
       if (!oid.test(source) || (current?.oid ?? "") !== expected || !successor && !isCurrentAdmission(admission) && !outcome && current && current.source !== source) {
         throw new Error("Workflow binding changed before admission");
@@ -873,6 +881,11 @@ admit_pr_workflow_binding() {
         return 1
       }
       selected="$main"
+      if [ "${PR_WORKFLOW_ADMISSION:-0}" = proof-baseline ]; then
+        # The typed source review names the selected workflow, not a later tip.
+        # Final admission verifies its ancestry and complete closure against main.
+        selected="$PR_WORKFLOW_SOURCE_REVISION"
+      fi
     elif ! selected=$(pr_batch_wrapper_git workflow-cold-select "$canonical_repo_root" "$1" \
       "$PR_WORKFLOW_SOURCE_REVISION" "$PR_WORKFLOW_BINDING_OID" "$main"); then
       echo "Cold workflow qualification failed; use the admitted source from a qualified checkout. Preserving $qualification_ref." >&2

@@ -190,6 +190,13 @@ qualification fetch. It does not replace the retained workflow binding. Land
 and independently review this capability first; an unlanded wrapper cannot admit
 itself, and developer-wrapper opt-in still grants no authority.
 
+If main advances after workflow selection, the producer preserves that selected
+workflow identity only when it remains an ancestor of fresh authenticated main
+and its complete wrapper inventory is byte-identical, including paths and modes.
+The fresh main checkpoint remains separate from the review's workflow identity.
+Other current-workflow admission and recovery commands still require the exact
+current-main workflow at locked qualification.
+
 The source review must be a fresh independent exact-source correction review with
 that same typed pending-proof authorization, incoming review, workflow source,
 workflow binding, and hosted lease. The default source-review file is
