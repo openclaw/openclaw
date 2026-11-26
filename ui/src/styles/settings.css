@@ -2063,8 +2063,9 @@ openclaw-approvals-page .data-table-pagination__info {
 /* In the header the picker is the agent's avatar alone; the trigger keeps the name
    in its accessible label and the menu lists every agent by name. */
 .settings-sidebar__agent--header .agent-select__trigger {
+  justify-content: flex-end;
   gap: 4px;
-  width: auto;
+  width: 54px;
   height: 32px;
   min-height: 32px;
   padding: 0 6px 0 4px;
