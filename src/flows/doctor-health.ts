@@ -339,12 +339,12 @@ async function runDoctorHealthFlowWithResult(
       }
 
       if (maintenance && (options.repair === true || options.yes === true)) {
-        await tracePending("state-database-repair");
+        const stateIntegrityCheck = options.fullIntegrityCheck ? "full" : "quick";
+        await tracePending("state-database-repair", () =>
+          startup.checkDoctorStateDatabaseRepairPending(stateIntegrityCheck),
+        );
         const repairedState = await measure("doctor.state-database-repair", () =>
-          startup.repairDoctorStateDatabase(
-            effectiveRuntime,
-            options.fullIntegrityCheck ? "full" : "quick",
-          ),
+          startup.repairDoctorStateDatabase(effectiveRuntime, stateIntegrityCheck),
         );
         if (repairedState) {
           schemas = await measure("doctor.database-preflight", () =>
@@ -353,15 +353,18 @@ async function runDoctorHealthFlowWithResult(
         }
       }
       if (maintenance) {
-        const { prepareDoctorMigrationBackups } =
+        const { checkDoctorMigrationBackupsPending, prepareDoctorMigrationBackups } =
           await import("../commands/doctor-heartbeat-migration-backup.js");
-        await tracePending("database-migrations");
+        const automaticRepair = Boolean(automaticHeartbeatRepair);
+        await tracePending("database-migrations", () =>
+          checkDoctorMigrationBackupsPending({ schemas, env: process.env, automaticRepair }),
+        );
         await prepareDoctorMigrationBackups({
           schemas,
           env: process.env,
           check: options.fullIntegrityCheck ? "full" : "quick",
           verifiedSnapshots,
-          automaticRepair: Boolean(automaticHeartbeatRepair),
+          automaticRepair,
           runtime: effectiveRuntime,
           measure,
         });
@@ -375,7 +378,9 @@ async function runDoctorHealthFlowWithResult(
           options.fullIntegrityCheck ? "full" : "quick",
         ),
       );
-      await tracePending("runtime-checks");
+      await tracePending("runtime-checks", () =>
+        startup.checkDoctorRuntimeChecksPending(schemas, root, prompter),
+      );
       const preparedRuntime = await startup.prepareDoctorRuntimeChecks(
         schemas,
         root,
