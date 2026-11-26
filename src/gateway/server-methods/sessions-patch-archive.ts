@@ -177,7 +177,7 @@ const archivePolicyFields = [
   "modelOverrideFallbackOriginModel",
 ] as const;
 
-export async function prepareSessionPatchArchive(
+async function prepareSessionPatchArchive(
   params: SessionPatchArchiveParams,
 ): Promise<Result<SessionPatchArchivePreparation, ErrorShape>> {
   const metadata = captureSessionEntryMetadataRead(

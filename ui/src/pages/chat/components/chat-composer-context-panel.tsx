@@ -1,6 +1,10 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord as readCostRecord } from "@openclaw/normalization-core/record-coerce";
 import { Errored, For, Loading, Repeat, Show, createMemo, lazy } from "solid-js";
+import {
+  formatPromptCacheHitRate,
+  latestRunCacheHitRate,
+} from "../../../../../src/shared/prompt-cache-hit-rate.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -10,7 +14,6 @@ import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import type { ProviderQuotaGroup } from "../../../lib/provider-quota-summary.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { SessionCostTotal } from "../../../lib/session-context-report.ts";
-import { promptCacheHitRate } from "../../../lib/sessions/usage.ts";
 import type {
   ContextNoticeProps,
   getContextNoticeViewModel,
@@ -85,36 +88,6 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
   }
   return null;
 }
-
-/** Prompt cache share across the model calls since the latest user message that reported
- *  a cache split; a call with unknown usage or cache use is left out, never counted as a miss. */
-function latestRunCacheHitRate(messages: unknown[] | undefined): number | null {
-  const totals = { input: 0, cacheRead: 0, cacheWrite: 0 };
-  for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
-    const message = readCostRecord(messages?.[index]);
-    if (message?.role === "user") {
-      break;
-    }
-    if (message?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(message)) {
-      continue;
-    }
-    const usage = readCostRecord(message.usage);
-    if (
-      readCostRecord(usage?.usageReport)?.state === "unavailable" ||
-      readCostRecord(usage?.cacheTelemetry)?.state === "unavailable"
-    ) {
-      continue;
-    }
-    for (const key of ["input", "cacheRead", "cacheWrite"] as const) {
-      totals[key] += asNonNegativeFiniteNumber(usage?.[key]) ?? 0;
-    }
-  }
-  return promptCacheHitRate(totals);
-}
-
-// Floors, so 100.00% only appears when every prompt token was a cache read.
-const formatCacheHitRate = (rate: number | null) =>
-  rate === null ? "—" : `${(Math.floor(rate * 10_000) / 100).toFixed(2)}%`;
 
 function formatContextCost(value: number) {
   return formatCost(value).replace(/(\.\d{2})0$/, "$1");
@@ -251,7 +224,7 @@ export function ChatComposerContextPanel(
                   : column === "output"
                     ? formatStat(context().output)
                     : column === "cache"
-                      ? formatCacheHitRate(runCacheHitRate())
+                      ? formatPromptCacheHitRate(runCacheHitRate())
                       : context().cost === null
                         ? "—"
                         : formatContextCost(context().cost!)}
@@ -278,7 +251,7 @@ export function ChatComposerContextPanel(
                         : column === "output"
                           ? bound(formatStat(total().output))
                           : column === "cache"
-                            ? formatCacheHitRate(total().cacheHitRate)
+                            ? formatPromptCacheHitRate(total().cacheHitRate)
                             : total().unpriced
                               ? t("chat.composer.contextUsage.unpriced")
                               : bound(formatContextCost(total().usd))}

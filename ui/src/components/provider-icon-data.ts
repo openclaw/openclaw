@@ -171,7 +171,7 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
 const ACP_HARNESS_PROVIDER = /^acp-(.+)$/u;
 
 /** Title-cased fallback label built from the provider id ("z-ai" → "Z Ai"). */
-export function formatRawProviderLabel(provider: string): string {
+function formatRawProviderLabel(provider: string): string {
   return provider
     .split(/[-_]+/u)
     .filter(Boolean)

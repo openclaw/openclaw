@@ -37,7 +37,7 @@ const ACCESS: readonly InvitedAccess[] = ["read", "suggest", "send"];
 const PERMISSIONS: readonly InvitedPermission[] = ["read-only", "guarded", "workspace", "full"];
 
 /** Scope IDs in display order, with their copy key. */
-export const ROLE_SCOPES = [
+const ROLE_SCOPES = [
   ["operator.sessions.read", "sessionsRead"],
   ["operator.sessions.write", "sessionsWrite"],
   ["operator.questions", "questions"],

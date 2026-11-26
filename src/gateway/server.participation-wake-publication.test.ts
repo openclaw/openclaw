@@ -112,8 +112,9 @@ it("keeps default-mode participant authority when publishing after a native chil
         reply(held, childResult);
         const result = await withinTest(publication.promise, signal);
         expect(result).not.toContain("changed between default and explicit permissions");
-        // The synthetic Gateway has no configured publisher: reach that boundary, not an authority mismatch.
+        // Reach the publication handler without provisioning a workspace or credentials.
         expect(result).toContain("GitHub publication result:");
+        expect(result).toContain("This conversation has no publication workspace");
         expect((await readSessionEntryReadOnlyInWorker(target))?.permissionMode).toBeUndefined();
       } finally {
         if (!held.writableEnded && !held.destroyed) {
@@ -129,6 +130,7 @@ it("keeps default-mode participant authority when publishing after a native chil
         allow: ["sessions_spawn", "sessions_yield", "github_publish"],
         toolSearch: false,
         codeMode: { enabled: false },
+        github: { profileId: "ghp_11111111111111111111111111111111" },
       },
     },
   );

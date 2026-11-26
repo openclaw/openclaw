@@ -99,7 +99,9 @@ suite.define(() => {
         await providerPage.getByRole("button", { name: "Approve sign-in" }).click();
 
         // The ready dialog offers the signed-in provider's models; choosing picks its first one (#203379).
-        await modal.getByRole("heading", { name: `${loginLabel} is ready`, exact: true }).waitFor();
+        await modal
+          .getByRole("heading", { name: `${loginLabel} connected`, exact: true })
+          .waitFor();
         await modal.getByRole("button", { name: "Choose a model", exact: true }).click();
         const starter = modal.getByRole("button", {
           name: `Start a new chat with ${modelName}`,

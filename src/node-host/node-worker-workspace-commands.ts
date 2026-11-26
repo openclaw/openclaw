@@ -38,7 +38,7 @@ const NODE_MANIFEST_MEMO_BYTES = NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES - 4096;
 const boundedManifestScript = createRemoteWorkspaceManifestScript(NODE_MANIFEST_MEMO_BYTES);
 
 /** Exact built-in argv retains the workspace-exec contract; other programs still run as children. */
-export function nodeWorkspaceManifestCapture(argv: readonly string[], workspaceDir: string) {
+function nodeWorkspaceManifestCapture(argv: readonly string[], workspaceDir: string) {
   if (
     argv[0] !== "node" ||
     argv[1] !== "-e" ||
@@ -68,7 +68,7 @@ export function nodeWorkspaceManifestCapture(argv: readonly string[], workspaceD
   };
 }
 
-export async function runNodeWorkspaceManifestCapture(
+async function runNodeWorkspaceManifestCapture(
   params: WorkspaceManifestComputationOperations["workspace.manifest.remote-capture"]["input"] & {
     env?: NodeJS.ProcessEnv;
     signal?: AbortSignal;
