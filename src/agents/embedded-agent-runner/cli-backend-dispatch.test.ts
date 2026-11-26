@@ -284,12 +284,8 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
               authProfileBinding: {
                 profileId,
                 authRequirement: "subscription" as const,
-                assertCurrent() {
-                  throw new Error("Binding cannot authorize this account");
-                },
-                async revalidate() {
-                  throw new Error("Binding cannot authorize this account");
-                },
+                assertCurrent() {},
+                async revalidate() {},
               },
             }
           : {}),
@@ -306,6 +302,22 @@ describe("runEmbeddedAgentViaCliBackendIfEligible gate", () => {
       }
     },
   );
+
+  it("keeps explicit API-key bindings embedded when preliminary metadata is missing", async () => {
+    resolveModelAuthMode.mockReturnValue(undefined);
+    ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+    await expect(
+      runDispatch({
+        authProfileBinding: {
+          profileId: "anthropic:agent-local-key",
+          authRequirement: "api-key",
+          assertCurrent() {},
+          async revalidate() {},
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(runCliAgent).not.toHaveBeenCalled();
+  });
 
   it("uses the required API-key account before subscription eligibility", async () => {
     resolveRuntimeCliBackends.mockReturnValue([

@@ -26,6 +26,11 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
   if (params.cliBackendDispatch !== "subscription-auth") {
     return undefined;
   }
+  // The caller's explicit API-key requirement wins even when the preliminary
+  // CLI metadata probe cannot see the selected agent's credential store yet.
+  if (params.authProfileBinding?.authRequirement === "api-key") {
+    return undefined;
+  }
   // The one-shot bridge cannot carry authenticated source-channel delivery
   // context; private source replies must stay with their embedded owner.
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
