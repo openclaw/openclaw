@@ -17,14 +17,14 @@ It doesn't add a usable dictionary, persist entries, or send vocabulary to a pro
 The selected lifecycle issue is [#205856](https://github.com/openclaw/openclaw/issues/205856).
 It must remain open while any required criterion is unmet.
 
-| Item                      | Recorded identity                                                                                                                   |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Base                      | `openclaw/openclaw`, `main`, `1c3de7eb68481e5d7656e21ec96d43855789fbb0`                                                             |
-| Task branch               | `CompleteDotTech/openclaw`, `feat/personal-dictation-dictionary`                                                                    |
-| Tested candidate commit   | Pending. Reconstructed source has no completed qualification run. Bind each executed check to its actual commit before publication. |
-| Transport request         | [#191109](https://github.com/openclaw/openclaw/issues/191109)                                                                       |
-| Shared vocabulary context | [M06 #205820](https://github.com/openclaw/openclaw/issues/205820) and [#205633](https://github.com/openclaw/openclaw/issues/205633) |
-| Refinement context        | [M11 #205845](https://github.com/openclaw/openclaw/issues/205845)                                                                   |
+| Item                             | Recorded identity                                                                                                                   |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Base                             | `openclaw/openclaw`, `main`, `1c3de7eb68481e5d7656e21ec96d43855789fbb0`                                                             |
+| Task branch                      | `CompleteDotTech/openclaw`, `feat/personal-dictation-dictionary`                                                                    |
+| Measured pure preparation commit | `46c74099c7360a4f8ecbfc556df9ba5cfa936903`. The PR records the final published head and subsequent checks.                          |
+| Transport request                | [#191109](https://github.com/openclaw/openclaw/issues/191109)                                                                       |
+| Shared vocabulary context        | [M06 #205820](https://github.com/openclaw/openclaw/issues/205820) and [#205633](https://github.com/openclaw/openclaw/issues/205633) |
+| Refinement context               | [M11 #205845](https://github.com/openclaw/openclaw/issues/205845)                                                                   |
 
 No accepted transport PR is asserted as a parent. The task branch uses the recorded main commit.
 An issue has no Git head to stack on.
@@ -51,6 +51,9 @@ Missing package contracts must not be represented as implemented or verified.
 ## Decisions required before production integration
 
 Maintainer acceptance for personal persistence and public contracts is outstanding.
+The [automated issue review](https://github.com/openclaw/openclaw/issues/205856#issuecomment-7186791734)
+also requests a coordinated storage owner, minimum client flow, and shared term contract with M06.
+That advisory review is not maintainer design acceptance. No accepting maintainer decision was found.
 Contribution guidance requires separate design acceptance for schema, durability, retention, permission,
 or public-contract changes. See the [database review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).
 The candidate doesn't introduce a preference namespace, RPC, public SDK export, dictionary editor,
@@ -124,57 +127,91 @@ Passing a future pure test changes only its recorded evidence, not the completio
 
 ## Evidence and recovery record
 
-The execution host restarted, removing the temporary checkout, dependency installation, and local evidence files.
-This document and the benchmark were reconstructed from retained source text and observations.
-Neither recovered file inherits qualification from the lost tree.
+The execution host restarted during dependency preparation, removing the temporary checkout.
+The candidate was reconstructed, independently reviewed again, and checkpointed remotely at
+`c33bea090ef907fa150327dca65a9494b4142771`. Formatting and the exact test allocation were committed
+at `46c74099c7360a4f8ecbfc556df9ba5cfa936903`. No result from the lost tree qualifies recovered bytes.
 
-The serial tooling installation previously completed with pnpm 12.15.0 in 35.1 seconds.
-The first canonical unit-test startup exited 137 before any test cases ran.
-Formatting passed on the pre-restart tree, but that tree is gone and the recovered source isn't format-verified.
-These observations describe prior attempts. They aren't test, build, or formatting passes for this candidate.
+Two independent AI source reviewers inspected the recovered boundary and complete diff/ledger.
+The complete review covered all twelve files. It found no unresolved correctness defect after
+fixing the unrelated replacement target, shadowed-alias precedence, and first-duplicate representative.
+The regressions are authored and reviewed, but **NOT RUN**. This is not maintainer approval,
+local ClawSweeper/autoreview, or an executed integration review.
 
-Record each new check's command, actual commit, environment, fixtures, result, and limitation.
-No speech-quality or latency claim follows from this source proposal.
+The author simplification pass retained one shared validator, locale normalizer, parser, and resolver.
+There is no second state store, context collector, provider constructor, or production policy owner.
+The first separable foundation is the M06 validation/resolution source, followed by personal consumers;
+this draft cannot land as a complete P03 implementation. Net test growth is 1,078 lines, with an exact
+678-line allocation beyond the existing 400-line allowance. The record covers distinct validation,
+import, Unicode, scope, revision, ambiguity, and quota failures; it doesn't relax a threshold.
 
-| Check                                                 | Evidence status                                                                                                                                      |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Reused term validation and candidate selection tests  | NOT RUN. Previous canonical test startup exited 137 before cases executed.                                                                           |
-| Personal import/export preview and snapshot tests     | NOT RUN. Previous canonical test startup exited 137 before cases executed.                                                                           |
-| Targeted typecheck, lint, formatting, and docs sanity | NOT RUN on recovered source. Prior formatting success belongs only to the lost tree.                                                                 |
-| Independent complete-diff and ledger review           | NOT RUN on the reconstructed final candidate.                                                                                                        |
-| Required build and CI                                 | NOT RUN for this candidate.                                                                                                                          |
-| Snapshot performance                                  | NOT RUN. Record hardware, runtime, dictionary size, selected limits, measurement method, and observed distribution.                                  |
-| Recognition comparison                                | NOT RUN. Requires a synthetic or consented audio corpus and provider/model access. Record locales, scoring, corrected errors, and introduced errors. |
-| Keyboard and screen-reader workflows                  | NOT RUN. No dictionary, correction, import-preview, or conflict UI exists in this candidate.                                                         |
-| Real microphone/capture integration                   | NOT RUN. No capture integration exists in this candidate.                                                                                            |
-| Local-only destination observation                    | NOT RUN. No dictionary dispatch or refinement integration exists in this candidate.                                                                  |
-| Upgrade/downgrade and recovery                        | NOT RUN. No personal persistence schema or migration is activated.                                                                                   |
-| Published head and final integration verification     | NOT RUN. Record actual remote identity and checks before reporting a publication outcome.                                                            |
+### Observed checks and setup limits
 
-The proposed 50 ms snapshot budget and 64 selected hints from 1,000 stored entries remain unmeasured.
-A provider fixture can't establish recognition quality, browser accessibility, or microphone behavior.
-An unmerged stack test is an integration simulation. It isn't post-merge evidence.
+The original canonical test startup exited 137 before reporting any test cases.
+After recovery, a separate frozen development-dependency installation using pinned pnpm 12.15.0,
+CPU affinity to one logical CPU, and explicit native thread limits was also killed with exit 137.
+These are setup failures, not assertion failures, passing tests, or proof of a specific OOM cause.
 
-### Measure pure preparation
+A small checkout-owned installation of the repository's exact `oxfmt` 0.74.0 and `tsx` 4.23.15 pins
+supported formatting and the pure benchmark. It is not a complete project dependency installation.
+The benchmark and test-line guard used the documented TSX preload with `PNPM_CONFIG_MODULES_DIR`
+pointing to that local tooling directory. No borrowed checkout dependencies, alternate test runner,
+modified setup, node_modules source patch, or disabled admission guard was used.
 
-After installing this checkout's dependencies, run the maintained benchmark from the repository root:
+| Check                                                                     | Observed evidence and limits                                                                                                                                                                                    |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Formatting                                                                | PASS: pinned oxfmt 0.74.0 checked all eleven changed TS/Markdown/config files, with one thread. This is a direct pinned-formatter check; the normal wrapper first failed because root dependencies were absent. |
+| Whitespace                                                                | PASS: `git diff --check` over the scoped change.                                                                                                                                                                |
+| Test-line ratchet                                                         | PASS: +1,078 lines, allowance 400, allocation credit 678. The exact recorded base was selected explicitly for the shallow checkout.                                                                             |
+| Independent source review                                                 | Completed for all twelve reconstructed files, including the shared foundation and acceptance ledger. No unresolved correctness finding.                                                                         |
+| Pure preparation benchmark                                                | PASS at `46c74099c7360a4f8ecbfc556df9ba5cfa936903`; measured distribution below.                                                                                                                                |
+| Canonical term, personal snapshot, and import tests                       | NOT RUN. The required project dependency setup is incomplete.                                                                                                                                                   |
+| Typechecks, lint, unused-file scan, full build                            | NOT RUN. No successful qualification is claimed from source review or the benchmark.                                                                                                                            |
+| Documentation MDX sanity                                                  | BLOCKED at setup: the normal command could not load `@mdx-js/mdx`. No MDX pass is claimed.                                                                                                                      |
+| Required CI and final published-head verification                         | The PR records the current head and actual workflow status; no CI pass is asserted here.                                                                                                                        |
+| Recognition, microphone/provider, keyboard/screen reader                  | NOT RUN. No integrated dictionary UI or dispatch exists.                                                                                                                                                        |
+| Actual local-only destination observation, log/crash/telemetry inspection | NOT RUN. Pure policy and numeric-summary helpers cannot establish production egress or privacy.                                                                                                                 |
+| Upgrade/downgrade, atomic conflicts/import, rollback/recovery             | NOT RUN. No persistence contract or migration is activated.                                                                                                                                                     |
+
+The canonical unit-src configuration still imports native runtime setup and UI config dependencies.
+The new tests have no fast-lane membership; they were not routed through a different configuration.
+The import module has no production caller and may be reported by the unused-file gate.
+No ignore or artificial executable entry suppresses that pending integration concern.
+
+### Measured pure preparation
+
+The maintained entrypoint is:
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/bench-personal-vocabulary.mts
 ```
 
-The workload generates 1,000 synthetic entries and checks that both snapshot and hint output retain 64 terms.
-It reports actual locale distribution, serialized bytes, CPU model, operating system, runtime, and host load.
-Visible logical CPU count and available parallelism are reported separately.
-One first-call measurement precedes 25 warmups and 200 serial samples.
-The snapshot and combined snapshot-plus-hint stages report min, p50, p95, p99, and max using nearest-rank percentiles.
-Validation and imports are outside the timed region. No persistence, authentication, microphone, or network runs.
+This measurement ran on an AMD EPYC 9V74 80-Core Processor host, Linux 6.18.57 x64,
+Node 24.22.3 and V8 13.6.233.17-node.63. The environment exposed nine logical CPUs;
+affinity limited this run to one available CPU. Host load averages were 0.51 / 0.63 / 0.99
+both before and after the run. The recorded timestamp is 2026-11-26T09:15:53.020Z.
 
-The hint quota is a fixture: 64 terms, 8,192 JSON bytes, and 512 synthetic token units.
-Each term costs one fixture token unit. This isn't a provider tokenizer or an accepted endpoint limit.
-The proposed warm snapshot p95 target is below 50 ms, with exact occupancy required before interpreting timing.
-This first measurement would establish a local baseline. It doesn't claim a speedup or full-turn latency.
-Record the command output against the tested commit outside this document before reporting a measured result.
+The deterministic synthetic workload has 1,000 entries, 950 enabled entries, and 334 aliases.
+Each of neutral, en, en-US, es-ES, and fr-FR contributes 200 entries; selection uses en-US.
+Serialized terms occupy 106,733 bytes and the full input 106,849 bytes.
+The quota is a fixture: 64 terms, 8,192 JSON bytes, and 512 synthetic token units.
+One term costs one fixture token unit; this is not a provider tokenizer or endpoint quota.
+
+One first-call sample precedes 25 warmups and 200 serial samples. Percentiles use nearest rank.
+The script checks that both snapshot and hint output contain exactly 64 terms after timing.
+Validation, imports, persistence, authentication, microphone, network, and actual tokenization
+are excluded. This establishes a local preparation baseline, not a speedup or full-turn latency.
+
+| Stage                          | First call (ms) | Warm p50 (ms) | Warm p95 (ms) | Warm p99 (ms) | Warm max (ms) |
+| ------------------------------ | --------------: | ------------: | ------------: | ------------: | ------------: |
+| Snapshot                       |        9.482815 |      1.269420 |      1.679919 |      1.978188 |      6.980277 |
+| Snapshot plus hint preparation |        9.886993 |      1.290653 |      1.797731 |      2.002955 |      7.004333 |
+
+The observed warm snapshot p95 is below the proposed 50 ms target on this host.
+Output occupancy is 64 terms, 1,089 JSON bytes, and 64 fixture token units.
+The snapshot explains 50 disabled, 350 locale-ineligible, and 536 limit-omitted entries;
+22 selected entries have aliases unrepresented by the canonical-only fixture.
+No speech-quality, provider support, browser accessibility, or real microphone claim follows.
 
 ## Proposed rollout and recovery
 
