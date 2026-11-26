@@ -1337,22 +1337,22 @@ class GatewaySession(
         for ((name, value) in resolved.headers) {
           request.header(name, value)
         }
-        // Exported documents must not follow a redirect outside the ticketed Gateway route.
+        // Allow large downloads to continue as long as bytes keep arriving.
         val downloadClient =
-          if (kind == GatewayMediaKind.File) {
-            client
-              .newBuilder()
-              .followRedirects(false)
-              .followSslRedirects(false)
-              .build()
-          } else {
-            client
-          }
+          client
+            .newBuilder()
+            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .apply {
+              // Exported documents must not follow a redirect outside the ticketed Gateway route.
+              if (kind == GatewayMediaKind.File) {
+                followRedirects(false)
+                followSslRedirects(false)
+              }
+            }.build()
         val retry = GatewayPlaybackRetryState()
         repeat(Int.MAX_VALUE) {
           if (!retry.canAttempt()) return@withContext null
           val call = downloadClient.newCall(request.build())
-          call.timeout().timeout(20, java.util.concurrent.TimeUnit.SECONDS)
           var retryDelayMs: Long? = null
           val media =
             call.useCancellableResponse { response ->

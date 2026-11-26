@@ -52,6 +52,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.io.IOException
+import java.net.SocketTimeoutException
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.MessageDigest
@@ -751,6 +752,135 @@ class GatewaySessionCustomHeadersTest {
         scope.cancel()
         server.shutdown()
         redirectTrap.shutdown()
+      }
+    }
+
+  @Test
+  fun fileDownloadSurvivesSlowTransferButNotStalledTransfer() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val json = Json { ignoreUnknownKeys = true }
+      val connected = CompletableDeferred<Unit>()
+      val fileArtifactId = "artifact_managed_media_44444444-4444-4444-8444-444444444444"
+      val filePath = "/api/chat/media/outgoing/main/44444444-4444-4444-8444-444444444444/full?mediaTicket=file-ticket"
+      val fileBytes = ByteArray(24 * 1024) { it.toByte() }
+      val server =
+        MockWebServer().apply {
+          dispatcher =
+            object : Dispatcher() {
+              override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.path?.startsWith("/api/chat/media/outgoing/") == true) {
+                  val response = MockResponse().setHeader("Content-Type", "application/pdf")
+                  if (request.requestUrl?.queryParameter("test") == "stalled") {
+                    // The second chunk arrives after the idle budget, even if the timeout regresses.
+                    return response.setBody(Buffer().write(fileBytes, 0, 2048)).throttleBody(1024, 30, TimeUnit.SECONDS)
+                  }
+                  // Send 24 chunks one second apart to exceed the shipped 20-second call budget.
+                  return response.setBody(Buffer().write(fileBytes)).throttleBody(1024, 1, TimeUnit.SECONDS)
+                }
+                return MockResponse().withWebSocketUpgrade(
+                  object : WebSocketListener() {
+                    override fun onOpen(
+                      webSocket: WebSocket,
+                      response: Response,
+                    ) {
+                      webSocket.send(CONNECT_CHALLENGE_FRAME)
+                    }
+
+                    override fun onMessage(
+                      webSocket: WebSocket,
+                      text: String,
+                    ) {
+                      val frame = json.parseToJsonElement(text).jsonObject
+                      val id = frame["id"]?.jsonPrimitive?.content ?: return
+                      when (frame["method"]?.jsonPrimitive?.content) {
+                        "connect" -> {
+                          webSocket.send(
+                            """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""",
+                          )
+                        }
+
+                        "artifacts.download" -> {
+                          val path =
+                            if (frame["params"]
+                                ?.jsonObject
+                                ?.get("artifactId")
+                                ?.jsonPrimitive
+                                ?.content == "stalled"
+                            ) {
+                              "$filePath&test=stalled"
+                            } else {
+                              filePath
+                            }
+                          webSocket.send(
+                            """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"file","type":"file","mimeType":"application/pdf","download":{"mode":"url"}},"url":"$path"}}""",
+                          )
+                        }
+                      }
+                    }
+                  },
+                )
+              }
+            }
+          start()
+        }
+      val stableId = "manual|127.0.0.1|${server.port}"
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val session =
+        GatewaySession(
+          scope = scope,
+          identityStore = testDeviceIdentityStore(app),
+          deviceAuthStore = NoopDeviceAuthStore(),
+          onConnected = { if (!connected.isCompleted) connected.complete(Unit) },
+          onDisconnected = {},
+          onEvent = { _, _ -> },
+        )
+
+      try {
+        session.connect(
+          endpoint = GatewayEndpoint(stableId, "test", "127.0.0.1", server.port, tlsEnabled = false),
+          token = "bootstrap-token",
+          bootstrapToken = null,
+          password = null,
+          options =
+            GatewayConnectOptions(
+              role = "operator",
+              scopes = listOf("operator.read"),
+              caps = emptyList(),
+              commands = emptyList(),
+              permissions = emptyMap(),
+              client =
+                GatewayClientInfo(
+                  id = "openclaw-android-test",
+                  displayName = "Android Test",
+                  version = "1.0.0-test",
+                  platform = "android",
+                  mode = "ui",
+                  instanceId = "android-test-instance",
+                  deviceFamily = "android",
+                  modelIdentifier = "test",
+                ),
+            ),
+          tls = null,
+        )
+        withTimeout(TEST_TIMEOUT_MS) { connected.await() }
+
+        val slowStarted = System.nanoTime()
+        val slow = session.loadMediaArtifact(stableId, "main", "main", fileArtifactId, GatewayMediaKind.File) as? GatewayLoadedMedia.Buffered
+        val slowElapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - slowStarted)
+        assertArrayEquals(fileBytes, slow?.bytes)
+        assertTrue("Healthy transfer finished in ${slowElapsedMs}ms", slowElapsedMs > 20_000)
+
+        val stalledStarted = System.nanoTime()
+        val stalled = runCatching { session.loadMediaArtifact(stableId, "main", "main", "stalled", GatewayMediaKind.File) }
+        val stalledElapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - stalledStarted)
+        val failure = stalled.exceptionOrNull()
+        assertTrue("Expected a socket read timeout, got $failure", failure is SocketTimeoutException)
+        assertTrue("Stalled transfer failed in ${stalledElapsedMs}ms", stalledElapsedMs in 19_500..25_000)
+      } finally {
+        session.disconnectAndJoin()
+        scope.cancel()
+        server.shutdown()
       }
     }
 
