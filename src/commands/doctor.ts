@@ -219,6 +219,9 @@ export async function doctorCommand(
           ? `Externally managed Doctor repair complete: ${report.applied.length} applied, ${report.remaining.length} remaining.`
           : `Externally managed Doctor repair incomplete: ${report.applied.length} applied, ${report.remaining.length} remaining.`,
       );
+      for (const item of report.advisories) {
+        outputRuntime.log(`[${item.stepId}] ${item.message}`);
+      }
       for (const item of report.remaining) {
         outputRuntime.error(`[${item.stepId}] ${item.message}`);
       }

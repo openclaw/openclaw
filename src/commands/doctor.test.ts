@@ -238,7 +238,7 @@ describe("doctorCommand", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("keeps externally managed repair diagnostics inside its JSON report", async () => {
+  it.each([false, true])("keeps external repair advisories visible (json=%s)", async (json) => {
     const report = {
       schemaVersion: 1,
       mode: "externally-managed",
@@ -248,6 +248,9 @@ describe("doctorCommand", () => {
       applied: [],
       skipped: [],
       remaining: [],
+      advisories: [
+        { stepId: "original-state-capture", message: "Backup verification needs attention." },
+      ],
     };
     mocks.runDoctorHealthFlow.mockImplementationOnce(
       async (repairRuntime: ReturnType<typeof createDoctorRuntime>) => {
@@ -261,12 +264,19 @@ describe("doctorCommand", () => {
     await expect(
       doctorCommand(runtime, {
         externallyManaged: true,
-        json: true,
+        json,
         nonInteractive: true,
         repair: true,
       }),
     ).rejects.toThrow("exit:0");
 
+    if (!json) {
+      expect(runtime.log).toHaveBeenCalledWith(
+        "[original-state-capture] Backup verification needs attention.",
+      );
+      expect(runtime.writeJson).not.toHaveBeenCalled();
+      return;
+    }
     expect(runtime.writeJson).toHaveBeenCalledWith(
       {
         ...report,
