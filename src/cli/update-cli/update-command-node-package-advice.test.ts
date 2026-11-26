@@ -6,10 +6,12 @@ import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { completePostUpdateMaintenance } from "./update-command-post-update-maintenance.js";
 
-vi.mock("./update-command-service.js", () => ({
+vi.mock("./update-command-service.js", async (original) => ({
+  ...(await original<typeof import("./update-command-service.js")>()),
   tryInstallShellCompletion: vi.fn(async () => undefined),
 }));
-vi.mock("./update-command-owed.js", () => ({
+vi.mock("./update-command-owed.js", async (original) => ({
+  ...(await original<typeof import("./update-command-owed.js")>()),
   retryOwedUpdateSteps: vi.fn(async () => []),
 }));
 
