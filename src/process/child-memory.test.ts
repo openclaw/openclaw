@@ -161,7 +161,6 @@ it.each([
   const files: Record<string, string> = {
     "/proc/meminfo": `SwapTotal: ${(8 * GiB) / 1024} kB\n`,
     "/proc/self/cgroup": `0::${group}\n`,
-    "/proc/self/mountinfo": "30 1 0:27 / /sys/fs/cgroup rw - cgroup2 cgroup rw",
     [`${root}/memory.max`]: String(8 * GiB),
     [`${root}/memory.high`]: "max",
     [`${root}/memory.swap.max`]: "0",
