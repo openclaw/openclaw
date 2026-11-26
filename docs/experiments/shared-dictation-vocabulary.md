@@ -22,13 +22,25 @@ is adjacent transcription-hint work; it is neither the implementation's parent n
 proof of shared authorization or provider acceptance. P03, M06, and M11 are local
 design identifiers from the supplied dictation package, not upstream PR numbers.
 
-| Review identity             | Recorded value                                                                                                                           |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Inspected upstream base     | `openclaw/openclaw:main`, `04b854b239cd8ab8a14beae4914ed9c54d791e62`                                                                     |
-| Local implementation branch | `feat/dictation-shared-dictionaries`                                                                                                     |
-| Accepted P03 or M11 parent  | None identified in the inspected base                                                                                                    |
-| Tested implementation head  | Exact commit and source hashes are recorded in the accompanying `validation-receipt.json`; the PR body must identify its published head. |
-| Published fork/PR           | Unpublished. The requested `CompleteDotTech/openclaw` fork was unavailable; GitHub browser sign-in is required to create it.             |
+| Review identity            | Recorded value                                                                                                                                                                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Implementation source base | `openclaw/openclaw:main`, `04b854b239cd8ab8a14beae4914ed9c54d791e62`                                                                                                                                                                 |
+| Published fork branch      | `CompleteDotTech/openclaw:feat/dictation-shared-dictionaries`                                                                                                                                                                        |
+| Accepted P03 or M11 parent | None identified in the inspected base                                                                                                                                                                                                |
+| Tested implementation head | Exact commit and source hashes are recorded in the accompanying `validation-receipt.json`; the PR body must identify its published head.                                                                                             |
+| Initial fork draft         | [Fork proposal draft #1](https://github.com/CompleteDotTech/openclaw/pull/1); current review/head details are recorded in the selected issue and validation receipt. Production integration and readiness require design acceptance. |
+
+The recovered four-commit implementation was published through the authenticated
+GitHub connection. Published head `927da4c148bd31c913a647366249b982a51bd9ff` has
+the exact source tree `b3a8f9b8d13c3d5c8dbacf1d329a7110e8526b3d` of the previously
+tested local head `058b21e885e3b3fedccbdeb66643abd525c163ff`. Each corresponding
+commit tree was verified; only commit metadata and resulting commit IDs changed.
+The fork draft targets its real `main` branch, observed at
+`f76b87badadd0c4d244d6529fb4da41894eb8b83`, with the source base above as its merge
+base. This initial review surface does not establish completed upstream
+implementation or maintainer acceptance. Repository guidance permits an upstream
+draft to seek design review; production contract activation and readiness remain
+gated on the recorded decision. Subsequent qualification evidence is recorded below.
 
 The supplied `IMPLEMENTATION_PROMPT.md`, `ISSUE.md`, `PR.md`, `ARCHITECTURE.md`,
 `IMPLEMENTATION_WORKFLOW.md`, and `VALIDATION_PLAN.md` require all twelve acceptance
@@ -58,7 +70,8 @@ authority, shared collection operations fail before opening storage.
 The [storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes)
 requires recorded design acceptance for public contracts, schemas, retention,
 durability, and permission changes. A new JSON representation in an existing table
-does not avoid that checkpoint. Issue #205633 records the proposed feature; filing
+does not avoid that checkpoint. An upstream draft may present the proposal for
+design discussion without claiming acceptance or enabling these contracts. Issue #205633 records the proposed feature; filing
 it does not constitute acceptance. The present code is unregistered and introduces
 no SQL schema, personal-store migration, plugin SDK export, or public RPC.
 
@@ -118,7 +131,9 @@ the existing `PluginStateKeyedStore<VocabularyCollection, 2>` operations `observ
 `compareAndApply`, and `entriesInKeyRange`. The accepted host adapter must pass
 current authority into final worker admission, using the
 [existing worker storage owner](/reference/database-schemas/worker-access). The
-prototype's Map fixture cannot certify that adapter or physical database behavior.
+isolated real-worker fixture now qualifies this proposed adapter's CAS, final write
+admission, orderly reopen, and record-size behavior with synthetic grants. It does
+not establish the production permission or namespace mapping.
 
 Collection keys are `${scopeId}:${collectionId}`. Both identifiers are ASCII
 letters, digits, `_`, or `-`, with length 1–128; neither can contain `:`. Creation
@@ -150,6 +165,14 @@ revision, update time, and minimized audit. It drops label and terms. Replace an
 import cannot reactivate it. List validates every returned row, including deleted
 rows used for pagination, before returning a cursor. Unknown versions remain
 untouched and unavailable to interpretation, including unknown-version tombstones.
+
+The real-worker maximum-size case uses 5,000 terms, an exact 409,600-byte
+normalized draft, maximum-length actor/scope/collection identifiers, and a full
+32-event audit ring. After an orderly worker close, the entire term array and
+label survive. The stored record exceeds the draft limit but remains within the
+existing 1,048,576-byte per-value ceiling. This constructed case proves record
+compatibility; it does not measure namespace exhaustion, every serialization
+shape, crash recovery, or power-loss durability.
 
 The proposed dedicated namespace must retain tombstones without TTL or eviction
 until an accepted synchronization/garbage-collection policy can prove that stale
@@ -190,6 +213,17 @@ Synthetic measurements validate budgeting behavior only. No OpenAI, Gemini,
 local-provider, or other live endpoint is qualified by this experiment. An
 existing prompt field in `extensions/openai/realtime-transcription-provider-factory.ts`
 does not prove acceptance, effective hinting, or safe use of the new term contract.
+A documentation review on November 26, 2026 checked the existing OpenAI adapter
+against the [current client-event reference](https://developers.openai.com/api/reference/resources/realtime/client-events).
+Its `session.audio.input.transcription.prompt` is documented as optional free-form
+context for the adapter's `gpt-4o-transcribe` default, excluding diarization.
+The existing fake-WebSocket provider test checks configured prompt serialization;
+it does not establish live acceptance. The [archived November 2025 Cookbook](https://developers.openai.com/cookbook/examples/realtime_out_of_band_transcription)
+mentions a 1,024-token limit but warns its API information may be outdated. The
+exact current token, byte and term budgets therefore remain unverified. Neither
+source qualifies a 5,000-term/400-KiB provider payload. The [deprecation table](https://developers.openai.com/api/docs/deprecations)
+also schedules the current default model's shutdown for February 26, 2027;
+provider-owner migration and live qualification remain separate required work.
 No provider route is selected from term text and no alternative route is attempted.
 The lease currently binds one provider/capability to both nominal stages. It does
 not qualify differing STT and refinement endpoints or their distinct budgets; that
@@ -227,58 +261,116 @@ product path or qualification is absent. There is no complete criterion in this
 prototype. The test references below identify evidence sources; they do not by
 themselves claim a successful run.
 
-| Evidence ID | Exact source/procedure                                      | Evidence boundary                                                                                                                                                                                                                                                                                    |
-| ----------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| E1          | `src/realtime-transcription/vocabulary-collections.test.ts` | Synthetic two-scope authority and Map CAS fixture; includes guessed IDs, export/audit separation, simultaneous editors, malformed import, tombstones, unknown versions, and committed/unknown receipts. No real host ACL or worker persistence proof.                                                |
-| E2          | `src/realtime-transcription/vocabulary-terms.test.ts`       | Deterministic import, Unicode/locale, precedence/conflict, immutable-input, hostile-data, aggregate-bound, and exact synthetic encoder tests. No spoken corpus or live endpoint proof.                                                                                                               |
-| E3          | `src/realtime-transcription/vocabulary-snapshot.test.ts`    | Synthetic grant invalidation, captured-input, expiry, per-egress revalidation, pinned edit, replay rejection, lineage, and recovery-descriptor cases. No actual membership service or M11 coordinator.                                                                                               |
-| E4          | `src/gateway/talk/transcription-relay.vocabulary.test.ts`   | Real relay, Talk event controller, cleanup, and vocabulary lease with fake provider/authority; unrelated persistence/diagnostics are mocked. Exercises late hinted results, no replay, accepted-event preservation, admission, and redaction. No actual transmitted vocabulary or recognition proof. |
-| E5          | Existing `src/gateway/talk/transcription-relay.test.ts`     | Existing relay regression suite must run with the changed relay; no result is inferred from source inspection.                                                                                                                                                                                       |
-| E6          | `scripts/bench-vocabulary.mts`                              | Three 5,000-term workloads, each with 20 warmups and 100 samples per operation. Reports exact byte sizes, latency, sampled memory occupancy and GC. Authentication, network/model time, provider quotas and cumulative allocations are NOT MEASURED.                                                 |
-| E7          | Production qualification                                    | Accepted host/store mapping, real two-editor operations, saved-state migration, endpoint payload/quota checks, spoken corpus, actual keyboard/screen-reader controls, and supported-client recovery. NOT RUN; required dependencies absent.                                                          |
+| Evidence ID | Exact source/procedure                                                  | Evidence boundary                                                                                                                                                                                                                                                                                                           |
+| ----------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| E1          | `src/realtime-transcription/vocabulary-collections.test.ts`             | Synthetic two-scope authority and Map CAS fixture; includes guessed IDs, export/audit separation, simultaneous editors, malformed import, tombstones, unknown versions, and committed/unknown receipts. No real host ACL or worker persistence proof.                                                                       |
+| E2          | `src/realtime-transcription/vocabulary-terms.test.ts`                   | Deterministic import, Unicode/locale, precedence/conflict, immutable-input, hostile-data, aggregate-bound, and exact synthetic encoder tests. No spoken corpus or live endpoint proof.                                                                                                                                      |
+| E3          | `src/realtime-transcription/vocabulary-snapshot.test.ts`                | Synthetic grant invalidation, captured-input, expiry, per-egress revalidation, pinned edit, replay rejection, lineage, and recovery-descriptor cases. No actual membership service or M11 coordinator.                                                                                                                      |
+| E4          | `src/gateway/talk/transcription-relay.vocabulary.test.ts`               | Real relay, Talk event controller, cleanup, and vocabulary lease with fake provider/authority; unrelated persistence/diagnostics are mocked. Exercises late hinted results, no replay, accepted-event preservation, admission, and redaction. No actual transmitted vocabulary or recognition proof.                        |
+| E5          | Existing `src/gateway/talk/transcription-relay.test.ts`                 | Observed standard aggregate Gateway run: 18 existing relay regressions passed alongside the 12 vocabulary cases. Provider sessions remain synthetic.                                                                                                                                                                        |
+| E6          | `scripts/bench-vocabulary.mts`                                          | Three 5,000-term workloads, each with 20 warmups and 100 samples per operation. Reports exact byte sizes, latency, sampled memory occupancy and GC. Authentication, network/model time, provider quotas and cumulative allocations are NOT MEASURED.                                                                        |
+| E7          | Production qualification                                                | Accepted host/store mapping, real two-editor operations, saved-state migration, endpoint payload/quota checks, spoken corpus, actual keyboard/screen-reader controls, and supported-client recovery. NOT RUN; required dependencies absent.                                                                                 |
+| E8          | `src/realtime-transcription/vocabulary-collections.integration.test.ts` | Actual V2 retained worker store with synthetic grants: concurrent CAS, atomic malformed import, tombstones after orderly worker close/reopen, final commit-admission revocation, and an exact 400-KiB/5,000-term draft plus full audit ring. No production ACL, migration, namespace-exhaustion, or crash-durability claim. |
 
-| Criterion                        | Status  | Production owner and current coverage                                                                                                   | Missing proof                                                                                                                                             | Artifact / tested head                          |
-| -------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| AC01 — Authorized scope          | PARTIAL | Host authorization plus collection/snapshot owners; E1/E3 fail closed and bind requested scopes to grants.                              | Accepted real membership/ACL mapping, store opener, RPC, guessed-ID matrix against those production boundaries.                                           | E1/E3; observed focused run; receipt head       |
-| AC02 — Resolution                | PARTIAL | Proposed P03 resolver; E2 checks session/personal/shared precedence and unresolved conflicts.                                           | Accepted P03 integration, real private personal lifecycle, visible selection/source/conflict UI.                                                          | E2; observed focused run; receipt head          |
-| AC03 — Provider contract         | PARTIAL | Provider adapter owner; E2/E3 bound synthetic canonical-list hints and expose unsupported/truncated status.                             | Verified endpoint fields, tokenizer/payload limits, actual authorized transport, visible capability disclosure, refusal without rerouting.                | E2/E3/E7; live proof NOT RUN                    |
-| AC04 — Revocation                | PARTIAL | Host authority, snapshot owner, existing Talk relay, future M11/M10; E3/E4 cover hinted lineage and late-result rejection.              | Production membership invalidation, actual hint dispatch/refinement/insertion races, explicit authorized retranscription and no-audio UI recovery.        | E3/E4/E5/E7; observed focused run; receipt head |
-| AC05 — Concurrent edits          | PARTIAL | V2 store owner and collection service; E1 covers CAS, complete-import rejection, tombstones, and uncertain receipts.                    | Accepted durable namespace/final-authority binding, worker-backed concurrent writers, real management conflict recovery.                                  | E1/E7; worker/client proof NOT RUN              |
-| AC06 — Migration                 | PARTIAL | Existing store/migration owner; prototype preserves unknown versions and limits export to one authorized draft.                         | Accepted migration/rollback/retention contract and actual saved-state upgrade/downgrade proof; no P03 migration exists here.                              | E1/E7; migration NOT RUN                        |
-| AC07 — Offline lifecycle         | PARTIAL | Host authority and utterance owner; E1/E3 reject expired/disconnected grants and require fresh work after reconnect.                    | Real connectivity changes, visible unavailable state, accepted personal-only path, retry/reconnect integration.                                           | E1/E3/E7; client proof NOT RUN                  |
-| AC08 — Isolation                 | PARTIAL | Validator, capability adapter, route owner; E2 rejects malformed imports and keeps hostile text in a data list.                         | Qualified adapter encoding, real no-tool/no-mode/no-route behavior, cross-scope transport inspection.                                                     | E2/E4/E7; live proof NOT RUN                    |
-| AC09 — Accessibility and clients | BLOCKED | Existing browser/native client owners.                                                                                                  | Collection selection/management, source inspection, conflicts, recovery, keyboard and supported screen-reader trials.                                     | E7; NOT RUN; no UI added                        |
-| AC10 — Privacy                   | PARTIAL | Collection, snapshot, relay, store and diagnostic owners; E1/E3/E4 separate audit/export and redact vocabulary-bound provider failures. | Accepted audit visibility/retention, real telemetry/cache/admin/export review, production resource lifecycle proof.                                       | E1/E3/E4/E7; observed focused run; receipt head |
-| AC11 — Performance               | PARTIAL | Validator/resolver, store and adapter owners; bounds are encoded and boundary fixtures exist.                                           | Cumulative allocation instrumentation, production worker/database resource proof, and actual provider quota behavior. Synthetic timing results are below. | E2/E6/E7; observed benchmark; receipt head      |
-| AC12 — Semantic regression       | PARTIAL | P03, provider, and future M11 validation owners; E2 preserves exact spelling and performs no transcript substitution.                   | Spoken common-word/identifier/negation/number/literal corpus, real hinted recognition, and unaffected personal-only dictation.                            | E2/E7; spoken/client proof NOT RUN              |
+| Criterion                        | Status  | Production owner and current coverage                                                                                                                                        | Missing proof                                                                                                                                                                                             | Artifact / tested head                                |
+| -------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| AC01 — Authorized scope          | PARTIAL | Host authorization plus collection/snapshot owners; E1/E3 fail closed and bind requested scopes to grants.                                                                   | Accepted real membership/ACL mapping, store opener, RPC, guessed-ID matrix against those production boundaries.                                                                                           | E1/E3; observed focused run; receipt head             |
+| AC02 — Resolution                | PARTIAL | Proposed P03 resolver; E2 checks session/personal/shared precedence and unresolved conflicts.                                                                                | Accepted P03 integration, real private personal lifecycle, visible selection/source/conflict UI.                                                                                                          | E2; observed focused run; receipt head                |
+| AC03 — Provider contract         | PARTIAL | Provider adapter owner; E2/E3 bound synthetic canonical-list hints and expose unsupported/truncated status.                                                                  | Verified endpoint fields, tokenizer/payload limits, actual authorized transport, visible capability disclosure, refusal without rerouting.                                                                | E2/E3/E7; live proof NOT RUN                          |
+| AC04 — Revocation                | PARTIAL | Host authority, snapshot owner, existing Talk relay, future M11/M10; E3/E4 cover hinted lineage and late-result rejection.                                                   | Production membership invalidation, actual hint dispatch/refinement/insertion races, explicit authorized retranscription and no-audio UI recovery.                                                        | E3/E4/E5/E7; observed focused run; receipt head       |
+| AC05 — Concurrent edits          | PARTIAL | V2 store owner and collection service; E1/E8 cover CAS, complete-import rejection, tombstones, uncertain receipts, and actual worker reopening.                              | Accepted production namespace/authority mapping and real management conflict recovery.                                                                                                                    | E1/E8 observed; production client proof NOT RUN       |
+| AC06 — Migration                 | PARTIAL | Existing store/migration owner; prototype preserves unknown versions and limits export to one authorized draft.                                                              | Accepted migration/rollback/retention contract and actual saved-state upgrade/downgrade proof; no P03 migration exists here.                                                                              | E1/E7; migration NOT RUN                              |
+| AC07 — Offline lifecycle         | PARTIAL | Host authority and utterance owner; E1/E3 reject expired/disconnected grants and require fresh work after reconnect.                                                         | Real connectivity changes, visible unavailable state, accepted personal-only path, retry/reconnect integration.                                                                                           | E1/E3/E7; client proof NOT RUN                        |
+| AC08 — Isolation                 | PARTIAL | Validator, capability adapter, route owner; E2 rejects malformed imports and keeps hostile text in a data list.                                                              | Qualified adapter encoding, real no-tool/no-mode/no-route behavior, cross-scope transport inspection.                                                                                                     | E2/E4/E7; live proof NOT RUN                          |
+| AC09 — Accessibility and clients | BLOCKED | Existing browser/native client owners.                                                                                                                                       | Collection selection/management, source inspection, conflicts, recovery, keyboard and supported screen-reader trials.                                                                                     | E7; NOT RUN; no UI added                              |
+| AC10 — Privacy                   | PARTIAL | Collection, snapshot, relay, store and diagnostic owners; E1/E3/E4/E8 separate audit/export, retain minimized worker records, and redact vocabulary-bound provider failures. | Accepted audit visibility/retention, real telemetry/cache/admin/export review, production resource lifecycle proof.                                                                                       | E1/E3/E4/E8; observed runs; receipt head              |
+| AC11 — Performance               | PARTIAL | Validator/resolver, store and adapter owners; bounds are encoded; E8 verifies an exact maximum draft with full audit fits the actual store value quota.                      | A repeatable below-50-ms target (the refreshed compact case misses it), cumulative allocation instrumentation, production resource proof, and actual provider quotas. Synthetic timing results are below. | E2/E6/E8; observed benchmark/store runs; receipt head |
+| AC12 — Semantic regression       | PARTIAL | P03, provider, and future M11 validation owners; E2 preserves exact spelling and performs no transcript substitution.                                                        | Spoken common-word/identifier/negation/number/literal corpus, real hinted recognition, and unaffected personal-only dictation.                                                                            | E2/E7; spoken/client proof NOT RUN                    |
 
 ### Observed local verification
 
-Verification used this checkout's own physical tool installation. The full
-workspace dependency install was terminated with exit 137; a subsequent limited
-install was also terminated. Focused proof therefore uses the repository's
-`run-vitest.mjs` wrapper with a supplemental narrow config and source aliases,
-unpatched Vitest 5.0.5, and Node 24.22.3. This is not the standard repository
-project lane or an end-to-end qualification. The exact config and commands are
-retained with the validation receipt.
+Refreshed qualification on November 26, 2026 uses this checkout's own physical,
+complete workspace installation, reconciled with frozen lockfile and pinned pnpm
+12.15.0. The dependency supply-chain check passed for 1,764 packages. Tests use the
+repository's `run-vitest.mjs` wrapper, installed patched Vitest, Node 24.22.3,
+standard project configurations, one worker, and the supported throttled mode.
+Commands, logs, source hashes, and the final published-head mapping are retained
+with the validation receipt.
 
-| Check                                                                                           | Observed result                                                                                                                                                            |
-| ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| E1–E4 focused behavior                                                                          | PASS: 4 files, 51 tests. Covers the real relay with explicitly isolated file-provider discovery, durable voice persistence, and diagnostics.                               |
-| Pure boundary TypeScript                                                                        | PASS: strict standalone checking of vocabulary types, terms, snapshots, their tests, and the benchmark. Collection/relay integration types are not covered by this result. |
-| Syntax lint                                                                                     | PASS through `run-oxlint.mjs --openclaw-focused-config` for changed TypeScript/config files. This intentionally has no type-aware claim.                                   |
-| Formatting                                                                                      | PASS through the repository formatter for the changed files.                                                                                                               |
-| Standard project test setup                                                                     | BLOCKED: the incomplete full install lacked required workspace/UI test dependencies. No successful standard-project run is claimed.                                        |
-| Broader collection type check                                                                   | BLOCKED: the host terminated the process with exit 137.                                                                                                                    |
-| Type-aware lint                                                                                 | BLOCKED: the host killed `tsgolint` with SIGKILL.                                                                                                                          |
-| Full build, existing relay regression lane, required CI                                         | NOT RUN to completion with the incomplete full installation; no PR exists for CI.                                                                                          |
-| Real authorization/store, saved-state migration, UI/accessibility, live provider, spoken corpus | NOT RUN; their accepted integration is absent.                                                                                                                             |
+| Check                                                                             | Observed result                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| E1–E3 standard vocabulary behavior                                                | 39 tests passed in three files under `vitest.unit-src.config.ts`. That initial combined command also included E8 in the wrong thread owner and exited unsuccessfully; E8 was subsequently corrected and rerun below.                                                                                                                                                                                                                                   |
+| E8 actual retained worker store                                                   | PASS: 4 tests under standard `vitest.infra.config.ts`, using the existing isolated process owner and production runtime worker preset. Covers concurrent CAS, atomic import rejection, persisted tombstones, final admission refusal, and a maximum-size draft/audit row.                                                                                                                                                                              |
+| E4/E5 vocabulary and existing Talk relay                                          | PASS: 30 tests in two files under the existing aggregate `vitest.gateway.config.ts` with `OPENCLAW_GATEWAY_PROJECT_SHARDS=0`. The 18 existing cases and 12 vocabulary cases use production runtime worker preparation.                                                                                                                                                                                                                                 |
+| Runtime selection and project routing                                             | PARTIAL: all 51 existing runtime-selection tests passed. The broader project-config suite passed two tests, then its full-shard config subprocess stalled; the unchanged 120-second no-output watchdog terminated the run (exit 143). The existing full-suite file-ownership audit passed separately (one selected case, 40 filtered out), proving each discovered normal test has exactly one owner. No broader project-config-suite pass is claimed. |
+| Tooling test type leaf                                                            | PASS: canonical `tsconfig.test.root.tooling.json` leaf through `run-tsgo.mjs` using the supported throttled Go fallback. This covers the changed planner and included test callers; it does not establish full core or collection/relay test-graph types.                                                                                                                                                                                              |
+| Core production types                                                             | BLOCKED: canonical `pnpm tsgo:core` terminated with exit 137 using the supported throttled Go fallback; no source diagnostic established a product type error.                                                                                                                                                                                                                                                                                         |
+| Type-aware core lint                                                              | BLOCKED: targeted `run-oxlint.mjs` with the core tsconfig terminated when `tsgolint` received SIGKILL.                                                                                                                                                                                                                                                                                                                                                 |
+| Type-aware scripts lint                                                           | PASS for the benchmark and runtime selector after repairing three `no-misused-promises` diagnostics. The benchmark now calls explicit synchronous major GC through a void callback; no cast or lint suppression was used.                                                                                                                                                                                                                              |
+| Syntax lint / formatting                                                          | PASS: syntax-only lint for all 14 changed TS/MTS/MJS paths and repository formatting for all 15 supported changed source/doc paths. Syntax-only lint does not replace type-aware proof.                                                                                                                                                                                                                                                                |
+| Documentation                                                                     | Changed-document MDX sanity passed. The global anchor/link audit found eight failures in unchanged unrelated source/target documents; this document was not reported. Baseline execution was not repeated. ClawHub fragments remain unverified without the external mirror. The global docs audit is not a pass.                                                                                                                                       |
+| Test-line allocation                                                              | PASS: 1,435 net test lines, 400 standard allowance, 1,035 explicitly allocated.                                                                                                                                                                                                                                                                                                                                                                        |
+| Full build                                                                        | BLOCKED: default preflight could not see the process memory limit and stopped before cleaning output. A supported explicit 1,536-MiB heap attempt completed native protocol, script checks, plugin assets, AI and package phases, then failed in main `tsdown` when a child received SIGKILL; overall exit 1. No full-build success is claimed.                                                                                                        |
+| Required unused-file scan                                                         | FAIL / BLOCKED: the production Knip scan reports `src/realtime-transcription/vocabulary-collections.ts` as unused because it has no production registration. The full-tree scan exhausted the explicit 1,536-MiB JavaScript heap and aborted (SIGABRT). No entrypoint or ignore was fabricated to hide the unregistered proposal.                                                                                                                      |
+| Other full test/script type graphs                                                | NOT RUN to completion; the full core graph remains capacity-blocked. The earlier narrow pure-boundary check is not a substitute.                                                                                                                                                                                                                                                                                                                       |
+| Required CI                                                                       | NOT RUN: the fork draft exists, but the inspected published head has zero statuses, check runs, and Actions runs. A combined status of `pending` with zero entries does not establish a queued job.                                                                                                                                                                                                                                                    |
+| Production authorization, migration, UI/accessibility, provider and spoken corpus | NOT RUN; accepted production integration is absent. E8 qualifies actual worker storage under synthetic grants only.                                                                                                                                                                                                                                                                                                                                    |
 
-The focused config is a supplementary source fixture, not a replacement for the
-repository gates. The required full build, standard project tests and type-aware
-checks must pass before this work can become ready for merge.
+The first E8 attempt failed during setup because the thread owner had no host
+shared-state broker. Adding this actual SQLite consumer to the existing database
+worker registry selected the appropriate forked-process infra owner. Full compiled
+test-worker preparation then terminated with exit 137 before tests. Source review
+qualified exactly E8 and the two relay suites for the existing runtime-only preset:
+their fixture code executes in Vitest, and their worker children use production
+entries. The runtime graph retains production declarations; broad or mixed
+selections still use the full graph. Compiler verification, worker admission, IPC
+ownership, and lifetime cleanup were not skipped or weakened. The failed setup
+logs remain alongside the successful runs. No failed product assertion was made
+green by weakening a test.
+
+The earlier 51-test supplemental run and strict standalone pure-boundary type
+check remain historical evidence from the identical original implementation tree.
+They used a narrow config/source aliases and unpatched Vitest after the earlier
+installation failed, so they are separate from the refreshed standard-lane proof.
+The historical benchmark workloads and production functions are unchanged. The
+refreshed runner makes its synchronous major-GC callback explicit after a
+type-aware script lint finding; a fresh run is recorded separately below. The required build, canonical types,
+type-aware lint, unused-file gate, and applicable CI must pass before readiness;
+passing boundary tests does not complete M06.
 
 ### Maximum-bound performance
+
+#### Refreshed run — November 26, 2026
+
+After repairing the benchmark callback's type-aware lint failure, the complete
+benchmark ran again on Linux x64, Intel Xeon Platinum 8573C, Node 24.22.3, with
+nine logical CPUs. Each operation/workload still uses 20 warmups and 100 measured
+samples, nearest-rank percentiles, and 5,000 eligible terms. Explicit synchronous
+major GC occurs outside the timed operations. No other task-owned compiler, test,
+linter or build ran concurrently; the script does not establish an otherwise idle
+host. Its one-minute load averages were 0.37 before and 0.73 afterward.
+
+| Workload                                          | Raw / normalized draft bytes | Parse + validate p95 | Resolve p95 | Combined p95 | Combined below 50 ms |
+| ------------------------------------------------- | ---------------------------- | -------------------- | ----------- | ------------ | -------------------- |
+| Compact terms                                     | 382,395 / 382,395            | 80.85 ms             | 11.89 ms    | 50.20 ms     | MISS                 |
+| Exact raw limit, whitespace padding               | 409,600 / 382,395            | 39.54 ms             | 14.18 ms    | 43.72 ms     | PASS                 |
+| Exact normalized draft limit, actual term padding | 409,600 / 409,600            | 33.08 ms             | 15.64 ms    | 41.22 ms     | PASS                 |
+
+The compact workload missed the strict target at 50.200470 ms; the refreshed run
+does **not** establish a uniform below-50-ms p95. The original passing run below
+remains historical evidence, not a substitute for this result. Production
+validation/resolution functions and workload contents did not change. This
+observation does not isolate the cause of timing variation or prove a regression
+from the explicit GC callback. No repeated run was selected merely to obtain a
+passing number.
+
+Sampled heap increases across these operation batches ranged from 110.0 to
+170.7 MiB. As before, these are sampled process-occupancy values, not cumulative
+allocation or instantaneous peak proof. Authentication, network/model execution,
+and actual provider quotas remain NOT MEASURED. Raw samples, CPU/memory counters,
+methodology, and source hashes are retained with the refreshed receipt.
+
+#### Historical run — November 25, 2026
 
 Measured November 25, 2026, on Linux x64, Intel Xeon Platinum 8573C, Node 24.22.3
 (V8 13.6.233.17-node.63), with nine logical CPUs reported. Each row contains 5,000
@@ -328,7 +420,12 @@ acceptance or executed production proof. Three actionable defects were repaired:
 mutable collection/grant selection across awaited authorization; private provider
 errors on relay stop/finish paths; and sparse alias-array validation. A wrong-stage
 relay guard and required closed-mock annotations were also added. The reviewer
-reported no remaining actionable defect in the re-reviewed scope.
+reported no remaining actionable defect in the re-reviewed scope. A subsequent
+independent review of the real-worker tests repaired a weak concurrent-winner
+assertion: reopened state now equals the fulfilled editor's returned collection.
+The final test and exact runtime/infra routing additions were re-reviewed with no
+remaining actionable code finding; synthetic authority and orderly restart limits
+remain explicit.
 
 The implementation keeps one validation/resolution owner and one existing Talk
 publication owner. Collection operations use the existing V2 store contract;

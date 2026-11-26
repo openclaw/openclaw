@@ -189,10 +189,11 @@ function benchmark(operation: () => Result, collectGarbage: () => void) {
 }
 
 function main() {
-  if (typeof global.gc !== "function") {
+  const gc = global.gc;
+  if (typeof gc !== "function") {
     throw new Error("This benchmark requires --expose-gc");
   }
-  const collectGarbage = global.gc;
+  const collectGarbage = () => gc({ execution: "sync", type: "major" });
   const startedAt = new Date().toISOString();
   const loadBefore = os.loadavg();
   const workloads = makeWorkloads();
@@ -249,7 +250,7 @@ function main() {
         "performance.now around the production operation; combined path also binds its immutable synthetic collection",
       batchTiming: "includes result consumption and per-sample process.memoryUsage observations",
       garbageCollection:
-        "explicit GC after warmup and after releasing the last result; no forced GC between samples; automatic GC during a timed operation is included",
+        "explicit synchronous major GC after warmup and after releasing the last result; no forced GC between samples; automatic GC during a timed operation is included",
       memory:
         "observed heap/RSS deltas and post-operation sampled peaks, not cumulative allocation bytes or instantaneous peak allocation",
       fixture:
