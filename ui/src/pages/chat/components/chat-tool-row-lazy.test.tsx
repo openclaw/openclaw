@@ -229,13 +229,13 @@ it("keeps card chrome through import recovery and retains the current resolved r
     expect(root.container.querySelector(".chat-tool-row__cmd")?.textContent).toBe("echo after"),
   );
   expect(root.container.querySelectorAll('[role="alert"]')).toHaveLength(0);
-  expect(root.container.querySelector(".chat-command-trail__preview")).toBe(preview);
-  expect(preview.textContent).toContain("after output");
   await waitForSolid(() =>
     expect(root.container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe("tool"),
   );
   const row = root.container.querySelector<HTMLButtonElement>("button.chat-tool-row")!;
   expect(root.container.querySelector(".chat-tool-row[aria-busy]")).toBeNull();
+  expect(root.container.querySelector(".chat-command-trail__preview")).toBe(preview);
+  expect(preview.textContent).toContain("after output");
   row.click();
   expect(toggle).toHaveBeenCalledWith("current-exec");
   setInline(false);
