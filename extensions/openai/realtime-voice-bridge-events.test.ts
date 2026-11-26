@@ -719,4 +719,29 @@ describe("OpenAI realtime voice bridge tools", () => {
       expectedToolContinuation("call_1", { text: "done" }),
     );
   });
+
+  it("adds an image to the conversation without requesting a response", async () => {
+    const { bridge, socket } = await connectBridge({});
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x01]);
+
+    bridge.sendImage?.({ mimeType: "image/jpeg", data: jpeg });
+
+    expect(sentOfType(socket, "conversation.item.create")).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_image", image_url: `data:image/jpeg;base64,${jpeg.toString("base64")}` },
+          ],
+        },
+      },
+    ]);
+    expect(sentOfType(socket, "response.create")).toEqual([]);
+
+    await bridge.close();
+    bridge.sendImage?.({ mimeType: "image/jpeg", data: jpeg });
+    expect(sentOfType(socket, "conversation.item.create")).toHaveLength(1);
+  });
 });

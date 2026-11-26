@@ -332,6 +332,14 @@ Register each capability inside `register(api)` alongside your existing
     The host may pass `sendUserMessage(text, { toolChoice })` while the
     response state is idle to force one named function for that response;
     later responses return to the session's configured tool choice.
+    Implement the optional `sendImage({ mimeType, data })` bridge method when
+    the session's model accepts image input. It adds one JPEG or PNG to the
+    conversation as caller-side context and must not request a response; the
+    host follows it with a tool result or lets the next turn use it. Drop an
+    image that arrives while the provider is not connected instead of queuing
+    it. Hosts call `session.sendImage(image)` on the object returned by
+    `createRealtimeVoiceBridgeSession`; it returns `false` when the session is
+    closed or the provider has no `sendImage`.
     Set `handlesInputAudioBargeIn` when the provider owns interruption from
     incoming audio. Forward provider buffer-clear events through
     `onClearAudio("barge-in")` when available; continuous providers can stop

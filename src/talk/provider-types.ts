@@ -80,6 +80,12 @@ export type RealtimeVoiceToolResultOptions = {
   willContinue?: boolean;
 };
 
+/** One still image the host shows the model, such as a camera or screen frame. */
+export type RealtimeVoiceImageInput = {
+  mimeType: "image/jpeg" | "image/png";
+  data: Buffer;
+};
+
 export type RealtimeVoiceCloseDisposition = "abort" | "detach";
 
 export type RealtimeVoiceCloseOptions = {
@@ -277,6 +283,12 @@ export type RealtimeVoiceBridge = {
   handlesInputAudioBargeIn?: boolean;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
+  /**
+   * Adds one image to the conversation as caller-side context without requesting a response.
+   * Implement only when the session's model accepts image input; hosts treat absence as
+   * "this session cannot see". An image sent while the provider is not connected is dropped.
+   */
+  sendImage?(image: RealtimeVoiceImageInput): void;
   setMediaTimestamp(ts: number): void;
   sendUserMessage?(
     text: string,
