@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { CompactNodeTestShard, NodeTestShard } from "./ci-node-test-plan.mts";
 import {
   createCompactSplitTimingGeneration,
@@ -43,6 +44,43 @@ function canUseSerialTooling16Runner(job: CompactNodeTestShard, runnerBackend?: 
         group.includePatterns.length > 0 &&
         group.includePatterns.every((file) => !TOOLING_LARGE_CAPACITY_TEST_FILES.has(file)),
     )
+  );
+}
+
+type MeasuredExchangeRow = readonly [group: string, envelope: string];
+
+/** Exchange whole measured groups without changing row slots, setup, or admission prices. */
+export function exchangeMeasuredCompactGroups(
+  jobs: readonly (NodeTestShard | CompactNodeTestShard)[],
+  [first, second]: readonly [MeasuredExchangeRow, MeasuredExchangeRow],
+): readonly (NodeTestShard | CompactNodeTestShard)[] {
+  const find = ([name, envelope]: MeasuredExchangeRow) => {
+    const matches = jobs.flatMap((job) => {
+      const { checkName, shardName: _shardName, groups, ...row } = job;
+      if (!checkName.startsWith("checks-node-compact-") || !groups) {
+        return [];
+      }
+      const group = groups.find((entry) => entry.shard_name === name);
+      return group &&
+        createHash("sha256")
+          .update(JSON.stringify({ ...row, groups }))
+          .digest("hex") === envelope
+        ? [{ job, group, groups }]
+        : [];
+    });
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  const a = find(first);
+  const b = find(second);
+  if (!a || !b || a.job === b.job) {
+    return jobs;
+  }
+  return jobs.map((job) =>
+    job === a.job
+      ? { ...job, groups: [...a.groups.filter((group) => group !== a.group), b.group] }
+      : job === b.job
+        ? { ...job, groups: [...b.groups.filter((group) => group !== b.group), a.group] }
+        : job,
   );
 }
 

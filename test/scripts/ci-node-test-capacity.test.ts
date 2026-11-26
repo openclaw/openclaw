@@ -1,9 +1,49 @@
+import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import {
+  exchangeMeasuredCompactGroups,
   resolveBoatNodeJobBudget,
   resolveSelectedNodeTestRunner,
 } from "../../scripts/lib/ci-node-test-capacity.mts";
 import type { CompactNodeTestShard } from "../../scripts/lib/ci-node-test-plan.mts";
+
+it("exchanges measured groups only while both compact row envelopes match", () => {
+  const runner = "blacksmith-8vcpu-ubuntu-2404";
+  const group = (name: string) => ({
+    shard_name: name,
+    timing_key: name + "#generation",
+    configs: ["infra"],
+    includePatterns: [name + ".test.ts"],
+    runner,
+    requiresDist: false,
+  });
+  const [slow, fast, sibling] = [group("slow"), group("fast"), group("sibling")];
+  const envelope = { runner, requiresDist: false, planConcurrency: 1, timeoutMinutes: 120 };
+  const measured = (groups: ReturnType<typeof group>[]) =>
+    createHash("sha256")
+      .update(JSON.stringify({ ...envelope, groups }))
+      .digest("hex");
+  const row = (index: number, groups: ReturnType<typeof group>[]) => ({
+    ...envelope,
+    checkName: "checks-node-compact-large-" + index,
+    shardName: "compact-large-" + index,
+    groups,
+  });
+  const rows = [row(0, [slow]), row(1, [fast, sibling])] as const;
+  const exchange = [
+    ["slow", measured([slow])],
+    ["fast", measured([fast, sibling])],
+  ] as const;
+  expect(exchangeMeasuredCompactGroups(rows, exchange)).toEqual([
+    { ...rows[0], groups: [fast] },
+    { ...rows[1], groups: [sibling, slow] },
+  ]);
+  const drifted = [
+    rows[0],
+    { ...rows[1], groups: [fast, { ...sibling, includePatterns: ["new.test.ts"] }] },
+  ];
+  expect(exchangeMeasuredCompactGroups(drifted, exchange)).toBe(drifted);
+});
 
 it("paces Boat starts across the day and preserves included headroom", () => {
   const limits = {

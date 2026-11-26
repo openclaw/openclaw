@@ -13,6 +13,7 @@ import {
 } from "./lib/ci-ios-smoke-plan.mjs";
 import {
   BOAT_HOSTED_PREPARED_WORKSPACE,
+  exchangeMeasuredCompactGroups,
   resolveBoatNodeTestCapacity,
 } from "./lib/ci-node-test-capacity.mts";
 import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
@@ -1538,7 +1539,41 @@ const workerCachePreset = (shard) => {
 };
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const packedNodeTestRows = [];
-const nodeTestShards = targetNodeTestShards
+// Match the complete measured row envelopes, not unstable compact shard ordinals.
+// Full source and frozen npm-stable use different workload selectors and setup.
+const releaseExchange =
+  releaseScope === "full"
+    ? [
+        [
+          "core-runtime-infra-system-runtime-hosted-2",
+          "87c5f58c5c7b3ea4e749539e0bf208604cd107a518b6f20081d7ce1ae2f735bb",
+        ],
+        [
+          "agentic-agents-support-hosted-7",
+          "17388491e4d7906ec263a2786f9eeb70127a1d79a5ef7ffe0e7184172d9bd1af",
+        ],
+      ] // FRV 45898477601
+    : releaseScope === "npm-stable"
+      ? [
+          [
+            "core-runtime-infra-system-runtime-hosted-2",
+            "ddb844d193dffcdc09c6dcadfc665fdc0f521fc1e0765aba5c412152800614da",
+          ],
+          [
+            "agentic-agents-support-hosted-7",
+            "81ac831155f6c57706a8f534321db3c7331dabb9c4af199fa5f7e4bd745c4a27",
+          ],
+        ] // FRV 45898564216
+      : undefined;
+const nodeTestShards = (
+  isCanonicalRepository &&
+  compactReleaseMatrixRows &&
+  splitRuntimeJobs &&
+  testRuntimeMode === "dual-all" &&
+  releaseExchange
+    ? exchangeMeasuredCompactGroups(targetNodeTestShards, releaseExchange)
+    : targetNodeTestShards
+)
   .toSorted(
     (a, b) =>
       Number(b.runner === "runson-c8i-8xlarge") - Number(a.runner === "runson-c8i-8xlarge") ||
