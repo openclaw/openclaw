@@ -19,8 +19,8 @@ import { isCronExecutionIdle } from "./execution-idle.js";
 import { requiresExternalCronDelivery } from "./isolated-agent/delivery-target.js";
 import {
   buildCronDeliveryTrace,
-  finalizeCronPromptForResolvedTools,
   resolveCronDeliveryContext,
+  resolveCronRuntimeContextForTools,
 } from "./isolated-agent/run-delivery-trace.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import { CronOperatorSourceError } from "./operator-source-error.js";
@@ -320,9 +320,9 @@ export async function runCronSessionTurn(
           noticesStarted = true;
         },
         sourceDelivery: delivery?.sourceDelivery,
-        finalizePromptForResolvedTools: delivery
+        resolveRuntimeContextForTools: delivery
           ? (candidate) =>
-              finalizeCronPromptForResolvedTools({
+              resolveCronRuntimeContextForTools({
                 ...candidate,
                 deliveryRequested: delivery.deliveryRequested,
                 resolvedDelivery: delivery.resolvedDelivery,

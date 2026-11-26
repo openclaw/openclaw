@@ -59,10 +59,11 @@ import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import { prepareCliRunTerminalReply } from "./cli-runner/terminal-reply.js";
 import { settlePreparedCliRunWithTrajectory } from "./cli-runner/trajectory.js";
 import { runWithCliTurn } from "./cli-runner/turn-admission.js";
-import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
+import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
 import { resolveSourceReplyDelivery } from "./embedded-agent-runner/delivery-evidence.js";
+import type { RunCliAgentInternalParams } from "./embedded-agent-runner/run/internal-params.js";
 import { coerceToFailoverError, recordModelFallbackStop } from "./failover-error.js";
 import { runBeforeAgentRunGate } from "./harness/before-agent-run.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
@@ -122,12 +123,14 @@ export async function isCliBindingFlushed(
   return false;
 }
 
-export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
+export function runCliAgent(
+  paramsInput: RunCliAgentInternalParams,
+): Promise<EmbeddedAgentRunResult> {
   return runWithCliTurn(paramsInput, runCliAgentInternal);
 }
 
 async function runCliAgentInternal(
-  params: RunCliAgentParams,
+  params: RunCliAgentInternalParams,
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);

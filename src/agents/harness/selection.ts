@@ -209,9 +209,7 @@ export async function runAgentHarnessAttempt(
   nativeSessionRuntime?: import("../embedded-agent-runner/run/model-setup.js").PreparedNativeSessionRuntime,
 ): Promise<EmbeddedRunAttemptResult> {
   assertOperatorAccessProgramAllowed(readRunOperatorAuthority(params), params.cyberAccessProgram);
-  let internalParams: EmbeddedRunAttemptInternalParams & {
-    systemAgentTool?: SystemAgentToolOptions;
-  } = params;
+  let internalParams = params;
   if (nativeSessionRuntime) {
     await nativeSessionRuntime.assertCurrent();
   } else {
@@ -575,6 +573,7 @@ function withoutPluginHarnessPrivateState(
     assistantErrorTranscript: _assistantErrorTranscript,
     compactionCountOwner: _compactionCountOwner,
     completionCheck: _completionCheck,
+    resolveRuntimeContextForTools: _resolveRuntimeContextForTools,
     preparedSessionTarget: _preparedSessionTarget,
     bindWatchdogAttempt: _bindWatchdogAttempt,
     onMemoryFlushModelProgress: _onMemoryFlushModelProgress,
@@ -621,7 +620,7 @@ function prepareHarnessFinalizationParams(
 }
 
 async function withoutInternalHarnessAuthority(
-  params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptInternalParams,
   harness: AgentHarness,
   builtIn: boolean,
   ownerPluginId: string | undefined,

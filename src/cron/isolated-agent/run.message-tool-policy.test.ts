@@ -11,6 +11,7 @@ import {
   setCliRunnerPrepareTestDeps,
 } from "../../agents/cli-runner/prepare.test-support.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { applyJobPatch } from "../service/jobs.js";
 import { messageToolOutcome } from "./delivery-dispatch.test-fixtures.js";
@@ -110,15 +111,16 @@ function runPrompt(runParams: Record<string, unknown>, messageToolAvailable = fa
   if (typeof prompt !== "string") {
     throw new Error("expected run prompt to be a string");
   }
-  const finalizer = runParams.finalizePromptForResolvedTools;
-  if (typeof finalizer !== "function") {
+  expect(runParams.finalizePromptForResolvedTools).toBeUndefined();
+  const resolver = runParams.resolveRuntimeContextForTools;
+  if (typeof resolver !== "function") {
     return prompt;
   }
-  const finalized = finalizer({ prompt, messageToolAvailable });
-  if (typeof finalized !== "string") {
-    throw new Error("expected finalized run prompt to be a string");
-  }
-  return finalized;
+  const fragments = (
+    resolver as NonNullable<RunEmbeddedAgentInternalParams["resolveRuntimeContextForTools"]>
+  )({ messageToolAvailable });
+  expect(runParams.prompt).toBe(prompt);
+  return [prompt, ...fragments.map((fragment) => fragment.text)].join("\n\n");
 }
 function mockCliAnnounce() {
   mockAnnounce();
