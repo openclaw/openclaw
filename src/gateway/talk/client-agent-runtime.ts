@@ -25,20 +25,21 @@ import type { TalkClientRunAuthority } from "./client-run-authority.js";
 import { isTalkConsultSourceCurrent } from "./run-ownership.js";
 
 const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
-  const [agentCommand, admission, admissionFacts, runtime, dispatch] = await Promise.all([
-    import("../../agents/agent-command.js"),
-    import("../../agents/admitted-run-context.js"),
-    import("../../agents/agent-command-admission-facts.js"),
-    import("../../runtime.js"),
-    import("./client-agent-runtime-dispatch.js"),
-  ]);
+  const [agentCommand, admission, admissionFacts, runtime, { withTalkConsultPublishedRuntime }] =
+    await Promise.all([
+      import("../../agents/agent-command.js"),
+      import("../../agents/admitted-run-context.js"),
+      import("../../agents/agent-command-admission-facts.js"),
+      import("../../runtime.js"),
+      import("./client-agent-runtime-dispatch.js"),
+    ]);
   return {
     agentCommandFromGatewayIngress: agentCommand.agentCommandFromGatewayIngress,
     attachAgentCommandAdmissionFacts: admissionFacts.attachAgentCommandAdmissionFacts,
     closeAdmittedRunDelegatedAuthority: admission.closeAdmittedRunDelegatedAuthority,
     createOperationalRunInstanceRef: admission.createOperationalRunInstanceRef,
     defaultRuntime: runtime.defaultRuntime,
-    withTalkConsultPublishedRuntime: dispatch.withTalkConsultPublishedRuntime,
+    withTalkConsultPublishedRuntime,
   };
 });
 
