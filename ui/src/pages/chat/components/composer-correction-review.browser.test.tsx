@@ -46,46 +46,51 @@ function reviewProps(overrides: Partial<ComposerCorrectionReviewProps> = {}) {
 it.each([
   ["Cancel", "onCancel"],
   ["Keep original", "onKeepOriginal"],
-] as const)("makes original-only %s reachable and operable by keyboard", async (label, callback) => {
-  const props = reviewProps();
-  const view = mountSolid(() => <ComposerCorrectionReview {...props} />);
-  const original = view.getByRole("region", { name: "Original recognized text" });
-  const candidate = view.getByRole("region", { name: "Proposed correction" });
-  expect(original.textContent).toBe(props.original);
-  expect(candidate.textContent).toBe(
-    "No correction is available. You can keep the original text or cancel.",
-  );
-  expect(view.getByRole("status").textContent).toBe(
-    "The recognized text needs your review. No correction was applied.",
-  );
-  await expect
-    .element(
-      view.getByText(
-        "Spoken corrections are unavailable. The recognized text has been kept unchanged.",
-      ),
-    )
-    .toBeVisible();
-  await expect.element(view.getByRole("button", { name: "Accept correction" })).toBeDisabled();
-  expect(view.container.querySelector("details")).toBeNull();
-  expect(original.closest("[aria-live]")).toBeNull();
-  expect(candidate.closest("[aria-live]")).toBeNull();
+] as const)(
+  "makes original-only %s reachable and operable by keyboard",
+  async (label, callback) => {
+    const props = reviewProps();
+    const view = mountSolid(() => <ComposerCorrectionReview {...props} />);
+    const original = view.getByRole("region", { name: "Original recognized text" });
+    const candidate = view.getByRole("region", { name: "Proposed correction" });
+    expect(original.textContent).toBe(props.original);
+    expect(candidate.textContent).toBe(
+      "No correction is available. You can keep the original text or cancel.",
+    );
+    expect(view.getByRole("status").textContent).toBe(
+      "The recognized text needs your review. No correction was applied.",
+    );
+    await expect
+      .element(
+        view.getByText(
+          "Spoken corrections are unavailable. The recognized text has been kept unchanged.",
+        ),
+      )
+      .toBeVisible();
+    await expect.element(view.getByRole("button", { name: "Accept correction" })).toBeDisabled();
+    expect(view.container.querySelector("details")).toBeNull();
+    expect(original.closest("[aria-live]")).toBeNull();
+    expect(candidate.closest("[aria-live]")).toBeNull();
 
-  original.focus();
-  await userEvent.tab();
-  expect(document.activeElement).toBe(candidate);
-  const labels = ["Cancel", "Keep original"];
-  for (const next of labels.slice(0, labels.indexOf(label) + 1)) {
+    original.focus();
     await userEvent.tab();
-    expect(document.activeElement).toBe(view.getByRole("button", { name: next, exact: true }));
-  }
-  await userEvent.keyboard("{Enter}");
-  expect(props[callback]).toHaveBeenCalledTimes(1);
-  for (const other of ["onCancel", "onKeepOriginal", "onAcceptCorrection"] as const) {
-    if (other !== callback) {
-      expect(props[other]).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(candidate);
+    const labels = ["Cancel", "Keep original"];
+    for (const next of labels.slice(0, labels.indexOf(label) + 1)) {
+      await userEvent.tab();
+      expect(document.activeElement).toBe(
+        view.getByRole("button", { name: new RegExp(`^${next}$`) }),
+      );
     }
-  }
-});
+    await userEvent.keyboard("{Enter}");
+    expect(props[callback]).toHaveBeenCalledTimes(1);
+    for (const other of ["onCancel", "onKeepOriginal", "onAcceptCorrection"] as const) {
+      if (other !== callback) {
+        expect(props[other]).not.toHaveBeenCalled();
+      }
+    }
+  },
+);
 
 it.each([
   [390, "light"],
@@ -135,7 +140,7 @@ it.each([true, false])(
     } else {
       await expect.element(view.getByRole("button", { name: "Keep original" })).toBeDisabled();
     }
-    await userEvent.click(view.getByRole("button", { name: "Cancel", exact: true }));
+    await userEvent.click(view.getByRole("button", { name: /^Cancel$/ }));
     expect(props.onCancel).toHaveBeenCalledTimes(1);
     expect(props.onAcceptCorrection).not.toHaveBeenCalled();
     expect(props.onKeepOriginal).not.toHaveBeenCalled();
@@ -168,7 +173,9 @@ it("presents a caller-supplied candidate and delegates keyboard acceptance", asy
   expect(view.getByText("Before").closest("[aria-live]")).toBeNull();
   for (const label of ["Cancel", "Keep original", "Accept correction"]) {
     await userEvent.tab();
-    expect(document.activeElement).toBe(view.getByRole("button", { name: label, exact: true }));
+    expect(document.activeElement).toBe(
+      view.getByRole("button", { name: new RegExp(`^${label}$`) }),
+    );
   }
   await userEvent.keyboard("{Enter}");
   expect(props.onAcceptCorrection).toHaveBeenCalledOnce();
@@ -213,7 +220,7 @@ it("keeps recognized text recoverable by keyboard when the optional review fails
   await page.screenshot({ path: ".artifacts/m03-review/unavailable-review-recovery.png" });
   original.focus();
   await userEvent.tab();
-  expect(document.activeElement).toBe(view.getByRole("button", { name: "Cancel", exact: true }));
+  expect(document.activeElement).toBe(view.getByRole("button", { name: /^Cancel$/ }));
   await userEvent.tab();
   expect(document.activeElement).toBe(view.getByRole("button", { name: "Keep original" }));
   await userEvent.keyboard("{Enter}");
@@ -277,7 +284,7 @@ it.each([
     expect(panel.scrollWidth).toBeLessThanOrEqual(panel.clientWidth);
     await expect.element(view.getByRole("button", { name: "Accept correction" })).toBeDisabled();
     for (const label of ["Cancel", "Keep original"]) {
-      const button = view.getByRole("button", { name: label, exact: true });
+      const button = view.getByRole("button", { name: new RegExp(`^${label}$`) });
       button.focus();
       await expect.element(button).toBeVisible();
       const rect = button.getBoundingClientRect();

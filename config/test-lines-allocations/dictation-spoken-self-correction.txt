@@ -1,5 +1,5 @@
 # M03 covers actual Gateway/draft recovery, ordered drain and cancellation,
 # capture admission, local-only preference persistence, mounted Escape/Send controls,
 # review presentation and structural edit-map boundaries. Semantic service remains deferred.
-# Exact net growth: 2,259 test lines; the first 400 use the ordinary allowance.
-1859
+# Exact net growth: 2,270 test lines; the first 400 use the ordinary allowance.
+1870

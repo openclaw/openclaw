@@ -771,7 +771,7 @@ describe("renderChatComposer controls", () => {
         onDraftChange.mockClear();
         const menuEscape = pressComposerKey(view.container, "Escape");
         expect(menuEscape.defaultPrevented).toBe(true);
-        expect(state.slashMenu.state.slashMenuOpen).toBe(false);
+        await waitForSolid(() => expect(state.slashMenu.state.slashMenuOpen).toBe(false));
         expect(cancel).not.toHaveBeenCalled();
         expect(onAbort).not.toHaveBeenCalled();
         expect(dictation.correctionCommitRequired).toBe(true);
@@ -779,9 +779,9 @@ describe("renderChatComposer controls", () => {
         // Real input makes insertion stale, but closing its menu must not erase readable recovery.
         expect(dictation.correctionReview?.canKeepOriginal).toBe(false);
         await waitForSolid(() =>
-          expect(view.container.querySelector(".composer-correction-review")?.textContent).toContain(
-            original,
-          ),
+          expect(
+            view.container.querySelector(".composer-correction-review")?.textContent,
+          ).toContain(original),
         );
         expect(escapedToWindow).toHaveBeenCalledOnce();
         escapedToWindow.mockClear();

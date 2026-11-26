@@ -8,13 +8,9 @@ import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
-import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import {
-  createApplicationGateway,
-  createApplicationGatewaySnapshot,
-} from "../../test-helpers/application-context-fixtures.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { createChatPaneDictationProps } from "./chat-pane-session-controls.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { createChatPageStateContext } from "./chat-state-context.test-support.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import { createPageState } from "./chat-state-page.ts";
@@ -216,17 +212,16 @@ function composerBoundary(h: ReturnType<typeof fixture>) {
   return { props, textarea, update, draft: () => draft, editRevision: () => state.editRevision };
 }
 
-// The actual transport/presentation scopes feed the production pane helper and
-// composer adapter. The existing fixture retains the capture and insertion owners.
+// Drive the actual pane lifecycle before projecting its state into the composer.
 function lifecycleBoundary(h: ReturnType<typeof fixture>, profileless = false) {
   const composer = composerBoundary(h);
-  const chat = createChatState({ awaitDomCommit: async () => true });
-  onTestFinished(chat.dispose);
-  const page = createPageState(createChatPageStateContext(), chat.createRenderLifecycle(), {
-    sessionKey: "agent:main:one",
-    dispatchEvent: () => true,
-  });
-  page.chatMessage = composer.draft();
+  const { pane, state: page } = createTestChatPane({ client: h.options.client ?? undefined });
+  // Simulate an already attached conversation; the compose target owns its current client.
+  Object.assign(pane, { stagedAttachmentGatewayOwner: h.options.client });
+  const chat = pane.chatState;
+  const gateway = pane.context.gateway;
+  pane.sessionKey = page.sessionKey = "agent:main:one";
+  page.handleChatDraftChange(composer.draft());
   page.currentSessionId = "physical-one";
   page.settings = {
     ...page.settings,
@@ -236,27 +231,19 @@ function lifecycleBoundary(h: ReturnType<typeof fixture>, profileless = false) {
         ? { version: 1, mode: "explicit", locale: "en-US" }
         : undefined,
   };
-  chat.attach(page);
   const writes = vi.spyOn(page, "handleChatDraftChange");
   const hello = sessionMutationGatewayHello();
-  const connected = createApplicationGatewaySnapshot({
-    client: h.options.client,
+  const connected: ApplicationGatewaySnapshot = {
+    ...gateway.snapshot,
     phase: "connected",
     hello: { ...hello, auth: { ...hello.auth, recoveryScope: "account-one" } },
     selfUser: profileless
       ? null
       : { id: "alice", identity: { type: "profile", id: "profile-alice" } },
-  });
-  const { gateway, publish } = createApplicationGateway(connected);
-  const lifecycle = createGatewayConnectionLifecycle(connected);
-  onTestFinished(lifecycle.dispose);
+  };
   const update = (patch: Partial<ApplicationGatewaySnapshot> = {}) => {
     const snapshot = { ...gateway.snapshot, ...patch };
-    publish(snapshot);
-    lifecycle.transition(snapshot);
-    page.connectionEpoch = lifecycle.epoch;
-    page.client = snapshot.client;
-    page.connected = snapshot.phase === "connected";
+    pane.applyGatewaySnapshot(snapshot);
     const scope = gatewayPresentationScope(gateway);
     const user = resolveCurrentSelfUser({
       snapshotUser:
@@ -272,15 +259,15 @@ function lifecycleBoundary(h: ReturnType<typeof fixture>, profileless = false) {
       ...createChatPaneDictationProps(
         page,
         chat.composerDraft,
-        () => true,
+        () => pane.state === page,
         user?.identity?.type === "profile" ? user.identity.id : null,
         gateway,
       ),
       onDraftChange: (value) => page.handleChatDraftChange(value),
     });
   };
-  update();
-  return { page, writes, gateway, connected, update };
+  update(connected);
+  return { pane, page, writes, gateway, connected, update, composer, chat };
 }
 
 beforeEach(() => {
@@ -732,10 +719,14 @@ describe("spoken corrections through composer dictation", () => {
       await h.finish(original);
       expect(h.owner.correctionReview?.canKeepOriginal).toBe(true);
     }
-    const epoch = boundary.page.connectionEpoch;
-    // A transient close keeps client/hello and temporarily clears selfUser.
-    boundary.update({ phase: "reconnecting", selfUser: undefined });
-    expect(boundary.page.connectionEpoch).toBeGreaterThan(epoch);
+    const epoch = boundary.pane.connectionGeneration;
+    const sessionId = boundary.page.currentSessionId;
+    const isDraftCurrent = boundary.chat.composerDraft.captureRevision();
+    const editRevision = boundary.composer.editRevision();
+    // Transport loss retains the client but clears the handshake and profile read.
+    boundary.update({ phase: "reconnecting", hello: null, selfUser: undefined });
+    expect(boundary.pane.connectionGeneration).toBeGreaterThan(epoch);
+    expect(boundary.page.connectionEpoch).toBe(boundary.pane.connectionGeneration);
     await stopped;
     await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(0);
@@ -753,6 +744,10 @@ describe("spoken corrections through composer dictation", () => {
     }
     boundary.update(boundary.connected);
     if (mode === "explicit") {
+      expect(boundary.page.currentSessionId, "physical session").toBe(sessionId);
+      expect(isDraftCurrent(), "draft publication").toBe(true);
+      expect(boundary.composer.editRevision(), "composer edit revision").toBe(editRevision);
+      expect(boundary.composer.props.canCompose, "compose authority").toBe(true);
       expect(h.owner.correctionReview).toMatchObject({ canAccept: false, canKeepOriginal: true });
       expect(h.owner.resolveCorrection("correction")).toBe(false);
       expect(h.owner.resolveCorrection("original")).toBe(true);
@@ -776,49 +771,52 @@ describe("spoken corrections through composer dictation", () => {
     ["explicit", "delayed final"],
     ["explicit", "timeout"],
     ["explicit", "failure"],
-  ] as const)("retains %s received text after %s through the production pane", async (mode, outcome) => {
-    const h = fixture({ corrections: { mode, locale: "en-US" } });
-    const boundary = lifecycleBoundary(h);
-    await h.start();
-    const preview = "Keep the received preview";
-    const final = "Keep the received final";
-    h.emit({ type: "partial", text: preview });
-    const stopped = h.owner.finishActive();
-    const duplicateFinal = h.retainFinal(final);
-    await vi.advanceTimersByTimeAsync(0);
-    if (outcome === "timeout") {
-      await vi.advanceTimersByTimeAsync(10_000);
-    } else {
-      h.final(final);
-      h.emit(
-        outcome === "failure"
-          ? { type: "error", message: "Controlled finalization failure" }
-          : { type: "close", reason: "completed" },
+  ] as const)(
+    "retains %s received text after %s through the production pane",
+    async (mode, outcome) => {
+      const h = fixture({ corrections: { mode, locale: "en-US" } });
+      const boundary = lifecycleBoundary(h);
+      await h.start();
+      const preview = "Keep the received preview";
+      const final = "Keep the received final";
+      h.emit({ type: "partial", text: preview });
+      const stopped = h.owner.finishActive();
+      const duplicateFinal = h.retainFinal(final);
+      await vi.advanceTimersByTimeAsync(0);
+      if (outcome === "timeout") {
+        await vi.advanceTimersByTimeAsync(10_000);
+      } else {
+        h.final(final);
+        h.emit(
+          outcome === "failure"
+            ? { type: "error", message: "Controlled finalization failure" }
+            : { type: "close", reason: "completed" },
+        );
+      }
+      expect(await stopped).toBe(mode === "off");
+      const expected = outcome === "delayed final" ? final : preview;
+      if (mode === "explicit") {
+        expect(h.owner.correctionReview).toMatchObject({
+          canAccept: false,
+          canKeepOriginal: true,
+          result: { original: expected, candidate: expected, plan: null },
+        });
+        expect(boundary.writes).not.toHaveBeenCalled();
+        expect(h.owner.resolveCorrection("original")).toBe(true);
+      }
+      expect(boundary.page.chatMessage).toBe(
+        mode === "off" ? expected : `Existing field text. ${expected}`,
       );
-    }
-    expect(await stopped).toBe(mode === "off");
-    const expected = outcome === "delayed final" ? final : preview;
-    if (mode === "explicit") {
-      expect(h.owner.correctionReview).toMatchObject({
-        canAccept: false,
-        canKeepOriginal: true,
-        result: { original: expected, candidate: expected, plan: null },
-      });
-      expect(boundary.writes).not.toHaveBeenCalled();
-      expect(h.owner.resolveCorrection("original")).toBe(true);
-    }
-    expect(boundary.page.chatMessage).toBe(
-      mode === "off" ? expected : `Existing field text. ${expected}`,
-    );
-    expect(boundary.writes).toHaveBeenCalledOnce();
-    duplicateFinal();
-    h.emit({ type: "close", reason: "completed" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(boundary.writes).toHaveBeenCalledOnce();
-    expect(boundary.page.chatMessage).toBe(
-      mode === "off" ? expected : `Existing field text. ${expected}`,
-    );
-  });
+      expect(boundary.writes).toHaveBeenCalledOnce();
+      duplicateFinal();
+      h.emit({ type: "close", reason: "completed" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(boundary.writes).toHaveBeenCalledOnce();
+      expect(boundary.page.chatMessage).toBe(
+        mode === "off" ? expected : `Existing field text. ${expected}`,
+      );
+    },
+  );
 
   it.each([
     "profile",

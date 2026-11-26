@@ -145,10 +145,10 @@ export function collectDictationProtectedSpans(
   const text = source.text;
   for (let index = 0; index < text.length; index += 1) {
     const mark = text[index];
-    const close = mark === "“" ? "”" : mark === "‘" ? "’" : mark;
     if (mark !== '"' && mark !== "'" && mark !== "`" && mark !== "“" && mark !== "‘") {
       continue;
     }
+    const close = mark === "“" ? "”" : mark === "‘" ? "’" : mark;
     // Apostrophes in contractions and possessives are lexical punctuation.
     if (mark === "'" && /[\p{L}\p{N}]/u.test(text[index - 1] ?? "")) {
       continue;
@@ -383,12 +383,13 @@ export function validateDictationPlan(
     }
     ids.add(edit.id);
     sourceIds.add(edit.sourceSpanId);
-    if (!range(edit.range, source.text.length) || !range(edit.triggerRange, source.text.length)) {
+    const { range: editRange, triggerRange } = edit;
+    if (!range(editRange, source.text.length) || !range(triggerRange, source.text.length)) {
       return fail("invalid-range");
     }
     if (
-      !validBoundary(edit.range) ||
-      !validBoundary(edit.triggerRange) ||
+      !validBoundary(editRange) ||
+      !validBoundary(triggerRange) ||
       !isWellFormed(edit.replacement)
     ) {
       return fail("unicode-boundary");
@@ -407,8 +408,8 @@ export function validateDictationPlan(
     if (
       protection.some(
         (span) =>
-          dictationRangesOverlap(span.range, edit.range) ||
-          dictationRangesOverlap(span.range, edit.triggerRange),
+          dictationRangesOverlap(span.range, editRange) ||
+          dictationRangesOverlap(span.range, triggerRange),
       )
     ) {
       return fail("protected-span");
@@ -416,10 +417,10 @@ export function validateDictationPlan(
     edits.push({
       id: edit.id,
       sourceSpanId: edit.sourceSpanId,
-      range: edit.range,
+      range: editRange,
       replacement: edit.replacement,
       category: edit.category,
-      triggerRange: edit.triggerRange,
+      triggerRange,
       chainDepth: edit.chainDepth,
     });
   }
