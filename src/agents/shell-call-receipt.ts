@@ -25,15 +25,16 @@ export function markShellPollResult<T extends object>(
   pollCallId: string,
 ): T {
   const receipt = processReceipts.get(session);
-  if (
-    receipt &&
-    hasObservedExit(session) &&
-    !session.cleanupUncertain &&
-    !session.finalizationFailed
-  ) {
+  if (receipt && hasObservedExit(session) && isShellCleanupCertain(session)) {
     return bindShellResultObservation(result, { ...receipt, callId: pollCallId });
   }
   return result;
+}
+
+export function isShellCleanupCertain(
+  session: Pick<ProcessSession, "cleanupUncertain" | "finalizationFailed">,
+): boolean {
+  return !session.cleanupUncertain && !session.finalizationFailed;
 }
 
 export function hasObservedExit<
@@ -58,10 +59,13 @@ export function hasObservedExit<
 export function markShellCallResult<T extends { details: ExecToolDetails }>(
   result: T,
   receipt: ShellCallReceipt | undefined,
+  session?: ProcessSession,
 ): T {
   const detail = result.details;
   if (
     receipt &&
+    // The root can exit normally while the process owner still cannot confirm its descendants stopped.
+    (!session || isShellCleanupCertain(session)) &&
     !getInternalToolResultProvenance(result) &&
     (detail.status === "completed" || detail.status === "failed") &&
     (detail.reason === "not-dispatched" ||

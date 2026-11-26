@@ -400,8 +400,10 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             return receipt.recordDeferredOutcome;
           }
         : undefined;
-      const finish = (result: Parameters<typeof attachExecApprovalReview>[0]) =>
-        markShellCallResult(attachExecApprovalReview(result, approvalReview), receipt);
+      const finish = (
+        result: Parameters<typeof attachExecApprovalReview>[0],
+        session?: ExecProcessHandle["session"],
+      ) => markShellCallResult(attachExecApprovalReview(result, approvalReview), receipt, session);
       let run: ExecProcessHandle;
       let settled = false;
       try {
@@ -708,6 +710,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                 session: run.session,
               })
             : buildExecRunningResult(run, params.yieldMs, warnings),
+          run.session,
         );
       } catch (error) {
         if (toolAborted) {

@@ -86,7 +86,7 @@ import {
 import { inlineEvalFact, opaqueProgramAsk } from "./bash-tools.exec-interpreter-approval.js";
 import { createApprovalSlug, runExecProcess } from "./bash-tools.exec-runtime.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
-import { hasObservedExit } from "./shell-call-receipt.js";
+import { hasObservedExit, isShellCleanupCertain } from "./shell-call-receipt.js";
 
 const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
   kind: "one-shot",
@@ -1171,12 +1171,7 @@ export async function processGatewayAllowlist(
       const { run } = admitted;
 
       const outcome = await run.promise;
-      if (
-        !outcome.timedOut &&
-        !run.session.cleanupUncertain &&
-        !run.session.finalizationFailed &&
-        hasObservedExit(outcome)
-      ) {
+      if (!outcome.timedOut && isShellCleanupCertain(run.session) && hasObservedExit(outcome)) {
         await recordOutcome?.({ kind: "exited", exitCode: outcome.exitCode });
       }
       const dynamicFollowupText = await resolveGatewayExecApprovalFollowupText({
