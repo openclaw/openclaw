@@ -45,10 +45,8 @@ function traceSqlExecutions(
 ): {
   database: DatabaseSync;
   statements: string[];
-  readonly materializedIndexSqlBytes: number;
 } {
   const statements: string[] = [];
-  let materializedIndexSqlBytes = 0;
   function observe(row: unknown) {
     if (
       row &&
@@ -57,7 +55,6 @@ function traceSqlExecutions(
       typeof row.sql === "string" &&
       /^CREATE (?:UNIQUE )?INDEX\b/iu.test(row.sql)
     ) {
-      materializedIndexSqlBytes += Buffer.byteLength(row.sql, "utf8");
       onIndexSql?.(row.sql);
     }
   }
@@ -103,9 +100,6 @@ function traceSqlExecutions(
       },
     }) as DatabaseSync,
     statements,
-    get materializedIndexSqlBytes() {
-      return materializedIndexSqlBytes;
-    },
   };
 }
 
@@ -157,7 +151,10 @@ describe("repairCanonicalSqliteIndexes", () => {
           }
           return sum + Buffer.byteLength(row.sql, "utf8");
         }, 0);
-        const traced = traceSqlExecutions(db);
+        let materializedIndexSqlBytes = 0;
+        const traced = traceSqlExecutions(db, (sql) => {
+          materializedIndexSqlBytes += Buffer.byteLength(sql, "utf8");
+        });
 
         expect(
           repairCanonicalSqliteIndexes(traced.database, "test database", schema, {
@@ -166,7 +163,7 @@ describe("repairCanonicalSqliteIndexes", () => {
         ).toEqual([]);
 
         expect(db.prepare("PRAGMA schema_version").get()).toEqual(before);
-        expect(traced.materializedIndexSqlBytes).toBeLessThanOrEqual(indexSqlBytes);
+        expect(materializedIndexSqlBytes).toBeLessThanOrEqual(indexSqlBytes);
         expect(traced.statements.length).toBeLessThanOrEqual(7);
       } finally {
         db.close();

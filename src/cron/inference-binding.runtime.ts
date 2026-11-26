@@ -28,7 +28,7 @@ import {
   resolveCronModelSelectionOwner,
 } from "./isolated-agent/model-selection.js";
 
-/** Capture a current owner; null means an explicit, validated native CLI account selection. */
+/** Capture a current owner; null means a validated configured-key or native CLI selection. */
 export async function captureCronInferenceBinding(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -213,7 +213,16 @@ export async function captureCronInferenceBinding(params: {
     if (attempt?.kind !== "profile") {
       // A configured key keeps the job unbound, the same rule its runs follow.
       const source = attempt?.plan.credentialSource;
-      if (source?.kind === "direct" && !isConfiguredKeyAuthSource(source)) {
+      if (isConfiguredKeyAuthSource(source)) {
+        const { runtime } = resolveExecution(params.runtimeSessionEntry);
+        if (params.recordedRuntime && params.recordedRuntime !== runtime) {
+          throw new Error(
+            `The automation runs on runtime ${params.recordedRuntime}, which is unavailable for this account; the edit would move it to runtime ${runtime}.`,
+          );
+        }
+        return null;
+      }
+      if (source?.kind === "direct") {
         throw new Error(
           "Automation requires a stored inference account or a key in the environment or provider config. Select an account with model@profile.",
         );
@@ -319,7 +328,7 @@ export async function acquireCronInferenceAuthorization(params: {
       error.code === "MCP_AUTHORIZATION_RETIRED"
     ) {
       throw new Error(
-        `${label} runs on account ${params.binding.profileId}, which was removed or signed out. Sign in again, or choose another account: openclaw automations edit ${jobId} --model <provider/model>@<profileId> (list accounts: openclaw models auth list).`,
+        `${label} runs on account ${params.binding.profileId}, which was removed or signed out. Sign in again, or choose another account: openclaw automations edit ${jobId} --model <provider/model>@<profileId> (list accounts: openclaw gateway call models.authStatus). To use a key in the environment or provider config instead: openclaw automations edit ${jobId} --model <provider/model>.`,
         { cause: error },
       );
     }

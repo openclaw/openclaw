@@ -159,19 +159,18 @@ export async function prepareUserProfileAdministration(options: GatewayRequestHa
   return assertCurrent;
 }
 
+/**
+ * Refuses only unknown roles. An assignment saved before gateway.roles.default exists grants
+ * nothing until a default turns enforcement on, so administrators can be chosen first.
+ */
 export function resolveUserRoleAssignmentError(
   getConfig: () => OpenClawConfig,
   role: string | null,
-  subject?: import("../operator-role-enforcement.js").OperatorRoleSubject,
 ) {
   if (role === null) {
     return undefined;
   }
-  const cfg = getConfig();
-  const definitions = cfg.gateway?.roles?.definitions;
-  if (definitions && cfg.gateway?.roles?.default === undefined && !subject?.openclawIdMember) {
-    return "Named-role assignment requires gateway.roles.default to enable named-role enforcement.";
-  }
+  const definitions = getConfig().gateway?.roles?.definitions;
   return definitions && Object.hasOwn(definitions, role)
     ? undefined
     : `unknown operator role "${role}"; define it under gateway.roles.definitions before assigning it`;

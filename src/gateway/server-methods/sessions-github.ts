@@ -22,6 +22,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { githubAccountAvatarUrl } from "../../shared/github-account-avatar.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
 import { createControlUiSessionPrRead } from "../control-ui-session-pr-read.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { performSessionGitHubPreparation } from "../github-pr-workspace-preparation.js";
 import { performSessionGitHubAction } from "../github-publication-actions.js";
 import {
@@ -138,10 +139,10 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
       options.respond(
         false,
         undefined,
-        errorShape(
-          forbidden ? ErrorCodes.FORBIDDEN : ErrorCodes.UNAVAILABLE,
-          error instanceof Error ? error.message : sessionGitHubFailureMessages[method],
-          acquisition
+        // In-process tool callers keep the typed failure, so a refusal reaches the model as one.
+        errorShapeFromError(forbidden ? ErrorCodes.FORBIDDEN : ErrorCodes.UNAVAILABLE, error, {
+          message: error instanceof Error ? error.message : sessionGitHubFailureMessages[method],
+          ...(acquisition
             ? {
                 retryable: acquisition.kind === "store-unavailable",
                 details: { leaseAcquisition: acquisition },
@@ -153,8 +154,8 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
                   "idempotencyKey" in options.params &&
                   error.rejection?.idempotencyKey === options.params.idempotencyKey
                 ? { details: error.rejection }
-                : undefined,
-        ),
+                : {}),
+        }),
       );
     }
   });

@@ -5,6 +5,7 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -179,14 +180,26 @@ internal fun ChatTurnRecapRow(recap: TurnRecap) {
     horizontalArrangement = Arrangement.spacedBy(7.dp),
   ) {
     WorkingClawIcon(runKey = "turn-recap", color = ClawTheme.colors.primary, parked = true)
-    Text(
-      text = nativeStringResource("Done in \$duration", duration),
-      style = ClawTheme.type.caption,
-      color = ClawTheme.colors.textMuted,
-    )
-    tokens?.let {
-      Text(text = nativeStringResource("·"), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
-      Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    FlowRow(
+      modifier = Modifier.weight(1f),
+      horizontalArrangement = Arrangement.spacedBy(7.dp),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+      itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = nativeStringResource("Done in \$duration", duration),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
+      tokens?.let {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+          Text(text = nativeStringResource("·"), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
+          Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        }
+      }
     }
   }
 }

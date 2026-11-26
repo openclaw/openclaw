@@ -18,6 +18,11 @@ import type {
 type CronDelivery = NonNullable<CronJob["delivery"]>;
 type CronFormAnnounceDelivery = Extract<CronDelivery, { mode: "announce" }>;
 
+export type CronRunsFailure = {
+  reason: "load" | "more" | "readAccess" | "accessDenied" | "automationUnavailable" | "blocked";
+  detail: string;
+};
+
 export type CronFormState = {
   name: string;
   description: string;
@@ -35,6 +40,7 @@ export type CronFormState = {
   eventArguments: string;
   eventSource: string;
   scheduleAt: string;
+  originalScheduleAt?: { at: string; local: string };
   everyAmount: string;
   everyUnit: "seconds" | "minutes" | "hours" | "days";
   cronExpr: string;
@@ -156,7 +162,7 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   // only the current filtered/paged table cache.
   cronEditingJob: CronJob | null;
   cronCloningJob: CronJob | null;
-  cronRunsError: string | null;
+  cronRunsError: CronRunsFailure | null;
   cronRunsJobId: string | null;
   cronRunsRunId?: string | null;
   cronRunsLoadingMore: boolean;

@@ -548,8 +548,8 @@ runner snapshots the prepared tree. Node is pinned to `24.22.1`; the committed
 public definition also binds its executable hash, the five workload sources and
 twenty expected cases. The observed runtime fingerprint is retained before the
 fixed-runtime comparison, including its executable SHA-256. Preparation has a
-40-minute install timeout, controls have
-one 30-minute deadline, and the job has a 75-minute limit. Controls disable
+40-minute preparation timeout shared by the installer and Kysely generation,
+controls have one 30-minute deadline, and the job has a 75-minute limit. Controls disable
 package downloads and reject persistent changes to prepared inputs.
 
 The `node-cache-workload-<run-id>-<attempt>` artifact retains preparation logs,
@@ -612,6 +612,38 @@ tracing stays off during measurement. Incomplete pairs admit no comparison.
 The earlier qualification receipt retains `timingAdmission: false`; the new
 measurement output records the verified provenance and resulting analysis.
 This CLI does not add a scheduled workflow, install dependencies or publish data.
+
+The manual `node-cache-qualified-measurement` workflow mode prepares the same
+fixed workload and runs fresh controls followed immediately by measurement at
+the same harness SHA. Use a fresh dispatch with `target_ref` empty or equal to
+that SHA. It does not reuse artifacts from an earlier run. A failed control
+prevents measurement; both modes retain the same shared workload arguments and
+offline cache settings. Release, live-provider and publishing inputs cannot
+select other jobs in this mode.
+
+This mode has a 240-minute job limit. Its first owned validation step records a
+230-minute work deadline to target a ten-minute finalization allowance. This
+anchor is not the runner's job-start time, so the actual finalization allowance
+can be shorter. The preparation admission deadline
+is 40 minutes after that anchor and includes checkout, runtime and pnpm setup
+elapsed time. Checkout and setup actions each have a five-minute timeout;
+runtime verification has two minutes. The admission deadline does not cancel
+an action asynchronously: after these bounded steps, installation is rejected
+if no preparation budget remains. The installer and Kysely generation share
+that remaining budget, with 30 seconds reserved for TERM/KILL settlement.
+Successful preparation is rejected if either absolute deadline has passed before
+controls are admitted. Controls receive at most 30 minutes and measurement
+at most 150 minutes, each capped by the remaining work budget. An exhausted
+budget stops before the next command. These are execution limits, not estimates
+of how long the workload will take.
+
+Measurement uses new physical output and scratch directories outside both
+checkouts and the control output. It finishes before the control artifact is
+finalized. The separate `node-cache-measurement-<run-id>-<attempt>` artifact
+retains admission provenance, paired records, analysis when complete and the
+measurement terminal; the control artifact retains its original qualification
+terminal and the recorded workflow clock. Finalizers create failure terminals
+only when absent, and both uploads run after failure. No report is published.
 
 ## Security Review reconciler
 

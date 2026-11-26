@@ -7,11 +7,12 @@ import {
 } from "../../../src/shared/session-method-scopes-base.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { invitedSessionAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { isSessionDeferredPatch } from "./sessions/patch.ts";
 
-type SessionAccessRow = Pick<GatewaySessionRow, "sharingRole">;
+type SessionAccessRow = Pick<GatewaySessionRow, "sharingRole" | "invitedAccess" | "permissionMode">;
 
 export type SessionMethodAccess =
   | { allowed: true; requiredScope: OperatorScope }
@@ -77,6 +78,33 @@ export function readSessionMethodScopeAccess(
       : undefined) ?? broadScope;
   if (!requiredScope) {
     throw new Error(`Missing session method scope: ${request.method}`);
+  }
+  const invitation = invitedSessionAccess(request.session);
+  if (request.sessionScope && invitation === "send" && broadScope !== "operator.admin") {
+    const params = request.params;
+    const stricterPermission =
+      request.method === "sessions.patch" &&
+      isRecord(params) &&
+      Object.keys(params).every((key) =>
+        ["key", "agentId", "expectedSessionId", "permissionMode"].includes(key),
+      ) &&
+      (params.permissionMode === "read-only" ||
+        (params.permissionMode === "guarded" && request.session?.permissionMode !== "read-only"));
+    // The Gateway checks the initiating participant against this exact run;
+    // invitation evidence never grants session-wide cancellation authority.
+    const exactChatAbort =
+      request.method === "chat.abort" &&
+      isRecord(params) &&
+      typeof params.runId === "string" &&
+      params.runId.trim().length > 0 &&
+      roleScopesAllow({
+        role: auth?.role ?? "operator",
+        requestedScopes: ["operator.sessions.read"],
+        allowedScopes: auth?.scopes ?? [],
+      });
+    if (request.method === "chat.send" || stricterPermission || exactChatAbort) {
+      return { allowed: true, requiredScope };
+    }
   }
   const scopes = auth?.scopes;
   const role = auth?.role ?? "operator";

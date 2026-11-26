@@ -1,73 +1,46 @@
-// Shared verbatim by both launcher formats during the PR1 cutover. Only Node built-ins.
-export const ROLLBACK_SOURCE = String.raw`
-function collectPreserved(dir, suffix, since, depth, found) {
-  let entries = [];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return found;
-  }
-  for (const entry of entries) {
-    const file = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (depth > 0 && !["git-install", "npm", "node_modules", "tmp", "logs"].includes(entry.name)) {
-        collectPreserved(file, suffix, since, depth - 1, found);
-      }
-    } else if (entry.name.endsWith(suffix) && fs.lstatSync(file).ctimeMs >= since) {
-      found.push(file.slice(0, -suffix.length));
-    }
-  }
-  return found;
+// Frozen launcher code: only Node built-ins, no database or release dependency.
+export const MANIFEST_RESTORE_SOURCE = String.raw`
+function invalidRestore(file) {
+  return new Error("Invalid update restore manifest " + file + ". Preserve it and run openclaw triage before retrying.");
 }
-
-function restoreState(files, suffix) {
-  const restored = new Set(files);
-  for (const file of files) {
-    for (const companion of ["-wal", "-journal", "-shm", ".seal"]) {
-      if (!restored.has(file + companion)) {
-        fs.rmSync(file + companion, { force: true });
-      }
-    }
-  }
-  for (const file of files) {
-    if (fs.existsSync(file + suffix)) {
-      fs.renameSync(file + suffix, file);
-    }
-  }
-}
-
-function retirePlans(stateDir, generation) {
-  const applied = path.join(stateDir, ".upgraded-" + generation + ".json");
-  let record;
+function readRestoreManifest(trial, replay) {
+  const file = path.join(path.dirname(linked(trial.target)), ".restore");
+  let manifest;
   try {
-    record = JSON.parse(fs.readFileSync(applied, "utf8"));
+    manifest = JSON.parse(fs.readFileSync(file, "utf8"));
   } catch (error) {
-    if (error?.code !== "ENOENT") {
-      throw error;
+    if (error.code === "ENOENT") return null;
+    throw invalidRestore(file);
+  }
+  if (!manifest || manifest.v !== 1 || typeof manifest.runId !== "string" || !manifest.runId || !Array.isArray(manifest.files)) {
+    throw invalidRestore(file);
+  }
+  const seen = new Set();
+  for (const entry of manifest.files) {
+    if (!entry || typeof entry.live !== "string" || !path.isAbsolute(entry.live) || seen.has(entry.live) ||
+        (entry.preimage !== null && (typeof entry.preimage !== "string" || !path.isAbsolute(entry.preimage)))) {
+      throw invalidRestore(file);
+    }
+    seen.add(entry.live);
+    if (!replay && entry.preimage !== null) {
+      const image = fs.lstatSync(entry.preimage, { throwIfNoEntry: false });
+      if (!image?.isFile() && !image?.isSymbolicLink()) throw invalidRestore(file);
     }
   }
-  // Keep the record on failure so an interrupted rollback retries its removals.
-  for (const op of record?.ops ?? []) {
-    if (op.kind === "add") {
-      fs.rmSync(op.live, { force: true });
-    }
+  return manifest.files;
+}
+function restoreManifestFiles(files) {
+  // Sidecars must be removed before a database image is restored, regardless of entry order.
+  for (const entry of files) {
+    if (entry.preimage === null) fs.rmSync(entry.live, { force: true });
   }
-  fs.rmSync(applied, { force: true });
-  for (const entry of fs.readdirSync(stateDir)) {
-    if (!entry.startsWith(".upgrade-" + generation + "-")) {
-      continue;
+  for (const entry of files) {
+    if (entry.preimage === null) continue;
+    if (fs.lstatSync(entry.preimage, { throwIfNoEntry: false })) {
+      fs.renameSync(entry.preimage, entry.live);
+    } else if (!fs.lstatSync(entry.live, { throwIfNoEntry: false })) {
+      throw new Error("Update restore lost both " + entry.live + " and " + entry.preimage + ". Preserve the manifest and run openclaw triage.");
     }
-    const dir = path.join(stateDir, entry);
-    let plan;
-    try {
-      plan = JSON.parse(fs.readFileSync(path.join(dir, "plan.json"), "utf8"));
-    } catch {}
-    for (const op of plan?.ops ?? []) {
-      if (op.kind === "add" && op.next && !fs.existsSync(op.next)) {
-        fs.rmSync(op.live, { force: true });
-      }
-    }
-    fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 `;
