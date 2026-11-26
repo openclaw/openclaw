@@ -123,11 +123,11 @@ Quick start follows this path:
 3. Choose the detected connection you want, or select a supported provider.
    Only that connection is tested with a real completion. If it fails, review the
    error and choose whether to retry, select another provider, or skip.
-   If setup saved a sign-in before the check failed and discovery was allowed,
-   select the saved sign-in to retry. For a regular agent model, keep the
-   suggested model ID or enter another ID from the same provider. You do not
-   need to sign in again, and the default model changes only after a reply
-   passes verification.
+   If discovery was allowed, you can retry a saved sign-in without signing in
+   again. After a failed check, select the saved sign-in to keep the suggested
+   regular agent model ID or enter another ID from the same provider. This also
+   works for a sign-in detected when you started setup. The default model
+   changes only after a reply passes verification.
 4. Choose **More…** for additional provider groups, including installable official
    plugins. Each provider's regions, plans, and supported browser, device, API-key,
    or token methods appear in a second menu. Plugin installation requires its

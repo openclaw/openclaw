@@ -141,7 +141,9 @@ export async function runManualStage(params: {
       }),
       t("wizard.guided.aiAccessTitle"),
     );
-    if (!candidate && params.refreshSavedCandidates) {
+    if (candidate?.kind.startsWith("saved-auth:")) {
+      savedRetryKinds.add(candidate.kind);
+    } else if (!candidate && params.refreshSavedCandidates) {
       // Manual auth can save a sign-in before verification fails. Add that
       // inventory without repeating discovery or automatically trying a model.
       const saved = await params.refreshSavedCandidates();
