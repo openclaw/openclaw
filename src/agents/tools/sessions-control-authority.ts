@@ -18,7 +18,7 @@ export async function prepareSessionControlTarget(params: {
   sessionKey: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string | null;
-  operation: "archive" | "restore" | "stop";
+  operation: "archive" | "restore" | "stop" | "snooze";
   authority?: AdmittedRunOperatorAuthority;
 }) {
   // Identity-only callers compose their own invocation guard. In particular, accepted
@@ -108,7 +108,8 @@ export async function prepareSessionControlTarget(params: {
       if (denied) {
         throw new ToolAuthorizationError("Session control access was revoked or denied.");
       }
-      if (source.allows("operator.admin")) {
+      // Sidebar snooze/wake requires ordinary write access, not archive's creator check.
+      if (params.operation === "snooze" || source.allows("operator.admin")) {
         return;
       }
       const creatorId = sessionCreatorProfileId(current.createdActor);

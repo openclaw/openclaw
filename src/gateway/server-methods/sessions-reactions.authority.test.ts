@@ -187,3 +187,22 @@ it.each(["private", "previously-absent"] as const)(
       }
     }),
 );
+
+it("requires suggest or send membership for ceiling-role reactions", () =>
+  withReactionState(async () => {
+    const cfg = roleConfig("view");
+    cfg.gateway!.roles!.definitions["test-role"]!.sessions = {
+      others: "invited",
+      maxInvitedAccess: "send",
+    };
+    const requestContext = context(cfg);
+    for (const access of ["read", "suggest", "send"] as const) {
+      const key = `agent:main:reaction-level-${access}`;
+      const scope = await seedSession({ visibility: "read-only", sessionId: access }, key);
+      addSessionMember(scope, { identityId: "alice", addedBy: "owner", access });
+      const messageId = await appendMessage(undefined, scope);
+      expect(
+        (await setReaction(messageId, { sessionKey: key }, client("alice"), requestContext))[0],
+      ).toBe(access !== "read");
+    }
+  }));

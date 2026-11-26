@@ -88,6 +88,27 @@ it("falls back to the offset when Gateway ICU does not recognize the browser tim
   );
 });
 
+it("shares the UTC report for a named UTC zone even with a conflicting offset", async () => {
+  const config = {};
+  const startMs = Date.UTC(2026, 1, 1);
+  const endMs = Date.UTC(2026, 1, 3) - 1;
+  const summary = costSummary(7, 0.25);
+  loadCost.mockResolvedValueOnce(summary);
+
+  expectUsage(await request(dates, config), summary);
+  expectUsage(
+    await request({ ...dates, mode: "specific", timeZone: "UTC", utcOffset: "UTC+5:30" }, config),
+    summary,
+  );
+  expect(loadCost).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      startMs,
+      endMs,
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    }),
+  );
+});
+
 it("includes later years when a split-day report starts before year 1000", () => {
   const range = resolveDateRange({
     startDate: "0999-01-01",
@@ -118,6 +139,12 @@ it.each(["specific", "gateway"])("handles skipped civil dates in %s mode", (mode
     expectRange({ ...params, startDate: "2011-12-29", endDate: "2011-12-29" }, [
       Date.UTC(2011, 11, 29, 10),
       Date.UTC(2011, 11, 30, 10) - 1,
+    ]);
+    // Local Dec 31 follows Dec 29. A trailing two-day window includes only Dec 31.
+    vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(new Date("2011-12-30T22:00:00Z"));
+    expectRange({ ...params, days: 2 }, [
+      Date.UTC(2011, 11, 30, 10),
+      Date.UTC(2011, 11, 31, 10) - 1,
     ]);
   });
 });

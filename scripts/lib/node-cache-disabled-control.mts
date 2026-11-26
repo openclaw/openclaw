@@ -66,6 +66,7 @@ export const NODE_CACHE_DISABLED_INPUTS = [
   "scripts/lib/prepared-workload-inventory.mts",
   "scripts/lib/node-cache-workload-inputs.mts",
   "scripts/lib/node-cache-disabled-control.mts",
+  "scripts/lib/node-cache-qualification.mts",
   "src/shared/deferred.ts",
 ] as const;
 
@@ -116,7 +117,7 @@ function sealSeed(root: string) {
   chmodSync(root, 0o500);
 }
 
-function assertSealedSeed(root: string, expected: ReturnType<typeof readNodeCacheSeed>) {
+export function assertSealedSeed(root: string, expected: ReturnType<typeof readNodeCacheSeed>) {
   if (JSON.stringify(readNodeCacheSeed(root)) !== JSON.stringify(expected)) {
     throw new Error("Sealed seed bytes changed");
   }
@@ -182,6 +183,7 @@ async function qualifyControls(input: Context, full: boolean) {
     kind: full ? "node-cache-workload-qualification" : "node-cache-disabled-control",
     scope: full ? "disabled-empty-seeded" : "disabled-only",
     timingAdmission: false,
+    controlScratchDir: scratch,
     ...(!full ? { controlAttempted: false, checks } : {}),
   };
   const controls: Array<{ kind: string; status: string }> = [];

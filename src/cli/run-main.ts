@@ -35,6 +35,7 @@ import {
 import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-capability.js";
+import { withCliFailureContext } from "./failure-context.js";
 import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
 import { tryRunWindowsGatewayTaskSupervisor } from "./gateway-cli/task-supervisor.js";
 import {
@@ -682,10 +683,11 @@ export async function runCli(
       },
     );
   const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(originalArgv));
-  return !invocation.hasHelpOrVersion &&
-    ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
-    ? await withDeferredDebugProxyCapture(invoke)
-    : await invoke();
+  return withCliFailureContext(() =>
+    !invocation.hasHelpOrVersion && ["update", "doctor", "proxy"].includes(invocation.primary ?? "")
+      ? withDeferredDebugProxyCapture(invoke)
+      : invoke(),
+  );
 }
 
 async function withSnapshotReuseForMaintenance<T>(
@@ -1196,18 +1198,15 @@ async function runCliWithPreparedOutputMode(
     }
 
     let parseArgv = normalizeGeneratedHelpCommandArgv(normalizedArgv);
-    const suppressStartupProgress = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
-    const { createCliProgress } = await import("./progress.js");
-    const startupProgress = createCliProgress({
-      label: "Loading OpenClaw CLI…",
-      indeterminate: true,
-      delayMs: 0,
-      ...(suppressStartupProgress ? { enabled: false } : {}),
-    });
+    const machineOutput = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
+    const startupProgress =
+      process.stderr.isTTY && !machineOutput
+        ? (await import("./progress.js")).createCliProgress({ label: "Loading OpenClaw CLI…" })
+        : undefined;
     try {
       const [
         { buildProgram },
-        { handleCliUncaughtException },
+        { installCliUncaughtExceptionHandler },
         { installUnhandledRejectionHandler },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
@@ -1225,9 +1224,7 @@ async function runCliWithPreparedOutputMode(
         installUnhandledRejectionHandler();
       }
 
-      process.on("uncaughtException", (error) => {
-        handleCliUncaughtException(error, normalizedArgv);
-      });
+      installCliUncaughtExceptionHandler(normalizedArgv);
 
       const invocation = resolveCliArgvInvocation(parseArgv);
       // Register the primary command (builtin or subcli) so help and command parsing
@@ -1259,7 +1256,7 @@ async function runCliWithPreparedOutputMode(
           const startupPolicy = resolveCliStartupPolicyForArgv({
             argv: parseArgv,
             commandPath: invocation.commandPath,
-            jsonOutputMode: suppressStartupProgress,
+            jsonOutputMode: machineOutput,
           });
           return await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
             mode: "lazy",
@@ -1283,7 +1280,7 @@ async function runCliWithPreparedOutputMode(
             resolveRootOptionRole(program, remainingArgs, logLevelIndex) !== "root",
         },
       );
-      startupProgress.done();
+      startupProgress?.done();
 
       let completedHelpOrVersion = false;
       try {
@@ -1315,7 +1312,7 @@ async function runCliWithPreparedOutputMode(
         requestExitAfterOneShotOutput();
       }
     } finally {
-      startupProgress.done();
+      startupProgress?.done();
     }
   } finally {
     pluginCliSession?.close();

@@ -231,6 +231,7 @@ export async function discoverReceiptRecoveryRequest(
     jobs,
     client,
     plan?.candidate,
+    admission.request.inputs,
   );
   const requestId = randomUUID();
   let policyQualification;

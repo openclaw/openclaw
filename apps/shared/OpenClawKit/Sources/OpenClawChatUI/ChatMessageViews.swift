@@ -476,7 +476,8 @@ enum ChatUserMessageDisclosurePolicy {
         var end = Self.stringIndex(atUTF16Offset: min(text.utf16.count, Self.collapsedCharacterLimit), in: text)
         var lineCount = 1
         for index in text.indices where index < end {
-            guard text[index] == "\n" else { continue }
+            let character = text[index]
+            guard character == "\n" || character == "\r\n" else { continue }
             if lineCount == Self.collapsedLineLimit {
                 end = index
                 break

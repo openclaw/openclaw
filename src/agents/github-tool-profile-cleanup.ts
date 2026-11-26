@@ -5,12 +5,10 @@ import { root as fsRoot, type Root } from "@openclaw/fs-safe/root";
 import { isManagedGitHubProfileId } from "../config/github-identity-profile-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { listAgentIds, resolveAgentConfig } from "./agent-scope.js";
-import { listGitHubOAuthRecords } from "./github-oauth-records.js";
 import {
   resolveManagedGitHubAgentKey,
   resolveManagedGitHubProfileRoot,
-} from "./github-tool-identity.js";
+} from "./github-tool-profile-path.js";
 
 const MAX_CLEANUP_WARNINGS = 20;
 const STAGING_PROFILE_PREFIX = ".github-profile.staging-";
@@ -108,23 +106,15 @@ async function cleanupProfileRoot(params: {
   }
 }
 
-/** Retires only generations unreferenced by the immutable startup config snapshot. */
-export async function cleanupRetiredManagedGitHubProfiles(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): Promise<GitHubProfileCleanupResult> {
-  const warnings: string[] = [];
-  const systemRoot = resolveManagedGitHubProfileRoot({
-    agentId: "system",
-    scope: "system",
-    env: params.env,
-  });
+async function readPreservedProfiles(config: OpenClawConfig) {
+  const { listAgentIds, resolveAgentConfig } = await import("./agent-scope-config.js");
+  const { listGitHubOAuthRecords } = await import("./github-oauth-records.js");
   const systemProfiles = new Set(
-    params.config.tools?.github?.profileId ? [params.config.tools.github.profileId] : [],
+    config.tools?.github?.profileId ? [config.tools.github.profileId] : [],
   );
   const agentProfiles = new Map<string, Set<string>>(
-    listAgentIds(params.config).map((agentId) => {
-      const profileId = resolveAgentConfig(params.config, agentId)?.tools?.github?.profileId;
+    listAgentIds(config).map((agentId) => {
+      const profileId = resolveAgentConfig(config, agentId)?.tools?.github?.profileId;
       return [resolveManagedGitHubAgentKey(agentId), new Set(profileId ? [profileId] : [])];
     }),
   );
@@ -143,12 +133,29 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
     profiles.add(record.profileId);
     agentProfiles.set(agentKey, profiles);
   }
+  return { systemProfiles, agentProfiles };
+}
+
+/** Retires only generations unreferenced by the immutable startup config snapshot. */
+export async function cleanupRetiredManagedGitHubProfiles(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<GitHubProfileCleanupResult> {
+  const warnings: string[] = [];
+  const systemRoot = resolveManagedGitHubProfileRoot({
+    agentId: "system",
+    scope: "system",
+    env: params.env,
+  });
+  // Open each cleanup root in order. Only an admitted root needs the shared recovery snapshot.
+  let recovery: ReturnType<typeof readPreservedProfiles> | undefined;
+  const preserved = () => (recovery ??= readPreservedProfiles(params.config));
   const system = await openCleanupRoot(systemRoot, "managed GitHub profile root", warnings);
   if (system) {
     await cleanupProfileRoot({
       root: system,
       directory: ".",
-      preservedProfileIds: systemProfiles,
+      preservedProfileIds: (await preserved()).systemProfiles,
       warnings,
     });
   }
@@ -158,6 +165,7 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
     warnings,
   );
   if (registry) {
+    const { agentProfiles } = await preserved();
     for (const entry of await registry.list(".", { withFileTypes: true })) {
       if (!MANAGED_AGENT_KEY_PATTERN.test(entry.name)) {
         warnings.push(

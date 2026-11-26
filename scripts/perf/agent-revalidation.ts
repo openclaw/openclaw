@@ -19,6 +19,7 @@ import type { compileStructuredInputField } from "../../src/agents/harness/struc
 import type { materializePreparedRuntimeModel } from "../../src/agents/runtime-plan/materialize-model.js";
 import type { AgentRuntimeAuthPlan } from "../../src/agents/runtime-plan/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -170,12 +171,7 @@ try {
   await nextTurn();
   const hostLoadStart = loadavg();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const before = process.threadCpuUsage();
   const start = performance.now();

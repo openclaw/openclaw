@@ -172,6 +172,7 @@ class SkillWorkshopPageState {
     }
     // Retry is the user's explicit reread; ensure waits out a recent failed read.
     void (retry ? this.context.runtimeConfig.refresh() : this.context.runtimeConfig.ensureLoaded());
+    const targetAtStart = this.viewer?.target;
     const result = loadWorkshopSnapshot(scope.client, scope.agentId).then((snapshot) => {
       if (this.scope !== scope) {
         return null;
@@ -179,6 +180,11 @@ class SkillWorkshopPageState {
       // The first read for this agent; later reads follow mutations and keep the open page.
       const first = this.snapshot === null;
       this.snapshot = snapshot;
+      // Retry can refresh the list, but cannot navigate away from a selection made since it began.
+      if (retry && this.viewer?.target !== targetAtStart) {
+        this.changed();
+        return snapshot;
+      }
       const page = readWorkshopPage(this.context);
       if (first && this.startView === null) {
         this.startView = defaultStartView(snapshot);

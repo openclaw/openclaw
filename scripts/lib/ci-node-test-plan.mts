@@ -233,6 +233,7 @@ export function prepareNodeTestVolumes(context: NodeTestVolumeContext) {
     volumeDigest([config, environmentFor(group), context.runtimePolicy]);
   const baselines = new Map<string, Map<string, Set<string>>>();
   const unknownProfiles = new Set<string>();
+  const pendingProfiles = new Map<string, NodeTestShardGroup[]>();
   let groups: NodeTestShardGroup[] = [];
   try {
     const resolved: NodeTestShardGroup[] = [];
@@ -249,6 +250,20 @@ export function prepareNodeTestVolumes(context: NodeTestVolumeContext) {
   for (const group of groups) {
     for (const config of group.configs) {
       const profile = profileFor(config, group);
+      const matchingGroups = pendingProfiles.get(profile) ?? [];
+      matchingGroups.push(group);
+      pendingProfiles.set(profile, matchingGroups);
+    }
+  }
+  const prepareBaseline = (config: string, profile: string) => {
+    const matchingGroups = pendingProfiles.get(profile);
+    if (!matchingGroups) {
+      return;
+    }
+    // Keep every full-plan stripe for a requested profile, including unknowns.
+    // Unselected profiles need no runtime inventory projection.
+    pendingProfiles.delete(profile);
+    for (const group of matchingGroups) {
       try {
         const entries = project(config, group);
         if (!entries || entries.some((entry) => !entry)) {
@@ -270,13 +285,14 @@ export function prepareNodeTestVolumes(context: NodeTestVolumeContext) {
         unknownProfiles.add(profile);
       }
     }
-  }
+  };
   return (group: NodeTestShardGroup, targets?: readonly string[]): NodeTestVolume => ({
     version: 1,
     revision: context.revision,
     policy: context.runtimePolicy,
     entries: group.configs.flatMap((config) => {
       const profile = profileFor(config, group);
+      prepareBaseline(config, profile);
       return (project(config, group, targets) ?? []).flatMap((selection) => {
         if (!selection || selection.files.length === 0) {
           return [];

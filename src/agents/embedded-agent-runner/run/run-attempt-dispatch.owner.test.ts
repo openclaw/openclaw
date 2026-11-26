@@ -15,8 +15,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
-import { resetLogger, setLoggerOverride } from "../../../logging/logger.js";
-import { testApi as logTestApi } from "../../../logging/logger.test-support.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { buildSkillSnapshot } from "../../../skills/loading/workspace-skill-prompt.js";
@@ -244,7 +243,7 @@ it.each(dispatchCases)(
           : createAgentRunDirectAbortError();
       const diagnosticFile = state.path("target-refusal.log");
       const readTargetRefusals = async () => {
-        await logTestApi.flushFileLogQueueForTests();
+        await flushLogger();
         const contents = existsSync(diagnosticFile)
           ? await fs.readFile(diagnosticFile, "utf8")
           : "";
@@ -937,7 +936,7 @@ it.each(dispatchCases)(
         baseline.resolve();
         await pending.catch(() => undefined);
         await retainedTranscript?.dispose();
-        await logTestApi.flushFileLogQueueForTests();
+        await flushLogger();
         setLoggerOverride(null);
         resetLogger();
         hostObserver?.mockRestore();

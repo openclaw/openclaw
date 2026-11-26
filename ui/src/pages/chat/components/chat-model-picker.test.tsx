@@ -261,6 +261,24 @@ it("keeps Anthropic runtime choices under one provider tab", async () => {
   expect(provider("anthropic/claude-sonnet-5-5")).toBe("anthropic");
 });
 
+it("drops a provider name from a row only when the group heading shows it", async () => {
+  const plan = { providerName: "Acme Pro plan" };
+  const { container } = mountPicker({
+    open: true,
+    modelOptions: [
+      option("acme", "acme-4-hydrogen", { label: "Acme 4 Hydrogen", presentation: plan }),
+      option("acme", "acme-pro-plan-mini", { label: "Acme Pro plan Mini", presentation: plan }),
+    ],
+    selectedModelValue: "acme/acme-4-hydrogen",
+  });
+  await waitForMenu(container);
+  const name = (value: string) =>
+    control(container, "option", value)?.querySelector(".chat-controls__model-option-name")
+      ?.textContent;
+  expect(name("acme/acme-4-hydrogen")).toBe("Acme 4 Hydrogen");
+  expect(name("acme/acme-pro-plan-mini")).toBe("Mini");
+});
+
 it("keeps search live while targets load, then ranks model, target, and account choices", async () => {
   const selectTarget = vi.fn();
   const selectAccount = vi.fn();

@@ -24,12 +24,6 @@ export type CronCreatorAuthorityRunScope = {
   readonly signal: AbortSignal;
   readonly grantTokens: Set<string>;
   readonly managementEntitlement?: CronManagementEntitlement;
-  /** Separately admitted channel-owner identity, not implied by automation management rights. */
-  readonly requesterOwner?: Readonly<{
-    senderId?: string;
-    channel?: string;
-    accountId?: string;
-  }>;
   /** Fresh admission only; never transferred with a management continuation. */
   readonly callerScopedCreation?: true;
   readonly isCurrent?: () => boolean;

@@ -13,7 +13,10 @@ const mocks = vi.hoisted(() => ({
   presence: [] as Array<Pick<PresenceEntry, "user" | "watchedSessions">>,
 }));
 
-vi.mock("./chat-send-handler.js", () => ({ handleChatSend: mocks.handleChatSend }));
+vi.mock("./chat-send-external-entry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chat-send-external-entry.js")>()),
+  handleDirectExternalChatSend: mocks.handleChatSend,
+}));
 vi.mock("../../config/sessions/session-metadata-write.async.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../config/sessions/session-metadata-write.async.js")>();

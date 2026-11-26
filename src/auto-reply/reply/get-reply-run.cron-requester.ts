@@ -48,11 +48,6 @@ export function createReplyCronAuthorityFactory(
   if (!authority || !requester || (grant && grant.automations !== "manage")) {
     return undefined;
   }
-  const owner = {
-    channel: requester.channel,
-    accountId: requester.accountId,
-    senderId: requester.senderId,
-  };
   return (runId: string, isCurrentOwner = () => authority.isCurrent()) =>
     isCurrentOwner()
       ? createCronCreatorAuthorityCapability(
@@ -61,7 +56,6 @@ export function createReplyCronAuthorityFactory(
           { source: "channel-owner" },
           undefined,
           requester,
-          owner,
         )
       : undefined;
 }

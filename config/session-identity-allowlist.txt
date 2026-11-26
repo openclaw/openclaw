@@ -279,7 +279,6 @@ src/agents/bash-tools.exec-cron-grant.ts	2
 src/agents/bash-tools.exec-host-gateway.ts	1
 src/agents/bash-tools.exec-host-node-policy.ts	2
 src/agents/bash-tools.exec-host-shared.ts	3
-src/agents/bash-tools.exec-run.ts	1
 src/agents/btw-transcript.ts	6
 src/agents/cli-output-events.ts	4
 src/agents/cli-output-stream.ts	2
@@ -311,7 +310,7 @@ src/agents/command/post-run.ts	9
 src/agents/command/session-store.ts	8
 src/agents/command/session.ts	8
 src/agents/command/transcript-persistence.ts	4
-src/agents/cron-creator-authority-context.ts	38
+src/agents/cron-creator-authority-context.ts	31
 src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.ts	3
 src/agents/embedded-agent-runner/cli-backend-dispatch.ts	3
 src/agents/embedded-agent-runner/compact.queued-execution.ts	8
@@ -790,7 +789,6 @@ src/gateway/github-publication-coordinator-methods.ts	5
 src/gateway/github-publication-defer.worker.ts	3
 src/gateway/github-publication-discovery.ts	4
 src/gateway/github-publication-git-index.ts	2
-src/gateway/github-publication-requester.ts	3
 src/gateway/github-publication-shared-read.kernel.ts	10
 src/gateway/github-publication-shared-read.ts	10
 src/gateway/github-publication-store.worker.ts	6
@@ -1033,7 +1031,7 @@ src/gateway/session-repository-materialization.ts	17
 src/gateway/session-repository-preparation.ts	1
 src/gateway/session-reset-incognito.ts	3
 src/gateway/session-reset-service.ts	15
-src/gateway/session-restart-resume.ts	11
+src/gateway/session-restart-resume.ts	7
 src/gateway/session-row-child-activity.ts	2
 src/gateway/session-row-child-visibility.ts	2
 src/gateway/session-row-membership-read.ts	2
@@ -1383,7 +1381,7 @@ src/plugins/host-hook-steering.ts	1
 src/plugins/http-registry.ts	2
 src/plugins/install-runtime-batch.ts	2
 src/plugins/installed-plugin-index-source-snapshots.ts	1
-src/plugins/memory-audience.ts	8
+src/plugins/memory-audience.ts	2
 src/plugins/plugin-command-execution.ts	1
 src/plugins/plugin-native-namespace.ts	1
 src/plugins/registry-contributions.ts	1
@@ -1488,7 +1486,6 @@ src/state/openclaw-state-db-open.ts	1
 src/state/openclaw-state-db-task-delivery-recovery.ts	1
 src/state/openclaw-state-worker-context.ts	1
 src/state/session-repository-workspaces.kernel.ts	3
-src/state/state-upgrade-tree.ts	1
 src/state/user-github-connections.types.ts	2
 src/state/user-github-connections.worker.ts	2
 src/state/user-preferences-publication.ts	1

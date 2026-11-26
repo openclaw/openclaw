@@ -68,6 +68,8 @@ export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeF
   mentions?: readonly HumanMention[];
   /** The selected people are the recipients; no agent turn runs for this input. */
   humanAddressed?: true;
+  /** Display-only credit for the author of an approved suggestion; never model text. */
+  suggestedBy?: { id: string; name?: string };
   media?: readonly PersistedUserTurnMediaInput[] | null;
   /** Restart-safe native image placement; model-visible prompt bytes remain separate. */
   mediaImageLayout?: {

@@ -160,7 +160,12 @@ describe("cron view editor", () => {
       { deliveryMode: "webhook" },
       { fieldErrors: { deliveryTo: "cron.errors.webhookUrlRequired" }, canSubmit: false },
     );
-    expectInvalidField(webhook, "delivery-to", "deliveryTo", "Webhook URL is required.");
+    expectInvalidField(
+      webhook,
+      "delivery-to",
+      "deliveryTo",
+      "Enter the URL where OpenClaw should send results.",
+    );
   });
 
   it("announces field validation errors as alerts", async () => {

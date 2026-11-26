@@ -3265,6 +3265,14 @@ function qualificationReuseIdentity(admission) {
   ) {
     throw new Error("Qualification reuse transport differs from its authenticated Q identity");
   }
+  // Admission authenticates the original schedule. Reuse compares measured
+  // coverage, which is identical whether independent jobs waited for npm or not.
+  if (envelope.laneInputs?.preflight_first === "true") {
+    delete envelope.laneInputs.preflight_first;
+    if (!Object.keys(envelope.laneInputs).length) {
+      delete envelope.laneInputs;
+    }
+  }
   // Each receipt authenticates its own P and dispatch locator. Reuse binds the
   // candidate qualification and coverage, not the revision that evaluates it.
   return {
@@ -4094,7 +4102,8 @@ async function validateReleaseEvidenceGraph(
     }
     const packet = parseFastTrackPacket(fastTrackRequest);
     const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
-    if (packet.request.policy === "approved-fast-track-v1") {
+    // Beta-prerelease fast-tracks carry no reference and skip delta measurement.
+    if (packet.request.policy === "approved-fast-track-v1" && packet.request.reference) {
       if (
         execFileSync("git", ["-C", repositoryRoot, "rev-parse", "--is-shallow-repository"], {
           encoding: "utf8",
