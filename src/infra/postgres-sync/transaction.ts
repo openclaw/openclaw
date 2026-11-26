@@ -9,7 +9,11 @@ import { beginPostgresReadSnapshotScope } from "../sqlite-schema-facts.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
 import { readSqliteWriteAdmissionServices } from "../sqlite-write-admission.js";
-import { decodePostgresError, POSTGRES_REQUEST_TIMEOUT_MS } from "./protocol.js";
+import {
+  decodePostgresError,
+  POSTGRES_REQUEST_TIMEOUT_MS,
+  readPostgresSqlState,
+} from "./protocol.js";
 
 function assertPostgresOperationCurrent(): void {
   const scope = currentSqliteWorkerOperationAdmission.getStore();
@@ -105,7 +109,7 @@ function beginPostgresWrite(db: PostgresSqlConnection): void {
       assertBudget();
       return;
     } catch (error) {
-      if (!(error instanceof Error) || !("code" in error) || error.code !== "55P03") {
+      if (!(error instanceof Error) || readPostgresSqlState(error) !== "55P03") {
         throw error;
       }
       // A failed advisory wait leaves an aborted transaction. Never service a

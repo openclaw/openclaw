@@ -4,6 +4,7 @@ import {
   decodePostgresRows,
   isPostgresConnectionError,
   preparePostgresQuery,
+  readPostgresSqlState,
   validatePostgresBindings,
 } from "./protocol.js";
 
@@ -75,18 +76,26 @@ describe("PostgreSQL SQL boundary", () => {
 
   it("preserves SQLite CHECK constraint handling for SQLSTATE 23514", () => {
     const cause = { message: "original pg failure", code: "23514", constraint: "cards_key" };
-    expect(decodePostgresError({ name: "error", ...cause })).toMatchObject({
+    const error = decodePostgresError({ name: "error", ...cause });
+    expect(error).toMatchObject({
       message: "CHECK constraint failed: cards_key",
       code: "ERR_SQLITE_ERROR",
       errcode: 275,
       cause,
     });
+    expect(readPostgresSqlState(error)).toBe("23514");
+  });
+
+  it("does not read server codes through unrelated error wrappers", () => {
+    const cause = decodePostgresError({ name: "error", message: "lock timeout", code: "55P03" });
+    expect(readPostgresSqlState(new Error("unrelated failure", { cause }))).toBeUndefined();
   });
 
   it("identifies cancellation independently of connection loss", () => {
     const error = decodePostgresError({ name: "error", message: "canceled", code: "57014" });
     expect(error).toMatchObject({ name: "PostgresQueryCanceledError", code: "57014" });
     expect(isPostgresConnectionError("57014")).toBe(false);
+    expect(readPostgresSqlState(error)).toBe("57014");
   });
 
   it.each(["25P03", "25P04"])("retires sessions terminated by %s", (code) => {

@@ -1,11 +1,14 @@
 import { expect, it, vi } from "vitest";
 import { retainSqliteWriteAdmissionService } from "../sqlite-write-admission.js";
 import { usePostgresFixture } from "./fixture.test-support.js";
-import { POSTGRES_REQUEST_TIMEOUT_MS } from "./protocol.js";
+import { decodePostgresError, POSTGRES_REQUEST_TIMEOUT_MS } from "./protocol.js";
 
 const harness = usePostgresFixture();
 
-function fixture(options: { lock?: number; statement?: number; transaction?: number } = {}) {
+function fixture(
+  options: { lock?: number; statement?: number; transaction?: number } = {},
+  lockError = decodePostgresError({ name: "error", message: "lock timeout", code: "55P03" }),
+) {
   const db = harness.connection();
   const path = "/synthetic/postgres-admission.sqlite";
   vi.spyOn(db.anchor, "location").mockReturnValue(path);
@@ -13,7 +16,6 @@ function fixture(options: { lock?: number; statement?: number; transaction?: num
   let attempts = 0;
   let busy = true;
   let nativeFailure: Error | undefined;
-  const lockError = Object.assign(new Error("lock timeout"), { code: "55P03" });
   vi.spyOn(performance, "now").mockImplementation(() => now);
   const settings = db.anchor.prepare("SELECT 1");
   vi.spyOn(settings, "all").mockReturnValue([
@@ -63,8 +65,16 @@ function fixture(options: { lock?: number; statement?: number; transaction?: num
   };
 }
 
-it("rolls back before servicing the holder and enters the body only once after admission", () => {
-  const f = fixture({ transaction: 2000 });
+it.each(["raw", "wrapped"])("services the holder before one body call for %s SQLSTATE", (shape) => {
+  const native = Object.assign(new Error("lock timeout"), { code: "55P03" });
+  const lockError =
+    shape === "wrapped"
+      ? Object.assign(new Error("lock timeout", { cause: native }), {
+          code: "ERR_SQLITE_ERROR",
+          errcode: 5,
+        })
+      : native;
+  const f = fixture({ transaction: 2000 }, lockError);
   const body = vi.fn(() => {
     expect(f.db.isTransaction).toBe(true);
     expect(f.service).toHaveBeenCalledTimes(1);
@@ -103,9 +113,9 @@ it.each(["callback", "closed", "transaction"] as const)(
   },
 );
 
-it.each(["57014", "08006"])("does not retry native %s", (code) => {
+it.each(["40P01", "40001", "57014", "08006"])("does not retry decoded %s", (code) => {
   const f = fixture();
-  const failure = Object.assign(new Error("native refusal"), { code });
+  const failure = decodePostgresError({ name: "error", message: "native refusal", code });
   f.reject(failure);
   const body = vi.fn();
   expect(() => f.db.runTransaction(body)).toThrow(failure);
@@ -152,9 +162,9 @@ it.each([
     failure = error;
   }
   expect(failure).toBeInstanceOf(Error);
-  if (options.code) {
+  if (options.code && options.code !== "55P03") {
     expect(failure).toMatchObject({ code: options.code });
-  } else {
+  } else if (!options.code) {
     expect(failure).toMatchObject({ message: expect.stringContaining("bridge request deadline") });
   }
   if (options.code === "55P03") {

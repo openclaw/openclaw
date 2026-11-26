@@ -235,6 +235,19 @@ export function decodePostgresRows(
   );
 }
 
+/** Read the server code through the decoder's SQLite-compatible error envelope. */
+export function readPostgresSqlState(error: Error): string | undefined {
+  const original =
+    "code" in error && error.code === "ERR_SQLITE_ERROR" && error.cause instanceof Error
+      ? error.cause
+      : error;
+  return "code" in original &&
+    typeof original.code === "string" &&
+    /^[A-Z0-9]{5}$/u.test(original.code)
+    ? original.code
+    : undefined;
+}
+
 export function isPostgresConnectionError(sqlState?: string): boolean {
   return !sqlState || sqlState.startsWith("08") || /^57P0[123]$|^25P0[34]$/.test(sqlState);
 }
