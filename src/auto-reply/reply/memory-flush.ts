@@ -106,9 +106,10 @@ export function settleFailedPreflightCompaction<T>(
   reason: string,
   tokenCount: number | undefined,
   contextWindowTokens: number,
+  failure?: Error,
 ): T {
   if (exceedsContextWindow(tokenCount, contextWindowTokens)) {
-    throw new Error(`Preflight compaction required but failed: ${reason}`);
+    throw failure ?? new Error(`Preflight compaction required but failed: ${reason}`);
   }
   return entry;
 }

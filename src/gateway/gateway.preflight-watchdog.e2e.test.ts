@@ -98,37 +98,7 @@ it(
         sessionKey,
         storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       };
-      await upsertSessionEntryCore(scope, {
-        sessionId,
-        updatedAt: wallNow(),
-        totalTokens: 120_000,
-        totalTokensFresh: true,
-        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-      });
-      for (let turn = 0; turn < 4; turn += 1) {
-        await appendTranscriptMessage(scope, {
-          message: { role: "user", content: "Historical request " + turn, timestamp: wallNow() },
-        });
-        await appendTranscriptMessage(scope, {
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "Historical answer " + turn }],
-            api: "openai-responses",
-            provider: "mock-openai",
-            model: "preflight-watchdog-fixture",
-            usage: {
-              input: 120_000,
-              output: 10,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 120_010,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            stopReason: "stop",
-            timestamp: wallNow(),
-          },
-        });
-      }
+      await seedLongSession(scope, 120_000);
       vi.spyOn(Date, "now").mockImplementation(() => wallNow() + offset);
       const { runId } = await fixture.client.request<{ runId: string }>("chat.send", {
         sessionKey,
@@ -189,3 +159,197 @@ it(
     }
   },
 );
+
+type StallCase = { stage: "memory flush" | "compaction"; modelRef?: string };
+
+it.each([
+  { stage: "memory flush", modelRef: "mock-openai/preflight-stall-fixture" },
+  { stage: "compaction" },
+] satisfies StallCase[])(
+  "ends a Control UI turn promptly when its $stage stalls without output",
+  { timeout: 180_000 },
+  async ({ stage, modelRef }) => {
+    const sessionKey = "agent:main:main";
+    const summaryModel = "preflight-summary";
+    const silenceSeconds = 5;
+    const requests: string[] = [];
+    const held: ServerResponse[] = [];
+    const chatEvents: Array<Record<string, unknown>> = [];
+    let lastOutputAt = 0;
+    const fixture = createChatFixture("preflight-stall", {
+      onEvent: ({ event, payload }) => {
+        if (event === "chat" && payload && typeof payload === "object") {
+          chatEvents.push(payload as Record<string, unknown>);
+        }
+      },
+      configure: (config, model) => ({
+        ...config,
+        agents: {
+          defaults: {
+            ...config.agents?.defaults,
+            timeoutSeconds: 900,
+            compaction: {
+              model: model.providerId + "/" + summaryModel,
+              keepRecentTokens: 1,
+              recentTurnsPreserve: 1,
+              qualityGuard: { enabled: false },
+              timeoutSeconds: silenceSeconds,
+              memoryFlush: { enabled: stage === "memory flush" },
+            },
+          },
+        },
+        models: {
+          mode: "replace",
+          providers: {
+            [model.providerId]: {
+              ...model.config,
+              models: [...model.config.models, buildOpenAiResponsesTestModel(summaryModel)],
+            },
+          },
+        },
+        plugins: {
+          allow: ["memory-core"],
+          load: { paths: [path.resolve("extensions/memory-core")] },
+          slots: { memory: "memory-core" },
+          entries: { "memory-core": { enabled: true, config: { dreaming: { enabled: false } } } },
+        },
+      }),
+      respond: async (body, _sessionId, response) => {
+        const { model } = JSON.parse(body) as { model: string };
+        const kind = body.includes("Pre-compaction memory flush")
+          ? "flush"
+          : model === summaryModel
+            ? "summary"
+            : "reply";
+        requests.push(kind);
+        if (
+          (stage === "memory flush" && kind === "flush") ||
+          (stage === "compaction" && kind === "summary")
+        ) {
+          // Accept the request, emit one delta, then go silent while keeping the socket open.
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          writeEvent(response, {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              id: "msg_stall",
+              type: "message",
+              role: "assistant",
+              status: "in_progress",
+              content: [],
+            },
+          });
+          writeEvent(response, {
+            type: "response.output_text.delta",
+            item_id: "msg_stall",
+            output_index: 0,
+            content_index: 0,
+            delta: "Partial",
+          });
+          lastOutputAt = performance.now();
+          held.push(response);
+          return undefined;
+        }
+        return kind === "summary"
+          ? "Earlier messages discussed the fixture."
+          : "The foreground reply arrived.";
+      },
+    });
+    try {
+      await fixture.start();
+      const sessionId = randomUUID();
+      const scope = {
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      };
+      await seedLongSession(scope, 140_000);
+      const { runId } = await fixture.client.request<{ runId: string }>("chat.send", {
+        sessionKey,
+        message: "Answer after maintenance.",
+        idempotencyKey: randomUUID(),
+      });
+      const wait = await fixture.client.request<{ status: string }>(
+        "agent.wait",
+        { runId, timeoutMs: 60_000 },
+        { timeoutMs: 65_000 },
+      );
+      const failedAfterMs = performance.now() - lastOutputAt;
+      const finals = chatEvents.filter((event) => event.runId === runId && event.state !== "delta");
+      const delivered = JSON.stringify(finals);
+      console.log(
+        "[preflight-stall] " +
+          JSON.stringify({
+            stage,
+            wait,
+            requests,
+            failedAfterMs: Math.round(failedAfterMs),
+            finals,
+          }),
+      );
+      // Bounded by the configured silence window, far below the 360s reply watchdog.
+      expect(failedAfterMs).toBeGreaterThanOrEqual(silenceSeconds * 1000 - 250);
+      expect(failedAfterMs).toBeLessThan(silenceSeconds * 1000 + 15_000);
+      expect(delivered).not.toContain("stopped making progress");
+      if (stage === "memory flush") {
+        // The reply's own model was silent, so the turn fails with what stalled and what to do.
+        expect(requests).toEqual(["flush"]);
+        expect(delivered).toContain(
+          "Memory maintenance before this reply stalled: " +
+            modelRef +
+            " sent no output for 5s. Check that the model is running",
+        );
+      } else {
+        // Compaction reports its own timeout before the reply watchdog's backstop, and a
+        // prompt that still fits continues to the reply instead of a generic stall.
+        expect(requests).toEqual(["summary", "reply"]);
+        expect(wait.status).toBe("ok");
+        expect(delivered).toContain("The foreground reply arrived.");
+      }
+    } finally {
+      for (const response of held) {
+        response.destroy();
+      }
+      await fixture.close();
+    }
+  },
+);
+
+async function seedLongSession(
+  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
+  totalTokens: number,
+) {
+  const now = Date.now();
+  await upsertSessionEntryCore(scope, {
+    sessionId: scope.sessionId,
+    updatedAt: now,
+    totalTokens,
+    totalTokensFresh: true,
+    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+  });
+  for (let turn = 0; turn < 4; turn += 1) {
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "Historical request " + turn, timestamp: now },
+    });
+    await appendTranscriptMessage(scope, {
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer " + turn }],
+        api: "openai-responses",
+        provider: "mock-openai",
+        model: "preflight-watchdog-fixture",
+        usage: {
+          input: totalTokens,
+          output: 10,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: totalTokens + 10,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: now,
+      },
+    });
+  }
+}

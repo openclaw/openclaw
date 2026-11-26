@@ -88,6 +88,7 @@ import {
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
+import { createCompactionStall, startMemoryFlushStallGuard } from "./preflight-stall.js";
 import type { FollowupRun } from "./queue.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
@@ -455,6 +456,7 @@ export async function runSessionCompactionIfNeeded(params: {
         reason,
         tokenCountForCompaction,
         contextWindowTokens,
+        createCompactionStall(reason, params.cfg, params.followupRun.run),
       );
     }
 
@@ -672,12 +674,13 @@ export async function runMemoryFlushIfNeeded(
     maintenanceRun,
     sourcePolicySessionKey,
   } = preparedAttempt;
+  const stallGuard = startMemoryFlushStallGuard(params, selection, abortSignal);
   const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
     runId: flushRunId,
     sessionId: memorySession.sessionId,
     sessionKey: memorySession.sessionKey,
     sessionFile: memorySession.sessionFile,
-    abortSignal,
+    abortSignal: stallGuard?.signal ?? abortSignal,
   });
   const flushedCompactionCount = entry?.compactionCount ?? 0;
   let visibleErrorPayloads: ReplyPayload[] = [];
@@ -751,6 +754,7 @@ export async function runMemoryFlushIfNeeded(
       sessionOverride: { kind: "preserve" },
       abortSignal: deferredLifecycle.signal,
       runCandidate: async (provider, model, runOptions) => {
+        stallGuard?.setModel(provider, model);
         const sessionRuntimeOverride = runOptions.agentHarnessRuntimeOverride;
         const candidateThinkLevel = resolveRunThinkingLevelForFallbackCandidate({
           cfg: params.cfg,
@@ -782,13 +786,8 @@ export async function runMemoryFlushIfNeeded(
           ...runBaseParams,
           awaitSessionDiffBaseline: params.followupRun.runObservers?.awaitSessionDiffBaseline,
           ...memorySession,
-          onMemoryFlushModelProgress: params.replyOperation
-            ? () => {
-                if (!deferredLifecycle.signal.aborted) {
-                  params.replyOperation?.watchdog.progress("semantic", "memory_flush:model_output");
-                }
-              }
-            : undefined,
+          onMemoryFlushModelProgress:
+            stallGuard && (() => stallGuard.progress(deferredLifecycle.signal)),
           agentHarnessId: resolveSessionPinnedHarnessId(entry),
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
           sandboxSessionKey: sourcePolicySessionKey,
@@ -854,8 +853,9 @@ export async function runMemoryFlushIfNeeded(
       memoryFlushLog.debug(error.message);
       return { sessionEntry: entry, outcome: "skipped" };
     }
-    return await recordFailure(error);
+    return stallGuard?.failure(entry) ?? (await recordFailure(error));
   } finally {
+    stallGuard?.stop();
     stopHeartbeat?.();
     if (parentRunId && !abortSignal?.aborted) {
       emitAgentRunStatusEvent({
