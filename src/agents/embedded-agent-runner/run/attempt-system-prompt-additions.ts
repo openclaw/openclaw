@@ -27,6 +27,8 @@ const PROGRESS_CARD_SYSTEM_PROMPT =
 /** Prepares host-owned additions before either embedded or plugin harness dispatch. */
 export async function prepareAttemptSystemPromptAdditions(params: {
   agentId: string;
+  workspaceDir: string;
+  cwd?: string;
   authProfileId?: string;
   config?: OpenClawConfig;
   extraSystemPrompt?: string;
@@ -109,10 +111,12 @@ export async function prepareAttemptSystemPromptAdditions(params: {
       params.config,
       params.agentId,
       params.entry,
+      params.cwd?.trim() || params.workspaceDir,
     ),
     ...(params.entry
       ? {
           prepareSessionProjectGuidance: sessionProjectGuidanceSource({
+            workspaceDir: params.cwd?.trim() || params.workspaceDir,
             config: params.config,
             agentId: params.agentId,
             sessionKey: params.sessionKey,

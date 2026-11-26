@@ -326,6 +326,7 @@ export async function buildPreparedCompactionRuntime(
               params.config,
               sessionAgentId,
               params.sessionEntry,
+              params.cwd?.trim() || resolvedWorkspace,
             ),
             webSearchEnabled: params.toolOverrides?.webSearch !== false,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

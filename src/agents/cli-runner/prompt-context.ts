@@ -257,6 +257,7 @@ export async function prepareCliSystemPrompt({
     ...params,
     requesterProfileId,
     prepareSessionProjectGuidance: sessionProjectGuidanceSource({
+      workspaceDir: runtimeCwd,
       config: params.config,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
