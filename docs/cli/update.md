@@ -191,7 +191,7 @@ Invalid configuration reports `invalid-config` before database schema inspection
 An unreadable configuration file or failed configuration loading step instead
 reports `config-read-failed`, with a recognized filesystem error code when available.
 An ownership refusal during loading includes the `gateway-ownership-unverified`
-failure fact and points to `openclaw gateway recover-lock` for inspection. Active
+failure fact and advises stopping the recorded Gateway before retrying. Active
 maintenance instead reports `gateway-maintenance-busy` with wait or stop guidance.
 Neither diagnostic includes the recorded holder's private details.
 For supported package targets, the candidate makes that
@@ -846,7 +846,8 @@ work, and retained generations. See
 for retention, cleanup warnings, and legacy recovery distinctions.
 
 Candidate SQLite migrations use whole-database `quick_check`, full integrity
-checks of rewritten or re-indexed tables, and foreign-key checks by default.
+checks of rewritten or re-indexed tables, and foreign-key checks by default. Agent
+database version steps check only the schema catalog and the tables they declare.
 Prepared-release updates (Git and npm, pnpm or Bun installs) refuse
 `--full-integrity-check` before creating a run; they do not support this selection.
 Run `openclaw doctor --fix --full-integrity-check` separately for full checks

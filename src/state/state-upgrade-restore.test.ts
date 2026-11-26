@@ -7,7 +7,7 @@ import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { ROLLBACK_SOURCE } from "../update/rollback-source.js";
+import { LEGACY_ROLLBACK_SOURCE } from "../update/legacy-rollback-source.js";
 import { createTrialPending, resolvePrefix, writeTrial, type Trial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { ensureOpenClawAgentSchema } from "./openclaw-agent-db-schema.js";
@@ -94,7 +94,7 @@ it("captures old-Gateway writes on a new release retry without resetting an olde
   await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), f.capture);
   const older = fs.readFileSync(f.manifest, "utf8");
   runInNewContext(
-    `${ROLLBACK_SOURCE}\nrestoreState(collectPreserved(stateDir,suffix,0,4,[]),suffix);`,
+    `${LEGACY_ROLLBACK_SOURCE}\nrestoreState(collectPreserved(stateDir,suffix,0,4,[]),suffix);`,
     { fs, path, stateDir: f.root, suffix: `.pre-${f.generation}` },
   );
   {
@@ -162,7 +162,7 @@ it("reuses immutable originals after live writes and preserves the frozen legacy
   expect(value(f.image)).toBe("original");
   expect(fs.readFileSync(f.manifest, "utf8")).toBe(encoded);
   const preserved = runInNewContext(
-    `${ROLLBACK_SOURCE}\nconst files=collectPreserved(stateDir,suffix,0,4,[]); restoreState(files,suffix); files;`,
+    `${LEGACY_ROLLBACK_SOURCE}\nconst files=collectPreserved(stateDir,suffix,0,4,[]); restoreState(files,suffix); files;`,
     { fs, path, stateDir: f.root, suffix: `.pre-${f.generation}` },
   ) as string[];
   expect([...preserved]).toEqual([f.file]);
@@ -254,9 +254,10 @@ it("publishes an empty trial receipt once and preserves complete existing receip
   expect(fs.readFileSync(f.manifest, "utf8")).toBe(encoded);
 });
 
-it("lets the frozen launcher remove a newly created canonical agent store and restore existing rows", async () => {
+it("narrows unused legacy-import stores before runtime while preserving boot-created families", async () => {
   const f = await fixture();
   const agentPath = path.join(f.root, "agents", "new", "agent", "openclaw-agent.sqlite");
+  const laterPath = path.join(f.root, "agents", "later", "agent", "openclaw-agent.sqlite");
   const target: DatabaseTarget = {
     kind: "agent",
     agentId: "new",
@@ -265,8 +266,8 @@ it("lets the frozen launcher remove a newly created canonical agent store and re
     minReader: 0,
     engine: "sqlite",
   };
-  await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), {
-    targets: [...f.capture.targets, target],
+  const complete = await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), {
+    targets: [...f.capture.targets, target, { ...target, agentId: "later", path: laterPath }],
     config: {},
   });
   const manifest = JSON.parse(fs.readFileSync(f.manifest, "utf8")) as {
@@ -293,6 +294,16 @@ it("lets the frozen launcher remove a newly created canonical agent store and re
     using live = new DatabaseSync(f.file);
     live.exec("UPDATE witness SET value = 'candidate'");
   }
+  complete?.();
+  const narrowed = JSON.parse(fs.readFileSync(f.manifest, "utf8")) as typeof manifest;
+  expect(narrowed.files).not.toContainEqual({ live: laterPath, preimage: null });
+  expect(narrowed.files).toContainEqual({ live: `${f.file}-wal`, preimage: null });
+  fs.mkdirSync(path.dirname(laterPath), { recursive: true });
+  {
+    using later = new DatabaseSync(laterPath);
+    ensureOpenClawAgentSchema(later, "later", laterPath);
+    later.exec("CREATE TABLE witness(value TEXT); INSERT INTO witness VALUES ('later-base')");
+  }
   // A failed candidate can leave committed WAL companions for the old launcher to remove.
   const crashed = spawnSync(process.execPath, [
     "--input-type=module",
@@ -301,19 +312,66 @@ it("lets the frozen launcher remove a newly created canonical agent store and re
     import { DatabaseSync } from 'node:sqlite';
     const db = new DatabaseSync(process.argv[1]);
     db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; UPDATE schema_meta SET app_version='candidate'");
+    const later = new DatabaseSync(process.argv[2]);
+    later.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO witness VALUES ('later-WAL')");
     process.kill(process.pid, "SIGKILL");
   `,
     agentPath,
+    laterPath,
   ]);
   expect(crashed.error).toBeUndefined();
   expect(crashed.status, crashed.stderr?.toString()).not.toBe(0);
   expect(fs.statSync(`${agentPath}-wal`).size).toBeGreaterThan(0);
+  expect(fs.statSync(`${laterPath}-wal`).size).toBeGreaterThan(0);
   runInNewContext(
-    `${ROLLBACK_SOURCE}\nretirePlans(stateDir,generation); restoreState(collectPreserved(stateDir,suffix,0,4,[]),suffix);`,
+    `${LEGACY_ROLLBACK_SOURCE}\nretirePlans(stateDir,generation); restoreState(collectPreserved(stateDir,suffix,0,4,[]),suffix);`,
     { fs, path, stateDir: f.root, generation: f.generation, suffix: `.pre-${f.generation}` },
   );
   for (const file of agentFiles) {
     expect(fs.existsSync(file)).toBe(false);
   }
   expect(value(f.file)).toBe("original");
+  {
+    using later = new DatabaseSync(laterPath, { readOnly: true });
+    expect(later.prepare("SELECT value FROM witness ORDER BY rowid").all()).toEqual([
+      { value: "later-base" },
+      { value: "later-WAL" },
+    ]);
+  }
+});
+
+it("refreshes a narrowed prospective family on retry without re-imaging original rows", async () => {
+  const f = await fixture();
+  const added = path.join(f.root, "new.sqlite");
+  const capture = {
+    targets: [...f.capture.targets, { path: added, engine: "sqlite" as const }],
+    config: {},
+  };
+  const complete = await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), capture);
+  complete?.();
+  expect(JSON.parse(fs.readFileSync(f.manifest, "utf8")).files).not.toContainEqual({
+    live: added,
+    preimage: null,
+  });
+  const inode = fs.statSync(f.image).ino;
+  {
+    using live = new DatabaseSync(f.file);
+    live.exec("UPDATE witness SET value='candidate'");
+  }
+  const retry = await publishStateUpgradeRestore(await beginStateUpgradeRestore(f.env), capture);
+  expect(JSON.parse(fs.readFileSync(f.manifest, "utf8")).files).toContainEqual({
+    live: added,
+    preimage: null,
+  });
+  {
+    using created = new DatabaseSync(added);
+    created.exec("CREATE TABLE witness(value TEXT)");
+  }
+  retry?.();
+  expect(fs.statSync(f.image).ino).toBe(inode);
+  expect(value(f.image)).toBe("original");
+  expect(JSON.parse(fs.readFileSync(f.manifest, "utf8")).files).toContainEqual({
+    live: added,
+    preimage: null,
+  });
 });

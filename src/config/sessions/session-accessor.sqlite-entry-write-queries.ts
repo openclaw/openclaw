@@ -257,7 +257,68 @@ export const getSessionEntryWriteQueries = createSqliteQueryCache((database: Eng
         },
       }
     : undefined;
+  type ArchiveUndoRow = { key: string; sessionId: string; marker: string };
+  const markerTarget = (parameter: QueryParameter<ArchiveUndoRow>) =>
+    db
+      .updateTable("session_nodes")
+      .where(
+        "session_key",
+        "=",
+        parameter((row) => row.key),
+      )
+      .where(
+        "current_session_id",
+        "=",
+        parameter((row) => row.sessionId),
+      );
   return {
+    // The private Archive Undo marker shares the entry write transaction; it is never session metadata.
+    archiveUndo: {
+      clear: prepareSqliteQuerySync<{ key: string }>(database, (parameter) =>
+        db
+          .updateTable("session_nodes")
+          .set({ archive_undo_marker: null })
+          .where(
+            "session_key",
+            "=",
+            parameter((row) => row.key),
+          )
+          .where("archive_undo_marker", "is not", null),
+      ),
+      read: prepareSqliteQuerySync<{ key: string }, { archive_undo_marker: string | null }>(
+        database,
+        (parameter) =>
+          db
+            .selectFrom("session_nodes")
+            .select("archive_undo_marker")
+            .where(
+              "session_key",
+              "=",
+              parameter((row) => row.key),
+            ),
+      ),
+      issue: prepareSqliteQuerySync<ArchiveUndoRow, { session_key: string }>(
+        database,
+        (parameter) =>
+          markerTarget(parameter)
+            .set({ archive_undo_marker: parameter((row) => row.marker) })
+            .where("archived_at", "is", null)
+            .returning("session_key"),
+      ),
+      consume: prepareSqliteQuerySync<ArchiveUndoRow, { session_key: string }>(
+        database,
+        (parameter) =>
+          markerTarget(parameter)
+            .set({ archive_undo_marker: null })
+            .where(
+              "archive_undo_marker",
+              "=",
+              parameter((row) => row.marker),
+            )
+            .where("archived_at", "is not", null)
+            .returning("session_key"),
+      ),
+    },
     node: prepareSqliteQuerySync<SessionNodeWriteRow>(database, (parameter) =>
       node(parameter, false),
     ),

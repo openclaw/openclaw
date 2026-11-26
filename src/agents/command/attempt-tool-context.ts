@@ -1,4 +1,4 @@
-import { resolveConfiguredCommandOwners } from "../../auto-reply/command-auth.js";
+import { resolveConfiguredCommandOwners } from "../../auto-reply/command-owner-facts.js";
 import { resolveOwnerPromptNumbers } from "../owner-display.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
 

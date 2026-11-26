@@ -32,6 +32,8 @@ export type UserTurnPromptReactionSource = Readonly<{
 }>;
 
 type AdmissionOwner = {
+  /** An unstaged Gateway ACK already accepted the input; later persistence isn't another input. */
+  markInputAccepted: () => void;
   onOriginalInputCommitted?: (anchor: TranscriptEntryAnchor) => void;
   prepareMentionInvitation?: (
     message: PersistedUserTurnMessage,

@@ -326,7 +326,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/chat-pane-session-operations.runtime.ts":
       return "chat-interaction-runtime";
     case "ui/src/pages/chat/components/chat-context-breakdown.tsx":
-    case "ui/src/pages/chat/components/chat-context-breakdown-model.ts":
+    case "src/shared/context-budget-categories.ts":
     case "ui/src/pages/chat/components/chat-context-report.tsx":
     case "ui/src/pages/chat/components/chat-details-environment-body.tsx":
     case "ui/src/lib/session-context-report.ts":

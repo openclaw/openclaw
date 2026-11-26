@@ -13,7 +13,7 @@ import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
-import { ROLLBACK_SOURCE } from "../update/rollback-source.js";
+import { LEGACY_ROLLBACK_SOURCE } from "../update/legacy-rollback-source.js";
 import { createTrialPending, resolvePrefix, writeTrial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
@@ -400,7 +400,7 @@ describe("canonical in-place migration", () => {
         expect(fs.readFileSync(configPreimage, "utf8")).toBe(authoredConfig);
         await closeOpenClawStateDatabaseAsync();
         runInNewContext(
-          `${ROLLBACK_SOURCE}\nconst files=collectPreserved(stateDir,suffix,0,4,[]); retirePlans(stateDir,generation); restoreState(files,suffix);`,
+          `${LEGACY_ROLLBACK_SOURCE}\nconst files=collectPreserved(stateDir,suffix,0,4,[]); retirePlans(stateDir,generation); restoreState(files,suffix);`,
           { fs, path, stateDir, generation, suffix: `.pre-${generation}` },
         );
         expect(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8")).toBe(authoredConfig);

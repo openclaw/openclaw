@@ -19,7 +19,9 @@ function storePaths(stateDir) {
       }
     }
   }
-  return result.filter((filename) => fs.existsSync(filename)).toSorted();
+  return result
+    .filter((filename) => fs.existsSync(filename))
+    .toSorted((a, b) => a.localeCompare(b));
 }
 function filesAt(filename) {
   return suffixes.flatMap((suffix) => {
@@ -128,53 +130,4 @@ export function inspectFixtureStores(stateDir, inspectionRoot) {
       files,
     });
   });
-}
-export function snapshotFixtureStores(stateDir, destination) {
-  assert(!fs.existsSync(destination), `Preimage destination already exists: ${destination}`);
-  for (const filename of storePaths(stateDir)) {
-    copyStore(filename, path.join(destination, path.relative(stateDir, filename)));
-  }
-  // Even a read-only SQLite connection may update SHM. Never inspect the preimage.
-  return inspectFixtureStores(stateDir, `${destination}.inspection`);
-}
-export function restoreRaisedFloorStores(stateDir, baselineRoot, before, after) {
-  const receipt = { restored: [], preserved: [], unrestoredRaised: [], stores: [] };
-  for (const current of after) {
-    const previous = before.find(({ relativePath }) => relativePath === current.relativePath);
-    assert(previous, `Candidate created an unowned store: ${current.relativePath}`);
-    // NULL/missing means the store requires its current writer version.
-    const raised = current.minReader > previous.minReader;
-    const filename = path.join(stateDir, current.relativePath);
-    if (raised) {
-      const preimage = path.join(baselineRoot, current.relativePath);
-      assert.deepEqual(
-        filesAt(preimage),
-        previous.files,
-        `Store preimage changed: ${current.relativePath}`,
-      );
-      copyStore(preimage, filename);
-      receipt.restored.push(current.relativePath);
-    } else {
-      assert.deepEqual(
-        filesAt(filename),
-        current.files,
-        `Unraised store changed during rollback projection: ${current.relativePath}`,
-      );
-      receipt.preserved.push(current.relativePath);
-    }
-    receipt.stores.push({
-      relativePath: current.relativePath,
-      raised,
-      restored: raised,
-      beforeFloor: previous.minReader,
-      afterFloor: current.minReader,
-    });
-  }
-  for (const previous of before) {
-    assert(
-      after.some(({ relativePath }) => relativePath === previous.relativePath),
-      `Candidate removed store ${previous.relativePath}`,
-    );
-  }
-  return receipt;
 }

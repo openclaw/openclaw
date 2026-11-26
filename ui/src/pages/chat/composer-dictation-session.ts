@@ -1,4 +1,5 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
@@ -106,11 +107,12 @@ export class ComposerDictationCommits {
   }
 }
 
+type DictationSelection = { start: number; end: number; value: string };
+
 function insertComposerDictation(
-  value: string,
+  { value, start: selectionStart, end: selectionEnd }: DictationSelection,
   transcript: string,
-  selectionStart: number,
-  selectionEnd: number,
+  maxLength = -1,
 ): { value: string; caret: number } {
   const spoken = transcript.trim();
   if (!spoken) {
@@ -123,14 +125,16 @@ function insertComposerDictation(
   const leadingSpace = before && !/\s$/.test(before) && !/^\s|^[,.;:!?)]/.test(spoken) ? " " : "";
   const trailingSpace =
     after && !/^\s|^[,.;:!?)]/.test(after) && !/[\s([{]$/.test(spoken) ? " " : "";
-  const inserted = `${leadingSpace}${spoken}${trailingSpace}`;
+  const replacement = `${leadingSpace}${spoken}${trailingSpace}`;
+  const inserted =
+    maxLength < 0
+      ? replacement
+      : truncateUtf16Safe(replacement, maxLength - before.length - after.length);
   return {
     value: `${before}${inserted}${after}`,
     caret: before.length + inserted.length,
   };
 }
-
-type DictationSelection = { start: number; end: number; value: string };
 
 /**
  * Places a transcript in a draft. The captured selection holds unless a late final
@@ -140,18 +144,13 @@ type DictationSelection = { start: number; end: number; value: string };
 export function placeComposerDictation(
   transcript: string,
   captured: DictationSelection | null,
-  live: DictationSelection,
+  live: DictationSelection & { maxLength?: number },
   late?: true,
   preservePreview?: true,
 ): { value: string; caret: number; changed: boolean; captured: DictationSelection | null } {
   const selection =
     captured && (preservePreview || !late || captured.value === live.value) ? captured : live;
-  const insertion = insertComposerDictation(
-    selection.value,
-    transcript,
-    selection.start,
-    selection.end,
-  );
+  const insertion = insertComposerDictation(selection, transcript, live.maxLength);
   return {
     ...insertion,
     changed: insertion.value !== selection.value,

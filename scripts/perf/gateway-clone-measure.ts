@@ -33,6 +33,7 @@ import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/
 import type { SessionActor } from "../../src/config/sessions/session-actor-contract.js";
 import type { InternalSessionEntry } from "../../src/config/sessions/types.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -461,12 +462,7 @@ for (let index = 0; index < 200; index++) {
 }
 const inspector = new Session();
 if (values.allocation) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
 }
 const diagnostics = startGatewayBenchDiagnostics();
 const hostLoad = loadavg();

@@ -18,10 +18,8 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { SystemPackageOwnershipError } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  hasReleaseUpdateOwner,
-  isNodeOnlyUpdateInstallation,
-} from "../../update/installation-identity.js";
+import { isNodeOnlyUpdateInstallation } from "../../update/installation-identity.js";
+import { hasReleaseUpdateOwner } from "../../update/store.js";
 import { formatCliCommand } from "../command-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { prepareResult, printResult } from "./progress.js";
@@ -47,7 +45,10 @@ import {
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun, type prepareUpdateCommand } from "./update-command-run.js";
-import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
+import {
+  resolveServiceRefreshEnv,
+  withOwnedManagedUpdateEnv,
+} from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
@@ -98,62 +99,66 @@ export async function tryRunReleaseUpdateCommand(
   prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
-  const channelConfig = opts.dryRun ? undefined : await readUpdateChannelConfig(false);
-  const switchesToGit =
-    prepared.requestedChannel === "dev" ||
-    (prepared.requestedChannel === null &&
-      channelConfig?.storedChannel === "dev" &&
-      normalizeTag(opts.tag) === null);
-  const staysGit = prepared.requestedChannel === null || prepared.requestedChannel === "dev";
-  const releaseRoute =
-    !opts.dryRun &&
-    ((prepared.installKind === "package" &&
-      !switchesToGit &&
-      !isMainPackageTarget(normalizeTag(opts.tag))) ||
-      (prepared.installKind === "git" && staysGit));
-  const owned = await hasReleaseUpdateOwner(env);
-  if (!releaseRoute) {
-    if (owned && !opts.dryRun) {
-      const route = opts.channel ? `--channel ${opts.channel}` : "--tag main";
-      throw new Error(
-        `The resident launcher owns this installation. ${route} requires the in-place installer, which cannot replace it. To update the current installation instead, run: ${formatCliCommand("openclaw update", env)}`,
-      );
+  // Release readers use process.env; retain admission's service selectors
+  // through routing and execution so they cannot touch the caller's profile.
+  return await withOwnedManagedUpdateEnv(env, async () => {
+    const channelConfig = opts.dryRun ? undefined : await readUpdateChannelConfig(false);
+    const switchesToGit =
+      prepared.requestedChannel === "dev" ||
+      (prepared.requestedChannel === null &&
+        channelConfig?.storedChannel === "dev" &&
+        normalizeTag(opts.tag) === null);
+    const staysGit = prepared.requestedChannel === null || prepared.requestedChannel === "dev";
+    const releaseRoute =
+      !opts.dryRun &&
+      ((prepared.installKind === "package" &&
+        !switchesToGit &&
+        !isMainPackageTarget(normalizeTag(opts.tag))) ||
+        (prepared.installKind === "git" && staysGit));
+    const owned = await hasReleaseUpdateOwner(env);
+    if (!releaseRoute) {
+      if (owned && !opts.dryRun) {
+        const route = opts.channel ? `--channel ${opts.channel}` : "--tag main";
+        throw new Error(
+          `The resident launcher owns this installation. ${route} requires the in-place installer, which cannot replace it. To update the current installation instead, run: ${formatCliCommand("openclaw update", env)}`,
+        );
+      }
+      return false;
     }
-    return false;
-  }
-  if (prepared.installKind === "package" && !owned && (await isNodeOnlyUpdateInstallation(env))) {
-    return false;
-  }
-  await assertReleaseUpdateAdmission({
-    root: prepared.discoveredRoot,
-    installKind: prepared.installKind,
-    timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-    pkgOwnership: prepared.pkgOwnership,
-    opts,
-    controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
-  });
-  await assertUpdateRecoveryAdmission();
-  const { runReleaseUpdateCli } = await import("../../update/cli.js");
-  let tag = prepared.installKind === "git" ? undefined : (normalizeTag(opts.tag) ?? undefined);
-  if (prepared.installKind !== "git") {
-    const spec = resolveGlobalInstallSpec({ packageName: "openclaw", tag: tag ?? "" });
-    if (spec !== `openclaw@${tag ?? ""}`) {
-      tag = spec;
+    if (prepared.installKind === "package" && !owned && (await isNodeOnlyUpdateInstallation(env))) {
+      return false;
     }
-  }
-  await runReleaseUpdateCli({
-    json: Boolean(opts.json),
-    restart: prepared.shouldRestart,
-    runningRoot: prepared.discoveredRoot,
-    channel: prepared.requestedChannel ?? undefined,
-    storedChannel: channelConfig?.storedChannel ?? undefined,
-    sha: opts.sha,
-    tag,
-    yes: Boolean(opts.yes),
-    timeoutMs: prepared.timeoutMs,
-    acceptCapabilities: Boolean(opts.acceptCapabilities),
+    await assertReleaseUpdateAdmission({
+      root: prepared.discoveredRoot,
+      installKind: prepared.installKind,
+      timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+      pkgOwnership: prepared.pkgOwnership,
+      opts,
+      controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+    });
+    await assertUpdateRecoveryAdmission();
+    const { runReleaseUpdateCli } = await import("../../update/cli.js");
+    let tag = prepared.installKind === "git" ? undefined : (normalizeTag(opts.tag) ?? undefined);
+    if (prepared.installKind !== "git") {
+      const spec = resolveGlobalInstallSpec({ packageName: "openclaw", tag: tag ?? "" });
+      if (spec !== `openclaw@${tag ?? ""}`) {
+        tag = spec;
+      }
+    }
+    await runReleaseUpdateCli({
+      json: Boolean(opts.json),
+      restart: prepared.shouldRestart,
+      runningRoot: prepared.discoveredRoot,
+      channel: prepared.requestedChannel ?? undefined,
+      storedChannel: channelConfig?.storedChannel ?? undefined,
+      sha: opts.sha,
+      tag,
+      yes: Boolean(opts.yes),
+      timeoutMs: prepared.timeoutMs,
+      acceptCapabilities: Boolean(opts.acceptCapabilities),
+    });
+    return true;
   });
-  return true;
 }
 
 /** Report rejected read-only admission without creating a run or recovery diagnostics. */

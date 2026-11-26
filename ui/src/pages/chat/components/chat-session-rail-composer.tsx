@@ -90,7 +90,7 @@ export function SessionRailComposer(props: {
     isConnected: () => props.connected,
     // Follow-ups stay editable while an answer is pending; submit owns that gate.
     canCommit: () => props.connected,
-    onMessage: (message) => props.onDraftChange?.(message.slice(0, SIDE_CHAT_QUESTION_MAX_LENGTH)),
+    onMessage: (message) => props.onDraftChange?.(message),
     onError: (message) => showToast({ severity: "error", message }),
     onSubmit: () => props.submit(),
   });

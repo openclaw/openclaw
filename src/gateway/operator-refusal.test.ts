@@ -29,6 +29,10 @@ const SENTENCES = {
     "I did not start this request. The invitation you joined this session with has ended. Ask the session owner to invite you again.",
   "github-not-linked":
     "I did not start this request. Your Gateway profile has no linked GitHub account, so I cannot check that the PR is yours. Link it once in the Control UI under Settings → Profile → Identity, on the configured GitHub host, then ask again.",
+  "automation-account-unrecorded":
+    "I did not start this request. It has no recorded inference account, so OpenClaw refused the selected credentials. Select an authorized stored account with `openclaw automations edit <jobId> --model <provider/model>@<account>`, or use a configured provider key. For eligible host-managed accounts, `openclaw doctor --fix` can record the account.",
+  "workspace-not-owned":
+    "I did not start this request. Only the person who started this conversation or an administrator can restore its workspace. Ask an administrator to restore this workspace, or start a new conversation.",
 } satisfies Record<OperatorRefusalCause, string>;
 
 async function runRefusedTool(failure: () => unknown) {

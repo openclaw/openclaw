@@ -1151,6 +1151,7 @@ src/infra/git-object-store-transport.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
 src/infra/git-path-quote.ts
+src/infra/git-release-paths.ts
 src/infra/git-repository-repair.ts
 src/infra/git-root.ts
 src/infra/git-worker-context.ts
@@ -1203,6 +1204,7 @@ src/infra/net/undici-family-policy.ts
 src/infra/net/undici-global-dispatcher.ts
 src/infra/net/undici-runtime.ts
 src/infra/node-compile-cache-env.ts
+src/infra/node-filesystem-policy.ts
 src/infra/node-runner-inventory.ts
 src/infra/node-runtime-executable.ts
 src/infra/node-sqlite.ts
@@ -1499,6 +1501,7 @@ src/infra/update-run-admission.types.ts
 src/infra/update-run-admission.ts
 src/infra/update-run-cause.ts
 src/infra/update-run-codec.ts
+src/infra/update-run-omission.ts
 src/infra/update-run-owed-step.ts
 src/infra/update-run-gateway-stop.ts
 src/infra/update-run-legacy-expiry.ts
@@ -1852,6 +1855,7 @@ src/plugins/plugin-native-reference.ts
 src/plugins/plugin-native-resolution.ts
 src/plugins/plugin-native-root-lease.ts
 src/plugins/plugin-package-metadata-capture.ts
+src/plugins/plugin-peer-link-target.ts
 src/plugins/plugin-peer-link.ts
 src/plugins/plugin-policy-id.ts
 src/plugins/plugin-provider-request-policy.ts
@@ -2205,6 +2209,7 @@ src/state/openclaw-agent-execution-owner.ts
 src/state/openclaw-agent-execution-preparation.ts
 src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
+src/state/openclaw-agent-fts-schema.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
 src/state/openclaw-agent-active-event-facts-schema.ts
@@ -3002,6 +3007,7 @@ src/config/sessions/session-run-lifecycle-projection.ts
 src/config/sessions/session-restart-resume-scope.ts
 src/shared/agent-liveness.ts
 src/tui/gateway-chat-requests.ts
+src/tui/tui-history-full-text.ts
 packages/gateway-client/src/request-error.ts
 packages/gateway-client/src/protocol-request.ts
 packages/gateway-protocol/src/connect-error-details.ts

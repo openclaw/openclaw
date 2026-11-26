@@ -462,7 +462,9 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
           // State admission may refuse a live owner before a maintenance handle exists.
           warn(serviceVerdict.message);
         }
-        if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
+        // An offline service is not proof that no update owns it: the package updater
+        // replaces the live tree after its stop, outside the service operation lock.
+        if (inspection.serviceUpdateVerdict?.kind !== "absent") {
           assertAuthority(() => {
             const admitted = resolveDoctorUpdateAdmission(env);
             // Storage guards can run inside a transaction; receipts belong to service admission.

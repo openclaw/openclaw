@@ -1,7 +1,6 @@
 #if os(macOS)
 import Foundation
 import Observation
-import struct OpenClawKit.GatewayResponseError
 import OpenClawProtocol
 
 struct ChatSidebarSelection {
@@ -26,6 +25,41 @@ struct ChatSidebarSelection {
 }
 
 @MainActor @Observable
+final class ChatSidebarPinProfile {
+    private(set) var savedKeys: Set<String>?
+    var verified: Bool {
+        self.savedKeys != nil
+    }
+
+    private var readRevision = 0
+    static let pinKey = "ui.railShortcuts"
+    private struct PinSnapshot: Decodable {
+        let status: String
+        let entries: [String: [AnyCodable]]?
+    }
+
+    func read(
+        _ connection: OpenClawSessionMenuConnection,
+        forDisplay: Bool = false) async throws -> [AnyCodable]
+    {
+        self.readRevision += 1
+        let revision = self.readRevision
+        // A lost read keeps the last verified profile; only a definitive reply changes it.
+        let reply: PinSnapshot = try await connection.read("users.prefs.get", ["keys": .init([Self.pinKey])])
+        var savedKeys: Set<String>?
+        defer { if self.readRevision == revision { self.savedKeys = savedKeys } }
+        if reply.status == "no_durable_identity" {
+            guard forDisplay else { throw URLError(.userAuthenticationRequired) }
+            return []
+        }
+        guard reply.status == "ok", let entries = reply.entries else { throw CocoaError(.coderReadCorrupt) }
+        let layout = entries[Self.pinKey] ?? ["route:cron", "route:plugins", "route:usage"].map(AnyCodable.init)
+        savedKeys = Set(layout.compactMap { ChatSessionSidebarBatch.sessionPinKey($0.value as? String) })
+        return layout
+    }
+}
+
+@MainActor @Observable
 final class ChatSessionSidebarBatch {
     enum Action: Equatable {
         case unread(Bool), category(String?), newGroup(String), archived(Bool), delete
@@ -45,12 +79,14 @@ final class ChatSessionSidebarBatch {
         let key: String
         let ok: Bool
         let error: Failure?
+        let agentId: String?
+        let archiveUndoToken: String?
         struct Failure: Decodable { let message: String }
     }
 
-    struct PinSnapshot: Decodable {
+    /// Display only: an old Gateway's pin order belongs to its shared config. Never write it here.
+    private struct LegacyPinOrder: Decodable {
         let valid: Bool
-        let hash: String
         let config: Config
         struct Config: Decodable {
             let ui: UI?
@@ -59,19 +95,16 @@ final class ChatSessionSidebarBatch {
                 struct Prefs: Decodable { let sidebarEntries: [String]? }
             }
         }
-
-        func entries() throws -> [String] {
-            guard self.valid else { throw CocoaError(.coderReadCorrupt) }
-            // ui/src/app-navigation.ts:59: absence uses page defaults; explicit [] hides them.
-            return self.config.ui?.prefs?.sidebarEntries ??
-                ["route:dashboards", "route:systems", "route:cron", "route:plugins"]
-        }
     }
 
+    private struct PinWrite: Decodable { let status: String }
     var selection = ChatSidebarSelection()
     var errors: [String: String] = [:]
     var notices: [String] = []
     var archiveUndo: ChatSidebarArchiveReceipt?
+    var archiveRecoveries: [String: ChatSidebarArchiveRecovery] = [:]
+    // Survives a connection reset; never retain a target, endpoint, or error from the old lease.
+    var restoreNotices: Set<ChatSidebarRestoreNotice> = []
     var pendingArchives: [String: UUID] = [:]
     var running = false
     var pendingDelete: [OpenClawChatSessionEntry] = []
@@ -93,6 +126,7 @@ final class ChatSessionSidebarBatch {
             self.errors = [:]
             self.notices = []
             self.archiveUndo = nil
+            self.archiveRecoveries = [:]
             self.pendingArchives = [:]
             self.writingPins = false
             self.sidebarEntries = []
@@ -101,30 +135,52 @@ final class ChatSessionSidebarBatch {
 
     func refreshPins(_ connection: OpenClawSessionMenuConnection) async throws {
         try Task.checkCancellation()
-        guard connection.allows("config.get", scope: "operator.read") else { return }
         guard !self.writingPins else { return }
-        let snapshot: PinSnapshot = try await connection.read("config.get")
-        self.sidebarEntries = try snapshot.entries()
+        let scope = self.scope
+        let entries: [String]
+        if connection.supportsPersonalPins {
+            guard connection.allows("users.prefs.get", scope: "operator.sessions.read") else { return }
+            entries = try await connection.pinProfile.read(connection, forDisplay: true)
+                .compactMap { $0.value as? String }
+        } else {
+            guard connection.allows("config.get", scope: "operator.read") else { return }
+            let snapshot: LegacyPinOrder = try await connection.read("config.get")
+            guard snapshot.valid else { throw CocoaError(.coderReadCorrupt) }
+            entries = snapshot.config.ui?.prefs?.sidebarEntries ?? []
+        }
+        guard self.scope == scope, !self.writingPins else { return }
+        self.sidebarEntries = entries
     }
 
-    static func movingPin(_ entries: [String], keys: [String], key: String, target: String?, after: Bool) -> [String] {
-        // app-navigation.ts persists session:<key>; Gateway ordinary keys already include their agent.
-        // Raw global/unknown sentinels share the web preference slot, not a native-only identity format.
+    fileprivate static func sessionPinKey(_ text: String?) -> String? {
+        guard let text, text.hasPrefix("session:") else { return nil }
+        let key = text.dropFirst(8).trimmingCharacters(in: .whitespacesAndNewlines)
+        return key.isEmpty ? nil : key
+    }
+
+    var pinPositions: [String: Int] {
+        Dictionary(self.sidebarEntries.enumerated().compactMap { index, entry in
+            Self.sessionPinKey(entry).map { ($0, index) }
+        }, uniquingKeysWith: min)
+    }
+
+    static func movingPin(_ entries: [AnyCodable], key: String, target: String?, after: Bool) throws -> [AnyCodable] {
+        func pinKey(_ entry: AnyCodable) -> String? {
+            Self.sessionPinKey(entry.value as? String)
+        }
+        // Move only existing pin slots. The original JSON, including unknown future values, is the CAS base.
+        let slots = entries.indices.filter { pinKey(entries[$0]) != nil }
+        var sessions = slots.map { entries[$0] }
+        guard let source = sessions.firstIndex(where: { pinKey($0) == key }) else {
+            throw OpenClawPersonalPinError.placementChanged
+        }
         guard key != target else { return entries }
-        // Keep foreign slots fixed. Unpinning changes session state, not this array's slot count.
-        var result = entries
-        for key in keys where !result.contains("session:\(key)") {
-            result.append("session:\(key)")
-        }
-        let slots = result.indices.filter {
-            result[$0].hasPrefix("session:") && !result[$0].dropFirst(8).trimmingCharacters(in: .whitespacesAndNewlines)
-                .isEmpty
-        }
-        var sessions = slots.map { result[$0] }
-        guard let source = sessions.firstIndex(of: "session:\(key)") else { return entries }
         let entry = sessions.remove(at: source)
-        let destination = target.flatMap { sessions.firstIndex(of: "session:\($0)") }
+        let destination = target.flatMap { target in sessions.firstIndex(where: { pinKey($0) == target }) }
+        // Only a drop on the section itself means “at the end.” Do not reinterpret a stale row target.
+        guard target == nil || destination != nil else { throw OpenClawPersonalPinError.placementChanged }
         sessions.insert(entry, at: destination.map { $0 + (after ? 1 : 0) } ?? sessions.count)
+        var result = entries
         for (slot, value) in zip(slots, sessions) {
             result[slot] = value
         }
@@ -132,46 +188,54 @@ final class ChatSessionSidebarBatch {
     }
 
     func movePin(
-        keys: [String],
         key: String,
         target: String?,
         after: Bool,
         connection: OpenClawSessionMenuConnection) async throws
     {
+        guard connection.supportsPersonalPins else { throw OpenClawPersonalPinError.unsupportedGateway }
         guard !self.writingPins,
-              connection.allows("config.patch", scope: "operator.admin") else { throw CancellationError() }
+              connection.allows("users.prefs.set") else { throw CancellationError() }
         let scope = self.scope
         self.writingPins = true
         // The preference belongs to the connection, not the current roster filter or selection.
-        defer { if self.scope == scope { self.writingPins = false } }
+        defer {
+            if self.scope == scope {
+                self.writingPins = false
+            }
+        }
         do {
             for attempt in 0..<2 {
-                let snapshot: PinSnapshot = try await connection.read("config.get")
-                let previous = try snapshot.entries()
-                self.sidebarEntries = Self.movingPin(previous, keys: keys, key: key, target: target, after: after)
+                let previous = try await connection.pinProfile.read(connection)
+                guard self.scope == scope else { return }
                 do {
-                    // ui/src/app/server-prefs.ts:549 uses this same leaf replacement. The config.patch baseHash
-                    // guard protects foreign slots; a conflict recomputes the move instead of replaying stale bytes.
-                    try await connection.request(OpenClawChatGatewayRequests.sidebarPinOrder(
-                        self.sidebarEntries,
-                        hash: snapshot.hash))
+                    let next = try Self.movingPin(previous, key: key, target: target, after: after)
+                    self.sidebarEntries = next.compactMap { $0.value as? String }
+                    guard next != previous else { return }
+                    let result: PinWrite = try await connection.read("users.prefs.set", [
+                        "entries": .init([ChatSidebarPinProfile.pinKey: next]),
+                        "expectedEntries": .init([ChatSidebarPinProfile.pinKey: previous]),
+                    ])
+                    guard self.scope == scope else { return }
+                    if result.status == "conflict", attempt == 0 {
+                        // The optimistic order was rejected, even if the retry read never succeeds.
+                        self.sidebarEntries = previous.compactMap { $0.value as? String }
+                        continue
+                    }
+                    guard result.status == "ok" else { throw CocoaError(.fileWriteUnknown) }
                 } catch {
-                    guard connection.isCurrent() else { throw CancellationError() }
-                    self.sidebarEntries = previous
-                    // ui/src/lib/config/config-mutation-error.ts:40 identifies this existing conflict response.
-                    if attempt == 0, let error = error as? GatewayResponseError,
-                       error.code == "INVALID_REQUEST",
-                       error.details["publication"] == nil,
-                       error.message.contains("config changed since last load") { continue }
+                    guard connection.isCurrent(), self.scope == scope else { throw CancellationError() }
+                    self.sidebarEntries = previous.compactMap { $0.value as? String }
                     throw error
                 }
-                // One post-ack read is enough; changes during it settle on the next refresh.
-                let committed: PinSnapshot = try await connection.read("config.get")
-                self.sidebarEntries = try committed.entries()
+                // The write was acknowledged. A newer peer order can supersede it, but a failed read cannot.
+                if let latest = try? await connection.pinProfile.read(connection), self.scope == scope {
+                    self.sidebarEntries = latest.compactMap { $0.value as? String }
+                }
                 return
             }
         } catch {
-            guard connection.isCurrent() else { throw CancellationError() }
+            guard connection.isCurrent(), self.scope == scope else { throw CancellationError() }
             self.notices = [error.localizedDescription]
             throw error
         }
@@ -192,7 +256,9 @@ final class ChatSessionSidebarBatch {
                 "sessions.delete",
                 scope: rows.allSatisfy(\.isArchived) ? "operator.write" : "operator.admin")
         }
-        if connection.allows(method) { return true }
+        if connection.allows(method) {
+            return true
+        }
         // ui/src/lib/session-method-access.ts:32,81 preflights the entire scoped batch.
         if case .archived = action {
             return connection.allows(method, scope: "operator.sessions.write") &&
@@ -267,11 +333,17 @@ final class ChatSessionSidebarBatch {
         defer { for (row, token) in pending {
             self.finishArchive(row, token: token)
         } }
-        let successful = await self.patch(
+        var tokens: [String: String] = [:]
+        let successful = await patch(
             action == .archived(true) ? pending.map(\.0) : rows,
-            fields: action.patch,
+            action: action,
             connection: connection)
-        if action == .archived(true) { self.offerArchiveUndo(successful, connection: connection) }
+        { row, token in
+            tokens[Self.archiveIdentity(row)] = token
+        }
+        if action == .archived(true) {
+            offerArchiveUndo(successful, connection: connection, tokens: tokens)
+        }
         return successful
     }
 
@@ -304,38 +376,62 @@ final class ChatSessionSidebarBatch {
 
     func patch(
         _ rows: [OpenClawChatSessionEntry],
-        fields: [String: AnyCodable],
-        connection: OpenClawSessionMenuConnection) async -> [OpenClawChatSessionEntry]
+        action: Action,
+        connection: OpenClawSessionMenuConnection,
+        archived: (OpenClawChatSessionEntry, String) -> Void = { _, _ in }) async -> [OpenClawChatSessionEntry]
     {
         struct Response: Decodable { let outcomes: [Outcome] }
         var successful: [OpenClawChatSessionEntry] = []
         var errors: [String: String] = [:]
         // ui/src/components/session-organizer-batch-mutations.ts:129 and sessions-patch.ts:9:
         // sequential chunks retain earlier successes when a later request fails.
-        for offset in stride(from: 0, to: rows.count, by: 100) {
+        func requestsUndo(_ row: OpenClawChatSessionEntry) -> Bool {
+            action == .archived(true) && connection.requestsArchiveUndo(for: row)
+        }
+        var remaining = rows[...]
+        while let first = remaining.first {
             guard connection.isCurrent(), !Task.isCancelled else { return [] }
-            let chunk = Array(rows[offset..<min(offset + 100, rows.count)])
+            // patchMany shares one patch across targets. Keep adjacent like requests in selection order.
+            let requestUndo = requestsUndo(first)
+            let chunk = remaining.prefix(100).prefix { requestsUndo($0) == requestUndo }
+            var fields = action.patch
+            if requestUndo { fields["requestArchiveUndo"] = .init(true) }
             do {
                 let data = try await connection.request(OpenClawChatGatewayRequests.sidebarBatchPatch(
-                    chunk,
+                    Array(chunk),
                     patch: fields))
                 let response = try JSONDecoder().decode(Response.self, from: data)
-                guard response.outcomes.map(\.key) == chunk.map(\.key) else {
+                guard response.outcomes.count == chunk.count,
+                      zip(chunk, response.outcomes).allSatisfy({ row, outcome in
+                          guard row.key == outcome.key else { return false }
+                          guard requestUndo else { return true }
+                          let expected = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
+                          return outcome
+                              .agentId == expected ||
+                              (outcome.agentId == nil && OpenClawChatSessionKey.agentID(from: row.key) != nil)
+                      })
+                else {
                     throw CocoaError(.coderReadCorrupt)
                 }
                 for (row, outcome) in zip(chunk, response.outcomes) {
-                    if outcome.ok { successful.append(row) } else {
+                    if outcome.ok {
+                        successful.append(row)
+                        if requestUndo, let token = outcome.archiveUndoToken, !token.isEmpty {
+                            archived(row, token)
+                        }
+                    } else {
                         errors[OpenClawChatSessionSidebarData.identity(row)] = outcome.error?
                             .message ?? String(localized: "The thread operation failed.")
                     }
                 }
             } catch {
                 guard connection.isCurrent(), !Task.isCancelled else { return [] }
-                for row in rows[offset...] {
+                for row in remaining {
                     errors[OpenClawChatSessionSidebarData.identity(row)] = error.localizedDescription
                 }
                 break
             }
+            remaining = remaining.dropFirst(chunk.count)
         }
         // Preserve failures published by other operations after this one began.
         self.errors.merge(errors) { _, latest in latest }
@@ -351,29 +447,43 @@ final class ChatSessionSidebarBatch {
     enum Drop {
         case selfDrop
         case mutation([String: AnyCodable]?)
+        /// Pin through the Gateway's session checks, then place the new pin beside a saved one.
+        case insert(key: String, target: String)
     }
 
     static func drop(
         _ row: OpenClawChatSessionEntry,
         section: String,
-        target: OpenClawChatSessionEntry? = nil) -> Drop?
+        target: OpenClawChatSessionEntry? = nil,
+        now: Date = .now) -> Drop?
     {
         if section == "pinned" {
             // ui/src/components/session-organizer.ts handleSidebarZoneDrop consumes self-drops before bubbling.
             if let target, OpenClawChatSessionSidebarData.identity(row) ==
-                OpenClawChatSessionSidebarData.identity(target) { return .selfDrop }
-            guard ChatSessionSidebarEligibility.canPin(row) else { return nil }
-            return .mutation(row.pinned == true ? nil : ["pinned": .init(true)])
+                OpenClawChatSessionSidebarData.identity(target)
+            {
+                return .selfDrop
+            }
+            guard ChatSessionSidebarEligibility.canPin(row), !row.isSnoozed(at: now) else { return nil }
+            if row.pinned == true {
+                return .mutation(nil)
+            }
+            guard let target else { return .mutation(["pinned": .init(true)]) }
+            func canonical(_ row: OpenClawChatSessionEntry) -> String {
+                OpenClawChatSessionTarget.resolve(
+                    row.key, selectedAgentID: row.agentId, policy: .scopeBareKeysToSelectedAgent).sessionKey
+            }
+            return .insert(key: canonical(row), target: canonical(target))
         }
         // Category patches: ui/src/components/session-organizer-operations.runtime.ts assignSessionCategory.
         // Web drop entry points: session-organizer.ts sectionDrop and handleSessionListDrop.
         if section.hasPrefix("group:") || section == "recent" {
             let category = section == "recent" ? nil : String(section.dropFirst(6))
-            guard row.category != category || row.pinned == true else { return nil }
-            var patch: [String: AnyCodable] =
-                ["category": section == "recent" ? .init(NSNull()) : .init(String(section.dropFirst(6)))]
-            if row.pinned == true { patch["pinned"] = .init(false) }
-            return .mutation(patch)
+            var patch = row.category == category ? [:] : Action.category(category).patch
+            if row.pinned == true {
+                patch["pinned"] = .init(false)
+            }
+            return patch.isEmpty ? nil : .mutation(patch)
         }
         return section == "list" && row.pinned == true ? .mutation(["pinned": .init(false)]) : nil
     }
@@ -383,7 +493,9 @@ final class ChatSessionSidebarBatch {
     }
 
     nonisolated static func sectionToken(_ id: String) -> String {
-        if id.hasPrefix("group:") { return "category:" + id.dropFirst(6) }
+        if id.hasPrefix("group:") {
+            return "category:" + id.dropFirst(6)
+        }
         return id == "recent" ? "ungrouped" : id
     }
 
@@ -394,7 +506,9 @@ final class ChatSessionSidebarBatch {
         for token in stored where !order.contains(token) {
             if builtins.contains(token) || token.hasPrefix("catalog:") ||
                 (token.hasPrefix("category:") && groups.contains(String(token.dropFirst(9))))
-            { order.append(token) }
+            {
+                order.append(token)
+            }
         }
         for group in groups where !order.contains("category:\(group)") {
             order.insert("category:\(group)", at: order.firstIndex(where: { builtins.contains($0) }) ?? order.count)

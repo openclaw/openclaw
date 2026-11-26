@@ -134,10 +134,10 @@ describe("Templates discovery", () => {
     await nextTurn();
     expect(detail.textContent).not.toContain("Retired");
     replacement.resolve({
-      preview: { kind: "instruction", name: "SOUL.md", content: "Current preview" },
+      preview: { kind: "instruction", name: "SOUL.md", content: "\tCurrent preview" },
     });
     await waitForSolid(() =>
-      expect(detail.querySelector(".detail-body")?.textContent).toContain("Current preview"),
+      expect(detail.querySelector(".detail-body pre code")?.textContent).toBe("Current preview\n"),
     );
   });
 

@@ -18,6 +18,7 @@ import { resolveInstalledPluginIndexPolicyHash } from "../../src/plugins/install
 import { finalizePluginMetadataSnapshot } from "../../src/plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import { createProviderExternalAuthResolver } from "../../src/plugins/provider-external-auth-core.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [mode = "timing", rawIterations = "4000"] = process.argv.slice(2);
 const iterations = Number(rawIterations);
@@ -60,12 +61,7 @@ const observer = new PerformanceObserver((list) => {
 });
 try {
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else {
     observer.observe({ entryTypes: ["gc"] });
   }

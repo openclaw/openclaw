@@ -1,7 +1,10 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
 import { captureChatSessionScrollPosition } from "../scroll.ts";
 import { extractTranscriptRange } from "./chat-transcript-range.ts";
-import type { TranscriptSearchProjection } from "./chat-transcript-session.ts";
+import type {
+  TranscriptProjectionSource,
+  TranscriptSearchProjection,
+} from "./chat-transcript-session.ts";
 
 type ChatTranscriptPrependAnchor = { messageKey: string; rowKey: string | null; top: number };
 type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
@@ -14,6 +17,8 @@ export class TranscriptPrependAnchor {
   private searchReturn: ChatTranscriptPrependAnchor | "end" | null = null;
   private searchPlacement: "reader" | "end" | null = null;
   private firstMessageKey: string | undefined;
+  private source?: TranscriptProjectionSource;
+  private firstSourceMessage: unknown;
   private pending:
     | (ChatTranscriptPrependAnchor & { measured: boolean; prepended: boolean })
     | null = null;
@@ -55,14 +60,16 @@ export class TranscriptPrependAnchor {
     }
   }
 
-  /** The empty shell unmounts every row. Keep the last deliberate position across that gap. */
+  /** Track the source history boundary and the reader to restore across an empty search. */
   project(
     messageKeys: TranscriptMessageKeys,
-    projection: TranscriptSearchProjection,
+    source: TranscriptProjectionSource | undefined,
     element: HTMLDivElement | null,
     following: boolean,
   ): void {
     this.messageKeys = messageKeys;
+    this.source = source;
+    const projection = source?.search ?? null;
     const previous = this.searchProjection;
     if (previous?.query === projection?.query && previous?.empty === projection?.empty) {
       return;
@@ -101,7 +108,9 @@ export class TranscriptPrependAnchor {
     return Boolean(
       this.firstMessageKey &&
       this.firstMessageKey !== this.messageKeys.keys().next().value &&
-      this.messageKeys.has(this.firstMessageKey),
+      (this.messageKeys.has(this.firstMessageKey) ||
+        (this.firstSourceMessage !== undefined &&
+          (this.source?.messages.indexOf(this.firstSourceMessage) ?? -1) > 0)),
     );
   }
 
@@ -118,6 +127,7 @@ export class TranscriptPrependAnchor {
       this.retainReader(element);
     }
     this.firstMessageKey = this.messageKeys.keys().next().value;
+    this.firstSourceMessage = this.source?.messages[0];
   }
 
   /** Retain current geometry without admitting a candidate message projection. */
@@ -198,6 +208,8 @@ export class TranscriptPrependAnchor {
     this.searchReturn = null;
     this.searchProjection = null;
     this.firstMessageKey = undefined;
+    this.firstSourceMessage = undefined;
+    this.source = undefined;
     this.messageKeys = new Set();
     this.committedMessageRows = new Map();
   }
