@@ -51,6 +51,21 @@ describe("block HTML islands", () => {
     expect(plainText).toBe("More\nA & & &amp; &amp; A   B\nC\u00a0D");
   });
 
+  it("ignores tag-shaped code while finding the details summary", () => {
+    const block = single("<details><summary><code><summary></code>Title</summary>Body</details>");
+    assert(block.type === "details");
+    expect(block.summary).toEqual([{ type: "code", text: "<summary>" }, "Title"]);
+    expect(block.blocks).toEqual([{ type: "paragraph", text: "Body" }]);
+  });
+
+  it("keeps inline code tags inside their authored disclosure", () => {
+    const block = single(
+      "<details><summary>Code</summary>\n\nKeep `</details>` literal.\n\n</details>",
+    );
+    expect(block).toMatchObject({ type: "details", blocks: [{ type: "paragraph" }] });
+    expect(JSON.stringify(block)).toContain("</details>");
+  });
+
   it.each([
     [2147483646, [2147483646, 2147483647]],
     [2147483647, [1, 2]],
@@ -109,6 +124,28 @@ describe("block HTML islands", () => {
     expect(blocks).toMatchObject([
       { type: "paragraph", text: expect.arrayContaining([{ type: "bold", text: "x" }]) },
     ]);
+  });
+
+  it("keeps unsupported HTML ownership across Markdown tables", () => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(
+      "<custom>\n\n| Header |\n| --- |\n| <sup>**x**</sup> |\n\n</custom>",
+    );
+    expect(plainText).toContain("<sup>x</sup>");
+    const table = blocks.find((block) => block.type === "table");
+    expect(table?.cells[1]?.[0]?.text).toEqual(
+      expect.arrayContaining([{ type: "bold", text: "x" }]),
+    );
+  });
+
+  it("keeps HTML active in a table before an unsupported wrapper", () => {
+    const blocks = blocksFor("| Header |\n| --- |\n| <sup>**x**</sup> |\n\n<custom>after</custom>");
+    expect(blocks[0]).toMatchObject({
+      type: "table",
+      cells: [
+        [{ text: "Header" }],
+        [{ text: { type: "superscript", text: { type: "bold", text: "x" } } }],
+      ],
+    });
   });
 
   it("counts rowspan carryover toward the table column limit", () => {

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { processLineMessage as renderLineMessage } from "./markdown-to-line.js";
 
@@ -12,6 +13,29 @@ function processLineMessage(text: string) {
   };
 }
 
+function cardBody(result: ReturnType<typeof processLineMessage>) {
+  const bubble = expectDefined(result.flexMessages[0], "flex message").contents;
+  if (bubble.type !== "bubble") {
+    throw new Error("Expected bubble");
+  }
+  return expectDefined(bubble.body, "bubble body").contents;
+}
+const spans = (...cells: object[]) => ({ contents: cells.map((cell) => ({ contents: [cell] })) });
+
+describe("processLineMessage table cards", () => {
+  it("maps inline styles to Flex spans without promoting plain messages", () => {
+    const result = processLineMessage(`| Name | Status |
+|---|---|
+| **Bold** | *Italic* |
+| \`<u>Literal</u>\` | Plain |`);
+    const rows = cardBody(result);
+    expect(rows.slice(2)).toMatchObject([
+      spans({ text: "Bold", weight: "bold" }, { text: "Italic", style: "italic" }),
+      { contents: [{ text: "<u>Literal</u>" }, {}] },
+    ]);
+    expect(result.text).toBe("");
+  });
+});
 describe("processLineMessage", () => {
   it("keeps valid tables and code cards while downgrading only an oversized sibling table", () => {
     const value = "z".repeat(30_000);
